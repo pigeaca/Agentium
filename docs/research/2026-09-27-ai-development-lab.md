@@ -409,7 +409,7 @@ Minimum detectable effect (80% power, two-sided α = 0.05):  MDE = 2.80 · sqrt(
 | 40 × 5 | 400 | 12.7 pp | 10.2% | $520 / $880 |
 | 65 × 5 | 650 | 10.0 pp | 8.1% | $845 / $1,430 |
 
-> **Measured in Phase 0 (2026-09-27):** on six small harness tasks, the per-run log-cost spread was σ = 0.19 and the cross-task spread τ = 0.05, both about half the assumptions above. A cost run averaged $0.29. So 12 × 3 runs detect about 12% cost changes, not 22%. Success could not be calibrated because 57 of 60 runs passed, so keep `w = 0.20` for planning. See the [Phase 0 results](2026-09-27-phase0-spike-results.md).
+> **Measured in Phase 0 (2026-09-27):** on six small harness tasks, the per-run log-cost spread was σ = 0.19, about half the assumption above. A cost run averaged $0.29. The cross-task spread τ is unresolved: the point estimate is 0.05, but six tasks allow values up to about 0.25. So 12 × 3 runs detect about 12–21% cost changes. Success could not be calibrated because 57 of 60 runs passed, so keep `w = 0.20` for planning. See the [Phase 0 results](2026-09-27-phase0-spike-results.md).
 
 As `R` grows, `τ²` dominates. Past about 5 runs per task, adding tasks buys more than adding runs.
 

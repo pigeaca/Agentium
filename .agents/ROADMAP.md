@@ -5,7 +5,7 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 ## Foundation — 2026-09-27
 - The agent development process came over from Orchid, with a stack-neutral harness. See the [decision](decisions/2026-09-27-agent-process-from-orchid.md).
 - Product research: existing tools, UX, the context-experiment method, architecture, MVP and strategy comparison.
-- Phase 0 spike: 60 real Claude Code runs comparing Agentium's full context with a minimal one. It gave a go for Phase 1, a measured noise level, and an isolation recipe. See the [results](../docs/research/2026-09-27-phase0-spike-results.md).
+- Phase 0 spike: 60 real Claude Code runs comparing Agentium's full context with a minimal one. It gave a go for Phase 1, a measured noise level (σ; τ still unresolved), and an isolation recipe. See the [results](../docs/research/2026-09-27-phase0-spike-results.md).
 
 ## Next, in order
 1. The user confirms the stack (proposed: Go core, local React UI, SQLite) in a decision record.

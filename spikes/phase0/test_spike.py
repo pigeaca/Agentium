@@ -6,6 +6,7 @@ import random
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 
 import spike
 import stats
@@ -54,6 +55,76 @@ class ClaudeStream(unittest.TestCase):
         metrics = spike.parse_claude("not json\n")
         self.assertIsNone(metrics["cost_usd"])
         self.assertEqual(spike.classify(metrics, False), "infra")
+
+
+class Trajectory(unittest.TestCase):
+    TEXT = stream(
+        {"type": "system", "subtype": "init", "permissionMode": "acceptEdits", "tools": ["Bash", "mcp__x__y"], "skills": ["personal"]},
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "python3 .agents/scripts/harness.py check docs"}},
+            {"type": "tool_use", "id": "b2", "name": "Bash", "input": {"command": "git stash && python3 -m unittest discover"}},
+            {"type": "tool_use", "id": "b3", "name": "Bash", "input": {"command": 'cd "$TMP" && git commit -m t'}},
+            {"type": "tool_use", "id": "r1", "name": "Read", "input": {"file_path": "/elsewhere/secret.py"}},
+            {"type": "tool_use", "id": "r2", "name": "Edit", "input": {"file_path": "/run/root/repo/a.py"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "b1", "content": [{"type": "text", "text": "[harness] CLAUDE.md must explicitly import each shared entrypoint once."}]},
+            {"type": "tool_result", "tool_use_id": "r1", "content": "must explicitly import each shared entrypoint (source code, not a check)"}]}},
+        {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0.1, "num_turns": 2},
+    )
+
+    def test_flags(self):
+        metrics = spike.parse_claude(self.TEXT)
+        self.assertEqual((metrics["bash_commands"], metrics["ran_unittest"], metrics["ran_harness_check"], metrics["git_stash"]), (3, True, True, True))
+        self.assertFalse(metrics["git_commit_in_checkout"], "a commit in a temporary repository is not a commit of the task")
+        self.assertTrue(metrics["saw_import_rule_failure"])
+
+    def test_import_failure_only_counts_harness_check_output(self):
+        text = self.TEXT.replace("python3 .agents/scripts/harness.py check docs", "cat notes.txt")
+        self.assertFalse(spike.parse_claude(text)["saw_import_rule_failure"])
+
+    def test_finalize_keeps_counts_not_names_or_paths(self):
+        final = spike.finalize(spike.parse_claude(self.TEXT), Path("/run/root"), [Path("/elsewhere"), Path("/run")])
+        self.assertNotIn("skills", final)
+        self.assertNotIn("file_paths", final)
+        self.assertEqual((final["file_tool_paths_watched"], final["mcp_tools"]), (1, 1))  # /elsewhere/secret.py; own root excluded
+        unwatched = spike.finalize(spike.parse_claude(self.TEXT), Path("/run/root"), [Path("/other")])
+        self.assertEqual(unwatched["file_tool_paths_watched"], 0)
+
+
+class Verification(unittest.TestCase):
+    def test_unit_timeout_is_a_failure_not_an_exception(self):
+        with unittest.mock.patch.object(spike.subprocess, "run", side_effect=subprocess.TimeoutExpired("x", 1)):
+            self.assertEqual(spike.unit(Path("."), "test_x.py"), {"ok": False, "tests": 0, "timed_out": True})
+
+    def test_hidden_test_never_lands_in_the_checkout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            checkout = root / "run/repo"
+            (checkout / ".agents/scripts").mkdir(parents=True)
+            (checkout / ".agents/scripts/harness.py").write_text("X = 1\n")
+            (checkout / ".agents/scripts/test_harness.py").write_text("import unittest\n")
+            subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+            spike.git("add", "-A", cwd=checkout)
+            spike.git("commit", "-q", "-m", "base", cwd=checkout)
+            context = spike.git("rev-parse", "HEAD", cwd=checkout).strip()
+            seen = []
+            with unittest.mock.patch.object(spike, "unit", side_effect=lambda repo, pattern: seen.append((repo, pattern, (repo / ".agents/scripts/test_hidden.py").exists())) or {"ok": True, "tests": 1}):
+                result = spike.verify(checkout, "branch-types", context, root, root / "verify/x")
+            self.assertTrue(all(exists and repo != checkout for repo, _, exists in seen))
+            self.assertFalse((checkout / ".agents/scripts/test_hidden.py").exists())
+            self.assertFalse((root / "verify/x").exists())
+            self.assertEqual(result["files"], [])
+
+
+class HiddenPaths(unittest.TestCase):
+    def test_login_mode_hides_session_transcripts_and_rejects_a_work_dir_inside_hidden_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = spike.hidden_paths(Path(directory) / "work", token=None)
+            self.assertIn((Path.home() / ".claude/projects").resolve(), paths)
+            self.assertIn(spike.HERE, paths)
+            self.assertNotIn((Path.home() / ".claude/projects").resolve(), spike.hidden_paths(Path(directory) / "work", token="t"))
+        with self.assertRaises(SystemExit):
+            spike.hidden_paths(spike.HERE / "work", token=None)
 
 
 class CodexStream(unittest.TestCase):
@@ -135,6 +206,12 @@ class Statistics(unittest.TestCase):
         self.assertAlmostEqual(math.sqrt(sigma2), 0.3, delta=0.05)
         tau2 = stats.heterogeneity(stats.paired(table, "full", "minimal", math.log), sigma2, 6)
         self.assertLess(tau2, 0.02)
+
+    def test_t_interval(self):
+        center, low, high = stats.t_interval([1.0, 2.0, 3.0])
+        self.assertEqual(center, 2.0)
+        self.assertAlmostEqual(high - center, 4.303 * 1.0 / math.sqrt(3), places=3)
+        self.assertAlmostEqual(center - low, high - center)
 
     def test_planner_matches_the_study_formula(self):
         # Study section 5.6: w=0.20, tau=0.05, R=5, n=65 -> about 10 pp; non-inferiority at 15 pp -> 23 tasks.

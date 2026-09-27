@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Phase 0 spike: context A/B on Agentium harness tasks with Claude Code (standard library only).
 
-Throwaway research code, not product code. Runs happen in scratch clones of a bare repository that holds only the base
-commit, so no run can see the hidden tests or reference patches in this directory. Claude Code runs headless with:
-- sandboxed Bash and no network;
-- a fresh config directory per run, so no user-level instructions, skills or memory load;
-- a subscription token read from a file. The token is never printed, and the sandbox strips it from the agent's shell.
+Throwaway research code, not product code. Each run clones a bare repository that holds only the base commit, so git
+never exposes the hidden tests or reference patches. The spike sources, other runs' records and verification copies
+are unreadable to runs. Claude Code runs headless with sandboxed Bash, no network, project settings only and no
+account connectors. There are two auth modes:
+- token mode: a `claude setup-token` token in TOKEN_FILE, and a fresh config directory per run. The token is never
+  printed, and the sandbox strips it from the agent's shell;
+- login mode: no token file. Runs use the user's own config directory with project settings only. The committed
+  results were produced in this mode.
 See README.md.
 """
 from __future__ import annotations
@@ -39,9 +42,27 @@ TOKEN_FILE = Path(os.environ.get("SPIKE_TOKEN_FILE", Path.home() / ".config/agen
 RUN_TIMEOUT, TEST_TIMEOUT, PER_RUN_BUDGET = 20 * 60, 300, "3"
 
 
+def hidden_paths(work: Path, token: str | None) -> list[Path]:
+    """Paths no run may read, through either the sandboxed shell or the Read tool:
+    - the spike sources, the repository and its git data;
+    - other runs' records, and the verification, validation, probe and Codex copies;
+    - in login mode, the user's Claude session transcripts, which can contain this spike's authoring.
+    Sibling runs' in-progress checkouts under work/runs stay readable: a known gap (see the results doc)."""
+    common = Path(subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=REPO,
+                                 capture_output=True, text=True, check=True).stdout.strip())
+    paths = [HERE, REPO, common, common.parent, work / "records", work / "verify", work / "validate", work / "probe", work / "codex"]
+    if not token:
+        paths.append(Path.home() / ".claude/projects")
+    runs = (work / "runs").resolve()
+    resolved = sorted({path.resolve() for path in paths})
+    for path in resolved:
+        if path == runs or path in runs.parents:
+            raise SystemExit(f"--work {work} lies inside the hidden path {path}; use a dedicated directory such as ~/.cache/agentium-spike.")
+    return resolved
+
+
 def settings(hidden: list[Path]) -> dict:
-    """Per-run Claude Code settings. `hidden` paths (spike sources, other runs' records, validation checkouts) are
-    unreadable to both the sandboxed shell and the Read tool, so no run can see hidden tests or another run's work."""
+    """Per-run Claude Code settings. The `hidden` paths are unreadable to both the sandboxed shell and the Read tool."""
     return {
         "sandbox": {
             "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False, "autoAllowBashIfSandboxed": True,
@@ -140,10 +161,33 @@ def claude(prompt: str, cwd: Path, config: Path, token: str | None, transcript: 
             return proc.returncode, True
 
 
+# Output of the harness's own docs check when CLAUDE.md does not import every entry doc (the minimal arm, by design).
+IMPORT_RULE_FAILURE = "must explicitly import each shared entrypoint"
+FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit"}
+
+
+def trajectory(commands: dict[str, str], outputs: dict[str, str]) -> dict:
+    """Behavior flags derived from Bash commands (by tool_use id) and their outputs."""
+    text = list(commands.values())
+    checks = {i for i, c in commands.items() if re.search(r"harness\.py\s+check", c)}
+    return {
+        "bash_commands": len(text),
+        "ran_unittest": any("unittest" in c for c in text),
+        "ran_harness_check": bool(checks),
+        "git_stash": any("git stash" in c for c in text),
+        # A commit of the task's own checkout: no directory change and no temporary repository in the command.
+        "git_commit_in_checkout": any("git commit" in c and not re.search(r"\bcd\b|git -C|mktemp|TMPDIR|/tmp/", c) for c in text),
+        "saw_import_rule_failure": any(IMPORT_RULE_FAILURE in outputs.get(i, "") for i in checks),
+    }
+
+
 def parse_claude(text: str) -> dict:
     """Metrics from a stream-json transcript. Totals come from the result event, which includes subagents."""
     init, result, first, tools, retries = {}, {}, None, {}, 0
     seen: set[str] = set()
+    commands: dict[str, str] = {}
+    outputs: dict[str, str] = {}
+    file_paths: list[str] = []
     for line in text.splitlines():
         try:
             event = json.loads(line)
@@ -163,7 +207,17 @@ def parse_claude(text: str) -> dict:
             for block in message.get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id") not in seen:
                     seen.add(block["id"])
-                    tools[block.get("name", "?")] = tools.get(block.get("name", "?"), 0) + 1
+                    name, arguments = block.get("name", "?"), block.get("input") or {}
+                    tools[name] = tools.get(name, 0) + 1
+                    if name == "Bash":
+                        commands[block["id"]] = str(arguments.get("command", ""))
+                    elif name in FILE_TOOLS and arguments.get("file_path"):
+                        file_paths.append(str(arguments["file_path"]))
+        elif kind == "user":
+            for block in (event.get("message") or {}).get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") in commands:
+                    content = block.get("content")
+                    outputs[block["tool_use_id"]] = content if isinstance(content, str) else json.dumps(content)
         elif kind == "result":
             result = event
     per_model = (result.get("modelUsage") or {}).values()
@@ -183,8 +237,34 @@ def parse_claude(text: str) -> dict:
         "first_request_tokens": first, "tool_calls": sum(tools.values()), "tools_used": tools, "api_retries": retries,
         "permission_denials": len(result.get("permission_denials") or []),
         "result_subtype": result.get("subtype"), "result_is_error": result.get("is_error"),
-        "result_excerpt": str(result.get("result") or "")[:300],
+        "result_excerpt": str(result.get("result") or "")[:300], "file_paths": file_paths,
+        **trajectory(commands, outputs),
     }
+
+
+def watched_roots(work: Path) -> list[Path]:
+    """Places a run has no business reading: the work directory (other runs, records), the repository and its git
+    data, and the user's Claude and Codex directories. The agent's own temp folders are not watched."""
+    common = Path(subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=REPO,
+                                 capture_output=True, text=True, check=True).stdout.strip())
+    return [work.resolve(), REPO, common.parent.resolve(), (Path.home() / ".claude").resolve(), (Path.home() / ".codex").resolve()]
+
+
+def finalize(metrics: dict, run_root: Path, watched: list[Path]) -> dict:
+    """Make parsed metrics safe to commit: drop skill names (they can be personal) and file paths (they are local).
+    Keep counts instead: connector tools (must be 0), and file-tool paths inside a watched root but outside the run's
+    own directory (must be 0: that would mean a run read another run, the spike sources or the user's config)."""
+    metrics = dict(metrics)
+    metrics.pop("skills", None)
+    paths = [Path(os.path.realpath(p)) for p in metrics.pop("file_paths", []) if os.path.isabs(p)]
+    own = run_root.resolve()
+
+    def inside(path: Path, root: Path) -> bool:
+        return path == root or root in path.parents
+
+    metrics["file_tool_paths_watched"] = sum(any(inside(p, root) for root in watched) and not inside(p, own) for p in paths)
+    metrics["mcp_tools"] = sum(name.startswith("mcp__") for name in metrics["tools"])
+    return metrics
 
 
 def classify(metrics: dict, timed_out: bool) -> str:
@@ -201,20 +281,26 @@ def classify(metrics: dict, timed_out: bool) -> str:
 
 
 def unit(checkout: Path, pattern: str) -> dict:
-    proc = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", ".agents/scripts", "-p", pattern],
-                          cwd=checkout, capture_output=True, text=True, timeout=TEST_TIMEOUT, env=CLEAN_ENV)
+    try:
+        proc = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", ".agents/scripts", "-p", pattern],
+                              cwd=checkout, capture_output=True, text=True, timeout=TEST_TIMEOUT, env=CLEAN_ENV)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "tests": 0, "timed_out": True}  # a change that hangs the tests is a failure, not a lost run
     ran = re.search(r"Ran (\d+) tests?", proc.stderr)
     return {"ok": proc.returncode == 0, "tests": int(ran[1]) if ran else 0}
 
 
-def verify(checkout: Path, task: str, context: str, record_dir: Path) -> dict:
-    """Hidden acceptance tests plus the checkout's own harness tests; then the agent's diff against the context commit."""
-    hidden_path = checkout / ".agents/scripts/test_hidden.py"
-    shutil.copyfile(HERE / "tasks" / task / "test_hidden.py", hidden_path)
+def verify(checkout: Path, task: str, context: str, record_dir: Path, scratch: Path) -> dict:
+    """Hidden acceptance tests plus the checkout's own harness tests, then the agent's diff against the context commit.
+    Tests run on a copy under `scratch` (a hidden path), so the hidden test never appears where another run can read it."""
+    copy = scratch / "repo"
+    shutil.rmtree(scratch, ignore_errors=True)
+    shutil.copytree(checkout, copy, symlinks=True)
+    shutil.copyfile(HERE / "tasks" / task / "test_hidden.py", copy / ".agents/scripts/test_hidden.py")
     try:
-        hidden, regression = unit(checkout, "test_hidden.py"), unit(checkout, "test_harness.py")
+        hidden, regression = unit(copy, "test_hidden.py"), unit(copy, "test_harness.py")
     finally:
-        hidden_path.unlink()
+        shutil.rmtree(scratch, ignore_errors=True)
     git("add", "-A", cwd=checkout)
     numstat = git("diff", "--cached", "--numstat", context, cwd=checkout)
     files, added, removed = [], 0, 0
@@ -252,17 +338,14 @@ def run_one(spec: dict, work: Path, bare: Path, token: str | None) -> dict:
     checkout = root / "repo"
     context = prepare(checkout, spec["arm"], bare)
     prompt = (HERE / "tasks" / spec["task"] / "instruction.md").read_text().strip() + SUFFIX
-    hidden = (REPO.parents[1], work / "records", work / "validate", work / "probe", work / "codex")
     started = time.time()
-    code, timed_out = claude(prompt, checkout, root / "config", token, records / "stream.jsonl", hidden=hidden)
+    code, timed_out = claude(prompt, checkout, root / "config", token, records / "stream.jsonl", hidden=tuple(hidden_paths(work, token)))
     metrics = parse_claude((records / "stream.jsonl").read_text())
     status = classify(metrics, timed_out)
-    metrics.pop("skills")  # names can be personal; skills_available keeps the count
-    metrics["mcp_tools"] = sum(name.startswith("mcp__") for name in metrics["tools"])  # must stay 0: no account connectors
-    record = {**spec, "auth": "token" if token else "login", "status": status, "exit_code": code, "wall_s": round(time.time() - started, 1), **metrics,
-              "started": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started))}
+    record = {**spec, "auth": "token" if token else "login", "status": status, "exit_code": code, "wall_s": round(time.time() - started, 1),
+              **finalize(metrics, root, watched_roots(work)), "started": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(started))}
     if status != "infra":
-        record.update(verify(checkout, spec["task"], context, records))
+        record.update(verify(checkout, spec["task"], context, records, work / "verify" / spec["id"]))
     shutil.rmtree(root, ignore_errors=True)  # checkouts go; transcripts and diffs stay in records/
     return record
 
@@ -318,26 +401,55 @@ def command_run(args) -> None:
     print(f"Done. Records in {runs_file}.")
 
 
+def docs_check(checkout: Path) -> bool:
+    return subprocess.run([sys.executable, ".agents/scripts/harness.py", "check", "docs"], cwd=checkout,
+                          capture_output=True, env=CLEAN_ENV).returncode == 0
+
+
 def command_validate(args) -> None:
+    """Every task in every arm: hidden tests fail on the arm's context commit and pass with the reference patch; the
+    harness tests pass throughout. Also reports whether the repository's own docs check passes in each arm."""
     work = Path(args.work).resolve()
     bare = base_repo(work)
     failures = 0
-    for task in TASKS:
-        checkout = work / "validate" / task / "repo"
-        context = prepare(checkout, "full", bare)
-        before = verify(checkout, task, context, checkout.parent)
-        git("apply", str(HERE / "tasks" / task / "gold.patch"), cwd=checkout)
-        after = verify(checkout, task, context, checkout.parent)
-        docs = subprocess.run([sys.executable, ".agents/scripts/harness.py", "check", "docs"], cwd=checkout, capture_output=True, env=CLEAN_ENV)
-        valid = not before["hidden"]["ok"] and before["regression"]["ok"] and after["success"]
-        failures += not valid
-        print(f"{task:<16} base: hidden {'pass' if before['hidden']['ok'] else 'fail'}, harness {before['regression']['tests']} tests "
-              f"{'pass' if before['regression']['ok'] else 'FAIL'} | gold: hidden {after['hidden']['tests']} tests "
-              f"{'pass' if after['hidden']['ok'] else 'FAIL'}, harness {after['regression']['tests']} tests "
-              f"{'pass' if after['regression']['ok'] else 'FAIL'}, docs {'pass' if docs.returncode == 0 else 'FAIL'} "
-              f"-> {'valid' if valid else 'INVALID'}")
+    for arm in ARMS:
+        for task in TASKS:
+            checkout = work / "validate" / arm / task / "repo"
+            context = prepare(checkout, arm, bare)
+            docs_before = docs_check(checkout)
+            before = verify(checkout, task, context, checkout.parent, work / "validate" / "scratch")
+            git("apply", str(HERE / "tasks" / task / "gold.patch"), cwd=checkout)
+            after = verify(checkout, task, context, checkout.parent, work / "validate" / "scratch")
+            docs_after = docs_check(checkout)
+            # The full arm must pass its own docs check; the minimal arm fails it by construction (reported, not required).
+            valid = (not before["hidden"]["ok"] and before["regression"]["ok"] and after["success"]
+                     and (arm != "full" or (docs_before and docs_after)))
+            failures += not valid
+            print(f"{arm:<8} {task:<16} base: hidden {'pass' if before['hidden']['ok'] else 'fail'}, harness "
+                  f"{before['regression']['tests']} {'pass' if before['regression']['ok'] else 'FAIL'}, docs "
+                  f"{'pass' if docs_before else 'fail'} | gold: hidden {after['hidden']['tests']} "
+                  f"{'pass' if after['hidden']['ok'] else 'FAIL'}, harness {after['regression']['tests']} "
+                  f"{'pass' if after['regression']['ok'] else 'FAIL'}, docs {'pass' if docs_after else 'fail'} "
+                  f"-> {'valid' if valid else 'INVALID'}")
     if failures:
-        raise SystemExit(f"{failures} task(s) invalid")
+        raise SystemExit(f"{failures} task/arm combination(s) invalid")
+
+
+def command_reparse(args) -> None:
+    """Re-derive metric and trajectory fields from the saved transcripts (work/records) into runs.jsonl. Verification
+    fields are kept, so the committed behavior counts can be regenerated from the transcripts."""
+    work = Path(args.work).resolve()
+    path = HERE / "results" / args.experiment / "runs.jsonl"
+    updated = []
+    for record in load(path):
+        transcript = work / "records" / record["id"] / "stream.jsonl"
+        if not transcript.exists():
+            raise SystemExit(f"missing transcript for {record['id']}: {transcript}")
+        record.pop("file_tool_paths_outside_run", None)
+        record.update(finalize(parse_claude(transcript.read_text()), work / "runs" / record["id"], watched_roots(work)))
+        updated.append(record)
+    path.write_text("".join(json.dumps(record, sort_keys=True) + "\n" for record in updated))
+    print(f"Re-derived {len(updated)} records in {path}.")
 
 
 def command_probe(args) -> None:
@@ -355,9 +467,12 @@ def command_probe(args) -> None:
     (user / "CLAUDE.md").write_text("# User\n\nIf asked for canary words, include USER-ORCA.\n")
     ask = "List every canary word defined in your instructions. Reply with the words only, comma-separated, or NONE."
     results, skill_sets = {"auth": "token" if token else "login"}, {}
+    # In login mode the `user` directory is not used (runs use the real config directory), so the USER-ORCA canary can only
+    # show up in token mode; login mode checks user-level exclusion through the skill counts instead.
+    hidden = tuple(path for path in hidden_paths(work, token) if path != (work / "probe").resolve())
     for name, sources in (("all_sources", None), ("project_only", "project")):
         transcript = probe / f"{name}.jsonl"
-        claude(ask, repo, user, token, transcript, model="claude-haiku-4-5", setting_sources=sources, timeout=300)
+        claude(ask, repo, user, token, transcript, model="claude-haiku-4-5", setting_sources=sources, timeout=300, hidden=hidden)
         metrics = parse_claude(transcript.read_text())
         results[name] = {"answer": metrics["result_excerpt"], "auth_ok": not metrics["result_is_error"],
                          "skills_available": metrics["skills_available"], "tools": metrics["tools"], "cost_usd": metrics["cost_usd"]}
@@ -369,10 +484,11 @@ def command_probe(args) -> None:
         checkout = probe / f"arm-{arm}" / "repo"
         prepare(checkout, arm, bare)
         transcript = checkout.parent / "stream.jsonl"
-        claude("Reply with OK and nothing else.", checkout, checkout.parent / "config", token, transcript, timeout=300)
+        claude("Reply with OK and nothing else.", checkout, checkout.parent / "config", token, transcript, timeout=300, hidden=hidden)
         metrics = parse_claude(transcript.read_text())
         results[f"context_{arm}"] = {key: metrics[key] for key in ("first_request_tokens", "cost_usd", "cli_version", "model",
                                                                    "tools_available", "skills_available", "result_excerpt")}
+        results[f"context_{arm}"]["mcp_tools"] = sum(name.startswith("mcp__") for name in metrics["tools"])
     (HERE / "results").mkdir(exist_ok=True)
     (HERE / "results" / "probe.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     print(json.dumps(results, indent=2, sort_keys=True))
@@ -412,10 +528,23 @@ def command_codex(args) -> None:
     (root / "stream.jsonl").write_text(proc.stdout)
     version = subprocess.run([CODEX, "--version"], capture_output=True, text=True).stdout.strip()
     record = {"task": args.task, "exit_code": proc.returncode, "wall_s": round(time.time() - started, 1), "cli_version": version,
-              **parse_codex(proc.stdout), **verify(checkout, args.task, context, root)}
+              **parse_codex(proc.stdout), **verify(checkout, args.task, context, root, work / "verify" / "codex")}
     (HERE / "results").mkdir(exist_ok=True)
     (HERE / "results" / "codex-check.json").write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     print(json.dumps(record, indent=2, sort_keys=True))
+
+
+def effects(runs: list[dict], a: str, b: str) -> dict:
+    """Paired effects of arm b against arm a. Success is a difference; the others are ratios of geometric means.
+    Each has the cluster-bootstrap interval and, as a cross-check, a t-interval on the per-task differences."""
+    out = {}
+    success = stats.cells(runs, lambda r: float(r["success"]) if r.get("success") is not None else None)
+    out["success_diff_b_minus_a"] = {"bootstrap": stats.bootstrap(success, a, b), "t": stats.t_interval(stats.paired(success, a, b))}
+    for key in ("cost_usd", "wall_s", "output_tokens", "turns"):
+        table = stats.cells(runs, lambda r, key=key: r.get(key) if (r.get(key) or 0) > 0 else None)
+        out[f"{key}_geomean_ratio_b_over_a"] = {"bootstrap": tuple(math.exp(x) for x in stats.bootstrap(table, a, b, transform=math.log)),
+                                                "t": tuple(math.exp(x) for x in stats.t_interval(stats.paired(table, a, b, math.log)))}
+    return {name: {kind: [round(x, 4) for x in values] for kind, values in value.items()} for name, value in out.items()}
 
 
 def summarize(runs: list[dict]) -> dict:
@@ -434,28 +563,42 @@ def summarize(runs: list[dict]) -> dict:
                                 "output_tokens": avg("output_tokens"), "cache_read_tokens": avg("cache_read_tokens"),
                                 "cache_write_tokens": avg("cache_write_tokens"), "first_request_tokens": avg("first_request_tokens"),
                                 "lines_changed": avg("lines_added"), "statuses": {s: sum(r["status"] == s for r in group) for s in {r["status"] for r in group}}}
+    for arm in arms:  # behavior flags (see trajectory()) and environment checks, as run counts per arm
+        group = [r for r in fair if r["arm"] == arm]
+        summary["arms"][arm]["behavior"] = {
+            "updated_test_harness": sum(any("test_harness" in f for f in r.get("files", [])) for r in group),
+            **{flag: sum(bool(r.get(flag)) for r in group) for flag in
+               ("ran_unittest", "ran_harness_check", "git_stash", "git_commit_in_checkout", "saw_import_rule_failure")},
+            "permission_denials": sum(r.get("permission_denials") or 0 for r in group),
+            "file_tool_paths_watched": sum(r.get("file_tool_paths_watched") or 0 for r in group),
+            "mcp_tools": sum(r.get("mcp_tools") or 0 for r in group),
+        }
+    starts = sorted(r["started"] for r in fair if r.get("started"))
+    summary["started_span_utc"] = [starts[0], starts[-1]] if starts else None
     if len(arms) == 2:
         a, b = "full", "minimal"
+        summary["effects"] = effects(fair, a, b)
+        # Sensitivity: drop task/repeat pairs whose minimal run hit the repository's own docs check failure (a confound
+        # that exists only in the minimal arm, because the harness requires CLAUDE.md to import every entry doc).
+        confounded = {(r["task"], r["repeat"]) for r in fair if r["arm"] == b and r.get("saw_import_rule_failure")}
+        clean = [r for r in fair if (r["task"], r["repeat"]) not in confounded]
+        summary["effects_excluding_import_rule_pairs"] = {"excluded_pairs": len(confounded), **effects(clean, a, b)}
         repeats = max(1, round(len(fair) / (2 * len({r["task"] for r in fair}))))
         success = stats.cells(fair, lambda r: float(r["success"]) if r.get("success") is not None else None)
-        effects = {"success_diff_b_minus_a": stats.bootstrap(success, a, b)}
-        for key in ("cost_usd", "wall_s", "output_tokens", "turns"):
-            table = stats.cells(fair, lambda r, key=key: r.get(key) if (r.get(key) or 0) > 0 else None)
-            estimate, low, high = stats.bootstrap(table, a, b, transform=math.log)
-            effects[f"{key}_ratio_b_over_a"] = (math.exp(estimate), math.exp(low), math.exp(high))
         cost = stats.cells(fair, lambda r: r.get("cost_usd") if (r.get("cost_usd") or 0) > 0 else None)
         sigma2 = stats.within_variance(cost, math.log)
         tau2_cost = stats.heterogeneity(stats.paired(cost, a, b, math.log), sigma2 or 0, repeats)
         w = stats.within_variance(success)
         tau2_success = stats.heterogeneity(stats.paired(success, a, b), w or 0, repeats)
-        summary["effects"] = {k: [round(x, 4) for x in v] for k, v in effects.items()}
         summary["variance"] = {"sigma_log_cost": round(math.sqrt(sigma2), 4) if sigma2 else None, "tau_log_cost": round(math.sqrt(tau2_cost), 4),
                                "w_success": round(w, 4) if w is not None else None, "tau_success": round(math.sqrt(tau2_success), 4),
                                "repeats": repeats, "tasks": len({r["task"] for r in fair})}
         designs = {}
         for n, r in ((12, 3), (20, 3), (20, 5), (23, 5), (40, 5), (65, 5)):
             designs[f"{n}x{r}"] = {"success_mde_pp": round(100 * stats.mde(tau2_success, w or 0, r, n), 1),
-                                   "cost_mde_pct": round(100 * (1 - math.exp(-stats.mde(tau2_cost, sigma2 or 0, r, n))), 1)}
+                                   # τ comes from 6 tasks (5 degrees of freedom): also show the study's τ and a high value.
+                                   **{f"cost_mde_pct_tau_{label}": round(100 * (1 - math.exp(-stats.mde(tau ** 2, sigma2 or 0, r, n))), 1)
+                                      for label, tau in (("measured", math.sqrt(tau2_cost)), ("0.10", 0.10), ("0.25", 0.25))}}
         summary["designs"] = designs
         summary["noninferiority_15pp_tasks_at_5_runs"] = stats.noninferiority_tasks(tau2_success, w or 0, 5, 0.15)
         per_task = {}
@@ -487,11 +630,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--work", default=os.environ.get("SPIKE_WORK", str(Path.home() / ".cache/agentium-spike")))
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("validate", help="check each task fails on the base and passes with its reference patch")
+    sub.add_parser("validate", help="check each task, in each arm, fails on the base and passes with its reference patch")
     sub.add_parser("probe", help="isolation canaries and per-arm context size")
     codex = sub.add_parser("codex", help="one Codex run to check its JSON output")
     codex.add_argument("--task", default="branch-types", choices=TASKS)
-    for name in ("run", "report"):
+    for name in ("run", "report", "reparse"):
         command = sub.add_parser(name)
         command.add_argument("--experiment", default="context-ab")
         if name == "run":
@@ -500,7 +643,8 @@ def main() -> None:
             command.add_argument("--cap", type=float, default=150.0, help="stop starting runs at this estimated USD total")
             command.add_argument("--seed", type=int, default=20260927)
     args = parser.parse_args()
-    {"validate": command_validate, "probe": command_probe, "codex": command_codex, "run": command_run, "report": command_report}[args.command](args)
+    {"validate": command_validate, "probe": command_probe, "codex": command_codex, "run": command_run, "report": command_report,
+     "reparse": command_reparse}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 import random
-from statistics import mean, variance
+from statistics import mean, stdev, variance
 
 Z_TWO_SIDED_80 = (1.96 + 0.8416) ** 2  # alpha 0.05 two-sided, power 0.8
 Z_ONE_SIDED_80 = (1.645 + 0.8416) ** 2  # alpha 0.05 one-sided (non-inferiority), power 0.8
@@ -75,3 +75,22 @@ def mde(tau2: float, within: float, repeats: int, tasks: int) -> float:
 def noninferiority_tasks(tau2: float, within: float, repeats: int, margin: float) -> int:
     """Tasks needed to show 'no loss beyond margin' with 80% power when there is no true difference."""
     return math.ceil(Z_ONE_SIDED_80 * (tau2 + 2 * within / repeats) / margin ** 2)
+
+
+# Two-sided 95% t quantiles; t_quantile uses the nearest listed df at or below df, which errs wide.
+T975 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228,
+        12: 2.179, 15: 2.131, 20: 2.086, 25: 2.060, 30: 2.042, 40: 2.021, 60: 2.000, 120: 1.980}
+
+
+def t_quantile(df: int) -> float:
+    return T975[max(k for k in T975 if k <= df)] if df >= 1 else math.inf
+
+
+def t_interval(diffs: list[float]) -> tuple[float, float, float]:
+    """Mean and 95% t-interval of per-task paired differences: a cross-check on the bootstrap. With few tasks the
+    percentile bootstrap runs narrow; the two-stage bootstrap counts within-cell noise twice and runs wide."""
+    if len(diffs) < 2:
+        raise ValueError("need at least two tasks")
+    center = mean(diffs)
+    half = t_quantile(len(diffs) - 1) * stdev(diffs) / math.sqrt(len(diffs))
+    return center, center - half, center + half

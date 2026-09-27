@@ -1,6 +1,17 @@
 {
   "arms": {
     "full": {
+      "behavior": {
+        "file_tool_paths_watched": 0,
+        "git_commit_in_checkout": 0,
+        "git_stash": 0,
+        "mcp_tools": 0,
+        "permission_denials": 16,
+        "ran_harness_check": 19,
+        "ran_unittest": 20,
+        "saw_import_rule_failure": 0,
+        "updated_test_harness": 16
+      },
       "cache_read_tokens": 596629.4333,
       "cache_write_tokens": 26949.5,
       "cost_usd": 0.2865,
@@ -17,6 +28,17 @@
       "wall_s": 100.5333
     },
     "minimal": {
+      "behavior": {
+        "file_tool_paths_watched": 0,
+        "git_commit_in_checkout": 0,
+        "git_stash": 11,
+        "mcp_tools": 0,
+        "permission_denials": 9,
+        "ran_harness_check": 11,
+        "ran_unittest": 30,
+        "saw_import_rule_failure": 11,
+        "updated_test_harness": 30
+      },
       "cache_read_tokens": 616133.5333,
       "cache_write_tokens": 27262.8667,
       "cost_usd": 0.3014,
@@ -35,56 +57,166 @@
   },
   "designs": {
     "12x3": {
-      "cost_mde_pct": 12.1,
+      "cost_mde_pct_tau_0.10": 13.7,
+      "cost_mde_pct_tau_0.25": 21.1,
+      "cost_mde_pct_tau_measured": 12.1,
       "success_mde_pp": 14.8
     },
     "20x3": {
-      "cost_mde_pct": 9.5,
+      "cost_mde_pct_tau_0.10": 10.8,
+      "cost_mde_pct_tau_0.25": 16.8,
+      "cost_mde_pct_tau_measured": 9.5,
       "success_mde_pp": 11.4
     },
     "20x5": {
-      "cost_mde_pct": 7.7,
+      "cost_mde_pct_tau_0.10": 9.2,
+      "cost_mde_pct_tau_0.25": 15.9,
+      "cost_mde_pct_tau_measured": 7.7,
       "success_mde_pp": 8.9
     },
     "23x5": {
-      "cost_mde_pct": 7.2,
+      "cost_mde_pct_tau_0.10": 8.7,
+      "cost_mde_pct_tau_0.25": 14.9,
+      "cost_mde_pct_tau_measured": 7.2,
       "success_mde_pp": 8.3
     },
     "40x5": {
-      "cost_mde_pct": 5.5,
+      "cost_mde_pct_tau_0.10": 6.6,
+      "cost_mde_pct_tau_0.25": 11.5,
+      "cost_mde_pct_tau_measured": 5.5,
       "success_mde_pp": 6.3
     },
     "65x5": {
-      "cost_mde_pct": 4.3,
+      "cost_mde_pct_tau_0.10": 5.2,
+      "cost_mde_pct_tau_0.25": 9.2,
+      "cost_mde_pct_tau_measured": 4.3,
       "success_mde_pp": 4.9
     }
   },
   "effects": {
-    "cost_usd_ratio_b_over_a": [
-      1.0825,
-      0.9583,
-      1.2294
-    ],
-    "output_tokens_ratio_b_over_a": [
-      1.1913,
-      1.0243,
-      1.3841
-    ],
-    "success_diff_b_minus_a": [
-      -0.0333,
-      -0.1667,
-      0.0667
-    ],
-    "turns_ratio_b_over_a": [
-      1.1187,
-      0.9294,
-      1.3825
-    ],
-    "wall_s_ratio_b_over_a": [
-      1.2653,
-      0.8757,
-      1.7387
-    ]
+    "cost_usd_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.0825,
+        0.9583,
+        1.2294
+      ],
+      "t": [
+        1.0825,
+        0.9469,
+        1.2375
+      ]
+    },
+    "output_tokens_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.1913,
+        1.0243,
+        1.3841
+      ],
+      "t": [
+        1.1913,
+        1.0147,
+        1.3986
+      ]
+    },
+    "success_diff_b_minus_a": {
+      "bootstrap": [
+        -0.0333,
+        -0.1667,
+        0.0667
+      ],
+      "t": [
+        -0.0333,
+        -0.119,
+        0.0524
+      ]
+    },
+    "turns_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.1187,
+        0.9294,
+        1.3825
+      ],
+      "t": [
+        1.1187,
+        0.8698,
+        1.4387
+      ]
+    },
+    "wall_s_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.2653,
+        0.8757,
+        1.7387
+      ],
+      "t": [
+        1.2653,
+        0.8347,
+        1.9179
+      ]
+    }
+  },
+  "effects_excluding_import_rule_pairs": {
+    "cost_usd_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.0506,
+        0.9116,
+        1.209
+      ],
+      "t": [
+        1.0506,
+        0.8767,
+        1.2591
+      ]
+    },
+    "excluded_pairs": 11,
+    "output_tokens_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.2305,
+        1.0659,
+        1.3898
+      ],
+      "t": [
+        1.2305,
+        1.0515,
+        1.4399
+      ]
+    },
+    "success_diff_b_minus_a": {
+      "bootstrap": [
+        -0.0333,
+        -0.1667,
+        0.0667
+      ],
+      "t": [
+        -0.0333,
+        -0.119,
+        0.0524
+      ]
+    },
+    "turns_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.0364,
+        0.797,
+        1.3577
+      ],
+      "t": [
+        1.0364,
+        0.7174,
+        1.4973
+      ]
+    },
+    "wall_s_geomean_ratio_b_over_a": {
+      "bootstrap": [
+        1.2207,
+        0.7394,
+        1.8881
+      ],
+      "t": [
+        1.2207,
+        0.635,
+        2.3469
+      ]
+    }
   },
   "fair_runs": 60,
   "infra_runs": 0,
@@ -152,6 +284,10 @@
     }
   },
   "runs": 60,
+  "started_span_utc": [
+    "2026-09-27T16:43:59",
+    "2026-09-27T17:19:11"
+  ],
   "variance": {
     "repeats": 5,
     "sigma_log_cost": 0.187,

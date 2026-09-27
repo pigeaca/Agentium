@@ -2,7 +2,7 @@
   "all_sources": {
     "answer": "PROJECT-PELICAN",
     "auth_ok": true,
-    "cost_usd": 0.039192,
+    "cost_usd": 0.038145,
     "skills_available": 34,
     "tools": [
       "Bash",
@@ -11,7 +11,6 @@
       "ListAgents",
       "NotebookEdit",
       "Read",
-      "RemoteTrigger",
       "ReportFindings",
       "Skill",
       "Task",
@@ -21,40 +20,34 @@
       "TaskStop",
       "TaskUpdate",
       "ToolSearch",
-      "Write",
-      "mcp__claude_ai_Claude_Docs__batch",
-      "mcp__claude_ai_Claude_Docs__create",
-      "mcp__claude_ai_Claude_Docs__delete",
-      "mcp__claude_ai_Claude_Docs__export",
-      "mcp__claude_ai_Claude_Docs__guide",
-      "mcp__claude_ai_Claude_Docs__query",
-      "mcp__claude_ai_Claude_Docs__read",
-      "mcp__claude_ai_Claude_Docs__update"
+      "Write"
     ]
   },
   "auth": "login",
   "context_full": {
     "cli_version": "2.1.281",
-    "cost_usd": 0.117656,
-    "first_request_tokens": 29405,
+    "cost_usd": 0.051486800000000006,
+    "first_request_tokens": 28779,
+    "mcp_tools": 0,
     "model": "claude-sonnet-5",
     "result_excerpt": "OK",
     "skills_available": 20,
-    "tools_available": 21
+    "tools_available": 12
   },
   "context_minimal": {
     "cli_version": "2.1.281",
-    "cost_usd": 0.040682800000000005,
-    "first_request_tokens": 26078,
+    "cost_usd": 0.038142800000000004,
+    "first_request_tokens": 25443,
+    "mcp_tools": 0,
     "model": "claude-sonnet-5",
     "result_excerpt": "OK",
     "skills_available": 20,
-    "tools_available": 21
+    "tools_available": 12
   },
   "project_only": {
     "answer": "PROJECT-PELICAN",
     "auth_ok": true,
-    "cost_usd": 0.015310500000000001,
+    "cost_usd": 0.0143085,
     "skills_available": 19,
     "tools": [
       "Bash",
@@ -63,7 +56,6 @@
       "ListAgents",
       "NotebookEdit",
       "Read",
-      "RemoteTrigger",
       "ReportFindings",
       "Skill",
       "Task",
@@ -73,15 +65,7 @@
       "TaskStop",
       "TaskUpdate",
       "ToolSearch",
-      "Write",
-      "mcp__claude_ai_Claude_Docs__batch",
-      "mcp__claude_ai_Claude_Docs__create",
-      "mcp__claude_ai_Claude_Docs__delete",
-      "mcp__claude_ai_Claude_Docs__export",
-      "mcp__claude_ai_Claude_Docs__guide",
-      "mcp__claude_ai_Claude_Docs__query",
-      "mcp__claude_ai_Claude_Docs__read",
-      "mcp__claude_ai_Claude_Docs__update"
+      "Write"
     ]
   },
   "user_level_skills_excluded_by_project_only": 15
