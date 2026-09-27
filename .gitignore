@@ -7,7 +7,10 @@
 # Python harness caches
 __pycache__/
 
-# Secrets and local environment
+# Personal client settings (permissions, absolute paths)
+.claude/settings.local.json
+
+# Secrets, tokens and local data
 .env
 .env.*
 !.env.example
@@ -15,7 +18,14 @@ __pycache__/
 *.key
 *.p12
 *.pfx
+*.secret
 credentials.json
+serviceaccount.json
+token.txt
+*.db
+*.sqlite
+*.sqlite3
+*.dump
 
 # Client-managed agent worktrees (Claude Code creates them here)
 .claude/worktrees/

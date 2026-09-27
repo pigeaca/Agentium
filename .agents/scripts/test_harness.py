@@ -114,7 +114,7 @@ class CredentialScan(unittest.TestCase):
         self.assertEqual(harness.credential_findings(diff), ["notes.md:8: added line looks like a OpenAI API key"])
 
     def test_sensitive_paths(self):
-        for path in [".env", "config/.env.local", "certs/server.pem", "tls.key", "id_ed25519", "credentials.json"]:
+        for path in [".env", "config/.env.local", "certs/server.pem", "tls.key", "id_ed25519", "credentials.json", ".claude/settings.local.json"]:
             self.assertTrue(harness.sensitive_path(path), path)
         for path in [".env.example", "id_ed25519.pub", "docs/keys.md", "environment.ts"]:
             self.assertFalse(harness.sensitive_path(path), path)
@@ -193,6 +193,16 @@ class ChangedCheckSelection(unittest.TestCase):
         self.assertTrue(any("no mapped check" in suggestion and "cmd/server/main.go" in suggestion for suggestion in suggestions))
 
 
+class RemoteUrls(unittest.TestCase):
+    def test_ssh_github_remotes_get_an_https_fallback(self):
+        for url in ["git@github.com:/pigeaca/Agentium.git", "git@github.com:pigeaca/Agentium.git", "ssh://git@github.com/pigeaca/Agentium.git"]:
+            with self.subTest(url=url):
+                self.assertEqual(harness.https_url(url), "https://github.com/pigeaca/Agentium.git")
+        for url in ["https://github.com/pigeaca/Agentium.git", "git@gitlab.com:team/repo.git", "/tmp/remote.git"]:
+            with self.subTest(url=url):
+                self.assertIsNone(harness.https_url(url))
+
+
 class OfflineInstall(unittest.TestCase):
     def test_lockfiles_are_installed_offline_and_nothing_else_runs(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -266,7 +276,7 @@ class WorktreeLifecycle(unittest.TestCase):
         self.primary = self.base / "repo"
         subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(self.base / "remote.git")], check=True)
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.primary)], check=True)
-        (self.primary / ".gitignore").write_text("node_modules/\n")
+        (self.primary / ".gitignore").write_text("node_modules/\n.idea/\n")
         self.git("add", ".gitignore")
         self.git("commit", "-q", "-m", "initial")
         self.git("remote", "add", "origin", str(self.base / "remote.git"))
@@ -308,12 +318,25 @@ class WorktreeLifecycle(unittest.TestCase):
         with patch("builtins.print"), self.assertRaisesRegex(ValueError, "uncommitted or untracked"):
             harness.worktree_remove("claude/fix/probe")
         (path / "stray.txt").unlink()
-        (path / "node_modules").mkdir()
-        (path / "node_modules" / "package.js").write_text("ignored\n")
+        (path / ".idea").mkdir()
+        (path / ".idea" / "workspace.xml").write_text("personal\n")
+        with patch("builtins.print"), self.assertRaisesRegex(ValueError, r"ignored files .*\.idea"):
+            harness.worktree_remove("claude/fix/probe")
+        shutil.rmtree(path / ".idea")
+        (path / "web" / "node_modules").mkdir(parents=True)
+        (path / "web" / "node_modules" / "package.js").write_text("regenerable\n")
         with patch("builtins.print"):
             harness.worktree_remove("claude/fix/probe")
         self.assertFalse(path.exists())
         self.assertNotIn("claude/fix/probe", self.git("branch", "--list", "claude/fix/probe"))
+
+    def test_new_refuses_a_stale_base_unless_explicit(self):
+        with patch.object(harness, "fetch_default", return_value=("origin/main", False)), self.assertRaisesRegex(ValueError, "--base origin/main"):
+            harness.worktree_new("claude/fix/stale", None)
+        self.assertFalse((self.base / "repo-worktrees" / "claude-fix-stale").exists())
+        with patch.object(harness, "fetch_default", side_effect=AssertionError("explicit base must not fetch")), patch("builtins.print"):
+            harness.worktree_new("claude/fix/stale", "origin/main")
+        self.assertTrue((self.base / "repo-worktrees" / "claude-fix-stale").is_dir())
 
     def test_remove_refuses_default_branch_and_current_checkout(self):
         for branch in ["main", "master"]:

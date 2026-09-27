@@ -31,6 +31,8 @@ METRIC_LINE = re.compile(r"^- (Agent|Elapsed|Check-fix loops|User corrections|Re
 OFFLINE_INSTALLERS = {
     "pnpm-lock.yaml": (["corepack", "pnpm", "install", "--frozen-lockfile", "--offline"], {"COREPACK_ENABLE_NETWORK": "0", "npm_config_update_notifier": "false"}),
 }
+# Ignored path components that tools recreate; any other ignored file blocks `worktree remove`.
+REGENERABLE = {"node_modules", "__pycache__", "dist", "build", "target", ".venv", ".pytest_cache", "coverage.out", "test-results", "playwright-report", ".DS_Store"}
 
 
 def run(*args: str, cwd: Path | None = None, extra_env: dict[str, str] | None = None) -> None:
@@ -121,8 +123,9 @@ def check_docs() -> None:
     if archived != indexed:
         raise ValueError(f"Archive/index mismatch: {sorted(archived ^ indexed)}")
     ignored = {"node_modules", ".git", "dist", "vendor", ".venv"}
+    skipped = {archive, ROOT / ".claude/worktrees"}  # Client-managed worktrees are other checkouts, not this tree's docs.
     for directory, directories, files in os.walk(ROOT):
-        directories[:] = [d for d in directories if d not in ignored and Path(directory, d) != archive and not Path(directory, d).is_symlink()]
+        directories[:] = [d for d in directories if d not in ignored and Path(directory, d) not in skipped and not Path(directory, d).is_symlink()]
         for name in files:
             path = Path(directory, name)
             if not name.endswith(".md") or path.is_symlink():
@@ -159,7 +162,7 @@ def credential_findings(diff: str) -> list[str]:
 
 def sensitive_path(path: str) -> bool:
     name = Path(path).name
-    return (name in {".env", "credentials.json"} or (name.startswith(".env.") and name != ".env.example")
+    return (name in {".env", "credentials.json", "settings.local.json"} or (name.startswith(".env.") and name != ".env.example")
             or name.endswith((".pem", ".key", ".p12", ".pfx"))
             or (name.startswith(("id_rsa", "id_ecdsa", "id_ed25519")) and not name.endswith(".pub")))
 
@@ -299,12 +302,24 @@ def worktree_branches() -> dict[str, Path]:
     return branches
 
 
-def fetch_default() -> str:
+def https_url(url: str) -> str | None:
+    """HTTPS form of an SSH GitHub remote (git@github.com:owner/repo.git), for shells without an SSH key."""
+    match = re.match(r"^(?:ssh://)?git@github\.com[:/]+(.+?)/?$", url)
+    return f"https://github.com/{match[1]}" if match else None
+
+
+def fetch_default() -> tuple[str, bool]:
+    """Fetch the remote default branch; fall back to HTTPS for SSH GitHub remotes. Returns (ref, fetched)."""
     base = remote_default()
     remote, _, branch = base.partition("/")
-    if subprocess.run(["git", "fetch", "--quiet", remote, branch], cwd=ROOT, capture_output=True).returncode:
-        print(f"[harness] Could not fetch {base}; using the last fetched state.", file=sys.stderr)
-    return base
+    if subprocess.run(["git", "fetch", "--quiet", remote, branch], cwd=ROOT, capture_output=True).returncode == 0:
+        return base, True
+    fallback = https_url(git_output("remote", "get-url", remote).strip())
+    if fallback and subprocess.run(["git", "fetch", "--quiet", fallback, f"+refs/heads/{branch}:refs/remotes/{base}"],
+                                   cwd=ROOT, capture_output=True).returncode == 0:
+        return base, True
+    print(f"[harness] Could not fetch {base} (SSH and HTTPS); its last fetched state may be stale.", file=sys.stderr)
+    return base, False
 
 
 def worktree_new(branch: str, base: str | None) -> None:
@@ -314,7 +329,11 @@ def worktree_new(branch: str, base: str | None) -> None:
     path = primary.parent / f"{primary.name}-worktrees" / branch.replace("/", "-")
     if path.exists():
         raise ValueError(f"{path} already exists; reuse it or choose another branch.")
-    base = base or fetch_default()
+    if base is None:
+        base, fetched = fetch_default()
+        if not fetched:
+            # A stale default branch silently starts the task from old code; make the choice explicit instead.
+            raise ValueError(f"Could not fetch {base}; nothing created. Fix access, or pass --base {base} to use the stale state deliberately.")
     # --no-track: a task branch must not adopt the default branch as upstream (a bare push or pull would target it).
     run("git", "worktree", "add", "--no-track", "-b", branch, str(path), base)
     try:
@@ -329,7 +348,7 @@ def worktree_remove(branch: str) -> None:
     """Remove a merged task worktree and its local branch using only Git's non-forcing operations."""
     if not BRANCH_PATTERN.match(branch):
         raise ValueError("Only task branches (<agent>/<type>/<topic>) can be removed; the default branch never is.")
-    base = fetch_default()
+    base, _ = fetch_default()  # A stale base can only make a merged branch look unmerged, so removal errs on refusing.
     if subprocess.run(["git", "merge-base", "--is-ancestor", branch, base], cwd=ROOT, capture_output=True).returncode:
         raise ValueError(f"{branch} is not merged into {base}; nothing removed. Squash-merged branches must be removed by hand.")
     path = worktree_branches().get(branch)
@@ -338,6 +357,13 @@ def worktree_remove(branch: str) -> None:
             raise ValueError(f"{branch} is checked out in {path}, the current or primary checkout; switch it first.")
         if git_output("-C", str(path), "status", "--porcelain").strip():
             raise ValueError(f"{path} has uncommitted or untracked work; nothing removed.")
+        # `git worktree remove` also deletes ignored files; only regenerable ones may go without asking.
+        # --ignored=matching lists each ignored pattern match (web/node_modules/), not its collapsed parent (web/).
+        status = git_output("-C", str(path), "status", "--porcelain", "--ignored=matching", "--untracked-files=all")
+        ignored = [line[3:] for line in status.splitlines() if line.startswith("!! ")]
+        kept = [entry for entry in ignored if not REGENERABLE.intersection(entry.rstrip("/").split("/"))]
+        if kept:
+            raise ValueError(f"{path} has ignored files that may be personal work ({', '.join(kept[:5])}); move or delete them first.")
         run("git", "worktree", "remove", str(path))
     run("git", "branch", "-d", branch)
 

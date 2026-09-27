@@ -19,5 +19,6 @@ Load references by the boundary being changed:
 | Checks and evidence | [Verification](rules/testing.md) |
 | Dependencies, credentials or external data | [Dependencies](rules/supply-chain.md) and [secrets](rules/secrets.md) |
 | Architectural choices | [Decisions](decisions/README.md) |
+| Reading efficiently | [Context budget](reference/context-budget.md) |
 
 Product references are added here once the architecture exists. Create a plan sized to the change before implementation. Update affected docs when behavior changes; archive completed or superseded plans. Do not load every rule, reference or archived plan for routine work.

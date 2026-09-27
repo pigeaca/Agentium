@@ -47,7 +47,10 @@ Plan templates end with a Metrics block (agent/model/effort, elapsed minutes, ch
 
 The remote is `origin` → `pigeaca/Agentium` (**public**); the default branch is `main`. Agents use the GitHub CLI (`gh`, Homebrew at `/opt/homebrew/bin/gh`; prepend it to `PATH` if a shell lacks it). The user logs `gh` in with a fine-grained personal access token, and `gh auth setup-git` makes it Git's HTTPS credential helper. Never ask for, print or store the token.
 
-The clone's `origin` uses SSH, and agent shells may have no SSH key registered with GitHub. Push task branches over HTTPS without changing the remote: `git push -u https://github.com/pigeaca/Agentium.git <branch>`, then `git branch --set-upstream-to=origin/<branch>` after a `git fetch origin` succeeds (or leave the upstream unset and always push with the HTTPS URL).
+The clone's `origin` uses SSH, and agent shells may have no SSH key registered with GitHub. Without changing the remote:
+- **Fetch:** the harness's `worktree new/remove` fall back to HTTPS automatically. By hand: `git fetch https://github.com/pigeaca/Agentium.git +refs/heads/main:refs/remotes/origin/main`.
+- **Push:** `git push -u https://github.com/pigeaca/Agentium.git <branch>`. This records the URL as the branch's upstream, so later plain `git push` calls use HTTPS too.
+- **Permanent fix (the user's choice, since it changes Git config):** `git config url."https://github.com/".insteadOf git@github.com:`, or register an SSH key for the agent shell.
 
 The token must include this repository, with Contents, Pull requests and **Workflows** read/write (GitHub rejects pushes that touch `.github/workflows/` without Workflows), plus Actions and Commit statuses read. Fine-grained tokens cannot have a Checks permission, so `gh pr checks`, the check-runs API and the desktop app's CI monitor fail with 403. Read CI through the Actions API instead:
 

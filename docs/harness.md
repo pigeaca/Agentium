@@ -7,7 +7,7 @@ Run `python3 .agents/scripts/harness.py <command>` from the repository root, or 
 | `doctor` | Show Python and whether git, gh, gofmt and corepack are installed | Environment diagnosis |
 | `check docs` | Doc links, Claude imports, skill and subagent adapters, context size, plan archive | Documentation change |
 | `check harness` | Harness regression tests (temporary fixtures only) | Harness change |
-| `check ci` | `docs` + `harness`; what CI runs | Before opening a PR |
+| `check ci` (also plain `check`) | `docs` + `harness`; what CI runs | Before opening a PR |
 | `check changed [--dry-run] [base]` | Select and run the checks for everything changed since the merge base with the remote default branch | Before committing or opening a PR |
 | `check staged` | Index-only guard: whitespace, credential-shaped additions, env/key files, staged Go formatting when present, docs | Pre-commit hook |
 | `hooks` | Point `core.hooksPath` at the tracked `.githooks/` for all local worktrees | Once per clone |
@@ -33,9 +33,9 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 
 ## Task worktrees
 
-`worktree new claude/fix/cancel-race` fetches the remote default branch and creates the branch without an upstream, so a bare push or pull never targets the default branch; the first `git push -u` sets one. The worktree lands at `<repo>-worktrees/claude-fix-cancel-race` beside the primary checkout, and the command installs dependencies offline and prints the path. Branch names must follow the Git rules. If the offline install fails, the worktree is kept and the message names the missing setup.
+`worktree new claude/fix/login-timeout` fetches the remote default branch, retrying over HTTPS when an SSH GitHub remote fails. It refuses to continue on a stale base unless you pass `--base` explicitly. It creates the branch without an upstream, so a bare push or pull never targets the default branch; the first `git push -u` sets one. The worktree lands at `<repo>-worktrees/claude-fix-login-timeout` beside the primary checkout, and the command installs dependencies offline and prints the path. Branch names must follow the Git rules. If the offline install fails, the worktree is kept and the message names the missing setup.
 
-`worktree remove <branch>` accepts only task branch names. It fetches, then refuses unless the branch is contained in the remote default branch and its worktree has no uncommitted or untracked files; ignored files such as dependency folders are fine. It uses `git worktree remove` and `git branch -d` without force, and never removes the current or primary checkout. Squash-merged branches are not detected as merged; remove those by hand after checking.
+`worktree remove <branch>` accepts only task branch names. It fetches, then refuses unless the branch is contained in the remote default branch and its worktree has no uncommitted or untracked files. It also refuses ignored files that could be personal work (`.idea/`, `.env.local`, notes); only regenerable ones such as `node_modules`, `dist`, `build` and caches may be deleted with the worktree. It uses `git worktree remove` and `git branch -d` without force, and never removes the current or primary checkout. Squash-merged branches are not detected as merged; remove those by hand after checking.
 
 ## Choosing checks
 
@@ -53,7 +53,11 @@ When the stack is chosen, extend the harness in one change:
 1. Add `check` scopes for the stack's tests (e.g. `check go` running vet, gofmt, race tests and `govulncheck`), and include them in `check ci`.
 2. Add rules to `plan_checks` that map the stack's paths to those scopes (e.g. Go packages to `go test ./pkg/...`), with tests in `ChangedCheckSelection`.
 3. Add the stack's lockfile and offline installer to `OFFLINE_INSTALLERS` if it has one.
-4. Add CI jobs with SHA-pinned actions, and pin tool and toolchain versions.
-5. Record the stack in the architecture and a decision record.
+4. Clear provider credentials and database URLs in the harness `ENV`, so checks never reach live services.
+5. Add CI jobs with SHA-pinned actions, and pin tool and toolchain versions.
+6. Record the stack in the architecture and a decision record.
 
-Orchid's harness (Go + React: `check go-ci`, browser suites, a per-worktree UI port, a PostgreSQL check that sets `LC_ALL=C`) is a tested reference for these pieces.
+Common pieces worth adding with a Go or web stack:
+- a combined Go CI scope (vet, gofmt, race tests with a coverage floor, pinned `govulncheck`);
+- browser suites that run on a per-worktree port;
+- a disposable-database check whose tools get `LC_ALL=C`, because macOS PostgreSQL aborts without a valid locale.

@@ -18,7 +18,7 @@ Copy the process, not the product. Agentium carries over:
 - the pre-commit guard,
 - a stack-neutral harness: docs/adapter validation, the staged guard, check selection, worktree lifecycle with an optional offline dependency install, and metrics.
 
-It leaves behind Orchid's UI, palette, runtime, interface and persistence references, its browser gallery and fixtures, and all Go/frontend checks. Orchid keeps its own copy unchanged.
+It leaves behind Orchid's UI, palette, runtime, interface and persistence references, its browser gallery and fixtures, and its Go and frontend check suites. Two generic hooks stay dormant until matching files exist: the staged guard's gofmt step (only for staged `.go` files) and the offline pnpm install (only for a `pnpm-lock.yaml`). The harness environment no longer clears provider keys or database URLs, because there is nothing to protect yet; the stack change must restore that. Orchid keeps its own copy unchanged.
 
 ## Consequences
 
