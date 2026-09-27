@@ -1,6 +1,6 @@
 # Agentium
 
-Product description: to be defined.
+Agentium is a planned local-first lab for AI coding agents. It runs agents such as Claude Code and Codex on tasks from your own repository, and measures how the agent, the model or the project's AI context (`AGENTS.md`, `CLAUDE.md`, skills) changes correctness, cost and speed, with honest statistics. The design is at the research stage: see [the feasibility study](docs/research/2026-09-27-ai-development-lab.md).
 
 ## Development process
 
