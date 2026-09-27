@@ -1,0 +1,163 @@
+{
+  "arms": {
+    "full": {
+      "cache_read_tokens": 596629.4333,
+      "cache_write_tokens": 26949.5,
+      "cost_usd": 0.2865,
+      "first_request_tokens": 28928.6,
+      "lines_changed": 16.6667,
+      "output_tokens": 5934.3667,
+      "runs": 30,
+      "statuses": {
+        "ok": 30
+      },
+      "success_rate": 0.9667,
+      "tool_calls": 15.1333,
+      "turns": 16.1333,
+      "wall_s": 100.5333
+    },
+    "minimal": {
+      "cache_read_tokens": 616133.5333,
+      "cache_write_tokens": 27262.8667,
+      "cost_usd": 0.3014,
+      "first_request_tokens": 25569.5333,
+      "lines_changed": 20.0333,
+      "output_tokens": 6909.8333,
+      "runs": 30,
+      "statuses": {
+        "ok": 30
+      },
+      "success_rate": 0.9333,
+      "tool_calls": 16.0333,
+      "turns": 17.0333,
+      "wall_s": 110.9133
+    }
+  },
+  "designs": {
+    "12x3": {
+      "cost_mde_pct": 12.1,
+      "success_mde_pp": 14.8
+    },
+    "20x3": {
+      "cost_mde_pct": 9.5,
+      "success_mde_pp": 11.4
+    },
+    "20x5": {
+      "cost_mde_pct": 7.7,
+      "success_mde_pp": 8.9
+    },
+    "23x5": {
+      "cost_mde_pct": 7.2,
+      "success_mde_pp": 8.3
+    },
+    "40x5": {
+      "cost_mde_pct": 5.5,
+      "success_mde_pp": 6.3
+    },
+    "65x5": {
+      "cost_mde_pct": 4.3,
+      "success_mde_pp": 4.9
+    }
+  },
+  "effects": {
+    "cost_usd_ratio_b_over_a": [
+      1.0825,
+      0.9583,
+      1.2294
+    ],
+    "output_tokens_ratio_b_over_a": [
+      1.1913,
+      1.0243,
+      1.3841
+    ],
+    "success_diff_b_minus_a": [
+      -0.0333,
+      -0.1667,
+      0.0667
+    ],
+    "turns_ratio_b_over_a": [
+      1.1187,
+      0.9294,
+      1.3825
+    ],
+    "wall_s_ratio_b_over_a": [
+      1.2653,
+      0.8757,
+      1.7387
+    ]
+  },
+  "fair_runs": 60,
+  "infra_runs": 0,
+  "noninferiority_15pp_tasks_at_5_runs": 6,
+  "per_task": {
+    "branch-types": {
+      "full": {
+        "cost_usd": 0.236,
+        "success": "5/5"
+      },
+      "minimal": {
+        "cost_usd": 0.262,
+        "success": "5/5"
+      }
+    },
+    "markdown-links": {
+      "full": {
+        "cost_usd": 0.213,
+        "success": "5/5"
+      },
+      "minimal": {
+        "cost_usd": 0.209,
+        "success": "4/5"
+      }
+    },
+    "review-metric": {
+      "full": {
+        "cost_usd": 0.326,
+        "success": "5/5"
+      },
+      "minimal": {
+        "cost_usd": 0.393,
+        "success": "5/5"
+      }
+    },
+    "secret-patterns": {
+      "full": {
+        "cost_usd": 0.249,
+        "success": "4/5"
+      },
+      "minimal": {
+        "cost_usd": 0.241,
+        "success": "4/5"
+      }
+    },
+    "sensitive-files": {
+      "full": {
+        "cost_usd": 0.144,
+        "success": "5/5"
+      },
+      "minimal": {
+        "cost_usd": 0.183,
+        "success": "5/5"
+      }
+    },
+    "worktree-list": {
+      "full": {
+        "cost_usd": 0.551,
+        "success": "5/5"
+      },
+      "minimal": {
+        "cost_usd": 0.52,
+        "success": "5/5"
+      }
+    }
+  },
+  "runs": 60,
+  "variance": {
+    "repeats": 5,
+    "sigma_log_cost": 0.187,
+    "tasks": 6,
+    "tau_log_cost": 0.0476,
+    "tau_success": 0.0,
+    "w_success": 0.05
+  }
+}

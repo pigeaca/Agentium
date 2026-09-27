@@ -1,0 +1,33 @@
+{
+  "cli_version": "codex-cli 0.158.0-alpha.2.1",
+  "exit_code": 0,
+  "failed_turns": 0,
+  "files": [
+    "perf-ci-branch-types.patch"
+  ],
+  "hidden": {
+    "ok": false,
+    "tests": 3
+  },
+  "items": {
+    "agent_message": 4,
+    "command_execution": 12,
+    "error": 2
+  },
+  "lines_added": 57,
+  "lines_removed": 0,
+  "regression": {
+    "ok": true,
+    "tests": 27
+  },
+  "success": false,
+  "task": "branch-types",
+  "turns": 1,
+  "usage": {
+    "cached_input_tokens": 309248,
+    "input_tokens": 346293,
+    "output_tokens": 4829,
+    "reasoning_output_tokens": 1752
+  },
+  "wall_s": 169.4
+}

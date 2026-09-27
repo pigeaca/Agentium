@@ -1,0 +1,1 @@
+The pre-commit guard (`harness.py check staged`) should also refuse credential files that package managers and tools keep: `.npmrc`, `.pypirc`, `.netrc`, and Java keystores (`*.jks`, `*.keystore`), in any directory. Files that only mention these names, such as `docs/npmrc.md` or `src/netrc_parser.py`, must stay allowed, and so must everything that is allowed today.

@@ -1,0 +1,27 @@
+diff --git a/.agents/scripts/harness.py b/.agents/scripts/harness.py
+index 9fe9619..ad33aaf 100644
+--- a/.agents/scripts/harness.py
++++ b/.agents/scripts/harness.py
+@@ -24,6 +24,8 @@ SECRET_PATTERNS = (
+     ("GitHub token", r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})"),
+     ("Slack token", r"\bxox[abprs]-[A-Za-z0-9-]{10,}"),
+     ("private key", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
++    ("Google API key", r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])"),
++    ("Stripe secret key", r"\bsk_live_[0-9A-Za-z]{24,}"),
+ )
+ BRANCH_PATTERN = re.compile(r"^[a-z0-9-]+/(?:feat|fix|analysis|refactor|docs|test|chore)/[a-z0-9][a-z0-9.-]*$")
+ METRIC_LINE = re.compile(r"^- (Agent|Elapsed|Check-fix loops|User corrections|Review):[ \t]*(.*)$", re.M)
+diff --git a/.agents/scripts/test_harness.py b/.agents/scripts/test_harness.py
+index d43b126..e8e803c 100644
+--- a/.agents/scripts/test_harness.py
++++ b/.agents/scripts/test_harness.py
+@@ -104,7 +104,8 @@ class CredentialScan(unittest.TestCase):
+ 
+     def test_each_shape_marker_and_header_lookalike(self):
+         samples = [fake("sk-", "proj-", "b" * 24), fake("AK", "IA", "ABCDEFGHIJKLMNOP"), fake("gh", "p_", "c" * 36),
+-                   fake("xo", "xb-", "1234567890ab"), fake("-----BEGIN ", "RSA PRIVATE KEY-----")]
++                   fake("xo", "xb-", "1234567890ab"), fake("-----BEGIN ", "RSA PRIVATE KEY-----"),
++                   fake("AI", "za", "e" * 35), fake("sk_", "live_", "g" * 24)]
+         for sample in samples:
+             with self.subTest(sample=sample[:6]):
+                 self.assertEqual(len(harness.credential_findings(f"+++ b/x\n@@ -0,0 +1 @@\n+{sample}")), 1)

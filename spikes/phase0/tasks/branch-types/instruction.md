@@ -1,0 +1,1 @@
+Task branches should also allow two new types: `perf` for performance work (for example `claude/perf/faster-docs-check`) and `ci` for CI and workflow changes (for example `codex/ci/pin-actions`). Make `harness.py worktree new` and `worktree remove` accept them, keep rejecting every other type, and keep the Git rules consistent with the change.

@@ -1,0 +1,65 @@
+diff --git a/.agents/scripts/harness.py b/.agents/scripts/harness.py
+index 9fe9619..ceae3fc 100644
+--- a/.agents/scripts/harness.py
++++ b/.agents/scripts/harness.py
+@@ -381,7 +381,10 @@ def plan_metrics(text: str) -> dict | None:
+         match = re.match(r"\s*(\d+)", fields.get(key, ""))
+         return int(match[1]) if match else None
+ 
+-    return {"agent": " / ".join(agent[:3]), "minutes": number("Elapsed"), "loops": number("Check-fix loops"), "corrections": number("User corrections")}
++    # "approve", "changes requested, 3 fixed" or "not required (docs-only)"; a template placeholder yields None.
++    review = re.match(r"\s*(approve|changes requested|not required)\b", fields.get("Review", ""), re.I)
++    return {"agent": " / ".join(agent[:3]), "minutes": number("Elapsed"), "loops": number("Check-fix loops"),
++            "corrections": number("User corrections"), "review": review[1].lower() if review else None}
+ 
+ 
+ def metrics_report() -> None:
+@@ -394,14 +397,17 @@ def metrics_report() -> None:
+         known = [value for value in values if value is not None]
+         return f"{sum(known) / len(known):.1f}" if known else "-"
+ 
+-    print(f"{'client / model / effort':<44} {'tasks':>5} {'0-fix %':>8} {'loops':>6} {'fixes':>6} {'min':>6}")
++    print(f"{'client / model / effort':<44} {'tasks':>5} {'0-fix %':>8} {'loops':>6} {'fixes':>6} {'min':>6} {'approve %':>9}")
+     for agent in sorted({row["agent"] for row in rows}):
+         group = [row for row in rows if row["agent"] == agent]
+         rated = [row for row in group if row["corrections"] is not None]
+         clean = [row for row in rated if row["corrections"] == 0]
+         rate = f"{100 * len(clean) / len(rated):.0f}" if rated else "-"
+-        print(f"{agent:<44} {len(group):>5} {rate:>8} {average([r['loops'] for r in group]):>6} {average([r['corrections'] for r in group]):>6} {average([r['minutes'] for r in group]):>6}")
+-    print(f"\n{len(rows)} measured plan(s). '0-fix %' = tasks accepted without user corrections. Small samples are anecdotes.")
++        reviewed = [row for row in group if row["review"] in {"approve", "changes requested"}]
++        approved = f"{100 * sum(row['review'] == 'approve' for row in reviewed) / len(reviewed):.0f}" if reviewed else "-"
++        print(f"{agent:<44} {len(group):>5} {rate:>8} {average([r['loops'] for r in group]):>6} {average([r['corrections'] for r in group]):>6} {average([r['minutes'] for r in group]):>6} {approved:>9}")
++    print(f"\n{len(rows)} measured plan(s). '0-fix %' = tasks accepted without user corrections; "
++          "'approve %' = first-pass reviewer approvals among reviewed plans. Small samples are anecdotes.")
+ 
+ 
+ HELP = """Agentium harness (Python standard library)
+diff --git a/.agents/scripts/test_harness.py b/.agents/scripts/test_harness.py
+index d43b126..d8af284 100644
+--- a/.agents/scripts/test_harness.py
++++ b/.agents/scripts/test_harness.py
+@@ -235,7 +235,9 @@ class PlanMetrics(unittest.TestCase):
+ 
+     def test_filled_block_is_parsed_and_template_placeholders_are_skipped(self):
+         self.assertEqual(harness.plan_metrics(self.FILLED),
+-                         {"agent": "Claude Code / claude-opus-5-5 / high", "minutes": 95, "loops": 2, "corrections": 1})
++                         {"agent": "Claude Code / claude-opus-5-5 / high", "minutes": 95, "loops": 2, "corrections": 1, "review": "approve"})
++        changed = self.FILLED.replace("Review: approve", "Review: Changes requested, 11 fixed")
++        self.assertEqual(harness.plan_metrics(changed)["review"], "changes requested")
+         template = (Path(harness.__file__).parents[1] / "templates/implementation-plan.md").read_text()
+         self.assertIsNone(harness.plan_metrics(template))
+         self.assertIsNone(harness.plan_metrics("# Old plan without metrics\n"))
+diff --git a/docs/harness.md b/docs/harness.md
+index 3d35777..a816311 100644
+--- a/docs/harness.md
++++ b/docs/harness.md
+@@ -14,7 +14,7 @@ Run `python3 .agents/scripts/harness.py <command>` from the repository root, or
+ | `worktree new <branch> [--base REF]` | Task worktree from the fetched remote default branch, without upstream, with offline dependency install | Starting any task |
+ | `worktree deps` | Offline install of locked dependencies into the current checkout | Existing worktree without dependencies |
+ | `worktree remove <branch>` | Remove a merged, clean task worktree and delete its local branch (never forced) | After the PR is merged |
+-| `metrics` | Summarize archived plans' Metrics blocks by client/model/effort | Reviewing model routing |
++| `metrics` | Summarize archived plans' Metrics blocks by client/model/effort, including the first-pass review approval rate | Reviewing model routing |
+ 
+ ## Boundaries
+ 

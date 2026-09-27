@@ -1,17 +1,17 @@
 # Architecture
 
-Status: **proposed, not accepted.** The user described the product on 2026-09-27. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) proposes the design below, and nothing is built yet. A decision record will accept or change it. Once one exists, record the stack's conventions here and add its checks to the harness (see [adding stack checks](../docs/harness.md#adding-stack-checks)).
+Status: **strategy accepted (hybrid); stack still proposed.** The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) proposed the design below, and the user accepted its [hybrid strategy](decisions/2026-09-27-hybrid-strategy.md). No product code exists yet. When the stack is decided, record its conventions here and add its checks to the harness (see [adding stack checks](../docs/harness.md#adding-stack-checks)).
 
-## Product concept (proposed)
+## Product concept
 
 Agentium runs coding agents (Claude Code and Codex first) on tasks from a developer's own repository. It compares agents, models and versions of the project's AI context (`AGENTS.md`, `CLAUDE.md`, skills, rules) on correctness, cost and speed. Context versions are first-class experiment arms. Results use a paired design with repeats and report plain verdicts: improved, regressed, no loss beyond the margin, or inconclusive.
 
-Proposed shape, pending the decision:
-- **Hybrid.** Agentium owns context snapshots, tasks, experiment design, statistics and the UX.
+Shape:
+- **Hybrid** (accepted). Agentium owns context snapshots, tasks, experiment design, statistics and the UX.
 - **Local runs** drive agent CLIs headlessly in isolated git worktrees.
 - **Harbor**, pinned and out of process, adds containers later.
-- **Stack:** a Go core in a single binary, a local React web UI and SQLite.
-- **First step:** a capped-budget spike that measures per-run cost and variance before the MVP.
+- **Stack (proposed, awaiting the user's decision):** a Go core in a single binary, a local React web UI and SQLite.
+- **Phase 0 spike, done:** it measured per-run cost and variance and settled how runs are isolated ([results](../docs/research/2026-09-27-phase0-spike-results.md)). Its throwaway code lives in `spikes/phase0/`.
 
 ## Current contents: the development process only
 
@@ -23,3 +23,4 @@ Proposed shape, pending the decision:
 | `.githooks/pre-commit` | Shared pre-commit guard |
 | `.github/` | CI and the PR template |
 | `docs/research/` | Product research; history, not default context |
+| `spikes/` | Throwaway experiments (standard library only); not product code |

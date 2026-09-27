@@ -7,3 +7,4 @@ Format: `# ADR: <Title>`, then `## Status` (Accepted | Superseded by <file> | De
 ## Index
 
 - [2026-09-27-agent-process-from-orchid.md](2026-09-27-agent-process-from-orchid.md) — development process carried over from Orchid, stack-neutral harness
+- [2026-09-27-hybrid-strategy.md](2026-09-27-hybrid-strategy.md) — hybrid strategy for the lab: own experiments, context and statistics; local runs first; Harbor later
