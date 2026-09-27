@@ -1,0 +1,3 @@
+# Verification
+
+Use `python3 .agents/scripts/harness.py help`. Choose a check based on changed behavior, once per coherent slice; `check changed --dry-run` shows the selection for the current diff and `check changed` runs it. Docs: `check docs`; harness: `check harness`; both: `check ci`. Stack-specific checks are added to the harness when the stack is chosen; until then, name the command you ran and its result in the plan and PR. Re-run only affected failures and new changes. Tests must never depend on live credentials or production data. CI on the PR is the final gate regardless of local selection.

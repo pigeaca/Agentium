@@ -1,0 +1,13 @@
+# Working rules
+
+- Follow the user's approved scope. Before implementation, record outcome, boundaries, acceptance criteria and verification in a plan sized to the change ([plan rules](../plans/README.md)).
+- Task-scoped branches, worktrees, staging, commits, fetch, push to task branches and PR creation/update are authorized under the [Git rules](git-workflow.md); do not ask again for routine steps. Work in a task worktree, never in the primary checkout. Other external writes, dependencies, credentials, live integrations and destructive data operations still require explicit scope. Preserve unrelated work.
+- Never log or commit secrets. The shared pre-commit hook (`harness.py hooks`) enforces staged-change checks; never bypass it without explicit user approval. Read-only repository inspection needs no approval.
+- Keep changes cohesive and reuse existing code and harness commands. Follow the language conventions recorded in the [architecture](../architecture.md) once the stack is chosen: propagate cancellation, return contextual errors, keep types strict.
+- Explain non-obvious contracts, side effects and concurrency constraints in concise comments; update stale comments when behavior changes. Update every consumer of a changed contract together.
+- Run the smallest meaningful check after a coherent change, not after each edit; `harness.py check changed` selects it from the diff. Repeat only for new changes or failures. Never install missing tooling automatically.
+- Test changed behavior, failure handling and compatibility where relevant. Avoid tests that only restate labels or implementation details. UI changes need browser evidence of the golden path.
+- Inspect focused code/log ranges. Default docs orient; code owns details. Parallel agents are authorized when useful: assign independent tasks and separate writable worktrees under the [collaboration rules](collaboration.md). Choose model and effort by task risk ([routing](../reference/agent-setup.md#model-and-effort)).
+- Before completion, update affected docs, record actual verification, limitations and metrics, then move any plan file to `plans/archive/` and add its index entry. Completed work is a pushed PR with green CI (or explained pre-existing failures) and, unless docs-only or inline-plan, a recorded review; the user merges it ([Git rules](git-workflow.md)). Report the PR, commit IDs and CI state; do not call uncommitted, unpushed or red work complete.
+
+Task-specific rules: [secrets](secrets.md), [dependencies](supply-chain.md), [verification](testing.md), [errors](error-handling.md), [logging](observability.md), [performance](performance.md), [Git](git-workflow.md), [collaboration](collaboration.md). Do not load unrelated rules.
