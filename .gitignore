@@ -1,0 +1,21 @@
+# OS and IDE
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python harness caches
+__pycache__/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+
+# Client-managed agent worktrees (Claude Code creates them here)
+.claude/worktrees/
