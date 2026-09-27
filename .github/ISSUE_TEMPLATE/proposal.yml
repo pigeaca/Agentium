@@ -1,0 +1,33 @@
+name: Proposal or feedback
+description: A product idea, feedback on the feasibility study, or a change to the development process.
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Product idea
+        - Feasibility study feedback
+        - Development process (rules, skills, harness, CI)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What is missing or wrong today, and who it affects.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change. Link the relevant section of the study or the rules where it helps.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
