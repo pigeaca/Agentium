@@ -1,0 +1,42 @@
+name: Bug report
+description: The harness, hooks, CI or agent instructions do not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Security problems go through the [security policy](https://github.com/pigeaca/Agentium/blob/main/.github/SECURITY.md), not an issue.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The command or instruction you used, and what went wrong.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. python3 .agents/scripts/harness.py ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, agent client and model if relevant, and the output of `python3 .agents/scripts/harness.py doctor`.
+      render: text
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed tokens, keys and other secrets from everything pasted above.
+          required: true

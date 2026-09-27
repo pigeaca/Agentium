@@ -21,5 +21,5 @@ Proposed shape, pending the decision:
 | `.agents/scripts/harness.py` | Standard-library entrypoint for checks, hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
-| `.github/` | CI and the PR template |
+| `.github/` | CI, the PR template, issue forms and community files (contributing, security, conduct) |
 | `docs/research/` | Product research; history, not default context |

@@ -15,6 +15,8 @@ python3 .agents/scripts/harness.py check changed
 
 See [the harness reference](docs/harness.md) and [agent setup](.agents/reference/agent-setup.md).
 
+To contribute, read [CONTRIBUTING](.github/CONTRIBUTING.md). Report vulnerabilities privately under the [security policy](.github/SECURITY.md).
+
 ## License
 
 [Apache 2.0](LICENSE)
