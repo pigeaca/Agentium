@@ -3,3 +3,4 @@
 Archived plans are history, not default context. Search this index by title or date, then open only the matching plan.
 
 - [Agent Process Kit from Orchid](2026-09-27-agent-process-kit.md) — 2026-09-27
+- [AI Development Lab feasibility research](2026-09-27-lab-feasibility-research.md) — 2026-09-27

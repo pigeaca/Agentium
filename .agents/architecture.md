@@ -1,8 +1,19 @@
 # Architecture
 
-Pending: the user will describe Agentium's idea (requested 2026-09-27). Record the product concepts, stack and code map here once they are decided, and add the stack's checks to the harness (see [adding stack checks](../docs/harness.md#adding-stack-checks)).
+Status: **proposed, not accepted.** The user described the product on 2026-09-27. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) proposes the design below, and nothing is built yet. A decision record will accept or change it. Once one exists, record the stack's conventions here and add its checks to the harness (see [adding stack checks](../docs/harness.md#adding-stack-checks)).
 
-Current contents are the development process only:
+## Product concept (proposed)
+
+Agentium runs coding agents (Claude Code and Codex first) on tasks from a developer's own repository. It compares agents, models and versions of the project's AI context (`AGENTS.md`, `CLAUDE.md`, skills, rules) on correctness, cost and speed. Context versions are first-class experiment arms. Results use a paired design with repeats and report plain verdicts: improved, regressed, no loss beyond the margin, or inconclusive.
+
+Proposed shape, pending the decision:
+- **Hybrid.** Agentium owns context snapshots, tasks, experiment design, statistics and the UX.
+- **Local runs** drive agent CLIs headlessly in isolated git worktrees.
+- **Harbor**, pinned and out of process, adds containers later.
+- **Stack:** a Go core in a single binary, a local React web UI and SQLite.
+- **First step:** a capped-budget spike that measures per-run cost and variance before the MVP.
+
+## Current contents: the development process only
 
 | Path | Responsibility |
 |---|---|
@@ -11,3 +22,4 @@ Current contents are the development process only:
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
 | `.github/` | CI and the PR template |
+| `docs/research/` | Product research; history, not default context |
