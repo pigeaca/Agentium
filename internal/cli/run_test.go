@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/claude"
 )
 
 // fakeAgent writes a stand-in for Claude Code. It records what it saw (its folder, whether the hidden test was
@@ -411,4 +413,15 @@ func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
 	}
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, ``, 25000, "")
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "arm base is not calibrated")
+}
+
+func TestJudgeEdgeCases(t *testing.T) {
+	grep := []claude.ToolCall{{Name: "Grep", Input: map[string]any{"pattern": "codeword"}, Result: "AGENTS.md:3:Calibration codeword: AGENTIUM-ABC"}}
+	if _, _, instructions := judge(grep, "CODEWORD=AGENTIUM-ABC", "AGENTIUM-ABC", "CLAUDE.md"); instructions != checkUnverified {
+		t.Errorf("a codeword found with a tool counts as loaded: %s", instructions)
+	}
+	truncated := []claude.ToolCall{{Name: "Bash", Input: map[string]any{"command": "seq 1 40000"}, Result: "<persisted-output> saved to: "}}
+	if _, large, _ := judge(truncated, "", "x", ""); large != checkUnverified {
+		t.Errorf("a saved-output notice without a path: %s", large)
+	}
 }

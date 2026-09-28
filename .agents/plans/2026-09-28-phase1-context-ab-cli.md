@@ -78,7 +78,7 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
   - verification on a hidden copy, secret redaction of transcripts, timeouts and process-group kill;
   - file-system isolation: the agent must not reach the data folder (checkouts sit next to the bare repository and its hidden tests) or credential files under `HOME` (`~/.config/gh`, `~/.netrc`, `~/.git-credentials`); processes that leave the group with `setsid` must still be stopped;
   - a fake `claude` for tests; `agentium run once` for debugging.
-- [ ] **5. Experiments** (about 4 days). Templates, the lock, the planner and price table (verified Anthropic prices, dated), the interleaved scheduler with concurrency, caps, infrastructure retries, resume, and orphan cleanup.
+- [ ] **5. Experiments** (about 4 days). From step 4's reviews: concurrent login-mode runs must deny each other's predicted session folders (`claude.SessionFolder`) up front; runs whose grading failed (`passed` unset) and runs with changed runner configuration (`checks_changed`) are not counted as successes; calibration runs (kind `calibration`) never enter results. Templates, the lock, the planner and price table (verified Anthropic prices, dated), the interleaved scheduler with concurrency, caps, infrastructure retries, resume, and orphan cleanup.
 - [ ] **6. Statistics and reports** (about 4 days). A Go port of the spike's statistics, checked against its 60 runs; verdict rules and floors; Markdown and JSON reports; `run show`.
 - [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs.
 

@@ -346,7 +346,7 @@ func judge(calls []claude.ToolCall, answer, codeword, probeFile string) (sandbox
 				sandbox = checkOK
 			}
 		case c.Name == "Bash" && strings.Contains(command, "seq 1 40000") && strings.Contains(c.Result, "<persisted-output>"):
-			if _, rest, ok := strings.Cut(c.Result, "saved to: "); ok {
+			if _, rest, ok := strings.Cut(c.Result, "saved to: "); ok && len(strings.Fields(rest)) > 0 {
 				saved = strings.Fields(rest)[0]
 				large = checkFailed // there is a saved output: now it must be read back
 				for _, later := range calls[i+1:] {
@@ -368,8 +368,8 @@ func judge(calls []claude.ToolCall, answer, codeword, probeFile string) (sandbox
 		instructions = checkNA
 	case strings.Contains(answer, "CODEWORD="+codeword):
 		instructions = checkOK
-		for _, c := range calls { // reading the file is not loading it
-			if input, _ := json.Marshal(c.Input); strings.Contains(string(input), path.Base(probeFile)) {
+		for _, c := range calls { // finding the codeword with a tool (reading, grepping, a symlink) is not loading it
+			if input, _ := json.Marshal(c.Input); strings.Contains(c.Result, codeword) || strings.Contains(string(input), path.Base(probeFile)) {
 				instructions = checkUnverified
 			}
 		}
