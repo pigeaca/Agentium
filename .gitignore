@@ -7,6 +7,13 @@
 # Python harness caches
 __pycache__/
 
+# Go build and test output
+/agentium
+/bin/
+/dist/
+*.test
+coverage.out
+
 # Personal client settings (permissions, absolute paths)
 .claude/settings.local.json
 

@@ -1,6 +1,6 @@
 # Agent entrypoint
 
-Agentium is planned as a local-first lab that measures how coding agents, models and project context affect results. The design is a research proposal awaiting the user's decision; no product code exists yet. This repository currently holds the development process that agents follow: rules, roles, skills, templates, the harness, hooks and CI.
+Agentium is a local-first lab, being built, that measures how coding agents, models and project context affect results. The strategy (hybrid) and stack (Go + React + SQLite) are decided; the Go code is still a skeleton. This repository currently holds the development process that agents follow: rules, roles, skills, templates, the harness, hooks and CI.
 
 Read once, in order:
 1. [Core rules](rules/core.md)

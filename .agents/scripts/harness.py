@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Agentium's development process entrypoint (standard library only).
 
-Stack-neutral until the product stack is chosen: docs/adapter validation, the pre-commit guard,
-check selection, task worktrees, and plan metrics. See docs/harness.md#adding-stack-checks.
+Docs/adapter validation, the pre-commit guard, Go checks, check selection, task worktrees and plan metrics.
+The stack is Go + React + SQLite (see .agents/decisions); React checks arrive with the UI in Phase 2.
 """
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC_ENTRYPOINTS = ("AGENTS.md", ".agents/README.md", ".agents/rules/core.md", ".agents/architecture.md", ".agents/ROADMAP.md")
-ENV = {**os.environ}
+# Provider credentials never reach checks or tests; the Go toolchain never switches or downloads itself, and
+# builds never rewrite go.mod/go.sum.
+CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY")
+ENV = {**{k: v for k, v in os.environ.items() if k not in CREDENTIAL_ENV}, "GOTOOLCHAIN": "local", "GOFLAGS": "-mod=readonly"}
+GOVULNCHECK = "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
 # Credential shapes rejected on staged additions. Only fake test values may opt out with "secret-scan: allow" on the line.
 SECRET_PATTERNS = (
     ("Anthropic API key", r"\bsk-ant-[A-Za-z0-9_-]{20,}"),
@@ -136,6 +140,71 @@ def check_docs() -> None:
     print(f"Agent entrypoints including Claude: {words}/1800 words; links and adapters valid. Plans: {len(active)} active, {len(archived)} archived.")
 
 
+# --- Go -------------------------------------------------------------------------------------------
+
+def go_mod_version() -> str:
+    """The exact toolchain version go.mod pins, e.g. '1.27.1'."""
+    try:
+        text = (ROOT / "go.mod").read_text()
+    except FileNotFoundError:
+        raise ValueError("No go.mod in this checkout.") from None
+    match = re.search(r"^go\s+(\d+\.\d+(?:\.\d+)?)\s*$", text, re.M)
+    if not match:
+        raise ValueError("go.mod has no go version line.")
+    return match[1]
+
+
+def toolchain_version(go: str) -> str | None:
+    # Run outside the module: with GOTOOLCHAIN=local an older go refuses to run inside it.
+    result = subprocess.run([go, "version"], cwd=Path(go).parent, capture_output=True, text=True, env=ENV)
+    match = re.search(r"\bgo(\d+\.\d+(?:\.\d+)?)\b", result.stdout)
+    return match[1] if result.returncode == 0 and match else None
+
+
+def go_binary() -> Path:
+    """The toolchain go.mod pins: `go` on PATH when it matches, else ~/sdk/go<version>/bin/go. Never installs one."""
+    wanted = go_mod_version()
+    for candidate in (shutil.which("go"), str(Path.home() / f"sdk/go{wanted}/bin/go")):
+        if candidate and Path(candidate).is_file() and toolchain_version(candidate) == wanted:
+            return Path(candidate)
+    raise ValueError(f"Go {wanted} (pinned in go.mod) is not on PATH or in ~/sdk/go{wanted}. Nothing was installed; with approval, "
+                     f"run: go install golang.org/dl/go{wanted}@latest && ~/go/bin/go{wanted} download")
+
+
+def go_tool(name: str) -> str | None:
+    """A tool from the pinned toolchain (e.g. gofmt), falling back to PATH when go.mod or the toolchain is absent."""
+    try:
+        return str(go_binary().parent / name)
+    except ValueError:
+        return shutil.which(name)
+
+
+def check_go() -> None:
+    go = go_binary()
+    files = [path for path in git_output("ls-files", "-co", "--exclude-standard", "-z", "*.go").split("\0") if path]
+    unformatted = subprocess.run([str(go.parent / "gofmt"), "-l", *files], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.split() if files else []
+    if unformatted:
+        raise ValueError(f"Not gofmt-formatted: {', '.join(unformatted)} (run gofmt -w on them).")
+    run(str(go), "vet", "./...")
+    run(str(go), "test", "-race", "-count=1", "./...")
+
+
+def check_vuln() -> None:
+    """govulncheck at the pinned version. It queries the online Go vulnerability database; locally it runs only when
+    the tool is already in the module cache, and CI (CI=true) may download that exact version."""
+    go = go_binary()
+    env = {"GOFLAGS": ""}  # `go run pkg@version` resolves outside the main module, where -mod does not apply
+    if not os.environ.get("CI"):
+        cache = subprocess.run([str(go), "env", "GOMODCACHE"], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.strip()
+        module, version = GOVULNCHECK.partition("/cmd/")[0], GOVULNCHECK.rsplit("@", 1)[1]  # golang.org/x/vuln, v1.8.0
+        if not (Path(cache) / f"{module}@{version}").is_dir():
+            print(f"[harness] check vuln skipped: {GOVULNCHECK} is not in the module cache, and the harness never downloads "
+                  "tools. CI runs it; to run locally, fetch it once with approval.", file=sys.stderr)
+            return
+        env["GOPROXY"] = "off"
+    run(str(go), "run", GOVULNCHECK, "./...", extra_env=env)
+
+
 # --- Pre-commit guard -------------------------------------------------------------------------
 
 def credential_findings(diff: str) -> list[str]:
@@ -177,14 +246,15 @@ def check_staged() -> None:
     problems += [f"{path}: credential and environment files must stay untracked" for path in staged if sensitive_path(path)]
     problems += credential_findings(git_output("diff", "--cached", "--no-color", "--no-ext-diff", "-U0", "--diff-filter=ACMR"))
     go_files = [path for path in staged if path.endswith(".go")]
-    if go_files and not shutil.which("gofmt"):
+    gofmt = go_tool("gofmt") if go_files else None
+    if go_files and not gofmt:
         # GUI Git clients may lack the shell PATH; CI enforces formatting once a Go stack exists, so warn instead of blocking.
         print("[harness] gofmt not on PATH; staged Go formatting not checked.", file=sys.stderr)
         go_files = []
     for path in go_files:
         # Format the staged blob, not the working file, so partially staged hunks are judged as committed.
         blob = subprocess.run(["git", "show", f":{path}"], cwd=ROOT, capture_output=True, check=True).stdout
-        result = subprocess.run(["gofmt", "-l"], input=blob, capture_output=True)
+        result = subprocess.run([gofmt, "-l"], input=blob, capture_output=True)
         if result.returncode or result.stdout.strip():
             problems.append(f"{path}: staged Go is not gofmt-formatted {result.stderr.decode().strip()}".rstrip())
     try:
@@ -233,6 +303,11 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
         if path.startswith((".agents/scripts/", ".githooks/")):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
+        if path.endswith(".go") or path in {"go.mod", "go.sum"}:
+            reasons.setdefault(("check", "go"), []).append(path)
+            mapped = True
+        if path in {"go.mod", "go.sum"}:
+            reasons.setdefault(("check", "vuln"), []).append(path)
         if path.startswith(".github/"):
             suggestions.add("CI workflow changed: verified only by the PR's CI run")
             mapped = True
@@ -240,7 +315,7 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
             unmapped.append(path)
     if unmapped:
         suggestions.add(f"{len(unmapped)} file(s) have no mapped check yet (e.g. {unmapped[0]}); run the stack's checks by hand and add a rule")
-    rank = {("check", "docs"): 0, ("check", "harness"): 1}
+    rank = {("check", "docs"): 0, ("check", "harness"): 1, ("check", "go"): 2, ("check", "vuln"): 3}
     planned = [(list(command), files[0] + (f" and {len(files) - 1} more" if len(files) > 1 else ""))
                for command, files in sorted(reasons.items(), key=lambda item: (rank.get(item[0], 9), item[0]))]
     return planned, sorted(suggestions)
@@ -406,7 +481,7 @@ def metrics_report() -> None:
 
 HELP = """Agentium harness (Python standard library)
   doctor                     Inspect installed tools; no installation
-  check docs|harness|staged|ci
+  check docs|harness|go|vuln|staged|ci
   check changed [--dry-run] [base]
                              Select and run the checks for this branch's changes
   hooks                      Enable the shared pre-commit hook for all worktrees
@@ -416,8 +491,8 @@ HELP = """Agentium harness (Python standard library)
   worktree remove <branch>   Remove a merged, clean task worktree and its local branch
   metrics                    Summarize archived plans' Metrics blocks by agent and model
 
-ci = docs + harness tests. staged = pre-commit checks on the index.
-Stack checks are added when the stack is chosen (docs/harness.md#adding-stack-checks).
+ci = docs + harness tests + go. go = gofmt, vet, race tests. vuln = pinned govulncheck (online DB).
+staged = pre-commit checks on the index. Go runs at the go.mod version with GOTOOLCHAIN=local.
 Nothing is downloaded; worktree setup installs locked dependencies only from the local cache.
 """
 
@@ -428,8 +503,13 @@ def main(args: list[str]) -> None:
         print(HELP)
     elif command == "doctor":
         print(f"Python {sys.version.split()[0]}")
-        for tool in ("git", "gh", "gofmt", "corepack"):
+        for tool in ("git", "gh", "corepack"):
             print(f"  {tool:<9} {shutil.which(tool) or 'not found'}")
+        try:
+            go = go_binary()
+            print(f"  {'go':<9} {go} (go{toolchain_version(str(go))}, pinned in go.mod)")
+        except ValueError as error:
+            print(f"  {'go':<9} {error}")
     elif command == "check":
         scope = rest[0] if rest else "ci"
         if scope == "changed":
@@ -441,6 +521,12 @@ def main(args: list[str]) -> None:
                 check_docs()
             if scope in {"harness", "ci"}:
                 run(sys.executable, "-m", "unittest", "discover", "-s", ".agents/scripts", "-p", "test_harness.py")
+            if scope == "ci" and (ROOT / "go.mod").is_file():
+                check_go()
+        elif scope == "go":
+            check_go()
+        elif scope == "vuln":
+            check_vuln()
         else:
             raise ValueError(f"Unknown check scope: {scope}")
     elif command == "hooks":
