@@ -129,11 +129,27 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	return args, env, nil
 }
 
-// historyPaths are the parts of a Claude Code config folder the agent may not read: what records past work (session
-// transcripts, file history, prompt history, todos, plans, the state file), since tasks come from the user's own history
-// and can hold the task's solution; and the login itself (.credentials.json on Linux; macOS keeps it in the Keychain).
+// historyPaths are the parts of a Claude Code config folder the agent may not read: what records past work (file
+// history, prompt history, todos, plans, the state file), since tasks come from the user's own history and can hold the
+// task's solution; and the login itself (.credentials.json on Linux; macOS keeps it in the Keychain). Past session
+// transcripts in projects/ are denied folder by folder (SessionFolders).
 func historyPaths() []string {
-	return []string{"projects", "file-history", "history.jsonl", "todos", "sessions", "plans", ".claude.json", ".credentials.json"}
+	return []string{"file-history", "history.jsonl", "todos", "sessions", "plans", ".claude.json", ".credentials.json"}
+}
+
+// SessionFolders lists the session folders already in a config folder's projects/ (past sessions' transcripts). A run's
+// own session folder is created after it starts, so it is not among them: Claude Code saves large tool outputs there,
+// and the agent must be able to read them back.
+func SessionFolders(configDir string) []string {
+	entries, err := os.ReadDir(filepath.Join(configDir, "projects"))
+	if err != nil {
+		return nil
+	}
+	var folders []string
+	for _, e := range entries {
+		folders = append(folders, filepath.Join(configDir, "projects", e.Name()))
+	}
+	return folders
 }
 
 // deniedPaths are the paths the agent may not read, in every sign-in mode:
@@ -154,6 +170,7 @@ func (inv Invocation) deniedPaths(userConfig string) []string {
 	for _, name := range historyPaths() {
 		paths = append(paths, filepath.Join(active, name))
 	}
+	paths = append(paths, SessionFolders(active)...)
 	for _, dir := range []string{filepath.Join(inv.Home, ".claude"), userConfig} {
 		if filepath.Clean(dir) != filepath.Clean(active) {
 			paths = append(paths, dir)

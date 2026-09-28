@@ -151,3 +151,16 @@ func TestNewIDSortsByTime(t *testing.T) {
 		t.Errorf("ids %q, %q", a, b)
 	}
 }
+
+func TestOwnSessionReadsAreNotOutsideReads(t *testing.T) {
+	config := t.TempDir()
+	past := filepath.Join(config, "projects", "-work-old")
+	if err := os.MkdirAll(past, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	own := filepath.Join(config, "projects", "-data-workspaces-r1-repo", "tool-results", "out.txt")
+	kept := ownSessionExcluded([]string{own, filepath.Join(past, "transcript.jsonl"), "/tmp/x"}, config, []string{past})
+	if len(kept) != 2 || kept[0] != filepath.Join(past, "transcript.jsonl") {
+		t.Errorf("kept = %v: the run's own saved output is not an outside read; a past session is", kept)
+	}
+}

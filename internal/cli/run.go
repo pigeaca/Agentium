@@ -275,11 +275,14 @@ func runShow(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
-// calibrationPrompt asks for what every real task needs: a sandboxed shell command, and a large output read back.
-const calibrationPrompt = "This is an environment check: do not change any files.\n" +
+// calibrationPrompt asks for what every real task needs (a sandboxed shell command, a large output read back) and for
+// the codeword Agentium added to the arm's instruction file, which proves that file loads.
+const calibrationPrompt = "This is an environment check: do not change any files and do not search the repository.\n" +
 	"1. Run this command with the Bash tool: printf 'agentium-sandbox-ok\\n'\n" +
-	"2. Run this command with the Bash tool: seq 1 40000\n" +
-	"Then reply with exactly one line: SANDBOX=<what command 1 printed> LAST=<the last number command 2 printed>"
+	"2. Run exactly this command with the Bash tool, without redirecting its output: seq 1 40000\n" +
+	"   Its output is too large to show in full: read the full output that Claude Code saved for you, and find its 20000th line.\n" +
+	"3. Your project instructions, as loaded at the start, end with a calibration codeword. If you see none, it is NONE.\n" +
+	"Then reply with exactly one line: SANDBOX=<what command 1 printed> LINE=<the 20000th line of command 2's output> CODEWORD=<the codeword>"
 
 // calibration is what a calibration run found for one arm.
 type calibration struct {
@@ -289,6 +292,7 @@ type calibration struct {
 	Outcome          string   `json:"outcome"`
 	SandboxOK        bool     `json:"sandbox_ok"`
 	LargeOutputOK    bool     `json:"large_output_ok"`
+	InstructionsOK   bool     `json:"instructions_ok"` // the agent repeated the codeword added to the arm's instruction file
 	FirstRequest     int64    `json:"first_request_tokens"`
 	EstimatedContext int      `json:"estimated_context_tokens"` // the resolver's session-start estimate
 	CLIVersion       string   `json:"cli_version"`
@@ -361,19 +365,26 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		if err != nil {
 			return fail(env, err)
 		}
+		codeword, err := run.NewID(env.Now()) // random enough to be unguessable
+		if err != nil {
+			return fail(env, err)
+		}
+		codeword = "AGENTIUM-" + strings.ToUpper(codeword[len(codeword)-6:])
 		rec, err := executeRun(ctx, env, w, runEnv, 0, run.Spec{TaskName: "calibration", Instruction: calibrationPrompt, PlainPrompt: true,
-			Task: task.Spec{Base: head, Verify: []string{"true"}}, Arm: a.arm, Model: *model, BudgetUSD: *budget, Timeout: *timeout})
+			Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: head, Verify: []string{"true"}}, Arm: a.arm, Model: *model,
+			BudgetUSD: *budget, Timeout: *timeout})
 		if err != nil {
 			return fail(env, err)
 		}
 		m := rec.Metrics
 		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome,
-			SandboxOK: strings.Contains(m.ResultExcerpt, "SANDBOX=agentium-sandbox-ok"), LargeOutputOK: strings.Contains(m.ResultExcerpt, "LAST=40000"),
-			FirstRequest: m.FirstRequest, EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion,
+			SandboxOK: strings.Contains(m.ResultExcerpt, "SANDBOX=agentium-sandbox-ok"), LargeOutputOK: strings.Contains(m.ResultExcerpt, "LINE=20000"),
+			InstructionsOK: strings.Contains(m.ResultExcerpt, "CODEWORD="+codeword),
+			FirstRequest:   m.FirstRequest, EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion,
 			Model: m.Model, Tools: m.Tools, Skills: m.Skills, SlashCommands: m.SlashCommands, Drift: rec.Drift, CostUSD: m.CostUSD}
 		results = append(results, c)
 		clean := rec.Outcome == claude.OutcomeOK && len(rec.Drift) == 0
-		healthy = healthy && clean && c.SandboxOK && c.LargeOutputOK
+		healthy = healthy && clean && c.SandboxOK && c.LargeOutputOK && c.InstructionsOK
 		if !clean { // a drifted or failed calibration must not become what later runs are checked against
 			continue
 		}
@@ -397,33 +408,29 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 func printCalibration(env Env, results []calibration) {
 	out := env.Stdout
 	yes := func(ok bool) string { return map[bool]string{true: "ok", false: "FAILED"}[ok] }
-	fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %14s %14s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "FIRST REQUEST", "ESTIMATED CTX", "TOOLS", "SKILLS", "COST")
+	fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %-13s %14s %14s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "INSTRUCTIONS",
+		"FIRST REQUEST", "ESTIMATED CTX", "TOOLS", "SKILLS", "COST")
 	for _, c := range results {
-		fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %14d %14d %6d %7d %8s\n", c.Arm, c.Outcome, yes(c.SandboxOK), yes(c.LargeOutputOK),
-			c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
+		fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %-13s %14d %14d %6d %7d %8s\n", c.Arm, c.Outcome, yes(c.SandboxOK), yes(c.LargeOutputOK),
+			yes(c.InstructionsOK), c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
 		for _, d := range c.Drift {
 			fmt.Fprintf(out, "  unfair: %s (not saved as the arm's calibration)\n", d)
 		}
 	}
+	fmt.Fprintf(out, "INSTRUCTIONS: the agent repeated a codeword Agentium added to the arm's startup instruction file, so that file loads.\n")
 	if len(results) > 0 {
-		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools, so only differences between arms compare with the estimates:\n",
+		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools; between arms:\n",
 			orNone(results[0].CLIVersion), orNone(results[0].Model))
 	}
 	base := results[0]
 	for _, c := range results[1:] {
+		// Estimates count about four bytes per token; real counts run higher for text dense with paths and links, and
+		// Claude Code wraps each file. Experiments report the measured size; this ratio says how far off estimates are.
 		measured, estimated := c.FirstRequest-base.FirstRequest, int64(c.EstimatedContext-base.EstimatedContext)
-		verdict := "consistent"
-		// The estimate counts about four bytes per token, and Claude Code wraps each file: allow 30%, at least 150 tokens.
-		if tolerance := max(int64(150), abs(estimated)*30/100); abs(measured-estimated) > tolerance {
-			verdict = "CHECK: the resolver may not match this Claude Code version"
+		ratio := "n/a"
+		if estimated != 0 {
+			ratio = fmt.Sprintf("%.2f", float64(measured)/float64(estimated))
 		}
-		fmt.Fprintf(out, "  %s vs base: measured %+d tokens, estimated %+d: %s\n", c.Arm, measured, estimated, verdict)
+		fmt.Fprintf(out, "  %s: measured %+d tokens, estimated %+d (measured/estimated %s)\n", c.Arm, measured, estimated, ratio)
 	}
-}
-
-func abs(n int64) int64 {
-	if n < 0 {
-		return -n
-	}
-	return n
 }

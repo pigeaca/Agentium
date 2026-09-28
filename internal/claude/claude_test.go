@@ -219,7 +219,7 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 		if mode == SignInAPIKey {
 			active, other = "/work/runs/r1/config", "/home/u/.claude-work"
 		}
-		denied := []string{other, "/home/u/.claude.json", active + "/projects", active + "/file-history", active + "/history.jsonl", active + "/.credentials.json",
+		denied := []string{other, "/home/u/.claude.json", active + "/file-history", active + "/history.jsonl", active + "/.credentials.json",
 			"/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"}
 		for _, p := range denied {
 			if !slices.Contains(toStrings(settings["permissions"].(map[string]any)["deny"]), "Read(/"+p+"/**)") || !strings.Contains(denyRead, p) {
@@ -488,5 +488,34 @@ func TestRunTimeoutInterruptsFirst(t *testing.T) {
 	m, _ := Parse(transcript)
 	if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
 		t.Errorf("an interrupted run should still report its result: %+v", m)
+	}
+}
+
+func TestReq5PastSessionsAreDeniedButNotTheRunsOwn(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{".claude/projects/-work-old-project", ".claude/projects/-work-other"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv := invocation(t, SignInLogin, "")
+	inv.Home = home
+	args, _, err := inv.Command([]string{"PATH=/usr/bin", "HOME=" + home}) // the default config folder, ~/.claude
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	rules := toStrings(settings["permissions"].(map[string]any)["deny"])
+	for _, past := range []string{"-work-old-project", "-work-other"} {
+		if !slices.Contains(rules, "Read(/"+filepath.Join(home, ".claude", "projects", past)+"/**)") {
+			t.Errorf("past session %s is readable: %v", past, rules)
+		}
+	}
+	// The projects folder itself stays readable: the run's own session folder, created later, holds its large outputs.
+	if slices.Contains(rules, "Read(/"+filepath.Join(home, ".claude", "projects")+"/**)") {
+		t.Errorf("all of projects/ is denied, so large outputs cannot be read back: %v", rules)
 	}
 }

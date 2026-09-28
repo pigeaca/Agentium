@@ -44,6 +44,10 @@ type Spec struct {
 	Timeout     time.Duration // the agent's run
 	Keep        bool          // keep the workspace and the verification copy
 	PlainPrompt bool          // send Instruction as it is, without the task suffix (calibration)
+	// Probe, when set, is appended to the arm's startup instruction file (CLAUDE.md, .claude/CLAUDE.md or AGENTS.md, as
+	// the resolver finds it) before the context commit: calibration asks the agent to repeat it, which proves that
+	// file really loads.
+	Probe string
 }
 
 // Env is what a run needs from Agentium and the machine.
@@ -204,6 +208,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, nil
 		}
 	}
+	if spec.Probe != "" {
+		if err := appendProbe(ctx, repo, spec.Probe); err != nil {
+			return rec, err
+		}
+	}
 	// Setup outputs that git does not ignore are part of the starting point, not the agent's work.
 	if _, err := gitx.Run(ctx, "-C", repo, "add", "-A"); err != nil {
 		return rec, err
@@ -237,6 +246,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		transcript.Close()
 		return rec, fmt.Errorf("run transcript: %w", err)
 	}
+	activeConfig := inv.ConfigDir
+	if env.SignIn == claude.SignInLogin {
+		activeConfig = claude.UserConfigDir(env.Environ, env.Home)
+	}
+	pastSessions := claude.SessionFolders(activeConfig) // the run's own session folder is created after this
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	transcript.Close()
@@ -267,7 +281,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), projectSkills
 	rec.Drift = claude.Check(rec.Metrics, expect)
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
-	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace, watched)
+	rec.Behavior.OutsideReads = outsideReads(ownSessionExcluded(rec.Metrics.FilePaths, activeConfig, pastSessions), repo, workspace, watched)
 	if rec.Behavior.OutsideReads > 0 {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
@@ -552,6 +566,32 @@ func parseFile(p string) (claude.Metrics, error) {
 	return claude.Parse(f)
 }
 
+// appendProbe appends line to the first startup instruction file of the context in repo.
+func appendProbe(ctx context.Context, repo, line string) error {
+	src, err := source.WorkingTree(ctx, repo)
+	if err != nil {
+		return err
+	}
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range resolved.Entries {
+		if e.Kind == claudectx.KindInstructions {
+			f, err := os.OpenFile(filepath.Join(repo, filepath.FromSlash(e.Path)), os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				return fmt.Errorf("probe: %w", err)
+			}
+			defer f.Close()
+			if _, err := fmt.Fprintf(f, "\n%s\n", line); err != nil {
+				return fmt.Errorf("probe: %w", err)
+			}
+			return nil
+		}
+	}
+	return errors.New("probe: the arm's context has no instruction file (CLAUDE.md or AGENTS.md) that loads at start")
+}
+
 // skillNames lists the project skill names of the arm's context in repo.
 func skillNames(ctx context.Context, repo string) ([]string, error) {
 	src, err := source.WorkingTree(ctx, repo)
@@ -621,6 +661,28 @@ func realPath(p string) string {
 		missing = append([]string{filepath.Base(p)}, missing...)
 		p = parent
 	}
+}
+
+// ownSessionExcluded drops paths in the run's own session folder: a folder under the active config's projects/ that
+// did not exist when the run started. Claude Code saves large tool outputs there for the agent to read back.
+func ownSessionExcluded(paths []string, activeConfig string, pastSessions []string) []string {
+	projects := realPath(filepath.Join(activeConfig, "projects"))
+	var kept []string
+	for _, p := range paths {
+		resolved := realPath(p)
+		if rel, err := filepath.Rel(projects, resolved); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			folder := filepath.Join(projects, strings.Split(rel, string(filepath.Separator))[0])
+			past := false
+			for _, s := range pastSessions {
+				past = past || realPath(s) == folder
+			}
+			if !past {
+				continue
+			}
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 // measure reads `git diff --numstat -z` into the behavior counts and returns the changed paths.
