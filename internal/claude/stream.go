@@ -332,3 +332,93 @@ func excerpt(text string, limit int) string {
 	}
 	return text[:cut]
 }
+
+// ToolCall is one tool use in a transcript with its result.
+type ToolCall struct {
+	Name    string
+	Input   map[string]any
+	Result  string // the tool result's text (joined when it has several parts)
+	IsError bool
+}
+
+// ToolCalls lists the main agent's and subagents' tool uses with their results, in order. It is for checks that must
+// rest on what tools returned, not on what the agent says.
+func ToolCalls(r io.Reader) ([]ToolCall, error) {
+	var calls []ToolCall
+	index := map[string]int{}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for scanner.Scan() {
+		var event envelope
+		if json.Unmarshal(scanner.Bytes(), &event) != nil || (event.Type != "assistant" && event.Type != "user") {
+			continue
+		}
+		var message struct {
+			Content []json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(event.Message, &message) != nil {
+			continue
+		}
+		for _, raw := range message.Content {
+			var block struct {
+				Type      string          `json:"type"`
+				ID        string          `json:"id"`
+				Name      string          `json:"name"`
+				Input     map[string]any  `json:"input"`
+				ToolUseID string          `json:"tool_use_id"`
+				Content   json.RawMessage `json:"content"`
+				IsError   bool            `json:"is_error"`
+			}
+			if json.Unmarshal(raw, &block) != nil {
+				continue
+			}
+			switch {
+			case block.Type == "tool_use" && event.Type == "assistant":
+				if _, seen := index[block.ID]; !seen {
+					index[block.ID] = len(calls)
+					calls = append(calls, ToolCall{Name: block.Name, Input: block.Input})
+				}
+			case block.Type == "tool_result" && event.Type == "user":
+				if i, ok := index[block.ToolUseID]; ok {
+					calls[i].Result, calls[i].IsError = resultText(block.Content), block.IsError
+				}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return calls, fmt.Errorf("read transcript: %w", err)
+	}
+	return calls, nil
+}
+
+// resultText is a tool result's content as text: a string, or the text parts of a list.
+func resultText(raw json.RawMessage) string {
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return text
+	}
+	var parts []struct {
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &parts) == nil {
+		var b strings.Builder
+		for _, p := range parts {
+			b.WriteString(p.Text)
+		}
+		return b.String()
+	}
+	return string(raw)
+}
+
+var sessionUnsafe = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+// SessionFolder is where Claude Code keeps the session of a run started in dir, under configDir: projects/ plus dir's
+// real path with every character but letters and digits replaced by "-" (as observed on 2.1.281). Large tool outputs
+// are saved there.
+func SessionFolder(configDir, dir string) string {
+	real := dir
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		real = resolved
+	}
+	return filepath.Join(configDir, "projects", sessionUnsafe.ReplaceAllString(real, "-"))
+}

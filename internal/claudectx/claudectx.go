@@ -461,3 +461,21 @@ func SkillNames(c Context, src source.Source) []string {
 	sort.Strings(names)
 	return slices.Compact(names)
 }
+
+// CommandNames lists the names the context's commands go by: a command's file name without .md, and for nested ones
+// also "folder:name".
+func CommandNames(c Context) []string {
+	var names []string
+	for _, e := range c.Entries {
+		if e.Kind != KindCommand {
+			continue
+		}
+		rel := strings.TrimSuffix(strings.TrimPrefix(e.Path, ".claude/commands/"), ".md")
+		names = append(names, path.Base(rel))
+		if strings.Contains(rel, "/") {
+			names = append(names, strings.ReplaceAll(rel, "/", ":"))
+		}
+	}
+	sort.Strings(names)
+	return slices.Compact(names)
+}

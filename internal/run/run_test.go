@@ -151,3 +151,20 @@ func TestNewIDSortsByTime(t *testing.T) {
 		t.Errorf("ids %q, %q", a, b)
 	}
 }
+
+func TestOnlyTheRunsOwnSessionIsExempt(t *testing.T) {
+	config := t.TempDir()
+	own := filepath.Join(config, "projects", "-data-workspaces-r1-repo")
+	paths := []string{
+		filepath.Join(own, "tool-results", "out.txt"),                                 // the run's own saved output
+		filepath.Join(config, "projects", "-work-old", "transcript.jsonl"),            // a past session
+		filepath.Join(config, "projects", "-data-workspaces-r2-repo", "tool-results"), // another run, created meanwhile
+	}
+	kept := ownSessionExcluded(paths, own)
+	if len(kept) != 2 || kept[0] != paths[1] || kept[1] != paths[2] {
+		t.Errorf("kept = %v: only the run's own session folder is exempt", kept)
+	}
+	if got := union([]string{"b", "a"}, []string{"a", "c"}); strings.Join(got, ",") != "a,b,c" {
+		t.Errorf("union = %v", got)
+	}
+}

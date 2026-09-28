@@ -480,6 +480,7 @@ type Run struct {
 	ProjectID int64
 	TaskID    int64 // 0 when the task was removed
 	TaskName  string
+	Kind      string // "task" (default) or "calibration"
 	Arm       string
 	Outcome   string
 	Passed    *bool
@@ -498,9 +499,12 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if run.Passed != nil {
 		passed = *run.Passed
 	}
+	if run.Kind == "" {
+		run.Kind = "task"
+	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Arm, run.Outcome, passed,
+		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
 		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished)); err != nil {
 		return fmt.Errorf("save run %s: %w", run.ID, err)
 	}
@@ -526,7 +530,7 @@ func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
 
 func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at
+		SELECT id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at
 		FROM runs `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query runs: %w", err)
@@ -538,7 +542,7 @@ func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Ru
 		var taskID sql.NullInt64
 		var passed sql.NullBool
 		var record, started, finished string
-		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
+		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Kind, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
 			&record, &started, &finished); err != nil {
 			return nil, fmt.Errorf("read run: %w", err)
 		}
@@ -558,4 +562,46 @@ func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Ru
 		return nil, fmt.Errorf("query runs: %w", err)
 	}
 	return runs, nil
+}
+
+// Calibration is a stored calibration of one arm (see migrations/0005_calibrations.sql).
+type Calibration struct {
+	ID        int64
+	ProjectID int64
+	Arm       string
+	Snapshot  string
+	RunID     string
+	Result    []byte // JSON
+	CreatedAt time.Time
+}
+
+// SaveCalibration records a calibration.
+func (s *Store) SaveCalibration(ctx context.Context, c Calibration) error {
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO calibrations (project_id, arm, snapshot, run_id, result, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		c.ProjectID, c.Arm, c.Snapshot, c.RunID, string(c.Result), formatTime(c.CreatedAt)); err != nil {
+		return fmt.Errorf("save calibration of %s: %w", c.Arm, err)
+	}
+	return nil
+}
+
+// LatestCalibration returns the newest calibration of a project's arm with this snapshot commit, or ErrNotFound.
+func (s *Store) LatestCalibration(ctx context.Context, projectID int64, arm, snapshot string) (Calibration, error) {
+	var c Calibration
+	var result, created string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, project_id, arm, snapshot, run_id, result, created_at FROM calibrations
+		WHERE project_id = ? AND arm = ? AND snapshot = ? ORDER BY created_at DESC, id DESC LIMIT 1`, projectID, arm, snapshot).
+		Scan(&c.ID, &c.ProjectID, &c.Arm, &c.Snapshot, &c.RunID, &result, &created)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Calibration{}, fmt.Errorf("calibration of %s: %w", arm, ErrNotFound)
+	}
+	if err != nil {
+		return Calibration{}, fmt.Errorf("calibration of %s: %w", arm, err)
+	}
+	c.Result = []byte(result)
+	if c.CreatedAt, err = parseTime(created); err != nil {
+		return Calibration{}, err
+	}
+	return c, nil
 }

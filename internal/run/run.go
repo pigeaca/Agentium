@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +44,11 @@ type Spec struct {
 	BudgetUSD   float64
 	Timeout     time.Duration // the agent's run
 	Keep        bool          // keep the workspace and the verification copy
+	PlainPrompt bool          // send Instruction as it is, without the task suffix (calibration)
+	// Probe, when set, is appended to the arm's startup instruction file (CLAUDE.md, .claude/CLAUDE.md or AGENTS.md, as
+	// the resolver finds it) before the context commit: calibration asks the agent to repeat it, which proves that
+	// file really loads.
+	Probe string
 }
 
 // Env is what a run needs from Agentium and the machine.
@@ -59,8 +65,11 @@ type Env struct {
 	TokenFile     string
 	VerifyTimeout time.Duration // each setup or verification command
 	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
-	Progress      io.Writer
-	Now           func() time.Time
+	// Expect is the arm's calibrated environment (CLI version, model, tools, skills, slash commands); its personal and
+	// project skills are filled in by the run.
+	Expect   claude.Expect
+	Progress io.Writer
+	Now      func() time.Time
 }
 
 // Record is a finished run.
@@ -84,6 +93,11 @@ type Record struct {
 	Finished    time.Time      `json:"finished"`
 	RecordsDir  string         `json:"records"`
 	ContextHead string         `json:"context_commit,omitempty"`
+	ProbeFile   string         `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
+	// ProjectSkills and ProjectCommands are the arm's own skill and command names at the context commit; calibration
+	// subtracts them to keep only what Claude Code bundles.
+	ProjectSkills   []string `json:"-"`
+	ProjectCommands []string `json:"-"`
 }
 
 // Behavior is what the agent did, beyond passing or failing.
@@ -140,7 +154,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if found := instructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
-	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: spec.Instruction + suffix, Model: spec.Model, Effort: spec.Effort,
+	prompt := spec.Instruction + suffix
+	if spec.PlainPrompt {
+		prompt = spec.Instruction
+	}
+	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
 		Deny: env.denied(ctx, workspace)}
 	if env.SignIn != claude.SignInLogin {
@@ -196,6 +214,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, nil
 		}
 	}
+	if spec.Probe != "" {
+		if rec.ProbeFile, err = appendProbe(ctx, repo, spec.Probe); err != nil {
+			return rec, err
+		}
+		if rec.ProbeFile == "" {
+			rec.Notes = append(rec.Notes, "the arm loads no instruction file at start, so the codeword probe was skipped")
+		}
+	}
 	// Setup outputs that git does not ignore are part of the starting point, not the agent's work.
 	if _, err := gitx.Run(ctx, "-C", repo, "add", "-A"); err != nil {
 		return rec, err
@@ -229,6 +255,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		transcript.Close()
 		return rec, fmt.Errorf("run transcript: %w", err)
 	}
+	activeConfig := inv.ConfigDir
+	if env.SignIn == claude.SignInLogin {
+		activeConfig = claude.UserConfigDir(env.Environ, env.Home)
+	}
+	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after the checkout. Reads
+	// there are the run's own; any other session folder, even one created during the run, is someone else's.
+	ownSession := claude.SessionFolder(activeConfig, repo)
+	pastSessions := claude.SessionFolders(activeConfig)
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	transcript.Close()
@@ -251,13 +285,25 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return unfinished(parseErr)
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
-	projectSkills, err := skillNames(ctx, graded) // the context commit, not the agent's tree (it may have removed .git)
-	if err != nil {
+	// The context commit (Agentium's grading repository), not the agent's tree, which may have lost its .git.
+	if rec.ProjectSkills, rec.ProjectCommands, err = projectNames(ctx, graded); err != nil {
 		return unfinished(err)
 	}
-	rec.Drift = claude.Check(rec.Metrics, claude.Expect{PersonalSkills: claude.PersonalSkills(userConfig), ProjectSkills: projectSkills})
+	expect := env.Expect
+	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills
+	// A calibration holds only what Claude Code bundles: the arm's own skills and commands at its base are added here.
+	if expect.Skills != nil {
+		expect.Skills = union(expect.Skills, rec.ProjectSkills)
+	}
+	if expect.SlashCommands != nil {
+		expect.SlashCommands = union(expect.SlashCommands, rec.ProjectSkills, rec.ProjectCommands)
+	}
+	rec.Drift = claude.Check(rec.Metrics, expect)
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
-	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace, watched)
+	rec.Behavior.OutsideReads = outsideReads(ownSessionExcluded(rec.Metrics.FilePaths, ownSession), repo, workspace, watched)
+	if _, err := os.Stat(ownSession); err != nil && len(claude.SessionFolders(activeConfig)) > len(pastSessions) {
+		rec.Notes = append(rec.Notes, "Claude Code kept this run's session in an unexpected folder: reads of its saved outputs count as outside reads")
+	}
 	if rec.Behavior.OutsideReads > 0 {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
@@ -542,17 +588,44 @@ func parseFile(p string) (claude.Metrics, error) {
 	return claude.Parse(f)
 }
 
-// skillNames lists the project skill names of the arm's context in repo.
-func skillNames(ctx context.Context, repo string) ([]string, error) {
+// appendProbe appends line to the first startup instruction file of the context in repo and returns that file's path,
+// or "" when the context loads no instruction file at start.
+func appendProbe(ctx context.Context, repo, line string) (string, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	resolved, err := claudectx.Resolve(src)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	return claudectx.SkillNames(resolved, src), nil
+	for _, e := range resolved.Entries {
+		if e.Kind == claudectx.KindInstructions {
+			f, err := os.OpenFile(filepath.Join(repo, filepath.FromSlash(e.Path)), os.O_APPEND|os.O_WRONLY, 0)
+			if err != nil {
+				return "", fmt.Errorf("probe: %w", err)
+			}
+			defer f.Close()
+			if _, err := fmt.Fprintf(f, "\n%s\n", line); err != nil {
+				return "", fmt.Errorf("probe: %w", err)
+			}
+			return e.Path, nil
+		}
+	}
+	return "", nil
+}
+
+// projectNames lists the project skill and command names of the arm's context in repo.
+func projectNames(ctx context.Context, repo string) (skills, commands []string, err error) {
+	src, err := source.WorkingTree(ctx, repo)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return nil, nil, err
+	}
+	return claudectx.SkillNames(resolved, src), claudectx.CommandNames(resolved), nil
 }
 
 // instructionFilesAbove lists instruction files in the folders above dir, which Claude Code would load into a run.
@@ -611,6 +684,32 @@ func realPath(p string) string {
 		missing = append([]string{filepath.Base(p)}, missing...)
 		p = parent
 	}
+}
+
+// ownSessionExcluded drops paths in the run's own session folder, where Claude Code saves large tool outputs for the
+// agent to read back.
+func ownSessionExcluded(paths []string, ownSession string) []string {
+	own := realPath(ownSession)
+	var kept []string
+	for _, p := range paths {
+		if !within(realPath(p), own) {
+			kept = append(kept, p)
+		}
+	}
+	return kept
+}
+
+func union(lists ...[]string) []string {
+	var out []string
+	for _, list := range lists {
+		for _, x := range list {
+			if !slices.Contains(out, x) {
+				out = append(out, x)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // measure reads `git diff --numstat -z` into the behavior counts and returns the changed paths.

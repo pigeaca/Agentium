@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is in progress ([plan](plans/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks and single runs work; calibration, experiments and reports follow.
+Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is in progress ([plan](plans/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs and calibration work; experiments and reports follow.
 
 ## Product concept
 
@@ -29,7 +29,7 @@ Shape:
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
 | `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `version`, `help`) |
 | `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, run workspaces and run records |
-| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks and runs |
+| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs and calibrations |
 | `internal/project` | Read-only repository discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
 | `internal/gitx` | Every git call: hooks, fsmonitor, prompts and optional index writes off, inherited `GIT_*` dropped; hook-free fetch of a user's commit into Agentium's bare repository (for task bases) |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |

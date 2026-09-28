@@ -219,7 +219,7 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 		if mode == SignInAPIKey {
 			active, other = "/work/runs/r1/config", "/home/u/.claude-work"
 		}
-		denied := []string{other, "/home/u/.claude.json", active + "/projects", active + "/file-history", active + "/history.jsonl", active + "/.credentials.json",
+		denied := []string{other, "/home/u/.claude.json", active + "/file-history", active + "/history.jsonl", active + "/.credentials.json",
 			"/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"}
 		for _, p := range denied {
 			if !slices.Contains(toStrings(settings["permissions"].(map[string]any)["deny"]), "Read(/"+p+"/**)") || !strings.Contains(denyRead, p) {
@@ -488,5 +488,57 @@ func TestRunTimeoutInterruptsFirst(t *testing.T) {
 	m, _ := Parse(transcript)
 	if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
 		t.Errorf("an interrupted run should still report its result: %+v", m)
+	}
+}
+
+func TestReq5PastSessionsAreDeniedButNotTheRunsOwn(t *testing.T) {
+	home := t.TempDir()
+	for _, dir := range []string{".claude/projects/-work-old-project", ".claude/projects/-work-other"} {
+		if err := os.MkdirAll(filepath.Join(home, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inv := invocation(t, SignInLogin, "")
+	inv.Home = home
+	args, _, err := inv.Command([]string{"PATH=/usr/bin", "HOME=" + home}) // the default config folder, ~/.claude
+	if err != nil {
+		t.Fatal(err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil {
+		t.Fatal(err)
+	}
+	rules := toStrings(settings["permissions"].(map[string]any)["deny"])
+	for _, past := range []string{"-work-old-project", "-work-other"} {
+		if !slices.Contains(rules, "Read(/"+filepath.Join(home, ".claude", "projects", past)+"/**)") {
+			t.Errorf("past session %s is readable: %v", past, rules)
+		}
+	}
+	// The projects folder itself stays readable: the run's own session folder, created later, holds its large outputs.
+	if slices.Contains(rules, "Read(/"+filepath.Join(home, ".claude", "projects")+"/**)") {
+		t.Errorf("all of projects/ is denied, so large outputs cannot be read back: %v", rules)
+	}
+}
+
+func TestToolCallsPairResultsWithTheirUse(t *testing.T) {
+	stream := `{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"seq 1 40000"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"<persisted-output>\nOutput too large. Full output saved to: /c/projects/-w/tool-results/b1.txt\n</persisted-output>"}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"/c/projects/-w/tool-results/b1.txt","offset":20000}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":[{"type":"text","text":"20000\t20000"}],"is_error":false}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"c","name":"Read","input":{"file_path":"/secret"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c","content":"Permission denied","is_error":true}]}}
+`
+	calls, err := ToolCalls(strings.NewReader(stream))
+	if err != nil || len(calls) != 3 {
+		t.Fatalf("calls = %+v, %v", calls, err)
+	}
+	if !strings.Contains(calls[0].Result, "saved to: /c/projects/-w/tool-results/b1.txt") || calls[1].Result != "20000\t20000" || !calls[2].IsError {
+		t.Errorf("calls = %+v", calls)
+	}
+}
+
+func TestSessionFolder(t *testing.T) {
+	if got := SessionFolder("/home/u/.claude", "/private/tmp/work/ws_1.2/repo"); got != "/home/u/.claude/projects/-private-tmp-work-ws-1-2-repo" {
+		t.Errorf("session folder = %s", got)
 	}
 }
