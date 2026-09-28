@@ -219,7 +219,7 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 		if mode == SignInAPIKey {
 			active, other = "/work/runs/r1/config", "/home/u/.claude-work"
 		}
-		denied := []string{other, "/home/u/.claude.json", active + "/projects", active + "/file-history", active + "/history.jsonl",
+		denied := []string{other, "/home/u/.claude.json", active + "/projects", active + "/file-history", active + "/history.jsonl", active + "/.credentials.json",
 			"/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"}
 		for _, p := range denied {
 			if !slices.Contains(toStrings(settings["permissions"].(map[string]any)["deny"]), "Read(/"+p+"/**)") || !strings.Contains(denyRead, p) {

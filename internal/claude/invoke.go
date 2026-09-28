@@ -129,11 +129,11 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	return args, env, nil
 }
 
-// historyPaths are the parts of a Claude Code config folder that record past work: session transcripts, file history,
-// prompt history, todos, plans and the state file. Since tasks come from the user's own history, they can hold the
-// task's solution.
+// historyPaths are the parts of a Claude Code config folder the agent may not read: what records past work (session
+// transcripts, file history, prompt history, todos, plans, the state file), since tasks come from the user's own history
+// and can hold the task's solution; and the login itself (.credentials.json on Linux; macOS keeps it in the Keychain).
 func historyPaths() []string {
-	return []string{"projects", "file-history", "history.jsonl", "todos", "sessions", "plans", ".claude.json"}
+	return []string{"projects", "file-history", "history.jsonl", "todos", "sessions", "plans", ".claude.json", ".credentials.json"}
 }
 
 // deniedPaths are the paths the agent may not read, in every sign-in mode:
