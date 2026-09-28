@@ -1,6 +1,6 @@
 # Phase 0 spike
 
-Throwaway research code for the [feasibility study](../../docs/research/2026-09-27-ai-development-lab.md) Phase 0. It measures what a context A/B experiment costs and how noisy it is, using real Claude Code runs on Agentium's own harness. It is not product code, and the MVP will not reuse it as is. Plan: `.agents/plans/2026-09-27-phase0-spike.md`.
+Throwaway research code for the [feasibility study](../../docs/research/2026-09-27-ai-development-lab.md) Phase 0. It measures what a context A/B experiment costs and how noisy it is, using real Claude Code runs on Agentium's own harness. It is not product code, and the MVP will not reuse it as is. Plan: `.agents/plans/archive/2026-09-27-phase0-spike.md`.
 
 ## What it runs
 

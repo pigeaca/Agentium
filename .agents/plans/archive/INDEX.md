@@ -4,3 +4,4 @@ Archived plans are history, not default context. Search this index by title or d
 
 - [Agent Process Kit from Orchid](2026-09-27-agent-process-kit.md) — 2026-09-27
 - [AI Development Lab feasibility research](2026-09-27-lab-feasibility-research.md) — 2026-09-27
+- [Phase 0 spike: context A/B on real runs](2026-09-27-phase0-spike.md) — 2026-09-27
