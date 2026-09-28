@@ -10,3 +10,6 @@ CREATE TABLE calibrations (
     created_at TEXT    NOT NULL
 );
 CREATE INDEX calibrations_by_arm ON calibrations (project_id, arm, created_at);
+
+-- Calibration runs are stored as runs, so their spend shows; kind keeps them out of task results.
+ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'; -- task or calibration

@@ -480,6 +480,7 @@ type Run struct {
 	ProjectID int64
 	TaskID    int64 // 0 when the task was removed
 	TaskName  string
+	Kind      string // "task" (default) or "calibration"
 	Arm       string
 	Outcome   string
 	Passed    *bool
@@ -498,9 +499,12 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	if run.Passed != nil {
 		passed = *run.Passed
 	}
+	if run.Kind == "" {
+		run.Kind = "task"
+	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Arm, run.Outcome, passed,
+		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
 		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished)); err != nil {
 		return fmt.Errorf("save run %s: %w", run.ID, err)
 	}
@@ -526,7 +530,7 @@ func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
 
 func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at
+		SELECT id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at
 		FROM runs `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query runs: %w", err)
@@ -538,7 +542,7 @@ func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Ru
 		var taskID sql.NullInt64
 		var passed sql.NullBool
 		var record, started, finished string
-		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
+		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Kind, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
 			&record, &started, &finished); err != nil {
 			return nil, fmt.Errorf("read run: %w", err)
 		}

@@ -519,3 +519,26 @@ func TestReq5PastSessionsAreDeniedButNotTheRunsOwn(t *testing.T) {
 		t.Errorf("all of projects/ is denied, so large outputs cannot be read back: %v", rules)
 	}
 }
+
+func TestToolCallsPairResultsWithTheirUse(t *testing.T) {
+	stream := `{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"seq 1 40000"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"<persisted-output>\nOutput too large. Full output saved to: /c/projects/-w/tool-results/b1.txt\n</persisted-output>"}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"b","name":"Read","input":{"file_path":"/c/projects/-w/tool-results/b1.txt","offset":20000}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"b","content":[{"type":"text","text":"20000\t20000"}],"is_error":false}]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"c","name":"Read","input":{"file_path":"/secret"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"c","content":"Permission denied","is_error":true}]}}
+`
+	calls, err := ToolCalls(strings.NewReader(stream))
+	if err != nil || len(calls) != 3 {
+		t.Fatalf("calls = %+v, %v", calls, err)
+	}
+	if !strings.Contains(calls[0].Result, "saved to: /c/projects/-w/tool-results/b1.txt") || calls[1].Result != "20000\t20000" || !calls[2].IsError {
+		t.Errorf("calls = %+v", calls)
+	}
+}
+
+func TestSessionFolder(t *testing.T) {
+	if got := SessionFolder("/home/u/.claude", "/private/tmp/work/ws_1.2/repo"); got != "/home/u/.claude/projects/-private-tmp-work-ws-1-2-repo" {
+		t.Errorf("session folder = %s", got)
+	}
+}

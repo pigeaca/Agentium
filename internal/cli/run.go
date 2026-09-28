@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -118,13 +119,16 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		}
 		runEnv.Expect = claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}
 		fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, cal.CreatedAt.Format("2006-01-02 15:04"))
+		if found.RequestedModel != *model {
+			fmt.Fprintf(env.Stdout, "note: the calibration used %s, this run %s: its tool set may differ by model\n", found.RequestedModel, *model)
+		}
 	} else if errors.Is(err, store.ErrNotFound) {
 		fmt.Fprintf(env.Stdout, "note: arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate\n", arm.Name)
 	} else {
 		return fail(env, err)
 	}
 	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, runEnv.SignIn, *budget)
-	rec, err := executeRun(ctx, env, w, runEnv, t.ID, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
+	rec, err := executeRun(ctx, env, w, runEnv, t.ID, "task", run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
 		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
 	if err != nil {
@@ -156,8 +160,9 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 		Progress: env.Stdout, Now: env.Now}, nil
 }
 
-// executeRun runs spec with a fresh id and stores the record whenever the agent started, even when interrupted.
-func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, taskID int64, spec run.Spec) (run.Record, error) {
+// executeRun runs spec with a fresh id and stores the record whenever the agent started, even when interrupted. A
+// calibration run is stored with kind "calibration" and no pass or fail: it has no task to grade.
+func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, taskID int64, kind string, spec run.Spec) (run.Record, error) {
 	id, err := run.NewID(env.Now())
 	if err != nil {
 		return run.Record{}, err
@@ -168,12 +173,15 @@ func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, task
 		os.RemoveAll(rec.RecordsDir) // the agent never started: nothing to keep
 		return rec, runErr
 	}
+	if kind == "calibration" {
+		rec.Passed = nil
+	}
 	encoded, err := json.Marshal(rec)
 	if err != nil {
 		return rec, errors.Join(runErr, fmt.Errorf("encode run: %w", err))
 	}
 	// An interrupted run is saved all the same: ctx is cancelled by then, and its spend must not be lost.
-	if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: taskID, TaskName: spec.TaskName,
+	if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: taskID, TaskName: spec.TaskName, Kind: kind,
 		Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded, Started: rec.Started,
 		Finished: rec.Finished}); err != nil {
 		return rec, errors.Join(runErr, err)
@@ -237,7 +245,11 @@ func runList(ctx context.Context, env Env, args []string) int {
 		if r.Passed != nil {
 			passed = map[bool]string{true: "yes", false: "no"}[*r.Passed]
 		}
-		fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-8s %-8s %8s\n", r.ID, r.TaskName, r.Arm, r.Outcome, passed, fmt.Sprintf("$%.2f", r.CostUSD))
+		name := r.TaskName
+		if r.Kind == "calibration" {
+			name = "(calibration)"
+		}
+		fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-8s %-8s %8s\n", r.ID, name, r.Arm, r.Outcome, passed, fmt.Sprintf("$%.2f", r.CostUSD))
 	}
 	return ExitOK
 }
@@ -276,7 +288,8 @@ func runShow(ctx context.Context, env Env, args []string) int {
 }
 
 // calibrationPrompt asks for what every real task needs (a sandboxed shell command, a large output read back) and for
-// the codeword Agentium added to the arm's instruction file, which proves that file loads.
+// the codeword Agentium added to the arm's instruction file. The checks rest on the transcript's tool results; the
+// answer only has to agree.
 const calibrationPrompt = "This is an environment check: do not change any files and do not search the repository.\n" +
 	"1. Run this command with the Bash tool: printf 'agentium-sandbox-ok\\n'\n" +
 	"2. Run exactly this command with the Bash tool, without redirecting its output: seq 1 40000\n" +
@@ -284,24 +297,84 @@ const calibrationPrompt = "This is an environment check: do not change any files
 	"3. Your project instructions, as loaded at the start, end with a calibration codeword. If you see none, it is NONE.\n" +
 	"Then reply with exactly one line: SANDBOX=<what command 1 printed> LINE=<the 20000th line of command 2's output> CODEWORD=<the codeword>"
 
+// Check states.
+const (
+	checkOK         = "ok"
+	checkFailed     = "FAILED"
+	checkUnverified = "unverified" // the run did not show the evidence (for example, it worked around the saved output)
+	checkNA         = "n/a"
+)
+
 // calibration is what a calibration run found for one arm.
 type calibration struct {
 	Arm              string   `json:"arm"`
 	Snapshot         string   `json:"snapshot,omitempty"`
 	RunID            string   `json:"run_id"`
 	Outcome          string   `json:"outcome"`
-	SandboxOK        bool     `json:"sandbox_ok"`
-	LargeOutputOK    bool     `json:"large_output_ok"`
-	InstructionsOK   bool     `json:"instructions_ok"` // the agent repeated the codeword added to the arm's instruction file
+	Sandbox          string   `json:"sandbox"`      // a sandboxed Bash command returned its output
+	LargeOutput      string   `json:"large_output"` // the output Claude Code saved was read back
+	Instructions     string   `json:"instructions"` // the codeword in the arm's instruction file came back without reading it
 	FirstRequest     int64    `json:"first_request_tokens"`
 	EstimatedContext int      `json:"estimated_context_tokens"` // the resolver's session-start estimate
 	CLIVersion       string   `json:"cli_version"`
-	Model            string   `json:"model"`
+	Model            string   `json:"model"`           // as Claude Code reported it
+	RequestedModel   string   `json:"requested_model"` // as asked for (--model)
 	Tools            []string `json:"tools"`
-	Skills           []string `json:"skills"`         // stored locally to check later runs; never printed
-	SlashCommands    []string `json:"slash_commands"` // likewise
-	Drift            []string `json:"drift,omitempty"`
-	CostUSD          float64  `json:"cost_usd"`
+	// Skills and SlashCommands are Claude Code's bundled ones: the arm's own project skills and commands are left out
+	// and added back when a run is checked. Stored locally to check later runs; never printed.
+	Skills        []string `json:"skills"`
+	SlashCommands []string `json:"slash_commands"`
+	Drift         []string `json:"drift,omitempty"`
+	CostUSD       float64  `json:"cost_usd"`
+}
+
+// healthy reports whether a calibration can be what later runs are checked against.
+func (c calibration) healthy() bool {
+	return c.Outcome == claude.OutcomeOK && len(c.Drift) == 0 && c.Sandbox == checkOK && c.LargeOutput == checkOK &&
+		(c.Instructions == checkOK || c.Instructions == checkNA)
+}
+
+// judge reads the checks from the run's tool calls and results.
+func judge(calls []claude.ToolCall, answer, codeword, probeFile string) (sandbox, large, instructions string) {
+	sandbox, large, instructions = checkFailed, checkUnverified, checkFailed
+	saved := ""
+	for i, c := range calls {
+		command, _ := c.Input["command"].(string)
+		switch {
+		case c.Name == "Bash" && strings.Contains(command, "agentium-sandbox-ok"):
+			if !c.IsError && strings.Contains(c.Result, "agentium-sandbox-ok") {
+				sandbox = checkOK
+			}
+		case c.Name == "Bash" && strings.Contains(command, "seq 1 40000") && strings.Contains(c.Result, "<persisted-output>"):
+			if _, rest, ok := strings.Cut(c.Result, "saved to: "); ok {
+				saved = strings.Fields(rest)[0]
+				large = checkFailed // there is a saved output: now it must be read back
+				for _, later := range calls[i+1:] {
+					file, _ := later.Input["file_path"].(string)
+					cmd, _ := later.Input["command"].(string)
+					if (file == saved || strings.Contains(cmd, saved)) && !later.IsError && strings.Contains(later.Result, "20000") {
+						large = checkOK
+						break
+					}
+				}
+			}
+		}
+	}
+	if large == checkOK && !strings.Contains(answer, "LINE=20000") {
+		large = checkFailed
+	}
+	switch {
+	case probeFile == "":
+		instructions = checkNA
+	case strings.Contains(answer, "CODEWORD="+codeword):
+		instructions = checkOK
+		for _, c := range calls { // reading the file is not loading it
+			if input, _ := json.Marshal(c.Input); strings.Contains(string(input), path.Base(probeFile)) {
+				instructions = checkUnverified
+			}
+		}
+	}
+	return sandbox, large, instructions
 }
 
 func runCalibrate(ctx context.Context, env Env, args []string) int {
@@ -315,7 +388,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 0 || *budget <= 0 {
+	if len(rest) != 0 || *budget <= 0 || *timeout <= 0 {
 		fmt.Fprint(env.Stderr, runUsage)
 		return ExitUsage
 	}
@@ -365,27 +438,35 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		if err != nil {
 			return fail(env, err)
 		}
-		codeword, err := run.NewID(env.Now()) // random enough to be unguessable
+		suffix, err := run.NewID(env.Now()) // random enough to be unguessable
 		if err != nil {
 			return fail(env, err)
 		}
-		codeword = "AGENTIUM-" + strings.ToUpper(codeword[len(codeword)-6:])
-		rec, err := executeRun(ctx, env, w, runEnv, 0, run.Spec{TaskName: "calibration", Instruction: calibrationPrompt, PlainPrompt: true,
-			Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: head, Verify: []string{"true"}}, Arm: a.arm, Model: *model,
-			BudgetUSD: *budget, Timeout: *timeout})
+		codeword := "AGENTIUM-" + strings.ToUpper(suffix[len(suffix)-6:])
+		rec, err := executeRun(ctx, env, w, runEnv, 0, "calibration", run.Spec{TaskName: "calibration", Instruction: calibrationPrompt,
+			PlainPrompt: true, Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: head, Verify: []string{"true"}},
+			Arm: a.arm, Model: *model, BudgetUSD: *budget, Timeout: *timeout})
+		if err != nil {
+			return fail(env, err)
+		}
+		transcript, err := os.Open(filepath.Join(rec.RecordsDir, "stream.jsonl"))
+		if err != nil {
+			return fail(env, fmt.Errorf("calibration transcript: %w", err))
+		}
+		calls, err := claude.ToolCalls(transcript)
+		transcript.Close()
 		if err != nil {
 			return fail(env, err)
 		}
 		m := rec.Metrics
-		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome,
-			SandboxOK: strings.Contains(m.ResultExcerpt, "SANDBOX=agentium-sandbox-ok"), LargeOutputOK: strings.Contains(m.ResultExcerpt, "LINE=20000"),
-			InstructionsOK: strings.Contains(m.ResultExcerpt, "CODEWORD="+codeword),
-			FirstRequest:   m.FirstRequest, EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion,
-			Model: m.Model, Tools: m.Tools, Skills: m.Skills, SlashCommands: m.SlashCommands, Drift: rec.Drift, CostUSD: m.CostUSD}
+		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
+			EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion, Model: m.Model,
+			RequestedModel: *model, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
+			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: m.CostUSD}
+		c.Sandbox, c.LargeOutput, c.Instructions = judge(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
 		results = append(results, c)
-		clean := rec.Outcome == claude.OutcomeOK && len(rec.Drift) == 0
-		healthy = healthy && clean && c.SandboxOK && c.LargeOutputOK && c.InstructionsOK
-		if !clean { // a drifted or failed calibration must not become what later runs are checked against
+		if !c.healthy() { // only a calibration that passed every check becomes what later runs are checked against
+			healthy = false
 			continue
 		}
 		encoded, err := json.Marshal(c)
@@ -399,25 +480,41 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	printCalibration(env, results)
 	if !healthy {
+		fmt.Fprintln(env.Stdout, "Not every arm passed: failed arms were not saved as calibrations (see the run records).")
 		return ExitError
 	}
 	return ExitOK
 }
 
+// without lists the names in list that none of the others hold.
+func without(list []string, others ...[]string) []string {
+	out := []string{}
+	for _, x := range list {
+		found := false
+		for _, o := range others {
+			found = found || slices.Contains(o, x)
+		}
+		if !found {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
 // printCalibration reports each arm and compares the measured context sizes with Agentium's estimates.
 func printCalibration(env Env, results []calibration) {
 	out := env.Stdout
-	yes := func(ok bool) string { return map[bool]string{true: "ok", false: "FAILED"}[ok] }
-	fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %-13s %14s %14s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "INSTRUCTIONS",
+	fmt.Fprintf(out, "%-16s %-8s %-10s %-12s %-12s %13s %13s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "INSTRUCTIONS",
 		"FIRST REQUEST", "ESTIMATED CTX", "TOOLS", "SKILLS", "COST")
 	for _, c := range results {
-		fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %-13s %14d %14d %6d %7d %8s\n", c.Arm, c.Outcome, yes(c.SandboxOK), yes(c.LargeOutputOK),
-			yes(c.InstructionsOK), c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
+		fmt.Fprintf(out, "%-16s %-8s %-10s %-12s %-12s %13d %13d %6d %7d %8s\n", c.Arm, c.Outcome, c.Sandbox, c.LargeOutput, c.Instructions,
+			c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
 		for _, d := range c.Drift {
-			fmt.Fprintf(out, "  unfair: %s (not saved as the arm's calibration)\n", d)
+			fmt.Fprintf(out, "  unfair: %s\n", d)
 		}
 	}
-	fmt.Fprintf(out, "INSTRUCTIONS: the agent repeated a codeword Agentium added to the arm's startup instruction file, so that file loads.\n")
+	fmt.Fprintln(out, "Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;")
+	fmt.Fprintln(out, "INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file.")
 	if len(results) > 0 {
 		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools; between arms:\n",
 			orNone(results[0].CLIVersion), orNone(results[0].Model))

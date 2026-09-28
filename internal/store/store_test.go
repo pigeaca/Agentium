@@ -277,7 +277,7 @@ func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
 		}
 	}
 	got, err := s.RunByID(ctx, app.ID, "20260928T100000Z-aaaaaa")
-	if err != nil || got.Passed == nil || !*got.Passed || got.CostUSD != 0.31 || got.TaskID != saved.ID || string(got.Record) != `{"id":"a"}` {
+	if err != nil || got.Passed == nil || !*got.Passed || got.CostUSD != 0.31 || got.TaskID != saved.ID || string(got.Record) != `{"id":"a"}` || got.Kind != "task" {
 		t.Errorf("RunByID = %+v, %v", got, err)
 	}
 	if err := s.DeleteTask(ctx, app.ID, "fix"); err != nil {

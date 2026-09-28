@@ -291,16 +291,48 @@ func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
 	}
 }
 
-// calibratingAgent writes a fake Claude Code that reports tools, skills, a first-request size and an answer. In the
-// answer, CODEWORD is replaced by the codeword it finds at the end of CLAUDE.md or AGENTS.md, as a real agent would.
-func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, answer string) string {
+// calibratingAgent writes a fake Claude Code that answers the calibration with real-looking tool calls: the sandbox
+// command, seq with an output Claude Code saved, and a read of that saved file. It learns the codeword from the
+// instruction file itself (not through a tool call, so the check sees it as loaded). mode varies the evidence:
+// "redirect" works around the saved output, "denied" fails the read, "sandbox-error" fails the first command,
+// "read-claude-md" reads the instruction file with the Read tool.
+func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, mode string) string {
 	t.Helper()
-	script := `#!/bin/sh
-code=$(cat CLAUDE.md AGENTS.md 2>/dev/null | sed -n 's/^Calibration codeword: //p' | tail -1)
-echo '{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":[` + tools + `],"skills":[` + skills + `],"slash_commands":["compact"]}'
-echo '{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":` + strconv.Itoa(firstRequest) + `,"service_tier":"standard"},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"seq 1 40000"}}]}}'
-echo '{"type":"result","subtype":"success","is_error":false,"result":"'"$(printf '%s' "` + answer + `" | sed "s/CODEWORD$/CODEWORD=$code/")"'","total_cost_usd":0.02,"num_turns":3,"duration_ms":2000,"modelUsage":{}}'
-`
+	saved := "/cfg/projects/-own-session/tool-results/b1.txt"
+	use := func(id, name, input string) string {
+		return `{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":` + strconv.Itoa(firstRequest) +
+			`},"content":[{"type":"tool_use","id":"` + id + `","name":"` + name + `","input":` + input + `}]}}`
+	}
+	result := func(id, text string, isError bool) string {
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"` + text + `","is_error":` + strconv.FormatBool(isError) + `}]}}`
+	}
+	lines := []string{`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":[` +
+		tools + `],"skills":[` + skills + `],"slash_commands":["compact"]}`}
+	sandboxOut, sandboxErr := "agentium-sandbox-ok", false
+	if mode == "sandbox-error" {
+		sandboxOut, sandboxErr = "sandbox-exec: Operation not permitted", true
+	}
+	lines = append(lines, use("t1", "Bash", `{"command":"printf 'agentium-sandbox-ok\\n'"}`), result("t1", sandboxOut, sandboxErr))
+	switch mode {
+	case "redirect":
+		lines = append(lines, use("t2", "Bash", `{"command":"seq 1 40000 > /tmp/o.txt && sed -n 20000p /tmp/o.txt"}`), result("t2", "20000", false))
+	default:
+		lines = append(lines, use("t2", "Bash", `{"command":"seq 1 40000"}`),
+			result("t2", `<persisted-output>\nOutput too large (223.5KB). Full output saved to: `+saved+`\n</persisted-output>`, false))
+		if mode == "denied" {
+			lines = append(lines, use("t3", "Read", `{"file_path":"`+saved+`","offset":20000}`), result("t3", "Permission to read denied", true))
+		} else {
+			lines = append(lines, use("t3", "Read", `{"file_path":"`+saved+`","offset":20000}`), result("t3", "20000: 20000", false))
+		}
+	}
+	if mode == "read-claude-md" {
+		lines = append(lines, use("t4", "Read", `{"file_path":"CLAUDE.md"}`), result("t4", "# Rules", false))
+	}
+	script := "#!/bin/sh\ncode=$(cat CLAUDE.md AGENTS.md 2>/dev/null | sed -n 's/^Calibration codeword: //p' | tail -1)\n[ -n \"$code\" ] || code=NONE\n"
+	for _, line := range lines {
+		script += "cat <<'EOF'\n" + line + "\nEOF\n"
+	}
+	script += `echo '{"type":"result","subtype":"success","is_error":false,"result":"SANDBOX=agentium-sandbox-ok LINE=20000 CODEWORD='"$code"'","total_cost_usd":0.02,"num_turns":4,"duration_ms":2000,"modelUsage":{}}'` + "\n"
 	cli := filepath.Join(t.TempDir(), "claude")
 	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -314,25 +346,56 @@ func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
 	expect(t, f.run(context.Background(), "context", "snapshot", "long", "--working-tree"), ExitOK)
 	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
 
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "SANDBOX=agentium-sandbox-ok LINE=20000 CODEWORD")
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "")
 	cal := f.run(context.Background(), "run", "calibrate", "--snapshot", "long")
-	expect(t, cal, ExitOK, "Calibrating 2 arm(s)", "base             ok       ok       ok            ok", "long: measured +0 tokens, estimated +430 (measured/estimated 0.00)")
+	expect(t, cal, ExitOK, "Calibrating 2 arm(s)", "base             ok       ok         ok           ok",
+		"long: measured +0 tokens, estimated +430 (measured/estimated 0.00)")
 	if strings.Contains(cal.stdout, "review") {
 		t.Errorf("skill names must not be printed:\n%s", cal.stdout)
 	}
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "(calibration)")
 
-	// A later run with another tool set is unfair against the calibration.
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "done")
-	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "Checking the environment against the calibration of base",
+	// A later run with another tool set is unfair against the calibration; another model gets a note.
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "")
+	expect(t, f.run(context.Background(), "run", "once", "value", "--model", "claude-opus-5-5"), ExitOK,
+		"Checking the environment against the calibration of base", "note: the calibration used claude-sonnet-5, this run claude-opus-5-5",
 		"outcome      unfair", "tools differ (added Monitor; missing none)")
 	expect(t, f.run(context.Background(), "run", "once", "value", "--snapshot", "long"), ExitOK, "calibration of long")
+}
 
-	// A calibration where the sandbox check fails is reported, and the command fails.
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, `"review"`, 25000, "SANDBOX=Operation not permitted LINE=20000 CODEWORD")
-	expect(t, f.run(context.Background(), "run", "calibrate"), ExitError, "base             ok       FAILED")
-	// An agent that did not see the codeword: the instruction file the resolver expects did not load.
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, `"review"`, 25000, "SANDBOX=agentium-sandbox-ok LINE=20000 CODEWORD=NONE")
-	expect(t, f.run(context.Background(), "run", "calibrate"), ExitError, "base             ok       ok       ok            FAILED")
+func TestCalibrationChecksRestOnTheTranscript(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	for mode, want := range map[string]string{
+		"redirect":       "base             ok       ok         unverified   ok",
+		"denied":         "base             ok       ok         FAILED       ok",
+		"sandbox-error":  "base             ok       FAILED     ok           ok",
+		"read-claude-md": "base             ok       ok         ok           unverified",
+	} {
+		f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, ``, 25000, mode)
+		expect(t, f.run(context.Background(), "run", "calibrate"), ExitError, want, "failed arms were not saved")
+	}
+	// None of those became the baseline.
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, ``, 25000, "")
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "arm base is not calibrated")
+
+	// An arm without an instruction file cannot carry the codeword: n/a, and the other arms still count.
+	gitIn(t, f.repo, "rm", "-q", "CLAUDE.md")
+	expect(t, f.run(context.Background(), "context", "snapshot", "bare", "--working-tree"), ExitOK)
+	gitIn(t, f.repo, "checkout", "-q", "HEAD", "--", "CLAUDE.md")
+	expect(t, f.run(context.Background(), "run", "calibrate", "--snapshot", "bare"), ExitOK, "bare             ok       ok         ok           n/a")
+}
+
+func TestCalibrationKeepsOnlyBundledSkills(t *testing.T) {
+	// The base is calibrated at HEAD, which has a project skill the task's older base does not: the calibration
+	// stores only the bundled skill, and a run adds its own project skills, so it is not unfair.
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	writeFile(t, f.repo, ".claude/skills/new-skill/SKILL.md", "---\nname: new-skill\ndescription: d\n---\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "add a project skill")
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, `"bundled","new-skill"`, 25000, "")
+	expect(t, f.run(context.Background(), "run", "calibrate"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, `"bundled"`, 25000, "")
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "outcome      ok")
 }
 
 func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
@@ -340,12 +403,12 @@ func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(f.home, ".claude", "skills", "my-secret-skill"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, `"my-secret-skill"`, 25000, "SANDBOX=agentium-sandbox-ok LINE=20000 CODEWORD")
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, `"my-secret-skill"`, 25000, "")
 	cal := f.run(context.Background(), "run", "calibrate")
-	expect(t, cal, ExitError, "base             unfair", "unfair: 1 personal skill(s) loaded (not saved as the arm's calibration)")
+	expect(t, cal, ExitError, "base             unfair", "unfair: 1 personal skill(s) loaded")
 	if strings.Contains(cal.stdout, "my-secret-skill") {
 		t.Errorf("a personal skill name was printed:\n%s", cal.stdout)
 	}
-	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, ``, 25000, "done")
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, ``, 25000, "")
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "arm base is not calibrated")
 }
