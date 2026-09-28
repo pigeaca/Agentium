@@ -9,7 +9,5 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-09-28 — Stack: Go + React + SQLite accepted ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)); Go module, `check go`/`check vuln` and CI in place.
 
 ## Next, in order
-1. MVP Phase 1: core and the context A/B workflow from the CLI. Include the Phase 0 isolation recipe, per-run environment checks and trajectory graders. Plan it with acceptance criteria.
-2. Candidate follow-ups for the user to decide:
-   - make "update and run the tests" concrete in the entry docs;
-   - move the harness out of `.agents/`, because Codex's sandbox treats that directory as read-only.
+1. MVP Phase 1, in progress: context A/B from the CLI, Claude Code only, in eight PR steps. See the [plan](plans/2026-09-28-phase1-context-ab-cli.md).
+2. Phase 2: web UI, agent comparison, and Codex.
