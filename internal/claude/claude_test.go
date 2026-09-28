@@ -81,14 +81,23 @@ func TestReq1PersonalContextDoesNotLoad(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".claude", "commands", "ship.md"), []byte("ship"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	personal := PersonalSkills(home)
+	personal := PersonalSkills(UserConfigDir(nil, home))
 	if !slices.Equal(personal, []string{"deploy", "my-review", "ship"}) {
 		t.Fatalf("personal skills = %v", personal)
 	}
-	leaked := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "product-increment", "ship"}}
+	leaked := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "product-increment"}, SlashCommands: []string{"compact", "ship"}}
 	drift := Check(leaked, Expect{PersonalSkills: personal})
-	if len(drift) != 1 || drift[0] != "2 personal skill(s) loaded" {
+	if len(drift) != 1 || drift[0] != "2 personal skill(s) or command(s) loaded" {
 		t.Errorf("drift = %q (names must stay private)", drift)
+	}
+	// A project skill that shares a personal skill's name is the arm's own, not a leak.
+	own := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy"}}
+	if drift := Check(own, Expect{PersonalSkills: personal, ProjectSkills: []string{"deploy"}}); len(drift) != 0 {
+		t.Errorf("a project skill named like a personal one: %q", drift)
+	}
+	// With a lock's exact skill set, any other set is drift, reported by count.
+	if drift := Check(own, Expect{Skills: []string{"deploy", "review"}}); len(drift) != 1 || drift[0] != "skills differ (0 added, 1 missing)" {
+		t.Errorf("skill set drift = %q", drift)
 	}
 	if Classify(Metrics{SawResult: true, Result: "success"}, false, drift) != OutcomeUnfair {
 		t.Error("a run with personal skills is unfair")
@@ -128,11 +137,14 @@ func TestReq3PermissionModeIsFixedAndChecked(t *testing.T) {
 }
 
 func TestReq4SignInModesAndFreshConfig(t *testing.T) {
+	// Login mode uses the user's own login: their CLAUDE_CONFIG_DIR when they have one, and no secret.
 	_, login, _ := command(t, invocation(t, SignInLogin, ""))
-	for _, name := range []string{"CLAUDE_CONFIG_DIR", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
-		if _, ok := login[name]; ok {
-			t.Errorf("login mode passed %s (the user's own login and config folder are used)", name)
-		}
+	if login["CLAUDE_CONFIG_DIR"] != "/home/u/.claude-work" || login["ANTHROPIC_API_KEY"] != "" || login["CLAUDE_CODE_OAUTH_TOKEN"] != "" {
+		t.Errorf("login mode env = %v", login)
+	}
+	_, plain, err := invocation(t, SignInLogin, "").Command([]string{"PATH=/usr/bin", "HOME=/home/u"})
+	if err != nil || strings.Contains(strings.Join(plain, " "), "CLAUDE_CONFIG_DIR") {
+		t.Errorf("login mode without a custom config folder: %v, %v", plain, err)
 	}
 	_, token, _ := command(t, invocation(t, SignInTokenFile, "tok-123"))
 	if token["CLAUDE_CONFIG_DIR"] != "/work/runs/r1/config" || token["CLAUDE_CODE_OAUTH_TOKEN"] != "tok-123" || token["ANTHROPIC_API_KEY"] != "" {
@@ -186,9 +198,15 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 				t.Errorf("%s: %s not denied: %s | %s", mode, p, denyRead, rules)
 			}
 		}
-		transcripts := "/home/u/.claude/projects"
-		if strings.Contains(denyRead, transcripts) != (mode == SignInLogin) {
-			t.Errorf("%s: session transcripts denied = %v; want only in login mode", mode, strings.Contains(denyRead, transcripts))
+		// Claude Code's own data (transcripts, file and prompt history) and credential stores are denied in every mode,
+		// to the shell and to the Read tool.
+		for _, p := range []string{"/home/u/.claude", "/home/u/.claude.json", "/home/u/.claude-work", "/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"} {
+			if !strings.Contains(denyRead, p) || !strings.Contains(rules, "Read(/"+p+"/**)") {
+				t.Errorf("%s: %s is not denied: %s", mode, p, rules)
+			}
+		}
+		if mode == SignInAPIKey && !strings.Contains(rules, "Read(//work/runs/r1/config/**)") {
+			t.Errorf("the run's own config folder is readable: %s", rules)
 		}
 		if sandbox["enabled"] != true || sandbox["allowUnsandboxedCommands"] != false || sandbox["failIfUnavailable"] != true {
 			t.Errorf("sandbox = %v", sandbox)
@@ -214,6 +232,55 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 				t.Errorf("%s: %s is missing", mode, kept)
 			}
 		}
+	}
+}
+
+func TestReq5DeniedPathsAreCheckedAndResolved(t *testing.T) {
+	inv := invocation(t, SignInLogin, "")
+	inv.Deny = []string{"relative/path"}
+	if _, _, err := inv.Command(parentEnv); err == nil {
+		t.Error("a relative denied path must be refused")
+	}
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	inv.Deny = []string{link + "/"}
+	realResolved, _ := filepath.EvalSymlinks(real)
+	_, _, settings := command(t, inv)
+	rules := strings.Join(toStrings(settings["permissions"].(map[string]any)["deny"]), " ")
+	if !strings.Contains(rules, "Read(/"+link+"/**)") || !strings.Contains(rules, "Read(/"+realResolved+"/**)") {
+		t.Errorf("both forms of a symlinked path must be denied: %s", rules)
+	}
+	token := invocation(t, SignInTokenFile, "tok")
+	token.TokenFile = "/home/u/.secrets/claude-token"
+	_, _, settings = command(t, token)
+	if rules := strings.Join(toStrings(settings["permissions"].(map[string]any)["deny"]), " "); !strings.Contains(rules, "Read(//home/u/.secrets/**)") {
+		t.Errorf("the token file's folder is readable: %s", rules)
+	}
+}
+
+func TestReq5EnvironmentAllowlistEdges(t *testing.T) {
+	env := strings.Join(Environ([]string{"GOOGLE_CLOUD_PROJECT=p", "GOAUTH=netrc", "GOPATH=/g", "GOFLAGS=-mod=mod",
+		"HTTPS_PROXY=http://proxy:3128", "NO_PROXY=localhost", "SSL_CERT_FILE=/etc/ca.pem", "CGO_ENABLED=1", "NODE_OPTIONS=--x"}), " ")
+	if env != "GOPATH=/g GOFLAGS=-mod=mod HTTPS_PROXY=http://proxy:3128 NO_PROXY=localhost SSL_CERT_FILE=/etc/ca.pem CGO_ENABLED=1 NODE_OPTIONS=--x" {
+		t.Errorf("kept %s", env)
+	}
+}
+
+func TestParseToleratesOddFieldsAndZeroFirstRequest(t *testing.T) {
+	stream := `{"type":"system","subtype":"init","permissionMode":"acceptEdits","tools":["Bash"]}
+{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":0,"service_tier":"standard"},"content":[]}}
+{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":900},"content":"not a list"}}
+{"type":"result","subtype":"success","is_error":false,"result":"ok","total_cost_usd":0.5,"modelUsage":{"a":{"inputTokens":"lots"},"b":{"inputTokens":7,"outputTokens":3,"costUSD":0.1}}}
+`
+	m, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.FirstRequest != 0 || !m.SawResult || m.InputTokens != 7 || m.OutputTokens != 3 || m.CostUSD != 0.5 {
+		t.Errorf("metrics = %+v (the first request is the first one, even at 0; a bad model entry is skipped, not the result)", m)
 	}
 }
 

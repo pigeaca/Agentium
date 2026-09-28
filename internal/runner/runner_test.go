@@ -119,7 +119,7 @@ func TestArgsEnvironAndGracefulStop(t *testing.T) {
 	}
 	// On timeout the group gets SIGINT first: a command that handles it can finish cleanly.
 	out, read = output(t)
-	result, err = Run(context.Background(), Spec{Output: out, Timeout: 200 * time.Millisecond, Grace: 5 * time.Second,
+	result, err = Run(context.Background(), Spec{Output: out, Timeout: 2 * time.Second, Grace: 5 * time.Second,
 		Command: `trap 'echo finishing; exit 0' INT; sleep 30 & wait`})
 	if err != nil || !result.TimedOut || !strings.Contains(read(), "finishing") {
 		t.Errorf("graceful stop: %+v, %v, output %q", result, err, read())
@@ -131,6 +131,19 @@ func TestArgsEnvironAndGracefulStop(t *testing.T) {
 		Command: `trap '' INT; while true; do sleep 0.05; done`})
 	if err != nil || !result.TimedOut || time.Since(start) > 4*time.Second {
 		t.Errorf("forced stop: %+v, %v after %v", result, err, time.Since(start))
+	}
+}
+
+func TestCancelWithGraceInterruptsFirst(t *testing.T) {
+	out, read := output(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(2*time.Second, cancel)
+	_, err := Run(ctx, Spec{Output: out, Grace: 5 * time.Second, Command: `trap 'echo finishing; exit 0' INT; sleep 30 & wait`})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(read(), "finishing") {
+		t.Errorf("err %v, output %q", err, read())
+	}
+	if _, err := Run(ctx, Spec{Output: out, Args: []string{"/no/such/binary"}}); err == nil || !strings.Contains(err.Error(), "/no/such/binary") {
+		t.Errorf("errors name the program: %v", err)
 	}
 }
 

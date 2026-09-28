@@ -117,9 +117,13 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	if cmd.Process != nil {
 		killGroup(cmd.Process.Pid) // background children of a finished command
 	}
+	name := spec.Command
+	if len(spec.Args) > 0 {
+		name = spec.Args[0]
+	}
 	switch {
 	case ctx.Err() != nil:
-		return result, fmt.Errorf("run %q: %w", spec.Command, ctx.Err())
+		return result, fmt.Errorf("run %q: %w", name, ctx.Err())
 	case runCtx.Err() != nil:
 		result.TimedOut = true
 		return result, nil
@@ -130,7 +134,7 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		return result, nil
 	}
 	if err != nil {
-		return result, fmt.Errorf("run %q: %w", spec.Command, err)
+		return result, fmt.Errorf("run %q: %w", name, err)
 	}
 	result.ExitCode = 0
 	return result, nil

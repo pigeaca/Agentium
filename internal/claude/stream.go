@@ -21,6 +21,7 @@ type Metrics struct {
 	PermissionMode string   `json:"permission_mode"`
 	Tools          []string `json:"tools"`  // offered to the agent
 	Skills         []string `json:"-"`      // names can be personal: compared, never stored
+	SlashCommands  []string `json:"-"`      // likewise
 	SkillCount     int      `json:"skills"` // offered to the agent
 	MCPTools       int      `json:"mcp_tools"`
 
@@ -49,47 +50,80 @@ type Metrics struct {
 
 var fileTools = map[string]bool{"Read": true, "Edit": true, "Write": true, "NotebookEdit": true}
 
-// Parse reads a stream-json transcript. Lines that are not JSON (a crash message, say) are skipped.
+// The stream's events, decoded in parts: each part holds only the fields Agentium reads, so fields Claude Code adds or
+// types it changes (service_tier, cache_creation, costUSD, ...) are ignored instead of failing the whole line.
+type (
+	envelope struct {
+		Type            string          `json:"type"`
+		Subtype         string          `json:"subtype"`
+		ParentToolUseID *string         `json:"parent_tool_use_id"`
+		Message         json.RawMessage `json:"message"`
+	}
+	initEvent struct {
+		ClaudeCodeVersion string   `json:"claude_code_version"`
+		Model             string   `json:"model"`
+		PermissionMode    string   `json:"permissionMode"`
+		Tools             []string `json:"tools"`
+		Skills            []string `json:"skills"`
+		SlashCommands     []string `json:"slash_commands"`
+	}
+	assistantMessage struct {
+		Usage   json.RawMessage   `json:"usage"`
+		Content []json.RawMessage `json:"content"`
+	}
+	requestUsage struct {
+		Input         float64 `json:"input_tokens"`
+		CacheCreation float64 `json:"cache_creation_input_tokens"`
+		CacheRead     float64 `json:"cache_read_input_tokens"`
+	}
+	toolUse struct {
+		Type  string         `json:"type"`
+		ID    string         `json:"id"`
+		Name  string         `json:"name"`
+		Input map[string]any `json:"input"`
+	}
+	resultEvent struct {
+		IsError           bool                       `json:"is_error"`
+		Result            string                     `json:"result"`
+		TotalCostUSD      float64                    `json:"total_cost_usd"`
+		NumTurns          float64                    `json:"num_turns"`
+		DurationMS        float64                    `json:"duration_ms"`
+		DurationAPIMS     float64                    `json:"duration_api_ms"`
+		PermissionDenials []json.RawMessage          `json:"permission_denials"`
+		ModelUsage        map[string]json.RawMessage `json:"modelUsage"`
+	}
+	modelUsage struct {
+		Input         float64 `json:"inputTokens"`
+		Output        float64 `json:"outputTokens"`
+		CacheRead     float64 `json:"cacheReadInputTokens"`
+		CacheCreation float64 `json:"cacheCreationInputTokens"`
+	}
+)
+
+// Parse reads a stream-json transcript. Lines that are not JSON (a crash message, say) are skipped, and so are parts
+// of an event that do not decode.
 func Parse(r io.Reader) (Metrics, error) {
 	m := Metrics{ToolUses: map[string]int{}}
 	seen := map[string]bool{}
+	firstSeen := false
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // tool results can be large
 	for scanner.Scan() {
-		var event struct {
-			Type, Subtype   string
-			ParentToolUseID *string `json:"parent_tool_use_id"`
-			// init
-			ClaudeCodeVersion string `json:"claude_code_version"`
-			Model             string
-			PermissionMode    string `json:"permissionMode"`
-			Tools             []string
-			Skills            []string
-			// assistant
-			Message *struct {
-				Usage   map[string]int64
-				Content []json.RawMessage
-			}
-			// result
-			TotalCostUSD      float64 `json:"total_cost_usd"`
-			NumTurns          int     `json:"num_turns"`
-			DurationMS        int64   `json:"duration_ms"`
-			DurationAPIMS     int64   `json:"duration_api_ms"`
-			IsError           bool    `json:"is_error"`
-			Result            string
-			PermissionDenials []json.RawMessage           `json:"permission_denials"`
-			ModelUsage        map[string]map[string]int64 `json:"modelUsage"`
-		}
-		if err := json.Unmarshal(scanner.Bytes(), &event); err != nil {
+		line := scanner.Bytes()
+		var event envelope
+		if err := json.Unmarshal(line, &event); err != nil {
 			continue
 		}
 		switch {
 		case event.Type == "system" && event.Subtype == "init":
+			var init initEvent
+			if json.Unmarshal(line, &init) != nil {
+				continue
+			}
 			m.SawInit = true
-			m.CLIVersion, m.Model, m.PermissionMode = event.ClaudeCodeVersion, event.Model, event.PermissionMode
-			m.Tools, m.Skills = sorted(event.Tools), sorted(event.Skills)
-			m.SkillCount = len(m.Skills)
-			m.MCPTools = 0
+			m.CLIVersion, m.Model, m.PermissionMode = init.ClaudeCodeVersion, init.Model, init.PermissionMode
+			m.Tools, m.Skills, m.SlashCommands = sorted(init.Tools), sorted(init.Skills), sorted(init.SlashCommands)
+			m.SkillCount, m.MCPTools = len(m.Skills), 0
 			for _, tool := range m.Tools {
 				if strings.HasPrefix(tool, "mcp__") {
 					m.MCPTools++
@@ -97,16 +131,19 @@ func Parse(r io.Reader) (Metrics, error) {
 			}
 		case event.Type == "system" && event.Subtype == "api_retry":
 			m.APIRetries++
-		case event.Type == "assistant" && event.Message != nil:
-			if m.FirstRequest == 0 && event.ParentToolUseID == nil {
-				u := event.Message.Usage // input and cache counts are exact per request: the context the model saw
-				m.FirstRequest = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
+		case event.Type == "assistant":
+			var message assistantMessage
+			if json.Unmarshal(event.Message, &message) != nil {
+				continue
 			}
-			for _, raw := range event.Message.Content {
-				var block struct {
-					Type, ID, Name string
-					Input          map[string]any
-				}
+			var usage requestUsage
+			if !firstSeen && event.ParentToolUseID == nil && json.Unmarshal(message.Usage, &usage) == nil {
+				// Input and cache counts are exact per request: the context the model saw at the start.
+				firstSeen = true
+				m.FirstRequest = int64(usage.Input + usage.CacheCreation + usage.CacheRead)
+			}
+			for _, raw := range message.Content {
+				var block toolUse
 				if json.Unmarshal(raw, &block) != nil || block.Type != "tool_use" || seen[block.ID] {
 					continue
 				}
@@ -124,17 +161,26 @@ func Parse(r io.Reader) (Metrics, error) {
 				}
 			}
 		case event.Type == "result":
+			var result resultEvent
+			if json.Unmarshal(line, &result) != nil {
+				continue
+			}
 			m.SawResult = true
-			m.Result, m.ResultIsError = event.Subtype, event.IsError
-			m.CostUSD, m.Turns, m.DurationMS, m.APIDurationMS = event.TotalCostUSD, event.NumTurns, event.DurationMS, event.DurationAPIMS
-			m.Denials = len(event.PermissionDenials)
-			m.ResultExcerpt = excerpt(event.Result, 300)
+			m.Result, m.ResultIsError = event.Subtype, result.IsError
+			m.CostUSD, m.Turns = result.TotalCostUSD, int(result.NumTurns)
+			m.DurationMS, m.APIDurationMS = int64(result.DurationMS), int64(result.DurationAPIMS)
+			m.Denials = len(result.PermissionDenials)
+			m.ResultExcerpt = excerpt(result.Result, 300)
 			m.InputTokens, m.OutputTokens, m.CacheReadTokens, m.CacheWriteTokens = 0, 0, 0, 0
-			for _, usage := range event.ModelUsage {
-				m.InputTokens += usage["inputTokens"]
-				m.OutputTokens += usage["outputTokens"]
-				m.CacheReadTokens += usage["cacheReadInputTokens"]
-				m.CacheWriteTokens += usage["cacheCreationInputTokens"]
+			for _, raw := range result.ModelUsage {
+				var usage modelUsage
+				if json.Unmarshal(raw, &usage) != nil {
+					continue
+				}
+				m.InputTokens += int64(usage.Input)
+				m.OutputTokens += int64(usage.Output)
+				m.CacheReadTokens += int64(usage.CacheRead)
+				m.CacheWriteTokens += int64(usage.CacheCreation)
 			}
 		}
 	}
@@ -178,8 +224,11 @@ type Expect struct {
 	CLIVersion string
 	Model      string
 	Tools      []string // the tool set every run of an experiment must get
-	// PersonalSkills are the names of the user's own skills and commands: none may load (requirement 1).
+	Skills     []string // the skill set every run of an arm must get (reported by count: names can be personal)
+	// PersonalSkills are the names of the user's own skills and commands: none may load (requirement 1), except where
+	// the arm has a project skill of the same name (ProjectSkills).
 	PersonalSkills []string
+	ProjectSkills  []string
 }
 
 // Check lists how a run's environment drifted from what was expected. Any drift makes a run unfair.
@@ -207,30 +256,34 @@ func Check(m Metrics, expect Expect) []string {
 		added, removed := difference(m.Tools, expect.Tools), difference(expect.Tools, m.Tools)
 		drift = append(drift, fmt.Sprintf("tools differ (added %s; missing %s)", orNone(added), orNone(removed)))
 	}
-	personal := 0
-	for _, skill := range m.Skills {
-		if slices.Contains(expect.PersonalSkills, skill) {
-			personal++
+	if expect.Skills != nil && !slices.Equal(m.Skills, sorted(expect.Skills)) {
+		drift = append(drift, fmt.Sprintf("skills differ (%d added, %d missing)", len(difference(m.Skills, expect.Skills)), len(difference(expect.Skills, m.Skills))))
+	}
+	personal := map[string]bool{}
+	for _, name := range append(append([]string{}, m.Skills...), m.SlashCommands...) {
+		if slices.Contains(expect.PersonalSkills, name) && !slices.Contains(expect.ProjectSkills, name) {
+			personal[name] = true
 		}
 	}
-	if personal > 0 { // requirement 1; the names stay private
-		drift = append(drift, fmt.Sprintf("%d personal skill(s) loaded", personal))
+	if len(personal) > 0 { // requirement 1; the names stay private
+		drift = append(drift, fmt.Sprintf("%d personal skill(s) or command(s) loaded", len(personal)))
 	}
 	return drift
 }
 
-// PersonalSkills lists the names of the user's own skills and commands (~/.claude/skills/*, ~/.claude/commands/*.md).
-// Only names are read, to recognize them in a run; they are never stored.
-func PersonalSkills(home string) []string {
+// PersonalSkills lists the names of the user's own skills and commands in their Claude Code folder (configDir, see
+// UserConfigDir): skills/* and commands/*.md. Only names are read, to recognize them in a run; they are never stored.
+// Skills from user-level plugins are not listed; a lock's exact skill set (Expect.Skills) catches those.
+func PersonalSkills(configDir string) []string {
 	var names []string
-	if entries, err := os.ReadDir(filepath.Join(home, ".claude", "skills")); err == nil {
+	if entries, err := os.ReadDir(filepath.Join(configDir, "skills")); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
 				names = append(names, e.Name())
 			}
 		}
 	}
-	commands, _ := filepath.Glob(filepath.Join(home, ".claude", "commands", "*.md"))
+	commands, _ := filepath.Glob(filepath.Join(configDir, "commands", "*.md"))
 	for _, c := range commands {
 		names = append(names, strings.TrimSuffix(filepath.Base(c), ".md"))
 	}

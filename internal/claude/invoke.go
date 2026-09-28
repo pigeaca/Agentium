@@ -39,10 +39,21 @@ type Invocation struct {
 	SignIn    string  // SignInAPIKey, SignInTokenFile or SignInLogin
 	Secret    string  // the API key or token for SignInAPIKey and SignInTokenFile; never logged or stored
 	ConfigDir string  // a fresh, empty CLAUDE_CONFIG_DIR for SignInAPIKey and SignInTokenFile
+	TokenFile string  // for SignInTokenFile: the token's file, whose folder the agent may not read
 	Home      string  // the user's home folder
-	// Deny lists paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data (other
-	// runs, hidden tests, the database), the user's repository, and verification copies.
+	// Deny lists absolute paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data
+	// (other runs, hidden tests, the database), the user's repository, and verification copies.
 	Deny []string
+}
+
+// UserConfigDir is the user's own Claude Code folder: $CLAUDE_CONFIG_DIR when set in environ, otherwise ~/.claude.
+func UserConfigDir(environ []string, home string) string {
+	for _, kv := range environ {
+		if value, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok && value != "" {
+			return value
+		}
+	}
+	return filepath.Join(home, ".claude")
 }
 
 // DisallowedTools are outward-facing, scheduling and worktree tools, plus tools that appear only with some account
@@ -76,7 +87,13 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.CLI == "" || inv.Dir == "" || inv.Prompt == "" || inv.Model == "" || inv.Home == "" {
 		return nil, nil, errors.New("a run needs the CLI, a folder, a prompt, a model and the home folder")
 	}
-	settings, err := json.Marshal(inv.settings())
+	for _, p := range inv.Deny {
+		if !filepath.IsAbs(p) {
+			return nil, nil, fmt.Errorf("denied path %q is not absolute", p)
+		}
+	}
+	userConfig := UserConfigDir(environ, inv.Home)
+	settings, err := json.Marshal(inv.settings(userConfig))
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode settings: %w", err)
 	}
@@ -95,6 +112,10 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	switch inv.SignIn { // requirement 4: a fresh config folder cannot use a subscription login
+	case SignInLogin:
+		if userConfig != filepath.Join(inv.Home, ".claude") { // the user's login lives in their own config folder
+			env = append(env, "CLAUDE_CONFIG_DIR="+userConfig)
+		}
 	case SignInAPIKey:
 		env = append(env, "CLAUDE_CONFIG_DIR="+inv.ConfigDir, "ANTHROPIC_API_KEY="+inv.Secret)
 	case SignInTokenFile:
@@ -103,19 +124,46 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	return args, env, nil
 }
 
-// deniedPaths are the paths the agent may not read: inv.Deny, plus the user's session transcripts in login mode (they
-// can hold the task's own history).
-func (inv Invocation) deniedPaths() []string {
+// deniedPaths are the paths the agent may not read, in every sign-in mode:
+//   - inv.Deny;
+//   - Claude Code's own data (~/.claude, ~/.claude.json, the user's CLAUDE_CONFIG_DIR, the run's fresh config folder):
+//     session transcripts, file history and prompt history can hold the task's own solution, since tasks come from
+//     the user's history. The Claude Code process itself is not sandboxed, so this does not affect sign-in;
+//   - credential stores and the token file's folder.
+//
+// Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
+func (inv Invocation) deniedPaths(userConfig string) []string {
 	paths := append([]string{}, inv.Deny...)
-	if inv.SignIn == SignInLogin {
-		paths = append(paths, filepath.Join(inv.Home, ".claude", "projects"))
+	paths = append(paths, filepath.Join(inv.Home, ".claude"), filepath.Join(inv.Home, ".claude.json"), userConfig)
+	if inv.ConfigDir != "" {
+		paths = append(paths, inv.ConfigDir)
 	}
-	return paths
+	if inv.TokenFile != "" {
+		paths = append(paths, filepath.Dir(inv.TokenFile))
+	}
+	for _, name := range credentialFiles() {
+		paths = append(paths, filepath.Join(inv.Home, name))
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, p := range paths {
+		forms := []string{filepath.Clean(p)}
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			forms = append(forms, resolved)
+		}
+		for _, form := range forms {
+			if !seen[form] {
+				seen[form] = true
+				out = append(out, form)
+			}
+		}
+	}
+	return out
 }
 
 // settings are the per-run Claude Code settings (--settings).
-func (inv Invocation) settings() map[string]any {
-	denied := inv.deniedPaths()
+func (inv Invocation) settings(userConfig string) map[string]any {
+	denied := inv.deniedPaths(userConfig)
 	readRules := make([]string, len(denied))
 	for i, p := range denied {
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
@@ -123,6 +171,9 @@ func (inv Invocation) settings() map[string]any {
 	var files []map[string]string
 	for _, name := range credentialFiles() {
 		files = append(files, map[string]string{"path": filepath.Join(inv.Home, name), "mode": "deny"})
+	}
+	if inv.TokenFile != "" {
+		files = append(files, map[string]string{"path": filepath.Dir(inv.TokenFile), "mode": "deny"})
 	}
 	return map[string]any{
 		"sandbox": map[string]any{
@@ -134,20 +185,27 @@ func (inv Invocation) settings() map[string]any {
 				"files":   files,
 			},
 		},
-		"permissions":               map[string]any{"deny": readRules},
+		"permissions":               map[string]any{"deny": readRules}, // the Read tool, which the sandbox does not cover
 		"autoMemoryEnabled":         false,
 		"disableClaudeAiConnectors": true, // requirement 2
 	}
 }
 
-// Environ keeps what a coding agent's tools need from environ (system settings and toolchain variables) and nothing
-// else: no credentials, no GIT_*, no AGENTIUM_*, no CLAUDE_* (in particular not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB,
-// which silently forces the default permission mode: requirement 3).
+// Environ keeps what a coding agent's tools need from environ (system settings, proxies and certificates, toolchain
+// variables) and nothing else: no credentials, no GIT_*, no AGENTIUM_*, no CLAUDE_* (in particular not
+// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default permission mode: requirement 3). Values are
+// passed as given: a proxy URL with a password in it would pass too.
 func Environ(environ []string) []string {
 	exact := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "TMPDIR": true,
 		"LANG": true, "TERM": true, "TZ": true, "VIRTUAL_ENV": true, "JAVA_HOME": true, "CARGO_HOME": true,
-		"RUSTUP_HOME": true, "PNPM_HOME": true, "BUN_INSTALL": true, "DENO_DIR": true}
-	prefixes := []string{"LC_", "GO", "CGO_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
+		"RUSTUP_HOME": true, "PNPM_HOME": true, "BUN_INSTALL": true, "DENO_DIR": true,
+		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
+		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true,
+		"GOPATH": true, "GOROOT": true, "GOBIN": true, "GOCACHE": true, "GOMODCACHE": true, "GOENV": true, "GOFLAGS": true,
+		"GOTOOLCHAIN": true, "GOPROXY": true, "GOPRIVATE": true, "GONOPROXY": true, "GONOSUMDB": true, "GOSUMDB": true,
+		"GOINSECURE": true, "GOWORK": true, "GO111MODULE": true, "GOTMPDIR": true, "GOEXPERIMENT": true, "GODEBUG": true,
+		"GOMAXPROCS": true, "GOGC": true, "GOMEMLIMIT": true, "GOOS": true, "GOARCH": true, "GOAMD64": true, "GOARM64": true}
+	prefixes := []string{"LC_", "CGO_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
 	var out []string
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
