@@ -54,7 +54,7 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 `check changed` diffs the working tree against the merge base with the remote default branch: committed, staged, unstaged and untracked files, with both sides of renames. It maps:
 - Markdown, `.agents/`, `.claude/` or `docs/` → `check docs`,
 - harness scripts or `.githooks/` → `check harness`,
-- `*.go`, `go.mod` or `go.sum` → `check go`, and `go.mod`/`go.sum` also → `check vuln`,
+- `*.go`, `go.mod`, `go.sum`, or any file under `cmd/` or `internal/` (embedded migrations, test data) → `check go`, and `go.mod`/`go.sum` also → `check vuln`,
 - CI files → listed as a suggestion (verified by the PR's CI run),
 - any other file → a suggestion that it has no mapped check yet.
 

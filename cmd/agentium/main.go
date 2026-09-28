@@ -3,9 +3,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/cli"
 )
@@ -15,9 +18,17 @@ import (
 var version = "dev"
 
 func main() {
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "agentium: working directory: %v\n", err)
+		os.Exit(cli.ExitError)
+	}
 	// Interrupts cancel the context so long-running commands can stop agent processes cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	code := cli.Run(ctx, cli.Env{Args: os.Args[1:], Stdout: os.Stdout, Stderr: os.Stderr, Version: version})
+	code := cli.Run(ctx, cli.Env{
+		Args: os.Args[1:], Stdout: os.Stdout, Stderr: os.Stderr, Version: version,
+		Dir: dir, Getenv: os.Getenv, LookPath: exec.LookPath, Now: time.Now,
+	})
 	stop()
 	os.Exit(code)
 }
