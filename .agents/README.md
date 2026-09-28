@@ -20,6 +20,6 @@ Load references by the boundary being changed:
 | Dependencies, credentials or external data | [Dependencies](rules/supply-chain.md) and [secrets](rules/secrets.md) |
 | Architectural choices | [Decisions](decisions/README.md) |
 | Reading efficiently | [Context budget](reference/context-budget.md) |
-| Product scope, competitors, experiment method or proposed architecture | [Feasibility study](../docs/research/2026-09-27-ai-development-lab.md), sections as needed |
+| Product scope, competitors, experiment method or proposed architecture | [Feasibility study](../docs/research/2026-09-27-ai-development-lab.md) and [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md), sections as needed |
 
 Product references are added here once the architecture exists. Create a plan sized to the change before implementation. Update affected docs when behavior changes; archive completed or superseded plans. Do not load every rule, reference or archived plan for routine work.

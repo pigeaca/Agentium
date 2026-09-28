@@ -119,7 +119,7 @@ Claude Code can also export OTel metrics (`claude_code.token.usage`, `claude_cod
 
 ### 2.4 How each agent loads context (it decides what an experiment really changes)
 
-- **Claude Code** loads `CLAUDE.md` from the working directory and every parent, plus `.claude/rules/*.md`. It loads `CLAUDE.md` files in subdirectories on demand, loads skills on demand, and resolves hooks and settings from `.claude/`. User-level `~/.claude` files and auto memory also load unless excluded. In the SDK, `settingSources` limits this. Managed policy and `~/.claude.json` load regardless; `CLAUDE_CONFIG_DIR` relocates the latter ([Claude Code features in the SDK][cc-features]). `--bare` skips `CLAUDE.md`, hooks, skills and memory entirely ([headless][cc-headless]). That makes it unsuitable for context experiments, because it removes the very thing under test.
+- **Claude Code** loads `CLAUDE.md` from the working directory and every parent, plus `.claude/rules/*.md`. Since v2.1.277 it also reads `AGENTS.md` itself, but by default only when no `CLAUDE.md` or `CLAUDE.local.md` exists in the working directory or above it; a built-in `agents-md` plugin setting can change that ([memory][cc-memory]). *(Corrected 2026-09-27 during the Phase 0 spike.)* It loads `CLAUDE.md` files in subdirectories on demand, loads skills on demand, and resolves hooks and settings from `.claude/`. User-level `~/.claude` files and auto memory also load unless excluded. In the SDK, `settingSources` limits this. Managed policy and `~/.claude.json` load regardless; `CLAUDE_CONFIG_DIR` relocates the latter ([Claude Code features in the SDK][cc-features]). `--bare` skips `CLAUDE.md`, hooks, skills and memory entirely ([headless][cc-headless]). That makes it unsuitable for context experiments, because it removes the very thing under test.
 - **Codex** loads the global `AGENTS.override.md` or `AGENTS.md` from `CODEX_HOME`, then walks from the project root down to the working directory. It concatenates files root first, so files closer to the working directory win. It stops at `project_doc_max_bytes`, 32 KiB by default ([AGENTS.md discovery][codex-agentsmd]). Whether it resolves `@file` imports is not documented. **(H)**: it reads them as plain text.
 
 So the same repository gives different effective context per agent. For example, an `AGENTS.md` over 32 KiB is cut off for Codex, yet loads in full for Claude when `CLAUDE.md` imports it with `@AGENTS.md`. Agentium must show the effective context per agent, not only a file list.
@@ -324,7 +324,7 @@ Context is every file that an agent loads, or that changes how the harness behav
 
 | Class | Claude Code | Codex | Treated as |
 |---|---|---|---|
-| Instructions | `CLAUDE.md` (with `@` imports), `.claude/rules/*.md`, `CLAUDE.md` in subdirectories | `AGENTS.md` / `AGENTS.override.md` hierarchy, fallback filenames | Context |
+| Instructions | `CLAUDE.md` (with `@` imports), `.claude/rules/*.md`, `CLAUDE.md` in subdirectories; `AGENTS.md` when no `CLAUDE.md` exists (v2.1.277+) | `AGENTS.md` / `AGENTS.override.md` hierarchy, fallback filenames | Context |
 | On-demand knowledge | `.claude/skills/*/SKILL.md`, `.claude/agents/*`, `.claude/commands/*` | `.agents/skills` **(H)** for repo scope | Context |
 | Referenced docs | Files pulled in through `@` imports or linked from instructions | Linked files (read only if the agent chooses to) | Context |
 | Harness settings | `.claude/settings.json` (permissions, hooks), `.mcp.json` | `.codex/config.toml` **(H)** | **Harness**: allowed in a variant only with a warning |
@@ -408,6 +408,8 @@ Minimum detectable effect (80% power, two-sided α = 0.05):  MDE = 2.80 · sqrt(
 | 20 × 5 | 200 | 18.0 pp | 14.1% | $260 / $440 |
 | 40 × 5 | 400 | 12.7 pp | 10.2% | $520 / $880 |
 | 65 × 5 | 650 | 10.0 pp | 8.1% | $845 / $1,430 |
+
+> **Measured in Phase 0 (2026-09-27):** on six small harness tasks, the per-run log-cost spread was σ = 0.19, about half the assumption above. A cost run averaged $0.29. The cross-task spread τ is unresolved: the point estimate is 0.05, but six tasks allow values up to about 0.25. So 12 × 3 runs detect about 12–21% cost changes. Success could not be calibrated because 57 of 60 runs passed, so keep `w = 0.20` for planning. See the [Phase 0 results](2026-09-27-phase0-spike-results.md).
 
 As `R` grows, `τ²` dominates. Past about 5 runs per task, adding tasks buys more than adding runs.
 
@@ -738,7 +740,7 @@ All checked on 2026-09-27.
 - Langfuse [self-hosting][langfuse], [license](https://github.com/langfuse/langfuse/blob/main/LICENSE), [ClickHouse acquisition](https://clickhouse.com/blog/clickhouse-acquires-langfuse-open-source-llm-observability).
 - [SWE-bench][swebench], [SWE-smith][swesmith], [SWE-rebench][swerebench], [RepoBench][repobench], [Agent Client Protocol agents][acp], [Vibe Kanban][vibekanban], [Arize Phoenix license][phoenix], [LiteLLM security update][litellm].
 
-**Claude Code and Anthropic:** [headless mode][cc-headless], [Claude Code features in the SDK][cc-features], [cost tracking][cc-cost], [monitoring][cc-otel], [plugin evals][cc-plugin-eval], [CLI reference](https://code.claude.com/docs/en/cli-reference), [pricing][anthropic-pricing], [Sonnet 5 migration guide][sonnet5-migration].
+**Claude Code and Anthropic:** [headless mode][cc-headless], [memory and AGENTS.md][cc-memory], [Claude Code features in the SDK][cc-features], [cost tracking][cc-cost], [monitoring][cc-otel], [plugin evals][cc-plugin-eval], [CLI reference](https://code.claude.com/docs/en/cli-reference), [pricing][anthropic-pricing], [Sonnet 5 migration guide][sonnet5-migration].
 
 **Codex:** [non-interactive mode][codex-exec], [AGENTS.md discovery][codex-agentsmd], [TypeScript SDK][codex-sdk-ts], [Python SDK][codex-sdk-py].
 
@@ -765,6 +767,7 @@ All checked on 2026-09-27.
 [cc-cost]: https://code.claude.com/docs/en/agent-sdk/cost-tracking
 [cc-otel]: https://code.claude.com/docs/en/monitoring-usage
 [cc-plugin-eval]: https://code.claude.com/docs/en/plugin-evals
+[cc-memory]: https://code.claude.com/docs/en/memory
 [codex-exec]: https://learn.chatgpt.com/docs/non-interactive-mode
 [codex-agentsmd]: https://learn.chatgpt.com/docs/agent-configuration/agents-md
 [codex-sdk-ts]: https://github.com/openai/codex/tree/main/sdk/typescript
