@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -275,11 +276,14 @@ func taskName(subject, commit string) string {
 
 // mergedPR is a merged pull request as gh reports it.
 type mergedPR struct {
-	number       int
-	commit       string // the merge (or squash) commit
-	instruction  string
-	changedFiles int
+	number      int
+	commit      string // the merge (or squash) commit
+	instruction string
+	files       map[string]lineCounts // by path (the new path for renames)
 }
+
+// lineCounts are a file's added and deleted lines; -1 when unknown (binary files in git's numstat).
+type lineCounts struct{ added, deleted int }
 
 // pullRequest reads a merged pull request through gh, run in the repository (read-only: `gh pr view`).
 func pullRequest(ctx context.Context, env Env, root string, number int) (mergedPR, error) {
@@ -289,7 +293,7 @@ func pullRequest(ctx context.Context, env Env, root string, number int) (mergedP
 	}
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, gh, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,mergeCommit,changedFiles")
+	cmd := exec.CommandContext(ctx, gh, "pr", "view", strconv.Itoa(number), "--json", "number,title,body,state,mergeCommit,files")
 	cmd.Dir = root
 	cmd.Env = gitx.Environ(os.Environ()) // gh keeps its own login; only GIT_* is dropped
 	out, err := cmd.Output()
@@ -301,9 +305,13 @@ func pullRequest(ctx context.Context, env Env, root string, number int) (mergedP
 		return mergedPR{}, fmt.Errorf("gh pr view %d: %w", number, err)
 	}
 	var view struct {
-		Number, ChangedFiles int
-		Title, Body, State   string
-		MergeCommit          *struct{ Oid string }
+		Number             int
+		Title, Body, State string
+		MergeCommit        *struct{ Oid string }
+		Files              []struct {
+			Path                 string
+			Additions, Deletions int
+		}
 	}
 	if err := json.Unmarshal(out, &view); err != nil {
 		return mergedPR{}, fmt.Errorf("gh pr view %d: %w", number, err)
@@ -311,25 +319,80 @@ func pullRequest(ctx context.Context, env Env, root string, number int) (mergedP
 	if view.State != "MERGED" || view.MergeCommit == nil || view.MergeCommit.Oid == "" {
 		return mergedPR{}, fmt.Errorf("pull request #%d is %s, not merged: only merged pull requests have a reference solution", number, strings.ToLower(view.State))
 	}
-	instruction := strings.TrimSpace(view.Title + "\n\n" + view.Body)
-	return mergedPR{number: number, commit: view.MergeCommit.Oid, instruction: instruction, changedFiles: view.ChangedFiles}, nil
+	pr := mergedPR{number: number, commit: view.MergeCommit.Oid, instruction: strings.TrimSpace(view.Title + "\n\n" + view.Body),
+		files: map[string]lineCounts{}}
+	for _, f := range view.Files {
+		pr.files[f.Path] = lineCounts{f.Additions, f.Deletions}
+	}
+	return pr, nil
 }
 
-// checkWholePR makes sure the merge commit holds the whole pull request: a rebase merge's last commit holds only its own
-// changes.
+// checkWholePR makes sure the merge commit holds exactly the pull request's changes: every file with the same line
+// counts. A rebase merge's last commit holds only its own changes, so its base would already contain part of the
+// solution. Renames are detected on both sides, as GitHub reports them.
 func checkWholePR(ctx context.Context, root string, pr mergedPR) error {
 	if _, err := gitx.Run(ctx, "-C", root, "cat-file", "-e", "--end-of-options", pr.commit+"^{commit}"); err != nil {
 		return fmt.Errorf("pull request #%d was merged as %s, which is not in your repository yet: fetch it first", pr.number, shortCommit(pr.commit))
 	}
-	names, err := gitx.Output(ctx, nil, "-C", root, "diff", "--name-only", "-z", "--no-renames", pr.commit+"^1", pr.commit)
+	out, err := gitx.Output(ctx, nil, "-C", root, "diff", "--numstat", "-z", "-M", pr.commit+"^1", pr.commit)
 	if err != nil {
 		return err
 	}
-	if changed := strings.Count(string(names), "\x00"); changed != pr.changedFiles {
-		return fmt.Errorf("pull request #%d changed %d file(s), but its merge commit %s changes %d: it was probably rebase-merged; import its commits with --commit",
-			pr.number, pr.changedFiles, shortCommit(pr.commit), changed)
+	local, err := parseNumstat(string(out))
+	if err != nil {
+		return err
+	}
+	mismatch := func(detail string) error {
+		return fmt.Errorf("pull request #%d does not match its merge commit %s (%s): it was probably rebase-merged; import its commits with --commit",
+			pr.number, shortCommit(pr.commit), detail)
+	}
+	if len(local) != len(pr.files) {
+		return mismatch(fmt.Sprintf("%d file(s) in the pull request, %d in the commit", len(pr.files), len(local)))
+	}
+	for path, counts := range pr.files {
+		got, ok := local[path]
+		switch {
+		case !ok:
+			return mismatch(path + " is not in the commit")
+		case got.added >= 0 && got != counts:
+			return mismatch(fmt.Sprintf("%s: +%d -%d in the pull request, +%d -%d in the commit", path, counts.added, counts.deleted, got.added, got.deleted))
+		}
 	}
 	return nil
+}
+
+// parseNumstat reads `git diff --numstat -z` output: "added\tdeleted\tpath\0", or for a rename
+// "added\tdeleted\t\0old\0new\0". Binary files have "-" counts, kept as -1.
+func parseNumstat(out string) (map[string]lineCounts, error) {
+	files := map[string]lineCounts{}
+	records := strings.Split(out, "\x00")
+	for i := 0; i < len(records); i++ {
+		if records[i] == "" {
+			continue
+		}
+		fields := strings.SplitN(records[i], "\t", 3)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("unexpected git diff --numstat record %q", records[i])
+		}
+		path := fields[2]
+		if path == "" { // a rename: the old and the new path follow
+			if i+2 >= len(records) {
+				return nil, fmt.Errorf("truncated git diff --numstat rename record")
+			}
+			path, i = records[i+2], i+2
+		}
+		counts := lineCounts{-1, -1}
+		if fields[0] != "-" {
+			added, err1 := strconv.Atoi(fields[0])
+			deleted, err2 := strconv.Atoi(fields[1])
+			if err1 != nil || err2 != nil {
+				return nil, fmt.Errorf("unexpected git diff --numstat counts %q", records[i])
+			}
+			counts = lineCounts{added, deleted}
+		}
+		files[path] = counts
+	}
+	return files, nil
 }
 
 func taskList(ctx context.Context, env Env, args []string) int {
@@ -492,7 +555,11 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	arms := []task.Arm{{Name: "base"}}
-	for _, name := range snapshots {
+	for i, name := range snapshots {
+		if name == "base" || slices.Contains(snapshots[:i], name) { // arm names name checkouts and logs
+			fmt.Fprintf(env.Stderr, "agentium task validate: --snapshot %q is repeated or reserved (\"base\" is the task's own context)\n", name)
+			return ExitUsage
+		}
 		snap, err := w.db.SnapshotByName(ctx, w.project.ID, name)
 		if err != nil {
 			return fail(env, err)

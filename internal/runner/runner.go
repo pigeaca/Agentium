@@ -36,25 +36,30 @@ type Result struct {
 // Passed reports whether the command exited with status 0.
 func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut }
 
-// credentialVars are removed from every child's environment, whatever their value.
-func credentialVars() []string {
-	return []string{
-		"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY",
-		"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-		"AWS_SESSION_TOKEN", "GOOGLE_APPLICATION_CREDENTIALS", "AZURE_OPENAI_API_KEY",
+// IsCredential reports whether an environment variable looks like it carries a credential: by name pattern (tokens,
+// keys, secrets, passwords, credentials) or by being a known one (the ssh agent socket, which allows pushes; Docker and
+// netrc settings). The value is never looked at. Credentials in files under HOME are not covered: agent runs must deny
+// those paths themselves.
+func IsCredential(name string) bool {
+	upper := strings.ToUpper(name)
+	switch upper {
+	case "SSH_AUTH_SOCK", "DOCKER_AUTH_CONFIG", "NETRC", "AWS_ACCESS_KEY_ID", "AWS_PROFILE", "GOOGLE_APPLICATION_CREDENTIALS":
+		return true
 	}
+	for _, marker := range []string{"TOKEN", "API_KEY", "APIKEY", "SECRET", "PASSWORD", "PASSWD", "ACCESS_KEY", "PRIVATE_KEY", "CREDENTIAL", "AUTH_KEY"} {
+		if strings.Contains(upper, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // Environ is environ without credentials, GIT_* (a hook's GIT_DIR would redirect git in the child) and AGENTIUM_*.
 func Environ(environ []string) []string {
-	drop := map[string]bool{}
-	for _, name := range credentialVars() {
-		drop[name] = true
-	}
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if drop[name] || strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "AGENTIUM_") {
+		if IsCredential(name) || strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "AGENTIUM_") {
 			continue
 		}
 		out = append(out, kv)

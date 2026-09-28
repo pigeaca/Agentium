@@ -87,8 +87,18 @@ func TestNewHoldsOnlyTheBaseCommit(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".git", "FETCH_HEAD")); err == nil || strings.Contains(string(config), bare) {
 		t.Error("the checkout records where the bare repository is")
 	}
+	if hooks, _ := os.ReadDir(filepath.Join(dir, ".git", "hooks")); len(hooks) != 0 {
+		t.Errorf("the checkout has template hooks: %v", hooks)
+	}
 	if err := New(ctx, bare, base, dir); err == nil {
 		t.Error("New must refuse an existing folder")
+	}
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := New(ctx, bare, strings.Repeat("0", 40), missing); err == nil {
+		t.Error("an unknown commit must fail")
+	}
+	if _, err := os.Stat(missing); err == nil {
+		t.Error("a failed checkout left its folder behind")
 	}
 }
 

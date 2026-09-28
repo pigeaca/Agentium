@@ -15,22 +15,23 @@ import (
 // jsTest matches JavaScript and TypeScript test files: name.test.ts, name.spec.jsx and so on.
 var jsTest = regexp.MustCompile(`\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$`)
 
-// IsTestFile reports whether p holds tests or test data: Go (_test.go), Python (test_*.py, *_test.py, conftest.py),
-// JavaScript and TypeScript (*.test.*, *.spec.*), and anything in a test, tests, __tests__, testdata, __snapshots__ or
-// e2e folder.
+// IsTestFile reports whether p holds tests or test data: Go (_test.go), Python (test_*.py, *_test.py, tests.py,
+// conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*), and anything in a test, tests, spec,
+// __tests__, __mocks__, testdata, fixtures, __fixtures__, __snapshots__ or e2e folder. Other test inputs (a golden file
+// beside the code, say) land in the reference, which validation cannot notice because the reference supplies them.
 func IsTestFile(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
-		case "test", "tests", "__tests__", "testdata", "__snapshots__", "e2e":
+		case "test", "tests", "spec", "__tests__", "__mocks__", "testdata", "fixtures", "__fixtures__", "__snapshots__", "e2e":
 			return true
 		}
 	}
 	base := path.Base(p)
 	switch {
-	case strings.HasSuffix(base, "_test.go"):
+	case strings.HasSuffix(base, "_test.go"), strings.HasSuffix(base, "_spec.rb"):
 		return true
 	case strings.HasSuffix(base, ".py"):
-		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "conftest.py"
+		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "tests.py" || base == "conftest.py"
 	default:
 		return jsTest.MatchString(base)
 	}
