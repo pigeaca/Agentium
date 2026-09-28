@@ -254,3 +254,40 @@ func TestTasksRoundTripUpdateAndCascade(t *testing.T) {
 		t.Errorf("tasks survive their project: %+v", list)
 	}
 }
+
+func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix.", Source: "manual", BaseCommit: "b", Verify: []string{"true"}, CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed := true
+	for i, run := range []Run{
+		{ID: "20260928T100000Z-aaaaaa", ProjectID: app.ID, TaskID: saved.ID, TaskName: "fix", Arm: "base", Outcome: "ok", Passed: &passed, CostUSD: 0.31, Record: []byte(`{"id":"a"}`), Started: now, Finished: now.Add(time.Minute)},
+		{ID: "20260928T100500Z-bbbbbb", ProjectID: app.ID, TaskID: saved.ID, TaskName: "fix", Arm: "trimmed", Outcome: "infra", Record: []byte(`{}`), Started: now.Add(5 * time.Minute), Finished: now.Add(6 * time.Minute)},
+	} {
+		if err := s.SaveRun(ctx, run); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	got, err := s.RunByID(ctx, app.ID, "20260928T100000Z-aaaaaa")
+	if err != nil || got.Passed == nil || !*got.Passed || got.CostUSD != 0.31 || got.TaskID != saved.ID || string(got.Record) != `{"id":"a"}` {
+		t.Errorf("RunByID = %+v, %v", got, err)
+	}
+	if err := s.DeleteTask(ctx, app.ID, "fix"); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := s.Runs(ctx, app.ID)
+	if err != nil || len(runs) != 2 || runs[0].TaskID != 0 || runs[1].Passed != nil || runs[1].Arm != "trimmed" {
+		t.Errorf("runs after the task was removed = %+v, %v (runs outlive their task)", runs, err)
+	}
+	if _, err := s.RunByID(ctx, app.ID, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing run: %v", err)
+	}
+}

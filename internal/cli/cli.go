@@ -24,6 +24,7 @@ type Env struct {
 	Version  string
 	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
+	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)
 	LookPath func(string) (string, error) // exec.LookPath
 	Now      func() time.Time             // time.Now
 }
@@ -37,6 +38,7 @@ Commands:
   init [path]   Register the repository at path (default: current directory) and report what Agentium found
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
   task          Add, import and validate coding tasks (agentium task for details)
+  run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
   version       Print the version and build information
   help          Show this help
 
@@ -64,6 +66,8 @@ func Run(ctx context.Context, env Env) int {
 		return runContext(ctx, env, args)
 	case "task":
 		return runTask(ctx, env, args)
+	case "run":
+		return runRun(ctx, env, args)
 	default:
 		fmt.Fprintf(env.Stderr, "agentium: unknown command %q\n\n%s", command, usage)
 		return ExitUsage

@@ -17,6 +17,7 @@ agentium context snapshot trimmed --working-tree   # --include-linked adds linke
 agentium context diff baseline trimmed --patch
 agentium task import --commit <sha>    # base: its parent; hidden tests: its test-file changes
 agentium task validate <name> --snapshot trimmed   # tests fail on the base, pass with the reference, in each arm
+agentium run once <name> --snapshot trimmed        # one real Claude Code run, graded with the hidden tests (costs money)
 ```
 
 Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).

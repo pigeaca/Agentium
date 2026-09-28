@@ -443,3 +443,21 @@ func descriptionBytes(data []byte) int {
 	}
 	return len(name) + len(description)
 }
+
+// SkillNames lists the names the context's skills go by: each skill's folder name and its frontmatter name.
+func SkillNames(c Context, src source.Source) []string {
+	var names []string
+	for _, e := range c.Entries {
+		if e.Kind != KindSkill {
+			continue
+		}
+		names = append(names, path.Base(path.Dir(e.Path)))
+		if data, err := src.ReadFile(e.Path); err == nil {
+			if name := frontmatterField(data, "name"); name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	sort.Strings(names)
+	return slices.Compact(names)
+}
