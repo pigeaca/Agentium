@@ -4,10 +4,12 @@ Run `python3 .agents/scripts/harness.py <command>` from the repository root, or 
 
 | Command | Purpose | When to use |
 |---|---|---|
-| `doctor` | Show Python and whether git, gh, gofmt and corepack are installed | Environment diagnosis |
+| `doctor` | Show Python, git, gh, corepack, and the Go toolchain resolved for `go.mod` | Environment diagnosis |
 | `check docs` | Doc links, Claude imports, skill and subagent adapters, context size, plan archive | Documentation change |
 | `check harness` | Harness regression tests (temporary fixtures only) | Harness change |
-| `check ci` (also plain `check`) | `docs` + `harness`; what CI runs | Before opening a PR |
+| `check go` | Go code: gofmt (listing), `go vet ./...`, `go test -race -count=1 ./...` | Go change |
+| `check vuln` | govulncheck at the pinned version (reads the online Go vulnerability database). Locally only when the tool is already cached | `go.mod`/`go.sum` change; CI |
+| `check ci` (also plain `check`) | `docs` + `harness` + `go` (when `go.mod` exists); what CI runs, followed there by `check vuln` | Before opening a PR |
 | `check changed [--dry-run] [base]` | Select and run the checks for everything changed since the merge base with the remote default branch | Before committing or opening a PR |
 | `check staged` | Index-only guard: whitespace, credential-shaped additions, env/key files, staged Go formatting when present, docs | Pre-commit hook |
 | `hooks` | Point `core.hooksPath` at the tracked `.githooks/` for all local worktrees | Once per clone |
@@ -18,7 +20,17 @@ Run `python3 .agents/scripts/harness.py <command>` from the repository root, or 
 
 ## Boundaries
 
-Nothing is ever downloaded. The only installation is `worktree new`/`worktree deps`, which runs the lockfile's offline installer (today: `corepack pnpm install --frozen-lockfile --offline` with `COREPACK_ENABLE_NETWORK=0` for any `pnpm-lock.yaml` at the root or one level down). It links only packages already in the local cache and fails instead of fetching. Missing tools are reported by `doctor`; install them only with approval.
+No toolchain, module or tool is ever downloaded locally. The exceptions: `check vuln` reads the online Go vulnerability database, and CI (`CI=true`) may download pinned tools and modules. The only installation is `worktree new`/`worktree deps`, which runs the lockfile's offline installer (today: `corepack pnpm install --frozen-lockfile --offline` with `COREPACK_ENABLE_NETWORK=0` for any `pnpm-lock.yaml` at the root or one level down). It links only packages already in the local cache and fails instead of fetching. Missing tools are reported by `doctor`; install them only with approval.
+
+## Go toolchain
+
+`go.mod` pins the exact Go version (`go 1.27.1`; a `toolchain` line, if one is ever added, takes precedence, as it does for setup-go). The harness uses `go` from `PATH` when its version matches, otherwise `~/sdk/go<version>/bin/go` (where `golang.org/dl` installs it). Tools such as gofmt come from that toolchain's `GOROOT`, so a symlinked `go` works. If neither matches, it stops and prints the install command; nothing is installed without approval. Every Go command runs with:
+- `GOTOOLCHAIN=local`, so Go never downloads a toolchain;
+- `GOFLAGS=-mod=readonly`, so builds never rewrite `go.mod` or `go.sum` (it replaces any personal `GOFLAGS`);
+- locally, `GOPROXY=off` for `check go`, so a dependency missing from the module cache fails instead of downloading. Fetch new dependencies once, with approval, using `go mod download`;
+- provider credentials removed, so checks never reach live services.
+
+`check vuln` runs `golang.org/x/vuln/cmd/govulncheck` at the version pinned in the harness. Locally it runs only if that version and its dependencies are already in the module cache (with `GOPROXY=off`), and otherwise it says it was skipped. To enable it locally, fetch it once with approval: `GOFLAGS= go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -version`. CI (`CI=true`) may download that exact version.
 
 ## Pre-commit guard
 
@@ -26,7 +38,7 @@ Run `hooks` once per clone. Git then runs `.githooks/pre-commit` from the commit
 - whitespace errors,
 - credential-shaped added lines, reported by location, never by value,
 - `.env`, key and credential files,
-- gofmt of staged Go blobs when Go files exist,
+- gofmt of staged Go blobs, using the pinned toolchain's gofmt,
 - docs validation.
 
 A fake credential in a test may carry `secret-scan: allow` on the same line. When `gofmt` is missing (some GUI Git clients lack the shell `PATH`), the Go step warns instead of blocking. The hook never runs test suites. `git config --unset core.hooksPath` disables it; bypassing it with `--no-verify` requires explicit user approval.
@@ -42,6 +54,7 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 `check changed` diffs the working tree against the merge base with the remote default branch: committed, staged, unstaged and untracked files, with both sides of renames. It maps:
 - Markdown, `.agents/`, `.claude/` or `docs/` → `check docs`,
 - harness scripts or `.githooks/` → `check harness`,
+- `*.go`, `go.mod` or `go.sum` → `check go`, and `go.mod`/`go.sum` also → `check vuln`,
 - CI files → listed as a suggestion (verified by the PR's CI run),
 - any other file → a suggestion that it has no mapped check yet.
 
@@ -49,15 +62,10 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 
 ## Adding stack checks
 
-When the stack is chosen, extend the harness in one change:
-1. Add `check` scopes for the stack's tests (e.g. `check go` running vet, gofmt, race tests and `govulncheck`), and include them in `check ci`.
-2. Add rules to `plan_checks` that map the stack's paths to those scopes (e.g. Go packages to `go test ./pkg/...`), with tests in `ChangedCheckSelection`.
-3. Add the stack's lockfile and offline installer to `OFFLINE_INSTALLERS` if it has one.
-4. Clear provider credentials and database URLs in the harness `ENV`, so checks never reach live services.
-5. Add CI jobs with SHA-pinned actions, and pin tool and toolchain versions.
-6. Record the stack in the architecture and a decision record.
+Go is in place: `check go`, `check vuln`, the `check changed` rules, the environment and the CI job. When the React UI arrives in Phase 2, extend the harness in one change:
+1. Add a `check web` scope (type check, lint, unit and browser tests) and include it in `check ci`.
+2. Map the UI's paths to it in `plan_checks`, with tests in `ChangedCheckSelection`.
+3. Register the lockfile's offline installer in `OFFLINE_INSTALLERS` (for example `pnpm-lock.yaml`).
+4. Add CI steps with SHA-pinned actions, pin the Node and package-manager versions, and record the toolchain in a decision.
 
-Common pieces worth adding with a Go or web stack:
-- a combined Go CI scope (vet, gofmt, race tests with a coverage floor, pinned `govulncheck`);
-- browser suites that run on a per-worktree port;
-- a disposable-database check whose tools get `LC_ALL=C`, because macOS PostgreSQL aborts without a valid locale.
+Browser suites should run on a per-worktree port, so parallel worktrees don't collide.

@@ -1,9 +1,11 @@
 """Harness regressions; fixtures live in temporary directories and never touch the real checkout."""
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 import harness
@@ -163,6 +165,16 @@ class StagedChecks(unittest.TestCase):
         with patch("builtins.print"):
             harness.check_staged()
 
+    def test_staged_go_uses_the_pinned_toolchain_gofmt(self):
+        gofmt = self.root / "fake-gofmt"
+        gofmt.write_text('#!/bin/sh\necho "<standard input>"\n')
+        gofmt.chmod(0o755)
+        self.stage("pkg/x.go", "package pkg\n")
+        with patch.object(harness, "go_tool", return_value=str(gofmt)) as go_tool, patch.object(harness, "check_docs"), \
+                patch("builtins.print"), self.assertRaisesRegex(ValueError, "staged check"):
+            harness.check_staged()
+        go_tool.assert_called_once_with("gofmt")
+
     def test_missing_gofmt_warns_instead_of_blocking(self):
         self.stage("main.go", "package main\nfunc main(){}\n")
         with patch.object(harness.shutil, "which", return_value=None), patch("builtins.print") as output:
@@ -187,10 +199,17 @@ class ChangedCheckSelection(unittest.TestCase):
         self.assertEqual(suggestions, [])
 
     def test_ci_and_unmapped_files_are_only_suggested(self):
-        commands, suggestions = self.commands(".github/workflows/ci.yml", "cmd/server/main.go")
+        commands, suggestions = self.commands(".github/workflows/ci.yml", "web/src/App.tsx")
         self.assertEqual(commands, [])
         self.assertTrue(any("PR's CI run" in suggestion for suggestion in suggestions))
-        self.assertTrue(any("no mapped check" in suggestion and "cmd/server/main.go" in suggestion for suggestion in suggestions))
+        self.assertTrue(any("no mapped check" in suggestion and "web/src/App.tsx" in suggestion for suggestion in suggestions))
+
+    def test_go_code_and_modules(self):
+        commands, suggestions = self.commands("internal/cli/cli.go", "docs/harness.md")
+        self.assertEqual(commands, [["check", "docs"], ["check", "go"]])
+        self.assertEqual(suggestions, [])
+        commands, _ = self.commands("go.sum")
+        self.assertEqual(commands, [["check", "go"], ["check", "vuln"]])
 
 
 class RemoteUrls(unittest.TestCase):
@@ -252,13 +271,163 @@ class PlanMetrics(unittest.TestCase):
 
 
 class CheckScopes(unittest.TestCase):
-    def test_ci_runs_docs_and_harness_tests(self):
-        with patch.object(harness, "check_docs") as docs, patch.object(harness, "run") as run:
+    def test_ci_runs_docs_harness_tests_and_go_when_there_is_a_module(self):
+        with patch.object(harness, "check_docs") as docs, patch.object(harness, "run") as run, patch.object(harness, "check_go") as go:
             harness.main(["check", "ci"])
         docs.assert_called_once()
         self.assertIn("test_harness.py", run.call_args.args)
+        go.assert_called_once()  # this repository has a go.mod
+        with tempfile.TemporaryDirectory() as directory, patch.object(harness, "ROOT", Path(directory)), \
+                patch.object(harness, "check_docs"), patch.object(harness, "run"), patch.object(harness, "check_go") as go:
+            harness.main(["check", "ci"])
+        go.assert_not_called()
         with self.assertRaisesRegex(ValueError, "Unknown check scope"):
             harness.main(["check", "everything"])
+
+
+def fake_go(root, version, modcache="", gofmt_lists="", gofmt_code=0, run_out="", run_err="", run_code=0, version_code=0):
+    """A stand-in GOROOT at `root`: `go version`, `go env GOROOT|GOMODCACHE`, `go run` and a gofmt that records its
+    arguments in <root>/gofmt.args and lists `gofmt_lists` as unformatted."""
+    bin_dir = root / "bin"
+    bin_dir.mkdir(parents=True)
+    go = bin_dir / "go"
+    go.write_text("#!/bin/sh\n"
+                  f'case "$1" in\n'
+                  f'  version) echo "go version go{version} test/arch"; exit {version_code};;\n'
+                  f'  env) case "$2" in GOROOT) echo "{root}";; GOMODCACHE) echo "{modcache}";; esac;;\n'
+                  f'  run) printf "{run_out}"; printf "{run_err}" >&2; exit {run_code};;\n'
+                  "esac\n")
+    gofmt = bin_dir / "gofmt"
+    gofmt.write_text(f'#!/bin/sh\necho "$@" > "{root}/gofmt.args"\nprintf "{gofmt_lists}"\nexit {gofmt_code}\n')
+    for tool in (go, gofmt):
+        tool.chmod(0o755)
+    return go
+
+
+class GoToolchain(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="agentium-go-")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.repo = self.base / "repo"
+        self.repo.mkdir()
+        (self.repo / "go.mod").write_text("module example.com/x\n\ngo 1.27.1\n")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        (self.repo / "a.go").write_text("package x\n")
+        (self.repo / ".gitignore").write_text("ignored.go\n")
+        (self.repo / "ignored.go").write_text("package x\n")
+        for name, value in [("ROOT", self.repo), ("run", unittest.mock.MagicMock())]:
+            patcher = patch.object(harness, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        environ = patch.dict(harness.os.environ, {}, clear=True)  # not CI unless a test says so
+        environ.start()
+        self.addCleanup(environ.stop)
+
+    def test_environment_drops_credentials_and_pins_go(self):
+        env = harness.harness_env({"ANTHROPIC_API_KEY": "x", "OPENAI_API_KEY": "y", "CODEX_API_KEY": "z", "PATH": "/bin", "GOFLAGS": "-tags=dev"})
+        self.assertEqual(env, {"PATH": "/bin", "GOTOOLCHAIN": "local", "GOFLAGS": "-mod=readonly"})
+        self.assertFalse(set(harness.CREDENTIAL_ENV) & harness.ENV.keys())
+
+    def test_go_mod_version_prefers_the_toolchain_line(self):
+        self.assertEqual(harness.go_mod_version(), "1.27.1")
+        (self.repo / "go.mod").write_text("module example.com/x\n\ngo 1.27\n\ntoolchain go1.27.3\n")
+        self.assertEqual(harness.go_mod_version(), "1.27.3")
+        (self.repo / "go.mod").write_text("module example.com/x\n")
+        with self.assertRaisesRegex(ValueError, "no go version"):
+            harness.go_mod_version()
+
+    def test_prefers_matching_path_go_then_sdk_and_never_installs(self):
+        old = fake_go(self.base / "old", "1.26.3")
+        sdk = fake_go(self.base / "home/sdk/go1.27.1", "1.27.1")
+        broken = fake_go(self.base / "broken", "1.27.1", version_code=1)
+        self.assertIsNone(harness.toolchain_version(str(broken)))
+        with patch.object(harness.shutil, "which", return_value=str(old)), patch.object(harness.Path, "home", return_value=self.base / "home"):
+            self.assertEqual(harness.go_binary(), sdk)
+        current = fake_go(self.base / "current", "1.27.1")
+        with patch.object(harness.shutil, "which", return_value=str(current)):
+            self.assertEqual(harness.go_binary(), current)
+        with patch.object(harness.shutil, "which", return_value=str(old)), patch.object(harness.Path, "home", return_value=self.base / "nohome"), \
+                self.assertRaisesRegex(ValueError, "Nothing was installed.*go install golang.org/dl/go1.27.1@latest"):
+            harness.go_binary()
+
+    def test_tools_come_from_goroot_even_through_a_symlinked_go(self):
+        real = fake_go(self.base / "sdk/go1.27.1", "1.27.1")
+        link = self.base / "linkbin/go"
+        link.parent.mkdir()
+        link.symlink_to(real)
+        with patch.object(harness.shutil, "which", return_value=str(link)):
+            self.assertEqual(harness.go_tool("gofmt"), str(self.base / "sdk/go1.27.1/bin/gofmt"))
+        (self.repo / "go.mod").unlink()  # no pinned toolchain: fall back to PATH
+        with patch.object(harness.shutil, "which", return_value="/usr/bin/gofmt"):
+            self.assertEqual(harness.go_tool("gofmt"), "/usr/bin/gofmt")
+
+    def test_check_go_formats_listed_files_then_vets_and_tests_offline(self):
+        with patch.object(harness, "go_binary", return_value=fake_go(self.base / "bad", "1.27.1", gofmt_lists="a.go")), \
+                self.assertRaisesRegex(ValueError, "Not gofmt-formatted: a.go"):
+            harness.check_go()
+        with patch.object(harness, "go_binary", return_value=fake_go(self.base / "err", "1.27.1", gofmt_code=2)), \
+                self.assertRaisesRegex(ValueError, "gofmt failed"):
+            harness.check_go()
+        harness.run.assert_not_called()
+        go = fake_go(self.base / "good", "1.27.1")
+        with patch.object(harness, "go_binary", return_value=go):
+            harness.check_go()
+        self.assertEqual((self.base / "good/gofmt.args").read_text().split(), ["-l", "a.go"])  # ignored.go left out
+        self.assertEqual([(call.args, call.kwargs) for call in harness.run.call_args_list],
+                         [((str(go), "vet", "./..."), {"extra_env": {"GOPROXY": "off"}}),
+                          ((str(go), "test", "-race", "-count=1", "./..."), {"extra_env": {"GOPROXY": "off"}})])
+        harness.run.reset_mock()
+        with patch.object(harness, "go_binary", return_value=go), patch.dict(harness.os.environ, {"CI": "true"}):
+            harness.check_go()
+        self.assertEqual(harness.run.call_args.kwargs, {"extra_env": {}})
+
+    def test_vuln_skips_uncached_locally_and_downloads_only_in_ci(self):
+        cache = self.base / "modcache"
+        go = fake_go(self.base / "uncached", "1.27.1", modcache=cache)
+        with patch.object(harness, "go_binary", return_value=go), patch("builtins.print") as output:
+            harness.check_vuln()
+        self.assertIn("skipped", output.call_args.args[0])
+        (cache / "golang.org/x/vuln@v1.8.0").mkdir(parents=True)
+        partial = fake_go(self.base / "partial", "1.27.1", modcache=cache, run_err="module lookup disabled by GOPROXY=off", run_code=1)
+        with patch.object(harness, "go_binary", return_value=partial), patch("builtins.print") as output:
+            harness.check_vuln()
+        self.assertIn("skipped", output.call_args.args[0])
+        found = fake_go(self.base / "found", "1.27.1", modcache=cache, run_out="Vulnerability #1", run_code=3)
+        with patch.object(harness, "go_binary", return_value=found), patch("builtins.print"), self.assertRaises(subprocess.CalledProcessError):
+            harness.check_vuln()
+        clean = fake_go(self.base / "clean", "1.27.1", modcache=cache, run_out="No vulnerabilities found.")
+        with patch.object(harness, "go_binary", return_value=clean), patch("builtins.print") as output:
+            harness.check_vuln()
+        self.assertIn("No vulnerabilities found.", "".join(str(call.args[0]) for call in output.call_args_list))
+        harness.run.assert_not_called()
+        with patch.object(harness, "go_binary", return_value=clean), patch.dict(harness.os.environ, {"CI": "true"}):
+            harness.check_vuln()
+        self.assertEqual(harness.run.call_args.args, (str(clean), "run", harness.GOVULNCHECK, "./..."))
+
+    def test_doctor_and_dispatch(self):
+        go = fake_go(self.base / "doc", "1.27.1")
+        with patch.object(harness, "go_binary", return_value=go), patch("builtins.print") as output:
+            harness.main(["doctor"])
+        self.assertTrue(any("go1.27.1, pinned in go.mod" in str(call.args[0]) for call in output.call_args_list))
+        with patch.object(harness, "go_binary", side_effect=ValueError("Go 1.27.1 missing")), patch("builtins.print") as output:
+            harness.main(["doctor"])
+        self.assertTrue(any("Go 1.27.1 missing" in str(call.args[0]) for call in output.call_args_list))
+        with patch.object(harness, "check_go") as check_go, patch.object(harness, "check_vuln") as check_vuln:
+            harness.main(["check", "go"])
+            harness.main(["check", "vuln"])
+        check_go.assert_called_once()
+        check_vuln.assert_called_once()
+
+    def test_ci_workflow_pins_the_same_tools(self):
+        workflow = (Path(harness.__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1", workflow)
+        self.assertIn("actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", workflow)
+        # Every action is pinned to a full commit SHA, never a movable tag.
+        for action in re.findall(r"uses:\s*(\S+)", workflow):
+            self.assertRegex(action, r"@[0-9a-f]{40}$", action)
+        self.assertIn("go-version-file: go.mod", workflow)
+        self.assertIn("harness.py check vuln", workflow)
 
 
 @unittest.skipUnless(shutil.which("git"), "git is required")
