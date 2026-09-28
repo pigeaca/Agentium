@@ -1,6 +1,6 @@
 # Harness
 
-Run `python3 .agents/scripts/harness.py <command>` from the repository root, or use the absolute script path from another directory. The harness uses only the Python standard library (3.9+) and Git. It is the single entrypoint for process checks, the pre-commit guard, task worktrees and plan metrics.
+Run `python3 scripts/harness.py <command>` from the repository root, or use the absolute script path from another directory. The harness uses only the Python standard library (3.9+) and Git. It is the single entrypoint for process checks, the pre-commit guard, task worktrees and plan metrics.
 
 | Command | Purpose | When to use |
 |---|---|---|

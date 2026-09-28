@@ -33,7 +33,7 @@ jobs:
           cache: false
 
       - name: Process and Go checks (docs, adapters, harness tests, gofmt, vet, race tests)
-        run: python3 .agents/scripts/harness.py check ci
+        run: python3 scripts/harness.py check ci
 
       - name: Go vulnerability scan (govulncheck at the harness's pinned version)
-        run: python3 .agents/scripts/harness.py check vuln
+        run: python3 scripts/harness.py check vuln

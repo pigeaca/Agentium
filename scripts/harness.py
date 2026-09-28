@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 DOC_ENTRYPOINTS = ("AGENTS.md", ".agents/README.md", ".agents/rules/core.md", ".agents/architecture.md", ".agents/ROADMAP.md")
 # Provider credentials never reach checks or tests; the Go toolchain never switches or downloads itself, and
 # builds never rewrite go.mod/go.sum.
@@ -339,7 +339,8 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
         if path.endswith(".md") or path.startswith((".agents/", ".claude/", "docs/")):
             reasons.setdefault(("check", "docs"), []).append(path)
             mapped = True
-        if path.startswith((".agents/scripts/", ".githooks/")):
+        # Only the harness itself: other scripts added later should surface as unmapped until they get a rule.
+        if path in {"scripts/harness.py", "scripts/test_harness.py"} or path.startswith(".githooks/"):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
         if path.endswith(".go") or path in {"go.mod", "go.sum"}:
@@ -455,7 +456,7 @@ def worktree_new(branch: str, base: str | None) -> None:
     except ValueError as error:
         deps = f"NOT installed: {error}"
     print(f"\nWorktree ready (kept even if setup failed):\n  path: {path}\n  branch: {branch} from {base}\n  dependencies: {deps}\n"
-          f"Run every command from that path, e.g. python3 {path}/.agents/scripts/harness.py check changed --dry-run")
+          f"Run every command from that path, e.g. python3 {path}/scripts/harness.py check changed --dry-run")
 
 
 def worktree_remove(branch: str) -> None:
@@ -560,7 +561,7 @@ def main(args: list[str]) -> None:
             if scope in {"docs", "ci"}:
                 check_docs()
             if scope in {"harness", "ci"}:
-                run(sys.executable, "-m", "unittest", "discover", "-s", ".agents/scripts", "-p", "test_harness.py")
+                run(sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_harness.py")
             if scope == "ci" and (ROOT / "go.mod").is_file():
                 check_go()
         elif scope == "go":
@@ -584,7 +585,7 @@ def main(args: list[str]) -> None:
     elif command == "metrics":
         metrics_report()
     else:
-        raise ValueError(f"Unknown command: {command}. Run python3 .agents/scripts/harness.py help.")
+        raise ValueError(f"Unknown command: {command}. Run python3 scripts/harness.py help.")
 
 
 if __name__ == "__main__":

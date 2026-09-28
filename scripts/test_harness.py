@@ -194,15 +194,15 @@ class ChangedCheckSelection(unittest.TestCase):
         return [command for command, _ in planned], suggestions
 
     def test_docs_and_harness_changes(self):
-        commands, suggestions = self.commands("docs/harness.md", ".agents/scripts/harness.py", ".githooks/pre-commit", "LICENSE")
+        commands, suggestions = self.commands("docs/harness.md", "scripts/harness.py", ".githooks/pre-commit", "LICENSE")
         self.assertEqual(commands, [["check", "docs"], ["check", "harness"]])
         self.assertEqual(suggestions, [])
 
     def test_ci_and_unmapped_files_are_only_suggested(self):
-        commands, suggestions = self.commands(".github/workflows/ci.yml", "web/src/App.tsx")
+        commands, suggestions = self.commands(".github/workflows/ci.yml", "web/src/App.tsx", "scripts/release.sh")
         self.assertEqual(commands, [])
         self.assertTrue(any("PR's CI run" in suggestion for suggestion in suggestions))
-        self.assertTrue(any("no mapped check" in suggestion and "web/src/App.tsx" in suggestion for suggestion in suggestions))
+        self.assertTrue(any("2 file(s) have no mapped check" in suggestion for suggestion in suggestions), suggestions)
 
     def test_go_code_and_modules(self):
         commands, suggestions = self.commands("internal/cli/cli.go", "docs/harness.md")
@@ -255,7 +255,7 @@ class PlanMetrics(unittest.TestCase):
     def test_filled_block_is_parsed_and_template_placeholders_are_skipped(self):
         self.assertEqual(harness.plan_metrics(self.FILLED),
                          {"agent": "Claude Code / claude-opus-5-5 / high", "minutes": 95, "loops": 2, "corrections": 1})
-        template = (Path(harness.__file__).parents[1] / "templates/implementation-plan.md").read_text()
+        template = (Path(harness.__file__).parents[1] / ".agents/templates/implementation-plan.md").read_text()
         self.assertIsNone(harness.plan_metrics(template))
         self.assertIsNone(harness.plan_metrics("# Old plan without metrics\n"))
 
@@ -420,7 +420,7 @@ class GoToolchain(unittest.TestCase):
         check_vuln.assert_called_once()
 
     def test_ci_workflow_pins_the_same_tools(self):
-        workflow = (Path(harness.__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        workflow = (Path(harness.__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
         self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1", workflow)
         self.assertIn("actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", workflow)
         # Every action is pinned to a full commit SHA, never a movable tag.
