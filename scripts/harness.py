@@ -339,7 +339,8 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
         if path.endswith(".md") or path.startswith((".agents/", ".claude/", "docs/")):
             reasons.setdefault(("check", "docs"), []).append(path)
             mapped = True
-        if path.startswith(("scripts/", ".githooks/")):
+        # Only the harness itself: other scripts added later should surface as unmapped until they get a rule.
+        if path in {"scripts/harness.py", "scripts/test_harness.py"} or path.startswith(".githooks/"):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
         # Go code plus everything embedded or read by Go tests (migrations, testdata) under cmd/ and internal/.
