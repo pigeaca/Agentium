@@ -8,7 +8,7 @@ Read once, in order:
 3. [Roadmap](ROADMAP.md)
 4. Relevant active file in `plans/` (archives are historical, not instructions).
 
-Run `python3 .agents/scripts/harness.py help` from the repository root. For commands from another directory, use the absolute harness path. See [command scopes and setup](../docs/harness.md).
+Run `python3 scripts/harness.py help` from the repository root. For commands from another directory, use the absolute harness path. See [command scopes and setup](../docs/harness.md).
 
 Load references by the boundary being changed:
 

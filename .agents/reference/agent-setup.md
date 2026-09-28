@@ -41,7 +41,7 @@ Pick the tier from the task's risk and ambiguity, not its size. These are starti
 
 ## Metrics
 
-Plan templates end with a Metrics block (agent/model/effort, elapsed minutes, check-fix loops, user corrections, review verdict). `python3 .agents/scripts/harness.py metrics` summarizes archived plans that filled it, grouped by client, model and effort. Inline-plan changes are not measured. Treat small samples as anecdotes.
+Plan templates end with a Metrics block (agent/model/effort, elapsed minutes, check-fix loops, user corrections, review verdict). `python3 scripts/harness.py metrics` summarizes archived plans that filled it, grouped by client, model and effort. Inline-plan changes are not measured. Treat small samples as anecdotes.
 
 ## GitHub access
 
@@ -64,11 +64,11 @@ Recommended repository settings (the user applies them; the token deliberately l
 
 ## Enforcement
 
-`python3 .agents/scripts/harness.py hooks` points `core.hooksPath` at the tracked `.githooks/` for every worktree of the local repository (each worktree runs its own checkout's hook; branches without `.githooks/` run none). The pre-commit hook runs `check staged`: whitespace errors, credential-shaped added lines, env/key files, gofmt of staged Go files when Go exists, and docs validation. It never runs test suites. CI runs `check ci` (docs and harness tests) on pushes and pull requests to `main`; stack jobs are added with the stack. Prose rules describe the preferred process; the hook and CI are the guarantees.
+`python3 scripts/harness.py hooks` points `core.hooksPath` at the tracked `.githooks/` for every worktree of the local repository (each worktree runs its own checkout's hook; branches without `.githooks/` run none). The pre-commit hook runs `check staged`: whitespace errors, credential-shaped added lines, env/key files, gofmt of staged Go files with the pinned toolchain, and docs validation. It never runs test suites. CI runs `check ci` (docs, harness tests, Go checks) and then `check vuln` on pushes and pull requests to `main`. Prose rules describe the preferred process; the hook and CI are the guarantees.
 
 ## Validation
 
-`python3 .agents/scripts/harness.py check docs` validates direct imports, current Markdown links, skill and subagent adapter coverage, entrypoint size and plan-archive consistency. It does not emulate Claude's loader or prove model compliance; a manual Claude session can confirm loaded memory with `/context` and skills in the `/` menu.
+`python3 scripts/harness.py check docs` validates direct imports, current Markdown links, skill and subagent adapter coverage, entrypoint size and plan-archive consistency. It does not emulate Claude's loader or prove model compliance; a manual Claude session can confirm loaded memory with `/context` and skills in the `/` menu.
 
 Personal `.claude/settings.local.json`, user-level memory and client permissions are separate configuration; this repository does not rewrite or validate them.
 

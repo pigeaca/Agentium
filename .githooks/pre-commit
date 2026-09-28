@@ -1,4 +1,4 @@
 #!/bin/sh
 # Shared pre-commit guard for people and every agent client; enable once with
-# `python3 .agents/scripts/harness.py hooks`. Bypassing it with --no-verify needs explicit user approval.
-exec python3 "$(git rev-parse --show-toplevel)/.agents/scripts/harness.py" check staged
+# `python3 scripts/harness.py hooks`. Bypassing it with --no-verify needs explicit user approval.
+exec python3 "$(git rev-parse --show-toplevel)/scripts/harness.py" check staged

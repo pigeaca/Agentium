@@ -17,7 +17,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. python3 .agents/scripts/harness.py ...
+        1. python3 scripts/harness.py ...
         2. ...
     validations:
       required: true
@@ -31,7 +31,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, Python version, agent client and model if relevant, and the output of `python3 .agents/scripts/harness.py doctor`.
+      description: OS, Python version, agent client and model if relevant, and the output of `python3 scripts/harness.py doctor`.
       render: text
   - type: checkboxes
     id: no-secrets

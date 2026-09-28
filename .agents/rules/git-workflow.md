@@ -44,4 +44,4 @@ Separate explicit approval is required for force-push, rewriting published/share
 
 ## Worktree lifecycle
 
-Use the [parallel-work rules](collaboration.md). Create task worktrees with `python3 .agents/scripts/harness.py worktree new <branch>` (or the client's managed worktree tool); inspect existing worktrees first. Never copy the repository. Remove only an owned, idle checkout after its work is merged or recoverably saved; `worktree remove` refuses dirty or unmerged work and never forces. Never delete a directory containing unaccounted work. Branch/worktree cleanup is not permission to close a PR.
+Use the [parallel-work rules](collaboration.md). Create task worktrees with `python3 scripts/harness.py worktree new <branch>` (or the client's managed worktree tool); inspect existing worktrees first. Never copy the repository. Remove only an owned, idle checkout after its work is merged or recoverably saved; `worktree remove` refuses dirty or unmerged work and never forces. Never delete a directory containing unaccounted work. Branch/worktree cleanup is not permission to close a PR.

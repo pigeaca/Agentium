@@ -17,8 +17,8 @@ The rules in [`.agents/`](../.agents/README.md) apply to people as well as agent
 3. Enable the pre-commit guard once per clone, and run the checks the diff needs before you push:
 
    ```sh
-   python3 .agents/scripts/harness.py hooks
-   python3 .agents/scripts/harness.py check changed
+   python3 scripts/harness.py hooks
+   python3 scripts/harness.py check changed
    ```
 
 4. Open a pull request against `main` and fill in the template. CI must pass. The maintainer reviews and merges.
