@@ -246,6 +246,10 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "agentium context snapshot: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63; no \"..\", no trailing \".\" or \".lock\")\n", name)
 		return ExitUsage
 	}
+	if name == "base" {
+		fmt.Fprintln(env.Stderr, `agentium context snapshot: "base" names each task's own context; choose another name`)
+		return ExitUsage
+	}
 	if !*workingTree && *ref == "" {
 		*ref = "HEAD"
 	}

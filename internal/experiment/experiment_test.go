@@ -75,11 +75,21 @@ func TestEstimateRun(t *testing.T) {
 	if unknown := EstimateRun("sonnet", nil); unknown.Known || !strings.Contains(unknown.Basis, "no list price") {
 		t.Errorf("an alias has no price: %+v", unknown)
 	}
-	if got := DefaultBudget(72, profile); got != 146 {
-		t.Errorf("DefaultBudget = %v, want 146 (1.25 × 72 × $1.612, rounded up)", got)
+	d := validDesign()
+	d.Tasks = make([]string, 12) // 72 runs
+	if got := DefaultBudget(d, profile); got != 155 {
+		t.Errorf("DefaultBudget = %v, want 155 (1.25 × 72 × $1.612 + 3 caps of $3 held for runs in flight, rounded up)", got)
 	}
-	if DefaultBudget(72, Estimate{}) != 0 {
+	// Cheap runs: the reserve keeps the budget above what a pair needs to start.
+	d.Tasks = d.Tasks[:1]
+	if got := DefaultBudget(d, Estimate{PerRunUSD: 0.25, Known: true}); got != 11 || got < 2*d.RunBudgetUSD {
+		t.Errorf("DefaultBudget for 6 runs at $0.25 = %v, want 11", got)
+	}
+	if DefaultBudget(d, Estimate{}) != 0 {
 		t.Error("an unknown estimate has no default budget")
+	}
+	if Reserve(d) != 9 {
+		t.Errorf("Reserve = %v, want 3 caps of $3 at concurrency 2", Reserve(d))
 	}
 }
 
@@ -87,7 +97,7 @@ func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 	d := validDesign()
 	d.Tasks, d.Repeats = []string{"a", "b", "c", "d", "e"}, 4
 	rows := Preview(d, 17, Estimate{PerRunUSD: 0.5, Known: true})
-	if len(rows) != 3 || rows[0].Name != "Quick" || rows[1].Name != "Confident" || rows[2].Name != "This experiment" {
+	if len(rows) != len(Tiers())+1 || rows[0].Name != "Quick" || rows[1].Name != "Confident" || rows[2].Name != "This experiment" {
 		t.Fatalf("rows = %+v", rows)
 	}
 	quick, confident, own := rows[0], rows[1], rows[2]
@@ -106,7 +116,7 @@ func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 }
 
 func validDesign() Design {
-	return Design{Template: TemplateContextAB, Arms: []Arm{{Name: "A", Context: BaseContext}, {Name: "B", Context: "lean", Snapshot: "abc"}},
+	return Design{Version: DesignVersion, Template: TemplateContextAB, Arms: []Arm{{Name: "A", Context: BaseContext}, {Name: "B", Context: "lean", Snapshot: "abc"}},
 		Tasks: []string{"t1"}, Repeats: 3, Model: "claude-sonnet-5", Goal: GoalCheaper, CostMargin: DefaultCostMargin,
 		SuccessMargin: DefaultSuccessMargin, RunBudgetUSD: 3, BudgetUSD: 100, Timeout: time.Minute, VerifyTimeout: time.Minute, Concurrency: 2}
 }
@@ -137,7 +147,9 @@ func TestValidate(t *testing.T) {
 		"goal":              {func(d *Design) { d.Goal = "faster" }, "unknown goal"},
 		"margin":            {func(d *Design) { d.SuccessMargin = 1.5 }, "margins"},
 		"budget":            {func(d *Design) { d.BudgetUSD = 0 }, "budgets"},
-		"cap above budget":  {func(d *Design) { d.RunBudgetUSD = 200 }, "above the budget"},
+		"below one pair":    {func(d *Design) { d.RunBudgetUSD = 60 }, "below one pair of runs at their caps ($120.00)"},
+		"version":           {func(d *Design) { d.Version = 0 }, "design version 0"},
+		"seed":              {func(d *Design) { d.Seed = MaxSeed + 1 }, "the seed must be at most"},
 		"timeout":           {func(d *Design) { d.Timeout = 0 }, "timeouts"},
 		"concurrency":       {func(d *Design) { d.Concurrency = MaxConcurrency + 1 }, "concurrency"},
 	} {

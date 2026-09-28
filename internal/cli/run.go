@@ -62,16 +62,27 @@ func runRun(ctx context.Context, env Env, args []string) int {
 
 // signIn picks how runs sign in: an API key, a token file, or the user's own login. Secrets are only passed on.
 func signIn(env Env) (mode, secret, tokenFile string, err error) {
-	if key := env.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		return claude.SignInAPIKey, key, "", nil
+	switch mode, tokenFile = signInMode(env); mode {
+	case claude.SignInAPIKey:
+		return mode, env.Getenv("ANTHROPIC_API_KEY"), "", nil
+	case claude.SignInTokenFile:
+		token, err := claude.ReadToken(tokenFile)
+		return mode, token, tokenFile, err
+	}
+	return mode, "", "", nil
+}
+
+// signInMode is signIn's choice, from the credentials' presence only.
+func signInMode(env Env) (mode, tokenFile string) {
+	if env.Getenv("ANTHROPIC_API_KEY") != "" {
+		return claude.SignInAPIKey, ""
 	}
 	if file := project.TokenFile(project.Env{Getenv: env.Getenv}); file != "" {
-		if _, statErr := os.Stat(file); statErr == nil {
-			token, err := claude.ReadToken(file)
-			return claude.SignInTokenFile, token, file, err
+		if _, err := os.Stat(file); err == nil {
+			return claude.SignInTokenFile, file
 		}
 	}
-	return claude.SignInLogin, "", "", nil
+	return claude.SignInLogin, ""
 }
 
 func runOnce(ctx context.Context, env Env, args []string) int {
@@ -316,19 +327,22 @@ const (
 
 // calibration is what a calibration run found for one arm.
 type calibration struct {
-	Arm              string   `json:"arm"`
-	Snapshot         string   `json:"snapshot,omitempty"`
-	RunID            string   `json:"run_id"`
-	Outcome          string   `json:"outcome"`
-	Sandbox          string   `json:"sandbox"`      // a sandboxed Bash command returned its output
-	LargeOutput      string   `json:"large_output"` // the output Claude Code saved was read back
-	Instructions     string   `json:"instructions"` // the codeword in the arm's instruction file came back without reading it
-	FirstRequest     int64    `json:"first_request_tokens"`
-	EstimatedContext int      `json:"estimated_context_tokens"` // the resolver's session-start estimate
-	CLIVersion       string   `json:"cli_version"`
-	Model            string   `json:"model"`           // as Claude Code reported it
-	RequestedModel   string   `json:"requested_model"` // as asked for (--model)
-	Tools            []string `json:"tools"`
+	Arm              string `json:"arm"`
+	Snapshot         string `json:"snapshot,omitempty"`
+	RunID            string `json:"run_id"`
+	Outcome          string `json:"outcome"`
+	Sandbox          string `json:"sandbox"`      // a sandboxed Bash command returned its output
+	LargeOutput      string `json:"large_output"` // the output Claude Code saved was read back
+	Instructions     string `json:"instructions"` // the codeword in the arm's instruction file came back without reading it
+	FirstRequest     int64  `json:"first_request_tokens"`
+	EstimatedContext int    `json:"estimated_context_tokens"` // the resolver's session-start estimate
+	CLIVersion       string `json:"cli_version"`
+	Model            string `json:"model"`           // as Claude Code reported it
+	RequestedModel   string `json:"requested_model"` // as asked for (--model)
+	// SignIn is how the calibration signed in: with the user's login, Claude Code keeps large outputs in the user's
+	// config, which runs must still read back; with a key or token, in the run's own.
+	SignIn string   `json:"sign_in,omitempty"`
+	Tools  []string `json:"tools"`
 	// Skills and SlashCommands are Claude Code's bundled ones: the arm's own project skills and commands are left out
 	// and added back when a run is checked. Stored locally to check later runs; never printed.
 	Skills        []string `json:"skills"`
@@ -470,7 +484,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		m := rec.Metrics
 		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
 			EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion, Model: m.Model,
-			RequestedModel: *model, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
+			RequestedModel: *model, SignIn: runEnv.SignIn, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
 			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: m.CostUSD}
 		c.Sandbox, c.LargeOutput, c.Instructions = judge(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
 		results = append(results, c)

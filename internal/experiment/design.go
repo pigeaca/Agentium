@@ -34,8 +34,15 @@ type Arm struct {
 	Snapshot string `json:"snapshot,omitempty"` // the snapshot commit; empty for the base's own context
 }
 
+// DesignVersion is the version of Design's stored form.
+const DesignVersion = 1
+
+// MaxSeed bounds seeds to 53 bits, which JSON numbers (and the web UI) carry exactly.
+const MaxSeed = 1<<53 - 1
+
 // Design is what an experiment fixes before its first run.
 type Design struct {
+	Version       int           `json:"version"`
 	Template      string        `json:"template"`
 	Arms          []Arm         `json:"arms"`
 	Tasks         []string      `json:"tasks"`
@@ -68,6 +75,9 @@ func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
 // Validate checks that the design is complete and consistent.
 func (d Design) Validate() error {
 	var errs []error
+	if d.Version != DesignVersion {
+		errs = append(errs, fmt.Errorf("design version %d (this Agentium writes %d)", d.Version, DesignVersion))
+	}
 	switch d.Template {
 	case TemplateContextAB, TemplateAA:
 	default:
@@ -113,14 +123,17 @@ func (d Design) Validate() error {
 	}
 	if d.RunBudgetUSD <= 0 || d.BudgetUSD <= 0 {
 		errs = append(errs, errors.New("budgets must be positive"))
-	} else if d.RunBudgetUSD > d.BudgetUSD {
-		errs = append(errs, fmt.Errorf("the per-run cap $%.2f is above the budget $%.2f", d.RunBudgetUSD, d.BudgetUSD))
+	} else if pair := 2 * d.RunBudgetUSD; d.BudgetUSD < pair {
+		errs = append(errs, fmt.Errorf("the budget $%.2f is below one pair of runs at their caps ($%.2f)", d.BudgetUSD, pair))
 	}
 	if d.Timeout <= 0 || d.VerifyTimeout <= 0 {
 		errs = append(errs, errors.New("timeouts must be positive"))
 	}
 	if d.Concurrency < 1 || d.Concurrency > MaxConcurrency {
 		errs = append(errs, fmt.Errorf("concurrency must be 1 to %d", MaxConcurrency))
+	}
+	if d.Seed > MaxSeed {
+		errs = append(errs, fmt.Errorf("the seed must be at most %d", uint64(MaxSeed)))
 	}
 	return errors.Join(errs...)
 }

@@ -40,15 +40,16 @@ type Tier struct {
 
 // Tiers are the preview's presets: Quick measures cost changes of roughly 15–20%; Confident also certifies that
 // success does not drop by more than about 15–20 pp.
-var Tiers = []Tier{{"Quick", 12, 3}, {"Confident", 23, 5}}
+func Tiers() []Tier { return []Tier{{"Quick", 12, 3}, {"Confident", 23, 5}} }
 
 // TierByName finds a tier, ignoring case.
 func TierByName(name string) (Tier, bool) {
-	i := slices.IndexFunc(Tiers, func(t Tier) bool { return strings.EqualFold(t.Name, name) })
+	tiers := Tiers()
+	i := slices.IndexFunc(tiers, func(t Tier) bool { return strings.EqualFold(t.Name, name) })
 	if i < 0 {
 		return Tier{}, false
 	}
-	return Tiers[i], true
+	return tiers[i], true
 }
 
 // Detectable is what a paired design can detect with 80% power, at τ = TauLow and TauHigh. The variance of a task's
@@ -93,7 +94,9 @@ func Exploratory(tasks, repeats int) []string {
 
 // DefaultProfile is one task run's tokens as the study assumed them (§5.6): 0.2M cache writes, 2.16M cache reads,
 // 0.04M uncached input and 30k output, with the cache written for an hour as Claude Code does.
-var DefaultProfile = pricing.Usage{CacheWrite1h: 200_000, CacheRead: 2_160_000, Input: 40_000, Output: 30_000}
+func DefaultProfile() pricing.Usage {
+	return pricing.Usage{CacheWrite1h: 200_000, CacheRead: 2_160_000, Input: 40_000, Output: 30_000}
+}
 
 // MinPastRuns is how many earlier runs make their median the estimate instead of the default profile.
 const MinPastRuns = 3
@@ -117,18 +120,23 @@ func EstimateRun(model string, past []float64) Estimate {
 		return Estimate{PerRunUSD: median, Known: true, Basis: fmt.Sprintf("the median of this project's %d earlier task runs on %s", len(past), model)}
 	}
 	if rates, ok := pricing.Lookup(model); ok {
-		return Estimate{PerRunUSD: rates.Cost(DefaultProfile), Known: true,
+		return Estimate{PerRunUSD: rates.Cost(DefaultProfile()), Known: true,
 			Basis: fmt.Sprintf("a default task run's tokens at %s's list prices of %s (fewer than %d earlier task runs on it)", model, pricing.Date, MinPastRuns)}
 	}
 	return Estimate{Basis: fmt.Sprintf("%s has no list price in Agentium's table and fewer than %d earlier task runs", model, MinPastRuns)}
 }
 
-// DefaultBudget is a quarter above the estimate, in whole dollars; zero when the estimate is unknown.
-func DefaultBudget(runs int, est Estimate) float64 {
+// Reserve is what the budget must hold back for runs that may be in flight: a run (or a pair's two runs) starts only
+// when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it.
+// With concurrency c, at most c−1 runs are in flight when a pair's first run starts, so c+1 caps are reserved.
+func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunBudgetUSD }
+
+// DefaultBudget is a quarter above the estimate plus the reserve, in whole dollars; zero when the estimate is unknown.
+func DefaultBudget(d Design, est Estimate) float64 {
 	if !est.Known {
 		return 0
 	}
-	return math.Ceil(1.25 * float64(runs) * est.PerRunUSD)
+	return math.Ceil(1.25*float64(d.Runs())*est.PerRunUSD + Reserve(d))
 }
 
 // Row is one line of a preview.
@@ -156,7 +164,7 @@ func Preview(d Design, eligible int, est Estimate) []Row {
 		return r
 	}
 	var rows []Row
-	for _, t := range Tiers {
+	for _, t := range Tiers() {
 		r := row(t.Name, min(t.Tasks, eligible), t.Repeats)
 		r.Short = eligible < t.Tasks
 		rows = append(rows, r)

@@ -40,7 +40,7 @@ Shape:
 | `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths and credentials, an allowlisted environment); stream-json metrics, outcomes and environment drift |
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules) and validation per context arm |
 | `internal/experiment` | Experiment designs (templates context A/B and A/A, arms, tasks eligible in every arm, repeats, caps, margins, seed) and the preview: tiers, cost estimates, detectable effects and floors |
-| `internal/pricing` | Anthropic's list prices per model, dated, for estimates and for transcripts without a cost |
+| `internal/pricing` | Anthropic's list prices per model, dated, for cost estimates |
 | `internal/run` | One run: a workspace prepared as the arm (base, context, setup, context commit), Claude Code denied everything else, grading on a hidden copy (diff, hidden tests, verification), behavior flags, redacted records |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |

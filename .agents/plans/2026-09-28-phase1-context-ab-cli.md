@@ -91,7 +91,7 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
       - the smallest detectable cost and success effects (80% power, two-sided 5%) with σ = 0.19, w = 0.20 and τ from 0.10 to 0.25;
       - the success margin the guard can certify;
       - the floors: 3 runs per task per arm, 8 tasks for cost claims, 20 for success claims; below a floor a metric is exploratory;
-    - readiness checks: each arm's context calibrated on the current Claude Code version with the experiment's model; every task valid in every arm.
+    - readiness checks: each arm's context calibrated on the current Claude Code version, with the experiment's model and sign-in; every task valid in every arm; a budget that covers the estimate plus the reserve below.
   - **5b, execution** (`agentium experiment run`):
     - the lock, written before the first run and checked on every resume. It records:
       - Agentium's and Claude Code's versions, the model, effort, flags and sign-in mode;
@@ -102,7 +102,7 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
     - isolation between concurrent runs: workspaces are named by slot and attempt, so each run denies up front the predicted session folders (`claude.SessionFolder`) of every run that could overlap it;
     - caps:
       - the per-run cap goes to Claude Code;
-      - a pair starts only when the spend so far, plus the caps of the runs in flight and of both runs in the pair, fits the total budget;
+      - a run starts only when the spend so far, plus the caps of the runs in flight and its own cap (both caps for a pair's first run), fits the total budget. With concurrency c that reserves up to c + 1 caps, which the default budget adds to the estimate;
       - a budget stop keeps the data; raising the budget on resume is allowed and recorded;
     - retries: only infrastructure failures are retried, up to 3 attempts per slot with a backoff. The experiment stops after 3 slots in a row fail for infrastructure, or when Claude Code's version or the model differs from the lock;
     - resume:

@@ -105,7 +105,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	case *repeats < 0:
 		return usage("--repeats must be positive")
 	}
-	tier := experiment.Tiers[0]
+	tier := experiment.Tiers()[0]
 	if *tierName != "" {
 		var found bool
 		if tier, found = experiment.TierByName(*tierName); !found {
@@ -123,7 +123,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 		if _, err := rand.Read(b[:]); err != nil {
 			return fail(env, fmt.Errorf("seed: %w", err))
 		}
-		*seed = binary.LittleEndian.Uint64(b[:]) | 1 // never 0, which means "random"
+		*seed = binary.LittleEndian.Uint64(b[:])&experiment.MaxSeed | 1 // never 0, which means "random"
 	}
 
 	w, err := openProject(ctx, env)
@@ -142,7 +142,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	d := experiment.Design{Template: *template, Arms: []experiment.Arm{armA, armB}, Repeats: *repeats, Model: *model, Effort: *effort,
+	d := experiment.Design{Version: experiment.DesignVersion, Template: *template, Arms: []experiment.Arm{armA, armB}, Repeats: *repeats, Model: *model, Effort: *effort,
 		Goal: *goal, CostMargin: experiment.DefaultCostMargin, SuccessMargin: experiment.DefaultSuccessMargin, RunBudgetUSD: *runBudget,
 		BudgetUSD: *budget, Timeout: *timeout, VerifyTimeout: *verifyTimeout, Concurrency: *concurrency, Seed: *seed}
 
@@ -172,12 +172,12 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if d.BudgetUSD == 0 {
-		if d.BudgetUSD = experiment.DefaultBudget(d.Runs(), est); d.BudgetUSD == 0 {
+		if d.BudgetUSD = experiment.DefaultBudget(d, est); d.BudgetUSD == 0 {
 			return fail(env, fmt.Errorf("the cost of a run cannot be estimated (%s): set --budget", est.Basis))
 		}
 	}
-	if err := d.Validate(); err != nil {
-		return fail(env, err)
+	if err := d.Validate(); err != nil { // everything it checks came from flags
+		return usage("%v", err)
 	}
 	encoded, err := json.Marshal(d)
 	if err != nil {
@@ -241,7 +241,8 @@ func printIneligible(w io.Writer, reasons map[string]string) {
 	}
 }
 
-// estimateRun estimates one run's cost on model from the project's earlier fair task runs on it.
+// estimateRun estimates one run's cost on model from the project's earlier fair task runs on it that reported their
+// cost (a run stopped before Claude Code's result has none).
 func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Estimate, error) {
 	runs, err := w.db.Runs(ctx, w.project.ID)
 	if err != nil {
@@ -253,9 +254,12 @@ func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Es
 			continue
 		}
 		var rec struct {
-			Model string `json:"model"`
+			Model   string `json:"model"`
+			Metrics struct {
+				SawResult bool `json:"saw_result"`
+			} `json:"metrics"`
 		}
-		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model {
+		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model && rec.Metrics.SawResult && r.CostUSD > 0 {
 			past = append(past, r.CostUSD)
 		}
 	}
@@ -331,6 +335,9 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 
 	fmt.Fprintln(out, "\nBefore it runs:")
 	ready := printReadiness(ctx, env, w, d, eligible, reasons, est)
+	if ctx.Err() != nil {
+		return fail(env, ctx.Err())
+	}
 
 	fmt.Fprintln(out, "\nSizes (runs count both arms):")
 	fmt.Fprintf(out, "%-16s %6s %8s %5s %10s %10s %12s %14s %13s  %s\n", "SIZE", "TASKS", "RUNS/ARM", "RUNS", "EST. COST", "WORST CASE",
@@ -344,21 +351,32 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		if est.Known {
 			cost = fmt.Sprintf("$%.2f", r.CostUSD)
 		}
-		exploratory := "-"
-		if len(r.Exploratory) > 0 {
-			exploratory = strings.Join(r.Exploratory, ", ")
+		effects := []string{percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp")}
+		exploratory := strings.Join(r.Exploratory, ", ")
+		if r.Tasks == 0 {
+			effects, exploratory = []string{"-", "-", "-"}, "no tasks"
+		} else if exploratory == "" {
+			exploratory = "-"
 		}
 		fmt.Fprintf(out, "%-16s %6s %8d %5d %10s %10s %12s %14s %13s  %s\n", r.Name, tasks, r.Repeats, r.Runs, cost, fmt.Sprintf("$%.2f", r.WorstUSD),
-			percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp"), exploratory)
+			effects[0], effects[1], effects[2], exploratory)
 	}
-	if len(eligible) < experiment.Tiers[len(experiment.Tiers)-1].Tasks {
+	tiers := experiment.Tiers()
+	if len(eligible) < tiers[len(tiers)-1].Tasks {
 		fmt.Fprintf(out, "* only %d task(s) can be in this experiment; a tier asking for more uses them all\n", len(eligible))
 	}
 	fmt.Fprintf(out, "Estimated cost: %s.\n", est.Basis)
-	fmt.Fprintf(out, "Worst case: every run reaches its $%.2f cap. The budget stops the experiment before it passes $%.2f.\n", d.RunBudgetUSD, d.BudgetUSD)
+	fmt.Fprintf(out, "Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
+		"leave room for its own cap, so spending never passes the $%.2f budget.\n", d.RunBudgetUSD, d.BudgetUSD)
 	fmt.Fprintf(out, "Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
-		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, spread across\n"+
-		"tasks τ = %.2f–%.2f (the range shown).\n", experiment.SigmaLogCost, experiment.WSuccess, experiment.TauLow, experiment.TauHigh)
+		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
+		"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
+		"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.\n",
+		experiment.SigmaLogCost, experiment.WSuccess, experiment.TauLow, experiment.TauHigh)
+	if own := experiment.Detect(len(d.Tasks), d.Repeats); d.Goal == experiment.GoalCheaper && len(d.Tasks) > 0 && own.Guard[0] > d.SuccessMargin {
+		fmt.Fprintf(out, "note: at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
+			"success verdict to be inconclusive unless there is no real difference and the noise is low.\n", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)
+	}
 	fmt.Fprintf(out, "Floors: verdicts on cost need %d tasks and on success %d, each with %d runs per arm; below them a metric is exploratory.\n",
 		experiment.MinTasksCost, experiment.MinTasksSuccess, experiment.MinRepeats)
 	if !ready {
@@ -391,6 +409,7 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 		ready = ready && ok
 		fmt.Fprintf(out, "  %-8s "+format+"\n", append([]any{map[bool]string{true: "ok", false: "MISSING"}[ok]}, a...)...)
 	}
+	mode, _ := signInMode(env)
 	version := ""
 	if cli, err := claudePath(env); err != nil {
 		line(false, "%v", err)
@@ -434,6 +453,8 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 			line(false, "context %s was calibrated on Claude Code %s, not %s: %s", a.Context, c.CLIVersion, version, calibrate)
 		case c.RequestedModel != d.Model:
 			line(false, "context %s was calibrated with %s, not %s: %s", a.Context, orNone(c.RequestedModel), d.Model, calibrate)
+		case c.SignIn != mode:
+			line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, orNone(c.SignIn), mode, calibrate)
 		default:
 			line(true, "context %s calibrated %s: first request %d tokens", a.Context, stored.CreatedAt.Format("2006-01-02 15:04"), c.FirstRequest)
 		}
@@ -452,8 +473,10 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 	if ready {
 		fmt.Fprintf(out, "  %-8s %d task(s), each valid in every arm's context\n", "ok", len(d.Tasks))
 	}
-	if expected := float64(d.Runs()) * est.PerRunUSD; est.Known && d.BudgetUSD < expected {
-		fmt.Fprintf(out, "  %-8s the budget $%.2f is below the estimated $%.2f: expect it to stop the experiment early\n", "WARNING", d.BudgetUSD, expected)
+	expected, reserve := float64(d.Runs())*est.PerRunUSD, experiment.Reserve(d)
+	if est.Known && d.BudgetUSD < expected+reserve {
+		fmt.Fprintf(out, "  %-8s the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early\n",
+			"WARNING", d.BudgetUSD, expected, reserve)
 	}
 	return ready
 }
@@ -483,8 +506,8 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", "NAME", "TEMPLATE", "ARMS (A / B)", "SIZE", "MODEL", "BUDGET", "CREATED")
 	for _, e := range all {
 		var d experiment.Design
-		if err := json.Unmarshal(e.Design, &d); err != nil {
-			return fail(env, fmt.Errorf("experiment %s: %w", e.Name, err))
+		if err := json.Unmarshal(e.Design, &d); err != nil || len(d.Arms) != 2 {
+			return fail(env, fmt.Errorf("experiment %s: unreadable design: %w", e.Name, errors.Join(err, errors.New("want two arms"))))
 		}
 		arms := d.Arms[0].Context + " / " + d.Arms[1].Context
 		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),

@@ -45,7 +45,7 @@ func TestLookup(t *testing.T) {
 			t.Errorf("%q is priced; aliases and unknown IDs must not be", model)
 		}
 	}
-	for model, r := range table {
+	for model, r := range table() {
 		if r.CacheWrite5m != 1.25*r.Input || r.CacheWrite1h != 2*r.Input {
 			t.Errorf("%s: cache writes %v/%v do not follow the 1.25× and 2× multipliers", model, r.CacheWrite5m, r.CacheWrite1h)
 		}

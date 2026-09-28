@@ -22,22 +22,24 @@ type Rates struct {
 	Output       float64 `json:"output"`
 }
 
-// table holds the Claude API's standard (global) prices, without batch, fast-mode or data-residency pricing, which
+// table returns the Claude API's standard (global) prices, without batch, fast-mode or data-residency pricing, which
 // Claude Code's runs here do not use.
-var table = map[string]Rates{
-	"claude-fable-5-1":  {Input: 10, CacheWrite5m: 12.5, CacheWrite1h: 20, CacheRead: 0.25, Output: 50},
-	"claude-fable-5":    {Input: 10, CacheWrite5m: 12.5, CacheWrite1h: 20, CacheRead: 1, Output: 50},
-	"claude-opus-5-5":   {Input: 4, CacheWrite5m: 5, CacheWrite1h: 8, CacheRead: 0.20, Output: 20},
-	"claude-opus-5":     {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
-	"claude-opus-4-8":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
-	"claude-opus-4-7":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
-	"claude-opus-4-6":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
-	"claude-opus-4-5":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
-	"claude-sonnet-5-5": {Input: 2, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.20, Output: 10},
-	"claude-sonnet-5":   {Input: 2, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.20, Output: 10},
-	"claude-sonnet-4-6": {Input: 3, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.30, Output: 15},
-	"claude-sonnet-4-5": {Input: 3, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.30, Output: 15},
-	"claude-haiku-4-5":  {Input: 1, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.10, Output: 5},
+func table() map[string]Rates {
+	return map[string]Rates{
+		"claude-fable-5-1":  {Input: 10, CacheWrite5m: 12.5, CacheWrite1h: 20, CacheRead: 0.25, Output: 50},
+		"claude-fable-5":    {Input: 10, CacheWrite5m: 12.5, CacheWrite1h: 20, CacheRead: 1, Output: 50},
+		"claude-opus-5-5":   {Input: 4, CacheWrite5m: 5, CacheWrite1h: 8, CacheRead: 0.20, Output: 20},
+		"claude-opus-5":     {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
+		"claude-opus-4-8":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
+		"claude-opus-4-7":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
+		"claude-opus-4-6":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
+		"claude-opus-4-5":   {Input: 5, CacheWrite5m: 6.25, CacheWrite1h: 10, CacheRead: 0.50, Output: 25},
+		"claude-sonnet-5-5": {Input: 2, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.20, Output: 10},
+		"claude-sonnet-5":   {Input: 2, CacheWrite5m: 2.5, CacheWrite1h: 4, CacheRead: 0.20, Output: 10},
+		"claude-sonnet-4-6": {Input: 3, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.30, Output: 15},
+		"claude-sonnet-4-5": {Input: 3, CacheWrite5m: 3.75, CacheWrite1h: 6, CacheRead: 0.30, Output: 15},
+		"claude-haiku-4-5":  {Input: 1, CacheWrite5m: 1.25, CacheWrite1h: 2, CacheRead: 0.10, Output: 5},
+	}
 }
 
 var dated = regexp.MustCompile(`-\d{8}$`)
@@ -45,7 +47,7 @@ var dated = regexp.MustCompile(`-\d{8}$`)
 // Lookup returns a model's rates. Dated model IDs (claude-haiku-4-5-20251001) are priced as their model; aliases such
 // as "sonnet", which Claude Code resolves itself, are not known.
 func Lookup(model string) (Rates, bool) {
-	r, ok := table[dated.ReplaceAllString(strings.TrimSpace(model), "")]
+	r, ok := table()[dated.ReplaceAllString(strings.TrimSpace(model), "")]
 	return r, ok
 }
 
