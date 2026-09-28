@@ -52,8 +52,8 @@ type Entry struct {
 type Context struct {
 	Entries  []Entry  `json:"entries"`
 	Warnings []string `json:"warnings"`
-	// Linked are repository files that context files link to ([text](path)) but do not load: the agent reads them
-	// only if it opens them, so they are not context unless a snapshot includes them explicitly.
+	// Linked are documents (see IsDocument) that context files link to ([text](path)) but do not load: the agent reads
+	// them only if it opens them, so they are not context unless a snapshot includes them explicitly.
 	Linked []string `json:"linked,omitempty"`
 }
 
@@ -280,16 +280,19 @@ func (r *resolver) imports(chain []string, data []byte, startup bool) {
 		if r.seen[resolved] {
 			continue // the same file imported from two places loads once
 		}
+		if !source.Has(r.src, resolved) {
+			if pathLike {
+				r.warn("%s imports %s, which does not exist.", from, resolved)
+			}
+			continue
+		}
 		if depth > MaxImportDepth {
 			r.warn("%s imports %s beyond Claude Code's %d-hop limit: it is not loaded.", from, resolved, MaxImportDepth)
 			continue
 		}
 		imported, ok := r.read(resolved)
 		if !ok {
-			if pathLike {
-				r.warn("%s imports %s, which does not exist.", from, resolved)
-			}
-			continue
+			continue // read warned
 		}
 		startupBytes := 0
 		if startup {
@@ -340,6 +343,24 @@ func stripCodeSpans(line string) string {
 	return out.String()
 }
 
+// IsDocument reports whether p is prose for readers: a Markdown, reStructuredText or AsciiDoc file outside test-data
+// folders. Snapshots may change documents and instruction files, never code, configuration or test inputs, which would
+// change what a task builds and tests. Plain .txt is excluded: requirements.txt and CMakeLists.txt are build inputs.
+func IsDocument(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
+	default:
+		return false
+	}
+	for _, dir := range strings.Split(path.Dir(p), "/") {
+		switch strings.ToLower(dir) {
+		case "test", "tests", "testdata", "fixtures", "__fixtures__", "__snapshots__", "golden", "node_modules", "vendor":
+			return false
+		}
+	}
+	return true
+}
+
 // linkPattern finds Markdown link targets: [text](target) or [text](target "title").
 var linkPattern = regexp.MustCompile(`\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
 
@@ -369,7 +390,7 @@ func (r *resolver) linked() []string {
 				if target == "" || strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") || path.IsAbs(target) {
 					continue
 				}
-				if resolved := path.Clean(path.Join(path.Dir(e.Path), target)); source.Has(r.src, resolved) && !r.seen[resolved] {
+				if resolved := path.Clean(path.Join(path.Dir(e.Path), target)); IsDocument(resolved) && source.Has(r.src, resolved) && !r.seen[resolved] {
 					found[resolved] = true
 				}
 			}

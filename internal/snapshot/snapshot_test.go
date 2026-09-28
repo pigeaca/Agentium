@@ -182,9 +182,13 @@ func TestPlanOverlayWhenTheBaseImportsCodeAndHarnessDiffers(t *testing.T) {
 		".claude/settings.json": "{\"permissions\":{}}\n",
 		".mcp.json":             "{}\n",
 	}
-	// Imported by the base, but configuration: a different package.json would change the build, not only the context.
-	if _, err := PlanOverlay(base, memSource{"CLAUDE.md": "@package.json\n", "package.json": "{}\n"}); !errors.Is(err, ErrTouchesNonContext) {
-		t.Errorf("imported package.json changed: err = %v, want ErrTouchesNonContext", err)
+	// Imported by the base, but build inputs: changing them would change the build, not only the context.
+	base["requirements.txt"] = "django==4\n"
+	base["testdata/golden.md"] = "expected output\n"
+	for file, content := range map[string]string{"package.json": "{}\n", "requirements.txt": "django==5\n", "testdata/golden.md": "other\n"} {
+		if _, err := PlanOverlay(base, memSource{"CLAUDE.md": "@" + file + "\n", file: content}); !errors.Is(err, ErrTouchesNonContext) {
+			t.Errorf("imported %s changed: err = %v, want ErrTouchesNonContext", file, err)
+		}
 	}
 	overlay, err := PlanOverlay(base, memSource{"CLAUDE.md": "See @docs/guide.md\n", "docs/guide.md": "new guide\n",
 		".claude/settings.json": "{\"permissions\":{\"allow\":[\"Bash\"]}}\n", ".claude/hooks/pre.sh*": "#!/bin/sh\n"})
@@ -207,7 +211,7 @@ func TestBuildIncludesDocumentsAndOddPaths(t *testing.T) {
 		".agents/testing.md":                 "testing\n",
 		".claude/skills/r/SKILL.md":          "---\nname: r\ndescription: d\n---\n",
 		".claude/skills/r/tab\tand\nline.md": "odd name\n", // must not corrupt the index input
-		"main.go":                            "package main\n",
+		"main.go":                            "package main\n", "requirements.txt": "django==5\n", "CMakeLists.txt": "project(x)\n",
 	}
 	commit, manifest, err := Build(ctx, bare, src, "with include", []string{".agents/testing.md", "CLAUDE.md"})
 	if err != nil {
@@ -224,7 +228,7 @@ func TestBuildIncludesDocumentsAndOddPaths(t *testing.T) {
 	if !slices.Contains(manifest.Paths(), ".agents/testing.md") || manifest.StartupBytes != len("Read [testing](.agents/testing.md)\n")+len("r")+len("d") {
 		t.Errorf("manifest = %+v", manifest)
 	}
-	for _, bad := range []string{"main.go", "missing.md"} {
+	for _, bad := range []string{"main.go", "missing.md", "requirements.txt", "CMakeLists.txt"} {
 		if _, _, err := Build(ctx, bare, src, "bad include", []string{bad}); err == nil || !strings.Contains(err.Error(), "--include "+bad) {
 			t.Errorf("--include %s: err = %v", bad, err)
 		}

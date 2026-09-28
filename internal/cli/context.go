@@ -23,7 +23,7 @@ const contextUsage = `Usage:
   agentium context show [--ref REF]              what Claude Code loads (default: the working tree)
   agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]... [--include-linked]
                                                  save a version (default: --ref HEAD); --include adds a
-                                                 Markdown or text document, --include-linked every
+                                                 document (Markdown, rst, AsciiDoc), --include-linked every
                                                  document the context links to
   agentium context list                          saved versions
   agentium context diff A B [--patch]            compare two saved versions
@@ -231,7 +231,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	ref := fs.String("ref", "", "snapshot the context at this commit (default HEAD)")
 	workingTree := fs.Bool("working-tree", false, "snapshot the context in the working tree, including uncommitted edits")
 	var include stringList
-	fs.Var(&include, "include", "also capture this Markdown or text document (repeatable)")
+	fs.Var(&include, "include", "also capture this document (repeatable)")
 	includeLinked := fs.Bool("include-linked", false, "also capture every document the context links to")
 	rest, code, ok := parseArgs(env, fs, args, contextUsage)
 	if !ok {
@@ -270,11 +270,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		if err != nil {
 			return fail(env, err)
 		}
-		for _, p := range resolved.Linked {
-			if snapshot.IsDocument(p) {
-				include = append(include, p)
-			}
-		}
+		include = append(include, resolved.Linked...) // documents only
 	}
 	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include)
 	if err != nil {

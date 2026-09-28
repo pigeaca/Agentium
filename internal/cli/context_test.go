@@ -87,7 +87,7 @@ func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
 	if strings.Contains(linked.stdout, "linked from the context are not in this snapshot") {
 		t.Errorf("--include-linked left linked files out:\n%s", linked.stdout)
 	}
-	expect(t, run("context", "snapshot", "--include", "go.mod", "bad-include"), ExitError, "only Markdown or text documents")
+	expect(t, run("context", "snapshot", "--include", "go.mod", "bad-include"), ExitError, "only documents (Markdown")
 	if bare := filepath.Join(data, "projects", "1", "repo.git"); strings.Contains(gitIn(t, bare, "for-each-ref"), "refs/agentium/sources") {
 		t.Error("show and snapshot must read commits in place, not copy the repository's history")
 	}

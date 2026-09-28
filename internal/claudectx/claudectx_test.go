@@ -120,7 +120,7 @@ func TestAgentsMdLoadsOnlyWithoutClaudeMd(t *testing.T) {
 
 func TestImportDepthCyclesAndPersonalFiles(t *testing.T) {
 	ctx := resolve(t, memSource{
-		"CLAUDE.md": "@a.md\n", "a.md": "@b.md\n", "b.md": "@c.md\n", "c.md": "@d.md\n", "d.md": "@e.md\n", "e.md": "@f.md\n@CLAUDE.md\n", "f.md": "too deep\n",
+		"CLAUDE.md": "@a.md\n", "a.md": "@b.md\n", "b.md": "@c.md\n", "c.md": "@d.md\n", "d.md": "@e.md\n", "e.md": "@f.md\n@CLAUDE.md\nthanks @alice\n", "f.md": "too deep\n",
 		"CLAUDE.local.md": "mine\n", ".claude/settings.local.json": "{}", ".claude/skills": "../.agents/skills",
 	})
 	got := kinds(ctx)
@@ -131,6 +131,9 @@ func TestImportDepthCyclesAndPersonalFiles(t *testing.T) {
 	}
 	if _, loaded := got["f.md"]; loaded || !hasWarning(ctx, "beyond Claude Code's 5-hop limit") {
 		t.Errorf("f.md is the sixth hop: %v %q", got, ctx.Warnings)
+	}
+	if hasWarning(ctx, "alice") {
+		t.Errorf("a mention at the sixth hop is not an import: %q", ctx.Warnings)
 	}
 	if _, loaded := got["CLAUDE.local.md"]; loaded || !hasWarning(ctx, "CLAUDE.local.md is personal") || !hasWarning(ctx, "settings.local.json is personal") {
 		t.Errorf("personal files: %v %q", got, ctx.Warnings)
@@ -196,12 +199,16 @@ func TestBareImportsAndLinkedFiles(t *testing.T) {
 	ctx := resolve(t, memSource{
 		"CLAUDE.md": "See @README and @Makefile; ask @alice.\n" +
 			"Read [testing](.agents/testing.md#rules), [the guide](docs/guide.md \"Guide\"), [site](https://example.com), [top](#top).\n" +
+			"Also [go.mod](go.mod), [run](scripts/run.sh) and [fixture](testdata/case.md).\n" +
 			"@docs/guide.md\n```\n[in code](.agents/fenced.md)\n```\n",
 		"README":             "readme\n",
 		"Makefile":           "test:\n",
 		".agents/testing.md": "testing rules\n",
 		".agents/fenced.md":  "x\n",
 		"docs/guide.md":      "guide\n",
+		"go.mod":             "module x\n",
+		"scripts/run.sh":     "#!/bin/sh\n",
+		"testdata/case.md":   "fixture\n",
 	})
 	got := kinds(ctx)
 	if got["README"] != KindImport || got["Makefile"] != KindImport {
@@ -211,6 +218,6 @@ func TestBareImportsAndLinkedFiles(t *testing.T) {
 		t.Errorf("a mention is not a missing import: %q", ctx.Warnings)
 	}
 	if want := []string{".agents/testing.md"}; strings.Join(ctx.Linked, ",") != strings.Join(want, ",") {
-		t.Errorf("linked = %v, want %v (not imported files, URLs, anchors or fenced links)", ctx.Linked, want)
+		t.Errorf("linked = %v, want %v (documents only: not imported files, code, test data, URLs, anchors or fenced links)", ctx.Linked, want)
 	}
 }

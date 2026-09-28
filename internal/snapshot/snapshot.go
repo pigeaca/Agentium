@@ -34,16 +34,6 @@ func ValidName(name string) bool {
 // KindIncluded marks a document added to a snapshot with --include: not loaded by Claude Code, but part of the version.
 const KindIncluded = "included"
 
-// IsDocument reports whether p is a Markdown or text document. Snapshots may change documents and instruction files,
-// but never code or configuration, which would change what the task builds and tests.
-func IsDocument(p string) bool {
-	switch strings.ToLower(path.Ext(p)) {
-	case ".md", ".mdx", ".markdown", ".txt", ".rst", ".adoc":
-		return true
-	}
-	return false
-}
-
 // File is one context file in a snapshot.
 type File struct {
 	Path         string `json:"path"`
@@ -83,8 +73,8 @@ func Build(ctx context.Context, bare string, src source.Source, message string, 
 		switch {
 		case !source.Has(src, p):
 			return "", Manifest{}, fmt.Errorf("--include %s: no such file in %s", p, src.Describe())
-		case !IsDocument(p):
-			return "", Manifest{}, fmt.Errorf("--include %s: only Markdown or text documents can be included", p)
+		case !claudectx.IsDocument(p):
+			return "", Manifest{}, fmt.Errorf("--include %s: only documents (Markdown, reStructuredText, AsciiDoc; not test data) can be included", p)
 		case !slices.Contains(resolved.Paths(), p):
 			data, err := src.ReadFile(p)
 			if err != nil {
@@ -176,7 +166,7 @@ func PlanOverlay(base, snap source.Source) (Overlay, error) {
 	overlay := Overlay{Writes: snap.Paths()}
 	var conflicts []string
 	for _, p := range overlay.Writes {
-		if claudectx.LoadsByPresence(p) || IsDocument(p) || !source.Has(base, p) {
+		if claudectx.LoadsByPresence(p) || claudectx.IsDocument(p) || !source.Has(base, p) {
 			continue
 		}
 		baseData, err := base.ReadFile(p)
