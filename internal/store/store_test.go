@@ -317,3 +317,39 @@ func TestLatestCalibrationPerArmAndSnapshot(t *testing.T) {
 		t.Errorf("another snapshot commit: %v", err)
 	}
 }
+
+func TestExperimentsRoundTrip(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "lean", Template: "context-ab", Design: []byte(`{"repeats":3}`), CreatedAt: now})
+	if err != nil || saved.ID == 0 {
+		t.Fatalf("SaveExperiment = %+v, %v", saved, err)
+	}
+	if _, err := s.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "lean", Template: "aa", Design: []byte(`{}`), CreatedAt: now}); !errors.Is(err, ErrExists) {
+		t.Errorf("a second experiment named lean: %v", err)
+	}
+	if _, err := s.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "noise", Template: "aa", Design: []byte(`{}`), CreatedAt: now.Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ExperimentByName(ctx, app.ID, "lean")
+	if err != nil || got.Template != "context-ab" || string(got.Design) != `{"repeats":3}` || !got.CreatedAt.Equal(now) {
+		t.Errorf("ExperimentByName = %+v, %v", got, err)
+	}
+	if all, err := s.Experiments(ctx, app.ID); err != nil || len(all) != 2 || all[0].Name != "lean" || all[1].Name != "noise" {
+		t.Errorf("Experiments = %+v, %v", all, err)
+	}
+	if err := s.DeleteExperiment(ctx, app.ID, "lean"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ExperimentByName(ctx, app.ID, "lean"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted experiment: %v", err)
+	}
+	if err := s.DeleteExperiment(ctx, app.ID, "lean"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleting twice: %v", err)
+	}
+}

@@ -16,9 +16,12 @@ agentium context snapshot baseline     # save the committed context (HEAD) as a 
 agentium context snapshot trimmed --working-tree   # --include-linked adds linked docs
 agentium context diff baseline trimmed --patch
 agentium task import --commit <sha>    # base: its parent; hidden tests: its test-file changes
+agentium task edit <name> --reviewed               # after checking the instruction does not give the solution away
 agentium task validate <name> --snapshot trimmed   # tests fail on the base, pass with the reference, in each arm
 agentium run calibrate --snapshot trimmed         # short real runs: sandbox, large outputs, context size, tool set (re-run if a check is unverified)
 agentium run once <name> --snapshot trimmed        # one real Claude Code run, graded with the hidden tests (costs money)
+agentium experiment new lean --b trimmed        # a context A/B: base against trimmed, on a sample of valid tasks
+agentium experiment plan lean                     # runs, estimated cost, detectable effects per size; what is missing
 ```
 
 Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).

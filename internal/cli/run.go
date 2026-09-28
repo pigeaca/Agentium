@@ -140,12 +140,9 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 
 // newRunEnv resolves what every run of this project needs: the CLI, the sign-in and the environment.
 func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, error) {
-	cli := env.Getenv("AGENTIUM_CLAUDE")
-	if cli == "" {
-		var err error
-		if cli, err = env.LookPath("claude"); err != nil {
-			return run.Env{}, errors.New("Claude Code was not found on PATH: install it, or set AGENTIUM_CLAUDE to its path")
-		}
+	cli, err := claudePath(env)
+	if err != nil {
+		return run.Env{}, err
 	}
 	mode, secret, tokenFile, err := signIn(env)
 	if err != nil {
@@ -158,6 +155,18 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), Environ: environ,
 		SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second,
 		Progress: env.Stdout, Now: env.Now}, nil
+}
+
+// claudePath finds Claude Code: AGENTIUM_CLAUDE, else PATH.
+func claudePath(env Env) (string, error) {
+	if cli := env.Getenv("AGENTIUM_CLAUDE"); cli != "" {
+		return cli, nil
+	}
+	cli, err := env.LookPath("claude")
+	if err != nil {
+		return "", errors.New("Claude Code was not found on PATH: install it, or set AGENTIUM_CLAUDE to its path")
+	}
+	return cli, nil
 }
 
 // executeRun runs spec with a fresh id and stores the record whenever the agent started, even when interrupted. A

@@ -1,0 +1,515 @@
+package cli
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/gitx"
+	"github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/snapshot"
+	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
+)
+
+const experimentUsage = `Usage:
+  agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--tier quick|confident | --task NAME...] [--repeats N]
+                     [--model MODEL] [--effort LEVEL] [--goal cheaper|better] [--run-budget USD] [--budget USD]
+                     [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
+                     a context A/B: arm A (default: base, each task's own context) against snapshot B
+  agentium experiment new NAME --template aa [--a CONTEXT] [...]
+                     an A/A calibration: one context in both arms, which must find no difference
+  agentium experiment plan NAME
+                     the runs, the estimated cost and the effects each size can detect; what is missing before it runs
+  agentium experiment list
+  agentium experiment rm NAME
+
+Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT). A tier
+samples them: quick is 12 tasks × 3 runs per arm, confident 23 × 5; --task picks them instead (repeatable).
+`
+
+func runExperiment(ctx context.Context, env Env, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(env.Stderr, experimentUsage)
+		return ExitUsage
+	}
+	switch args[0] {
+	case "new":
+		return experimentNew(ctx, env, args[1:])
+	case "plan":
+		return experimentPlan(ctx, env, args[1:])
+	case "list":
+		return experimentList(ctx, env, args[1:])
+	case "rm":
+		return experimentRemove(ctx, env, args[1:])
+	case "-h", "--help", "help":
+		fmt.Fprint(env.Stdout, experimentUsage)
+		return ExitOK
+	}
+	fmt.Fprintf(env.Stderr, "agentium experiment: unknown subcommand %q\n\n%s", args[0], experimentUsage)
+	return ExitUsage
+}
+
+func experimentNew(ctx context.Context, env Env, args []string) int {
+	fs := flag.NewFlagSet("experiment new", flag.ContinueOnError)
+	template := fs.String("template", experiment.TemplateContextAB, "context-ab or aa")
+	contextA := fs.String("a", experiment.BaseContext, "arm A's context: base or a snapshot")
+	contextB := fs.String("b", "", "arm B's context: a snapshot (context-ab only)")
+	tierName := fs.String("tier", "", "quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
+	var tasks stringList
+	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a tier)")
+	repeats := fs.Int("repeats", 0, "runs per task per arm (default: the tier's, or 3)")
+	model := fs.String("model", "claude-sonnet-5", "the model")
+	effort := fs.String("effort", "", "the effort level (default: the CLI's)")
+	goal := fs.String("goal", experiment.GoalCheaper, "cheaper (cost, with success as the guard) or better (success)")
+	runBudget := fs.Float64("run-budget", 3, "stop each run at this cost in USD")
+	budget := fs.Float64("budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
+	concurrency := fs.Int("concurrency", 2, "runs at a time")
+	timeout := fs.Duration("timeout", 20*time.Minute, "stop each run after this long")
+	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
+	seed := fs.Uint64("seed", 0, "the seed for the task sample and the run order (default: random)")
+	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 1 {
+		fmt.Fprint(env.Stderr, experimentUsage)
+		return ExitUsage
+	}
+	name := rest[0]
+	usage := func(format string, a ...any) int {
+		fmt.Fprintf(env.Stderr, "agentium experiment new: "+format+"\n", a...)
+		return ExitUsage
+	}
+	if !snapshot.ValidName(name) {
+		return usage("%q cannot name an experiment: use letters, digits, '.', '_' and '-'", name)
+	}
+	switch {
+	case *template == experiment.TemplateContextAB && *contextB == "":
+		return usage("a context A/B needs --b SNAPSHOT")
+	case *template == experiment.TemplateAA && *contextB != "":
+		return usage("an A/A experiment runs one context (--a) in both arms; drop --b")
+	case *tierName != "" && len(tasks) > 0:
+		return usage("--tier and --task both choose the tasks: use one")
+	case *repeats < 0:
+		return usage("--repeats must be positive")
+	}
+	tier := experiment.Tiers[0]
+	if *tierName != "" {
+		var found bool
+		if tier, found = experiment.TierByName(*tierName); !found {
+			return usage("unknown tier %q (use quick or confident)", *tierName)
+		}
+	}
+	if *repeats == 0 {
+		*repeats = tier.Repeats
+		if len(tasks) > 0 {
+			*repeats = experiment.MinRepeats
+		}
+	}
+	if *seed == 0 {
+		var b [8]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			return fail(env, fmt.Errorf("seed: %w", err))
+		}
+		*seed = binary.LittleEndian.Uint64(b[:]) | 1 // never 0, which means "random"
+	}
+
+	w, err := openProject(ctx, env)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	armA, err := experimentArm(ctx, w, "A", *contextA)
+	if err != nil {
+		return fail(env, err)
+	}
+	armB := armA
+	armB.Name = "B"
+	if *template == experiment.TemplateContextAB {
+		if armB, err = experimentArm(ctx, w, "B", *contextB); err != nil {
+			return fail(env, err)
+		}
+	}
+	d := experiment.Design{Template: *template, Arms: []experiment.Arm{armA, armB}, Repeats: *repeats, Model: *model, Effort: *effort,
+		Goal: *goal, CostMargin: experiment.DefaultCostMargin, SuccessMargin: experiment.DefaultSuccessMargin, RunBudgetUSD: *runBudget,
+		BudgetUSD: *budget, Timeout: *timeout, VerifyTimeout: *verifyTimeout, Concurrency: *concurrency, Seed: *seed}
+
+	eligible, reasons, err := eligibleTasks(ctx, w, d.Arms)
+	if err != nil {
+		return fail(env, err)
+	}
+	if len(tasks) > 0 {
+		for _, t := range tasks {
+			if why, known := reasons[t]; known {
+				return fail(env, fmt.Errorf("task %s cannot be in this experiment: %s", t, why))
+			}
+			if !slices.Contains(eligible, t) {
+				return fail(env, fmt.Errorf("task %q: %w", t, store.ErrNotFound))
+			}
+		}
+		d.Tasks = slices.Sorted(slices.Values(tasks))
+	} else {
+		if len(eligible) == 0 {
+			printIneligible(env.Stderr, reasons)
+			return fail(env, errors.New("no task can be in this experiment yet"))
+		}
+		d.Tasks = experiment.Sample(eligible, tier.Tasks, d.Seed)
+	}
+	est, err := estimateRun(ctx, w, d.Model)
+	if err != nil {
+		return fail(env, err)
+	}
+	if d.BudgetUSD == 0 {
+		if d.BudgetUSD = experiment.DefaultBudget(d.Runs(), est); d.BudgetUSD == 0 {
+			return fail(env, fmt.Errorf("the cost of a run cannot be estimated (%s): set --budget", est.Basis))
+		}
+	}
+	if err := d.Validate(); err != nil {
+		return fail(env, err)
+	}
+	encoded, err := json.Marshal(d)
+	if err != nil {
+		return fail(env, fmt.Errorf("encode experiment: %w", err))
+	}
+	if _, err := w.db.SaveExperiment(ctx, store.Experiment{ProjectID: w.project.ID, Name: name, Template: d.Template, Design: encoded,
+		CreatedAt: env.Now()}); err != nil {
+		return fail(env, err)
+	}
+	fmt.Fprintf(env.Stdout, "Created experiment %s: %s, %d task(s) × %d run(s) per arm = %d runs, budget $%.2f.\n", name,
+		describeArms(d), len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
+	if len(tasks) == 0 && len(eligible) < tier.Tasks {
+		fmt.Fprintf(env.Stdout, "note: the %s tier asks for %d tasks; only %d can be in it\n", tier.Name, tier.Tasks, len(eligible))
+	}
+	fmt.Fprintf(env.Stdout, "Preview what it costs and can detect: agentium experiment plan %s\n", name)
+	return ExitOK
+}
+
+// experimentArm resolves a context name: base, or a snapshot.
+func experimentArm(ctx context.Context, w *workspace, name, contextName string) (experiment.Arm, error) {
+	if contextName == experiment.BaseContext {
+		return experiment.Arm{Name: name, Context: contextName}, nil
+	}
+	snap, err := w.db.SnapshotByName(ctx, w.project.ID, contextName)
+	if err != nil {
+		return experiment.Arm{}, err
+	}
+	return experiment.Arm{Name: name, Context: contextName, Snapshot: snap.CommitID}, nil
+}
+
+// eligibleTasks returns the names of the tasks that can be in an experiment with these arms, and why each other
+// task cannot.
+func eligibleTasks(ctx context.Context, w *workspace, arms []experiment.Arm) ([]string, map[string]string, error) {
+	all, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var eligible []string
+	reasons := map[string]string{}
+	for _, t := range all {
+		c := experiment.Candidate{Name: t.Name, NeedsReview: t.NeedsReview}
+		if t.Validation != nil {
+			var v task.Validation
+			if err := json.Unmarshal(t.Validation, &v); err != nil {
+				return nil, nil, fmt.Errorf("task %s: validation: %w", t.Name, err)
+			}
+			c.Validation = &v
+		}
+		if why := experiment.Ineligible(c, arms); why != "" {
+			reasons[t.Name] = why
+		} else {
+			eligible = append(eligible, t.Name)
+		}
+	}
+	return eligible, reasons, nil
+}
+
+func printIneligible(w io.Writer, reasons map[string]string) {
+	for _, name := range slices.Sorted(maps.Keys(reasons)) {
+		fmt.Fprintf(w, "  %s: %s\n", name, reasons[name])
+	}
+}
+
+// estimateRun estimates one run's cost on model from the project's earlier fair task runs on it.
+func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Estimate, error) {
+	runs, err := w.db.Runs(ctx, w.project.ID)
+	if err != nil {
+		return experiment.Estimate{}, err
+	}
+	var past []float64
+	for _, r := range runs {
+		if r.Kind != "task" || !slices.Contains([]string{claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout}, r.Outcome) {
+			continue
+		}
+		var rec struct {
+			Model string `json:"model"`
+		}
+		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model {
+			past = append(past, r.CostUSD)
+		}
+	}
+	return experiment.EstimateRun(model, past), nil
+}
+
+func describeArms(d experiment.Design) string {
+	if d.Template == experiment.TemplateAA {
+		return "A/A calibration of context " + d.Arms[0].Context
+	}
+	return fmt.Sprintf("context A/B, A = %s, B = %s", d.Arms[0].Context, d.Arms[1].Context)
+}
+
+// loadExperiment reads a stored experiment's design.
+func loadExperiment(ctx context.Context, w *workspace, name string) (experiment.Design, error) {
+	stored, err := w.db.ExperimentByName(ctx, w.project.ID, name)
+	if err != nil {
+		return experiment.Design{}, err
+	}
+	var d experiment.Design
+	if err := json.Unmarshal(stored.Design, &d); err != nil {
+		return experiment.Design{}, fmt.Errorf("experiment %s: %w", name, err)
+	}
+	return d, nil
+}
+
+func experimentPlan(ctx context.Context, env Env, args []string) int {
+	rest, code, ok := parseArgs(env, flag.NewFlagSet("experiment plan", flag.ContinueOnError), args, experimentUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 1 {
+		fmt.Fprint(env.Stderr, experimentUsage)
+		return ExitUsage
+	}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	d, err := loadExperiment(ctx, w, rest[0])
+	if err != nil {
+		return fail(env, err)
+	}
+	eligible, reasons, err := eligibleTasks(ctx, w, d.Arms)
+	if err != nil {
+		return fail(env, err)
+	}
+	est, err := estimateRun(ctx, w, d.Model)
+	if err != nil {
+		return fail(env, err)
+	}
+	out := env.Stdout
+	goal := "cheaper, with success as the guard"
+	if d.Goal == experiment.GoalBetter {
+		goal = "better success"
+	}
+	fmt.Fprintf(out, "Experiment %s: %s\n", rest[0], describeArms(d))
+	for _, a := range d.Arms {
+		commit := ""
+		if a.Snapshot != "" {
+			commit = " (" + shortCommit(a.Snapshot) + ")"
+		}
+		fmt.Fprintf(out, "  arm %s: context %s%s\n", a.Name, a.Context, commit)
+	}
+	effort := d.Effort
+	if effort == "" {
+		effort = "the CLI's default"
+	}
+	fmt.Fprintf(out, "  model %s, effort %s; each run up to $%.2f and %s; %d at a time\n", d.Model, effort, d.RunBudgetUSD, d.Timeout, d.Concurrency)
+	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
+	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
+
+	fmt.Fprintln(out, "\nBefore it runs:")
+	ready := printReadiness(ctx, env, w, d, eligible, reasons, est)
+
+	fmt.Fprintln(out, "\nSizes (runs count both arms):")
+	fmt.Fprintf(out, "%-16s %6s %8s %5s %10s %10s %12s %14s %13s  %s\n", "SIZE", "TASKS", "RUNS/ARM", "RUNS", "EST. COST", "WORST CASE",
+		"COST CHANGE", "SUCCESS CHANGE", "NO-LOSS GUARD", "EXPLORATORY")
+	for _, r := range experiment.Preview(d, len(eligible), est) {
+		tasks := fmt.Sprint(r.Tasks)
+		if r.Short {
+			tasks += "*"
+		}
+		cost := "unknown"
+		if est.Known {
+			cost = fmt.Sprintf("$%.2f", r.CostUSD)
+		}
+		exploratory := "-"
+		if len(r.Exploratory) > 0 {
+			exploratory = strings.Join(r.Exploratory, ", ")
+		}
+		fmt.Fprintf(out, "%-16s %6s %8d %5d %10s %10s %12s %14s %13s  %s\n", r.Name, tasks, r.Repeats, r.Runs, cost, fmt.Sprintf("$%.2f", r.WorstUSD),
+			percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp"), exploratory)
+	}
+	if len(eligible) < experiment.Tiers[len(experiment.Tiers)-1].Tasks {
+		fmt.Fprintf(out, "* only %d task(s) can be in this experiment; a tier asking for more uses them all\n", len(eligible))
+	}
+	fmt.Fprintf(out, "Estimated cost: %s.\n", est.Basis)
+	fmt.Fprintf(out, "Worst case: every run reaches its $%.2f cap. The budget stops the experiment before it passes $%.2f.\n", d.RunBudgetUSD, d.BudgetUSD)
+	fmt.Fprintf(out, "Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
+		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, spread across\n"+
+		"tasks τ = %.2f–%.2f (the range shown).\n", experiment.SigmaLogCost, experiment.WSuccess, experiment.TauLow, experiment.TauHigh)
+	fmt.Fprintf(out, "Floors: verdicts on cost need %d tasks and on success %d, each with %d runs per arm; below them a metric is exploratory.\n",
+		experiment.MinTasksCost, experiment.MinTasksSuccess, experiment.MinRepeats)
+	if !ready {
+		fmt.Fprintln(out, "Not ready to run: see above.")
+	}
+	return ExitOK
+}
+
+// percentRange shows a detectable effect's range; success effects of 100 pp or more cannot be detected at all.
+func percentRange(v [2]float64, unit string) string {
+	end := func(x float64) string {
+		if unit == " pp" && x >= 1 {
+			return "100+"
+		}
+		return fmt.Sprintf("%.0f", 100*x)
+	}
+	if lo, hi := end(v[0]), end(v[1]); lo != hi {
+		return lo + "–" + hi + unit
+	}
+	return end(v[1]) + unit
+}
+
+// printReadiness checks what running needs: Claude Code, each context's calibration on its version and the
+// experiment's model, the snapshot commits, and every task still eligible. It reports whether all is in place.
+func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Design, eligible []string, reasons map[string]string,
+	est experiment.Estimate) bool {
+	out := env.Stdout
+	ready := true
+	line := func(ok bool, format string, a ...any) {
+		ready = ready && ok
+		fmt.Fprintf(out, "  %-8s "+format+"\n", append([]any{map[bool]string{true: "ok", false: "MISSING"}[ok]}, a...)...)
+	}
+	version := ""
+	if cli, err := claudePath(env); err != nil {
+		line(false, "%v", err)
+	} else if version, err = project.ClaudeVersion(ctx, cli); err != nil {
+		line(false, "Claude Code at %s: its version could not be read: %v", cli, err)
+	} else {
+		line(true, "Claude Code %s at %s", version, cli)
+	}
+	var seen []experiment.Arm
+	for _, a := range d.Arms {
+		if slices.ContainsFunc(seen, func(s experiment.Arm) bool { return s.Context == a.Context && s.Snapshot == a.Snapshot }) {
+			continue
+		}
+		seen = append(seen, a)
+		if a.Snapshot != "" {
+			if _, err := gitx.Run(ctx, "--git-dir", w.bare, "cat-file", "-e", a.Snapshot+"^{commit}"); err != nil {
+				line(false, "context %s: its snapshot commit %s is gone from Agentium's repository", a.Context, shortCommit(a.Snapshot))
+				continue
+			}
+		}
+		calibrate := "agentium run calibrate --model " + d.Model
+		if a.Snapshot != "" {
+			calibrate += " --snapshot " + a.Context
+		}
+		stored, err := w.db.LatestCalibration(ctx, w.project.ID, a.Context, a.Snapshot)
+		if errors.Is(err, store.ErrNotFound) {
+			line(false, "context %s is not calibrated: %s", a.Context, calibrate)
+			continue
+		}
+		if err != nil {
+			line(false, "context %s: %v", a.Context, err)
+			continue
+		}
+		var c calibration
+		if err := json.Unmarshal(stored.Result, &c); err != nil {
+			line(false, "context %s: its calibration cannot be read: %v", a.Context, err)
+			continue
+		}
+		switch {
+		case version != "" && c.CLIVersion != version:
+			line(false, "context %s was calibrated on Claude Code %s, not %s: %s", a.Context, c.CLIVersion, version, calibrate)
+		case c.RequestedModel != d.Model:
+			line(false, "context %s was calibrated with %s, not %s: %s", a.Context, orNone(c.RequestedModel), d.Model, calibrate)
+		default:
+			line(true, "context %s calibrated %s: first request %d tokens", a.Context, stored.CreatedAt.Format("2006-01-02 15:04"), c.FirstRequest)
+		}
+	}
+	var missing []string
+	for _, t := range d.Tasks {
+		if why, known := reasons[t]; known {
+			line(false, "task %s: %s", t, why)
+		} else if !slices.Contains(eligible, t) {
+			missing = append(missing, t)
+		}
+	}
+	if len(missing) > 0 {
+		line(false, "task(s) removed since the experiment was made: %s", strings.Join(missing, ", "))
+	}
+	if ready {
+		fmt.Fprintf(out, "  %-8s %d task(s), each valid in every arm's context\n", "ok", len(d.Tasks))
+	}
+	if expected := float64(d.Runs()) * est.PerRunUSD; est.Known && d.BudgetUSD < expected {
+		fmt.Fprintf(out, "  %-8s the budget $%.2f is below the estimated $%.2f: expect it to stop the experiment early\n", "WARNING", d.BudgetUSD, expected)
+	}
+	return ready
+}
+
+func experimentList(ctx context.Context, env Env, args []string) int {
+	rest, code, ok := parseArgs(env, flag.NewFlagSet("experiment list", flag.ContinueOnError), args, experimentUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 0 {
+		fmt.Fprint(env.Stderr, experimentUsage)
+		return ExitUsage
+	}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	all, err := w.db.Experiments(ctx, w.project.ID)
+	if err != nil {
+		return fail(env, err)
+	}
+	if len(all) == 0 {
+		fmt.Fprintln(env.Stdout, "No experiments yet: agentium experiment new NAME --b SNAPSHOT")
+		return ExitOK
+	}
+	fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", "NAME", "TEMPLATE", "ARMS (A / B)", "SIZE", "MODEL", "BUDGET", "CREATED")
+	for _, e := range all {
+		var d experiment.Design
+		if err := json.Unmarshal(e.Design, &d); err != nil {
+			return fail(env, fmt.Errorf("experiment %s: %w", e.Name, err))
+		}
+		arms := d.Arms[0].Context + " / " + d.Arms[1].Context
+		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),
+			d.Model, fmt.Sprintf("$%.2f", d.BudgetUSD), e.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	return ExitOK
+}
+
+func experimentRemove(ctx context.Context, env Env, args []string) int {
+	rest, code, ok := parseArgs(env, flag.NewFlagSet("experiment rm", flag.ContinueOnError), args, experimentUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 1 {
+		fmt.Fprint(env.Stderr, experimentUsage)
+		return ExitUsage
+	}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	if err := w.db.DeleteExperiment(ctx, w.project.ID, rest[0]); err != nil {
+		return fail(env, err)
+	}
+	fmt.Fprintf(env.Stdout, "Removed experiment %s.\n", rest[0])
+	return ExitOK
+}
