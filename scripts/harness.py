@@ -343,7 +343,8 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
         if path in {"scripts/harness.py", "scripts/test_harness.py"} or path.startswith(".githooks/"):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
-        if path.endswith(".go") or path in {"go.mod", "go.sum"}:
+        # Go code plus everything embedded or read by Go tests (migrations, testdata) under cmd/ and internal/.
+        if path.endswith(".go") or path in {"go.mod", "go.sum"} or path.startswith(("cmd/", "internal/")):
             reasons.setdefault(("check", "go"), []).append(path)
             mapped = True
         if path in {"go.mod", "go.sum"}:

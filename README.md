@@ -1,6 +1,17 @@
 # Agentium
 
-Agentium is a planned local-first lab for AI coding agents. It runs agents such as Claude Code and Codex on tasks from your own repository, and measures how the agent, the model or the project's AI context (`AGENTS.md`, `CLAUDE.md`, skills) changes correctness, cost and speed, with honest statistics. The design is at the research stage: see [the feasibility study](docs/research/2026-09-27-ai-development-lab.md).
+Agentium is a local-first lab for AI coding agents, being built now. It runs agents such as Claude Code (and later Codex) on tasks from your own repository, and measures how the agent, the model or the project's AI context (`AGENTS.md`, `CLAUDE.md`, skills) changes correctness, cost and speed, with honest statistics. Background: [the feasibility study](docs/research/2026-09-27-ai-development-lab.md); progress: [the roadmap](.agents/ROADMAP.md).
+
+## Try it
+
+Agentium is early (Phase 1). With Go 1.27.1:
+
+```sh
+go build -o agentium ./cmd/agentium
+./agentium init /path/to/your/repo    # registers it; never writes to the repository
+```
+
+Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).
 
 ## Development process
 
