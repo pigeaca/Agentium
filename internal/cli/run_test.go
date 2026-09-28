@@ -215,7 +215,7 @@ git config filter.leak.clean "sh -c 'env > `+marker+`; cat'"
 printf '* filter=leak\n' > .gitattributes`, false)
 	result := f.run(context.Background(), "run", "once", "value")
 	expect(t, result, ExitOK, "outcome      ok; verification failed", "checks       the agent changed run_tests.sh",
-		"graded with the base version: run_tests.sh")
+		"graded with the starting version: run_tests.sh")
 	if _, err := os.Stat(marker); err == nil {
 		data, _ := os.ReadFile(marker)
 		t.Errorf("the agent's git filter ran during grading (API key visible: %v)", strings.Contains(string(data), "grading-must-not-see-this"))
@@ -224,11 +224,29 @@ printf '* filter=leak\n' > .gitattributes`, false)
 
 func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", true)
+	ready := filepath.Join(t.TempDir(), "ready")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "touch "+ready, true)
 	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(2*time.Second, cancel)
+	go func() { // interrupt once the agent is running, not during checkout or setup
+		for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(ready); err == nil {
+				break
+			}
+		}
+		cancel()
+	}()
 	expect(t, f.run(ctx, "run", "once", "value"), ExitError, "context canceled")
 	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
+}
+
+// An agent that removes its checkout's .git must not erase its run or its spend, and git must not wander into an
+// enclosing repository.
+func TestRunSurvivesAnAgentRemovingItsGitFolder(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "rm -rf .git", false)
+	result := f.run(context.Background(), "run", "once", "value")
+	expect(t, result, ExitOK, "outcome      ok; verification failed", "the agent's commits could not be counted")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "value", "$0.40")
 }
 
 func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {

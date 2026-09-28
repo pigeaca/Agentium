@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -121,8 +122,8 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		Progress: env.Stdout, Now: env.Now}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
 		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
-	if rec.Outcome == "" { // it never started: nothing to keep
-		os.RemoveAll(rec.RecordsDir)
+	if _, err := os.Stat(filepath.Join(rec.RecordsDir, "stream.jsonl")); rec.Outcome == "" && err != nil {
+		os.RemoveAll(rec.RecordsDir) // the agent never started: nothing to keep
 	} else { // it ran, or got far enough to have an outcome: keep the record even if interrupted
 		encoded, err := json.Marshal(rec)
 		if err != nil {

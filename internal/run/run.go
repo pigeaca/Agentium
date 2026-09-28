@@ -234,18 +234,26 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	transcript.Close()
 	stderr.Close()
 	rec.ExitCode = result.ExitCode
-	if rec.Metrics, err = parseFile(transcriptPath); err != nil {
+	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
+	unfinished := func(err error) (Record, error) {
+		if rec.Outcome == "" {
+			rec.Outcome = claude.OutcomeInfra
+		}
+		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
 		return rec, err
 	}
-	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
-		rec.Outcome = claude.OutcomeInfra
-		rec.Notes = append(rec.Notes, "the run did not finish: "+runErr.Error())
-		return rec, runErr
+	var parseErr error
+	rec.Metrics, parseErr = parseFile(transcriptPath) // partial metrics are kept even when reading fails
+	if runErr != nil {                                // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
+		return unfinished(runErr)
+	}
+	if parseErr != nil {
+		return unfinished(parseErr)
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
-	projectSkills, err := skillNames(ctx, repo)
+	projectSkills, err := skillNames(ctx, graded) // the context commit, not the agent's tree (it may have removed .git)
 	if err != nil {
-		return rec, err
+		return unfinished(err)
 	}
 	rec.Drift = claude.Check(rec.Metrics, claude.Expect{PersonalSkills: claude.PersonalSkills(userConfig), ProjectSkills: projectSkills})
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
@@ -260,7 +268,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	switch rec.Outcome {
 	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
 		if err := env.grade(ctx, spec, repo, graded, &rec); err != nil {
-			return rec, err
+			return unfinished(err)
 		}
 	}
 	return rec, nil
@@ -297,8 +305,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if err := os.WriteFile(filepath.Join(rec.RecordsDir, "agent.diff"), patch, 0o600); err != nil {
 		return fmt.Errorf("agent diff: %w", err)
 	}
-	// Commits are read from the agent's repository, which is only read: rev-list runs no filters.
-	if commits, err := gitx.Run(ctx, "-C", repo, "rev-list", "--count", rec.ContextHead+"..HEAD"); err == nil {
+	// Commits are read from the agent's repository, which is only read: rev-list runs no filters. --git-dir, so that a
+	// removed .git fails here instead of git finding an enclosing repository.
+	if commits, err := gitx.Run(ctx, "--git-dir", filepath.Join(repo, ".git"), "rev-list", "--count", rec.ContextHead+"..HEAD"); err == nil {
 		rec.Behavior.Commits, _ = strconv.Atoi(commits)
 	} else {
 		rec.Notes = append(rec.Notes, "the agent's commits could not be counted: its repository was altered")
@@ -311,14 +320,14 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
 	}
 
-	// The checks themselves: scripts the verification commands name are restored to the base version, unless the
-	// reference solution changes them too (then changing them is part of the task). Other runner configuration the
-	// agent changed is reported.
-	base, err := source.Commit(ctx, spec.Task.Base, "--git-dir", env.Bare)
+	// The checks themselves: scripts the verification commands name are restored to their version in the context
+	// commit (where the agent started, setup included), unless the reference solution changes them too (then changing
+	// them is part of the task). Other runner configuration the agent changed is reported.
+	start, err := source.Commit(ctx, rec.ContextHead, "-C", graded)
 	if err != nil {
 		return err
 	}
-	scripts, configs := checkFiles(spec.Task.Verify, base)
+	scripts, configs := checkFiles(spec.Task.Verify, start)
 	var restore []string
 	for _, p := range changed {
 		switch {
@@ -329,11 +338,11 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		}
 	}
 	if len(restore) > 0 {
-		if err := checkout.Write(graded, base, restore); err != nil {
+		if err := checkout.Write(graded, start, restore); err != nil {
 			return fmt.Errorf("restore the checks: %w", err)
 		}
 		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
-		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the base version: "+strings.Join(restore, ", "))
+		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
 	}
 
 	failed := false
