@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -115,10 +116,11 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	git(main, "worktree", "add", "-q", linked)
 	env := Env{Layout: layout, ProjectRoot: linked, Now: time.Now}
-	denied := strings.Join(env.denied(filepath.Join(data, "workspaces", "r1")), "\n")
+	denied := strings.Join(env.denied(context.Background(), filepath.Join(data, "workspaces", "r1")), "\n")
 	mainGit, _ := filepath.EvalSymlinks(filepath.Join(main, ".git"))
+	mainCheckout, _ := filepath.EvalSymlinks(main) // another worktree: it can sit at a commit holding the solution
 	for _, want := range []string{filepath.Join(data, "projects"), layout.Records, layout.Artifacts, layout.Database + "-wal",
-		filepath.Join(data, "workspaces", "r2"), linked, mainGit} {
+		filepath.Join(data, "workspaces", "r2"), linked, mainGit, mainCheckout + "\n"} {
 		if !strings.Contains(denied, want) {
 			t.Errorf("%s is not denied:\n%s", want, denied)
 		}

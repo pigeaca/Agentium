@@ -150,3 +150,124 @@ func TestRunOnceRefusesInstructionFilesAboveTheWorkspace(t *testing.T) {
 	expect(t, run("task", "add", "t", "--base", "HEAD", "--instruction", "Do it.", "--verify", "true"), ExitOK)
 	expect(t, run("run", "once", "t"), ExitError, filepath.Join(outer, "CLAUDE.md"), "would load it into every run")
 }
+
+// scriptedAgent writes a fake Claude Code that runs body in its checkout, then prints a successful transcript. With
+// hang set, it instead waits to be interrupted and reports a result with cost 0.40, as Claude Code does on SIGINT.
+func scriptedAgent(t *testing.T, body string, hang bool) string {
+	t.Helper()
+	stream := `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash"],"skills":[],"slash_commands":[]}`
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.40,"num_turns":3,"duration_ms":1000,"modelUsage":{}}`
+	script := "#!/bin/sh\n"
+	if hang {
+		script += "trap 'echo '\"'\"'" + result + "'\"'\"'; exit 130' INT\n" + body + "\necho '" + stream + "'\nwhile :; do sleep 0.05; done\n"
+	} else {
+		script += body + "\necho '" + stream + "'\necho '" + result + "'\n"
+	}
+	cli := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return cli
+}
+
+type runFixture struct {
+	repo, data, home string
+	vars             map[string]string
+	run              func(ctx context.Context, args ...string) cliResult
+}
+
+func newRunFixture(t *testing.T, data string) runFixture {
+	t.Helper()
+	f := runFixture{repo: t.TempDir(), data: data, home: t.TempDir()}
+	gitIn(t, f.repo, "init", "-q", "-b", "main")
+	writeFile(t, f.repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\n")
+	writeFile(t, f.repo, "value.txt", "old\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "base")
+	writeFile(t, f.repo, "tests/value_test.sh", "grep -q new value.txt\n")
+	writeFile(t, f.repo, "value.txt", "new\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
+	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
+	f.run = func(ctx context.Context, args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
+			Getenv:   func(key string) string { return f.vars[key] },
+			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, f.run(context.Background(), "init"), ExitOK)
+	expect(t, f.run(context.Background(), "task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
+	return f
+}
+
+func TestRunGradingResistsTampering(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-grading-must-not-see-this") // in Agentium's own environment // secret-scan: allow
+	marker := filepath.Join(t.TempDir(), "filter-ran")
+	// The agent rewrites the checks to pass, plants its own version of the hidden test, and sets a git clean filter
+	// that would run (outside the sandbox) when grading stages its tree.
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, `printf 'exit 0\n' > run_tests.sh
+mkdir -p tests && printf 'true\n' > tests/value_test.sh
+git config filter.leak.clean "sh -c 'env > `+marker+`; cat'"
+printf '* filter=leak\n' > .gitattributes`, false)
+	result := f.run(context.Background(), "run", "once", "value")
+	expect(t, result, ExitOK, "outcome      ok; verification failed", "checks       the agent changed run_tests.sh",
+		"graded with the base version: run_tests.sh")
+	if _, err := os.Stat(marker); err == nil {
+		data, _ := os.ReadFile(marker)
+		t.Errorf("the agent's git filter ran during grading (API key visible: %v)", strings.Contains(string(data), "grading-must-not-see-this"))
+	}
+}
+
+func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(2*time.Second, cancel)
+	expect(t, f.run(ctx, "run", "once", "value"), ExitError, "context canceled")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
+}
+
+func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nBe brief.\n")
+	expect(t, f.run(context.Background(), "context", "snapshot", "brief", "--working-tree"), ExitOK)
+	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+	expect(t, f.run(context.Background(), "task", "add", "gen", "--base", "HEAD~1", "--instruction", "Anything.",
+		"--setup", "echo generated > gen.txt", "--verify", "test -f gen.txt"), ExitOK)
+	seen := filepath.Join(t.TempDir(), "claude-md")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "cat CLAUDE.md > "+seen, false)
+	kept := f.run(context.Background(), "run", "once", "gen", "--snapshot", "brief", "--keep")
+	// The arm's CLAUDE.md is what the agent saw; neither it nor the setup's output counts as the agent's change.
+	expect(t, kept, ExitOK, "Run ", "outcome      ok; verification passed", "changes      0 file(s)")
+	if saw, _ := os.ReadFile(seen); string(saw) != "# Rules\nBe brief.\n" {
+		t.Errorf("the agent saw CLAUDE.md = %q", saw)
+	}
+	workspaces, _ := os.ReadDir(filepath.Join(f.data, "workspaces"))
+	records, _ := os.ReadDir(filepath.Join(f.data, "records"))
+	if len(workspaces) != 1 || len(records) != 1 {
+		t.Fatalf("workspaces %v, records %v", workspaces, records)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "records", records[0].Name(), "verify", "gen.txt")); err != nil {
+		t.Errorf("--keep should keep the grading copy: %v", err)
+	}
+}
+
+func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
+	outer := t.TempDir()
+	f := newRunFixture(t, filepath.Join(outer, "data"))
+	token := filepath.Join(outer, "token") // its folder is denied to runs, and it holds the data folder
+	writeFile(t, outer, "token", "tok-abcdef\n")
+	if err := os.Chmod(token, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.vars["AGENTIUM_CLAUDE_TOKEN_FILE"] = token
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "lies inside", "runs may not read")
+	if records, _ := os.ReadDir(filepath.Join(f.data, "records")); len(records) != 0 {
+		t.Errorf("a run that never started left records: %v", records)
+	}
+}

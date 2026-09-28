@@ -18,7 +18,8 @@ import (
 )
 
 const runUsage = `Usage:
-  agentium run once TASK [--snapshot NAME] [--model MODEL] [--effort LEVEL] [--budget USD] [--timeout DURATION] [--keep]
+  agentium run once TASK [--snapshot NAME] [--model MODEL] [--effort LEVEL] [--budget USD] [--timeout DURATION]
+                     [--verify-timeout DURATION] [--keep]
                      one real Claude Code run on TASK, in the base's own context or with a snapshot applied.
                      It costs money (up to --budget, default $3) or uses your plan.
   agentium run list
@@ -120,12 +121,15 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		Progress: env.Stdout, Now: env.Now}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
 		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
-	if rec.Outcome != "" { // it ran, or got far enough to have an outcome: keep the record even if interrupted
+	if rec.Outcome == "" { // it never started: nothing to keep
+		os.RemoveAll(rec.RecordsDir)
+	} else { // it ran, or got far enough to have an outcome: keep the record even if interrupted
 		encoded, err := json.Marshal(rec)
 		if err != nil {
 			return fail(env, fmt.Errorf("encode run: %w", err))
 		}
-		if err := w.db.SaveRun(ctx, store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: t.ID, TaskName: t.Name, Arm: rec.Arm,
+		// An interrupted run is saved all the same: ctx is cancelled by then, and its spend must not be lost.
+		if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: t.ID, TaskName: t.Name, Arm: rec.Arm,
 			Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded, Started: rec.Started, Finished: rec.Finished}); err != nil {
 			return fail(env, errors.Join(runErr, err))
 		}
@@ -148,7 +152,11 @@ func printRun(env Env, rec run.Record) {
 	m, b := rec.Metrics, rec.Behavior
 	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", m.CostUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
-	fmt.Fprintf(out, "  changes      %d file(s), +%d -%d, %d commit(s); tests changed: %v\n", b.FilesChanged, b.LinesAdded, b.LinesRemoved, b.Commits, b.TestsChanged)
+	fmt.Fprintf(out, "  changes      %d file(s), +%d -%d, %d commit(s); tests changed: %v, test files removed: %d\n", b.FilesChanged, b.LinesAdded,
+		b.LinesRemoved, b.Commits, b.TestsChanged, b.TestsRemoved)
+	if len(b.ChecksChanged) > 0 {
+		fmt.Fprintf(out, "  checks       the agent changed %s\n", strings.Join(b.ChecksChanged, ", "))
+	}
 	fmt.Fprintf(out, "  behavior     ran tests: %v, ran the checks: %v, %d Bash command(s), %d denial(s)\n", b.RanTests, b.RanChecks, b.BashCommands, b.Denials)
 	fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", orNone(m.CLIVersion), orNone(m.Model),
 		orNone(m.PermissionMode), len(m.Tools), m.SkillCount)

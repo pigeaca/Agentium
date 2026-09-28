@@ -183,6 +183,11 @@ func (inv Invocation) deniedPaths(userConfig string) []string {
 	return out
 }
 
+// DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
+func (inv Invocation) DeniedPaths(environ []string) []string {
+	return inv.deniedPaths(UserConfigDir(environ, inv.Home))
+}
+
 // settings are the per-run Claude Code settings (--settings).
 func (inv Invocation) settings(userConfig string) map[string]any {
 	denied := inv.deniedPaths(userConfig)

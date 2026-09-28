@@ -13,8 +13,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -90,12 +92,16 @@ type Behavior struct {
 	LinesAdded   int  `json:"lines_added"`
 	LinesRemoved int  `json:"lines_removed"`
 	TestsChanged bool `json:"tests_changed"` // changed a test file
-	RanTests     bool `json:"ran_tests"`     // ran a test runner
-	RanChecks    bool `json:"ran_checks"`    // ran one of the task's verification commands
-	Commits      int  `json:"commits"`       // commits on top of the context commit
-	BashCommands int  `json:"bash_commands"`
-	Denials      int  `json:"denials"`
-	OutsideReads int  `json:"outside_reads"` // file tool calls on Agentium's data, the user's repository or Claude's data
+	TestsRemoved int  `json:"tests_removed"` // test files deleted
+	// ChecksChanged are verification scripts and test-runner configuration the agent changed; scripts the task did not
+	// need changed were restored before grading.
+	ChecksChanged []string `json:"checks_changed,omitempty"`
+	RanTests      bool     `json:"ran_tests"`  // ran a test runner
+	RanChecks     bool     `json:"ran_checks"` // ran one of the task's verification commands
+	Commits       int      `json:"commits"`    // commits on top of the context commit
+	BashCommands  int      `json:"bash_commands"`
+	Denials       int      `json:"denials"`
+	OutsideReads  int      `json:"outside_reads"` // file tool calls on Agentium's data, the user's repository or Claude's data
 }
 
 // NewID makes a run id: a UTC timestamp and a random suffix, so ids sort by start time.
@@ -112,50 +118,68 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 	"tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a " +
 	"short summary of what you changed and how you verified it."
 
-// Once runs spec once and grades it. The error is for runs that could not be carried out (bad setup of Agentium
-// itself, cancellation); an agent's failure is a Record.
-func Once(ctx context.Context, env Env, spec Spec) (Record, error) {
-	rec := Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
+// Once runs spec once and grades it. The error is for runs that could not be carried out (Agentium's own setup,
+// cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
+// shows it spent.
+func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
-	finish := func(err error) (Record, error) {
-		rec.Finished = env.Now().UTC()
-		return rec, err
-	}
 	workspace := filepath.Join(env.Layout.Workspaces, env.ID)
 	repo := filepath.Join(workspace, "repo")
+	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
+	defer func() {
+		rec.Finished = env.Now().UTC()
+		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
+			err = redactErr
+		}
+		if !spec.Keep {
+			os.RemoveAll(workspace)
+			os.RemoveAll(graded)
+		}
+	}()
 	if found := instructionFilesAbove(repo); len(found) > 0 {
-		return finish(fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", ")))
+		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
+	}
+	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: spec.Instruction + suffix, Model: spec.Model, Effort: spec.Effort,
+		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
+		Deny: env.denied(ctx, workspace)}
+	if env.SignIn != claude.SignInLogin {
+		inv.ConfigDir = filepath.Join(workspace, "config")
+	}
+	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
+	// reason that is not the agent's.
+	for _, denied := range inv.DeniedPaths(env.Environ) {
+		if within(realPath(workspace), realPath(denied)) {
+			return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
+		}
 	}
 	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
-		return finish(fmt.Errorf("run records: %w", err))
+		return rec, fmt.Errorf("run records: %w", err)
 	}
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		return finish(fmt.Errorf("run workspace: %w", err))
-	}
-	if !spec.Keep {
-		defer os.RemoveAll(workspace)
+		return rec, fmt.Errorf("run workspace: %w", err)
 	}
 	env.progress("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
 	if err := checkout.New(ctx, env.Bare, spec.Task.Base, repo); err != nil {
-		return finish(err)
+		return rec, err
 	}
 	if spec.Arm.Snapshot != "" {
 		base, err := source.Commit(ctx, spec.Task.Base, "--git-dir", env.Bare)
 		if err != nil {
-			return finish(err)
+			return rec, err
 		}
 		snap, err := source.Commit(ctx, spec.Arm.Snapshot, "--git-dir", env.Bare)
 		if err != nil {
-			return finish(err)
+			return rec, err
 		}
 		overlay, err := snapshot.PlanOverlay(base, snap)
 		if err != nil {
-			return finish(fmt.Errorf("arm %s: %w", spec.Arm.Name, err))
+			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
 		}
 		if err := checkout.Write(repo, snap, append(overlay.Writes, overlay.Deletes...)); err != nil {
-			return finish(fmt.Errorf("arm %s: %w", spec.Arm.Name, err))
+			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
 		}
 		if len(overlay.HarnessChanged) > 0 {
 			rec.Notes = append(rec.Notes, "the arm changes what runs: "+strings.Join(overlay.HarnessChanged, ", "))
@@ -163,119 +187,122 @@ func Once(ctx context.Context, env Env, spec Spec) (Record, error) {
 	}
 	if len(spec.Task.Setup) > 0 {
 		var ok bool
-		var err error
 		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log")); err != nil {
-			return finish(err)
+			return rec, err
 		}
 		if !ok {
 			rec.Outcome = claude.OutcomeInfra
 			rec.Notes = append(rec.Notes, "setup failed: see setup.log")
-			return finish(env.redactRecords(rec.RecordsDir))
+			return rec, nil
 		}
 	}
 	// Setup outputs that git does not ignore are part of the starting point, not the agent's work.
 	if _, err := gitx.Run(ctx, "-C", repo, "add", "-A"); err != nil {
-		return finish(err)
+		return rec, err
 	}
 	if _, err := gitx.Run(ctx, "-C", repo, "-c", "user.name=agentium", "-c", "user.email=agentium@localhost", "-c", "commit.gpgsign=false",
 		"commit", "--quiet", "--allow-empty", "--no-verify", "-m", "agentium: context "+spec.Arm.Name); err != nil {
-		return finish(err)
+		return rec, err
 	}
-	var err error
 	if rec.ContextHead, err = gitx.Run(ctx, "-C", repo, "rev-parse", "HEAD"); err != nil {
-		return finish(err)
+		return rec, err
+	}
+	// Grading never trusts the agent's .git (its config could name filters that run outside the sandbox): the context
+	// commit is copied now, before the agent starts, into a repository of Agentium's own.
+	if err := checkout.New(ctx, repo, rec.ContextHead, graded); err != nil {
+		return rec, fmt.Errorf("grading repository: %w", err)
 	}
 
 	// The agent.
-	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: spec.Instruction + suffix, Model: spec.Model, Effort: spec.Effort,
-		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		Deny: env.denied(workspace)}
-	if env.SignIn != claude.SignInLogin {
-		inv.ConfigDir = filepath.Join(workspace, "config")
+	if inv.ConfigDir != "" {
 		if err := os.MkdirAll(inv.ConfigDir, 0o700); err != nil {
-			return finish(fmt.Errorf("run config folder: %w", err))
+			return rec, fmt.Errorf("run config folder: %w", err)
 		}
 	}
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
 	transcript, err := os.Create(transcriptPath)
 	if err != nil {
-		return finish(fmt.Errorf("run transcript: %w", err))
+		return rec, fmt.Errorf("run transcript: %w", err)
 	}
 	stderr, err := os.Create(filepath.Join(rec.RecordsDir, "stderr.txt"))
 	if err != nil {
 		transcript.Close()
-		return finish(fmt.Errorf("run transcript: %w", err))
+		return rec, fmt.Errorf("run transcript: %w", err)
 	}
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	transcript.Close()
 	stderr.Close()
 	rec.ExitCode = result.ExitCode
-	if err := env.redactRecords(rec.RecordsDir); err != nil {
-		return finish(err)
+	if rec.Metrics, err = parseFile(transcriptPath); err != nil {
+		return rec, err
 	}
-	if runErr != nil {
+	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
 		rec.Outcome = claude.OutcomeInfra
 		rec.Notes = append(rec.Notes, "the run did not finish: "+runErr.Error())
-		return finish(runErr)
-	}
-	if rec.Metrics, err = parseFile(transcriptPath); err != nil {
-		return finish(err)
+		return rec, runErr
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
 	projectSkills, err := skillNames(ctx, repo)
 	if err != nil {
-		return finish(err)
+		return rec, err
 	}
 	rec.Drift = claude.Check(rec.Metrics, claude.Expect{PersonalSkills: claude.PersonalSkills(userConfig), ProjectSkills: projectSkills})
-	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace,
-		[]string{env.Layout.Root, env.ProjectRoot, filepath.Join(env.Home, ".claude"), userConfig})
+	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
+	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace, watched)
 	if rec.Behavior.OutsideReads > 0 {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
 	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
 	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", rec.Outcome, rec.Metrics.CostUSD, rec.Metrics.Turns)
 
-	// Grading, on a copy the agent never saw.
-	if err := env.grade(ctx, spec, repo, &rec); err != nil {
-		return finish(err)
+	// Grading, only for fair attempts (infra and unfair runs are never counted).
+	switch rec.Outcome {
+	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
+		if err := env.grade(ctx, spec, repo, graded, &rec); err != nil {
+			return rec, err
+		}
 	}
-	if err := env.redactRecords(rec.RecordsDir); err != nil {
-		return finish(err)
-	}
-	return finish(nil)
+	return rec, nil
 }
 
-// grade copies the workspace into the records, measures the agent's changes from the context commit, adds the hidden
-// tests and runs the verification commands.
-func (env Env) grade(ctx context.Context, spec Spec, repo string, rec *Record) error {
-	copyDir := filepath.Join(rec.RecordsDir, "verify")
-	if !spec.Keep {
-		defer os.RemoveAll(copyDir)
+// grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the
+// context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
+// verification commands.
+func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record) error {
+	if err := syncWorkTree(repo, graded); err != nil {
+		return fmt.Errorf("grading copy: %w", err)
 	}
-	if err := copyTree(repo, copyDir); err != nil {
-		return fmt.Errorf("verification copy: %w", err)
-	}
-	if _, err := gitx.Run(ctx, "-C", copyDir, "add", "-A"); err != nil {
+	if _, err := gitx.Run(ctx, "-C", graded, "add", "-A"); err != nil {
 		return err
 	}
-	numstat, err := gitx.Output(ctx, nil, "-C", copyDir, "diff", "--cached", "--numstat", "-z", "--no-renames", rec.ContextHead)
+	numstat, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--numstat", "-z", "--no-renames", rec.ContextHead)
 	if err != nil {
 		return err
 	}
 	changed := measure(string(numstat), &rec.Behavior)
-	patch, err := gitx.Output(ctx, nil, "-C", copyDir, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", rec.ContextHead)
+	deleted, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--name-only", "-z", "--no-renames", "--diff-filter=D", rec.ContextHead)
+	if err != nil {
+		return err
+	}
+	for _, p := range strings.Split(string(deleted), "\x00") {
+		if p != "" && task.IsTestFile(p) {
+			rec.Behavior.TestsRemoved++
+		}
+	}
+	patch, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", rec.ContextHead)
 	if err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(rec.RecordsDir, "agent.diff"), patch, 0o600); err != nil {
 		return fmt.Errorf("agent diff: %w", err)
 	}
-	commits, err := gitx.Run(ctx, "-C", copyDir, "rev-list", "--count", rec.ContextHead+"..HEAD")
-	if err != nil {
-		return err
+	// Commits are read from the agent's repository, which is only read: rev-list runs no filters.
+	if commits, err := gitx.Run(ctx, "-C", repo, "rev-list", "--count", rec.ContextHead+"..HEAD"); err == nil {
+		rec.Behavior.Commits, _ = strconv.Atoi(commits)
+	} else {
+		rec.Notes = append(rec.Notes, "the agent's commits could not be counted: its repository was altered")
 	}
-	rec.Behavior.Commits, _ = strconv.Atoi(commits)
 	rec.Behavior.BashCommands = len(rec.Metrics.Commands)
 	rec.Behavior.Denials = rec.Metrics.Denials
 	rec.Behavior.RanTests = ranTests(rec.Metrics.Commands)
@@ -283,23 +310,119 @@ func (env Env) grade(ctx context.Context, spec Spec, repo string, rec *Record) e
 	for _, p := range changed {
 		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
 	}
+
+	// The checks themselves: scripts the verification commands name are restored to the base version, unless the
+	// reference solution changes them too (then changing them is part of the task). Other runner configuration the
+	// agent changed is reported.
+	base, err := source.Commit(ctx, spec.Task.Base, "--git-dir", env.Bare)
+	if err != nil {
+		return err
+	}
+	scripts, configs := checkFiles(spec.Task.Verify, base)
+	var restore []string
+	for _, p := range changed {
+		switch {
+		case slices.Contains(scripts, p) && !slices.Contains(spec.Task.Reference, p):
+			restore = append(restore, p)
+		case slices.Contains(scripts, p) || slices.Contains(configs, p):
+			rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, p)
+		}
+	}
+	if len(restore) > 0 {
+		if err := checkout.Write(graded, base, restore); err != nil {
+			return fmt.Errorf("restore the checks: %w", err)
+		}
+		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
+		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the base version: "+strings.Join(restore, ", "))
+	}
+
+	failed := false
 	if spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
 		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
 		if err != nil {
 			return err
 		}
-		if err := checkout.Write(copyDir, solution, spec.Task.HiddenTests); err != nil {
-			return fmt.Errorf("hidden tests: %w", err)
+		if err := checkout.Write(graded, solution, spec.Task.HiddenTests); err != nil {
+			// The agent turned a hidden test's folder into a link, say: the tests cannot run as written.
+			rec.Notes = append(rec.Notes, "the hidden tests could not be added: "+err.Error())
+			failed = true
 		}
 	}
-	commands, ok, err := env.commands(ctx, copyDir, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"))
-	rec.Verify = commands
+	if !failed {
+		var commands []task.Command
+		var ok bool
+		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"))
+		rec.Verify = commands
+		if err != nil {
+			return err
+		}
+		failed = !ok
+	}
+	passed := !failed
+	rec.Passed = &passed
+	env.progress("  verification: %s", map[bool]string{true: "passed", false: "failed"}[passed])
+	return nil
+}
+
+// checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
+// restores) and the configuration of the test runners they call (reported when changed).
+func checkFiles(verify []string, base source.Source) (scripts, configs []string) {
+	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
+	for _, command := range verify {
+		for _, token := range strings.FieldsFunc(command, split) {
+			if p := path.Clean(strings.TrimPrefix(token, "./")); source.Has(base, p) && !slices.Contains(scripts, p) {
+				scripts = append(scripts, p)
+			}
+		}
+		runners := map[string][]string{
+			"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
+			"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
+			"go": {"go.mod"}, "cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+		}
+		for word, files := range runners {
+			if regexp.MustCompile(`\b` + word + `\b`).MatchString(command) {
+				for _, f := range files {
+					if source.Has(base, f) && !slices.Contains(configs, f) {
+						configs = append(configs, f)
+					}
+				}
+			}
+		}
+	}
+	return scripts, configs
+}
+
+// syncWorkTree makes dst's work tree (everything but .git) a copy of src's.
+func syncWorkTree(src, dst string) error {
+	entries, err := os.ReadDir(dst)
 	if err != nil {
 		return err
 	}
-	rec.Passed = &ok
-	env.progress("  verification: %s", map[bool]string{true: "passed", false: "failed"}[ok])
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	entries, err = os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
+}
+
+// within reports whether p is root or inside it.
+func within(p, root string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // commands runs shell commands in dir until one fails, logging to logPath.
@@ -326,19 +449,33 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 }
 
 // denied lists what the agent may not read: Agentium's data except its own workspace (projects and hidden tests,
-// records, artifacts, the database, other runs' workspaces), and the user's repository with its git data. Workspaces
-// created after this run starts are not listed: a known gap for concurrent runs, which hold no hidden tests.
-func (env Env) denied(workspace string) []string {
+// records, artifacts, the database, other runs' workspaces), and the user's repository: every worktree of it, which
+// can sit at a later commit holding the solution, and its git data. Workspaces created after this run starts are not
+// listed: a known gap for concurrent runs, whose workspaces hold no hidden tests.
+func (env Env) denied(ctx context.Context, workspace string) []string {
 	db := env.Layout.Database
-	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, db, db + "-wal", db + "-shm",
-		env.ProjectRoot}
-	if common, err := gitx.Run(context.Background(), "-C", env.ProjectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
-		paths = append(paths, filepath.Dir(common), common) // a worktree's shared git data lives elsewhere
-	}
+	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, db, db + "-wal", db + "-shm"}
+	paths = append(paths, env.repositoryPaths(ctx)...)
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {
 			if other := filepath.Join(env.Layout.Workspaces, e.Name()); other != workspace {
 				paths = append(paths, other)
+			}
+		}
+	}
+	return paths
+}
+
+// repositoryPaths are the user's repository, all its worktrees, and its shared git data.
+func (env Env) repositoryPaths(ctx context.Context) []string {
+	paths := []string{env.ProjectRoot}
+	if common, err := gitx.Run(ctx, "-C", env.ProjectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+		paths = append(paths, common, filepath.Dir(common))
+	}
+	if list, err := gitx.Run(ctx, "-C", env.ProjectRoot, "worktree", "list", "--porcelain"); err == nil {
+		for _, line := range strings.Split(list, "\n") {
+			if p, ok := strings.CutPrefix(line, "worktree "); ok && !slices.Contains(paths, p) {
+				paths = append(paths, p)
 			}
 		}
 	}
@@ -501,7 +638,7 @@ func ranTests(commands []string) bool {
 func ranChecks(commands, verify []string) bool {
 	for _, c := range commands {
 		for _, v := range verify {
-			if strings.Contains(c, strings.TrimSpace(v)) {
+			if v = strings.TrimSpace(v); v != "" && strings.Contains(c, v) {
 				return true
 			}
 		}

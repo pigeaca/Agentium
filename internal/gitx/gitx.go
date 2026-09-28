@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/pigeaca/agentium/internal/runner"
 )
 
 // Run runs git with args (for example "-C", dir or "--git-dir", bare first) and returns trimmed stdout.
@@ -43,12 +45,14 @@ func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...strin
 	return out, nil
 }
 
-// Environ is environ without GIT_* variables, plus: never prompt, ignore system-wide config, and never take optional
-// locks (so `git status` does not rewrite the user's index).
+// Environ is environ without GIT_* variables and without credentials (Agentium's git calls are all local, and a
+// filter or program configured in a repository must not see an API key), plus: never prompt, ignore system-wide
+// config, and never take optional locks (so `git status` does not rewrite the user's index).
 func Environ(environ []string) []string {
 	out := make([]string, 0, len(environ)+3)
 	for _, kv := range environ {
-		if !strings.HasPrefix(kv, "GIT_") {
+		name, _, _ := strings.Cut(kv, "=")
+		if !strings.HasPrefix(name, "GIT_") && !runner.IsCredential(name) {
 			out = append(out, kv)
 		}
 	}
