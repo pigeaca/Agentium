@@ -283,6 +283,9 @@ func loadExperiment(ctx context.Context, w *workspace, name string) (experiment.
 	if err := json.Unmarshal(stored.Design, &d); err != nil {
 		return experiment.Design{}, fmt.Errorf("experiment %s: %w", name, err)
 	}
+	if d.Version != experiment.DesignVersion || len(d.Arms) != 2 {
+		return experiment.Design{}, fmt.Errorf("experiment %s: its design (version %d) is not one this Agentium reads", name, d.Version)
+	}
 	return d, nil
 }
 
@@ -447,6 +450,16 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 		if err := json.Unmarshal(stored.Result, &c); err != nil {
 			line(false, "context %s: its calibration cannot be read: %v", a.Context, err)
 			continue
+		}
+		if c.SignIn == "" { // saved before calibrations recorded it: the calibration run's record has it
+			if r, err := w.db.RunByID(ctx, w.project.ID, stored.RunID); err == nil {
+				var rec struct {
+					SignIn string `json:"sign_in"`
+				}
+				if json.Unmarshal(r.Record, &rec) == nil {
+					c.SignIn = rec.SignIn
+				}
+			}
 		}
 		switch {
 		case version != "" && c.CLIVersion != version:

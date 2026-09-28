@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,9 +110,14 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	}
 	proj := projects[0]
 	now := time.Now()
-	if err := db.SaveRun(ctx, store.Run{ID: "20260929T000000Z-000000", ProjectID: proj.ID, TaskName: "value", Arm: "base", Outcome: "timeout", CostUSD: 5,
-		Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false}}`), Started: now, Finished: now}); err != nil {
-		t.Fatal(err)
+	for i, r := range []store.Run{
+		{Outcome: "timeout", CostUSD: 5, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false}}`)},
+		{Outcome: "ok", CostUSD: 0, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":true}}`)},
+	} {
+		r.ID, r.ProjectID, r.TaskName, r.Arm, r.Started, r.Finished = fmt.Sprintf("20260929T00000%dZ-000000", i), proj.ID, "value", "base", now, now
+		if err := db.SaveRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
 	}
 	db.Close()
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
