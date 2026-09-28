@@ -1,2 +1,0 @@
-# Reference patches are unified diffs: blank context lines are a single space by format.
-tasks/*/gold.patch -whitespace

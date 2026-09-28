@@ -11,7 +11,7 @@ Shape:
 - **Local runs** drive agent CLIs headlessly in isolated git worktrees.
 - **Harbor**, pinned and out of process, adds containers later.
 - **Stack (proposed, awaiting the user's decision):** a Go core in a single binary, a local React web UI and SQLite.
-- **Phase 0 spike, done:** it measured per-run cost and variance and settled how runs are isolated ([results](../docs/research/2026-09-27-phase0-spike-results.md)). Its throwaway code lives in `spikes/phase0/`.
+- **Phase 0 spike, done:** it measured per-run cost and variance and settled how runs are isolated ([results](../docs/research/2026-09-27-phase0-spike-results.md)).
 
 ## Current contents: the development process only
 
@@ -23,4 +23,3 @@ Shape:
 | `.githooks/pre-commit` | Shared pre-commit guard |
 | `.github/` | CI and the PR template |
 | `docs/research/` | Product research; history, not default context |
-| `spikes/` | Throwaway experiments (standard library only); not product code |

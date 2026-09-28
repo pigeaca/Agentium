@@ -1,1 +1,0 @@
-`harness.py check docs` misses broken links in two valid Markdown forms: links with a title, such as `[guide](docs/guide.md "Guide")`, and links in angle brackets, such as `[notes](<docs/my notes.md>)`. Make link extraction handle both forms (images too), keep ignoring `#anchor` parts and anchor-only links, and make sure a broken link in either form is reported.

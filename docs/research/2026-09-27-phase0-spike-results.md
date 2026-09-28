@@ -1,7 +1,7 @@
 # Phase 0 spike results: real context A/B runs
 
 - Date: 2026-09-27
-- Plan: `.agents/plans/archive/2026-09-27-phase0-spike.md`. Code and raw metrics: [`spikes/phase0/`](../../spikes/phase0/README.md). `python3 spike.py report` regenerates every number below from `results/context-ab/runs.jsonl`.
+- Plan: `.agents/plans/archive/2026-09-27-phase0-spike.md`. The throwaway script and raw run data were removed after this write-up. They remain in git history at commit `9bae530` (`spikes/phase0/`), which regenerates every number below.
 - Question: can a context A/B experiment run reliably and cheaply on real agent runs? How noisy is it compared with the [feasibility study's](2026-09-27-ai-development-lab.md) assumptions?
 
 ## Summary
@@ -53,7 +53,7 @@ Arithmetic means per run. The last column is the paired ratio of geometric means
 
 With only six tasks, both kinds of interval are rough. The percentile bootstrap over few clusters tends to run narrow. The two-stage bootstrap counts within-task noise twice and tends to run wide. The t-interval is a cross-check.
 
-Behavior, counted from the transcripts. The flags are defined in `trajectory()` in `spike.py`, and `spike.py reparse` re-derives them into `runs.jsonl`:
+Behavior, counted from the transcripts:
 
 | Runs that… | full | minimal |
 |---|---|---|
@@ -90,7 +90,7 @@ Excluding those 11 task/repeat pairs:
 | Turns | 1.04 [0.80, 1.36] | 1.12 [0.93, 1.38] |
 | Wall time | 1.22 [0.74, 1.89] | 1.27 [0.88, 1.74] |
 
-The conclusions do not change. **For Phase 1:** each arm must pass the repository's own checks, or the check must be declared part of what the arm changes. `validate` now reports the docs check per arm.
+The conclusions do not change. **For Phase 1:** each arm must pass the repository's own checks, or the check must be declared part of what the arm changes.
 
 ## Measured noise and what it means for experiment size
 
@@ -112,9 +112,9 @@ At this task size, 72 runs cost about $21. A cost-focused context experiment is 
 
 ## Isolation recipe: what it took
 
-Each item was found during the spike and is now handled in `spike.py`:
+Each item was found during the spike. Phase 1's executor must handle all of them:
 
-1. **A fresh `CLAUDE_CONFIG_DIR` cannot use a subscription login.** A run failed with "Not logged in" during setup; that probe predates `probe.json`. Isolated runs need an API key or a `claude setup-token` token. Login mode runs in the user's own config folder instead.
+1. **A fresh `CLAUDE_CONFIG_DIR` cannot use a subscription login.** A run failed with "Not logged in" during setup; this was an early probe. Isolated runs need an API key or a `claude setup-token` token. Login mode runs in the user's own config folder instead.
 2. **Personal context leaks by default.** Without `--setting-sources project`, a run loaded **15 user-level skills** (from the user's own skills and an installed plugin). With it, only the built-in ones loaded. A canary confirmed the project `CLAUDE.md` still loads.
    - The user-level-instruction canary only works in token mode. There is no user-level `CLAUDE.md` on this machine, so nothing could leak in login mode.
 3. **A claude.ai login attaches account connectors.** A Claude Docs connector (create, update and delete tools) appeared. Disable it with `disableClaudeAiConnectors`, `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `--strict-mcp-config`. Four more account-dependent tools appear only in the user's own config folder; they are disallowed. Every run recorded 0 connector tools.
@@ -130,7 +130,7 @@ Each item was found during the spike and is now handled in `spike.py`:
    - No transcript shows a run reading any of these: 0 file-tool reads of watched locations, and a manual review of the Bash commands.
    - The code now runs hidden tests in a copy under a denied path, denies `~/.claude/projects` in login mode, and refuses a work directory inside a hidden path.
    - Still readable: sibling runs' in-progress checkouts under `work/runs`.
-7. **Prompt caching skews naive cost comparisons.** In the original probe, which the committed `probe.json` does not contain, the arm that ran second cost $0.041 against $0.118, because it reused the cached shared prompt. The rerun in `probe.json` shows $0.038 against $0.051. Interleaving the arms is necessary.
+7. **Prompt caching skews naive cost comparisons.** In the original probe, the arm that ran second cost $0.041 against $0.118, because it reused the cached shared prompt. A rerun showed $0.038 against $0.051. Interleaving the arms is necessary.
 8. **Claude Code 2.1.277+ reads `AGENTS.md` itself when no `CLAUDE.md` exists.** Both arms here have a `CLAUDE.md`, so each loads only what its `CLAUDE.md` imports. The study has been corrected.
 
 ## Codex check
