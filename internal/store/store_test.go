@@ -157,6 +157,12 @@ func TestSnapshotsAreUniquePerProjectAndCascade(t *testing.T) {
 	if _, err := s.SnapshotByName(ctx, app.ID, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing snapshot: err = %v, want ErrNotFound", err)
 	}
+	if err := s.DeleteSnapshot(ctx, other.ID, "baseline"); err != nil {
+		t.Errorf("delete: %v", err)
+	}
+	if err := s.DeleteSnapshot(ctx, other.ID, "baseline"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete again: err = %v, want ErrNotFound", err)
+	}
 	list, err := s.Snapshots(ctx, app.ID)
 	if err != nil || len(list) != 2 || list[0].Name != "baseline" || list[1].Name != "minimal" {
 		t.Errorf("Snapshots = %+v, %v", list, err)

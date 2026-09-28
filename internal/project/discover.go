@@ -6,7 +6,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/gitx"
 )
 
 // MinClaudeVersion is the oldest Claude Code with the flags isolated runs need (`--permission-prompts none`).
@@ -245,17 +246,9 @@ func instructionFiles(root string) (files []File, skills, rules int) {
 	return files, len(skillFiles), rules
 }
 
+// gitOutput runs git in dir through gitx: no hooks, no prompts, no inherited GIT_DIR.
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(string(exitErr.Stderr)))
-		}
-		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
-	}
-	return strings.TrimSpace(string(out)), nil
+	return gitx.Run(ctx, append([]string{"-C", dir}, args...)...)
 }
 
 func fileExists(path string) bool {

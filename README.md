@@ -13,7 +13,7 @@ cd /path/to/your/repo
 agentium context show                  # what Claude Code loads at session start, and on demand
 agentium context snapshot baseline     # save the committed context (HEAD) as a version
 # edit CLAUDE.md, rules or skills, then:
-agentium context snapshot trimmed --working-tree
+agentium context snapshot trimmed --working-tree   # --include-linked adds linked docs
 agentium context diff baseline trimmed --patch
 ```
 

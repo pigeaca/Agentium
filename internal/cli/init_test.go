@@ -87,7 +87,7 @@ func TestInitRegistersWithoutTouchingTheRepository(t *testing.T) {
 	if code != ExitOK {
 		t.Fatalf("init exit %d, stderr %q", code, stderr)
 	}
-	for _, want := range []string{"Registered ", "(project 1)", claude + " 2.1.281", "go test ./...", "CLAUDE.md (8 B)", "your Claude login", "was not modified"} {
+	for _, want := range []string{"Registered ", "(project 1)", claude + " 2.1.281", "go test ./...", "about 2 tokens at session start (estimated) from 1 file(s)", "your Claude login", "was not modified"} {
 		if !strings.Contains(stdout, want) {
 			t.Errorf("stdout lacks %q:\n%s", want, stdout)
 		}

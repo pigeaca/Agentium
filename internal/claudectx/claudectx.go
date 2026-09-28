@@ -3,7 +3,8 @@
 //
 // Rules, from Claude Code's memory, skills and settings docs (checked 2026-09-28, CLI 2.1.281):
 //   - CLAUDE.md and .claude/CLAUDE.md at the root load at session start. If neither exists, AGENTS.md loads instead.
-//   - @path imports in those files load too, recursively up to five hops, but not inside code spans or blocks.
+//   - @path imports in those files load too, recursively up to five hops, but not inside code spans or blocks. Rules and
+//     nested CLAUDE.md files are memory files as well: their imports load when they do.
 //   - .claude/rules/**/*.md load at start, unless their frontmatter scopes them with paths:, then on demand.
 //   - Skill, subagent and command descriptions load at start; their bodies load on demand.
 //   - CLAUDE.md files in subdirectories load on demand, when files there are read.
@@ -51,6 +52,9 @@ type Entry struct {
 type Context struct {
 	Entries  []Entry  `json:"entries"`
 	Warnings []string `json:"warnings"`
+	// Linked are repository files that context files link to ([text](path)) but do not load: the agent reads them
+	// only if it opens them, so they are not context unless a snapshot includes them explicitly.
+	Linked []string `json:"linked,omitempty"`
 }
 
 // StartupBytes is the total loaded at session start.
@@ -84,7 +88,7 @@ func Resolve(src source.Source) (Context, error) {
 		return Context{}, err
 	}
 	sort.SliceStable(r.entries, func(i, j int) bool { return kindOrder(r.entries[i].Kind) < kindOrder(r.entries[j].Kind) })
-	return Context{Entries: r.entries, Warnings: r.warnings}, nil
+	return Context{Entries: r.entries, Warnings: r.warnings, Linked: r.linked()}, nil
 }
 
 // kindOrder sorts entries for display: startup instructions in load order first, then the rest by kind.
@@ -112,10 +116,18 @@ func kindOrder(kind string) int {
 }
 
 type resolver struct {
-	src      source.Source
-	seen     map[string]bool
-	entries  []Entry
-	warnings []string
+	src       source.Source
+	seen      map[string]bool
+	entries   []Entry
+	warnings  []string
+	importers []importer
+}
+
+// importer is a rule or nested instruction file whose @imports load with it.
+type importer struct {
+	path    string
+	data    []byte
+	startup bool
 }
 
 func (r *resolver) warn(format string, args ...any) {
@@ -156,7 +168,7 @@ func (r *resolver) resolve() error {
 	for _, name := range roots {
 		if data, ok := r.read(name); ok {
 			r.add(name, KindInstructions, data, len(data), "")
-			r.imports([]string{name}, data)
+			r.imports([]string{name}, data, true)
 		}
 	}
 	if source.Has(r.src, "AGENTS.md") && !agentsLoaded && !r.seen["AGENTS.md"] {
@@ -179,6 +191,14 @@ func (r *resolver) resolve() error {
 		}
 		r.classify(p)
 	}
+	// Startup rules first, so a file that both they and an on-demand file import counts as loaded at start.
+	for _, startup := range []bool{true, false} {
+		for _, imp := range r.importers {
+			if imp.startup == startup {
+				r.imports([]string{imp.path}, imp.data, startup)
+			}
+		}
+	}
 	return nil
 }
 
@@ -190,11 +210,13 @@ func (r *resolver) classify(p string) {
 		if !ok {
 			return
 		}
-		if frontmatterField(data, "paths") != "" || frontmatterHasKey(data, "paths") {
-			r.add(p, KindScopedRule, data, 0, "")
-		} else {
+		startup := frontmatterField(data, "paths") == "" && !frontmatterHasKey(data, "paths")
+		if startup {
 			r.add(p, KindRule, data, len(data), "")
+		} else {
+			r.add(p, KindScopedRule, data, 0, "")
 		}
+		r.importers = append(r.importers, importer{p, data, startup})
 	case strings.HasPrefix(p, ".claude/skills/"):
 		data, ok := r.read(p)
 		if !ok {
@@ -220,6 +242,7 @@ func (r *resolver) classify(p string) {
 	case (path.Base(p) == "CLAUDE.md" || path.Base(p) == "AGENTS.md") && strings.Contains(p, "/") && !strings.HasPrefix(p, ".claude/"):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindNested, data, 0, "")
+			r.importers = append(r.importers, importer{p, data, false})
 		}
 	}
 }
@@ -234,10 +257,12 @@ func LoadsByPresence(p string) bool {
 // importPattern finds @path tokens: "@" at the start of a line or after whitespace, followed by a path.
 var importPattern = regexp.MustCompile(`(?:^|\s)@([^\s` + "`" + `]+)`)
 
-// imports loads the @imports of the last file in chain (the files that led to it, root first).
-func (r *resolver) imports(chain []string, data []byte) {
+// imports loads the @imports of the last file in chain (the files that led to it, root first); startup says whether
+// that file loads at session start, and so its imports do.
+func (r *resolver) imports(chain []string, data []byte, startup bool) {
 	from, depth := chain[len(chain)-1], len(chain)
 	for _, target := range importTargets(string(data)) {
+		pathLike := strings.ContainsAny(target, "/.") // @README is a file if it exists; @alice is a mention
 		switch {
 		case strings.HasPrefix(target, "~/") || path.IsAbs(target):
 			r.warn("%s imports %s, outside the repository: personal, and not available in experiments.", from, target)
@@ -261,16 +286,21 @@ func (r *resolver) imports(chain []string, data []byte) {
 		}
 		imported, ok := r.read(resolved)
 		if !ok {
-			r.warn("%s imports %s, which does not exist.", from, resolved)
+			if pathLike {
+				r.warn("%s imports %s, which does not exist.", from, resolved)
+			}
 			continue
 		}
-		r.add(resolved, KindImport, imported, len(imported), from)
-		r.imports(append(slices.Clone(chain), resolved), imported)
+		startupBytes := 0
+		if startup {
+			startupBytes = len(imported)
+		}
+		r.add(resolved, KindImport, imported, startupBytes, from)
+		r.imports(append(slices.Clone(chain), resolved), imported, startup)
 	}
 }
 
-// importTargets lists @path targets outside fenced code blocks and inline code spans. Tokens without a "/" or "." are
-// mentions (like @alice), not paths.
+// importTargets lists @ tokens outside fenced code blocks and inline code spans; the caller decides which are files.
 func importTargets(text string) []string {
 	var targets []string
 	inFence := false
@@ -284,8 +314,7 @@ func importTargets(text string) []string {
 			continue
 		}
 		for _, match := range importPattern.FindAllStringSubmatch(stripCodeSpans(line), -1) {
-			target := strings.TrimRight(match[1], ".,;:)]}!?\"'")
-			if strings.ContainsAny(target, "/.") {
+			if target := strings.TrimRight(match[1], ".,;:)]}!?\"'"); target != "" {
 				targets = append(targets, target)
 			}
 		}
@@ -311,9 +340,52 @@ func stripCodeSpans(line string) string {
 	return out.String()
 }
 
+// linkPattern finds Markdown link targets: [text](target) or [text](target "title").
+var linkPattern = regexp.MustCompile(`\]\(([^)\s]+)(?:\s+"[^"]*")?\)`)
+
+// linked lists repository files that context files link to but that are not context themselves.
+func (r *resolver) linked() []string {
+	found := map[string]bool{}
+	for _, e := range r.entries {
+		if e.Kind == KindHarness || !strings.HasSuffix(e.Path, ".md") {
+			continue
+		}
+		data, err := r.src.ReadFile(e.Path)
+		if err != nil {
+			continue
+		}
+		inFence := false
+		for _, line := range strings.Split(string(data), "\n") {
+			if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				inFence = !inFence
+				continue
+			}
+			if inFence {
+				continue
+			}
+			for _, match := range linkPattern.FindAllStringSubmatch(line, -1) {
+				target, _, _ := strings.Cut(match[1], "#")
+				target, _, _ = strings.Cut(target, "?")
+				if target == "" || strings.Contains(target, "://") || strings.HasPrefix(target, "mailto:") || path.IsAbs(target) {
+					continue
+				}
+				if resolved := path.Clean(path.Join(path.Dir(e.Path), target)); source.Has(r.src, resolved) && !r.seen[resolved] {
+					found[resolved] = true
+				}
+			}
+		}
+	}
+	linked := make([]string, 0, len(found))
+	for p := range found {
+		linked = append(linked, p)
+	}
+	sort.Strings(linked)
+	return linked
+}
+
 // frontmatter returns the YAML frontmatter lines, if the file starts with "---".
 func frontmatter(data []byte) []string {
-	text := string(data)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	if !strings.HasPrefix(text, "---\n") {
 		return nil
 	}

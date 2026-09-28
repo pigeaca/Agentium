@@ -61,13 +61,15 @@ func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitIn(t, repo, "init", "-q", "-b", "main")
-	writeFile(t, repo, "CLAUDE.md", "# Project\n@AGENTS.md\n")
+	writeFile(t, repo, "CLAUDE.md", "# Project\n@AGENTS.md\nSee [testing](docs/testing.md).\n")
+	writeFile(t, repo, "docs/testing.md", "Run go test.\n")
 	writeFile(t, repo, "AGENTS.md", "Run the tests before finishing.\n")
 	writeFile(t, repo, ".claude/rules/go.md", "Always gofmt.\n")
 	writeFile(t, repo, "go.mod", "module x\n")
 	gitIn(t, repo, "add", "-A")
 	gitIn(t, repo, "commit", "-q", "-m", "initial")
-	run := cliIn(t, repo, filepath.Join(t.TempDir(), "data"))
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
 
 	expect(t, run("context", "list"), ExitError, "run `agentium init` first")
 	expect(t, run("init"), ExitOK)
@@ -77,7 +79,18 @@ func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
 	if strings.Contains(show.stdout, "personal notes") {
 		t.Error("files above the repository must not be read")
 	}
-	expect(t, run("context", "snapshot", "full"), ExitOK, "Saved snapshot full from HEAD", "3 file(s)")
+	expect(t, run("context", "snapshot", "full"), ExitOK, "Saved snapshot full from HEAD", "3 file(s)",
+		"1 file(s) linked from the context are not in this snapshot (e.g. docs/testing.md)")
+	expect(t, run("context", "snapshot", "--include", "docs/testing.md", "with-docs"), ExitOK, "4 file(s)")
+	linked := run("context", "snapshot", "all-linked", "--include-linked")
+	expect(t, linked, ExitOK, "4 file(s)")
+	if strings.Contains(linked.stdout, "linked from the context are not in this snapshot") {
+		t.Errorf("--include-linked left linked files out:\n%s", linked.stdout)
+	}
+	expect(t, run("context", "snapshot", "--include", "go.mod", "bad-include"), ExitError, "only Markdown or text documents")
+	if bare := filepath.Join(data, "projects", "1", "repo.git"); strings.Contains(gitIn(t, bare, "for-each-ref"), "refs/agentium/sources") {
+		t.Error("show and snapshot must read commits in place, not copy the repository's history")
+	}
 
 	// A minimal version, edited in the working tree and never committed.
 	writeFile(t, repo, "CLAUDE.md", "# Project\n")
@@ -104,11 +117,18 @@ func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
 		"Saved snapshot minimal from working tree", "not in this snapshot (e.g. main.go)", "AGENTS.md is not loaded")
 	expect(t, run("context", "snapshot", "full"), ExitError, `snapshot "full" already exists`)
 	expect(t, run("context", "snapshot", "Bad Name"), ExitUsage, "must be lowercase")
+	expect(t, run("context", "snapshot", "a..b"), ExitUsage, "must be lowercase")
+	expect(t, run("context", "show", "--ref", "--output=escape.txt"), ExitError, "is not a commit")
+	if _, err := os.Stat(filepath.Join(repo, "escape.txt")); err == nil {
+		t.Error("a ref was taken as a git option")
+	}
+	expect(t, run("context", "snapshot", "-h"), ExitOK, "--include PATH")
+	expect(t, run("context", "diff", "--bogus"), ExitUsage, "flag provided but not defined")
 	expect(t, run("context", "snapshot", "x", "--ref", "HEAD", "--working-tree"), ExitUsage)
 	expect(t, run("context", "snapshot", "x", "--ref", "no-such-branch"), ExitError, `"no-such-branch" is not a commit`)
 	expect(t, run("context", "show", "--ref", "HEAD"), ExitOK, "(commit ", "via CLAUDE.md")
 	list := run("context", "list")
-	expect(t, list, ExitOK, "full", "minimal", "working tree")
+	expect(t, list, ExitOK, "full", "with-docs", "all-linked", "minimal", "working tree")
 	if strings.Index(list.stdout, "full") > strings.Index(list.stdout, "minimal") {
 		t.Errorf("list is not oldest first:\n%s", list.stdout)
 	}

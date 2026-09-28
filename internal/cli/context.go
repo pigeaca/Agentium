@@ -20,10 +20,13 @@ import (
 )
 
 const contextUsage = `Usage:
-  agentium context show [--ref REF]                          what Claude Code loads (default: the working tree)
-  agentium context snapshot NAME [--ref REF | --working-tree] save a version (default: --ref HEAD)
-  agentium context list                                      saved versions
-  agentium context diff A B [--patch]                        compare two saved versions
+  agentium context show [--ref REF]              what Claude Code loads (default: the working tree)
+  agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]... [--include-linked]
+                                                 save a version (default: --ref HEAD); --include adds a
+                                                 Markdown or text document, --include-linked every
+                                                 document the context links to
+  agentium context list                          saved versions
+  agentium context diff A B [--patch]            compare two saved versions
 `
 
 func runContext(ctx context.Context, env Env, args []string) int {
@@ -40,6 +43,9 @@ func runContext(ctx context.Context, env Env, args []string) int {
 		return contextList(ctx, env, args[1:])
 	case "diff":
 		return contextDiff(ctx, env, args[1:])
+	case "-h", "--help", "help":
+		fmt.Fprint(env.Stdout, contextUsage)
+		return ExitOK
 	default:
 		fmt.Fprintf(env.Stderr, "agentium context: unknown subcommand %q\n\n%s", args[0], contextUsage)
 		return ExitUsage
@@ -57,7 +63,13 @@ type workspace struct {
 
 // openProject opens the project containing env.Dir; it must have been registered with `agentium init`.
 func openProject(ctx context.Context, env Env) (*workspace, error) {
+	if env.Dir == "" {
+		return nil, errors.New("the current folder cannot be read: run agentium inside your repository")
+	}
 	root, err := gitx.Run(ctx, "-C", env.Dir, "rev-parse", "--show-toplevel")
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s is not inside a git repository", env.Dir)
 	}
@@ -66,6 +78,9 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 	}
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
+		return nil, err
+	}
+	if err := layout.CheckOutside(root); err != nil {
 		return nil, err
 	}
 	if err := layout.Ensure(); err != nil {
@@ -93,33 +108,37 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 
 func (w *workspace) Close() { w.db.Close() }
 
-// read returns a view of the working tree (ref == "") or of ref, and the user commit it corresponds to. Commits are
-// copied into Agentium's bare repository first, so later reads never touch the user's repository.
+// read returns a read-only view of the working tree (ref == "") or of ref, and the commit HEAD or ref names. Nothing
+// is copied: commits are read in place with ls-tree and cat-file.
 func (w *workspace) read(ctx context.Context, ref string) (source.Source, string, error) {
 	target := ref
 	if target == "" {
 		target = "HEAD"
 	}
-	commit, err := gitx.Run(ctx, "-C", w.root, "rev-parse", "--verify", "--quiet", target+"^{commit}")
+	// --end-of-options: a ref such as "--output=x" is a name to look up, never an option.
+	commit, err := gitx.Run(ctx, "-C", w.root, "rev-parse", "--verify", "--quiet", "--end-of-options", target+"^{commit}")
+	if ctx.Err() != nil {
+		return nil, "", ctx.Err()
+	}
 	if err != nil || commit == "" {
 		return nil, "", fmt.Errorf("%q is not a commit in %s", target, w.root)
-	}
-	if err := gitx.FetchCommit(ctx, w.bare, w.root, commit); err != nil {
-		return nil, "", err
 	}
 	if ref == "" {
 		src, err := source.WorkingTree(ctx, w.root)
 		return src, commit, err
 	}
-	src, err := source.Commit(ctx, commit, "--git-dir", w.bare)
+	src, err := source.Commit(ctx, commit, "-C", w.root)
 	return src, commit, err
 }
 
 func contextShow(ctx context.Context, env Env, args []string) int {
-	fs := newFlags("context show", env.Stderr)
+	fs := flag.NewFlagSet("context show", flag.ContinueOnError)
 	ref := fs.String("ref", "", "show the context at this commit instead of the working tree")
-	rest, err := parseInterspersed(fs, args)
-	if err != nil || len(rest) != 0 {
+	rest, code, ok := parseArgs(env, fs, args, contextUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 0 {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
@@ -190,23 +209,41 @@ func printContext(out io.Writer, project, where string, resolved claudectx.Conte
 			fmt.Fprintf(out, "  %s\n", e.Path)
 		}
 	}
+	if len(resolved.Linked) > 0 {
+		fmt.Fprintln(out, "Linked (read only if the agent opens them; in a snapshot only with --include):")
+		for _, p := range resolved.Linked {
+			fmt.Fprintf(out, "  %s\n", p)
+		}
+	}
 	for _, warning := range resolved.Warnings {
 		fmt.Fprintf(out, "warning: %s\n", warning)
 	}
 }
 
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ",") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
+
 func contextSnapshot(ctx context.Context, env Env, args []string) int {
-	fs := newFlags("context snapshot", env.Stderr)
+	fs := flag.NewFlagSet("context snapshot", flag.ContinueOnError)
 	ref := fs.String("ref", "", "snapshot the context at this commit (default HEAD)")
 	workingTree := fs.Bool("working-tree", false, "snapshot the context in the working tree, including uncommitted edits")
-	rest, err := parseInterspersed(fs, args)
-	if err != nil || len(rest) != 1 || (*workingTree && *ref != "") {
+	var include stringList
+	fs.Var(&include, "include", "also capture this Markdown or text document (repeatable)")
+	includeLinked := fs.Bool("include-linked", false, "also capture every document the context links to")
+	rest, code, ok := parseArgs(env, fs, args, contextUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 1 || (*workingTree && *ref != "") {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
 	name := rest[0]
-	if !snapshot.NamePattern.MatchString(name) {
-		fmt.Fprintf(env.Stderr, "agentium context snapshot: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63)\n", name)
+	if !snapshot.ValidName(name) {
+		fmt.Fprintf(env.Stderr, "agentium context snapshot: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63; no \"..\", no trailing \".\" or \".lock\")\n", name)
 		return ExitUsage
 	}
 	if !*workingTree && *ref == "" {
@@ -228,20 +265,35 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	if *workingTree {
 		label = "working tree"
 	}
-	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit)
-	if err != nil {
-		return fail(env, err)
+	if *includeLinked {
+		resolved, err := claudectx.Resolve(src)
+		if err != nil {
+			return fail(env, err)
+		}
+		for _, p := range resolved.Linked {
+			if snapshot.IsDocument(p) {
+				include = append(include, p)
+			}
+		}
 	}
-	if _, err := gitx.Run(ctx, "--git-dir", w.bare, "update-ref", "refs/agentium/snapshots/"+name, commitID); err != nil {
+	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include)
+	if err != nil {
 		return fail(env, err)
 	}
 	encoded, err := json.Marshal(manifest)
 	if err != nil {
 		return fail(env, fmt.Errorf("encode manifest: %w", err))
 	}
+	// The database decides who owns a name (a concurrent snapshot with the same name fails here); the ref then keeps
+	// the commit from garbage collection.
 	if _, err := w.db.SaveSnapshot(ctx, store.Snapshot{ProjectID: w.project.ID, Name: name, Source: label, SourceCommit: commit,
-		CommitID: commitID, Manifest: encoded, CreatedAt: env.Now()}); err != nil {
+		CommitID: commitID, Manifest: encoded, CreatedAt: env.Now()}); errors.Is(err, store.ErrExists) {
+		return fail(env, fmt.Errorf("snapshot %q already exists; choose another name", name))
+	} else if err != nil {
 		return fail(env, err)
+	}
+	if _, err := gitx.Run(ctx, "--git-dir", w.bare, "update-ref", "refs/agentium/snapshots/"+name, commitID); err != nil {
+		return fail(env, errors.Join(err, w.db.DeleteSnapshot(ctx, w.project.ID, name)))
 	}
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
 		name, label, shortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
@@ -254,14 +306,40 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 			fmt.Fprintf(env.Stdout, "note: %d changed file(s) are not context and are not in this snapshot (e.g. %s)\n", len(changes), changes[0])
 		}
 	}
+	if linked := notIncluded(src, manifest); len(linked) > 0 {
+		fmt.Fprintf(env.Stdout, "note: %d file(s) linked from the context are not in this snapshot (e.g. %s); add them with --include PATH\n", len(linked), linked[0])
+	}
 	for _, warning := range manifest.Warnings {
 		fmt.Fprintf(env.Stdout, "warning: %s\n", warning)
 	}
 	return ExitOK
 }
 
+// notIncluded lists linked documents of src that the snapshot does not capture.
+func notIncluded(src source.Source, manifest snapshot.Manifest) []string {
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return nil
+	}
+	captured := map[string]bool{}
+	for _, p := range manifest.Paths() {
+		captured[p] = true
+	}
+	var missing []string
+	for _, p := range resolved.Linked {
+		if !captured[p] {
+			missing = append(missing, p)
+		}
+	}
+	return missing
+}
+
 func contextList(ctx context.Context, env Env, args []string) int {
-	if len(args) != 0 {
+	rest, code, ok := parseArgs(env, flag.NewFlagSet("context list", flag.ContinueOnError), args, contextUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 0 {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
@@ -291,10 +369,13 @@ func contextList(ctx context.Context, env Env, args []string) int {
 }
 
 func contextDiff(ctx context.Context, env Env, args []string) int {
-	fs := newFlags("context diff", env.Stderr)
+	fs := flag.NewFlagSet("context diff", flag.ContinueOnError)
 	patch := fs.Bool("patch", false, "print the full diff")
-	rest, err := parseInterspersed(fs, args)
-	if err != nil || len(rest) != 2 {
+	rest, code, ok := parseArgs(env, fs, args, contextUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 2 {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
@@ -328,25 +409,4 @@ func contextDiff(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stdout, fullPatch)
 	}
 	return ExitOK
-}
-
-func newFlags(name string, stderr io.Writer) *flag.FlagSet {
-	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	return fs
-}
-
-// parseInterspersed parses flags anywhere among the arguments (the flag package stops at the first positional one).
-func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
-	var positional []string
-	for {
-		if err := fs.Parse(args); err != nil {
-			return nil, err
-		}
-		if fs.NArg() == 0 {
-			return positional, nil
-		}
-		positional = append(positional, fs.Arg(0))
-		args = fs.Args()[1:]
-	}
 }

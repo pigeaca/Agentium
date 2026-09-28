@@ -276,6 +276,18 @@ func (s *Store) SnapshotByName(ctx context.Context, projectID int64, name string
 	return snaps[0], nil
 }
 
+// DeleteSnapshot removes a project's snapshot record, or returns ErrNotFound.
+func (s *Store) DeleteSnapshot(ctx context.Context, projectID int64, name string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM snapshots WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return fmt.Errorf("delete snapshot %q: %w", name, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("snapshot %q: %w", name, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
 // Snapshots lists a project's snapshots, oldest first.
 func (s *Store) Snapshots(ctx context.Context, projectID int64) ([]Snapshot, error) {
 	return s.querySnapshots(ctx, `WHERE project_id = ? ORDER BY created_at, id`, projectID)

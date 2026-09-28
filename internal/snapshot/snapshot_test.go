@@ -58,11 +58,11 @@ var full = memSource{
 func TestBuildIsDeterministicAndHoldsOnlyContext(t *testing.T) {
 	ctx := context.Background()
 	bare := bareRepo(t)
-	first, manifest, err := Build(ctx, bare, full, "snapshot full")
+	first, manifest, err := Build(ctx, bare, full, "snapshot full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, _, err := Build(ctx, bareRepo(t), full, "snapshot full")
+	again, _, err := Build(ctx, bareRepo(t), full, "snapshot full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,12 +97,12 @@ func TestBuildIsDeterministicAndHoldsOnlyContext(t *testing.T) {
 func TestDiff(t *testing.T) {
 	ctx := context.Background()
 	bare := bareRepo(t)
-	fullCommit, _, err := Build(ctx, bare, full, "full")
+	fullCommit, _, err := Build(ctx, bare, full, "full", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	minimal := memSource{"CLAUDE.md": "# Project\nKeep it short.\n", "main.go": "package main\n"}
-	minimalCommit, _, err := Build(ctx, bare, minimal, "minimal")
+	minimalCommit, _, err := Build(ctx, bare, minimal, "minimal", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +147,8 @@ func TestPlanOverlay(t *testing.T) {
 		{name: "same file imported", snap: memSource{"CLAUDE.md": "@main.go\n", "main.go": "package main\n"},
 			writes: []string{"CLAUDE.md", "main.go"}, deletes: []string{".claude/hooks/check.sh", ".claude/rules/go.md", "AGENTS.md"}},
 		{name: "changes source code", snap: memSource{"CLAUDE.md": "@main.go\n", "main.go": "package changed\n"}, err: ErrTouchesNonContext},
+		{name: "changes a document", snap: memSource{"CLAUDE.md": "@docs/x.md\n", "docs/x.md": "edited guide\n"},
+			writes: []string{"CLAUDE.md", "docs/x.md"}, deletes: []string{".claude/hooks/check.sh", ".claude/rules/go.md", "AGENTS.md"}},
 		// Taken when docs/x.md did not exist: in this base the import would resolve and load it.
 		{name: "import appears in base", snap: memSource{"CLAUDE.md": "@docs/x.md\n"}, err: ErrArmMismatch},
 	}
@@ -169,6 +171,63 @@ func TestPlanOverlay(t *testing.T) {
 	}
 	if _, err := PlanOverlay(base, memSource{"CLAUDE.md": "@main.go\n", "main.go": "package changed\n"}); err == nil || !strings.Contains(err.Error(), "main.go") {
 		t.Errorf("the refusal must name the file: %v", err)
+	}
+}
+
+func TestPlanOverlayWhenTheBaseImportsCodeAndHarnessDiffers(t *testing.T) {
+	base := memSource{
+		"CLAUDE.md":             "See @package.json and @docs/guide.md\n",
+		"package.json":          "{\"scripts\":{\"test\":\"jest\"}}\n",
+		"docs/guide.md":         "old guide\n",
+		".claude/settings.json": "{\"permissions\":{}}\n",
+		".mcp.json":             "{}\n",
+	}
+	// Imported by the base, but configuration: a different package.json would change the build, not only the context.
+	if _, err := PlanOverlay(base, memSource{"CLAUDE.md": "@package.json\n", "package.json": "{}\n"}); !errors.Is(err, ErrTouchesNonContext) {
+		t.Errorf("imported package.json changed: err = %v, want ErrTouchesNonContext", err)
+	}
+	overlay, err := PlanOverlay(base, memSource{"CLAUDE.md": "See @docs/guide.md\n", "docs/guide.md": "new guide\n",
+		".claude/settings.json": "{\"permissions\":{\"allow\":[\"Bash\"]}}\n", ".claude/hooks/pre.sh*": "#!/bin/sh\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{".claude/hooks/pre.sh", ".claude/settings.json", ".mcp.json"}; !slices.Equal(overlay.HarnessChanged, want) {
+		t.Errorf("harness changed = %v, want %v", overlay.HarnessChanged, want)
+	}
+	if !slices.Equal(overlay.Deletes, []string{".mcp.json"}) { // package.json stays: the base only imported it
+		t.Errorf("deletes = %v", overlay.Deletes)
+	}
+}
+
+func TestBuildIncludesDocumentsAndOddPaths(t *testing.T) {
+	ctx := context.Background()
+	bare := bareRepo(t)
+	src := memSource{
+		"CLAUDE.md":                          "Read [testing](.agents/testing.md)\n",
+		".agents/testing.md":                 "testing\n",
+		".claude/skills/r/SKILL.md":          "---\nname: r\ndescription: d\n---\n",
+		".claude/skills/r/tab\tand\nline.md": "odd name\n", // must not corrupt the index input
+		"main.go":                            "package main\n",
+	}
+	commit, manifest, err := Build(ctx, bare, src, "with include", []string{".agents/testing.md", "CLAUDE.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := gitx.Output(ctx, nil, "--git-dir", bare, "ls-tree", "-r", "-z", "--name-only", commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ".agents/testing.md\x00.claude/skills/r/SKILL.md\x00.claude/skills/r/tab\tand\nline.md\x00CLAUDE.md\x00"
+	if string(tree) != want {
+		t.Errorf("tree = %q, want %q", tree, want)
+	}
+	if !slices.Contains(manifest.Paths(), ".agents/testing.md") || manifest.StartupBytes != len("Read [testing](.agents/testing.md)\n")+len("r")+len("d") {
+		t.Errorf("manifest = %+v", manifest)
+	}
+	for _, bad := range []string{"main.go", "missing.md"} {
+		if _, _, err := Build(ctx, bare, src, "bad include", []string{bad}); err == nil || !strings.Contains(err.Error(), "--include "+bad) {
+			t.Errorf("--include %s: err = %v", bad, err)
+		}
 	}
 }
 
@@ -207,11 +266,12 @@ func TestUncapturedChangesListsNonContextEdits(t *testing.T) {
 	}
 }
 
-func TestNamePattern(t *testing.T) {
+func TestValidName(t *testing.T) {
 	for name, ok := range map[string]bool{"baseline": true, "v2.1_min-ctx": true, "0": true, "": false, "Upper": false,
-		"-lead": false, "has space": false, "a/b": false, strings.Repeat("a", 63): true, strings.Repeat("a", 64): false} {
-		if NamePattern.MatchString(name) != ok {
-			t.Errorf("NamePattern(%q) = %v, want %v", name, !ok, ok)
+		"-lead": false, "has space": false, "a/b": false, strings.Repeat("a", 63): true, strings.Repeat("a", 64): false,
+		"a..b": false, "x.lock": false, "x.": false} {
+		if ValidName(name) != ok {
+			t.Errorf("ValidName(%q) = %v, want %v", name, !ok, ok)
 		}
 	}
 }

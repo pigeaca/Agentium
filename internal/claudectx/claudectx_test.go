@@ -155,3 +155,62 @@ func TestSharedImportIsNotACycle(t *testing.T) {
 		t.Errorf("shared import: %+v", ctx)
 	}
 }
+
+func TestImportsFromRulesAndNestedFiles(t *testing.T) {
+	ctx := resolve(t, memSource{
+		"CLAUDE.md":             "Root\n",
+		".claude/rules/a.md":    "@../../docs/guide.md\n",
+		".claude/rules/web.md":  "---\r\npaths: web/**\r\n---\r\n@../../docs/react.md\r\n", // CRLF frontmatter still scopes it
+		"web/CLAUDE.md":         "@notes.md\n",
+		"docs/guide.md":         "guide\n",
+		"docs/react.md":         "react\n",
+		"web/notes.md":          "notes\n",
+		"docs/shared.md":        "shared\n",
+		".claude/rules/both.md": "---\npaths: x/**\n---\n@../../docs/shared.md\n",
+		".claude/rules/z.md":    "@../../docs/shared.md\n", // a startup rule wins over the scoped one
+	})
+	byPath := map[string]Entry{}
+	for _, e := range ctx.Entries {
+		byPath[e.Path] = e
+	}
+	for p, want := range map[string]struct {
+		via     string
+		startup bool
+	}{
+		"docs/guide.md":  {".claude/rules/a.md", true},
+		"docs/react.md":  {".claude/rules/web.md", false},
+		"web/notes.md":   {"web/CLAUDE.md", false},
+		"docs/shared.md": {".claude/rules/z.md", true},
+	} {
+		e, ok := byPath[p]
+		if !ok || e.Kind != KindImport || e.Via != want.via || (e.StartupBytes > 0) != want.startup {
+			t.Errorf("%s = %+v, want import via %s, startup %v", p, e, want.via, want.startup)
+		}
+	}
+	if byPath[".claude/rules/web.md"].Kind != KindScopedRule {
+		t.Errorf("CRLF frontmatter not parsed: %+v", byPath[".claude/rules/web.md"])
+	}
+}
+
+func TestBareImportsAndLinkedFiles(t *testing.T) {
+	ctx := resolve(t, memSource{
+		"CLAUDE.md": "See @README and @Makefile; ask @alice.\n" +
+			"Read [testing](.agents/testing.md#rules), [the guide](docs/guide.md \"Guide\"), [site](https://example.com), [top](#top).\n" +
+			"@docs/guide.md\n```\n[in code](.agents/fenced.md)\n```\n",
+		"README":             "readme\n",
+		"Makefile":           "test:\n",
+		".agents/testing.md": "testing rules\n",
+		".agents/fenced.md":  "x\n",
+		"docs/guide.md":      "guide\n",
+	})
+	got := kinds(ctx)
+	if got["README"] != KindImport || got["Makefile"] != KindImport {
+		t.Errorf("bare imports of existing files: %v", got)
+	}
+	if hasWarning(ctx, "alice") {
+		t.Errorf("a mention is not a missing import: %q", ctx.Warnings)
+	}
+	if want := []string{".agents/testing.md"}; strings.Join(ctx.Linked, ",") != strings.Join(want, ",") {
+		t.Errorf("linked = %v, want %v (not imported files, URLs, anchors or fenced links)", ctx.Linked, want)
+	}
+}
