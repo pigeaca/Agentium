@@ -200,3 +200,57 @@ func TestConcurrentOpensOfAFreshDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestTasksRoundTripUpdateAndCascade(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := Task{ProjectID: app.ID, Name: "fix-parser", Instruction: "Fix the parser.", Source: "commit abc",
+		BaseCommit: "base", SolutionCommit: "sol", HiddenTests: []string{"p/parser_test.go"}, Reference: []string{"p/parser.go"},
+		Verify: []string{"go test ./..."}, Setup: []string{"make assets"}, NeedsReview: true, CreatedAt: now}
+	if _, err := s.SaveTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveTask(ctx, task); !errors.Is(err, ErrExists) {
+		t.Errorf("duplicate: err = %v, want ErrExists", err)
+	}
+	manual := Task{ProjectID: app.ID, Name: "manual", Instruction: "Do it.", Source: "manual", BaseCommit: "base",
+		Verify: []string{"make test"}, CreatedAt: now.Add(time.Minute)}
+	if _, err := s.SaveTask(ctx, manual); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.TaskByName(ctx, app.ID, "fix-parser")
+	if err != nil || got.SolutionCommit != "sol" || got.HiddenTests[0] != "p/parser_test.go" || got.Reference[0] != "p/parser.go" || got.Setup[0] != "make assets" ||
+		!got.NeedsReview || got.Validation != nil || !got.CreatedAt.Equal(now) {
+		t.Errorf("TaskByName = %+v, %v", got, err)
+	}
+	got.Instruction, got.NeedsReview, got.Validation = "Make the parser accept empty input.", false, []byte(`{"status":"valid"}`)
+	got.Setup = nil
+	if err := s.UpdateTask(ctx, got, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := s.TaskByName(ctx, app.ID, "fix-parser"); again.NeedsReview || string(again.Validation) != `{"status":"valid"}` || len(again.Setup) != 0 ||
+		!again.UpdatedAt.Equal(now.Add(time.Hour)) || again.Instruction != "Make the parser accept empty input." {
+		t.Errorf("after update: %+v", again)
+	}
+	list, err := s.Tasks(ctx, app.ID)
+	if err != nil || len(list) != 2 || list[1].Name != "manual" || list[1].HiddenTests == nil || len(list[1].HiddenTests) != 0 {
+		t.Errorf("Tasks = %+v, %v", list, err)
+	}
+	if err := s.DeleteTask(ctx, app.ID, "manual"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateTask(ctx, Task{ProjectID: app.ID, Name: "manual"}, now); !errors.Is(err, ErrNotFound) {
+		t.Errorf("update of a deleted task: err = %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.Tasks(ctx, app.ID); len(list) != 0 {
+		t.Errorf("tasks survive their project: %+v", list)
+	}
+}

@@ -36,6 +36,7 @@ Usage:
 Commands:
   init [path]   Register the repository at path (default: current directory) and report what Agentium found
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
+  task          Add, import and validate coding tasks (agentium task for details)
   version       Print the version and build information
   help          Show this help
 
@@ -61,6 +62,8 @@ func Run(ctx context.Context, env Env) int {
 		return runInit(ctx, env, args)
 	case "context":
 		return runContext(ctx, env, args)
+	case "task":
+		return runTask(ctx, env, args)
 	default:
 		fmt.Fprintf(env.Stderr, "agentium: unknown command %q\n\n%s", command, usage)
 		return ExitUsage
