@@ -473,3 +473,89 @@ func nonNil(list []string) []string {
 	}
 	return list
 }
+
+// Run is a stored agent run (see migrations/0004_runs.sql).
+type Run struct {
+	ID        string
+	ProjectID int64
+	TaskID    int64 // 0 when the task was removed
+	TaskName  string
+	Arm       string
+	Outcome   string
+	Passed    *bool
+	CostUSD   float64
+	Record    []byte // JSON
+	Started   time.Time
+	Finished  time.Time
+}
+
+// SaveRun records a finished run.
+func (s *Store) SaveRun(ctx context.Context, run Run) error {
+	var taskID, passed any
+	if run.TaskID != 0 {
+		taskID = run.TaskID
+	}
+	if run.Passed != nil {
+		passed = *run.Passed
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		INSERT INTO runs (id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Arm, run.Outcome, passed,
+		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished)); err != nil {
+		return fmt.Errorf("save run %s: %w", run.ID, err)
+	}
+	return nil
+}
+
+// RunByID returns a project's run, or ErrNotFound.
+func (s *Store) RunByID(ctx context.Context, projectID int64, id string) (Run, error) {
+	runs, err := s.queryRuns(ctx, `WHERE project_id = ? AND id = ?`, projectID, id)
+	if err != nil {
+		return Run{}, err
+	}
+	if len(runs) == 0 {
+		return Run{}, fmt.Errorf("run %s: %w", id, ErrNotFound)
+	}
+	return runs[0], nil
+}
+
+// Runs lists a project's runs, oldest first.
+func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
+	return s.queryRuns(ctx, `WHERE project_id = ? ORDER BY started_at, id`, projectID)
+}
+
+func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Run, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, task_id, task_name, arm, outcome, passed, cost_usd, record, started_at, finished_at
+		FROM runs `+clause, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query runs: %w", err)
+	}
+	defer rows.Close()
+	var runs []Run
+	for rows.Next() {
+		var run Run
+		var taskID sql.NullInt64
+		var passed sql.NullBool
+		var record, started, finished string
+		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
+			&record, &started, &finished); err != nil {
+			return nil, fmt.Errorf("read run: %w", err)
+		}
+		run.TaskID, run.Record = taskID.Int64, []byte(record)
+		if passed.Valid {
+			run.Passed = &passed.Bool
+		}
+		if run.Started, err = parseTime(started); err != nil {
+			return nil, err
+		}
+		if run.Finished, err = parseTime(finished); err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query runs: %w", err)
+	}
+	return runs, nil
+}

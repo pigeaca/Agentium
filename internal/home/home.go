@@ -12,11 +12,15 @@ import (
 	"strings"
 )
 
-// Layout is the data folder: the SQLite database and per-project artifacts (checkouts, transcripts, reports).
+// Layout is the data folder: the SQLite database, per-project artifacts (validation logs, reports), and runs. A run's
+// workspace (the agent's checkout) lives apart from its records (transcripts, verification copies with hidden tests),
+// so the agent can be denied everything but its own workspace.
 type Layout struct {
-	Root      string
-	Database  string
-	Artifacts string
+	Root       string
+	Database   string
+	Artifacts  string
+	Workspaces string
+	Records    string
 }
 
 // Resolve returns the layout under $AGENTIUM_HOME, or ~/.agentium when that is unset. getenv is os.Getenv outside tests.
@@ -33,7 +37,8 @@ func Resolve(getenv func(string) string) (Layout, error) {
 	if err != nil {
 		return Layout{}, fmt.Errorf("resolve data folder %q: %w", root, err)
 	}
-	return Layout{Root: root, Database: filepath.Join(root, "agentium.db"), Artifacts: filepath.Join(root, "artifacts")}, nil
+	return Layout{Root: root, Database: filepath.Join(root, "agentium.db"), Artifacts: filepath.Join(root, "artifacts"),
+		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records")}, nil
 }
 
 // Ensure creates missing folders readable only by the owner: transcripts and checkouts contain source code. It never
@@ -53,7 +58,7 @@ func (l Layout) Ensure() error {
 	if err := os.MkdirAll(filepath.Dir(l.Root), 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(l.Root), err)
 	}
-	for _, dir := range []string{l.Root, l.Artifacts} {
+	for _, dir := range []string{l.Root, l.Artifacts, l.Workspaces, l.Records} {
 		err := os.Mkdir(dir, 0o700)
 		if errors.Is(err, fs.ErrExist) {
 			continue

@@ -1,0 +1,291 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// fakeAgent writes a stand-in for Claude Code. It records what it saw (its folder, whether the hidden test was
+// present, its config folder), optionally edits the checkout, and prints a stream-json transcript whose result text
+// includes the sign-in token, so redaction can be checked.
+func fakeAgent(t *testing.T, edit, permissionMode, extraTool string) (cli, seen string) {
+	t.Helper()
+	dir := t.TempDir()
+	seen = filepath.Join(dir, "seen")
+	script := `#!/bin/sh
+{ pwd; test -e tests/value_test.sh && echo hidden-present || echo hidden-absent; echo "config=$CLAUDE_CONFIG_DIR"; } > ` + seen + `
+` + edit + `
+cat <<EOF
+{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"` + permissionMode + `","tools":["Bash","Edit","Read"],"skills":[],"slash_commands":["compact"]}
+{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":5,"cache_creation_input_tokens":25000,"cache_read_input_tokens":0,"service_tier":"standard"},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sh run_tests.sh"}},{"type":"tool_use","id":"t2","name":"Edit","input":{"file_path":"$(pwd)/value.txt"}}` + extraTool + `]}}
+{"type":"result","subtype":"success","is_error":false,"result":"Done. (token: ${CLAUDE_CODE_OAUTH_TOKEN:-none})","total_cost_usd":0.25,"num_turns":4,"duration_ms":30000,"permission_denials":[],"modelUsage":{"claude-sonnet-5":{"inputTokens":10,"outputTokens":500,"cacheReadInputTokens":100,"cacheCreationInputTokens":25000,"costUSD":0.25}}}
+EOF
+`
+	cli = filepath.Join(dir, "claude")
+	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return cli, seen
+}
+
+func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, repo, "CLAUDE.md", "# Rules\n")
+	writeFile(t, repo, "value.txt", "old\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "tests/value_test.sh", "grep -q new value.txt\n")
+	writeFile(t, repo, "value.txt", "new\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Make the value new")
+
+	home := t.TempDir()
+	data := filepath.Join(t.TempDir(), "data")
+	tokenFile := filepath.Join(home, "token")
+	writeFile(t, home, "token", "tok-secret-1234567890\n")
+	if err := os.Chmod(tokenFile, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": home, "AGENTIUM_CLAUDE_TOKEN_FILE": tokenFile}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv: func(key string) string { return vars[key] },
+			Environ: func() []string {
+				return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home, "GITHUB_TOKEN=ghp_notforthechild"}
+			},
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now:      func() time.Time { return time.Now() },
+		})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	expect(t, run("task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
+	before := repoState(t, repo)
+
+	solver, seen := fakeAgent(t, "printf 'new\\n' > value.txt", "acceptEdits", "")
+	vars["AGENTIUM_CLAUDE"] = solver
+	solved := run("run", "once", "value")
+	expect(t, solved, ExitOK, "Starting a real Claude Code run", "sign-in token-file", "outcome      ok; verification passed",
+		"changes      1 file(s), +1 -1, 0 commit(s)", "ran the checks: true", "first request 25005 tokens")
+	saw, _ := os.ReadFile(seen)
+	if !strings.Contains(string(saw), "hidden-absent") || !strings.Contains(string(saw), filepath.Join("workspaces")) ||
+		!strings.Contains(string(saw), "config="+filepath.Join(data, "workspaces")) {
+		t.Errorf("the agent saw:\n%s", saw)
+	}
+	records := filepath.Join(data, "records")
+	entries, _ := os.ReadDir(records)
+	if len(entries) != 1 {
+		t.Fatalf("records = %v", entries)
+	}
+	runDir := filepath.Join(records, entries[0].Name())
+	transcript, _ := os.ReadFile(filepath.Join(runDir, "stream.jsonl"))
+	if strings.Contains(string(transcript), "tok-secret-1234567890") || !strings.Contains(string(transcript), "[REDACTED]") {
+		t.Errorf("the token must be redacted from the transcript:\n%s", transcript)
+	}
+	diff, _ := os.ReadFile(filepath.Join(runDir, "agent.diff"))
+	if !strings.Contains(string(diff), "+new") || strings.Contains(string(diff), "value_test.sh") {
+		t.Errorf("the agent's diff (hidden tests are not the agent's work):\n%s", diff)
+	}
+	for _, gone := range []string{filepath.Join(runDir, "verify"), filepath.Join(data, "workspaces", entries[0].Name())} {
+		if _, err := os.Stat(gone); err == nil {
+			t.Errorf("%s should be removed after the run", gone)
+		}
+	}
+
+	idle, _ := fakeAgent(t, "", "acceptEdits", "")
+	vars["AGENTIUM_CLAUDE"] = idle
+	expect(t, run("run", "once", "value"), ExitOK, "outcome      ok; verification failed", "changes      0 file(s)")
+
+	drifted, _ := fakeAgent(t, "", "default", "")
+	vars["AGENTIUM_CLAUDE"] = drifted
+	expect(t, run("run", "once", "value"), ExitOK, "outcome      unfair", `unfair: permission mode "default", not "acceptEdits"`)
+
+	peek := `,{"type":"tool_use","id":"t3","name":"Read","input":{"file_path":"` + filepath.Join(data, "agentium.db") + `"}}`
+	peeker, _ := fakeAgent(t, "", "acceptEdits", peek)
+	vars["AGENTIUM_CLAUDE"] = peeker
+	expect(t, run("run", "once", "value"), ExitOK, "outcome      unfair", "1 file tool call(s) reached Agentium's data")
+
+	list := run("run", "list")
+	expect(t, list, ExitOK, "value", "yes", "no", "unfair", "$0.25")
+	id := strings.Fields(strings.Split(list.stdout, "\n")[1])[0]
+	expect(t, run("run", "show", id), ExitOK, "Run "+id, "files        agent.diff", "stream.jsonl", "verify.log")
+	expect(t, run("run", "show", "nope"), ExitError, "not found")
+
+	expect(t, run("task", "add", "broken-setup", "--base", "HEAD~1", "--instruction", "Anything.", "--setup", "exit 3", "--verify", "true"), ExitOK)
+	expect(t, run("run", "once", "broken-setup"), ExitOK, "outcome      infra; verification not run", "note: setup failed")
+	expect(t, run("run", "once", "value", "--snapshot", "missing"), ExitError, `snapshot "missing"`)
+	expect(t, run("run", "once"), ExitUsage)
+
+	if after := repoState(t, repo); after != before {
+		t.Errorf("runs modified the repository:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestRunOnceRefusesInstructionFilesAboveTheWorkspace(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "a.txt", "a\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	outer := t.TempDir()
+	writeFile(t, outer, "CLAUDE.md", "personal notes\n")
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(outer, "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": "/bin/false"}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv: func(key string) string { return vars[key] }, Environ: func() []string { return nil },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	expect(t, run("task", "add", "t", "--base", "HEAD", "--instruction", "Do it.", "--verify", "true"), ExitOK)
+	expect(t, run("run", "once", "t"), ExitError, filepath.Join(outer, "CLAUDE.md"), "would load it into every run")
+}
+
+// scriptedAgent writes a fake Claude Code that runs body in its checkout, then prints a successful transcript. With
+// hang set, it instead waits to be interrupted and reports a result with cost 0.40, as Claude Code does on SIGINT.
+func scriptedAgent(t *testing.T, body string, hang bool) string {
+	t.Helper()
+	stream := `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash"],"skills":[],"slash_commands":[]}`
+	result := `{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.40,"num_turns":3,"duration_ms":1000,"modelUsage":{}}`
+	script := "#!/bin/sh\n"
+	if hang {
+		script += "trap 'echo '\"'\"'" + result + "'\"'\"'; exit 130' INT\n" + body + "\necho '" + stream + "'\nwhile :; do sleep 0.05; done\n"
+	} else {
+		script += body + "\necho '" + stream + "'\necho '" + result + "'\n"
+	}
+	cli := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return cli
+}
+
+type runFixture struct {
+	repo, data, home string
+	vars             map[string]string
+	run              func(ctx context.Context, args ...string) cliResult
+}
+
+func newRunFixture(t *testing.T, data string) runFixture {
+	t.Helper()
+	f := runFixture{repo: t.TempDir(), data: data, home: t.TempDir()}
+	gitIn(t, f.repo, "init", "-q", "-b", "main")
+	writeFile(t, f.repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\n")
+	writeFile(t, f.repo, "value.txt", "old\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "base")
+	writeFile(t, f.repo, "tests/value_test.sh", "grep -q new value.txt\n")
+	writeFile(t, f.repo, "value.txt", "new\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
+	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
+	f.run = func(ctx context.Context, args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
+			Getenv:   func(key string) string { return f.vars[key] },
+			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, f.run(context.Background(), "init"), ExitOK)
+	expect(t, f.run(context.Background(), "task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
+	return f
+}
+
+func TestRunGradingResistsTampering(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test-grading-must-not-see-this") // in Agentium's own environment // secret-scan: allow
+	marker := filepath.Join(t.TempDir(), "filter-ran")
+	// The agent rewrites the checks to pass, plants its own version of the hidden test, and sets a git clean filter
+	// that would run (outside the sandbox) when grading stages its tree.
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, `printf 'exit 0\n' > run_tests.sh
+mkdir -p tests && printf 'true\n' > tests/value_test.sh
+git config filter.leak.clean "sh -c 'env > `+marker+`; cat'"
+printf '* filter=leak\n' > .gitattributes`, false)
+	result := f.run(context.Background(), "run", "once", "value")
+	expect(t, result, ExitOK, "outcome      ok; verification failed", "checks       the agent changed run_tests.sh",
+		"graded with the starting version: run_tests.sh")
+	if _, err := os.Stat(marker); err == nil {
+		data, _ := os.ReadFile(marker)
+		t.Errorf("the agent's git filter ran during grading (API key visible: %v)", strings.Contains(string(data), "grading-must-not-see-this"))
+	}
+}
+
+func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	ready := filepath.Join(t.TempDir(), "ready")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "touch "+ready, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { // interrupt once the agent is running, not during checkout or setup
+		for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+			if _, err := os.Stat(ready); err == nil {
+				break
+			}
+		}
+		cancel()
+	}()
+	expect(t, f.run(ctx, "run", "once", "value"), ExitError, "context canceled")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
+}
+
+// An agent that removes its checkout's .git must not erase its run or its spend, and git must not wander into an
+// enclosing repository.
+func TestRunSurvivesAnAgentRemovingItsGitFolder(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "rm -rf .git", false)
+	result := f.run(context.Background(), "run", "once", "value")
+	expect(t, result, ExitOK, "outcome      ok; verification failed", "the agent's commits could not be counted")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "value", "$0.40")
+}
+
+func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nBe brief.\n")
+	expect(t, f.run(context.Background(), "context", "snapshot", "brief", "--working-tree"), ExitOK)
+	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+	expect(t, f.run(context.Background(), "task", "add", "gen", "--base", "HEAD~1", "--instruction", "Anything.",
+		"--setup", "echo generated > gen.txt", "--verify", "test -f gen.txt"), ExitOK)
+	seen := filepath.Join(t.TempDir(), "claude-md")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "cat CLAUDE.md > "+seen, false)
+	kept := f.run(context.Background(), "run", "once", "gen", "--snapshot", "brief", "--keep")
+	// The arm's CLAUDE.md is what the agent saw; neither it nor the setup's output counts as the agent's change.
+	expect(t, kept, ExitOK, "Run ", "outcome      ok; verification passed", "changes      0 file(s)")
+	if saw, _ := os.ReadFile(seen); string(saw) != "# Rules\nBe brief.\n" {
+		t.Errorf("the agent saw CLAUDE.md = %q", saw)
+	}
+	workspaces, _ := os.ReadDir(filepath.Join(f.data, "workspaces"))
+	records, _ := os.ReadDir(filepath.Join(f.data, "records"))
+	if len(workspaces) != 1 || len(records) != 1 {
+		t.Fatalf("workspaces %v, records %v", workspaces, records)
+	}
+	if _, err := os.Stat(filepath.Join(f.data, "records", records[0].Name(), "verify", "gen.txt")); err != nil {
+		t.Errorf("--keep should keep the grading copy: %v", err)
+	}
+}
+
+func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
+	outer := t.TempDir()
+	f := newRunFixture(t, filepath.Join(outer, "data"))
+	token := filepath.Join(outer, "token") // its folder is denied to runs, and it holds the data folder
+	writeFile(t, outer, "token", "tok-abcdef\n")
+	if err := os.Chmod(token, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.vars["AGENTIUM_CLAUDE_TOKEN_FILE"] = token
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "lies inside", "runs may not read")
+	if records, _ := os.ReadDir(filepath.Join(f.data, "records")); len(records) != 0 {
+		t.Errorf("a run that never started left records: %v", records)
+	}
+}

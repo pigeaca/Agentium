@@ -89,8 +89,9 @@ func TestFetchCommitCopiesAnUnreferencedCommitWithoutTouchingTheSource(t *testin
 }
 
 func TestEnvironDropsInheritedGitVariables(t *testing.T) {
-	got := Environ([]string{"HOME=/h", "GIT_DIR=/user/.git", "GIT_INDEX_FILE=/user/.git/index", "GIT_CONFIG_PARAMETERS='x=y'", "PATH=/bin"})
-	for _, dropped := range []string{"GIT_DIR=/user/.git", "GIT_INDEX_FILE=/user/.git/index", "GIT_CONFIG_PARAMETERS='x=y'"} {
+	got := Environ([]string{"HOME=/h", "GIT_DIR=/user/.git", "GIT_INDEX_FILE=/user/.git/index", "GIT_CONFIG_PARAMETERS='x=y'", "PATH=/bin",
+		"ANTHROPIC_API_KEY=k", "GITHUB_TOKEN=t"})
+	for _, dropped := range []string{"GIT_DIR=/user/.git", "GIT_INDEX_FILE=/user/.git/index", "GIT_CONFIG_PARAMETERS='x=y'", "ANTHROPIC_API_KEY=k", "GITHUB_TOKEN=t"} {
 		if slices.Contains(got, dropped) {
 			t.Errorf("%s was inherited: %v", dropped, got)
 		}

@@ -221,3 +221,17 @@ func TestBareImportsAndLinkedFiles(t *testing.T) {
 		t.Errorf("linked = %v, want %v (documents only: not imported files, code, test data, URLs, anchors or fenced links)", ctx.Linked, want)
 	}
 }
+
+func TestSkillNames(t *testing.T) {
+	src := memSource{
+		"CLAUDE.md":                       "x\n",
+		".claude/skills/review/SKILL.md":  "---\nname: code-review\ndescription: d\n---\n",
+		".claude/skills/deploy/SKILL.md":  "no frontmatter\n",
+		".claude/skills/review/extra.md":  "not a skill\n",
+		".claude/skills/deploy2/SKILL.md": "---\nname: deploy\n---\n",
+	}
+	got := SkillNames(resolve(t, src), src)
+	if want := []string{"code-review", "deploy", "deploy2", "review"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("skill names = %v, want %v", got, want)
+	}
+}

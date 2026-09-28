@@ -1,0 +1,694 @@
+// Package run executes one agent run on a task and grades it. The agent works in a workspace prepared as the arm: a
+// checkout of the task's base holding only that commit, the arm's context, the task's setup, then a context commit the
+// agent's changes are measured from. Claude Code runs isolated (internal/claude) and denied everything else in the
+// data folder and the user's repository. Grading happens afterwards on a copy in the run's records, which the agent
+// could never read: the hidden tests are added there and the verification commands run.
+package run
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pigeaca/agentium/internal/checkout"
+	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/gitx"
+	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/runner"
+	"github.com/pigeaca/agentium/internal/snapshot"
+	"github.com/pigeaca/agentium/internal/source"
+	"github.com/pigeaca/agentium/internal/task"
+)
+
+// Spec is what to run.
+type Spec struct {
+	TaskName    string
+	Instruction string
+	Task        task.Spec // base, solution, hidden tests, reference, setup, verification
+	Arm         task.Arm
+	Model       string
+	Effort      string
+	BudgetUSD   float64
+	Timeout     time.Duration // the agent's run
+	Keep        bool          // keep the workspace and the verification copy
+}
+
+// Env is what a run needs from Agentium and the machine.
+type Env struct {
+	ID            string // from NewID
+	Layout        home.Layout
+	Bare          string // the project's bare repository
+	ProjectRoot   string // the user's repository: the agent may not read it
+	CLI           string // the claude executable
+	Home          string
+	Environ       []string // the parent's environment; the run gets an allowlisted part
+	SignIn        string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
+	Secret        string   // for API key and token sign-in; redacted from every record
+	TokenFile     string
+	VerifyTimeout time.Duration // each setup or verification command
+	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
+	Progress      io.Writer
+	Now           func() time.Time
+}
+
+// Record is a finished run.
+type Record struct {
+	ID          string         `json:"id"`
+	Task        string         `json:"task"`
+	Arm         string         `json:"arm"`
+	Snapshot    string         `json:"snapshot,omitempty"`
+	Model       string         `json:"model"`
+	SignIn      string         `json:"sign_in"`
+	Outcome     string         `json:"outcome"`          // claude.Outcome*
+	Passed      *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
+	Drift       []string       `json:"drift,omitempty"`
+	Notes       []string       `json:"notes,omitempty"`
+	Metrics     claude.Metrics `json:"metrics"`
+	Behavior    Behavior       `json:"behavior"`
+	Setup       []task.Command `json:"setup,omitempty"`
+	Verify      []task.Command `json:"verify,omitempty"`
+	ExitCode    int            `json:"exit_code"`
+	Started     time.Time      `json:"started"`
+	Finished    time.Time      `json:"finished"`
+	RecordsDir  string         `json:"records"`
+	ContextHead string         `json:"context_commit,omitempty"`
+}
+
+// Behavior is what the agent did, beyond passing or failing.
+type Behavior struct {
+	FilesChanged int  `json:"files_changed"`
+	LinesAdded   int  `json:"lines_added"`
+	LinesRemoved int  `json:"lines_removed"`
+	TestsChanged bool `json:"tests_changed"` // changed a test file
+	TestsRemoved int  `json:"tests_removed"` // test files deleted
+	// ChecksChanged are verification scripts and test-runner configuration the agent changed; scripts the task did not
+	// need changed were restored before grading.
+	ChecksChanged []string `json:"checks_changed,omitempty"`
+	RanTests      bool     `json:"ran_tests"`  // ran a test runner
+	RanChecks     bool     `json:"ran_checks"` // ran one of the task's verification commands
+	Commits       int      `json:"commits"`    // commits on top of the context commit
+	BashCommands  int      `json:"bash_commands"`
+	Denials       int      `json:"denials"`
+	OutsideReads  int      `json:"outside_reads"` // file tool calls on Agentium's data, the user's repository or Claude's data
+}
+
+// NewID makes a run id: a UTC timestamp and a random suffix, so ids sort by start time.
+func NewID(now time.Time) (string, error) {
+	suffix := make([]byte, 3)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("run id: %w", err)
+	}
+	return now.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(suffix), nil
+}
+
+// suffix tells the agent how to work in the run's checkout.
+const suffix = "\n\nYou are working in this task's own checkout of the repository. Make the change here, in the working " +
+	"tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a " +
+	"short summary of what you changed and how you verified it."
+
+// Once runs spec once and grades it. The error is for runs that could not be carried out (Agentium's own setup,
+// cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
+// shows it spent.
+func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
+		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
+	workspace := filepath.Join(env.Layout.Workspaces, env.ID)
+	repo := filepath.Join(workspace, "repo")
+	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
+	defer func() {
+		rec.Finished = env.Now().UTC()
+		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
+			err = redactErr
+		}
+		if !spec.Keep {
+			os.RemoveAll(workspace)
+			os.RemoveAll(graded)
+		}
+	}()
+	if found := instructionFilesAbove(repo); len(found) > 0 {
+		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
+	}
+	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: spec.Instruction + suffix, Model: spec.Model, Effort: spec.Effort,
+		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
+		Deny: env.denied(ctx, workspace)}
+	if env.SignIn != claude.SignInLogin {
+		inv.ConfigDir = filepath.Join(workspace, "config")
+	}
+	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
+	// reason that is not the agent's.
+	for _, denied := range inv.DeniedPaths(env.Environ) {
+		if within(realPath(workspace), realPath(denied)) {
+			return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
+		}
+	}
+	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
+		return rec, fmt.Errorf("run records: %w", err)
+	}
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		return rec, fmt.Errorf("run workspace: %w", err)
+	}
+	env.progress("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)
+
+	// The workspace: the base, the arm's context, the setup, then the context commit.
+	if err := checkout.New(ctx, env.Bare, spec.Task.Base, repo); err != nil {
+		return rec, err
+	}
+	if spec.Arm.Snapshot != "" {
+		base, err := source.Commit(ctx, spec.Task.Base, "--git-dir", env.Bare)
+		if err != nil {
+			return rec, err
+		}
+		snap, err := source.Commit(ctx, spec.Arm.Snapshot, "--git-dir", env.Bare)
+		if err != nil {
+			return rec, err
+		}
+		overlay, err := snapshot.PlanOverlay(base, snap)
+		if err != nil {
+			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
+		}
+		if err := checkout.Write(repo, snap, append(overlay.Writes, overlay.Deletes...)); err != nil {
+			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
+		}
+		if len(overlay.HarnessChanged) > 0 {
+			rec.Notes = append(rec.Notes, "the arm changes what runs: "+strings.Join(overlay.HarnessChanged, ", "))
+		}
+	}
+	if len(spec.Task.Setup) > 0 {
+		var ok bool
+		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log")); err != nil {
+			return rec, err
+		}
+		if !ok {
+			rec.Outcome = claude.OutcomeInfra
+			rec.Notes = append(rec.Notes, "setup failed: see setup.log")
+			return rec, nil
+		}
+	}
+	// Setup outputs that git does not ignore are part of the starting point, not the agent's work.
+	if _, err := gitx.Run(ctx, "-C", repo, "add", "-A"); err != nil {
+		return rec, err
+	}
+	if _, err := gitx.Run(ctx, "-C", repo, "-c", "user.name=agentium", "-c", "user.email=agentium@localhost", "-c", "commit.gpgsign=false",
+		"commit", "--quiet", "--allow-empty", "--no-verify", "-m", "agentium: context "+spec.Arm.Name); err != nil {
+		return rec, err
+	}
+	if rec.ContextHead, err = gitx.Run(ctx, "-C", repo, "rev-parse", "HEAD"); err != nil {
+		return rec, err
+	}
+	// Grading never trusts the agent's .git (its config could name filters that run outside the sandbox): the context
+	// commit is copied now, before the agent starts, into a repository of Agentium's own.
+	if err := checkout.New(ctx, repo, rec.ContextHead, graded); err != nil {
+		return rec, fmt.Errorf("grading repository: %w", err)
+	}
+
+	// The agent.
+	if inv.ConfigDir != "" {
+		if err := os.MkdirAll(inv.ConfigDir, 0o700); err != nil {
+			return rec, fmt.Errorf("run config folder: %w", err)
+		}
+	}
+	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
+	transcript, err := os.Create(transcriptPath)
+	if err != nil {
+		return rec, fmt.Errorf("run transcript: %w", err)
+	}
+	stderr, err := os.Create(filepath.Join(rec.RecordsDir, "stderr.txt"))
+	if err != nil {
+		transcript.Close()
+		return rec, fmt.Errorf("run transcript: %w", err)
+	}
+	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
+	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
+	transcript.Close()
+	stderr.Close()
+	rec.ExitCode = result.ExitCode
+	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
+	unfinished := func(err error) (Record, error) {
+		if rec.Outcome == "" {
+			rec.Outcome = claude.OutcomeInfra
+		}
+		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
+		return rec, err
+	}
+	var parseErr error
+	rec.Metrics, parseErr = parseFile(transcriptPath) // partial metrics are kept even when reading fails
+	if runErr != nil {                                // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
+		return unfinished(runErr)
+	}
+	if parseErr != nil {
+		return unfinished(parseErr)
+	}
+	userConfig := claude.UserConfigDir(env.Environ, env.Home)
+	projectSkills, err := skillNames(ctx, graded) // the context commit, not the agent's tree (it may have removed .git)
+	if err != nil {
+		return unfinished(err)
+	}
+	rec.Drift = claude.Check(rec.Metrics, claude.Expect{PersonalSkills: claude.PersonalSkills(userConfig), ProjectSkills: projectSkills})
+	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
+	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace, watched)
+	if rec.Behavior.OutsideReads > 0 {
+		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
+	}
+	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
+	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", rec.Outcome, rec.Metrics.CostUSD, rec.Metrics.Turns)
+
+	// Grading, only for fair attempts (infra and unfair runs are never counted).
+	switch rec.Outcome {
+	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
+		if err := env.grade(ctx, spec, repo, graded, &rec); err != nil {
+			return unfinished(err)
+		}
+	}
+	return rec, nil
+}
+
+// grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the
+// context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
+// verification commands.
+func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record) error {
+	if err := syncWorkTree(repo, graded); err != nil {
+		return fmt.Errorf("grading copy: %w", err)
+	}
+	if _, err := gitx.Run(ctx, "-C", graded, "add", "-A"); err != nil {
+		return err
+	}
+	numstat, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--numstat", "-z", "--no-renames", rec.ContextHead)
+	if err != nil {
+		return err
+	}
+	changed := measure(string(numstat), &rec.Behavior)
+	deleted, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--name-only", "-z", "--no-renames", "--diff-filter=D", rec.ContextHead)
+	if err != nil {
+		return err
+	}
+	for _, p := range strings.Split(string(deleted), "\x00") {
+		if p != "" && task.IsTestFile(p) {
+			rec.Behavior.TestsRemoved++
+		}
+	}
+	patch, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", rec.ContextHead)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(rec.RecordsDir, "agent.diff"), patch, 0o600); err != nil {
+		return fmt.Errorf("agent diff: %w", err)
+	}
+	// Commits are read from the agent's repository, which is only read: rev-list runs no filters. --git-dir, so that a
+	// removed .git fails here instead of git finding an enclosing repository.
+	if commits, err := gitx.Run(ctx, "--git-dir", filepath.Join(repo, ".git"), "rev-list", "--count", rec.ContextHead+"..HEAD"); err == nil {
+		rec.Behavior.Commits, _ = strconv.Atoi(commits)
+	} else {
+		rec.Notes = append(rec.Notes, "the agent's commits could not be counted: its repository was altered")
+	}
+	rec.Behavior.BashCommands = len(rec.Metrics.Commands)
+	rec.Behavior.Denials = rec.Metrics.Denials
+	rec.Behavior.RanTests = ranTests(rec.Metrics.Commands)
+	rec.Behavior.RanChecks = ranChecks(rec.Metrics.Commands, spec.Task.Verify)
+	for _, p := range changed {
+		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
+	}
+
+	// The checks themselves: scripts the verification commands name are restored to their version in the context
+	// commit (where the agent started, setup included), unless the reference solution changes them too (then changing
+	// them is part of the task). Other runner configuration the agent changed is reported.
+	start, err := source.Commit(ctx, rec.ContextHead, "-C", graded)
+	if err != nil {
+		return err
+	}
+	scripts, configs := checkFiles(spec.Task.Verify, start)
+	var restore []string
+	for _, p := range changed {
+		switch {
+		case slices.Contains(scripts, p) && !slices.Contains(spec.Task.Reference, p):
+			restore = append(restore, p)
+		case slices.Contains(scripts, p) || slices.Contains(configs, p):
+			rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, p)
+		}
+	}
+	if len(restore) > 0 {
+		if err := checkout.Write(graded, start, restore); err != nil {
+			return fmt.Errorf("restore the checks: %w", err)
+		}
+		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
+		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
+	}
+
+	failed := false
+	if spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
+		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
+		if err != nil {
+			return err
+		}
+		if err := checkout.Write(graded, solution, spec.Task.HiddenTests); err != nil {
+			// The agent turned a hidden test's folder into a link, say: the tests cannot run as written.
+			rec.Notes = append(rec.Notes, "the hidden tests could not be added: "+err.Error())
+			failed = true
+		}
+	}
+	if !failed {
+		var commands []task.Command
+		var ok bool
+		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"))
+		rec.Verify = commands
+		if err != nil {
+			return err
+		}
+		failed = !ok
+	}
+	passed := !failed
+	rec.Passed = &passed
+	env.progress("  verification: %s", map[bool]string{true: "passed", false: "failed"}[passed])
+	return nil
+}
+
+// checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
+// restores) and the configuration of the test runners they call (reported when changed).
+func checkFiles(verify []string, base source.Source) (scripts, configs []string) {
+	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
+	for _, command := range verify {
+		for _, token := range strings.FieldsFunc(command, split) {
+			if p := path.Clean(strings.TrimPrefix(token, "./")); source.Has(base, p) && !slices.Contains(scripts, p) {
+				scripts = append(scripts, p)
+			}
+		}
+		runners := map[string][]string{
+			"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
+			"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
+			"go": {"go.mod"}, "cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+		}
+		for word, files := range runners {
+			if regexp.MustCompile(`\b` + word + `\b`).MatchString(command) {
+				for _, f := range files {
+					if source.Has(base, f) && !slices.Contains(configs, f) {
+						configs = append(configs, f)
+					}
+				}
+			}
+		}
+	}
+	return scripts, configs
+}
+
+// syncWorkTree makes dst's work tree (everything but .git) a copy of src's.
+func syncWorkTree(src, dst string) error {
+	entries, err := os.ReadDir(dst)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	entries, err = os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() != ".git" {
+			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// within reports whether p is root or inside it.
+func within(p, root string) bool {
+	rel, err := filepath.Rel(root, p)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// commands runs shell commands in dir until one fails, logging to logPath.
+func (env Env) commands(ctx context.Context, dir string, commands []string, logPath string) ([]task.Command, bool, error) {
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, false, fmt.Errorf("log: %w", err)
+	}
+	defer log.Close()
+	var results []task.Command
+	for _, command := range commands {
+		fmt.Fprintf(log, "$ %s\n", command)
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log})
+		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
+			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
+		if err != nil {
+			return results, false, err
+		}
+		if !result.Passed() {
+			return results, false, nil
+		}
+	}
+	return results, true, nil
+}
+
+// denied lists what the agent may not read: Agentium's data except its own workspace (projects and hidden tests,
+// records, artifacts, the database, other runs' workspaces), and the user's repository: every worktree of it, which
+// can sit at a later commit holding the solution, and its git data. Workspaces created after this run starts are not
+// listed: a known gap for concurrent runs, whose workspaces hold no hidden tests.
+func (env Env) denied(ctx context.Context, workspace string) []string {
+	db := env.Layout.Database
+	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, db, db + "-wal", db + "-shm"}
+	paths = append(paths, env.repositoryPaths(ctx)...)
+	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
+		for _, e := range entries {
+			if other := filepath.Join(env.Layout.Workspaces, e.Name()); other != workspace {
+				paths = append(paths, other)
+			}
+		}
+	}
+	return paths
+}
+
+// repositoryPaths are the user's repository, all its worktrees, and its shared git data.
+func (env Env) repositoryPaths(ctx context.Context) []string {
+	paths := []string{env.ProjectRoot}
+	if common, err := gitx.Run(ctx, "-C", env.ProjectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+		paths = append(paths, common, filepath.Dir(common))
+	}
+	if list, err := gitx.Run(ctx, "-C", env.ProjectRoot, "worktree", "list", "--porcelain"); err == nil {
+		for _, line := range strings.Split(list, "\n") {
+			if p, ok := strings.CutPrefix(line, "worktree "); ok && !slices.Contains(paths, p) {
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
+}
+
+func (env Env) progress(format string, args ...any) {
+	if env.Progress != nil {
+		fmt.Fprintf(env.Progress, format+"\n", args...)
+	}
+}
+
+// redactRecords removes the sign-in secret and credential-shaped strings from every text record of the run.
+func (env Env) redactRecords(dir string) error {
+	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			if d != nil && d.IsDir() && d.Name() == "verify" {
+				return filepath.SkipDir // the verification copy is the agent's work tree, removed after grading
+			}
+			return err
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return fmt.Errorf("redact %s: %w", p, err)
+		}
+		if clean := Redact(data, env.Secret); len(clean) != len(data) || string(clean) != string(data) {
+			if err := os.WriteFile(p, clean, 0o600); err != nil {
+				return fmt.Errorf("redact %s: %w", p, err)
+			}
+		}
+		return nil
+	})
+}
+
+// secretPatterns are credential shapes removed from records (as the pre-commit hook's scan knows them).
+var secretPatterns = regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}|\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}|\bAKIA[0-9A-Z]{16}\b|` +
+	`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})|\bxox[abprs]-[A-Za-z0-9-]{10,}|` +
+	`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
+
+// Redact replaces secret, when not empty, and credential-shaped strings with [REDACTED].
+func Redact(data []byte, secret string) []byte {
+	text := string(data)
+	if secret != "" {
+		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	}
+	return []byte(secretPatterns.ReplaceAllString(text, "[REDACTED]"))
+}
+
+func parseFile(p string) (claude.Metrics, error) {
+	f, err := os.Open(p)
+	if err != nil {
+		return claude.Metrics{}, fmt.Errorf("run transcript: %w", err)
+	}
+	defer f.Close()
+	return claude.Parse(f)
+}
+
+// skillNames lists the project skill names of the arm's context in repo.
+func skillNames(ctx context.Context, repo string) ([]string, error) {
+	src, err := source.WorkingTree(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return nil, err
+	}
+	return claudectx.SkillNames(resolved, src), nil
+}
+
+// instructionFilesAbove lists instruction files in the folders above dir, which Claude Code would load into a run.
+func instructionFilesAbove(dir string) []string {
+	var found []string
+	for d := filepath.Dir(dir); d != filepath.Dir(d); d = filepath.Dir(d) {
+		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
+			if info, err := os.Stat(filepath.Join(d, name)); err == nil && !info.IsDir() {
+				found = append(found, filepath.Join(d, name))
+			}
+		}
+	}
+	return found
+}
+
+// outsideReads counts file tool paths inside a watched root but outside the run's workspace. Relative paths are the
+// checkout's own.
+func outsideReads(paths []string, repo, workspace string, watched []string) int {
+	inside := func(p, root string) bool {
+		rel, err := filepath.Rel(root, p)
+		return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	}
+	resolve := realPath // a path to a missing file must still match its root's resolved form
+	count := 0
+	for _, p := range paths {
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(repo, p)
+		}
+		p = resolve(p)
+		if inside(p, resolve(workspace)) {
+			continue
+		}
+		for _, root := range watched {
+			if root != "" && inside(p, resolve(root)) {
+				count++
+				break
+			}
+		}
+	}
+	return count
+}
+
+// realPath resolves symbolic links in the longest existing prefix of p (/var and /private/var on macOS), so paths to
+// files that do not exist compare like the ones that do.
+func realPath(p string) string {
+	var missing []string
+	p = filepath.Clean(p)
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(append([]string{p}, missing...)...)
+		}
+		missing = append([]string{filepath.Base(p)}, missing...)
+		p = parent
+	}
+}
+
+// measure reads `git diff --numstat -z` into the behavior counts and returns the changed paths.
+func measure(numstat string, b *Behavior) []string {
+	var paths []string
+	for _, record := range strings.Split(numstat, "\x00") {
+		fields := strings.SplitN(record, "\t", 3)
+		if len(fields) != 3 {
+			continue
+		}
+		added, _ := strconv.Atoi(fields[0]) // "-" for binary files counts as 0
+		removed, _ := strconv.Atoi(fields[1])
+		b.FilesChanged++
+		b.LinesAdded += added
+		b.LinesRemoved += removed
+		paths = append(paths, fields[2])
+	}
+	return paths
+}
+
+// testRunner matches commands that run tests.
+var testRunner = regexp.MustCompile(`\b(go test|pytest|python3? -m (pytest|unittest)|(npm|pnpm|yarn|bun) (run )?test|jest|vitest|` +
+	`cargo test|make test|mvn( -\S+)* test|gradlew? test|rspec|dotnet test|harness\.py check)\b`)
+
+func ranTests(commands []string) bool {
+	for _, c := range commands {
+		if testRunner.MatchString(c) {
+			return true
+		}
+	}
+	return false
+}
+
+func ranChecks(commands, verify []string) bool {
+	for _, c := range commands {
+		for _, v := range verify {
+			if v = strings.TrimSpace(v); v != "" && strings.Contains(c, v) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// copyTree copies src to dst (which must not exist), keeping modes and symbolic links as links.
+func copyTree(src, dst string) error {
+	if _, err := os.Lstat(dst); err == nil {
+		return errors.New(dst + " already exists")
+	}
+	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, p)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		switch {
+		case d.IsDir():
+			return os.MkdirAll(target, info.Mode().Perm()|0o700)
+		case info.Mode()&os.ModeSymlink != 0:
+			link, err := os.Readlink(p)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(link, target)
+		case info.Mode().IsRegular():
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, info.Mode().Perm())
+		}
+		return nil // sockets and devices are not copied
+	})
+}
