@@ -199,10 +199,10 @@ class ChangedCheckSelection(unittest.TestCase):
         self.assertEqual(suggestions, [])
 
     def test_ci_and_unmapped_files_are_only_suggested(self):
-        commands, suggestions = self.commands(".github/workflows/ci.yml", "web/src/App.tsx")
+        commands, suggestions = self.commands(".github/workflows/ci.yml", "web/src/App.tsx", "scripts/release.sh")
         self.assertEqual(commands, [])
         self.assertTrue(any("PR's CI run" in suggestion for suggestion in suggestions))
-        self.assertTrue(any("no mapped check" in suggestion and "web/src/App.tsx" in suggestion for suggestion in suggestions))
+        self.assertTrue(any("2 file(s) have no mapped check" in suggestion for suggestion in suggestions), suggestions)
 
     def test_go_code_and_modules(self):
         commands, suggestions = self.commands("internal/cli/cli.go", "docs/harness.md")
