@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -316,4 +317,159 @@ func (s *Store) querySnapshots(ctx context.Context, clause string, args ...any) 
 		return nil, fmt.Errorf("query snapshots: %w", err)
 	}
 	return snaps, nil
+}
+
+// Task is a coding task (see migrations/0003_tasks.sql).
+type Task struct {
+	ID             int64
+	ProjectID      int64
+	Name           string
+	Instruction    string
+	Source         string
+	BaseCommit     string
+	SolutionCommit string
+	HiddenTests    []string
+	Reference      []string
+	Setup          []string // run in a fresh checkout before anything else
+	Verify         []string
+	NeedsReview    bool
+	Validation     []byte // JSON; nil until validated
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// SaveTask records a new task; names are unique per project (ErrExists).
+func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
+	lists, err := encodeLists(task.HiddenTests, task.Reference, task.Verify, task.Setup)
+	if err != nil {
+		return Task{}, fmt.Errorf("save task %q: %w", task.Name, err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO tasks (project_id, name, instruction, source, base_commit, solution_commit, hidden_tests,
+		                   reference_files, verify, setup, needs_review, validation, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		task.ProjectID, task.Name, task.Instruction, task.Source, task.BaseCommit, task.SolutionCommit, lists[0], lists[1],
+		lists[2], lists[3], task.NeedsReview, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt))
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Task{}, fmt.Errorf("task %q: %w", task.Name, ErrExists)
+		}
+		return Task{}, fmt.Errorf("save task %q: %w", task.Name, err)
+	}
+	if task.ID, err = result.LastInsertId(); err != nil {
+		return Task{}, fmt.Errorf("save task %q: %w", task.Name, err)
+	}
+	task.CreatedAt = task.CreatedAt.UTC()
+	task.UpdatedAt = task.CreatedAt
+	return task, nil
+}
+
+// UpdateTask stores a task's editable fields: instruction, setup and verification commands, review flag and validation.
+func (s *Store) UpdateTask(ctx context.Context, task Task, now time.Time) error {
+	lists, err := encodeLists(task.Verify, task.Setup)
+	if err != nil {
+		return fmt.Errorf("update task %q: %w", task.Name, err)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET instruction = ?, verify = ?, setup = ?, needs_review = ?, validation = ?, updated_at = ?
+		WHERE project_id = ? AND name = ?`,
+		task.Instruction, lists[0], lists[1], task.NeedsReview, string(task.Validation), formatTime(now), task.ProjectID, task.Name)
+	if err != nil {
+		return fmt.Errorf("update task %q: %w", task.Name, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("task %q: %w", task.Name, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
+// TaskByName returns a project's task, or ErrNotFound.
+func (s *Store) TaskByName(ctx context.Context, projectID int64, name string) (Task, error) {
+	tasks, err := s.queryTasks(ctx, `WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return Task{}, err
+	}
+	if len(tasks) == 0 {
+		return Task{}, fmt.Errorf("task %q: %w", name, ErrNotFound)
+	}
+	return tasks[0], nil
+}
+
+// Tasks lists a project's tasks, oldest first.
+func (s *Store) Tasks(ctx context.Context, projectID int64) ([]Task, error) {
+	return s.queryTasks(ctx, `WHERE project_id = ? ORDER BY created_at, id`, projectID)
+}
+
+// DeleteTask removes a project's task, or returns ErrNotFound.
+func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return fmt.Errorf("delete task %q: %w", name, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("task %q: %w", name, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
+func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
+		       verify, setup, needs_review, validation, created_at, updated_at
+		FROM tasks `+clause, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	defer rows.Close()
+	var tasks []Task
+	for rows.Next() {
+		var task Task
+		var hidden, reference, verify, setup, validation, created, updated string
+		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
+			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &validation, &created, &updated); err != nil {
+			return nil, fmt.Errorf("read task: %w", err)
+		}
+		for _, field := range []struct {
+			raw  string
+			into *[]string
+		}{{hidden, &task.HiddenTests}, {reference, &task.Reference}, {verify, &task.Verify}, {setup, &task.Setup}} {
+			if err := json.Unmarshal([]byte(field.raw), field.into); err != nil {
+				return nil, fmt.Errorf("task %q: %w", task.Name, err)
+			}
+		}
+		if validation != "" {
+			task.Validation = []byte(validation)
+		}
+		if task.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		if task.UpdatedAt, err = parseTime(updated); err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query tasks: %w", err)
+	}
+	return tasks, nil
+}
+
+// encodeLists encodes string lists as JSON arrays ([] rather than null for empty ones).
+func encodeLists(lists ...[]string) ([]string, error) {
+	out := make([]string, len(lists))
+	for i, list := range lists {
+		data, err := json.Marshal(nonNil(list))
+		if err != nil {
+			return nil, err
+		}
+		out[i] = string(data)
+	}
+	return out, nil
+}
+
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }

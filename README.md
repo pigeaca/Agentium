@@ -15,6 +15,8 @@ agentium context snapshot baseline     # save the committed context (HEAD) as a 
 # edit CLAUDE.md, rules or skills, then:
 agentium context snapshot trimmed --working-tree   # --include-linked adds linked docs
 agentium context diff baseline trimmed --patch
+agentium task import --commit <sha>    # base: its parent; hidden tests: its test-file changes
+agentium task validate <name> --snapshot trimmed   # tests fail on the base, pass with the reference, in each arm
 ```
 
 Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).

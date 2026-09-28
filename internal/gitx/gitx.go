@@ -64,12 +64,20 @@ func InitBare(ctx context.Context, dir string) error {
 	return err
 }
 
-// FetchCommit copies commit (and its history) from the repository at source into the bare repository, under
-// refs/agentium/sources/<commit> so it is never garbage-collected. Only upload-pack runs in the source repository: no
-// push, no hooks, nothing written there. allowAnySHA1InWant lets a commit that no ref points at be fetched.
-func FetchCommit(ctx context.Context, bare, source, commit string) error {
-	_, err := Run(ctx, "--git-dir", bare, "fetch", "--quiet", "--no-tags",
-		"--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack",
-		source, commit+":refs/agentium/sources/"+commit)
+// FetchCommit copies commit, without its history (depth 1), from the repository at source into the repository at
+// dest, and keeps it under ref when ref is not empty (so it is never garbage-collected). Only upload-pack runs in the
+// source repository: no push, no hooks, nothing written there. allowAnySHA1InWant lets a commit that no ref points at
+// be fetched. dest is a --git-dir for bare repositories or a -C folder for checkouts, as given by where.
+func FetchCommit(ctx context.Context, source, commit, ref string, where ...string) error {
+	refspec := commit
+	if ref != "" {
+		refspec += ":" + ref
+	}
+	args := append(append([]string{}, where...), "fetch", "--quiet", "--no-tags", "--depth=1",
+		"--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack", "--end-of-options", source, refspec)
+	_, err := Run(ctx, args...)
 	return err
 }
+
+// SourceRef is where FetchCommit keeps a user's commit in Agentium's bare repository.
+func SourceRef(commit string) string { return "refs/agentium/sources/" + commit }

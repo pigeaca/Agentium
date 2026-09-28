@@ -68,11 +68,14 @@ func TestFetchCommitCopiesAnUnreferencedCommitWithoutTouchingTheSource(t *testin
 	if err := InitBare(ctx, bare); err != nil { // idempotent
 		t.Fatal(err)
 	}
-	if err := FetchCommit(ctx, bare, source, dangling); err != nil {
+	if err := FetchCommit(ctx, source, dangling, SourceRef(dangling), "--git-dir", bare); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := Run(ctx, "--git-dir", bare, "rev-parse", "refs/agentium/sources/"+dangling); err != nil || got != dangling {
+	if got, err := Run(ctx, "--git-dir", bare, "rev-parse", SourceRef(dangling)); err != nil || got != dangling {
 		t.Errorf("fetched ref = %q, %v; want %s", got, err, dangling)
+	}
+	if count, _ := Run(ctx, "--git-dir", bare, "rev-list", "--count", dangling); count != "1" {
+		t.Errorf("fetched %s commits, want only the commit itself (depth 1)", count)
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Error("a hook ran")
@@ -80,7 +83,7 @@ func TestFetchCommitCopiesAnUnreferencedCommitWithoutTouchingTheSource(t *testin
 	if after := snapshotDir(t, source); after != before {
 		t.Errorf("fetching changed the source repository:\nbefore %s\nafter  %s", before, after)
 	}
-	if err := FetchCommit(ctx, bare, source, strings.Repeat("0", 40)); err == nil || !strings.Contains(err.Error(), "git --git-dir") {
+	if err := FetchCommit(ctx, source, strings.Repeat("0", 40), "", "--git-dir", bare); err == nil || !strings.Contains(err.Error(), "git --git-dir") {
 		t.Errorf("missing commit: err = %v, want a contextual git error", err)
 	}
 }
