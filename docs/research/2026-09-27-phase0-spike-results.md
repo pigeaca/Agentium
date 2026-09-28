@@ -32,7 +32,7 @@
 | Arms | `full`: the base commit's `CLAUDE.md`, which imports about 1,100 words of entry docs. `minimal`: a 64-word `CLAUDE.md`/`AGENTS.md` |
 | Tasks | Six issue-style changes to `.agents/scripts/harness.py`, each with hidden tests. Every task, in every arm, is validated: it fails on the arm's context commit and passes with its reference patch |
 | Design | 6 tasks × 2 arms × 5 runs; the two arms of each task and repeat run back to back in random order; 3 in parallel |
-| Success | The hidden tests pass, and the checkout's `test_harness.py` passes as the agent left it. Every run kept at least the base's 27 tests; none removed tests |
+| Success | The hidden tests pass, and the checkout's `test_harness.py` passes as the agent left it. No run's test count fell below the base's 27 |
 | Isolation | See [the recipe](#isolation-recipe-what-it-took) |
 | Auth | Login mode: the user's subscription, and the user's own config folder with project settings only. Costs are Claude Code's own `total_cost_usd` estimates |
 
@@ -62,7 +62,7 @@ Behavior, counted from the transcripts. The flags are defined in `trajectory()` 
 | ran a harness check (`harness.py check …`) | 19/30 | 11/30 |
 | saw the repo's own docs check fail on the `CLAUDE.md` import rule | 0/30 | 11/30 |
 | used `git stash`, all to show that failure was pre-existing | 0/30 | 11/30 |
-| committed their task work | 0/30 | 0/30 |
+| committed their task work (review of every `git commit` command; future runs record `commits_in_checkout`) | 0/30 | 0/30 |
 | Permission denials (total) | 16 | 9 |
 | File-tool reads of watched locations: the work directory outside the run's own, the repository, `~/.claude`, `~/.codex` | 0 | 0 |
 
@@ -130,7 +130,7 @@ Each item was found during the spike and is now handled in `spike.py`:
    - No transcript shows a run reading any of these: 0 file-tool reads of watched locations, and a manual review of the Bash commands.
    - The code now runs hidden tests in a copy under a denied path, denies `~/.claude/projects` in login mode, and refuses a work directory inside a hidden path.
    - Still readable: sibling runs' in-progress checkouts under `work/runs`.
-7. **Prompt caching skews naive cost comparisons.** In the first probe, the arm that ran second cost about a third as much because it reused the cached shared prompt. Interleaving the arms is necessary.
+7. **Prompt caching skews naive cost comparisons.** In the original probe, which the committed `probe.json` does not contain, the arm that ran second cost $0.041 against $0.118, because it reused the cached shared prompt. The rerun in `probe.json` shows $0.038 against $0.051. Interleaving the arms is necessary.
 8. **Claude Code 2.1.277+ reads `AGENTS.md` itself when no `CLAUDE.md` exists.** Both arms here have a `CLAUDE.md`, so each loads only what its `CLAUDE.md` imports. The study has been corrected.
 
 ## Codex check
@@ -145,7 +145,7 @@ One run of codex-cli 0.158 (the model was the user's default, `gpt-6-astra`), wi
 - **Small tasks.** Six small tasks in one small Python codebase, so results may not carry over to larger tasks or other stacks.
 - **Too easy for success.** Near-perfect pass rates, so nothing here says whether the full docs change correctness on harder work.
 - **The minimal-arm confound.** It is disclosed and tested above.
-- **Success depends on each agent's own test file.** The regression suite is the checkout's `test_harness.py` as the agent left it, and minimal agents edited it more often. No run reduced the test count.
+- **Success depends on each agent's own test file.** The regression suite is the checkout's `test_harness.py` as the agent left it, and minimal agents edited it more often. No run's test count fell below the base's 27.
 - **Estimated costs.** All costs are Claude Code's list-price estimates for the runs; the subscription was not billed per run.
 - **Login mode.** Runs used the user's config folder with project settings only, not a fresh config folder per run.
 - **One model and one agent.** Codex was not compared.

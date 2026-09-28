@@ -113,7 +113,7 @@ class Verification(unittest.TestCase):
             self.assertTrue(all(exists and repo != checkout for repo, _, exists in seen))
             self.assertFalse((checkout / ".agents/scripts/test_hidden.py").exists())
             self.assertFalse((root / "verify/x").exists())
-            self.assertEqual(result["files"], [])
+            self.assertEqual((result["files"], result["commits_in_checkout"]), ([], 0))
 
 
 class HiddenPaths(unittest.TestCase):

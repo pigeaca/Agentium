@@ -175,7 +175,7 @@ def trajectory(commands: dict[str, str], outputs: dict[str, str]) -> dict:
         "ran_unittest": any("unittest" in c for c in text),
         "ran_harness_check": bool(checks),
         "git_stash": any("git stash" in c for c in text),
-        # A commit of the task's own checkout: no directory change and no temporary repository in the command.
+        # A hint only (commands with cd/-C are skipped); verify() records the authoritative commits_in_checkout.
         "git_commit_in_checkout": any("git commit" in c and not re.search(r"\bcd\b|git -C|mktemp|TMPDIR|/tmp/", c) for c in text),
         "saw_import_rule_failure": any(IMPORT_RULE_FAILURE in outputs.get(i, "") for i in checks),
     }
@@ -301,6 +301,7 @@ def verify(checkout: Path, task: str, context: str, record_dir: Path, scratch: P
         hidden, regression = unit(copy, "test_hidden.py"), unit(copy, "test_harness.py")
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+    commits = int(git("rev-list", "--count", f"{context}..HEAD", cwd=checkout).strip())  # commits the agent made on top
     git("add", "-A", cwd=checkout)
     numstat = git("diff", "--cached", "--numstat", context, cwd=checkout)
     files, added, removed = [], 0, 0
@@ -312,7 +313,7 @@ def verify(checkout: Path, task: str, context: str, record_dir: Path, scratch: P
     (record_dir / "agent.diff").write_text(git("diff", "--cached", context, cwd=checkout))
     git("reset", "-q", cwd=checkout)
     return {"success": hidden["ok"] and regression["ok"], "hidden": hidden, "regression": regression,
-            "files": files, "lines_added": added, "lines_removed": removed}
+            "files": files, "lines_added": added, "lines_removed": removed, "commits_in_checkout": commits}
 
 
 def schedule(repeats: int, seed: int) -> list[dict]:
