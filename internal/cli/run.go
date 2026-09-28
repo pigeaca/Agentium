@@ -8,12 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -23,6 +26,10 @@ const runUsage = `Usage:
                      [--verify-timeout DURATION] [--keep]
                      one real Claude Code run on TASK, in the base's own context or with a snapshot applied.
                      It costs money (up to --budget, default $3) or uses your plan.
+  agentium run calibrate [--snapshot NAME]... [--model MODEL] [--budget USD]
+                     one short real run per arm (the base's own context, and each snapshot): checks that
+                     sandboxed commands work and large outputs read back, compares the first request's size with
+                     Agentium's estimate, and records the tools, skills and slash commands later runs must get
   agentium run list
   agentium run show ID
 
@@ -38,6 +45,8 @@ func runRun(ctx context.Context, env Env, args []string) int {
 	switch args[0] {
 	case "once":
 		return runOnce(ctx, env, args[1:])
+	case "calibrate":
+		return runCalibrate(ctx, env, args[1:])
 	case "list":
 		return runList(ctx, env, args[1:])
 	case "show":
@@ -98,48 +107,78 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		}
 		arm = task.Arm{Name: *snapshotName, Snapshot: snap.CommitID}
 	}
+	runEnv, err := newRunEnv(env, w, *verifyTimeout)
+	if err != nil {
+		return fail(env, err)
+	}
+	if cal, err := w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot); err == nil {
+		var found calibration
+		if err := json.Unmarshal(cal.Result, &found); err != nil {
+			return fail(env, fmt.Errorf("calibration of %s: %w", arm.Name, err))
+		}
+		runEnv.Expect = claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}
+		fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, cal.CreatedAt.Format("2006-01-02 15:04"))
+	} else if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintf(env.Stdout, "note: arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate\n", arm.Name)
+	} else {
+		return fail(env, err)
+	}
+	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, runEnv.SignIn, *budget)
+	rec, err := executeRun(ctx, env, w, runEnv, t.ID, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
+		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
+		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
+	if err != nil {
+		return fail(env, err)
+	}
+	printRun(env, rec)
+	return ExitOK
+}
+
+// newRunEnv resolves what every run of this project needs: the CLI, the sign-in and the environment.
+func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, error) {
 	cli := env.Getenv("AGENTIUM_CLAUDE")
 	if cli == "" {
+		var err error
 		if cli, err = env.LookPath("claude"); err != nil {
-			return fail(env, errors.New("Claude Code was not found on PATH: install it, or set AGENTIUM_CLAUDE to its path"))
+			return run.Env{}, errors.New("Claude Code was not found on PATH: install it, or set AGENTIUM_CLAUDE to its path")
 		}
 	}
 	mode, secret, tokenFile, err := signIn(env)
 	if err != nil {
-		return fail(env, err)
+		return run.Env{}, err
 	}
 	var environ []string
 	if env.Environ != nil {
 		environ = env.Environ()
 	}
+	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), Environ: environ,
+		SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second,
+		Progress: env.Stdout, Now: env.Now}, nil
+}
+
+// executeRun runs spec with a fresh id and stores the record whenever the agent started, even when interrupted.
+func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, taskID int64, spec run.Spec) (run.Record, error) {
 	id, err := run.NewID(env.Now())
 	if err != nil {
-		return fail(env, err)
+		return run.Record{}, err
 	}
-	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, mode, *budget)
-	rec, runErr := run.Once(ctx, run.Env{ID: id, Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"),
-		Environ: environ, SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: *verifyTimeout, Grace: 30 * time.Second,
-		Progress: env.Stdout, Now: env.Now}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
-		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
-		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
+	runEnv.ID = id
+	rec, runErr := run.Once(ctx, runEnv, spec)
 	if _, err := os.Stat(filepath.Join(rec.RecordsDir, "stream.jsonl")); rec.Outcome == "" && err != nil {
 		os.RemoveAll(rec.RecordsDir) // the agent never started: nothing to keep
-	} else { // it ran, or got far enough to have an outcome: keep the record even if interrupted
-		encoded, err := json.Marshal(rec)
-		if err != nil {
-			return fail(env, fmt.Errorf("encode run: %w", err))
-		}
-		// An interrupted run is saved all the same: ctx is cancelled by then, and its spend must not be lost.
-		if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: t.ID, TaskName: t.Name, Arm: rec.Arm,
-			Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded, Started: rec.Started, Finished: rec.Finished}); err != nil {
-			return fail(env, errors.Join(runErr, err))
-		}
+		return rec, runErr
 	}
-	if runErr != nil {
-		return fail(env, runErr)
+	encoded, err := json.Marshal(rec)
+	if err != nil {
+		return rec, errors.Join(runErr, fmt.Errorf("encode run: %w", err))
 	}
-	printRun(env, rec)
-	return ExitOK
+	// An interrupted run is saved all the same: ctx is cancelled by then, and its spend must not be lost.
+	if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: taskID, TaskName: spec.TaskName,
+		Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded, Started: rec.Started,
+		Finished: rec.Finished}); err != nil {
+		return rec, errors.Join(runErr, err)
+	}
+	return rec, runErr
 }
 
 func printRun(env Env, rec run.Record) {
@@ -234,4 +273,157 @@ func runShow(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(env.Stdout, "  files        %s\n", strings.Join(names, ", "))
 	}
 	return ExitOK
+}
+
+// calibrationPrompt asks for what every real task needs: a sandboxed shell command, and a large output read back.
+const calibrationPrompt = "This is an environment check: do not change any files.\n" +
+	"1. Run this command with the Bash tool: printf 'agentium-sandbox-ok\\n'\n" +
+	"2. Run this command with the Bash tool: seq 1 40000\n" +
+	"Then reply with exactly one line: SANDBOX=<what command 1 printed> LAST=<the last number command 2 printed>"
+
+// calibration is what a calibration run found for one arm.
+type calibration struct {
+	Arm              string   `json:"arm"`
+	Snapshot         string   `json:"snapshot,omitempty"`
+	RunID            string   `json:"run_id"`
+	Outcome          string   `json:"outcome"`
+	SandboxOK        bool     `json:"sandbox_ok"`
+	LargeOutputOK    bool     `json:"large_output_ok"`
+	FirstRequest     int64    `json:"first_request_tokens"`
+	EstimatedContext int      `json:"estimated_context_tokens"` // the resolver's session-start estimate
+	CLIVersion       string   `json:"cli_version"`
+	Model            string   `json:"model"`
+	Tools            []string `json:"tools"`
+	Skills           []string `json:"skills"`         // stored locally to check later runs; never printed
+	SlashCommands    []string `json:"slash_commands"` // likewise
+	Drift            []string `json:"drift,omitempty"`
+	CostUSD          float64  `json:"cost_usd"`
+}
+
+func runCalibrate(ctx context.Context, env Env, args []string) int {
+	fs := flag.NewFlagSet("run calibrate", flag.ContinueOnError)
+	var snapshots stringList
+	fs.Var(&snapshots, "snapshot", "also calibrate this snapshot's context (repeatable)")
+	model := fs.String("model", "claude-sonnet-5", "the model")
+	budget := fs.Float64("budget", 0.5, "stop each calibration run at this cost in USD")
+	timeout := fs.Duration("timeout", 5*time.Minute, "stop each calibration run after this long")
+	rest, code, ok := parseArgs(env, fs, args, runUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 0 || *budget <= 0 {
+		fmt.Fprint(env.Stderr, runUsage)
+		return ExitUsage
+	}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	head, err := w.keepCommit(ctx, "HEAD")
+	if err != nil {
+		return fail(env, err)
+	}
+	baseSource, err := source.Commit(ctx, head, "--git-dir", w.bare)
+	if err != nil {
+		return fail(env, err)
+	}
+	type armContext struct {
+		arm    task.Arm
+		source source.Source
+	}
+	arms := []armContext{{task.Arm{Name: "base"}, baseSource}}
+	for i, name := range snapshots {
+		if name == "base" || slices.Contains(snapshots[:i], name) {
+			fmt.Fprintf(env.Stderr, "agentium run calibrate: --snapshot %q is repeated or reserved\n", name)
+			return ExitUsage
+		}
+		snap, err := w.db.SnapshotByName(ctx, w.project.ID, name)
+		if err != nil {
+			return fail(env, err)
+		}
+		src, err := source.Commit(ctx, snap.CommitID, "--git-dir", w.bare)
+		if err != nil {
+			return fail(env, err)
+		}
+		arms = append(arms, armContext{task.Arm{Name: name, Snapshot: snap.CommitID}, src})
+	}
+	runEnv, err := newRunEnv(env, w, time.Minute)
+	if err != nil {
+		return fail(env, err)
+	}
+	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real Claude Code runs (%s, sign-in %s): up to $%.2f each.\n",
+		len(arms), shortCommit(head), *model, runEnv.SignIn, *budget)
+	var results []calibration
+	healthy := true
+	for _, a := range arms {
+		resolved, err := claudectx.Resolve(a.source)
+		if err != nil {
+			return fail(env, err)
+		}
+		rec, err := executeRun(ctx, env, w, runEnv, 0, run.Spec{TaskName: "calibration", Instruction: calibrationPrompt, PlainPrompt: true,
+			Task: task.Spec{Base: head, Verify: []string{"true"}}, Arm: a.arm, Model: *model, BudgetUSD: *budget, Timeout: *timeout})
+		if err != nil {
+			return fail(env, err)
+		}
+		m := rec.Metrics
+		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome,
+			SandboxOK: strings.Contains(m.ResultExcerpt, "SANDBOX=agentium-sandbox-ok"), LargeOutputOK: strings.Contains(m.ResultExcerpt, "LAST=40000"),
+			FirstRequest: m.FirstRequest, EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion,
+			Model: m.Model, Tools: m.Tools, Skills: m.Skills, SlashCommands: m.SlashCommands, Drift: rec.Drift, CostUSD: m.CostUSD}
+		results = append(results, c)
+		clean := rec.Outcome == claude.OutcomeOK && len(rec.Drift) == 0
+		healthy = healthy && clean && c.SandboxOK && c.LargeOutputOK
+		if !clean { // a drifted or failed calibration must not become what later runs are checked against
+			continue
+		}
+		encoded, err := json.Marshal(c)
+		if err != nil {
+			return fail(env, fmt.Errorf("encode calibration: %w", err))
+		}
+		if err := w.db.SaveCalibration(context.WithoutCancel(ctx), store.Calibration{ProjectID: w.project.ID, Arm: c.Arm,
+			Snapshot: c.Snapshot, RunID: rec.ID, Result: encoded, CreatedAt: env.Now()}); err != nil {
+			return fail(env, err)
+		}
+	}
+	printCalibration(env, results)
+	if !healthy {
+		return ExitError
+	}
+	return ExitOK
+}
+
+// printCalibration reports each arm and compares the measured context sizes with Agentium's estimates.
+func printCalibration(env Env, results []calibration) {
+	out := env.Stdout
+	yes := func(ok bool) string { return map[bool]string{true: "ok", false: "FAILED"}[ok] }
+	fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %14s %14s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "FIRST REQUEST", "ESTIMATED CTX", "TOOLS", "SKILLS", "COST")
+	for _, c := range results {
+		fmt.Fprintf(out, "%-16s %-8s %-8s %-13s %14d %14d %6d %7d %8s\n", c.Arm, c.Outcome, yes(c.SandboxOK), yes(c.LargeOutputOK),
+			c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
+		for _, d := range c.Drift {
+			fmt.Fprintf(out, "  unfair: %s (not saved as the arm's calibration)\n", d)
+		}
+	}
+	if len(results) > 0 {
+		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools, so only differences between arms compare with the estimates:\n",
+			orNone(results[0].CLIVersion), orNone(results[0].Model))
+	}
+	base := results[0]
+	for _, c := range results[1:] {
+		measured, estimated := c.FirstRequest-base.FirstRequest, int64(c.EstimatedContext-base.EstimatedContext)
+		verdict := "consistent"
+		// The estimate counts about four bytes per token, and Claude Code wraps each file: allow 30%, at least 150 tokens.
+		if tolerance := max(int64(150), abs(estimated)*30/100); abs(measured-estimated) > tolerance {
+			verdict = "CHECK: the resolver may not match this Claude Code version"
+		}
+		fmt.Fprintf(out, "  %s vs base: measured %+d tokens, estimated %+d: %s\n", c.Arm, measured, estimated, verdict)
+	}
+}
+
+func abs(n int64) int64 {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

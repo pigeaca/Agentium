@@ -43,6 +43,7 @@ type Spec struct {
 	BudgetUSD   float64
 	Timeout     time.Duration // the agent's run
 	Keep        bool          // keep the workspace and the verification copy
+	PlainPrompt bool          // send Instruction as it is, without the task suffix (calibration)
 }
 
 // Env is what a run needs from Agentium and the machine.
@@ -59,8 +60,11 @@ type Env struct {
 	TokenFile     string
 	VerifyTimeout time.Duration // each setup or verification command
 	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
-	Progress      io.Writer
-	Now           func() time.Time
+	// Expect is the arm's calibrated environment (CLI version, model, tools, skills, slash commands); its personal and
+	// project skills are filled in by the run.
+	Expect   claude.Expect
+	Progress io.Writer
+	Now      func() time.Time
 }
 
 // Record is a finished run.
@@ -140,7 +144,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if found := instructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
-	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: spec.Instruction + suffix, Model: spec.Model, Effort: spec.Effort,
+	prompt := spec.Instruction + suffix
+	if spec.PlainPrompt {
+		prompt = spec.Instruction
+	}
+	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
 		Deny: env.denied(ctx, workspace)}
 	if env.SignIn != claude.SignInLogin {
@@ -255,7 +263,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err != nil {
 		return unfinished(err)
 	}
-	rec.Drift = claude.Check(rec.Metrics, claude.Expect{PersonalSkills: claude.PersonalSkills(userConfig), ProjectSkills: projectSkills})
+	expect := env.Expect
+	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), projectSkills
+	rec.Drift = claude.Check(rec.Metrics, expect)
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
 	rec.Behavior.OutsideReads = outsideReads(rec.Metrics.FilePaths, repo, workspace, watched)
 	if rec.Behavior.OutsideReads > 0 {

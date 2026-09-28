@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -288,4 +289,60 @@ func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
 	if records, _ := os.ReadDir(filepath.Join(f.data, "records")); len(records) != 0 {
 		t.Errorf("a run that never started left records: %v", records)
 	}
+}
+
+// calibratingAgent writes a fake Claude Code that reports tools, skills, a first-request size and an answer.
+func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, answer string) string {
+	t.Helper()
+	script := `#!/bin/sh
+echo '{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":[` + tools + `],"skills":[` + skills + `],"slash_commands":["compact"]}'
+echo '{"type":"assistant","parent_tool_use_id":null,"message":{"usage":{"input_tokens":` + strconv.Itoa(firstRequest) + `,"service_tier":"standard"},"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"seq 1 40000"}}]}}'
+echo '{"type":"result","subtype":"success","is_error":false,"result":"` + answer + `","total_cost_usd":0.02,"num_turns":3,"duration_ms":2000,"modelUsage":{}}'
+`
+	cli := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return cli
+}
+
+func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\n"+strings.Repeat("A longer context line for the trimmed arm.\n", 40))
+	expect(t, f.run(context.Background(), "context", "snapshot", "long", "--working-tree"), ExitOK)
+	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "SANDBOX=agentium-sandbox-ok LAST=40000")
+	cal := f.run(context.Background(), "run", "calibrate", "--snapshot", "long")
+	expect(t, cal, ExitOK, "Calibrating 2 arm(s)", "base             ok       ok       ok", "long vs base: measured +0 tokens")
+	if strings.Contains(cal.stdout, "review") {
+		t.Errorf("skill names must not be printed:\n%s", cal.stdout)
+	}
+	// The fake reports the same size for both arms, but the long arm's CLAUDE.md is ~440 tokens bigger: flagged.
+	expect(t, cal, ExitOK, "estimated +430", "CHECK: the resolver may not match")
+
+	// A later run with another tool set is unfair against the calibration.
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "done")
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "Checking the environment against the calibration of base",
+		"outcome      unfair", "tools differ (added Monitor; missing none)")
+	expect(t, f.run(context.Background(), "run", "once", "value", "--snapshot", "long"), ExitOK, "calibration of long")
+
+	// A calibration where the sandbox check fails is reported, and the command fails.
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, `"review"`, 25000, "SANDBOX=Operation not permitted LAST=40000")
+	expect(t, f.run(context.Background(), "run", "calibrate"), ExitError, "base             ok       FAILED")
+}
+
+func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	if err := os.MkdirAll(filepath.Join(f.home, ".claude", "skills", "my-secret-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, `"my-secret-skill"`, 25000, "SANDBOX=agentium-sandbox-ok LAST=40000")
+	cal := f.run(context.Background(), "run", "calibrate")
+	expect(t, cal, ExitError, "base             unfair", "unfair: 1 personal skill(s) loaded (not saved as the arm's calibration)")
+	if strings.Contains(cal.stdout, "my-secret-skill") {
+		t.Errorf("a personal skill name was printed:\n%s", cal.stdout)
+	}
+	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash"`, ``, 25000, "done")
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "arm base is not calibrated")
 }

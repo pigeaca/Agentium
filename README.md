@@ -17,6 +17,7 @@ agentium context snapshot trimmed --working-tree   # --include-linked adds linke
 agentium context diff baseline trimmed --patch
 agentium task import --commit <sha>    # base: its parent; hidden tests: its test-file changes
 agentium task validate <name> --snapshot trimmed   # tests fail on the base, pass with the reference, in each arm
+agentium run calibrate --snapshot trimmed         # short real runs: sandbox, large outputs, context size, tool set
 agentium run once <name> --snapshot trimmed        # one real Claude Code run, graded with the hidden tests (costs money)
 ```
 

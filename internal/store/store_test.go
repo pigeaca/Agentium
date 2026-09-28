@@ -291,3 +291,29 @@ func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
 		t.Errorf("missing run: %v", err)
 	}
 }
+
+func TestLatestCalibrationPerArmAndSnapshot(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range []Calibration{
+		{ProjectID: app.ID, Arm: "base", RunID: "r1", Result: []byte(`{"n":1}`), CreatedAt: now},
+		{ProjectID: app.ID, Arm: "base", RunID: "r2", Result: []byte(`{"n":2}`), CreatedAt: now.Add(time.Hour)},
+		{ProjectID: app.ID, Arm: "trim", Snapshot: "abc", RunID: "r3", Result: []byte(`{"n":3}`), CreatedAt: now},
+	} {
+		if err := s.SaveCalibration(ctx, c); err != nil {
+			t.Fatalf("calibration %d: %v", i, err)
+		}
+	}
+	if c, err := s.LatestCalibration(ctx, app.ID, "base", ""); err != nil || c.RunID != "r2" || string(c.Result) != `{"n":2}` {
+		t.Errorf("latest base = %+v, %v", c, err)
+	}
+	// A snapshot redefined under the same name is another context: its old calibration does not apply.
+	if _, err := s.LatestCalibration(ctx, app.ID, "trim", "def"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another snapshot commit: %v", err)
+	}
+}
