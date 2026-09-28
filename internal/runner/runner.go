@@ -18,12 +18,19 @@ import (
 // Spec is one command to run.
 type Spec struct {
 	Dir     string
-	Command string        // run with /bin/sh -c
-	Env     []string      // added to Environ(os.Environ())
+	Command string   // run with /bin/sh -c
+	Args    []string // instead of Command: run Args[0] with Args[1:], no shell
+	Env     []string // added to the base environment
+	// Environ replaces the base environment, Environ(os.Environ()), when not nil; the caller filters it.
+	Environ []string
 	Timeout time.Duration // 0: no timeout beyond ctx
-	// Output receives stdout and stderr. Pass an *os.File: the child then writes to it directly, so a background
-	// process that keeps the output open cannot hold Run past the command's end.
+	// Grace, when not zero, stops the command gently on timeout or cancel: SIGINT to its process group first, SIGKILL
+	// after Grace. Claude Code, for one, finishes its turn and reports a result on SIGINT.
+	Grace time.Duration
+	// Output receives stdout, and stderr too unless Stderr is set. Pass *os.File values: the child then writes to them
+	// directly, so a background process that keeps the output open cannot hold Run past the command's end.
 	Output io.Writer
+	Stderr io.Writer
 }
 
 // Result is how a command ended.
@@ -75,15 +82,37 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
 	}
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, "/bin/sh", "-c", spec.Command)
+	argv := []string{"/bin/sh", "-c", spec.Command}
+	if len(spec.Args) > 0 {
+		argv = spec.Args
+	}
+	cmd := exec.CommandContext(runCtx, argv[0], argv[1:]...)
 	cmd.Dir = spec.Dir
-	cmd.Env = append(Environ(os.Environ()), spec.Env...)
+	base := spec.Environ
+	if base == nil {
+		base = Environ(os.Environ())
+	}
+	cmd.Env = append(append([]string{}, base...), spec.Env...)
 	cmd.Stdout, cmd.Stderr = spec.Output, spec.Output
+	if spec.Stderr != nil {
+		cmd.Stderr = spec.Stderr
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return killGroup(cmd.Process.Pid) }
-	cmd.WaitDelay = 5 * time.Second
+	var escalate *time.Timer
+	cmd.Cancel = func() error {
+		if spec.Grace <= 0 {
+			return killGroup(cmd.Process.Pid)
+		}
+		pid := cmd.Process.Pid
+		escalate = time.AfterFunc(spec.Grace, func() { killGroup(pid) })
+		return interruptGroup(pid)
+	}
+	cmd.WaitDelay = spec.Grace + 5*time.Second
 	start := time.Now()
 	err := cmd.Run()
+	if escalate != nil {
+		escalate.Stop()
+	}
 	result := Result{Duration: time.Since(start), ExitCode: -1}
 	if cmd.Process != nil {
 		killGroup(cmd.Process.Pid) // background children of a finished command
@@ -105,6 +134,14 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 	result.ExitCode = 0
 	return result, nil
+}
+
+// interruptGroup sends SIGINT to the process group led by pid; a group that is already gone is not an error.
+func interruptGroup(pid int) error {
+	if err := syscall.Kill(-pid, syscall.SIGINT); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 // killGroup kills the process group led by pid; a group that is already gone is not an error.
