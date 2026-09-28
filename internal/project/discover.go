@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,12 +64,18 @@ func TokenFile(env Env) string {
 	if file := env.Getenv("AGENTIUM_CLAUDE_TOKEN_FILE"); file != "" {
 		return file
 	}
-	return filepath.Join(env.Getenv("HOME"), ".config", "agentium", "claude-oauth-token")
+	if home := env.Getenv("HOME"); home != "" {
+		return filepath.Join(home, ".config", "agentium", "claude-oauth-token")
+	}
+	return "" // never a path relative to the working directory
 }
 
 // Discover inspects the repository containing dir.
 func Discover(ctx context.Context, dir string, env Env) (Info, error) {
 	root, err := gitOutput(ctx, dir, "rev-parse", "--show-toplevel")
+	if ctx.Err() != nil {
+		return Info{}, fmt.Errorf("discover %s: %w", dir, ctx.Err())
+	}
 	if err != nil {
 		return Info{}, fmt.Errorf("%s is not inside a git repository: %w", dir, err)
 	}
@@ -83,6 +90,7 @@ func Discover(ctx context.Context, dir string, env Env) (Info, error) {
 	info.Claude, info.Warnings = detectClaude(ctx, env)
 	info.TestCommands = testCommands(root)
 	if len(info.TestCommands) == 0 {
+		info.TestCommands = []string{} // stored as [], not null
 		info.Warnings = append(info.Warnings, "No test command detected: tasks will need explicit verification commands.")
 	}
 	info.Instructions, info.Skills, info.Rules = instructionFiles(root)
@@ -131,7 +139,10 @@ var versionPattern = regexp.MustCompile(`\b(\d+\.\d+\.\d+)\b`)
 func claudeVersion(ctx context.Context, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "--version").Output()
+	cmd := exec.CommandContext(ctx, path, "--version")
+	cmd.Dir = os.TempDir()          // not the user's repository: the CLI must not see or write it
+	cmd.WaitDelay = 2 * time.Second // a child that keeps stdout open cannot hold Output past the timeout
+	out, err := cmd.Output()
 	if err != nil {
 		return "", err
 	}
@@ -225,8 +236,13 @@ func instructionFiles(root string) (files []File, skills, rules int) {
 		}
 	}
 	skillFiles, _ := filepath.Glob(filepath.Join(root, ".claude", "skills", "*", "SKILL.md"))
-	ruleFiles, _ := filepath.Glob(filepath.Join(root, ".claude", "rules", "*.md"))
-	return files, len(skillFiles), len(ruleFiles)
+	filepath.WalkDir(filepath.Join(root, ".claude", "rules"), func(p string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && strings.HasSuffix(p, ".md") { // Claude Code loads nested rule folders too
+			rules++
+		}
+		return nil
+	})
+	return files, len(skillFiles), rules
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

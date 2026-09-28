@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,14 +25,33 @@ func gitIn(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
-// repoState captures everything init must leave untouched: files (tracked, untracked, ignored), refs and git config.
+// repoState captures everything Agentium must leave untouched: files (tracked, untracked, ignored), refs, HEAD, git
+// config, hooks and the index (its bytes and modification time). It reads without optional locks, so taking the state
+// does not itself rewrite the index.
 func repoState(t *testing.T, dir string) string {
 	t.Helper()
-	config, err := os.ReadFile(filepath.Join(dir, ".git", "config"))
+	var state strings.Builder
+	state.WriteString(gitIn(t, dir, "--no-optional-locks", "status", "--porcelain", "--ignored") + gitIn(t, dir, "for-each-ref"))
+	for _, name := range []string{"config", "HEAD", "index"} {
+		file := filepath.Join(dir, ".git", name)
+		data, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Fprintf(&state, "%s %x %s\n", name, sha256.Sum256(data), info.ModTime())
+	}
+	hooks, err := os.ReadDir(filepath.Join(dir, ".git", "hooks"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return gitIn(t, dir, "status", "--porcelain", "--ignored") + gitIn(t, dir, "for-each-ref") + string(config)
+	for _, hook := range hooks {
+		state.WriteString("hook " + hook.Name() + "\n")
+	}
+	return state.String()
 }
 
 func TestInitRegistersWithoutTouchingTheRepository(t *testing.T) {
@@ -90,6 +111,27 @@ func TestInitRegistersWithoutTouchingTheRepository(t *testing.T) {
 	}
 }
 
+func TestInitRefusesADataFolderInsideTheRepository(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "initial")
+	before := repoState(t, repo)
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Env{
+		Args: []string{"init", repo}, Stdout: &stdout, Stderr: &stderr, Dir: t.TempDir(),
+		Getenv: func(key string) string {
+			return map[string]string{"AGENTIUM_HOME": filepath.Join(repo, ".agentium-data")}[key]
+		},
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
+	})
+	if code != ExitError || !strings.Contains(stderr.String(), "is inside the repository") || strings.Contains(stdout.String(), "was not modified") {
+		t.Errorf("exit %d\nstdout %s\nstderr %s", code, stdout.String(), stderr.String())
+	}
+	if after := repoState(t, repo); after != before {
+		t.Errorf("the repository changed:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
 func TestInitErrors(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	env := Env{Stdout: &stdout, Stderr: &stderr, Dir: t.TempDir(), Getenv: func(string) string { return "" },
@@ -101,5 +143,29 @@ func TestInitErrors(t *testing.T) {
 	env.Args = []string{"init"}
 	if code := Run(context.Background(), env); code != ExitError || !strings.Contains(stderr.String(), "not inside a git repository") {
 		t.Errorf("outside a repository: exit %d, stderr %q", code, stderr.String())
+	}
+	for _, help := range []string{"-h", "--help"} {
+		stdout.Reset()
+		env.Args = []string{"init", help}
+		if code := Run(context.Background(), env); code != ExitOK || !strings.Contains(stdout.String(), "Usage: agentium init") {
+			t.Errorf("%s: exit %d, stdout %q", help, code, stdout.String())
+		}
+	}
+	stderr.Reset()
+	env.Args = []string{"init", "--force"}
+	if code := Run(context.Background(), env); code != ExitUsage || !strings.Contains(stderr.String(), "flag provided but not defined: -force") {
+		t.Errorf("unknown flag: exit %d, stderr %q", code, stderr.String())
+	}
+	stderr.Reset()
+	env.Args, env.Dir = []string{"init"}, ""
+	if code := Run(context.Background(), env); code != ExitError || !strings.Contains(stderr.String(), "current folder cannot be read") {
+		t.Errorf("unreadable working folder: exit %d, stderr %q", code, stderr.String())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stderr.Reset()
+	env.Args = []string{"init", t.TempDir()}
+	if code := Run(ctx, env); code != ExitError || !strings.Contains(stderr.String(), "context canceled") {
+		t.Errorf("cancelled: exit %d, stderr %q", code, stderr.String())
 	}
 }

@@ -10,11 +10,12 @@ import (
 	"io/fs"
 	"net/url"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3" // registers the "sqlite3" driver (cgo)
+	"github.com/mattn/go-sqlite3" // also registers the "sqlite3" driver (cgo)
 )
 
 //go:embed migrations/*.sql
@@ -38,9 +39,40 @@ type Project struct {
 	UpdatedAt time.Time
 }
 
-// Open opens the database at file (creating it if needed) and applies pending migrations.
+// openRetry bounds how long Open waits for other processes opening the same database. Switching a new database to WAL
+// fails at once with "database is locked" (the busy timeout does not apply), so Open retries it.
+const openRetry = 10 * time.Second
+
+// Open opens the database at file (creating it if needed) and applies pending migrations. Several processes may open the
+// same database at once.
 func Open(ctx context.Context, file string) (*Store, error) {
-	dsn := (&url.URL{Scheme: "file", Path: file, RawQuery: "_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL"}).String()
+	file, err := filepath.Abs(file) // a relative path would become a URI authority
+	if err != nil {
+		return nil, fmt.Errorf("open database %s: %w", file, err)
+	}
+	deadline := time.Now().Add(openRetry)
+	for wait := 10 * time.Millisecond; ; wait = min(2*wait, 250*time.Millisecond) {
+		s, err := openOnce(ctx, file)
+		if err == nil || !isBusy(err) || time.Now().After(deadline) {
+			return s, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("open database %s: %w", file, ctx.Err())
+		case <-time.After(wait):
+		}
+	}
+}
+
+func isBusy(err error) bool {
+	var sqliteErr sqlite3.Error
+	return errors.As(err, &sqliteErr) && (sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked)
+}
+
+func openOnce(ctx context.Context, file string) (*Store, error) {
+	// _txlock=immediate: transactions take the write lock at BEGIN, so two writers wait (busy timeout) instead of one
+	// failing when it upgrades a read lock.
+	dsn := (&url.URL{Scheme: "file", Path: file, RawQuery: "_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate"}).String()
 	db, err := sql.Open("sqlite3", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open database %s: %w", file, err)
@@ -62,7 +94,8 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// migrate applies each embedded migrations/NNNN_name.sql not yet recorded, one transaction per file, in order.
+// migrate applies each embedded migrations/NNNN_name.sql not yet recorded, one transaction per file, in order. Each
+// transaction re-checks the record under the write lock, so concurrent processes apply a migration once.
 func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
@@ -71,23 +104,32 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("list migrations: %w", err)
 	}
-	for _, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
-		version, err := strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0])
-		if err != nil {
+	latest := 0
+	versions := make([]int, len(names))
+	for i, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
+		if versions[i], err = strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0]); err != nil {
 			return fmt.Errorf("migration %s: version prefix: %w", name, err)
 		}
-		var applied int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied); err != nil {
-			return fmt.Errorf("migration %d: %w", version, err)
-		}
-		if applied > 0 {
-			continue
-		}
+		latest = max(latest, versions[i])
+	}
+	var newest sql.NullInt64
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if newest.Valid && int(newest.Int64) > latest {
+		return fmt.Errorf("the database has schema version %d, but this Agentium knows up to %d: upgrade Agentium", newest.Int64, latest)
+	}
+	for i, name := range names {
+		version := versions[i]
 		body, err := migrations.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("migration %d: %w", version, err)
 		}
 		if err := s.inTx(ctx, func(tx *sql.Tx) error {
+			var applied int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = ?`, version).Scan(&applied); err != nil || applied > 0 {
+				return err
+			}
 			if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 				return err
 			}
