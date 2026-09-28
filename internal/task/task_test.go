@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,8 @@ func TestIsTestFile(t *testing.T) {
 		"src/a.test.ts": true, "src/a.spec.jsx": true, "src/__tests__/a.js": true, "src/a.ts": false,
 		"src/__snapshots__/a.snap": true, "e2e/login.ts": true, "scripts/test_harness.py": true,
 		"docs/testing.md": false, "contest.py": false, "latest/x.go": false,
+		"app/tests.py": true, "spec/models/user_spec.rb": true, "lib/user_spec.rb": true, "src/__mocks__/fs.js": true,
+		"fixtures/users.json": true, "app/fixture.go": false, "specs.md": false,
 	} {
 		if got := IsTestFile(p); got != want {
 			t.Errorf("IsTestFile(%q) = %v, want %v", p, got, want)
@@ -102,7 +105,11 @@ func validator(t *testing.T, bare string) (Validator, *bytes.Buffer) {
 func stages(v Validation) []string {
 	var out []string
 	for _, s := range v.Stages {
-		out = append(out, s.Arm+"/"+s.Stage+"="+s.Want+":"+passFail(s.Passed))
+		got := passFail(s.Passed)
+		if s.SetupFailed {
+			got = "setup-failed"
+		}
+		out = append(out, s.Arm+"/"+s.Stage+"="+s.Want+":"+got)
 	}
 	return out
 }
@@ -187,19 +194,27 @@ func TestValidateRejectsTestsThatDoNotFailAndHandlesMissingSolutions(t *testing.
 	}
 	needsAsset.Setup = []string{"mkdir -p build && touch build/asset"}
 	withSetup, err := v.Validate(ctx, needsAsset, []Arm{{Name: "base"}})
-	if err != nil || withSetup.Status != StatusValid ||
-		!slices.Equal(stages(withSetup), []string{"base/setup=pass:pass", "base/hidden-tests=fail:fail", "base/reference=pass:pass"}) {
+	if err != nil || withSetup.Status != StatusValid || len(withSetup.Stages[1].Setup) != 1 ||
+		!slices.Equal(stages(withSetup), []string{"base/hidden-tests=fail:fail", "base/reference=pass:pass"}) {
 		t.Errorf("with setup: %v (%s), %v", stages(withSetup), withSetup.Status, err)
 	}
 	needsAsset.Setup = []string{"exit 7"}
-	if broken, _ := v.Validate(ctx, needsAsset, []Arm{{Name: "base"}}); broken.Status != StatusInvalid || !slices.Equal(stages(broken), []string{"base/setup=pass:fail"}) {
-		t.Errorf("failing setup: %v", stages(broken))
+	broken, _ := v.Validate(ctx, needsAsset, []Arm{{Name: "base"}})
+	if broken.Status != StatusInvalid || !slices.Equal(stages(broken), []string{"base/hidden-tests=fail:setup-failed"}) ||
+		!strings.Contains(broken.Summary(), "base/hidden-tests setup failed") {
+		t.Errorf("failing setup: %v, %q", stages(broken), broken.Summary())
 	}
 
 	v.Timeout = 100 * time.Millisecond
 	slow, err := v.Validate(ctx, Spec{Base: f.base, Verify: []string{"sleep 5"}}, []Arm{{Name: "base"}})
 	if err != nil || slow.Status != StatusInvalid || !slow.Stages[0].Commands[0].TimedOut {
 		t.Errorf("timeout: %+v, %v", slow, err)
+	}
+	// Hidden tests must fail, but a timeout is not that failure.
+	hung, err := v.Validate(ctx, Spec{Base: f.base, Solution: f.solution, HiddenTests: []string{"tests/value_test.sh"},
+		Reference: []string{"value.txt"}, Verify: []string{"sleep 5"}}, []Arm{{Name: "base"}})
+	if err != nil || hung.Status != StatusInvalid || !strings.Contains(hung.Summary(), "base/hidden-tests timed out") {
+		t.Errorf("timed-out hidden tests: %v, %q, %v", stages(hung), hung.Summary(), err)
 	}
 }
 
@@ -222,3 +237,82 @@ func (m snapSource) ReadFile(p string) ([]byte, error) {
 }
 func (m snapSource) Executable(string) bool { return false }
 func (m snapSource) Describe() string       { return "memory" }
+
+// history makes a repository with a base commit and solutions branching from it, copies them into a bare repository
+// and returns it with the commit ids.
+func history(t *testing.T, base map[string]string, solutions ...map[string]string) (string, string, []string) {
+	t.Helper()
+	ctx := context.Background()
+	user := t.TempDir()
+	git(t, user, "init", "-q", "-b", "main")
+	baseCommit := commit(t, user, base, "base")
+	var ids []string
+	for i, files := range solutions {
+		git(t, user, "checkout", "-q", baseCommit)
+		ids = append(ids, commit(t, user, files, "solution "+strconv.Itoa(i)))
+	}
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	if err := gitx.InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range append([]string{baseCommit}, ids...) {
+		if err := gitx.FetchCommit(ctx, user, c, gitx.SourceRef(c), "--git-dir", bare); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bare, baseCommit, ids
+}
+
+var checkedRepo = map[string]string{
+	"run_tests.sh": "grep -q Rules CLAUDE.md || { echo 'CLAUDE.md lost its rules'; exit 1; }\n" +
+		"for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n",
+	"CLAUDE.md": "# Rules\nKeep tests green.\n",
+	"value.txt": "old\n",
+}
+
+// A hidden test that fails once and then passes (like a snapshot test writing its snapshot) must not make a reference
+// that fixes nothing look valid: each stage gets a fresh checkout.
+func TestStagesDoNotShareState(t *testing.T) {
+	ctx := context.Background()
+	bare, base, ids := history(t, checkedRepo, map[string]string{
+		"tests/seen_test.sh": "test -f .seen || { touch .seen; exit 1; }\n",
+		"unrelated.txt":      "the reference fixes nothing\n",
+	})
+	v, _ := validator(t, bare)
+	result, err := v.Validate(ctx, Spec{Base: base, Solution: ids[0], HiddenTests: []string{"tests/seen_test.sh"},
+		Reference: []string{"unrelated.txt"}, Verify: []string{"sh run_tests.sh"}}, []Arm{{Name: "base"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != StatusInvalid || !slices.Equal(stages(result), []string{"base/hidden-tests=fail:fail", "base/reference=pass:fail"}) {
+		t.Errorf("stages = %v (%s): state leaked from the hidden-tests run into the reference run", stages(result), result.Status)
+	}
+}
+
+// A solution that also edits context files must not undo an arm's context: the arm keeps its version, so an arm whose
+// context breaks the repository's checks stays invalid.
+func TestSolutionFilesKeepTheArmsContext(t *testing.T) {
+	ctx := context.Background()
+	bare, base, ids := history(t, checkedRepo, map[string]string{
+		"tests/value_test.sh": "grep -q new value.txt\n",
+		"value.txt":           "new\n",
+		"CLAUDE.md":           "# Rules\nKeep tests green. Values are new.\n",
+	})
+	broken, _, err := snapshot.Build(ctx, bare, snapSource{"CLAUDE.md": "Be brief.\n"}, "broken", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, _ := validator(t, bare)
+	result, err := v.Validate(ctx, Spec{Base: base, Solution: ids[0], HiddenTests: []string{"tests/value_test.sh"},
+		Reference: []string{"CLAUDE.md", "value.txt"}, Verify: []string{"sh run_tests.sh"}}, []Arm{{Name: "base"}, {Name: "broken", Snapshot: broken}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"base/hidden-tests=fail:fail", "base/reference=pass:pass", "broken/hidden-tests=fail:fail", "broken/reference=pass:fail"}
+	if !slices.Equal(stages(result), want) || result.Status != StatusInvalid {
+		t.Errorf("stages = %v (%s), want %v", stages(result), result.Status, want)
+	}
+	if !slices.Equal(result.ContextKept["broken"], []string{"CLAUDE.md"}) || len(result.ContextKept["base"]) != 0 {
+		t.Errorf("context kept = %v", result.ContextKept)
+	}
+}

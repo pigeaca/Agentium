@@ -70,6 +70,15 @@ func TestExitCodesOutputAndEnvironment(t *testing.T) {
 	}
 }
 
+func TestEnvironDropsCredentialsByName(t *testing.T) {
+	kept := Environ([]string{"PATH=/bin", "HOME=/h", "GOFLAGS=-mod=readonly", "LANG=C", "TERM=xterm",
+		"HF_TOKEN=x", "STRIPE_SECRET_KEY=x", "DB_PASSWORD=x", "SSH_AUTH_SOCK=/tmp/agent", "MY_SERVICE_API_KEY=x",
+		"GOOGLE_APPLICATION_CREDENTIALS=/k.json", "ANTHROPIC_API_KEY=x", "GIT_DIR=/x", "AGENTIUM_HOME=/d"})
+	if strings.Join(kept, " ") != "PATH=/bin HOME=/h GOFLAGS=-mod=readonly LANG=C TERM=xterm" {
+		t.Errorf("kept %v", kept)
+	}
+}
+
 func TestTimeoutKillsTheProcessGroup(t *testing.T) {
 	out, _ := output(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")

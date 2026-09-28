@@ -35,9 +35,12 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	if err := os.Chmod(gh, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, ghDir, "pr-7.json", `{"number":7,"title":"Make value new (PR)","body":"Please.","state":"MERGED","mergeCommit":{"oid":"`+solution+`"},"changedFiles":2}`)
-	writeFile(t, ghDir, "pr-8.json", `{"number":8,"title":"Open","body":"","state":"OPEN","mergeCommit":null,"changedFiles":1}`)
-	writeFile(t, ghDir, "pr-9.json", `{"number":9,"title":"Rebased","body":"","state":"MERGED","mergeCommit":{"oid":"`+solution+`"},"changedFiles":5}`)
+	files := `"files":[{"path":"tests/value_test.sh","additions":1,"deletions":0},{"path":"value.txt","additions":1,"deletions":1}]`
+	writeFile(t, ghDir, "pr-7.json", `{"number":7,"title":"Make value new (PR)","body":"Please.","state":"MERGED","mergeCommit":{"oid":"`+solution+`"},`+files+`}`)
+	writeFile(t, ghDir, "pr-8.json", `{"number":8,"title":"Open","body":"","state":"OPEN","mergeCommit":null,"files":[]}`)
+	// Rebase-merged: the PR's first commit also touched value.txt, so the whole PR has more lines than its last commit.
+	writeFile(t, ghDir, "pr-9.json", `{"number":9,"title":"Rebased","body":"","state":"MERGED","mergeCommit":{"oid":"`+solution+`"},`+
+		`"files":[{"path":"tests/value_test.sh","additions":1,"deletions":0},{"path":"value.txt","additions":3,"deletions":1}]}`)
 
 	data := filepath.Join(t.TempDir(), "data")
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
@@ -74,6 +77,8 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	expect(t, run("task", "validate", name), ExitOK, "base       hidden-tests", "reference", "Result: valid")
 	expect(t, run("task", "validate", name, "--snapshot", "broken"), ExitError, "Result: invalid: broken/reference wanted pass")
 	expect(t, run("task", "list"), ExitOK, "invalid: broken/reference wanted pass")
+	expect(t, run("task", "validate", name, "--snapshot", "broken", "--snapshot", "broken"), ExitUsage, "repeated or reserved")
+	expect(t, run("task", "validate", name, "--snapshot", "base"), ExitUsage, "repeated or reserved")
 
 	expect(t, run("task", "edit", name, "--reviewed"), ExitOK)
 	expect(t, run("task", "edit", name, "--verify", "sh run_tests.sh", "--verify", "true"), ExitOK)
@@ -84,9 +89,11 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 
 	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Document the value.", "--verify", "test -f built", "--verify", "sh run_tests.sh"), ExitOK)
 	expect(t, run("task", "validate", "manual"), ExitError, "Result: invalid: base/base wanted pass")
+	expect(t, run("task", "edit", "manual", "--setup", "exit 3"), ExitOK)
+	expect(t, run("task", "validate", "manual"), ExitError, "got setup failed", "Result: invalid: base/base setup failed")
 	expect(t, run("task", "edit", "manual", "--setup", "touch built"), ExitOK)
 	expect(t, run("task", "show", "manual"), ExitOK, "setup      touch built", "status     not validated")
-	expect(t, run("task", "validate", "manual"), ExitOK, "base       setup", "Result: unchecked")
+	expect(t, run("task", "validate", "manual"), ExitOK, "base       base          want pass got pass ok", "Result: unchecked")
 	expect(t, run("task", "edit", "manual", "--setup", "x", "--no-setup"), ExitUsage)
 	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Again.", "--verify", "true"), ExitError, "already exists")
 	expect(t, run("task", "add", "nothing", "--base", "HEAD"), ExitUsage, "an instruction is required")
@@ -94,7 +101,7 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	expect(t, run("task", "import", "--pr", "7", "--name", "from-pr", "--verify", "sh run_tests.sh"), ExitOK, "Added task from-pr (pr #7)")
 	expect(t, run("task", "show", "from-pr"), ExitOK, "Make value new (PR)", "Please.")
 	expect(t, run("task", "import", "--pr", "8"), ExitError, "is open, not merged")
-	expect(t, run("task", "import", "--pr", "9", "--verify", "true"), ExitError, "probably rebase-merged")
+	expect(t, run("task", "import", "--pr", "9", "--verify", "true"), ExitError, "probably rebase-merged", "value.txt: +3 -1 in the pull request, +1 -1 in the commit")
 	expect(t, run("task", "import", "--pr", "10"), ExitError, "no such pull request")
 	expect(t, run("task", "import", "--commit", "HEAD", "--pr", "7"), ExitUsage, "give --commit REF or --pr N")
 
@@ -115,5 +122,25 @@ func TestTaskName(t *testing.T) {
 		if got := taskName(subject, commit); got != want {
 			t.Errorf("taskName(%q) = %q, want %q", subject, got, want)
 		}
+	}
+}
+
+func TestParseNumstat(t *testing.T) {
+	out := "3\t1\tsrc/a.go\x00" + "0\t0\t\x00old/name.go\x00new/name.go\x00" + "-\t-\tlogo.png\x00"
+	got, err := parseNumstat(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]lineCounts{"src/a.go": {3, 1}, "new/name.go": {0, 0}, "logo.png": {-1, -1}}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for path, counts := range want {
+		if got[path] != counts {
+			t.Errorf("%s = %v, want %v", path, got[path], counts)
+		}
+	}
+	if _, err := parseNumstat("garbage\x00"); err == nil {
+		t.Error("a malformed record must be an error")
 	}
 }

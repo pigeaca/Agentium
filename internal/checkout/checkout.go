@@ -1,6 +1,7 @@
-// Package checkout makes isolated working copies for validation and runs: a fresh repository holding one commit (depth
-// 1) fetched from Agentium's bare repository. Nothing else there (other commits, hidden tests, reference solutions) is
-// reachable from the copy, and the copy does not record where it came from.
+// Package checkout makes working copies for validation and runs: a fresh repository holding one commit (depth 1)
+// fetched from Agentium's bare repository, with no hooks. Through git, nothing else there (other commits, hidden tests,
+// reference solutions) is reachable from the copy, and the copy does not record where it came from. The file system is
+// another matter: copies live in the data folder next to the bare repository, so agent runs must also be denied it.
 package checkout
 
 import (
@@ -16,12 +17,19 @@ import (
 	"github.com/pigeaca/agentium/internal/source"
 )
 
-// New creates dir, which must not exist yet, as a checkout of commit from the bare repository.
-func New(ctx context.Context, bare, commit, dir string) error {
+// New creates dir, which must not exist yet, as a checkout of commit from the bare repository. On failure, dir is
+// removed.
+func New(ctx context.Context, bare, commit, dir string) (err error) {
 	if _, err := os.Lstat(dir); err == nil {
 		return fmt.Errorf("checkout %s: already exists", dir)
 	}
-	if _, err := gitx.Run(ctx, "init", "--quiet", dir); err != nil {
+	defer func() {
+		if err != nil {
+			os.RemoveAll(dir)
+		}
+	}()
+	// An empty --template: the user's init.templateDir (which may hold hooks) is not copied in.
+	if _, err := gitx.Run(ctx, "init", "--quiet", "--template=", dir); err != nil {
 		return err
 	}
 	if err := gitx.FetchCommit(ctx, bare, commit, "", "-C", dir); err != nil {

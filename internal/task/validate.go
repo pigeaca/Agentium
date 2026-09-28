@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,9 +27,9 @@ const (
 
 // Stage names. With a solution, each arm runs hidden-tests then reference; the base need not pass on its own (a task
 // may start where the checks cannot run yet), and an arm whose context breaks the checks fails at reference. Without a
-// solution, the base stage is all that can be run.
+// solution, the base stage is all that can be run. Every stage runs the task's setup commands first; if they fail, so
+// does the stage.
 const (
-	StageSetup       = "setup"        // the task's setup commands, run first in each fresh checkout, must pass
 	StageBase        = "base"         // the base (with the arm's context) must pass its verification
 	StageHiddenTests = "hidden-tests" // with the hidden tests added, it must fail
 	StageReference   = "reference"    // with the reference solution too, it must pass
@@ -57,13 +59,15 @@ type Command struct {
 
 // Stage is one verification run.
 type Stage struct {
-	Arm      string    `json:"arm"`
-	Stage    string    `json:"stage"`
-	Want     string    `json:"want"` // "pass" or "fail"
-	Passed   bool      `json:"passed"`
-	OK       bool      `json:"ok"` // Passed is what Want asked for
-	Commands []Command `json:"commands"`
-	Log      string    `json:"log"`
+	Arm         string    `json:"arm"`
+	Stage       string    `json:"stage"`
+	Want        string    `json:"want"` // "pass" or "fail"
+	Passed      bool      `json:"passed"`
+	OK          bool      `json:"ok"` // Passed is what Want asked for (a timeout never is), after a passing setup
+	Setup       []Command `json:"setup,omitempty"`
+	SetupFailed bool      `json:"setup_failed,omitempty"`
+	Commands    []Command `json:"commands"`
+	Log         string    `json:"log"`
 }
 
 // Validation is the outcome of validating a task.
@@ -74,6 +78,8 @@ type Validation struct {
 	At     time.Time `json:"at"`
 	// HarnessChanged lists, per arm, settings, hooks and MCP files that differ from the base.
 	HarnessChanged map[string][]string `json:"harness_changed,omitempty"`
+	// ContextKept lists, per arm, context files the solution also changes: the arm keeps its own version of them.
+	ContextKept map[string][]string `json:"context_kept,omitempty"`
 }
 
 // Validator runs validations. Checkouts are made in WorkDir and removed afterwards unless Keep is set.
@@ -104,13 +110,19 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		}
 	}
 	for _, arm := range arms {
-		stages, harness, err := v.validateArm(ctx, spec, arm, solution)
+		stages, harness, kept, err := v.validateArm(ctx, spec, arm, solution)
 		result.Stages = append(result.Stages, stages...)
 		if len(harness) > 0 {
 			if result.HarnessChanged == nil {
 				result.HarnessChanged = map[string][]string{}
 			}
 			result.HarnessChanged[arm.Name] = harness
+		}
+		if len(kept) > 0 {
+			if result.ContextKept == nil {
+				result.ContextKept = map[string][]string{}
+			}
+			result.ContextKept[arm.Name] = kept
 		}
 		if err != nil {
 			return result, err
@@ -124,72 +136,109 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 	return result, nil
 }
 
-func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution source.Source) ([]Stage, []string, error) {
-	dir := filepath.Join(v.WorkDir, arm.Name)
-	if err := checkout.New(ctx, v.Bare, spec.Base, dir); err != nil {
-		return nil, nil, err
-	}
-	if !v.Keep {
-		defer os.RemoveAll(dir)
-	}
-	var harness []string
+// validateArm runs an arm's stages. Each stage gets a fresh checkout, prepared as a run would be: the base, the arm's
+// context, the setup commands, then files from the solution. So nothing one stage leaves behind (a snapshot a failing
+// test wrote, build outputs) reaches the next. Solution files that are the arm's context keep the arm's version.
+func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution source.Source) (stages []Stage, harness, kept []string, err error) {
+	var snap source.Source
+	var overlay snapshot.Overlay
+	armContext := map[string]bool{}
 	if arm.Snapshot != "" {
 		base, err := source.Commit(ctx, spec.Base, "--git-dir", v.Bare)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		snap, err := source.Commit(ctx, arm.Snapshot, "--git-dir", v.Bare)
-		if err != nil {
-			return nil, nil, err
+		if snap, err = source.Commit(ctx, arm.Snapshot, "--git-dir", v.Bare); err != nil {
+			return nil, nil, nil, err
 		}
-		overlay, err := snapshot.PlanOverlay(base, snap)
-		if err != nil {
-			return nil, nil, fmt.Errorf("arm %s: %w", arm.Name, err)
+		if overlay, err = snapshot.PlanOverlay(base, snap); err != nil {
+			return nil, nil, nil, fmt.Errorf("arm %s: %w", arm.Name, err)
 		}
-		// Deletes are not in the snapshot, so Write removes them.
-		if err := checkout.Write(dir, snap, append(overlay.Writes, overlay.Deletes...)); err != nil {
-			return nil, nil, fmt.Errorf("arm %s: %w", arm.Name, err)
+		for _, p := range append(slices.Clone(overlay.Writes), overlay.Deletes...) {
+			armContext[p] = true
 		}
-		harness = overlay.HarnessChanged
+	}
+	solutionFiles := func(paths []string) []string {
+		var files []string
+		for _, p := range paths {
+			if armContext[p] {
+				if !slices.Contains(kept, p) {
+					kept = append(kept, p)
+				}
+				continue
+			}
+			files = append(files, p)
+		}
+		return files
 	}
 	type step struct {
-		name   string
-		want   bool         // pass
-		before func() error // prepares the checkout
+		name  string
+		want  bool     // pass
+		files []string // from the solution
 	}
 	plan := []step{{StageBase, true, nil}}
 	if solution != nil && len(spec.HiddenTests) > 0 && len(spec.Reference) > 0 {
 		plan = []step{
-			{StageHiddenTests, false, func() error { return checkout.Write(dir, solution, spec.HiddenTests) }},
-			{StageReference, true, func() error { return checkout.Write(dir, solution, spec.Reference) }},
+			{StageHiddenTests, false, solutionFiles(spec.HiddenTests)},
+			{StageReference, true, solutionFiles(append(slices.Clone(spec.HiddenTests), spec.Reference...))},
 		}
 	}
-	var stages []Stage
-	if len(spec.Setup) > 0 {
-		stage, err := v.verify(ctx, spec.Setup, dir, arm.Name, StageSetup, true)
-		stages = append(stages, stage)
-		v.report(stage)
-		if err != nil || !stage.OK {
-			return stages, harness, err
-		}
-	}
-	for _, step := range plan {
-		if step.before != nil {
-			if err := step.before(); err != nil {
-				return stages, harness, fmt.Errorf("arm %s, %s: %w", arm.Name, step.name, err)
-			}
-		}
-		stage, err := v.verify(ctx, spec.Verify, dir, arm.Name, step.name, step.want)
+	for _, s := range plan {
+		stage, err := v.runStage(ctx, spec, arm, s.name, s.want, snap, overlay, solution, s.files)
 		stages = append(stages, stage)
 		if err != nil {
-			return stages, harness, err
+			return stages, overlay.HarnessChanged, kept, err
 		}
 		v.report(stage)
 		if !stage.OK {
 			break
 		}
 	}
-	return stages, harness, nil
+	sort.Strings(kept)
+	return stages, overlay.HarnessChanged, kept, nil
+}
+
+// runStage prepares a fresh checkout for one stage and runs the verification in it.
+func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string, want bool, snap source.Source,
+	overlay snapshot.Overlay, solution source.Source, files []string) (Stage, error) {
+	stage := Stage{Arm: arm.Name, Stage: name, Want: passFail(want), Log: filepath.Join(v.LogDir, arm.Name+"-"+name+".log")}
+	dir := filepath.Join(v.WorkDir, arm.Name+"-"+name)
+	if err := checkout.New(ctx, v.Bare, spec.Base, dir); err != nil {
+		return stage, err
+	}
+	if !v.Keep {
+		defer os.RemoveAll(dir)
+	}
+	if snap != nil { // Deletes are not in the snapshot, so Write removes them.
+		if err := checkout.Write(dir, snap, append(slices.Clone(overlay.Writes), overlay.Deletes...)); err != nil {
+			return stage, fmt.Errorf("arm %s: %w", arm.Name, err)
+		}
+	}
+	log, err := os.Create(stage.Log)
+	if err != nil {
+		return stage, fmt.Errorf("validation log: %w", err)
+	}
+	defer log.Close()
+	if len(spec.Setup) > 0 {
+		var ok bool
+		if stage.Setup, ok, err = v.run(ctx, log, dir, spec.Setup); err != nil || !ok {
+			stage.SetupFailed = !ok
+			return stage, err
+		}
+	}
+	if len(files) > 0 {
+		if err := checkout.Write(dir, solution, files); err != nil {
+			return stage, fmt.Errorf("arm %s, %s: %w", arm.Name, name, err)
+		}
+	}
+	if stage.Commands, stage.Passed, err = v.run(ctx, log, dir, spec.Verify); err != nil {
+		return stage, err
+	}
+	stage.OK = stage.Passed == want
+	if !want && timedOut(stage.Commands) { // a timeout is not the failure hidden tests must cause
+		stage.OK = false
+	}
+	return stage, nil
 }
 
 // report prints one progress line for a stage.
@@ -197,39 +246,45 @@ func (v Validator) report(stage Stage) {
 	if v.Progress == nil {
 		return
 	}
-	verdict := "ok"
-	if !stage.OK {
+	got, verdict := passFail(stage.Passed), "ok"
+	switch {
+	case stage.SetupFailed:
+		got, verdict = "setup failed", "NOT OK"
+	case !stage.OK && timedOut(stage.Commands):
+		verdict = "NOT OK (timed out)"
+	case !stage.OK:
 		verdict = "NOT OK"
 	}
-	fmt.Fprintf(v.Progress, "  %-10s %-13s want %-4s got %-4s %s\n", stage.Arm, stage.Stage, stage.Want, passFail(stage.Passed), verdict)
+	fmt.Fprintf(v.Progress, "  %-10s %-13s want %-4s got %-4s %s\n", stage.Arm, stage.Stage, stage.Want, got, verdict)
 }
 
-// verify runs the commands in dir until one fails; the stage passes when all of them pass.
-func (v Validator) verify(ctx context.Context, commands []string, dir, arm, name string, want bool) (Stage, error) {
-	stage := Stage{Arm: arm, Stage: name, Want: passFail(want), Passed: true, Log: filepath.Join(v.LogDir, arm+"-"+name+".log")}
-	log, err := os.Create(stage.Log)
-	if err != nil {
-		return stage, fmt.Errorf("validation log: %w", err)
-	}
-	defer log.Close()
+// run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.
+func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
 		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log})
-		stage.Commands = append(stage.Commands, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
+		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
-			return stage, err
+			return results, false, err
 		}
 		if !result.Passed() {
 			if result.TimedOut {
 				fmt.Fprintf(log, "[agentium] timed out after %s\n", v.Timeout)
 			}
-			stage.Passed = false
-			break
+			return results, false, nil
 		}
 	}
-	stage.OK = stage.Passed == want
-	return stage, nil
+	return results, true, nil
+}
+
+func timedOut(commands []Command) bool {
+	for _, c := range commands {
+		if c.TimedOut {
+			return true
+		}
+	}
+	return false
 }
 
 func passFail(pass bool) string {
@@ -246,7 +301,12 @@ var ErrNoVerify = errors.New("no verification commands")
 func (v Validation) Summary() string {
 	var failed []string
 	for _, stage := range v.Stages {
-		if !stage.OK {
+		switch {
+		case stage.SetupFailed:
+			failed = append(failed, fmt.Sprintf("%s/%s setup failed", stage.Arm, stage.Stage))
+		case !stage.OK && timedOut(stage.Commands):
+			failed = append(failed, fmt.Sprintf("%s/%s timed out", stage.Arm, stage.Stage))
+		case !stage.OK:
 			failed = append(failed, fmt.Sprintf("%s/%s wanted %s", stage.Arm, stage.Stage, stage.Want))
 		}
 	}
