@@ -6,7 +6,8 @@
   - Go 1.27.1, which the user installs;
   - `mattn/go-sqlite3`, to be added when Phase 1 builds storage, not in this change;
   - `actions/setup-go` v7.0.0 pinned to `b7ad1dad31e06c5925ef5d2fc7ad053ef454303e`;
-  - govulncheck from `golang.org/x/vuln` v1.8.0.
+  - govulncheck from `golang.org/x/vuln` v1.8.0;
+  - later the same day: `actions/checkout` upgraded from v4.4.0 to v7.0.1 (`3d3c42e5aac5ba805825da76410c181273ba90b1`), because Node.js 20 is deprecated on runners.
 
 ## Outcome and boundaries
 The repository becomes a Go project with the process checks the rules expect, before any product code:

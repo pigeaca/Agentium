@@ -1,5 +1,6 @@
 """Harness regressions; fixtures live in temporary directories and never touch the real checkout."""
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -355,7 +356,11 @@ class GoToolchain(unittest.TestCase):
 
     def test_ci_workflow_pins_the_same_tools(self):
         workflow = (Path(harness.__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text()
+        self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1", workflow)
         self.assertIn("actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", workflow)
+        # Every action is pinned to a full commit SHA, never a movable tag.
+        for action in re.findall(r"uses:\s*(\S+)", workflow):
+            self.assertRegex(action, r"@[0-9a-f]{40}$", action)
         self.assertIn("go-version-file: go.mod", workflow)
         self.assertIn("harness.py check vuln", workflow)
 
