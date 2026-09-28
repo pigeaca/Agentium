@@ -224,9 +224,14 @@ type Expect struct {
 	CLIVersion string
 	Model      string
 	Tools      []string // the tool set every run of an experiment must get
-	Skills     []string // the skill set every run of an arm must get (reported by count: names can be personal)
-	// PersonalSkills are the names of the user's own skills and commands: none may load (requirement 1), except where
-	// the arm has a project skill of the same name (ProjectSkills).
+	// Skills and SlashCommands are the sets every run of an arm must get, taken from a calibration run under the same
+	// isolation (Claude Code bundles skills and commands of its own, so the resolver cannot list them). Reported by
+	// count: names can be personal.
+	Skills        []string
+	SlashCommands []string
+	// PersonalSkills are the names of the user's own skills: none may load (requirement 1). A name is not counted when
+	// the arm has a project skill of that name (ProjectSkills) or a calibration run had it (Skills): a bundled skill
+	// can share a personal skill's name. Personal commands show up as slash commands, which SlashCommands covers.
 	PersonalSkills []string
 	ProjectSkills  []string
 }
@@ -259,14 +264,18 @@ func Check(m Metrics, expect Expect) []string {
 	if expect.Skills != nil && !slices.Equal(m.Skills, sorted(expect.Skills)) {
 		drift = append(drift, fmt.Sprintf("skills differ (%d added, %d missing)", len(difference(m.Skills, expect.Skills)), len(difference(expect.Skills, m.Skills))))
 	}
-	personal := map[string]bool{}
-	for _, name := range append(append([]string{}, m.Skills...), m.SlashCommands...) {
-		if slices.Contains(expect.PersonalSkills, name) && !slices.Contains(expect.ProjectSkills, name) {
-			personal[name] = true
+	if expect.SlashCommands != nil && !slices.Equal(m.SlashCommands, sorted(expect.SlashCommands)) {
+		drift = append(drift, fmt.Sprintf("slash commands differ (%d added, %d missing)",
+			len(difference(m.SlashCommands, expect.SlashCommands)), len(difference(expect.SlashCommands, m.SlashCommands))))
+	}
+	personal := 0
+	for _, name := range m.Skills {
+		if slices.Contains(expect.PersonalSkills, name) && !slices.Contains(expect.ProjectSkills, name) && !slices.Contains(expect.Skills, name) {
+			personal++
 		}
 	}
-	if len(personal) > 0 { // requirement 1; the names stay private
-		drift = append(drift, fmt.Sprintf("%d personal skill(s) or command(s) loaded", len(personal)))
+	if personal > 0 { // requirement 1; the names stay private
+		drift = append(drift, fmt.Sprintf("%d personal skill(s) loaded", personal))
 	}
 	return drift
 }

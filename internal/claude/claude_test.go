@@ -85,10 +85,25 @@ func TestReq1PersonalContextDoesNotLoad(t *testing.T) {
 	if !slices.Equal(personal, []string{"deploy", "my-review", "ship"}) {
 		t.Fatalf("personal skills = %v", personal)
 	}
-	leaked := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "product-increment"}, SlashCommands: []string{"compact", "ship"}}
+	leaked := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "my-review", "product-increment"},
+		SlashCommands: []string{"compact", "ship"}}
 	drift := Check(leaked, Expect{PersonalSkills: personal})
-	if len(drift) != 1 || drift[0] != "2 personal skill(s) or command(s) loaded" {
+	if len(drift) != 1 || drift[0] != "2 personal skill(s) loaded" {
 		t.Errorf("drift = %q (names must stay private)", drift)
+	}
+	// A personal command shows up among slash commands, next to Claude Code's own: an exact set from a calibration run
+	// catches it; a personal skill named like a built-in command is not a leak.
+	if drift := Check(leaked, Expect{SlashCommands: []string{"compact", "review"}}); len(drift) != 1 || drift[0] != "slash commands differ (1 added, 1 missing)" {
+		t.Errorf("slash command drift = %q", drift)
+	}
+	builtin := Metrics{SawInit: true, PermissionMode: PermissionMode, SlashCommands: []string{"compact", "review"}}
+	if drift := Check(builtin, Expect{PersonalSkills: []string{"review"}}); len(drift) != 0 {
+		t.Errorf("a personal skill named like a built-in command: %q", drift)
+	}
+	// A bundled skill that a calibration run also had is not a leak either.
+	bundled := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"review"}}
+	if drift := Check(bundled, Expect{PersonalSkills: []string{"review"}, Skills: []string{"review"}}); len(drift) != 0 {
+		t.Errorf("a bundled skill named like a personal one: %q", drift)
 	}
 	// A project skill that shares a personal skill's name is the arm's own, not a leak.
 	own := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy"}}
@@ -198,15 +213,21 @@ func TestReq5HiddenPathsAndCredentialsAreDenied(t *testing.T) {
 				t.Errorf("%s: %s not denied: %s | %s", mode, p, denyRead, rules)
 			}
 		}
-		// Claude Code's own data (transcripts, file and prompt history) and credential stores are denied in every mode,
-		// to the shell and to the Read tool.
-		for _, p := range []string{"/home/u/.claude", "/home/u/.claude.json", "/home/u/.claude-work", "/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"} {
-			if !strings.Contains(denyRead, p) || !strings.Contains(rules, "Read(/"+p+"/**)") {
+		// Claude Code's history and credential stores are denied in every mode, to the shell and to the Read tool. The
+		// active config folder keeps its working files (the shell snapshot the Bash tool sources); others go whole.
+		active, other := "/home/u/.claude-work", "/home/u/.claude"
+		if mode == SignInAPIKey {
+			active, other = "/work/runs/r1/config", "/home/u/.claude-work"
+		}
+		denied := []string{other, "/home/u/.claude.json", active + "/projects", active + "/file-history", active + "/history.jsonl",
+			"/home/u/.ssh", "/home/u/.config/gh", "/home/u/.aws"}
+		for _, p := range denied {
+			if !slices.Contains(toStrings(settings["permissions"].(map[string]any)["deny"]), "Read(/"+p+"/**)") || !strings.Contains(denyRead, p) {
 				t.Errorf("%s: %s is not denied: %s", mode, p, rules)
 			}
 		}
-		if mode == SignInAPIKey && !strings.Contains(rules, "Read(//work/runs/r1/config/**)") {
-			t.Errorf("the run's own config folder is readable: %s", rules)
+		if slices.Contains(toStrings(sandbox["filesystem"].(map[string]any)["denyRead"]), active) {
+			t.Errorf("%s: the whole active config folder %s is denied; the Bash tool needs its working files", mode, active)
 		}
 		if sandbox["enabled"] != true || sandbox["allowUnsandboxedCommands"] != false || sandbox["failIfUnavailable"] != true {
 			t.Errorf("sandbox = %v", sandbox)
@@ -241,6 +262,15 @@ func TestReq5DeniedPathsAreCheckedAndResolved(t *testing.T) {
 	if _, _, err := inv.Command(parentEnv); err == nil {
 		t.Error("a relative denied path must be refused")
 	}
+	inv.Deny = nil
+	if _, _, err := inv.Command([]string{"CLAUDE_CONFIG_DIR=relative-config"}); err == nil {
+		t.Error("a relative CLAUDE_CONFIG_DIR must be refused")
+	}
+	token := invocation(t, SignInTokenFile, "tok")
+	token.TokenFile = "token.txt"
+	if _, _, err := token.Command(parentEnv); err == nil {
+		t.Error("a relative token file must be refused")
+	}
 	real := t.TempDir()
 	link := filepath.Join(t.TempDir(), "link")
 	if err := os.Symlink(real, link); err != nil {
@@ -253,7 +283,7 @@ func TestReq5DeniedPathsAreCheckedAndResolved(t *testing.T) {
 	if !strings.Contains(rules, "Read(/"+link+"/**)") || !strings.Contains(rules, "Read(/"+realResolved+"/**)") {
 		t.Errorf("both forms of a symlinked path must be denied: %s", rules)
 	}
-	token := invocation(t, SignInTokenFile, "tok")
+	token = invocation(t, SignInTokenFile, "tok")
 	token.TokenFile = "/home/u/.secrets/claude-token"
 	_, _, settings = command(t, token)
 	if rules := strings.Join(toStrings(settings["permissions"].(map[string]any)["deny"]), " "); !strings.Contains(rules, "Read(//home/u/.secrets/**)") {

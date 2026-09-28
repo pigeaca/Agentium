@@ -87,12 +87,17 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.CLI == "" || inv.Dir == "" || inv.Prompt == "" || inv.Model == "" || inv.Home == "" {
 		return nil, nil, errors.New("a run needs the CLI, a folder, a prompt, a model and the home folder")
 	}
-	for _, p := range inv.Deny {
+	userConfig := UserConfigDir(environ, inv.Home)
+	for _, p := range append([]string{userConfig, inv.Home}, inv.Deny...) {
 		if !filepath.IsAbs(p) {
-			return nil, nil, fmt.Errorf("denied path %q is not absolute", p)
+			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	userConfig := UserConfigDir(environ, inv.Home)
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile} {
+		if p != "" && !filepath.IsAbs(p) {
+			return nil, nil, fmt.Errorf("path %q is not absolute", p)
+		}
+	}
 	settings, err := json.Marshal(inv.settings(userConfig))
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode settings: %w", err)
@@ -124,20 +129,37 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	return args, env, nil
 }
 
+// historyPaths are the parts of a Claude Code config folder that record past work: session transcripts, file history,
+// prompt history, todos, plans and the state file. Since tasks come from the user's own history, they can hold the
+// task's solution.
+func historyPaths() []string {
+	return []string{"projects", "file-history", "history.jsonl", "todos", "sessions", "plans", ".claude.json"}
+}
+
 // deniedPaths are the paths the agent may not read, in every sign-in mode:
 //   - inv.Deny;
-//   - Claude Code's own data (~/.claude, ~/.claude.json, the user's CLAUDE_CONFIG_DIR, the run's fresh config folder):
-//     session transcripts, file history and prompt history can hold the task's own solution, since tasks come from
-//     the user's history. The Claude Code process itself is not sandboxed, so this does not affect sign-in;
+//   - Claude Code's data. The run's active config folder (the user's in login mode, the fresh one otherwise) loses only
+//     its history paths: Claude Code keeps working files there that its Bash tool reads, such as the shell snapshot.
+//     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
+//     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
 //   - credential stores and the token file's folder.
 //
 // Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
 func (inv Invocation) deniedPaths(userConfig string) []string {
-	paths := append([]string{}, inv.Deny...)
-	paths = append(paths, filepath.Join(inv.Home, ".claude"), filepath.Join(inv.Home, ".claude.json"), userConfig)
-	if inv.ConfigDir != "" {
-		paths = append(paths, inv.ConfigDir)
+	active := userConfig
+	if inv.SignIn != SignInLogin {
+		active = inv.ConfigDir
 	}
+	paths := append([]string{}, inv.Deny...)
+	for _, name := range historyPaths() {
+		paths = append(paths, filepath.Join(active, name))
+	}
+	for _, dir := range []string{filepath.Join(inv.Home, ".claude"), userConfig} {
+		if filepath.Clean(dir) != filepath.Clean(active) {
+			paths = append(paths, dir)
+		}
+	}
+	paths = append(paths, filepath.Join(inv.Home, ".claude.json"))
 	if inv.TokenFile != "" {
 		paths = append(paths, filepath.Dir(inv.TokenFile))
 	}
