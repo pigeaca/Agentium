@@ -27,10 +27,14 @@ Shape:
 |---|---|
 | `AGENTS.md`, `CLAUDE.md`, `.agents/` | Shared instructions: rules, references, roles, skills, templates, plans, decisions |
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
-| `internal/cli` | Command-line parsing and dispatch (`init`, `version`, `help`) |
+| `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `version`, `help`) |
 | `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only): database and artifacts, outside every repository |
-| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects |
+| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects and snapshots |
 | `internal/project` | Read-only repository discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
+| `internal/gitx` | Every git call: hooks, fsmonitor, prompts and optional index writes off, inherited `GIT_*` dropped; read-only fetch of a user's commit into Agentium's bare repository |
+| `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
+| `internal/claudectx` | Which files Claude Code loads, as experiments run it: instructions, `@` imports (5 hops), rules, skill/subagent/command descriptions, harness files, and warnings |
+| `internal/snapshot` | Context versions as parentless commits in `projects/<id>/repo.git` in the data folder; diffs; overlay planning that refuses to change non-context files |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |

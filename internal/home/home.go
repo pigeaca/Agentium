@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Layout is the data folder: the SQLite database and per-project artifacts (checkouts, transcripts, reports).
@@ -43,4 +44,9 @@ func (l Layout) Ensure() error {
 		}
 	}
 	return nil
+}
+
+// ProjectRepo is the bare repository holding a project's snapshots and fetched commits.
+func (l Layout) ProjectRepo(projectID int64) string {
+	return filepath.Join(l.Root, "projects", strconv.FormatInt(projectID, 10), "repo.git")
 }

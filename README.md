@@ -9,6 +9,12 @@ Agentium is early (Phase 1). With Go 1.27.1:
 ```sh
 go build -o agentium ./cmd/agentium
 ./agentium init /path/to/your/repo    # registers it; never writes to the repository
+cd /path/to/your/repo
+agentium context show                  # what Claude Code loads at session start, and on demand
+agentium context snapshot baseline     # save the committed context (HEAD) as a version
+# edit CLAUDE.md, rules or skills, then:
+agentium context snapshot trimmed --working-tree
+agentium context diff baseline trimmed --patch
 ```
 
 Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).

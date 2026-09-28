@@ -26,6 +26,9 @@ func TestResolve(t *testing.T) {
 	if layout.Root != "/Users/someone/.agentium" {
 		t.Errorf("default root = %q", layout.Root)
 	}
+	if got := layout.ProjectRepo(7); got != "/Users/someone/.agentium/projects/7/repo.git" {
+		t.Errorf("project repository = %q", got)
+	}
 	if _, err := Resolve(env(nil)); err == nil {
 		t.Error("expected an error without AGENTIUM_HOME or HOME")
 	}
