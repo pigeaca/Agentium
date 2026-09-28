@@ -20,16 +20,17 @@ Run `python3 .agents/scripts/harness.py <command>` from the repository root, or 
 
 ## Boundaries
 
-Nothing is ever downloaded. The only installation is `worktree new`/`worktree deps`, which runs the lockfile's offline installer (today: `corepack pnpm install --frozen-lockfile --offline` with `COREPACK_ENABLE_NETWORK=0` for any `pnpm-lock.yaml` at the root or one level down). It links only packages already in the local cache and fails instead of fetching. Missing tools are reported by `doctor`; install them only with approval.
+No toolchain, module or tool is ever downloaded locally. The exceptions: `check vuln` reads the online Go vulnerability database, and CI (`CI=true`) may download pinned tools and modules. The only installation is `worktree new`/`worktree deps`, which runs the lockfile's offline installer (today: `corepack pnpm install --frozen-lockfile --offline` with `COREPACK_ENABLE_NETWORK=0` for any `pnpm-lock.yaml` at the root or one level down). It links only packages already in the local cache and fails instead of fetching. Missing tools are reported by `doctor`; install them only with approval.
 
 ## Go toolchain
 
-`go.mod` pins the exact Go version (`go 1.27.1`). The harness uses `go` from `PATH` when its version matches, otherwise `~/sdk/go<version>/bin/go` (where `golang.org/dl` installs it). If neither matches, it stops and prints the install command; nothing is installed without approval. Every Go command runs with:
+`go.mod` pins the exact Go version (`go 1.27.1`; a `toolchain` line, if one is ever added, takes precedence, as it does for setup-go). The harness uses `go` from `PATH` when its version matches, otherwise `~/sdk/go<version>/bin/go` (where `golang.org/dl` installs it). Tools such as gofmt come from that toolchain's `GOROOT`, so a symlinked `go` works. If neither matches, it stops and prints the install command; nothing is installed without approval. Every Go command runs with:
 - `GOTOOLCHAIN=local`, so Go never downloads a toolchain;
-- `GOFLAGS=-mod=readonly`, so builds never rewrite `go.mod` or `go.sum`;
+- `GOFLAGS=-mod=readonly`, so builds never rewrite `go.mod` or `go.sum` (it replaces any personal `GOFLAGS`);
+- locally, `GOPROXY=off` for `check go`, so a dependency missing from the module cache fails instead of downloading. Fetch new dependencies once, with approval, using `go mod download`;
 - provider credentials removed, so checks never reach live services.
 
-`check vuln` runs `golang.org/x/vuln/cmd/govulncheck` at the version pinned in the harness. Locally it runs only if that version is already in the module cache (with `GOPROXY=off`), and otherwise it says it was skipped. CI (`CI=true`) may download that exact version.
+`check vuln` runs `golang.org/x/vuln/cmd/govulncheck` at the version pinned in the harness. Locally it runs only if that version and its dependencies are already in the module cache (with `GOPROXY=off`), and otherwise it says it was skipped. To enable it locally, fetch it once with approval: `GOFLAGS= go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -version`. CI (`CI=true`) may download that exact version.
 
 ## Pre-commit guard
 

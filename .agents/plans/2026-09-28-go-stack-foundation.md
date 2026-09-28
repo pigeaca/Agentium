@@ -25,7 +25,7 @@ Boundaries:
 1. A decision record for the stack: Go 1.27.1, module path, layout, conventions, the dependency policy, SQLite driver and UI stack. Architecture and roadmap updated. Evidence: docs.
 2. `go.mod` (`go 1.27.1`, no requirements) and `cmd/agentium` running `version` and `help`, with the logic in `internal/cli`, tested; unknown commands exit 2. Evidence: `check go`.
 3. **Harness:**
-   - `check go` runs gofmt (listing), `go vet`, `go test -race` and govulncheck when cached, otherwise reporting it as skipped;
+   - `check go` runs gofmt (listing), `go vet` and `go test -race`, with no module fetches locally. `check vuln` runs govulncheck, locally only when cached, otherwise reporting it as skipped. The split was clarified in review;
    - `check ci` includes Go when `go.mod` exists;
    - `check changed` maps `*.go`, `go.mod` and `go.sum` to `check go`;
    - `doctor` shows the resolved Go;

@@ -18,7 +18,15 @@ DOC_ENTRYPOINTS = ("AGENTS.md", ".agents/README.md", ".agents/rules/core.md", ".
 # Provider credentials never reach checks or tests; the Go toolchain never switches or downloads itself, and
 # builds never rewrite go.mod/go.sum.
 CREDENTIAL_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY")
-ENV = {**{k: v for k, v in os.environ.items() if k not in CREDENTIAL_ENV}, "GOTOOLCHAIN": "local", "GOFLAGS": "-mod=readonly"}
+
+
+def harness_env(environ: dict[str, str]) -> dict[str, str]:
+    """The environment for harness commands: provider credentials removed, and Go pinned to the local toolchain with
+    read-only modules. GOFLAGS is replaced, not appended to, so a personal GOFLAGS cannot change what checks run."""
+    return {**{k: v for k, v in environ.items() if k not in CREDENTIAL_ENV}, "GOTOOLCHAIN": "local", "GOFLAGS": "-mod=readonly"}
+
+
+ENV = harness_env(dict(os.environ))
 GOVULNCHECK = "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
 # Credential shapes rejected on staged additions. Only fake test values may opt out with "secret-scan: allow" on the line.
 SECRET_PATTERNS = (
@@ -143,19 +151,21 @@ def check_docs() -> None:
 # --- Go -------------------------------------------------------------------------------------------
 
 def go_mod_version() -> str:
-    """The exact toolchain version go.mod pins, e.g. '1.27.1'."""
+    """The exact toolchain go.mod pins, e.g. '1.27.1': its `toolchain` line if present (setup-go prefers it too),
+    otherwise its `go` line."""
     try:
         text = (ROOT / "go.mod").read_text()
     except FileNotFoundError:
         raise ValueError("No go.mod in this checkout.") from None
-    match = re.search(r"^go\s+(\d+\.\d+(?:\.\d+)?)\s*$", text, re.M)
+    match = (re.search(r"^toolchain\s+go(\d+\.\d+(?:\.\d+)?)\s*$", text, re.M)
+             or re.search(r"^go\s+(\d+\.\d+(?:\.\d+)?)\s*$", text, re.M))
     if not match:
         raise ValueError("go.mod has no go version line.")
     return match[1]
 
 
 def toolchain_version(go: str) -> str | None:
-    # Run outside the module: with GOTOOLCHAIN=local an older go refuses to run inside it.
+    # Outside the module, so go.mod cannot influence which version answers.
     result = subprocess.run([go, "version"], cwd=Path(go).parent, capture_output=True, text=True, env=ENV)
     match = re.search(r"\bgo(\d+\.\d+(?:\.\d+)?)\b", result.stdout)
     return match[1] if result.returncode == 0 and match else None
@@ -171,38 +181,67 @@ def go_binary() -> Path:
                      f"run: go install golang.org/dl/go{wanted}@latest && ~/go/bin/go{wanted} download")
 
 
+def toolchain_tool(go: Path, name: str) -> Path | None:
+    """A tool from the same GOROOT as `go` (a symlinked `go` on PATH has no tools beside it)."""
+    result = subprocess.run([str(go), "env", "GOROOT"], cwd=go.parent, capture_output=True, text=True, env=ENV)
+    tool = Path(result.stdout.strip()) / "bin" / name
+    return tool if result.returncode == 0 and tool.is_file() else None
+
+
 def go_tool(name: str) -> str | None:
     """A tool from the pinned toolchain (e.g. gofmt), falling back to PATH when go.mod or the toolchain is absent."""
     try:
-        return str(go_binary().parent / name)
+        tool = toolchain_tool(go_binary(), name)
     except ValueError:
-        return shutil.which(name)
+        tool = None
+    return str(tool) if tool else shutil.which(name)
+
+
+def offline_go_env() -> dict[str, str]:
+    # Locally, module fetches are off: a missing dependency fails instead of downloading. CI (CI=true) may download.
+    return {} if os.environ.get("CI") else {"GOPROXY": "off"}
 
 
 def check_go() -> None:
     go = go_binary()
+    gofmt = toolchain_tool(go, "gofmt")
+    if not gofmt:
+        raise ValueError(f"gofmt not found in the GOROOT of {go}.")
     files = [path for path in git_output("ls-files", "-co", "--exclude-standard", "-z", "*.go").split("\0") if path]
-    unformatted = subprocess.run([str(go.parent / "gofmt"), "-l", *files], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.split() if files else []
-    if unformatted:
-        raise ValueError(f"Not gofmt-formatted: {', '.join(unformatted)} (run gofmt -w on them).")
-    run(str(go), "vet", "./...")
-    run(str(go), "test", "-race", "-count=1", "./...")
+    if files:
+        result = subprocess.run([str(gofmt), "-l", *files], cwd=ROOT, capture_output=True, text=True, env=ENV)
+        if result.returncode:
+            raise ValueError(f"gofmt failed: {result.stderr.strip()}")
+        if result.stdout.split():
+            raise ValueError(f"Not gofmt-formatted: {', '.join(result.stdout.split())} (run gofmt -w on them).")
+    run(str(go), "vet", "./...", extra_env=offline_go_env())
+    run(str(go), "test", "-race", "-count=1", "./...", extra_env=offline_go_env())
 
 
 def check_vuln() -> None:
     """govulncheck at the pinned version. It queries the online Go vulnerability database; locally it runs only when
     the tool is already in the module cache, and CI (CI=true) may download that exact version."""
     go = go_binary()
-    env = {"GOFLAGS": ""}  # `go run pkg@version` resolves outside the main module, where -mod does not apply
-    if not os.environ.get("CI"):
-        cache = subprocess.run([str(go), "env", "GOMODCACHE"], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.strip()
-        module, version = GOVULNCHECK.partition("/cmd/")[0], GOVULNCHECK.rsplit("@", 1)[1]  # golang.org/x/vuln, v1.8.0
-        if not (Path(cache) / f"{module}@{version}").is_dir():
-            print(f"[harness] check vuln skipped: {GOVULNCHECK} is not in the module cache, and the harness never downloads "
-                  "tools. CI runs it; to run locally, fetch it once with approval.", file=sys.stderr)
-            return
-        env["GOPROXY"] = "off"
-    run(str(go), "run", GOVULNCHECK, "./...", extra_env=env)
+    args = (str(go), "run", GOVULNCHECK, "./...")
+    if os.environ.get("CI"):
+        run(*args)
+        return
+    skipped = (f"[harness] check vuln skipped: {GOVULNCHECK} or one of its dependencies is not in the module cache, and "
+               "the harness never downloads tools. CI runs it; to run it locally, fetch it once with approval.")
+    cache = subprocess.run([str(go), "env", "GOMODCACHE"], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.strip()
+    module, version = GOVULNCHECK.partition("/cmd/")[0], GOVULNCHECK.rsplit("@", 1)[1]  # golang.org/x/vuln, v1.8.0
+    if not (Path(cache) / f"{module}@{version}").is_dir():
+        print(skipped, file=sys.stderr)
+        return
+    print("\n[harness] " + " ".join(args), flush=True)
+    result = subprocess.run(list(args), cwd=ROOT, capture_output=True, text=True, env={**ENV, **offline_go_env()})
+    if result.returncode and "GOPROXY=off" in result.stderr:
+        print(skipped, file=sys.stderr)  # the tool's own dependencies are not cached
+        return
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    if result.returncode:
+        raise subprocess.CalledProcessError(result.returncode, list(args))
 
 
 # --- Pre-commit guard -------------------------------------------------------------------------
@@ -290,7 +329,7 @@ def remote_default() -> str:
 def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str]]:
     """Map changed paths to harness commands (fast to slow) plus suggestions that are not run.
 
-    Stack rules belong here once the stack is chosen (see docs/harness.md#adding-stack-checks).
+    Add a rule here with each new stack check (see docs/harness.md#adding-stack-checks).
     """
     reasons: dict[tuple[str, ...], list[str]] = {}
     suggestions: set[str] = set()
@@ -493,7 +532,8 @@ HELP = """Agentium harness (Python standard library)
 
 ci = docs + harness tests + go. go = gofmt, vet, race tests. vuln = pinned govulncheck (online DB).
 staged = pre-commit checks on the index. Go runs at the go.mod version with GOTOOLCHAIN=local.
-Nothing is downloaded; worktree setup installs locked dependencies only from the local cache.
+No toolchains, modules or tools are downloaded locally; worktree setup installs locked dependencies only from the
+local cache. check vuln reads the online vulnerability database, and in CI may download its pinned version.
 """
 
 

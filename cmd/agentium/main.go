@@ -10,7 +10,8 @@ import (
 	"github.com/pigeaca/agentium/internal/cli"
 )
 
-// version is set for releases: go build -ldflags "-X main.version=v0.1.0" ./cmd/agentium.
+// version is set for releases: go build -ldflags "-X main.version=v0.1.0" ./cmd/agentium. The linker can only set a
+// package-level string, so this is the one accepted exception to "no package-level mutable state"; nothing assigns it.
 var version = "dev"
 
 func main() {

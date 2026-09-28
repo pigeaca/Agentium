@@ -34,6 +34,6 @@ The study proposed a Go core, a React UI and SQLite, and the Phase 0 spike did n
 
 ## Consequences
 
-- `harness.py check go` (gofmt, vet, race tests, govulncheck) joins `check ci`, and Go paths map to it in `check changed`.
+- `harness.py check go` (gofmt, vet, race tests) joins `check ci`, and Go paths map to it in `check changed`. `check vuln` (govulncheck) runs separately: in CI after `check ci`, and through `check changed` when `go.mod` or `go.sum` change.
 - Developers need Go 1.27.1. The harness finds it on `PATH` or in `~/sdk/go1.27.1`, and fails clearly otherwise.
 - cgo means per-platform builds for releases. If that becomes a burden, a pure-Go driver (`modernc.org/sqlite`) is the fallback, at the cost of more dependencies.

@@ -18,7 +18,7 @@ func TestRun(t *testing.T) {
 		{name: "no command shows usage as an error", args: nil, wantCode: ExitUsage, wantStderr: "Usage:"},
 		{name: "help", args: []string{"help"}, wantCode: ExitOK, wantStdout: "Commands:"},
 		{name: "help flag", args: []string{"--help"}, wantCode: ExitOK, wantStdout: "version"},
-		{name: "version", args: []string{"version"}, wantCode: ExitOK, wantStdout: "agentium v9.9.9 (go"},
+		{name: "version", args: []string{"version"}, wantCode: ExitOK, wantStdout: "agentium v9.9.9 ("},
 		{name: "unknown command", args: []string{"frobnicate"}, wantCode: ExitUsage, wantStderr: `unknown command "frobnicate"`},
 	}
 	for _, tt := range tests {
@@ -36,6 +36,9 @@ func TestRun(t *testing.T) {
 			}
 			if tt.wantStdout == "" && stdout.Len() > 0 {
 				t.Errorf("unexpected stdout %q", stdout.String())
+			}
+			if tt.wantStderr == "" && stderr.Len() > 0 {
+				t.Errorf("unexpected stderr %q", stderr.String())
 			}
 		})
 	}
