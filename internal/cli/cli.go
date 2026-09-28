@@ -22,7 +22,7 @@ type Env struct {
 	Stdout   io.Writer
 	Stderr   io.Writer
 	Version  string
-	Dir      string                       // working directory
+	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
 	LookPath func(string) (string, error) // exec.LookPath
 	Now      func() time.Time             // time.Now

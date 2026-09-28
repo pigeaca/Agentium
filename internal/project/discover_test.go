@@ -177,3 +177,36 @@ func TestNpmPlaceholderIsNotATestCommand(t *testing.T) {
 		t.Errorf("commands = %q", commands)
 	}
 }
+
+func TestClaudeRunsOutsideTheRepositoryAndEdgeCases(t *testing.T) {
+	dir := repo(t, map[string]string{".claude/rules/go.md": "a\n", ".claude/rules/web/react.md": "b\n"})
+	// A CLI that drops a file wherever it runs: it must not run in the repository.
+	claude := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(claude, []byte("#!/bin/sh\ntouch agentium-probe-$$\necho '2.1.281 (Claude Code)'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // it ran in the temporary folder; tidy up after it
+		probes, _ := filepath.Glob(filepath.Join(os.TempDir(), "agentium-probe-*"))
+		for _, p := range probes {
+			os.Remove(p)
+		}
+	})
+	t.Chdir(dir)                                                           // as when a user runs agentium inside their repository
+	info, err := Discover(context.Background(), dir, testEnv(nil, claude)) // HOME unset
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := git(t, dir, "status", "--porcelain", "--ignored"); status != "" {
+		t.Errorf("claude --version ran in the repository: %q", status)
+	}
+	if info.Claude.Version != "2.1.281" || info.Claude.SignIn != SignInLogin || info.Rules != 2 {
+		t.Errorf("info = %+v (want version, login sign-in, 2 rules including the nested one)", info)
+	}
+	if TokenFile(testEnv(nil, "")) != "" {
+		t.Error("without HOME the token file must not be a relative path")
+	}
+	stored, _ := info.JSON()
+	if !strings.Contains(string(stored), `"test_commands":[]`) {
+		t.Errorf("no test commands must be stored as []: %s", stored)
+	}
+}

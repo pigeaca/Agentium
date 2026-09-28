@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,18 +13,31 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
+const initUsage = `Usage: agentium init [path]
+
+Registers the git repository containing path (default: the current folder) and reports what Agentium found. It only
+reads the repository; data goes to ~/.agentium (or AGENTIUM_HOME), which must be outside the repository.
+`
+
 // runInit registers a repository: discovery is read-only, and the result goes to the data folder only.
 func runInit(ctx context.Context, env Env, args []string) int {
-	if len(args) > 1 {
-		fmt.Fprintf(env.Stderr, "agentium init: expected at most one path, got %d\n", len(args))
+	paths, code, ok := parseArgs(env, flag.NewFlagSet("init", flag.ContinueOnError), args, initUsage)
+	if !ok {
+		return code
+	}
+	if len(paths) > 1 {
+		fmt.Fprintf(env.Stderr, "agentium init: expected at most one path, got %d\n\n%s", len(paths), initUsage)
 		return ExitUsage
 	}
 	dir := env.Dir
-	if len(args) == 1 {
-		dir = args[0]
-		if !filepath.IsAbs(dir) {
-			dir = filepath.Join(env.Dir, dir)
+	if len(paths) == 1 {
+		dir = paths[0]
+	}
+	if !filepath.IsAbs(dir) {
+		if env.Dir == "" {
+			return fail(env, errors.New("the current folder cannot be read: pass an absolute path"))
 		}
+		dir = filepath.Join(env.Dir, dir)
 	}
 	info, err := project.Discover(ctx, dir, project.Env{Getenv: env.Getenv, LookPath: env.LookPath})
 	if err != nil {
@@ -30,6 +45,9 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	}
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
+		return fail(env, err)
+	}
+	if err := layout.CheckOutside(info.Root); err != nil { // before anything is created
 		return fail(env, err)
 	}
 	if err := layout.Ensure(); err != nil {
