@@ -108,6 +108,45 @@ func TestBackgroundChildrenDieWithTheCommand(t *testing.T) {
 	}
 }
 
+func TestArgsEnvironAndGracefulStop(t *testing.T) {
+	out, read := output(t)
+	errFile, readErr := output(t)
+	// Args run without a shell; Environ replaces the base environment; Stderr is separate.
+	result, err := Run(context.Background(), Spec{Output: out, Stderr: errFile, Environ: []string{"ONLY=1"},
+		Args: []string{"/bin/sh", "-c", `echo "only=$ONLY home=${HOME:-unset}"; echo problem >&2`}})
+	if err != nil || !result.Passed() || strings.TrimSpace(read()) != "only=1 home=unset" || strings.TrimSpace(readErr()) != "problem" {
+		t.Errorf("result %+v, err %v, stdout %q, stderr %q", result, err, read(), readErr())
+	}
+	// On timeout the group gets SIGINT first: a command that handles it can finish cleanly.
+	out, read = output(t)
+	result, err = Run(context.Background(), Spec{Output: out, Timeout: 2 * time.Second, Grace: 5 * time.Second,
+		Command: `trap 'echo finishing; exit 0' INT; sleep 30 & wait`})
+	if err != nil || !result.TimedOut || !strings.Contains(read(), "finishing") {
+		t.Errorf("graceful stop: %+v, %v, output %q", result, err, read())
+	}
+	// A command that ignores SIGINT is killed after the grace period.
+	out, _ = output(t)
+	start := time.Now()
+	result, err = Run(context.Background(), Spec{Output: out, Timeout: 100 * time.Millisecond, Grace: 300 * time.Millisecond,
+		Command: `trap '' INT; while true; do sleep 0.05; done`})
+	if err != nil || !result.TimedOut || time.Since(start) > 4*time.Second {
+		t.Errorf("forced stop: %+v, %v after %v", result, err, time.Since(start))
+	}
+}
+
+func TestCancelWithGraceInterruptsFirst(t *testing.T) {
+	out, read := output(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(2*time.Second, cancel)
+	_, err := Run(ctx, Spec{Output: out, Grace: 5 * time.Second, Command: `trap 'echo finishing; exit 0' INT; sleep 30 & wait`})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(read(), "finishing") {
+		t.Errorf("err %v, output %q", err, read())
+	}
+	if _, err := Run(ctx, Spec{Output: out, Args: []string{"/no/such/binary"}}); err == nil || !strings.Contains(err.Error(), "/no/such/binary") {
+		t.Errorf("errors name the program: %v", err)
+	}
+}
+
 func TestCancelledContextIsAnError(t *testing.T) {
 	out, _ := output(t)
 	ctx, cancel := context.WithCancel(context.Background())
