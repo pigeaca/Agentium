@@ -226,8 +226,8 @@ def check_vuln() -> None:
     if os.environ.get("CI"):
         run(*args)
         return
-    skipped = (f"[harness] check vuln skipped: {GOVULNCHECK} or one of its dependencies is not in the module cache, and "
-               "the harness never downloads tools. CI runs it; to run it locally, fetch it once with approval.")
+    skipped = (f"[harness] check vuln skipped: {GOVULNCHECK}, its dependencies or the project's dependencies are not in "
+               "the module cache, and the harness never downloads. CI runs it; to run it locally, fetch them once with approval.")
     cache = subprocess.run([str(go), "env", "GOMODCACHE"], cwd=ROOT, capture_output=True, text=True, env=ENV).stdout.strip()
     module, version = GOVULNCHECK.partition("/cmd/")[0], GOVULNCHECK.rsplit("@", 1)[1]  # golang.org/x/vuln, v1.8.0
     if not (Path(cache) / f"{module}@{version}").is_dir():

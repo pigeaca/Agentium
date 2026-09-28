@@ -1,7 +1,7 @@
 # Go stack foundation
 
 - Date: 2026-09-28
-- Status: In Progress
+- Status: Completed
 - Scope/approval: the user confirmed Go + React + SQLite (2026-09-28) and approved:
   - Go 1.27.1, which the user installs;
   - `mattn/go-sqlite3`, to be added when Phase 1 builds storage, not in this change;
@@ -38,17 +38,48 @@ Boundaries:
 6. The PR's CI passes and a review verdict is recorded.
 
 ## Work
-- [ ] Decision record, architecture, roadmap
-- [ ] Go module, CLI and tests
-- [ ] Harness: Go resolution, `check go`, mappings, environment, doctor, tests
-- [ ] CI job; docs; `.gitignore`
+- [x] Decision record, architecture, roadmap
+- [x] Go module, CLI and tests
+- [x] Harness: Go resolution, `check go`, mappings, environment, doctor, tests
+- [x] CI job; docs; `.gitignore`
+- [x] Upgrade `actions/checkout` to v7.0.1 (approved mid-task)
 
 ## Verification and handoff
-`python3 .agents/scripts/harness.py check ci` locally with Go 1.27.1, the PR's CI, and a review.
+Planned: `harness.py check ci` locally with Go 1.27.1, the PR's CI, and a review.
+
+Results:
+- Before Go 1.27.1 was installed, `doctor` and `check go` stopped with the install command and installed nothing.
+- After the user installed it, the harness found `~/sdk/go1.27.1` with no PATH change.
+- `check changed` ran and passed docs, harness (37 tests), and go (gofmt, vet, race tests). `check vuln` was skipped locally as designed (not cached).
+- CI on e94e288 (run 36394489837) passed:
+  - checkout v7.0.1 and setup-go installed 1.27.1 from `go.mod`;
+  - 37 harness tests and the Go race tests passed;
+  - govulncheck v1.8.0: "No vulnerabilities found."
+- `agentium version` prints `agentium dev (go1.27.1 darwin/arm64)`.
+
+Limitations and follow-up:
+- No SQLite or React yet; SQLite is added with Phase 1 storage, and the UI toolchain is vetted in Phase 2.
+- CI module caching stays off until there is a `go.sum`.
+- When the first dependency is added, fetch it once with approval (`go mod download`), because local checks run with `GOPROXY=off`.
+
+## Review
+Independent read-only reviewer (Opus) on 44ce402: **changes requested**, 8 findings plus nits.
+- **Medium:**
+  - gofmt was taken from beside a symlinked `go` (reproduced), breaking `check go` and the pre-commit hook;
+  - `check go` could download modules once dependencies exist.
+- **Low:**
+  - the ADR and plan wording;
+  - `check vuln` with a partial cache;
+  - download wording;
+  - a credential test that tested nothing;
+  - missing tests;
+  - gofmt's exit code ignored.
+
+All were fixed in e94e288. **Re-check: approve.** The two remaining optional items (skip-message wording, and `persist-credentials: false` on checkout) were applied before archiving. The reviewer suggests an optional second review from Codex, because the change touches the harness's no-download and credential guarantees.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code / claude-opus-5-5 / default
+- Elapsed: 120m
+- Check-fix loops: 3 (Python 3.9 f-string/annotation in tests; stale workflow pin test; unmapped-example test after adding Go rules)
+- User corrections: 0
+- Review: changes requested, 8 fixed

@@ -20,7 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # Nothing in this job pushes, so the job token is not left in git config while the PR's code runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Installs exactly the version go.mod pins; the harness then runs it with GOTOOLCHAIN=local.
       # Module caching stays off until the module has dependencies (there is no go.sum to key it on yet).
