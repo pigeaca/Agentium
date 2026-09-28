@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -66,11 +68,19 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	printInit(env, saved, info, layout)
+	src, err := source.WorkingTree(ctx, info.Root)
+	if err != nil {
+		return fail(env, err)
+	}
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return fail(env, err)
+	}
+	printInit(env, saved, info, layout, resolved)
 	return ExitOK
 }
 
-func printInit(env Env, saved store.Project, info project.Info, layout home.Layout) {
+func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
 	w := env.Stdout
 	fmt.Fprintf(w, "Registered %s (project %d)\n", saved.Name, saved.ID)
 	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, shortCommit(info.Head))
@@ -81,11 +91,14 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	fmt.Fprintf(w, "  Claude Code  %s\n", claude)
 	fmt.Fprintf(w, "  sign-in      %s\n", describeSignIn(info.Claude.SignIn))
 	fmt.Fprintf(w, "  tests        %s\n", orNone(strings.Join(info.TestCommands, "; ")))
-	var files []string
-	for _, file := range info.Instructions {
-		files = append(files, fmt.Sprintf("%s (%s)", file.Path, sizeLabel(file.Bytes)))
+	startup := 0
+	for _, e := range resolved.Entries {
+		if e.StartupBytes > 0 {
+			startup++
+		}
 	}
-	fmt.Fprintf(w, "  context      %s; %d skill(s), %d rule file(s)\n", orNone(strings.Join(files, ", ")), info.Skills, info.Rules)
+	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: agentium context show\n",
+		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup)
 	fmt.Fprintf(w, "  data         %s (your repository was not modified)\n", layout.Root)
 	for _, warning := range info.Warnings {
 		fmt.Fprintf(w, "warning: %s\n", warning)

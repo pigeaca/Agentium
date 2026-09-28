@@ -229,3 +229,91 @@ func parseTime(value string) (time.Time, error) {
 	}
 	return t, nil
 }
+
+// Snapshot is a named version of a project's context.
+type Snapshot struct {
+	ID           int64
+	ProjectID    int64
+	Name         string
+	Source       string
+	SourceCommit string
+	CommitID     string
+	Manifest     []byte // JSON
+	CreatedAt    time.Time
+}
+
+// ErrExists is returned when a name is already taken.
+var ErrExists = errors.New("already exists")
+
+// SaveSnapshot records a new snapshot; names are unique per project.
+func (s *Store) SaveSnapshot(ctx context.Context, snap Snapshot) (Snapshot, error) {
+	result, err := s.db.ExecContext(ctx, `
+		INSERT INTO snapshots (project_id, name, source, source_commit, commit_id, manifest, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`, snap.ProjectID, snap.Name, snap.Source, snap.SourceCommit, snap.CommitID,
+		string(snap.Manifest), formatTime(snap.CreatedAt))
+	if err != nil {
+		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+			return Snapshot{}, fmt.Errorf("snapshot %q: %w", snap.Name, ErrExists)
+		}
+		return Snapshot{}, fmt.Errorf("save snapshot %q: %w", snap.Name, err)
+	}
+	if snap.ID, err = result.LastInsertId(); err != nil {
+		return Snapshot{}, fmt.Errorf("save snapshot %q: %w", snap.Name, err)
+	}
+	snap.CreatedAt = snap.CreatedAt.UTC()
+	return snap, nil
+}
+
+// SnapshotByName returns a project's snapshot, or ErrNotFound.
+func (s *Store) SnapshotByName(ctx context.Context, projectID int64, name string) (Snapshot, error) {
+	snaps, err := s.querySnapshots(ctx, `WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if len(snaps) == 0 {
+		return Snapshot{}, fmt.Errorf("snapshot %q: %w", name, ErrNotFound)
+	}
+	return snaps[0], nil
+}
+
+// DeleteSnapshot removes a project's snapshot record, or returns ErrNotFound.
+func (s *Store) DeleteSnapshot(ctx context.Context, projectID int64, name string) error {
+	result, err := s.db.ExecContext(ctx, `DELETE FROM snapshots WHERE project_id = ? AND name = ?`, projectID, name)
+	if err != nil {
+		return fmt.Errorf("delete snapshot %q: %w", name, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("snapshot %q: %w", name, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
+// Snapshots lists a project's snapshots, oldest first.
+func (s *Store) Snapshots(ctx context.Context, projectID int64) ([]Snapshot, error) {
+	return s.querySnapshots(ctx, `WHERE project_id = ? ORDER BY created_at, id`, projectID)
+}
+
+func (s *Store) querySnapshots(ctx context.Context, clause string, args ...any) ([]Snapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, project_id, name, source, source_commit, commit_id, manifest, created_at FROM snapshots `+clause, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query snapshots: %w", err)
+	}
+	defer rows.Close()
+	var snaps []Snapshot
+	for rows.Next() {
+		var snap Snapshot
+		var manifest, created string
+		if err := rows.Scan(&snap.ID, &snap.ProjectID, &snap.Name, &snap.Source, &snap.SourceCommit, &snap.CommitID, &manifest, &created); err != nil {
+			return nil, fmt.Errorf("read snapshot: %w", err)
+		}
+		snap.Manifest = []byte(manifest)
+		if snap.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		snaps = append(snaps, snap)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query snapshots: %w", err)
+	}
+	return snaps, nil
+}

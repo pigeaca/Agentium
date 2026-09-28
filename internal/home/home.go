@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -65,6 +66,11 @@ func (l Layout) Ensure() error {
 		}
 	}
 	return nil
+}
+
+// ProjectRepo is the bare repository holding a project's snapshots and fetched commits.
+func (l Layout) ProjectRepo(projectID int64) string {
+	return filepath.Join(l.Root, "projects", strconv.FormatInt(projectID, 10), "repo.git")
 }
 
 // CheckOutside refuses a data folder that is the repository at repoRoot (symlinks resolved) or inside it: writing

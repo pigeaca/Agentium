@@ -1,0 +1,154 @@
+// Package source gives read-only views of a repository state, either a commit or the working tree, so context can be
+// resolved the same way from either.
+package source
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/pigeaca/agentium/internal/gitx"
+)
+
+// Source is a repository state: its files (slash-separated paths relative to the root) and their contents. Symbolic
+// links are followed within the repository, since that is what an agent reading the file sees.
+type Source interface {
+	Paths() []string // sorted
+	ReadFile(path string) ([]byte, error)
+	Executable(path string) bool
+	Describe() string // e.g. "working tree" or "commit 1a2b3c4d5e6f"
+}
+
+// WorkingTree reads the repository at root as it is on disk: tracked files plus untracked files git does not ignore.
+// Ignored files (such as CLAUDE.local.md in most repositories) are invisible, as they are to experiments, and so is
+// anything a symbolic link reaches outside those files, as in a commit.
+func WorkingTree(ctx context.Context, root string) (Source, error) {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve %s: %w", root, err)
+	}
+	out, err := gitx.Output(ctx, nil, "-C", root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	var existing []string
+	for _, p := range splitNUL(string(out)) { // tracked files deleted from disk are gone; submodules are directories
+		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p))); err == nil && (info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
+			existing = append(existing, p)
+		}
+	}
+	return &workingTree{root: realRoot, paths: dedupe(existing)}, nil
+}
+
+type workingTree struct {
+	root  string // symlinks resolved
+	paths []string
+}
+
+func (w *workingTree) Paths() []string  { return w.paths }
+func (w *workingTree) Describe() string { return "working tree" }
+
+// ReadFile follows symbolic links only to other files of the working tree, so a link to a personal file (in the home
+// folder, or ignored like CLAUDE.local.md) is never read into a snapshot.
+func (w *workingTree) ReadFile(p string) ([]byte, error) {
+	if !Has(w, p) {
+		return nil, fmt.Errorf("%s: %w", p, os.ErrNotExist)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(w.root, filepath.FromSlash(p)))
+	if err != nil {
+		return nil, err
+	}
+	rel, err := filepath.Rel(w.root, resolved)
+	if err != nil || !Has(w, filepath.ToSlash(rel)) {
+		return nil, fmt.Errorf("%s: symbolic link points outside the repository's files", p)
+	}
+	return os.ReadFile(resolved)
+}
+func (w *workingTree) Executable(p string) bool {
+	info, err := os.Stat(filepath.Join(w.root, filepath.FromSlash(p)))
+	return err == nil && info.Mode().Perm()&0o111 != 0
+}
+
+// Commit reads commit through git, located by where (e.g. "-C", root or "--git-dir", bare).
+func Commit(ctx context.Context, commit string, where ...string) (Source, error) {
+	out, err := gitx.Output(ctx, nil, append(where, "ls-tree", "-r", "-z", commit)...)
+	if err != nil {
+		return nil, err
+	}
+	c := &commitSource{ctx: ctx, where: where, commit: commit, modes: map[string]string{}}
+	for _, entry := range splitNUL(string(out)) { // "<mode> <type> <object>\t<path>"
+		meta, p, ok := strings.Cut(entry, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) != 3 || fields[1] != "blob" { // submodules ("commit") are not files
+			continue
+		}
+		c.modes[p] = fields[0]
+		c.paths = append(c.paths, p)
+	}
+	c.paths = dedupe(c.paths)
+	return c, nil
+}
+
+type commitSource struct {
+	ctx    context.Context // Source methods take no context; reads use the one the view was created with
+	where  []string
+	commit string
+	paths  []string
+	modes  map[string]string
+}
+
+func (c *commitSource) Paths() []string { return c.paths }
+func (c *commitSource) Describe() string {
+	return "commit " + c.commit[:min(12, len(c.commit))]
+}
+func (c *commitSource) Executable(p string) bool { return c.modes[p] == "100755" }
+func (c *commitSource) ReadFile(p string) ([]byte, error) {
+	for hops := 0; hops < 8; hops++ {
+		mode, ok := c.modes[p]
+		if !ok {
+			return nil, fmt.Errorf("%s: %w", p, os.ErrNotExist)
+		}
+		data, err := gitx.Output(c.ctx, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+		if err != nil || mode != "120000" {
+			return data, err
+		}
+		target := path.Clean(path.Join(path.Dir(p), string(data))) // a symlink blob holds its target
+		if strings.HasPrefix(target, "../") || path.IsAbs(string(data)) {
+			return nil, fmt.Errorf("%s: symbolic link points outside the repository", p)
+		}
+		p = target
+	}
+	return nil, fmt.Errorf("%s: too many symbolic links", p)
+}
+
+// Has reports whether p is a file in src.
+func Has(src Source, p string) bool {
+	paths := src.Paths()
+	i := sort.SearchStrings(paths, p)
+	return i < len(paths) && paths[i] == p
+}
+
+func splitNUL(text string) []string {
+	var parts []string
+	for _, part := range strings.Split(text, "\x00") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return parts
+}
+
+func dedupe(paths []string) []string {
+	sort.Strings(paths)
+	out := paths[:0]
+	for i, p := range paths {
+		if i == 0 || p != paths[i-1] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
