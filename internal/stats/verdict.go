@@ -22,6 +22,24 @@ const (
 	Exploratory   = "exploratory"
 )
 
+// Margin is a metric's decision margin in the evidence's scale, per side.
+type Margin struct {
+	Better float64 // how far the better side reaches before an improvement stops being small
+	Worse  float64 // how far the worse side may reach for "no loss beyond the margin"
+}
+
+// Symmetric is the same margin on both sides: a difference, such as 0.15 for 15 pp of success.
+func Symmetric(m float64) Margin { return Margin{Better: m, Worse: m} }
+
+// RatioMargin is a relative margin m (0.10 for 10%) in log scale: a 10% cost margin is a 10% reduction on the better
+// side (−log 0.9) and a 10% increase on the worse side (log 1.1), so equivalence is a ratio within [0.90, 1.10].
+func RatioMargin(m float64, dir Direction) Margin {
+	if dir == LowerIsBetter {
+		return Margin{Better: -math.Log(1 - m), Worse: math.Log(1 + m)}
+	}
+	return Margin{Better: math.Log(1 + m), Worse: -math.Log(1 - m)}
+}
+
 // Evidence is a metric's intervals, in the scale its verdict is made in: a difference, or a log ratio.
 type Evidence struct {
 	Boot95, T95, Boot90, T90 Interval
@@ -32,18 +50,18 @@ func widest(a, b Interval) Interval {
 	return Interval{Estimate: a.Estimate, Low: math.Min(a.Low, b.Low), High: math.Max(a.High, b.High)}
 }
 
-// Decide gives a metric's verdict. margin is in the evidence's scale (a proportion for success, log(1 + m) for a
-// ratio); guard asks for the no-loss verdict (the success guard of a cheaper-context goal); belowFloor marks a design
-// too small for verdicts on this metric. The bootstrap and the t-interval must agree: each bound is the wider of the
-// two.
-//   - regressed: the 95% interval excludes zero on the worse side;
+// Decide gives a metric's verdict. margin is in the evidence's scale; guard asks for the no-loss verdict (the success
+// guard of a cheaper-context goal); belowFloor marks a design too small for verdicts on this metric. The bootstrap and
+// the t-interval must agree: each bound is the wider of the two.
+//   - regressed: the 95% interval excludes zero on the worse side (even a loss within the margin, as the study orders
+//     the rules: a guard's "no loss beyond the margin" is for losses that cannot be told from none);
 //   - improved: it excludes zero on the better side ("improved, but small" when the estimate is within the margin);
-//   - equivalent: the 90% interval lies within ±margin (two one-sided tests);
+//   - equivalent: the 90% interval lies within the margins (two one-sided tests);
 //   - no loss beyond the margin (guard only): the worse end of the 90% interval stays within the margin;
 //   - inconclusive otherwise.
 //
 // Below the floor the verdict is exploratory, but a regression is still returned as a warning.
-func Decide(e Evidence, dir Direction, margin float64, guard, belowFloor bool) (verdict, warning string) {
+func Decide(e Evidence, dir Direction, margin Margin, guard, belowFloor bool) (verdict, warning string) {
 	sign := 1.0
 	if dir == LowerIsBetter {
 		sign = -1
@@ -55,13 +73,13 @@ func Decide(e Evidence, dir Direction, margin float64, guard, belowFloor bool) (
 	switch {
 	case worse(u95):
 		verdict = Regressed
-	case better(u95) && math.Abs(e.Boot95.Estimate) < margin:
+	case better(u95) && sign*e.Boot95.Estimate < margin.Better:
 		verdict = ImprovedSmall
 	case better(u95):
 		verdict = Improved
-	case u90.Low >= -margin && u90.High <= margin:
+	case worstEnd >= -margin.Worse && math.Max(sign*u90.Low, sign*u90.High) <= margin.Better:
 		verdict = Equivalent
-	case guard && worstEnd >= -margin:
+	case guard && worstEnd >= -margin.Worse:
 		verdict = NoLoss
 	default:
 		verdict = Inconclusive

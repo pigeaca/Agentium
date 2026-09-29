@@ -1,9 +1,12 @@
 package experiment
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -88,26 +91,31 @@ func TestAnalyzeCheaperContext(t *testing.T) {
 }
 
 func TestAnalyzeCountsOnlyFairRunsAndStrictSuccess(t *testing.T) {
-	runs := synthetic(8, 3, 1.0, 1.0, func(int, int, string) bool { return true })
+	runs := synthetic(10, 3, 1.0, 1.0, func(int, int, string) bool { return true })
 	runs[0].Outcome, runs[1].Outcome, runs[2].Outcome = claude.OutcomeUnfair, claude.OutcomeInfra, claude.OutcomeCancelled
 	runs[3].ConfigChanged = []string{"pytest.ini"} // passed, but with the test runner changed: a failure
-	a, err := Analyze(lockFor(GoalCheaper, 8, 3), runs)
+	a, err := Analyze(lockFor(GoalCheaper, 10, 3), runs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if a.Excluded[claude.OutcomeUnfair] != 1 || a.Excluded[claude.OutcomeInfra] != 1 || a.Excluded[claude.OutcomeCancelled] != 1 ||
-		a.Counted["A"]+a.Counted["B"] != 45 {
+		a.Counted["A"]+a.Counted["B"] != 57 {
 		t.Errorf("counted %+v, excluded %+v", a.Counted, a.Excluded)
 	}
 	if a.PassAt1["B"] == 1 && a.PassAt1["A"] == 1 {
 		t.Error("the pass with changed runner configuration counted as a success")
 	}
-	// 8 tasks: cost has its floor (the tasks that lost a run still count toward the median of 3), success (20) not.
+	// The floors count tasks with 3 runs in both arms: 8 of 10 here (two lost a run), enough for cost (8), not success (20).
 	if s := result(t, a, MetricSuccess); s.Verdict != stats.Exploratory {
 		t.Errorf("success below its floor: %+v", s)
 	}
-	if c := result(t, a, MetricCost); c.Verdict == stats.Exploratory || c.Verdict == "" || c.Repeats != 3 || c.FullTasks != 6 {
-		t.Errorf("cost: %+v; want a verdict (8 tasks, 6 with 3 runs per arm; the floor is 8 tasks)", c)
+	if c := result(t, a, MetricCost); c.Verdict == stats.Exploratory || c.Verdict == "" || c.Repeats != 3 || c.FullTasks != 8 {
+		t.Errorf("cost: %+v; want a verdict (10 tasks, 8 with 3 runs per arm; the floor is 8 tasks)", c)
+	}
+	fewer := slices.Clone(runs)
+	fewer[4].Outcome = claude.OutcomeInfra // a third task loses a run: 7 full tasks
+	if c := result(t, mustAnalyze(t, lockFor(GoalCheaper, 10, 3), fewer), MetricCost); c.Verdict != stats.Exploratory || c.FullTasks != 7 {
+		t.Errorf("cost with 7 full tasks: %+v", c)
 	}
 	if !slices.Contains(a.NotDiscriminating, "t02") {
 		t.Errorf("tasks every run passed are not discriminating: %v", a.NotDiscriminating)
@@ -133,7 +141,7 @@ func TestAnalyzeBetterGoalAndThinData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := result(t, thin, MetricCost); c.Verdict != stats.Exploratory || !strings.Contains(c.Warning, "fewer than two tasks") {
+	if c := result(t, thin, MetricCost); c.Verdict != stats.Exploratory || !strings.Contains(c.Note, "fewer than two tasks") || c.Warning != "" {
 		t.Errorf("one task: %+v", c)
 	}
 
@@ -175,5 +183,79 @@ func TestAnalyzeAAFindsNoDifference(t *testing.T) {
 	}
 	if differences > 1 {
 		t.Errorf("%d verdicts of a difference in 10 A/A experiments", differences)
+	}
+}
+
+func mustAnalyze(t *testing.T, l Lock, runs []RunData) Analysis {
+	t.Helper()
+	a, err := Analyze(l, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+// An experiment whose every run was excluded, or whose runs report no time or tokens, still has a JSON analysis: no
+// NaN, levels are null.
+func TestAnalysisAlwaysEncodes(t *testing.T) {
+	runs := synthetic(4, 3, 1, 1, func(int, int, string) bool { return true })
+	for i := range runs {
+		runs[i].Outcome = claude.OutcomeInfra
+	}
+	for name, rs := range map[string][]RunData{"all excluded": runs, "no tokens": synthetic(4, 3, 1, 1, func(int, int, string) bool { return true })} {
+		if name == "no tokens" {
+			for i := range rs {
+				rs[i].OutputTokens, rs[i].DurationS = 0, 0
+			}
+		}
+		a := mustAnalyze(t, lockFor(GoalCheaper, 4, 3), rs)
+		data, err := json.Marshal(a)
+		if err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+		if name == "all excluded" && (!strings.Contains(string(data), `"a":null`) || a.Excluded[claude.OutcomeInfra] != 24) {
+			t.Errorf("%s: %s", name, data)
+		}
+	}
+}
+
+// Analyze's variance path gives the spike's numbers on the spike's 60 runs (its arms full and minimal as A and B).
+func TestAnalyzeVarianceMatchesTheSpike(t *testing.T) {
+	f, err := os.Open("../stats/testdata/phase0/runs.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var runs []RunData
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var r struct {
+			Task, Arm, Status string
+			Success           bool
+			CostUSD           float64 `json:"cost_usd"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &r); err != nil {
+			t.Fatal(err)
+		}
+		arm := map[string]string{"full": "A", "minimal": "B"}[r.Arm]
+		passed := r.Success
+		runs = append(runs, RunData{Task: r.Task, Arm: arm, Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: r.CostUSD})
+	}
+	data, err := os.ReadFile("../stats/testdata/phase0/summary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary struct {
+		Variance map[string]float64 `json:"variance"`
+	}
+	if err := json.Unmarshal(data, &summary); err != nil {
+		t.Fatal(err)
+	}
+	v := mustAnalyze(t, lockFor(GoalCheaper, 6, 5), runs).Variance
+	round := func(x float64) float64 { return math.Round(x*1e4) / 1e4 }
+	want := summary.Variance
+	if v == nil || round(v.SigmaLogCost) != want["sigma_log_cost"] || round(v.TauLogCost) != want["tau_log_cost"] ||
+		round(v.WSuccess) != want["w_success"] || round(v.TauSuccess) != want["tau_success"] || v.Repeats != want["repeats"] {
+		t.Errorf("variance %+v, spike %v", v, want)
 	}
 }

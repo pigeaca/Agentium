@@ -49,17 +49,18 @@ type MetricResult struct {
 	Ratio   bool   `json:"ratio"`
 	Tasks   int    `json:"tasks"`   // tasks with counted runs in both arms
 	Repeats int    `json:"repeats"` // the median, over those tasks, of the fewer counted runs of the two arms
-	// FullTasks have at least MinRepeats counted runs in both arms (the floors ask for the median, Repeats).
+	// FullTasks have at least MinRepeats counted runs in both arms: the floors count them.
 	FullTasks int `json:"full_tasks"`
-	// A and B are each arm's level: the success rate, or the geometric mean.
-	A       float64        `json:"a"`
-	B       float64        `json:"b"`
+	// A and B are each arm's level: the success rate, or the geometric mean; nil when the arm has no value.
+	A       *float64       `json:"a"`
+	B       *float64       `json:"b"`
 	Boot95  stats.Interval `json:"bootstrap_95"`
 	T95     stats.Interval `json:"t_95"`
 	Boot90  stats.Interval `json:"bootstrap_90"`
 	T90     stats.Interval `json:"t_90"`
 	Verdict string         `json:"verdict"`
-	Warning string         `json:"warning,omitempty"`
+	Warning string         `json:"warning,omitempty"` // a regression shown below the floors
+	Note    string         `json:"note,omitempty"`    // why there is no result
 	// TasksToResolve estimates, from the observed spread, how many tasks would resolve an inconclusive verdict.
 	TasksToResolve int `json:"tasks_to_resolve,omitempty"`
 }
@@ -139,9 +140,13 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 		case m.name == MetricSuccess && l.Design.Goal == GoalCheaper:
 			res.Role = RoleGuard
 		}
-		transform, back, margin := stats.Transform(stats.Identity), stats.Identity, l.Design.SuccessMargin
+		dir := stats.LowerIsBetter
+		if m.name == MetricSuccess {
+			dir = stats.HigherIsBetter
+		}
+		transform, back, margin := stats.Transform(stats.Identity), stats.Identity, stats.Symmetric(l.Design.SuccessMargin)
 		if m.ratio {
-			transform, back, margin = math.Log, math.Exp, math.Log(1+l.Design.CostMargin)
+			transform, back, margin = math.Log, math.Exp, stats.RatioMargin(l.Design.CostMargin, dir)
 		}
 		table := tables[m.name]
 		res.A, res.B = level(table, a, transform, back), level(table, b, transform, back)
@@ -149,7 +154,7 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 		res.Tasks = len(diffs)
 		res.Repeats, res.FullTasks = pairedRuns(table, a, b)
 		if len(diffs) < 2 {
-			res.Verdict, res.Warning = stats.Exploratory, "fewer than two tasks have counted runs in both arms"
+			res.Verdict, res.Note = stats.Exploratory, "fewer than two tasks have counted runs in both arms"
 			out.Results = append(out.Results, res)
 			continue
 		}
@@ -164,11 +169,7 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 		t90, _ := stats.TInterval(diffs, 0.90)
 		evidence := stats.Evidence{Boot95: boot.Percentile(0.95), T95: t95, Boot90: boot.Percentile(0.90), T90: t90}
 		res.Boot95, res.T95, res.Boot90, res.T90 = evidence.Boot95.Map(back), t95.Map(back), evidence.Boot90.Map(back), t90.Map(back)
-		dir := stats.LowerIsBetter
-		if m.name == MetricSuccess {
-			dir = stats.HigherIsBetter
-		}
-		belowFloor := res.Tasks < m.minTask || res.Repeats < MinRepeats
+		belowFloor := res.FullTasks < m.minTask // "at least 3 runs per task per arm", on enough tasks
 		if res.Role == RoleSecondary {
 			res.Verdict = stats.Exploratory // no verdict: one primary metric, and the guard
 			out.Results = append(out.Results, res)
@@ -177,14 +178,14 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 		res.Verdict, res.Warning = stats.Decide(evidence, dir, margin, res.Role == RoleGuard, belowFloor)
 		if res.Verdict == stats.Inconclusive {
 			wide := math.Max(halfWidth(evidence.Boot95), halfWidth(evidence.T95))
-			res.TasksToResolve, _ = stats.TasksToResolve(res.Tasks, wide, margin)
+			res.TasksToResolve, _ = stats.TasksToResolve(res.Tasks, wide, math.Min(margin.Better, margin.Worse))
 		}
 		out.Results = append(out.Results, res)
 	}
 	success := tables[MetricSuccess]
 	for _, arm := range []string{a, b} {
-		if out.Counted[arm] > 0 {
-			out.PassAt1[arm] = armMean(success, arm)
+		if rate := level(success, arm, stats.Identity, stats.Identity); rate != nil {
+			out.PassAt1[arm] = *rate
 			out.PassAll[arm], _ = stats.Consistency(success, arm)
 		}
 	}
@@ -197,8 +198,9 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 
 func halfWidth(i stats.Interval) float64 { return (i.High - i.Low) / 2 }
 
-// level is an arm's level over all its counted runs: the mean after transform, mapped back (a geometric mean for log).
-func level(t *stats.Table, arm string, transform, back stats.Transform) float64 {
+// level is an arm's level over all its counted runs: the mean after transform, mapped back (a geometric mean for
+// log); nil without values (JSON has no NaN).
+func level(t *stats.Table, arm string, transform, back stats.Transform) *float64 {
 	sum, n := 0.0, 0
 	for _, task := range t.Tasks() {
 		for _, v := range t.Cell(task, arm) {
@@ -207,13 +209,10 @@ func level(t *stats.Table, arm string, transform, back stats.Transform) float64 
 		}
 	}
 	if n == 0 {
-		return math.NaN()
+		return nil
 	}
-	return back(sum / float64(n))
-}
-
-func armMean(t *stats.Table, arm string) float64 {
-	return level(t, arm, stats.Identity, stats.Identity)
+	v := back(sum / float64(n))
+	return &v
 }
 
 // pairedRuns is the median, over tasks with runs in both arms, of the fewer counted runs of the two arms, and how many

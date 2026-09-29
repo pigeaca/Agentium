@@ -141,11 +141,13 @@ func (i Interval) Map(f func(float64) float64) Interval {
 	return Interval{Estimate: f(i.Estimate), Low: f(i.Low), High: f(i.High)}
 }
 
-// Percentile returns the percentile interval at level (0.95), indexed as the spike did.
+// Percentile returns the percentile interval at level (0.95), indexed as the spike did (for 10,000 draws at 95%: the
+// 251st and the 9,750th). Indices are rounded, not truncated: (1 − 0.9)/2 × 10,000 is 499.99999999999994 in floating
+// point.
 func (b Bootstrap) Percentile(level float64) Interval {
 	n := len(b.Draws)
-	low := int((1 - level) / 2 * float64(n))
-	high := int((1+level)/2*float64(n)) - 1
+	low := int(math.Round((1 - level) / 2 * float64(n)))
+	high := int(math.Round((1+level)/2*float64(n))) - 1
 	return Interval{Estimate: b.Estimate, Low: b.Draws[low], High: b.Draws[high]}
 }
 
@@ -221,11 +223,13 @@ func NonInferiorityTasks(tau2, within float64, repeats int, margin float64) int 
 
 // TasksToResolve estimates how many tasks would resolve an inconclusive result: an interval's half-width shrinks
 // with the square root of the tasks, and detecting an effect of target with 80% power at two-sided 5% needs a 95%
-// half-width of target·z(0.975)/(z(0.975) + z(0.8)). halfWidth is the widest observed 95% half-width at tasks.
+// half-width of target·z(0.975)/(z(0.975) + z(0.8)). halfWidth is the widest observed 95% half-width at tasks. An
+// interval already that narrow can still be inconclusive (an estimate between zero and the margin), so the answer is
+// always more than tasks.
 func TasksToResolve(tasks int, halfWidth, target float64) (int, error) {
 	if tasks < 2 || halfWidth <= 0 || target <= 0 {
 		return 0, errNoTasks
 	}
 	needed := target * zTwoSided / (zTwoSided + zPower)
-	return int(math.Ceil(float64(tasks) * (halfWidth / needed) * (halfWidth / needed))), nil
+	return max(tasks+1, int(math.Ceil(float64(tasks)*(halfWidth/needed)*(halfWidth/needed)))), nil
 }

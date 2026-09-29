@@ -99,6 +99,14 @@ func TestBootstrapAndTInterval(t *testing.T) {
 	if i95.Low != boot.Draws[50] || i95.High != boot.Draws[1949] {
 		t.Error("percentile indices differ from the spike's")
 	}
+	draws := make([]float64, 10000)
+	for i := range draws {
+		draws[i] = float64(i)
+	}
+	big := Bootstrap{Draws: draws}
+	if p95, p90 := big.Percentile(0.95), big.Percentile(0.90); p95.Low != 250 || p95.High != 9749 || p90.Low != 500 || p90.High != 9499 {
+		t.Errorf("10,000 draws: 95%% [%v, %v], 90%% [%v, %v]; want the 251st/9,750th and 501st/9,500th", p95.Low, p95.High, p90.Low, p90.High)
+	}
 	ti, err := TInterval([]float64{1, 2, 3, 4}, 0.95)
 	half := TQuantile(0.975, 3) * math.Sqrt(Variance([]float64{1, 2, 3, 4})/4)
 	if err != nil || ti.Estimate != 2.5 || !near(ti.Low, 2.5-half, 1e-12) || !near(ti.High, 2.5+half, 1e-12) {
@@ -130,6 +138,10 @@ func TestPlanningFormulas(t *testing.T) {
 	if n, err := TasksToResolve(10, 0.12, math.Log(1.1)); err != nil || n != 33 {
 		t.Errorf("TasksToResolve = %d, %v", n, err)
 	}
+	// Narrow enough already, yet inconclusive (an estimate between zero and the margin): more than it has.
+	if n, _ := TasksToResolve(20, 0.1, 0.15); n != 21 {
+		t.Errorf("TasksToResolve(20, 0.1, 0.15) = %d, want 21", n)
+	}
 	if _, err := TasksToResolve(1, 0.1, 0.05); err == nil {
 		t.Error("one task cannot say how many more")
 	}
@@ -153,6 +165,11 @@ func TestDecide(t *testing.T) {
 	}{
 		{"cost down", same(-0.2, -0.3, -0.1, -0.28, -0.12), LowerIsBetter, 0.0953, false, false, Improved, false},
 		{"cost down, small", same(-0.05, -0.08, -0.02, -0.07, -0.03), LowerIsBetter, 0.0953, false, false, ImprovedSmall, false},
+		// A 9.5% reduction is within a 10% margin: small, though log 0.905 reaches past log 1.1.
+		{"cost down 9.5%", same(math.Log(0.905), math.Log(0.88), math.Log(0.93), math.Log(0.89), math.Log(0.92)), LowerIsBetter, 0, false, false, ImprovedSmall, false},
+		// Equivalence for cost is a ratio within [0.90, 1.10].
+		{"cost equivalent", same(math.Log(0.97), math.Log(0.905), math.Log(1.04), math.Log(0.91), math.Log(1.03)), LowerIsBetter, 0, false, false, Equivalent, false},
+		{"cost not equivalent", same(math.Log(0.97), math.Log(0.88), math.Log(1.04), math.Log(0.895), math.Log(1.03)), LowerIsBetter, 0, false, false, Inconclusive, false},
 		{"cost up", same(0.2, 0.1, 0.3, 0.12, 0.28), LowerIsBetter, 0.0953, false, false, Regressed, false},
 		{"success up", same(0.2, 0.05, 0.35, 0.08, 0.32), HigherIsBetter, 0.15, false, false, Improved, false},
 		{"success down", same(-0.2, -0.35, -0.05, -0.32, -0.08), HigherIsBetter, 0.15, true, false, Regressed, false},
@@ -166,7 +183,11 @@ func TestDecide(t *testing.T) {
 		{"intervals disagree", Evidence{Boot95: interval(-0.2, -0.3, -0.1), T95: interval(-0.2, -0.35, 0.02), Boot90: interval(-0.2, -0.28, -0.12),
 			T90: interval(-0.2, -0.31, -0.05)}, LowerIsBetter, 0.0953, false, false, Inconclusive, false},
 	} {
-		verdict, warning := Decide(c.e, c.dir, c.margin, c.guard, c.belowFloor)
+		margin := Symmetric(c.margin)
+		if c.dir == LowerIsBetter {
+			margin = RatioMargin(0.10, LowerIsBetter)
+		}
+		verdict, warning := Decide(c.e, c.dir, margin, c.guard, c.belowFloor)
 		if verdict != c.want || (warning != "") != c.warn {
 			t.Errorf("%s: %q, warning %q; want %q (warning %v)", c.name, verdict, warning, c.want, c.warn)
 		}
