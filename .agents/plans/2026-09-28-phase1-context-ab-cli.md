@@ -119,6 +119,42 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
 
     *Evidence:* end-to-end tests with the fake agent. They cover a kill (SIGKILL of the runner process) and resume that loses no finished run, a budget stop and raise, retries, a lock mismatch, a version change during a run, and the predicted denials; the scheduler's tests cover the window, the budget, retries, stop rules and resume, with mutation checks.
 - [ ] **6. Statistics and reports** (about 4 days). A Go port of the spike's statistics, checked against its 60 runs; verdict rules and floors; Markdown and JSON reports; `run show`.
+  The plan for step 6, in two PRs:
+  - **6a, statistics** (`internal/stats`, `experiment.Analyze`), done in the statistics PR. The bootstrap reproduced the spike's ten effect intervals exactly on the first run; mutations of the random source, the draw order, a percentile index or the t quantile each break it. Two choices made while testing: the floors use the median of each task's fewer runs, so one lost slot does not demote a metric, and "tasks to resolve" scales the widest observed 95% interval. In ten simulated A/A experiments one verdict showed a difference, as a 5% level allows: step 7's A/A result must be read that way. It covers:
+    - paired tables of task × arm from an experiment's runs:
+      - counted runs are the fair ones;
+      - unfair, infrastructure and cancelled runs are excluded and counted by reason;
+      - a pass graded with changed runner configuration counts as a failure;
+    - estimators: the success difference (B − A) and, for cost, time and output tokens, the geometric-mean ratio from paired log differences;
+    - intervals at 95% and 90%:
+      - the two-stage cluster bootstrap: 10,000 draws, seeded from the lock, with its random source a parameter;
+      - a t-interval on the per-task differences, with exact t quantiles (the spike used a rounded table);
+    - variance components: σ (log cost), w (success) and τ (method of moments), for an A/A calibration to replace the planner's defaults;
+    - verdicts per the study's §5.6, using the design's margins:
+      - improved, "improved, but small", regressed, no loss beyond the margin, equivalent, inconclusive;
+      - a verdict needs the bootstrap and the t-interval to agree; otherwise it is inconclusive, since with few tasks one runs narrow and the other wide;
+      - only the primary metric (the goal's) and the success guard get verdicts; other metrics are exploratory;
+      - below the floors a metric is exploratory, except that a regression whose 95% interval excludes zero is still raised as a warning;
+      - an inconclusive result says how many tasks would likely resolve it, from the observed variance;
+    - consistency (pass^k per arm), and tasks that are not discriminating for success;
+    - *Evidence:* the spike's 60 runs (git history `9bae530`, copied as test data) reproduce its committed summary:
+      - the bootstrap exactly, with a Python-compatible Mersenne Twister as the test's random source (the spike's own code regenerates that summary unchanged on Python 3.9);
+      - the t-intervals within the rounded table's error;
+      - the variance components and detectable effects.
+  - **6b, reports** (`agentium experiment report NAME [--json]`; `run show` with the diff and logs):
+    - verdicts in plain words, then a metrics table and a per-task table (per-run results, cost A → B);
+    - behavior counts per arm, and the context overhead (the measured first request per arm);
+    - environment and honesty notes:
+      - excluded runs by reason;
+      - drift;
+      - non-discriminating tasks;
+      - the cache-read share and a cold-cache cost per arm, from the price table;
+      - recovered and estimated costs;
+      - passes with changed runner configuration;
+      - an incomplete schedule (a budget stop);
+      - the lock's method and dates;
+    - JSON with the lock, per-run data and results;
+    - *Evidence:* golden-file tests for the Markdown and JSON of a fixture experiment.
 - [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs.
 
 That's about 5 weeks in total (roughly 25 working days), consistent with the study's 4–5 week estimate.
