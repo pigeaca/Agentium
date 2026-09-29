@@ -1,7 +1,7 @@
 # Phase 1: context A/B from the command line
 
 - Date: 2026-09-28
-- Status: In Progress (plan awaiting approval by merge)
+- Status: Completed
 - Scope: the user asked to plan Phase 1 (2026-09-28) and decided:
   - **Claude Code only.** Codex arrives in Phase 2, with agent comparison and the UI.
   - **Include both spike follow-ups as step 0.** Move the harness out of `.agents/`, and make the "run and update the tests" rule concrete.
@@ -45,7 +45,7 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - `task validate`: the hidden tests fail on the base and pass with the reference patch, in every arm of an experiment.
 
    *Evidence:* tests; at least 12 validated tasks imported from real history.
-4. **Isolation.** Every run applies all nine requirements in [the Phase 0 results](../../docs/research/2026-09-27-phase0-spike-results.md). Each one is covered by an automated test using a **fake `claude`** that emits recorded stream-json, or by a per-run check stored with the run. A run whose environment drifted (permission mode, tools, connector tools, CLI version) is recorded as unfair and never counted. *Evidence:* the test list maps 1:1 to the nine items.
+4. **Isolation.** Every run applies all nine requirements in [the Phase 0 results](../../../docs/research/2026-09-27-phase0-spike-results.md). Each one is covered by an automated test using a **fake `claude`** that emits recorded stream-json, or by a per-run check stored with the run. A run whose environment drifted (permission mode, tools, connector tools, CLI version) is recorded as unfair and never counted. *Evidence:* the test list maps 1:1 to the nine items.
 5. **Experiments.**
    - Templates: context A/B, and A/A calibration.
    - `experiment plan` shows the runs, the estimated cost and the smallest detectable effects per tier (Quick, Confident, Custom), using σ = 0.19, τ = 0.10–0.25 and w = 0.20 as defaults.
@@ -59,7 +59,7 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - Markdown and JSON output, plus `run show` for one run.
 
    *Evidence:* golden-file tests, and the statistics reproduce the Phase 0 spike's committed numbers from its 60 runs (git history `9bae530`).
-7. **Real-run acceptance (approval gate).** With the user's go-ahead and budget, an A/A calibration and a context A/B run on Agentium, using the CLI only. The A/A test must not report a difference. Both reports must be produced, and spending must stay within the preview's estimate. *Evidence:* the reports, and the costs compared with the preview.
+7. **Real-run acceptance (approval gate).** With the user's go-ahead and budget, an A/A calibration and a context A/B run on Agentium, using the CLI only. The A/A test must not report a difference. Both reports must be produced, and spending must stay within the preview's estimate. *Evidence:* the reports, and the costs compared with the preview. Amended by the user on 2026-09-29: the A/B is sized to one five-hour usage window, not the Quick tier, which waits for rate-limit awareness.
 8. **Process.** Each step below lands as its own PR with green CI and a recorded review. The architecture code map, the README usage and the roadmap stay current. *Evidence:* the PRs.
 
 ## Work
@@ -155,12 +155,17 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
       - the lock's method and dates;
     - JSON with the lock, per-run data and results;
     - *Evidence:* golden-file tests for the Markdown and JSON of a fixture experiment.
-- [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs. The A/A is done (2026-09-29); the context A/B is deferred. The runs used the user's login, Claude Code 2.1.281 and claude-sonnet-5, and cost $19.51 at list prices within the $50 approved: calibration $0.15, a pilot $6.48, the A/A $12.88.
+- [x] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs. Done on 2026-09-29: the A/A, and a context A/B sized to one usage window (acceptance item 7, as amended). The runs used the user's login, Claude Code 2.1.281 and claude-sonnet-5, and cost $27.23 at list prices within the $50 approved: calibrations $0.54, a pilot $6.48, the A/A $12.88, the A/B $7.33.
   - **Pilot** (experiment `aa`, 10 settled runs). Isolation held end to end: after the build-cache fix, agents built and tested Go in the sandbox with a cache of their own. Three of the six tasks were unfair. One instruction read as notes about the agent's environment, so the model did nothing ($0.06 a run); two tasks had hidden tests checking messages or behaviors their instructions did not state. An independent fairness review then checked every instruction against its hidden tests; two instructions were completed and one task replaced.
   - **A/A** (experiment `aa2`). The user stopped it after 12 of 36 runs (6 complete pairs, one per task) to stay within one five-hour usage window. Every run passed. Cost B vs A was −6% (95%: −31% to +26%) and time −3%: no difference, as an A/A must report; the verdicts are exploratory, below the floors. From the 6 pairs, σ of log cost ≈ 0.20 (roughly 0.13–0.50), in line with the default 0.19, so the planner defaults stay. τ needs an A/B, and w could not be estimated because every run passed.
   - **Costs.** A run cost $0.38–1.69, $1.02 on average, and took about 4.5 minutes. The preview's $0.64 per run came from the pilot, whose broken tasks cost $0.06 a run, so the 12 runs cost $12.21 against an estimate of $7.69.
   - **Limits.** With a subscription login, each run used about 5–6% of the five-hour usage window (this session's own use included), so about 15 runs fit in a window. In login mode the plan's rate limit, not money, bounds an experiment.
-  - **Deferred: the Quick-tier context A/B** (72 runs: about five usage windows, or about $75 with an API key). It waits for rate-limit awareness and for usage room or budget. The acceptance data folder holds 8 tasks, 6 of them checked for fairness. Step 3's 12 Agentium tasks, imported into another data folder, still have unreviewed instructions; an A/B needs 12 or more fair ones.
+  - **A/B** (experiment `ab`): today's docs (`full`, about 3,400 tokens at start) against a minimal version (`minimal`: the same five imports in 84 words). The minimal docs come from a local branch, not merged. Both arms passed each task base's docs check (Phase 0's lesson 6). The user stopped it after 8 of 12 runs (4 complete pairs) to stay within the usage window.
+    - The first request fell by 4.6k tokens with the minimal docs, but cost rose 11% (95%: −45% to +123%), time 10% and output tokens 28%.
+    - Success fell from 4/4 to 3/4: on documents-filter, the minimal-docs agent missed that the linked-files list must hold only documents.
+    - Both arms updated and ran the tests in every run, so Phase 0's behavior gap did not reappear.
+    - Every verdict is exploratory. The spend was $7.33 against the preview's $8.61, about $0.79 per settled run against $0.72.
+  - **Still open: the Quick-tier context A/B** (72 runs: about five usage windows, or about $75 with an API key). It waits for rate-limit awareness and for 12 or more fair tasks: the acceptance data folder holds 6 checked for fairness, and step 3's 12 still have unreviewed instructions.
   - **Follow-ups:**
     - rate-limit awareness: pause before the limit, and warn in the preview;
     - a pilot run per task, to catch unfair tasks before an experiment;
@@ -189,8 +194,9 @@ That's about 5 weeks in total (roughly 25 working days), consistent with the stu
 - Real behavior is proven once, in step 7.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code / claude-opus-5-5 / default (runs under test: claude-sonnet-5)
+- Elapsed: about 33 hours of calendar time (2026-09-28 12:04 to 2026-09-29 21:00), including waits for merges and usage windows
+- Check-fix loops: not counted per step. Notable ones: a scheduler test hang, a race in window tests, arm64/amd64 float differences in golden JSON, and gofmt in the pre-commit hook.
+- User corrections: at least 1 (the A/B would not fit the usage window). Earlier steps were not tracked.
+- Real runs: 40 in step 7, cancelled runs included (5 calibration, 12 pilot, 13 A/A, 10 A/B), for $27.23 at list prices; plus 9 in step 4c's calibration, for $0.70
+- Review: an independent reviewer on every code PR; changes were requested on most, and all were fixed
