@@ -487,12 +487,12 @@ func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
 	}
 }
 
-// When Agentium cannot grade a fair attempt (here, the agent left a file nobody can read), the run is an
-// infrastructure failure, retried in experiments, not the agent's failure.
+// When Agentium cannot grade a fair attempt (here its own grading repository is damaged, which the fake agent can do
+// because it runs unsandboxed), the run is an infrastructure failure, retried in experiments, not the agent's failure.
 func TestRunGradingFailureIsInfrastructure(t *testing.T) {
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; touch locked; chmod 000 locked", false)
-	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "grading copy")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; rm -rf '"+f.data+"'/records/*/verify/.git", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "not a git repository")
 	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
 	// The start file ends with the finished record, which a runner killed before storing it would be recovered from.
 	files, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "started.json"))
@@ -503,6 +503,14 @@ func TestRunGradingFailureIsInfrastructure(t *testing.T) {
 	if !strings.Contains(string(data), `"finished":true`) || !strings.Contains(string(data), `"outcome":"infra"`) {
 		t.Errorf("start file after the run: %s", data)
 	}
+}
+
+// What the agent leaves unreadable is its own doing: graded without it, the run keeps its outcome.
+func TestRunGradesWithoutUnreadableFiles(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; touch locked; chmod 000 locked", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "outcome      ok; verification passed",
+		"note: graded without what the agent left unreadable: locked")
 }
 
 // While a setup command runs, the run's start file names its process group, so a runner killed meanwhile leaves

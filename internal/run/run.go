@@ -377,8 +377,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
 // verification commands.
 func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
-	if err := syncWorkTree(repo, graded); err != nil {
+	unreadable, err := syncWorkTree(repo, graded)
+	if err != nil {
 		return fmt.Errorf("grading copy: %w", err)
+	}
+	if len(unreadable) > 0 { // the agent's doing, so its result: graded without them
+		rec.Notes = append(rec.Notes, "graded without what the agent left unreadable: "+strings.Join(unreadable, ", "))
 	}
 	if _, err := gitx.Run(ctx, "-C", graded, "add", "-A"); err != nil {
 		return err
@@ -503,31 +507,35 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	return scripts, configs
 }
 
-// syncWorkTree makes dst's work tree (everything but .git) a copy of src's.
-func syncWorkTree(src, dst string) error {
+// syncWorkTree makes dst's work tree (everything but .git) a copy of src's, and lists what in src could not be read.
+func syncWorkTree(src, dst string) (unreadable []string, err error) {
 	entries, err := os.ReadDir(dst)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.Name() != ".git" {
 			if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 	entries, err = os.ReadDir(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.Name() != ".git" {
-			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-				return err
+			skipped, err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range skipped {
+				unreadable = append(unreadable, filepath.ToSlash(filepath.Join(e.Name(), p)))
 			}
 		}
 	}
-	return nil
+	return unreadable, nil
 }
 
 // within reports whether p is root or inside it.
@@ -810,23 +818,29 @@ func ranChecks(commands, verify []string) bool {
 	return false
 }
 
-// copyTree copies src to dst (which must not exist), keeping modes and symbolic links as links.
-func copyTree(src, dst string) error {
+// copyTree copies src to dst (which must not exist), keeping modes and symbolic links as links. What in src cannot be
+// read is skipped and listed (relative to src); failures to write dst are errors.
+func copyTree(src, dst string) (unreadable []string, err error) {
 	if _, err := os.Lstat(dst); err == nil {
-		return errors.New(dst + " already exists")
+		return nil, errors.New(dst + " already exists")
 	}
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	err = filepath.WalkDir(src, func(p string, d os.DirEntry, walkErr error) error {
 		rel, err := filepath.Rel(src, p)
 		if err != nil {
 			return err
 		}
+		if walkErr != nil { // src itself, or a folder, that cannot be read
+			if p == src && d == nil {
+				return walkErr
+			}
+			unreadable = append(unreadable, rel)
+			return nil
+		}
 		target := filepath.Join(dst, rel)
 		info, err := d.Info()
 		if err != nil {
-			return err
+			unreadable = append(unreadable, rel)
+			return nil
 		}
 		switch {
 		case d.IsDir():
@@ -834,16 +848,19 @@ func copyTree(src, dst string) error {
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(p)
 			if err != nil {
-				return err
+				unreadable = append(unreadable, rel)
+				return nil
 			}
 			return os.Symlink(link, target)
 		case info.Mode().IsRegular():
 			data, err := os.ReadFile(p)
 			if err != nil {
-				return err
+				unreadable = append(unreadable, rel)
+				return nil
 			}
 			return os.WriteFile(target, data, info.Mode().Perm())
 		}
 		return nil // sockets and devices are not copied
 	})
+	return unreadable, err
 }

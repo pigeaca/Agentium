@@ -8,18 +8,24 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // ErrBusy is returned when another process holds the run lock.
 var ErrBusy = errors.New("another Agentium process is running agents with this data folder")
 
-// RunsBusy reports whether another process holds the run lock now (its runs are in progress).
+// RunsBusy reports whether a process holds the run lock now (its runs are in progress). It probes with a shared lock
+// on a file of its own, which never changes the lock file; LockRuns waits out such a probe.
 func (l Layout) RunsBusy() bool {
-	release, err := l.LockRuns()
+	f, err := os.OpenFile(filepath.Join(l.Root, "runs.lock"), os.O_RDONLY|os.O_CREATE, 0o600)
 	if err != nil {
-		return errors.Is(err, ErrBusy)
+		return false
 	}
-	release()
+	defer f.Close()
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		return errors.Is(err, syscall.EWOULDBLOCK)
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return false
 }
 
@@ -32,7 +38,12 @@ func (l Layout) LockRuns() (release func(), err error) {
 	if err != nil {
 		return nil, fmt.Errorf("run lock: %w", err)
 	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	for wait := 0; errors.Is(err, syscall.EWOULDBLOCK) && wait < 40; wait++ { // a RunsBusy probe lasts an instant
+		time.Sleep(50 * time.Millisecond)
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	}
+	if err != nil {
 		holder, _ := os.ReadFile(path)
 		f.Close()
 		if errors.Is(err, syscall.EWOULDBLOCK) {

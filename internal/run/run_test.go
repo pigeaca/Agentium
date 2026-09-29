@@ -80,9 +80,21 @@ func TestCopyTreeKeepsModesAndLinks(t *testing.T) {
 	if err := os.Symlink("bin/run.sh", filepath.Join(src, "run")); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(t.TempDir(), "copy")
-	if err := copyTree(src, dst); err != nil {
+	// What cannot be read is the tree owner's doing: skipped and listed, not an error.
+	if err := os.WriteFile(filepath.Join(src, "locked"), []byte("x"), 0o000); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "sealed", "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(src, "sealed"), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(src, "sealed"), 0o755) })
+	dst := filepath.Join(t.TempDir(), "copy")
+	unreadable, err := copyTree(src, dst)
+	if err != nil || !slices.Equal(unreadable, []string{"locked", "sealed"}) {
+		t.Fatalf("copyTree = %v, %v", unreadable, err)
 	}
 	if info, err := os.Stat(filepath.Join(dst, "bin", "run.sh")); err != nil || info.Mode().Perm() != 0o755 {
 		t.Errorf("mode: %v %v", info, err)
@@ -90,8 +102,11 @@ func TestCopyTreeKeepsModesAndLinks(t *testing.T) {
 	if link, err := os.Readlink(filepath.Join(dst, "run")); err != nil || link != "bin/run.sh" {
 		t.Errorf("link = %q, %v", link, err)
 	}
-	if err := copyTree(src, dst); err == nil {
+	if _, err := copyTree(src, dst); err == nil {
 		t.Error("copying onto an existing folder must fail")
+	}
+	if _, err := copyTree(filepath.Join(src, "missing"), filepath.Join(t.TempDir(), "copy")); err == nil {
+		t.Error("a missing source must fail")
 	}
 }
 
