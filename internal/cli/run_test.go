@@ -126,6 +126,8 @@ func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
 	expect(t, list, ExitOK, "value", "yes", "no", "unfair", "$0.25")
 	id := strings.Fields(strings.Split(list.stdout, "\n")[1])[0]
 	expect(t, run("run", "show", id), ExitOK, "Run "+id, "files        agent.diff", "stream.jsonl", "verify.log")
+	shown := run("run", "show", id, "--diff", "--log")
+	expect(t, shown, ExitOK, "--- agent.diff", "-old", "+new", "--- setup.log: none (the task has no setup)", "--- verify.log", "$ sh run_tests.sh")
 	expect(t, run("run", "show", "nope"), ExitError, "not found")
 
 	expect(t, run("task", "add", "broken-setup", "--base", "HEAD~1", "--instruction", "Anything.", "--setup", "exit 3", "--verify", "true"), ExitOK)

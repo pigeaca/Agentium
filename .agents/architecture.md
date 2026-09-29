@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is in progress ([plan](plans/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration and experiments (design, preview, lock, interleaved resumable runs within a budget) work; statistics work; reports follow.
+Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is in progress ([plan](plans/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration and experiments (design, preview, lock, interleaved resumable runs within a budget) work; statistics and reports work; the paid acceptance runs (step 7) follow.
 
 ## Product concept
 
@@ -39,10 +39,11 @@ Shape:
 | `internal/runner` | Commands (through a shell or as arguments) in their own process group with a timeout and no credentials; a gentle stop (SIGINT, then SIGKILL); the group is killed when the command ends; the process group is reported when it starts |
 | `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths and credentials, an allowlisted environment); stream-json metrics, outcomes and environment drift |
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules) and validation per context arm |
-| `internal/experiment` | Experiment designs (templates context A/B and A/A, arms, tasks eligible in every arm, repeats, caps, margins, seed) and the preview (tiers, cost estimates, detectable effects, floors); the lock; the seeded schedule of interleaved pairs; execution (concurrency within a window, a budget no run can pass, infrastructure retries, stop rules, resume from stored runs); what counts as fair and as a success; the analysis of an experiment's runs (roles, margins, floors, verdicts) |
-| `internal/stats` | Paired analysis: task × arm tables, the two-stage cluster bootstrap (its random source a parameter), t-intervals with exact quantiles, variance components, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike's numbers |
+| `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed) and their preview; the lock; the seeded interleaved schedule; execution (a window, a budget no run passes, retries, stop rules, resume); counting, and the analysis of runs (roles, floors, verdicts) |
+| `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
+| `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, context and costs, behavior, per-task results and honesty notes, as Markdown or JSON (without personal names or paths) |
 | `internal/pricing` | Anthropic's list prices per model, dated, for cost estimates and for transcripts that end without Claude Code's cost |
-| `internal/run` | One run: a workspace prepared as the arm (base, context, setup, context commit), Claude Code denied everything else, grading on a hidden copy (diff, hidden tests, verification), behavior flags, redacted records; a start file per run, so a run left by a dead process is recovered with its spend; the folders a run will use, predicted for runs that may overlap it |
+| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, redacted records; a start file to recover a dead process's runs; the folders a run will use, predicted for runs that may overlap it |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |

@@ -118,7 +118,7 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
       - calibration runs never enter an experiment.
 
     *Evidence:* end-to-end tests with the fake agent. They cover a kill (SIGKILL of the runner process) and resume that loses no finished run, a budget stop and raise, retries, a lock mismatch, a version change during a run, and the predicted denials; the scheduler's tests cover the window, the budget, retries, stop rules and resume, with mutation checks.
-- [ ] **6. Statistics and reports** (about 4 days). A Go port of the spike's statistics, checked against its 60 runs; verdict rules and floors; Markdown and JSON reports; `run show`.
+- [x] **6. Statistics and reports** (about 4 days; done in the statistics and reports PRs). A Go port of the spike's statistics, checked against its 60 runs; verdict rules and floors; Markdown and JSON reports; `run show`.
   The plan for step 6, in two PRs:
   - **6a, statistics** (`internal/stats`, `experiment.Analyze`), done in the statistics PR. The bootstrap reproduced the spike's ten effect intervals exactly on the first run; mutations of the random source, the draw order, a percentile index or the t quantile each break it. Choices made in testing and review: the floors count tasks with 3 counted runs in both arms; a cost margin of 10% means a 10% reduction on the better side and a 10% increase on the worse (equivalence is a ratio within [0.90, 1.10]); "tasks to resolve" scales the widest observed 95% interval and is always more than the experiment has; levels without data are null, never NaN. In ten simulated A/A experiments one verdict showed a difference, as a 5% level allows: step 7's A/A result must be read that way. It covers:
     - paired tables of task × arm from an experiment's runs:
@@ -141,7 +141,7 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
       - the bootstrap exactly, with a Python-compatible Mersenne Twister as the test's random source (the spike's own code regenerates that summary unchanged on Python 3.9);
       - the t-intervals within the rounded table's error;
       - the variance components and detectable effects.
-  - **6b, reports** (`agentium experiment report NAME [--json]`; `run show` with the diff and logs):
+  - **6b, reports** (`agentium experiment report NAME [--json] [--out FILE]`; `run show --diff --log`), done in the reports PR. The JSON keeps the lock but counts skill and command names and keeps only Claude Code's file name; a guard loss the intervals can tell from none reads "regressed", and the headline says when it lies within the margin. It covers:
     - verdicts in plain words, then a metrics table and a per-task table (per-run results, cost A → B);
     - behavior counts per arm, and the context overhead (the measured first request per arm);
     - environment and honesty notes:

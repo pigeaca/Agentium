@@ -255,7 +255,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	case runErr != nil:
 		return fail(env, runErr)
 	case sum.Status == experiment.StatusDone:
-		fmt.Fprintln(out, "Every run is done. The report (statistics and verdicts) comes with Phase 1 step 6; the runs: agentium run list")
+		fmt.Fprintf(out, "Every run is done. The report: agentium experiment report %s\n", name)
 		return ExitOK
 	case sum.Status == experiment.StatusBudget:
 		fmt.Fprintf(out, "Stopped at the budget. To continue: agentium experiment run %s --budget USD (a higher total)\n", name)

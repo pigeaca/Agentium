@@ -114,7 +114,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	first := f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30")
 	expect(t, first, ExitOK, "Budget raised to $30.00 (recorded in the lock)", "Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 6 runs in a seeded order (seed 5)",
 		"Running up to 2 at a time", "[1/6] value, arm ", "[6/6] value, arm ", "ok, $0.30", "spent $1.80 of $",
-		"Experiment lean-ab: done", "6 of 6 runs settled; spent $1.80", "Every run is done")
+		"Experiment lean-ab: done", "6 of 6 runs settled; spent $1.80", "Every run is done. The report: agentium experiment report lean-ab")
 	for _, arm := range []string{"A", "B"} {
 		if row := armRow(first.stdout, arm); len(row) < 5 || row[2] != "3/3" || row[3] != "3" || row[4] != "3" {
 			t.Errorf("arm %s = %v: want 3 settled, 3 fair, 3 successes:\n%s", arm, row, first.stdout)
@@ -159,6 +159,18 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 		t.Errorf("a finished experiment ran again:\n%s", again.stdout)
 	}
 	expect(t, f.run(ctx, "experiment", "rm", "lean-ab"), ExitError, "has run")
+
+	// The report: one task only, so no intervals; the counts and notes are there.
+	report := f.run(ctx, "experiment", "report", "lean-ab")
+	expect(t, report, ExitOK, "# Experiment lean-ab", "Context A/B: A = `base`, B = `lean`", "**Cost**: no result (fewer than two tasks",
+		"6 of 6 runs settled (done); spent $1.80", "| value | ●●● 3/3 | ●●● 3/3 | $0.300 → $0.300 |", "## Notes")
+	out := filepath.Join(t.TempDir(), "report.json")
+	expect(t, f.run(ctx, "experiment", "report", "lean-ab", "--json", "--out", out), ExitOK, "Wrote the report of lean-ab to "+out)
+	if data, err := os.ReadFile(out); err != nil || !strings.Contains(string(data), `"experiment": "lean-ab"`) || strings.Contains(string(data), f.data) {
+		t.Errorf("JSON report: %v; it must not name the data folder", err)
+	}
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean", "--task", "value"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "report", "later"), ExitError, "has not run yet")
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "lean-ab", "done")
 	expect(t, f.run(ctx, "experiment", "show", "lean-ab"), ExitOK, "Locked ", "Claude Code 2.1.281, sign-in login", "method "+experiment.MethodVersion,
 		"Budget raised ", "$22.00 to $30.00")

@@ -1,0 +1,337 @@
+package report
+
+import (
+	"bytes"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/stats"
+	"github.com/pigeaca/agentium/internal/task"
+)
+
+var update = flag.Bool("update", false, "rewrite the golden files")
+
+// fixture is a context A/B of 10 tasks × 3 runs per arm: arm B's context is smaller and cheaper, success equal but
+// mixed; one run of each kind that is not counted; one pass with changed runner configuration; one recovered run.
+func fixture() Input {
+	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	d := experiment.Design{Version: experiment.DesignVersion, Template: experiment.TemplateContextAB,
+		Arms:    []experiment.Arm{{Name: "A", Context: "base"}, {Name: "B", Context: "lean", Snapshot: "b808beb3ddbaea19f7643ae0c20ec8167641da46"}},
+		Repeats: 3, Model: "claude-sonnet-5", Goal: experiment.GoalCheaper, CostMargin: 0.10, SuccessMargin: 0.15, RunBudgetUSD: 3, BudgetUSD: 60,
+		Timeout: 20 * time.Minute, VerifyTimeout: 10 * time.Minute, Concurrency: 2, Seed: 42}
+	for i := range 10 {
+		d.Tasks = append(d.Tasks, fmt.Sprintf("task-%d", i))
+	}
+	l := experiment.Lock{Method: experiment.MethodVersion, Agentium: "test", LockedAt: at, ClaudeCode: "2.1.281", ClaudePath: "/usr/local/bin/claude",
+		SignIn: claude.SignInLogin, Host: "darwin/arm64", PriceTable: "2026-09-29", Design: d, Schedule: experiment.Schedule(d), MaxAttempts: 3}
+	for _, a := range d.Arms {
+		l.Arms = append(l.Arms, experiment.LockedArm{Arm: a, Calibration: "cal-" + a.Name, Model: "claude-sonnet-5", Tools: []string{"Bash", "Edit", "Read"},
+			Skills: []string{"personal-looking-skill"}, SlashCommands: []string{"compact", "review"}})
+	}
+	for _, name := range d.Tasks {
+		l.Tasks = append(l.Tasks, experiment.NewLockedTask(name, "Fix "+name+".", task.Spec{Base: "base-commit", Verify: []string{"make test"}}))
+	}
+	var runs []Run
+	yes, no := true, false
+	for _, s := range l.Schedule {
+		var ti int
+		fmt.Sscanf(s.Task, "task-%d", &ti)
+		cost := 0.30 * (1 + 0.25*float64(ti%3)) * (1 + 0.04*float64(s.Repeat))
+		first := int64(30000)
+		if s.Arm == "B" {
+			cost *= 0.8
+			first = 27000
+		}
+		passed := &yes
+		if (ti+s.Repeat)%4 == 0 {
+			passed = &no
+		}
+		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, SignIn: claude.SignInLogin,
+			Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", RecordsDir: "/home/someone/.agentium/records/x",
+			Started: at.Add(time.Duration(s.Position) * time.Minute), Finished: at.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
+			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
+				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: first, SawInit: true, SawResult: true},
+			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, TestsChanged: s.Arm == "A", RanTests: true, RanChecks: s.Arm == "A",
+				BashCommands: 6}, Verify: []task.Command{{Command: "make test", ExitCode: 0, Seconds: 1.5}}}
+		switch s.Position {
+		case 3:
+			rec.Outcome, rec.Passed = claude.OutcomeUnfair, nil
+			rec.Drift = []string{"tools differ (added Monitor; missing none)", "1 file tool call(s) reached /home/someone/.agentium/projects"}
+		case 5: // what the agent said, and a note naming local paths, stay out of the report
+			rec.Metrics.ResultExcerpt = "Done in /home/someone/.agentium/workspaces/e1-s5-t1/repo with key sk-ant-api03-" + strings.Repeat("x", 40) // secret-scan: allow
+			rec.Notes = []string{"the hidden tests could not be added: open /home/someone/.agentium/records/r05/verify/t: denied",
+				"Agentium could not finish the run: sign-in with sk-ant-api03-" + strings.Repeat("y", 40) + " refused"} // secret-scan: allow
+		case 7: // passed with changed runner configuration: a failure
+			rec.Behavior.ConfigChanged, rec.Passed = []string{"pytest.ini"}, &yes
+		case 9: // failed with it: a failure either way, not a lost pass
+			rec.Behavior.ConfigChanged, rec.Passed = []string{"pytest.ini"}, &no
+		}
+		runs = append(runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
+		if s.Position == 10 { // an earlier attempt that failed for infrastructure, and one recovered after a stop
+			infra := rec
+			infra.ID, infra.Outcome, infra.Passed = "r10-infra", claude.OutcomeInfra, nil
+			infra.Metrics.CostUSD, infra.CostEstimated = 0.05, true
+			cancelled := rec
+			cancelled.ID, cancelled.Outcome, cancelled.Passed, cancelled.Recovered = "r10-cancelled", claude.OutcomeCancelled, nil, run.RecoveredStopped
+			runs = append(runs[:len(runs)-1], Run{ID: infra.ID, Slot: 10, Attempt: 1, Record: infra}, Run{ID: cancelled.ID, Slot: 10, Attempt: 2, Record: cancelled},
+				Run{ID: rec.ID, Slot: 10, Attempt: 2, Record: rec})
+		}
+	}
+	return Input{Name: "lean-ab", Lock: l, Status: experiment.StatusDone, Runs: runs, DataDir: "/home/someone/.agentium", Home: "/home/someone"}
+}
+
+func golden(t *testing.T, name string, got []byte) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s differs from the golden file (run with -update after checking):\n%s", name, got)
+	}
+}
+
+func TestReportGolden(t *testing.T) {
+	rep, err := Build(fixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, js bytes.Buffer
+	if err := rep.Markdown(&md); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.JSON(&js); err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "lean-ab.md", md.Bytes())
+	goldenJSON(t, "lean-ab.json", js.Bytes())
+}
+
+// goldenJSON compares JSON with the golden file, numbers within 1e-9 relative: the last digits of floating-point
+// results differ between machines (arm64 fuses multiply-adds, amd64 does not).
+func goldenJSON(t *testing.T, name string, got []byte) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		golden(t, name, got)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	var want, have any
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &have); err != nil {
+		t.Fatal(err)
+	}
+	if where := jsonDiff("", want, have); where != "" {
+		t.Errorf("%s differs from the golden file at %s (run with -update after checking):\n%s", name, where, got)
+	}
+}
+
+func jsonDiff(at string, want, have any) string {
+	switch w := want.(type) {
+	case float64:
+		h, ok := have.(float64)
+		if !ok || math.Abs(w-h) > 1e-9*math.Max(1, math.Abs(w)) {
+			return at
+		}
+	case map[string]any:
+		h, ok := have.(map[string]any)
+		if !ok || len(h) != len(w) {
+			return at
+		}
+		for k, v := range w {
+			if d := jsonDiff(at+"."+k, v, h[k]); d != "" {
+				return d
+			}
+		}
+	case []any:
+		h, ok := have.([]any)
+		if !ok || len(h) != len(w) {
+			return at
+		}
+		for i := range w {
+			if d := jsonDiff(fmt.Sprintf("%s[%d]", at, i), w[i], h[i]); d != "" {
+				return d
+			}
+		}
+	default:
+		if want != have {
+			return at
+		}
+	}
+	return ""
+}
+
+func TestReportContents(t *testing.T) {
+	rep, err := Build(fixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, js bytes.Buffer
+	rep.Markdown(&md)
+	rep.JSON(&js)
+	text := md.String()
+	for _, want := range []string{"# Experiment lean-ab", "Context A/B: A = `base`, B = `lean`. Goal: cheaper, without losing success.",
+		"**Cost -20%** (95%: ", "): improved.", "**Success ", "exploratory", "60 of 60 runs settled (done)", "| B | `lean` |", "(-3000)",
+		"Runs not counted: 1 unfair (the environment drifted), 1 infrastructure failure, 1 cancelled.",
+		"Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.",
+		"1 run(s) ended without Claude Code's cost", "1 run(s) were cut short when Agentium stopped", "Arm ", "passed with test-runner configuration changed",
+		"Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory.",
+		"Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.",
+		"Cold-cache cost reprices every cached read", "| task-0 |"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Markdown lacks %q", want)
+		}
+	}
+	if !strings.Contains(js.String(), "the hidden tests could not be added: open <agentium data>/records/r05") {
+		t.Error("run notes are kept, with local paths replaced")
+	}
+	for _, private := range []string{"personal-looking-skill", "/home/someone", "\"review\"", "/usr/local/bin", "sk-ant-api03", "Done in"} {
+		if strings.Contains(js.String(), private) || strings.Contains(text, private) {
+			t.Errorf("the report shows %q", private)
+		}
+	}
+	if !strings.Contains(js.String(), "(1 skill)") || !strings.Contains(js.String(), "(2 slash commands)") || !strings.Contains(js.String(), `"claude_path": "claude"`) {
+		t.Error("the JSON lock should count skills and slash commands")
+	}
+	if rep.Arms[0].Behavior.ConfigPasses+rep.Arms[1].Behavior.ConfigPasses != 1 {
+		t.Errorf("config passes %d + %d, want the one that passed", rep.Arms[0].Behavior.ConfigPasses, rep.Arms[1].Behavior.ConfigPasses)
+	}
+	// Counted runs: 60 slots, one unfair; the infra and cancelled tries of slot 10 are extra runs, not counted.
+	if rep.Arms[0].Counted+rep.Arms[1].Counted != 59 || len(rep.Runs) != 62 || rep.Settled != 60 {
+		t.Errorf("counted %d+%d, runs %d, settled %d", rep.Arms[0].Counted, rep.Arms[1].Counted, len(rep.Runs), rep.Settled)
+	}
+}
+
+func TestReportAA(t *testing.T) {
+	in := fixture()
+	in.Lock.Design.Template = experiment.TemplateAA
+	in.Lock.Arms[1].Context, in.Lock.Arms[1].Snapshot = "base", ""
+	in.Status, in.StatusNote = experiment.StatusBudget, "the next run would not fit the $60.00 budget"
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md bytes.Buffer
+	rep.Markdown(&md)
+	for _, want := range []string{"A/A calibration of context `base`", "any difference is noise",
+		"The experiment is not finished (budget: the next run would not fit the $60.00 budget)", "Measured noise, for planning later experiments"} {
+		if !strings.Contains(md.String(), want) {
+			t.Errorf("A/A report lacks %q", want)
+		}
+	}
+}
+
+// A guard loss the intervals can tell from none is "regressed", even within the margin (the study's order of rules);
+// the headline says so.
+func TestHeadlineGuardLossWithinTheMargin(t *testing.T) {
+	a, b := 0.80, 0.77
+	res := experiment.MetricResult{Metric: experiment.MetricSuccess, Role: experiment.RoleGuard, Tasks: 40, A: &a, B: &b,
+		Boot95: stats.Interval{Estimate: -0.03, Low: -0.05, High: -0.01}, T95: stats.Interval{Estimate: -0.03, Low: -0.05, High: -0.01},
+		Verdict: stats.Regressed}
+	got := headline(res, experiment.Design{SuccessMargin: 0.15})
+	if !strings.Contains(got, "regressed (a loss the intervals can tell from none, though within the 15 pp margin)") || !strings.Contains(got, "80% → 77%") {
+		t.Errorf("headline %q", got)
+	}
+}
+
+// An arm with no counted runs shows no numbers, rather than zeros that read as measured.
+func TestReportArmWithoutCountedRuns(t *testing.T) {
+	in := fixture()
+	for i := range in.Runs {
+		if in.Runs[i].Record.Arm == "B" {
+			in.Runs[i].Record.Outcome, in.Runs[i].Record.Passed = claude.OutcomeUnfair, nil
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, js bytes.Buffer
+	rep.Markdown(&md)
+	if err := rep.JSON(&js); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| B | `lean` | 0 | - | - | - | - |", "→ - |", "**Cost**: no result"} {
+		if !strings.Contains(md.String(), want) {
+			t.Errorf("Markdown lacks %q", want)
+		}
+	}
+	if strings.Contains(md.String(), "Measured noise") || strings.Contains(md.String(), "$0.000") {
+		t.Error("no paired tasks: no noise estimate, and no zero costs")
+	}
+	if !strings.Contains(js.String(), `"cost_usd": null`) {
+		t.Error("JSON: an arm without runs has null means")
+	}
+}
+
+func TestReportBetterGoalAndNoLossHeadline(t *testing.T) {
+	in := fixture()
+	in.Lock.Design.Goal = experiment.GoalBetter
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md bytes.Buffer
+	rep.Markdown(&md)
+	if !strings.Contains(md.String(), "Verdicts are given for success (primary); cost and time and output tokens are exploratory.") {
+		t.Errorf("the verdict note follows the goal:\n%s", md.String())
+	}
+	// "No loss" rests on the 90% interval, and the headline shows that one.
+	a, b := 0.80, 0.78
+	res := experiment.MetricResult{Metric: experiment.MetricSuccess, Role: experiment.RoleGuard, Tasks: 30, A: &a, B: &b, Verdict: stats.NoLoss,
+		Boot95: stats.Interval{Estimate: -0.02, Low: -0.17, High: 0.10}, T95: stats.Interval{Estimate: -0.02, Low: -0.16, High: 0.09},
+		Boot90: stats.Interval{Estimate: -0.02, Low: -0.14, High: 0.08}, T90: stats.Interval{Estimate: -0.02, Low: -0.13, High: 0.07}}
+	if got := headline(res, experiment.Design{SuccessMargin: 0.15}); !strings.Contains(got, "Δ -2 pp (90%: -14 to +8): no loss beyond 15 pp.") {
+		t.Errorf("headline %q", got)
+	}
+}
+
+func TestScrubReplacesWholePaths(t *testing.T) {
+	data := t.TempDir()
+	resolved, _ := filepath.EvalSymlinks(data)
+	in := Input{DataDir: data, Home: "/Users/v"}
+	for text, want := range map[string]string{
+		"open /Users/v/.claude/x: denied":             "open ~/.claude/x: denied",
+		"/Users/vlad/project stays":                   "/Users/vlad/project stays",
+		"at /Users/v":                                 "at ~",
+		"reached " + data + "/projects":               "reached <agentium data>/projects",
+		"reached " + resolved + "/records/r1":         "reached <agentium data>/records/r1",
+		"key sk-ant-api03-" + strings.Repeat("z", 40): "key [REDACTED]", // secret-scan: allow
+	} {
+		got := in.scrub(text)
+		if strings.Contains(want, "[REDACTED]") {
+			if strings.Contains(got, "sk-ant-api03") {
+				t.Errorf("scrub(%q) = %q: the key stayed", text, got)
+			}
+			continue
+		}
+		if got != want {
+			t.Errorf("scrub(%q) = %q, want %q", text, got, want)
+		}
+	}
+}

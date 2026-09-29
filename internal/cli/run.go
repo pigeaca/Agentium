@@ -32,7 +32,9 @@ const runUsage = `Usage:
                      sandboxed commands work and large outputs read back, compares the first request's size with
                      Agentium's estimate, and records the tools, skills and slash commands later runs must get
   agentium run list
-  agentium run show ID
+  agentium run show ID [--diff] [--log]
+                     one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
+                     and verification output
 
 Sign-in: ANTHROPIC_API_KEY when set, else a token file from ` + "`claude setup-token`" + ` (AGENTIUM_CLAUDE_TOKEN_FILE or
 ~/.config/agentium/claude-oauth-token), else your own login with project settings only.
@@ -341,7 +343,10 @@ func runList(ctx context.Context, env Env, args []string) int {
 }
 
 func runShow(ctx context.Context, env Env, args []string) int {
-	rest, code, ok := parseArgs(env, flag.NewFlagSet("run show", flag.ContinueOnError), args, runUsage)
+	fs := flag.NewFlagSet("run show", flag.ContinueOnError)
+	diff := fs.Bool("diff", false, "print the agent's change (against the context commit)")
+	logs := fs.Bool("log", false, "print the setup and verification output")
+	rest, code, ok := parseArgs(env, fs, args, runUsage)
 	if !ok {
 		return code
 	}
@@ -363,12 +368,45 @@ func runShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, fmt.Errorf("run %s: %w", stored.ID, err))
 	}
 	printRun(env, rec)
+	if stored.ExperimentID != 0 {
+		name := fmt.Sprintf("#%d", stored.ExperimentID)
+		if all, err := w.db.Experiments(ctx, w.project.ID); err == nil {
+			for _, e := range all {
+				if e.ID == stored.ExperimentID {
+					name = e.Name
+				}
+			}
+		}
+		fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
+	}
 	if entries, err := os.ReadDir(rec.RecordsDir); err == nil {
 		var names []string
 		for _, e := range entries {
 			names = append(names, e.Name())
 		}
 		fmt.Fprintf(env.Stdout, "  files        %s\n", strings.Join(names, ", "))
+	}
+	var shown []string
+	if *diff {
+		shown = append(shown, "agent.diff")
+	}
+	if *logs {
+		shown = append(shown, "setup.log", "verify.log")
+	}
+	for _, name := range shown {
+		data, err := os.ReadFile(filepath.Join(rec.RecordsDir, name))
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			fmt.Fprintf(env.Stdout, "\n--- %s: none (%s)\n", name, map[string]string{"agent.diff": "the run was not graded",
+				"setup.log": "the task has no setup", "verify.log": "the verification did not run"}[name])
+		case err != nil:
+			return fail(env, fmt.Errorf("run %s: %w", stored.ID, err))
+		default:
+			fmt.Fprintf(env.Stdout, "\n--- %s\n%s", name, data)
+			if len(data) > 0 && data[len(data)-1] != '\n' {
+				fmt.Fprintln(env.Stdout)
+			}
+		}
 	}
 	return ExitOK
 }
