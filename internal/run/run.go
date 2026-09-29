@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,6 +71,14 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Now      func() time.Time
+	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
+	// runs that may overlap can deny each other's folders before they exist (see Predicted).
+	Workspace string
+	// DenyExtra adds paths the agent may not read: the predicted folders of runs that may overlap it.
+	DenyExtra []string
+	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
+	// Agentium process died (its project and experiment slot, say).
+	Meta json.RawMessage
 }
 
 // Record is a finished run.
@@ -110,6 +119,9 @@ type Behavior struct {
 	// ChecksChanged are verification scripts and test-runner configuration the agent changed; scripts the task did not
 	// need changed were restored before grading.
 	ChecksChanged []string `json:"checks_changed,omitempty"`
+	// ConfigChanged is the test-runner configuration among them that the reference solution does not change: it was
+	// graded as the agent left it, so a pass with it is not counted as a success.
+	ConfigChanged []string `json:"config_changed,omitempty"`
 	RanTests      bool     `json:"ran_tests"`  // ran a test runner
 	RanChecks     bool     `json:"ran_checks"` // ran one of the task's verification commands
 	Commits       int      `json:"commits"`    // commits on top of the context commit
@@ -138,11 +150,31 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
-	workspace := filepath.Join(env.Layout.Workspaces, env.ID)
+	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	repo := filepath.Join(workspace, "repo")
 	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
+	// The start file follows the run (see Recover): whether the agent started, the process group of whatever runs now
+	// (setup, the agent, verification), and at the end the finished record, so a runner killed before storing it
+	// loses nothing.
+	var agentStarted, recordsReady bool
+	var pgid int
+	var startErr error
+	writeStart := func(finished bool) error {
+		return env.writeStart(start{Record: rec, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: finished, Meta: env.Meta})
+	}
+	running := func(pid int) {
+		pgid = pid
+		if err := writeStart(false); err != nil && startErr == nil {
+			startErr = err
+		}
+	}
 	defer func() {
 		rec.Finished = env.Now().UTC()
+		if recordsReady {
+			if startErr := writeStart(true); startErr != nil && err == nil {
+				err = startErr
+			}
+		}
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
 			err = redactErr
 		}
@@ -160,7 +192,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		Deny: env.denied(ctx, workspace)}
+		Deny: append(env.denied(ctx, workspace), env.DenyExtra...)}
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
@@ -174,6 +206,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
 		return rec, fmt.Errorf("run records: %w", err)
 	}
+	if err := writeStart(false); err != nil {
+		return rec, err
+	}
+	recordsReady = true
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		return rec, fmt.Errorf("run workspace: %w", err)
 	}
@@ -205,7 +241,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if len(spec.Task.Setup) > 0 {
 		var ok bool
-		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log")); err != nil {
+		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -263,22 +299,39 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// there are the run's own; any other session folder, even one created during the run, is someone else's.
 	ownSession := claude.SessionFolder(activeConfig, repo)
 	pastSessions := claude.SessionFolders(activeConfig)
+	agentStarted, pgid = true, 0
+	if err := writeStart(false); err != nil {
+		transcript.Close()
+		stderr.Close()
+		return rec, err
+	}
+	inv.Started = running
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
+	if runErr == nil && startErr != nil {
+		runErr = startErr
+	}
 	transcript.Close()
 	stderr.Close()
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
 	unfinished := func(err error) (Record, error) {
-		if rec.Outcome == "" {
-			rec.Outcome = claude.OutcomeInfra
+		switch {
+		case ctx.Err() != nil: // interrupted, even during grading: the run is not usable, and not the agent's failure
+			rec.Outcome, rec.Passed = claude.OutcomeCancelled, nil
+		default: // Agentium's own failure, even after a fair attempt (grading failed): not the agent's result
+			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
 		}
 		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
 		return rec, err
 	}
 	var parseErr error
-	rec.Metrics, parseErr = parseFile(transcriptPath) // partial metrics are kept even when reading fails
-	if runErr != nil {                                // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
+	rec.Metrics, parseErr = parseFile(transcriptPath)               // partial metrics are kept even when reading fails
+	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 { // stopped before Claude Code's result: still spent
+		rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
+		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
+	}
+	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
 		return unfinished(runErr)
 	}
 	if parseErr != nil {
@@ -313,7 +366,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
 	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
-		if err := env.grade(ctx, spec, repo, graded, &rec); err != nil {
+		if err := env.grade(ctx, spec, repo, graded, &rec, running); err != nil {
 			return unfinished(err)
 		}
 	}
@@ -323,9 +376,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 // grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
 // verification commands.
-func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record) error {
-	if err := syncWorkTree(repo, graded); err != nil {
+func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
+	unreadable, err := syncWorkTree(repo, graded)
+	if err != nil {
 		return fmt.Errorf("grading copy: %w", err)
+	}
+	if len(unreadable) > 0 { // the agent's doing, so its result: graded without them
+		rec.Notes = append(rec.Notes, "graded without what the agent left unreadable: "+strings.Join(unreadable, ", "))
 	}
 	if _, err := gitx.Run(ctx, "-C", graded, "add", "-A"); err != nil {
 		return err
@@ -381,6 +438,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			restore = append(restore, p)
 		case slices.Contains(scripts, p) || slices.Contains(configs, p):
 			rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, p)
+			if slices.Contains(configs, p) && !slices.Contains(spec.Task.Reference, p) {
+				rec.Behavior.ConfigChanged = append(rec.Behavior.ConfigChanged, p)
+			}
 		}
 	}
 	if len(restore) > 0 {
@@ -406,7 +466,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if !failed {
 		var commands []task.Command
 		var ok bool
-		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"))
+		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -447,31 +507,35 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	return scripts, configs
 }
 
-// syncWorkTree makes dst's work tree (everything but .git) a copy of src's.
-func syncWorkTree(src, dst string) error {
+// syncWorkTree makes dst's work tree (everything but .git) a copy of src's, and lists what in src could not be read.
+func syncWorkTree(src, dst string) (unreadable []string, err error) {
 	entries, err := os.ReadDir(dst)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.Name() != ".git" {
 			if err := os.RemoveAll(filepath.Join(dst, e.Name())); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 	entries, err = os.ReadDir(src)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.Name() != ".git" {
-			if err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name())); err != nil {
-				return err
+			skipped, err := copyTree(filepath.Join(src, e.Name()), filepath.Join(dst, e.Name()))
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range skipped {
+				unreadable = append(unreadable, filepath.ToSlash(filepath.Join(e.Name(), p)))
 			}
 		}
 	}
-	return nil
+	return unreadable, nil
 }
 
 // within reports whether p is root or inside it.
@@ -480,8 +544,8 @@ func within(p, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// commands runs shell commands in dir until one fails, logging to logPath.
-func (env Env) commands(ctx context.Context, dir string, commands []string, logPath string) ([]task.Command, bool, error) {
+// commands runs shell commands in dir until one fails, logging to logPath; running learns each one's process group.
+func (env Env) commands(ctx context.Context, dir string, commands []string, logPath string, running func(pid int)) ([]task.Command, bool, error) {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, false, fmt.Errorf("log: %w", err)
@@ -490,7 +554,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 	var results []task.Command
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running})
 		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
@@ -754,23 +818,29 @@ func ranChecks(commands, verify []string) bool {
 	return false
 }
 
-// copyTree copies src to dst (which must not exist), keeping modes and symbolic links as links.
-func copyTree(src, dst string) error {
+// copyTree copies src to dst (which must not exist), keeping modes and symbolic links as links. What in src cannot be
+// read is skipped and listed (relative to src); failures to write dst are errors.
+func copyTree(src, dst string) (unreadable []string, err error) {
 	if _, err := os.Lstat(dst); err == nil {
-		return errors.New(dst + " already exists")
+		return nil, errors.New(dst + " already exists")
 	}
-	return filepath.WalkDir(src, func(p string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
+	err = filepath.WalkDir(src, func(p string, d os.DirEntry, walkErr error) error {
 		rel, err := filepath.Rel(src, p)
 		if err != nil {
 			return err
 		}
+		if walkErr != nil { // src itself, or a folder, that cannot be read
+			if p == src && d == nil {
+				return walkErr
+			}
+			unreadable = append(unreadable, rel)
+			return nil
+		}
 		target := filepath.Join(dst, rel)
 		info, err := d.Info()
 		if err != nil {
-			return err
+			unreadable = append(unreadable, rel)
+			return nil
 		}
 		switch {
 		case d.IsDir():
@@ -778,16 +848,19 @@ func copyTree(src, dst string) error {
 		case info.Mode()&os.ModeSymlink != 0:
 			link, err := os.Readlink(p)
 			if err != nil {
-				return err
+				unreadable = append(unreadable, rel)
+				return nil
 			}
 			return os.Symlink(link, target)
 		case info.Mode().IsRegular():
 			data, err := os.ReadFile(p)
 			if err != nil {
-				return err
+				unreadable = append(unreadable, rel)
+				return nil
 			}
 			return os.WriteFile(target, data, info.Mode().Perm())
 		}
 		return nil // sockets and devices are not copied
 	})
+	return unreadable, err
 }

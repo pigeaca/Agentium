@@ -27,6 +27,9 @@ type Env struct {
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)
 	LookPath func(string) (string, error) // exec.LookPath
 	Now      func() time.Time             // time.Now
+	// Backoff is how long an experiment waits before retrying a run that failed for infrastructure reasons; nil means
+	// 30 seconds, then 2 minutes.
+	Backoff func(attempt int) time.Duration
 }
 
 const usage = `agentium measures how coding agents, models and project context change coding-agent results.
@@ -39,7 +42,7 @@ Commands:
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
   task          Add, import and validate coding tasks (agentium task for details)
   run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
-  experiment    Design context experiments and preview their cost and power (agentium experiment for details)
+  experiment    Design, preview and run context experiments (agentium experiment for details)
   version       Print the version and build information
   help          Show this help
 

@@ -11,6 +11,8 @@ import (
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/pigeaca/agentium/internal/pricing"
 )
 
 // Metrics are what a run reports in its stream-json transcript. Totals come from the result event, which includes
@@ -36,7 +38,12 @@ type Metrics struct {
 	FirstRequest     int64          `json:"first_request_tokens"` // context size of the first request: what the model saw at start
 	ToolUses         map[string]int `json:"tools_used"`
 	APIRetries       int            `json:"api_retries"`
-	Denials          int            `json:"permission_denials"` // requirement 7: sandbox or permission denials
+	// EstimatedCostUSD prices the transcript's requests at list prices, for a run that ended without Claude Code's own
+	// figure (CostUSD). Input and cache counts are exact per request; the stream reports output only in part, so output
+	// is estimated from the content's size. UnpricedRequests counts requests on models the price table lacks.
+	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
+	UnpricedRequests int     `json:"unpriced_requests,omitempty"`
+	Denials          int     `json:"permission_denials"` // requirement 7: sandbox or permission denials
 
 	Result        string `json:"result_subtype"` // success, error_max_turns, error_max_budget_usd, error_during_execution
 	ResultIsError bool   `json:"result_is_error"`
@@ -68,6 +75,8 @@ type (
 		SlashCommands     []string `json:"slash_commands"`
 	}
 	assistantMessage struct {
+		ID      string            `json:"id"`
+		Model   string            `json:"model"`
 		Usage   json.RawMessage   `json:"usage"`
 		Content []json.RawMessage `json:"content"`
 	}
@@ -75,6 +84,11 @@ type (
 		Input         float64 `json:"input_tokens"`
 		CacheCreation float64 `json:"cache_creation_input_tokens"`
 		CacheRead     float64 `json:"cache_read_input_tokens"`
+		Output        float64 `json:"output_tokens"`
+		Split         *struct {
+			FiveMinutes float64 `json:"ephemeral_5m_input_tokens"`
+			OneHour     float64 `json:"ephemeral_1h_input_tokens"`
+		} `json:"cache_creation"`
 	}
 	toolUse struct {
 		Type  string         `json:"type"`
@@ -106,6 +120,7 @@ func Parse(r io.Reader) (Metrics, error) {
 	m := Metrics{ToolUses: map[string]int{}}
 	seen := map[string]bool{}
 	firstSeen := false
+	requests := map[string]*request{} // by message ID: a message's content blocks arrive as separate events
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // tool results can be large
 	for scanner.Scan() {
@@ -137,10 +152,26 @@ func Parse(r io.Reader) (Metrics, error) {
 				continue
 			}
 			var usage requestUsage
-			if !firstSeen && event.ParentToolUseID == nil && json.Unmarshal(message.Usage, &usage) == nil {
+			usageOK := json.Unmarshal(message.Usage, &usage) == nil
+			if !firstSeen && event.ParentToolUseID == nil && usageOK {
 				// Input and cache counts are exact per request: the context the model saw at the start.
 				firstSeen = true
 				m.FirstRequest = int64(usage.Input + usage.CacheCreation + usage.CacheRead)
+			}
+			key := message.ID
+			if key == "" {
+				key = fmt.Sprintf("line-%d", len(requests))
+			}
+			req := requests[key]
+			if req == nil {
+				req = &request{model: message.Model}
+				requests[key] = req
+			}
+			if usageOK {
+				req.add(usage)
+			}
+			for _, raw := range message.Content {
+				req.contentBytes += int64(len(raw))
 			}
 			for _, raw := range message.Content {
 				var block toolUse
@@ -184,10 +215,45 @@ func Parse(r io.Reader) (Metrics, error) {
 			}
 		}
 	}
+	for _, req := range requests {
+		model := req.model
+		if model == "" {
+			model = m.Model
+		}
+		rates, ok := pricing.Lookup(model)
+		if !ok {
+			m.UnpricedRequests++
+			continue
+		}
+		m.EstimatedCostUSD += rates.Cost(req.usage())
+	}
 	if err := scanner.Err(); err != nil {
 		return m, fmt.Errorf("read transcript: %w", err)
 	}
 	return m, nil
+}
+
+// request is one model request, as far as the stream shows it.
+type request struct {
+	model                                 string
+	input, write5m, write1h, read, output int64
+	contentBytes                          int64
+}
+
+// add keeps the largest count seen for each field: every event of a message repeats its usage, output growing.
+func (r *request) add(u requestUsage) {
+	write5m, write1h := int64(0), int64(u.CacheCreation) // without the split, the one-hour rate Claude Code uses
+	if u.Split != nil {
+		write5m, write1h = int64(u.Split.FiveMinutes), int64(u.Split.OneHour)
+	}
+	r.input, r.read = max(r.input, int64(u.Input)), max(r.read, int64(u.CacheRead))
+	r.write5m, r.write1h, r.output = max(r.write5m, write5m), max(r.write1h, write1h), max(r.output, int64(u.Output))
+}
+
+// usage is the request's tokens, with output estimated at four bytes of content per token when the stream shows less.
+func (r *request) usage() pricing.Usage {
+	return pricing.Usage{Input: r.input, CacheWrite5m: r.write5m, CacheWrite1h: r.write1h, CacheRead: r.read,
+		Output: max(r.output, r.contentBytes/4)}
 }
 
 // Outcomes. ok, capped and timeout are the agent's; infra and unfair runs never had a fair attempt and are not counted.
@@ -197,6 +263,9 @@ const (
 	OutcomeTimeout = "timeout" // Agentium stopped it
 	OutcomeInfra   = "infra"   // no result, a crash, sign-in, limits, overload or transport
 	OutcomeUnfair  = "unfair"  // the environment drifted (see Check)
+	// OutcomeCancelled is Agentium's, not Claude Code's: the run was interrupted (Ctrl-C, or its Agentium process died
+	// and a later one recovered it). Never counted, and not an infrastructure failure either.
+	OutcomeCancelled = "cancelled"
 )
 
 // infraText matches results of runs that never reached the task. Agent outcomes never match.

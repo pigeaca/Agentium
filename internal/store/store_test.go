@@ -353,3 +353,68 @@ func TestExperimentsRoundTrip(t *testing.T) {
 		t.Errorf("deleting twice: %v", err)
 	}
 }
+
+func TestExperimentLockStatusAndRuns(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := s.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "lean", Template: "context-ab", Design: []byte(`{}`), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ExperimentByName(ctx, app.ID, "lean"); got.Status != StatusDraft || got.Lock != nil {
+		t.Errorf("a new experiment = %+v, want a draft without a lock", got)
+	}
+	if err := s.AmendLock(ctx, e.ID, []byte(`{"v":0}`)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("amending before locking: %v", err)
+	}
+	if err := s.LockExperiment(ctx, e.ID, []byte(`{"v":1}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LockExperiment(ctx, e.ID, []byte(`{"v":2}`)); !errors.Is(err, ErrLocked) {
+		t.Errorf("locking twice: %v", err)
+	}
+	if err := s.AmendLock(ctx, e.ID, []byte(`{"v":3}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetExperimentStatus(ctx, e.ID, StatusBudget, "the next pair would pass $20.00"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.ExperimentByName(ctx, app.ID, "lean")
+	if err != nil || string(got.Lock) != `{"v":3}` || got.Status != StatusBudget || got.StatusNote != "the next pair would pass $20.00" {
+		t.Errorf("locked experiment = %+v, %v", got, err)
+	}
+
+	for i, run := range []Run{
+		{ID: "r1", ProjectID: app.ID, TaskName: "fix", Arm: "A", Outcome: "infra", Record: []byte(`{}`), Started: now, Finished: now, ExperimentID: e.ID, Slot: 3, Attempt: 1},
+		{ID: "r2", ProjectID: app.ID, TaskName: "fix", Arm: "A", Outcome: "ok", Record: []byte(`{}`), Started: now.Add(time.Minute), Finished: now, ExperimentID: e.ID, Slot: 3, Attempt: 2},
+		{ID: "r3", ProjectID: app.ID, TaskName: "fix", Arm: "base", Outcome: "ok", Record: []byte(`{}`), Started: now, Finished: now},
+	} {
+		if err := s.SaveRun(ctx, run); err != nil {
+			t.Fatalf("run %d: %v", i, err)
+		}
+	}
+	runs, err := s.ExperimentRuns(ctx, e.ID)
+	if err != nil || len(runs) != 2 || runs[0].ID != "r1" || runs[1].Slot != 3 || runs[1].Attempt != 2 || runs[1].ExperimentID != e.ID {
+		t.Errorf("ExperimentRuns = %+v, %v", runs, err)
+	}
+	if other, _ := s.RunByID(ctx, app.ID, "r3"); other.ExperimentID != 0 || other.Slot != 0 {
+		t.Errorf("a run outside experiments = %+v", other)
+	}
+	for id, want := range map[string]bool{"r1": true, "r3": true, "nope": false} {
+		if got, err := s.HasRun(ctx, id); err != nil || got != want {
+			t.Errorf("HasRun(%s) = %v, %v", id, got, err)
+		}
+	}
+	// Runs outlive their experiment.
+	if err := s.DeleteExperiment(ctx, app.ID, "lean"); err != nil {
+		t.Fatal(err)
+	}
+	if run, err := s.RunByID(ctx, app.ID, "r2"); err != nil || run.ExperimentID != 0 {
+		t.Errorf("run after its experiment was removed = %+v, %v", run, err)
+	}
+}

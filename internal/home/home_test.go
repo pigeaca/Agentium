@@ -1,10 +1,14 @@
 package home
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func env(values map[string]string) func(string) string {
@@ -110,4 +114,45 @@ func TestCheckOutside(t *testing.T) {
 			t.Errorf("CheckOutside(%s) = %v, want inside=%v", root, err, inside)
 		}
 	}
+}
+
+func TestLockRunsIsExclusiveAndReleased(t *testing.T) {
+	l, err := Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	release, err := l.LockRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// flock locks belong to the open file: a second open, as another process would make, is refused.
+	if _, err := l.LockRuns(); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) {
+		t.Errorf("second lock: %v", err)
+	}
+	if !l.RunsBusy() {
+		t.Error("RunsBusy while the lock is held")
+	}
+	release()
+	if l.RunsBusy() {
+		t.Error("RunsBusy after release")
+	}
+	// A probe holding its shared lock does not make a start fail: LockRuns waits it out.
+	probe, err := os.Open(filepath.Join(l.Root, "runs.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_SH); err != nil {
+		t.Fatal(err)
+	}
+	go func() { time.Sleep(200 * time.Millisecond); probe.Close() }()
+	again, err := l.LockRuns()
+	if err != nil {
+		t.Fatalf("after a probe: %v", err)
+	}
+	again()
 }

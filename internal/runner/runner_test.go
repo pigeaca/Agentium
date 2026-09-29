@@ -160,3 +160,15 @@ func TestCancelledContextIsAnError(t *testing.T) {
 		t.Error("the child outlived cancellation")
 	}
 }
+
+func TestStartedReportsTheProcessGroup(t *testing.T) {
+	out, read := output(t)
+	var started int
+	result, err := Run(context.Background(), Spec{Command: "ps -o pgid= -p $$", Output: out, Started: func(pid int) { started = pid }})
+	if err != nil || !result.Passed() {
+		t.Fatalf("result %+v, %v", result, err)
+	}
+	if got := strings.TrimSpace(read()); started == 0 || got != strconv.Itoa(started) {
+		t.Errorf("Started got %d; the command's process group is %q", started, got)
+	}
+}

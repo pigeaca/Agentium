@@ -139,7 +139,12 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, runEnv.SignIn, *budget)
-	rec, err := executeRun(ctx, env, w, runEnv, t.ID, "task", run.Spec{TaskName: t.Name, Instruction: t.Instruction,
+	release, err := startRuns(ctx, env, w)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer release()
+	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
 		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
 	if err != nil {
@@ -180,30 +185,91 @@ func claudePath(env Env) (string, error) {
 	return cli, nil
 }
 
+// runMeta places a run: the project, the task, the kind, and for experiments the slot and attempt. It is stored with
+// the run and kept in its start file, so a run whose Agentium process died is stored where it belongs (startRuns).
+type runMeta struct {
+	ProjectID    int64  `json:"project_id"`
+	TaskID       int64  `json:"task_id,omitempty"`
+	Kind         string `json:"kind"` // "task" or "calibration"
+	ExperimentID int64  `json:"experiment_id,omitempty"`
+	Slot         int    `json:"slot,omitempty"`
+	Attempt      int    `json:"attempt,omitempty"`
+}
+
+// startRuns takes the data folder's run lock, which commands hold while they start agents, and stores the runs a dead
+// Agentium process left behind (cancelled, with what their transcripts show they spent). Call release when done.
+func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err error) {
+	release, err = w.layout.LockRuns()
+	if err != nil {
+		return nil, err
+	}
+	_, secret, _, err := signIn(env)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	orphans, recoverErr := run.Recover(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now())
+	for _, o := range orphans {
+		meta := runMeta{ProjectID: w.project.ID, Kind: "task"}
+		if len(o.Meta) > 0 {
+			if err := json.Unmarshal(o.Meta, &meta); err != nil {
+				release()
+				return nil, fmt.Errorf("run %s: %w", o.Record.ID, err)
+			}
+		}
+		if err := saveRun(ctx, w, o.Record, meta); err != nil {
+			release()
+			return nil, err
+		}
+		fmt.Fprintf(env.Stdout, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: cancelled, $%.2f\n",
+			o.Record.ID, o.Record.Task, o.Record.Arm, o.Record.Metrics.CostUSD)
+	}
+	if recoverErr != nil {
+		release()
+		return nil, recoverErr
+	}
+	return release, nil
+}
+
+// saveRun stores a run's record. An interrupted run is saved all the same: ctx is cancelled by then, and its spend
+// must not be lost.
+func saveRun(ctx context.Context, w *workspace, rec run.Record, meta runMeta) error {
+	if meta.Kind == "calibration" {
+		rec.Passed = nil
+	}
+	encoded, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("encode run: %w", err)
+	}
+	return w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: meta.ProjectID, TaskID: meta.TaskID, TaskName: rec.Task,
+		Kind: meta.Kind, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded,
+		Started: rec.Started, Finished: rec.Finished, ExperimentID: meta.ExperimentID, Slot: meta.Slot, Attempt: meta.Attempt})
+}
+
 // executeRun runs spec with a fresh id and stores the record whenever the agent started, even when interrupted. A
-// calibration run is stored with kind "calibration" and no pass or fail: it has no task to grade.
-func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, taskID int64, kind string, spec run.Spec) (run.Record, error) {
+// calibration run is stored with kind "calibration" and no pass or fail: it has no task to grade. The caller holds
+// the run lock (startRuns).
+func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, meta runMeta, spec run.Spec) (run.Record, error) {
 	id, err := run.NewID(env.Now())
 	if err != nil {
 		return run.Record{}, err
 	}
 	runEnv.ID = id
+	if meta.ProjectID == 0 {
+		meta.ProjectID = w.project.ID
+	}
+	if runEnv.Meta, err = json.Marshal(meta); err != nil {
+		return run.Record{}, fmt.Errorf("encode run: %w", err)
+	}
 	rec, runErr := run.Once(ctx, runEnv, spec)
 	if _, err := os.Stat(filepath.Join(rec.RecordsDir, "stream.jsonl")); rec.Outcome == "" && err != nil {
 		os.RemoveAll(rec.RecordsDir) // the agent never started: nothing to keep
 		return rec, runErr
 	}
-	if kind == "calibration" {
+	if meta.Kind == "calibration" {
 		rec.Passed = nil
 	}
-	encoded, err := json.Marshal(rec)
-	if err != nil {
-		return rec, errors.Join(runErr, fmt.Errorf("encode run: %w", err))
-	}
-	// An interrupted run is saved all the same: ctx is cancelled by then, and its spend must not be lost.
-	if err := w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: w.project.ID, TaskID: taskID, TaskName: spec.TaskName, Kind: kind,
-		Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded, Started: rec.Started,
-		Finished: rec.Finished}); err != nil {
+	if err := saveRun(ctx, w, rec, meta); err != nil {
 		return rec, errors.Join(runErr, err)
 	}
 	return rec, runErr
@@ -259,7 +325,7 @@ func runList(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, "No runs yet: agentium run once TASK")
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-8s %-8s %8s\n", "ID", "TASK", "ARM", "OUTCOME", "PASSED", "COST")
+	fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-9s %-6s %8s\n", "ID", "TASK", "ARM", "OUTCOME", "PASSED", "COST")
 	for _, r := range runs {
 		passed := "-"
 		if r.Passed != nil {
@@ -269,7 +335,7 @@ func runList(ctx context.Context, env Env, args []string) int {
 		if r.Kind == "calibration" {
 			name = "(calibration)"
 		}
-		fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-8s %-8s %8s\n", r.ID, name, r.Arm, r.Outcome, passed, fmt.Sprintf("$%.2f", r.CostUSD))
+		fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-9s %-6s %8s\n", r.ID, name, r.Arm, r.Outcome, passed, fmt.Sprintf("$%.2f", r.CostUSD))
 	}
 	return ExitOK
 }
@@ -452,6 +518,11 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	release, err := startRuns(ctx, env, w)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer release()
 	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real Claude Code runs (%s, sign-in %s): up to $%.2f each.\n",
 		len(arms), shortCommit(head), *model, runEnv.SignIn, *budget)
 	var results []calibration
@@ -466,7 +537,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 		codeword := "AGENTIUM-" + strings.ToUpper(suffix[len(suffix)-6:])
-		rec, err := executeRun(ctx, env, w, runEnv, 0, "calibration", run.Spec{TaskName: "calibration", Instruction: calibrationPrompt,
+		rec, err := executeRun(ctx, env, w, runEnv, runMeta{Kind: "calibration"}, run.Spec{TaskName: "calibration", Instruction: calibrationPrompt,
 			PlainPrompt: true, Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: head, Verify: []string{"true"}},
 			Arm: a.arm, Model: *model, BudgetUSD: *budget, Timeout: *timeout})
 		if err != nil {

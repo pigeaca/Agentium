@@ -22,6 +22,8 @@ agentium run calibrate --snapshot trimmed         # short real runs: sandbox, la
 agentium run once <name> --snapshot trimmed        # one real Claude Code run, graded with the hidden tests (costs money)
 agentium experiment new lean --b trimmed        # a context A/B: base against trimmed, on a sample of valid tasks
 agentium experiment plan lean                     # runs, estimated cost, detectable effects per size; what is missing
+agentium experiment run lean                      # lock it, then real runs in interleaved pairs within the budget (costs money; resumable)
+agentium experiment show lean                     # the lock and the progress per arm
 ```
 
 Data lives in `~/.agentium` (override with `AGENTIUM_HOME`).
