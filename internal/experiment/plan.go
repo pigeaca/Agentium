@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/pricing"
+	"github.com/pigeaca/agentium/internal/stats"
 )
 
 // Planning defaults (the study's §5.6 and the Phase 0 results), until an A/A calibration measures a repository's own.
@@ -16,12 +17,6 @@ const (
 	// TauLow and TauHigh bound the spread of the true effect across tasks, which Phase 0 left unresolved.
 	TauLow  = 0.10
 	TauHigh = 0.25
-)
-
-const (
-	zTwoSided = 1.96  // two-sided α = 0.05
-	zOneSided = 1.645 // one-sided α = 0.05
-	zPower    = 0.84  // 80% power
 )
 
 // Floors: below them a metric is exploratory and gets no verdict (the study's §5.6).
@@ -68,16 +63,11 @@ func Detect(tasks, repeats int) Detectable {
 	}
 	for i, tau := range []float64{TauLow, TauHigh} {
 		// Cost is compared as a ratio: the log difference, shown as the reduction it amounts to.
-		d.Cost[i] = 1 - math.Exp(-mde(zTwoSided+zPower, tau, SigmaLogCost*SigmaLogCost, tasks, repeats))
-		d.Success[i] = mde(zTwoSided+zPower, tau, WSuccess, tasks, repeats)
-		d.Guard[i] = mde(zOneSided+zPower, tau, WSuccess, tasks, repeats)
+		d.Cost[i] = 1 - math.Exp(-stats.MDE(tau*tau, SigmaLogCost*SigmaLogCost, repeats, tasks))
+		d.Success[i] = stats.MDE(tau*tau, WSuccess, repeats, tasks)
+		d.Guard[i] = stats.GuardMargin(tau*tau, WSuccess, repeats, tasks)
 	}
 	return d
-}
-
-// mde is the smallest effect a paired design detects: z·sqrt((τ² + 2w/R) / n), for n tasks and R runs per arm.
-func mde(z, tau, w float64, tasks, repeats int) float64 {
-	return z * math.Sqrt((tau*tau+2*w/float64(repeats))/float64(tasks))
 }
 
 // Exploratory lists the metrics a design is too small to give verdicts on.

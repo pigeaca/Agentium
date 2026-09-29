@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -16,14 +17,14 @@ func TestMDEReproducesTheStudysTable(t *testing.T) {
 		tasks, repeats int
 		success, cost  float64 // pp and %, as the study printed them
 	}{{8, 3, 36.5, 25.9}, {12, 3, 29.8, 21.7}, {20, 3, 23.1, 17.3}, {20, 5, 18.0, 14.1}, {40, 5, 12.7, 10.2}, {65, 5, 10.0, 8.1}} {
-		success := 100 * mde(zTwoSided+zPower, 0.05, WSuccess, c.tasks, c.repeats)
-		cost := 100 * (1 - math.Exp(-mde(zTwoSided+zPower, 0.10, 0.35*0.35, c.tasks, c.repeats)))
+		success := 100 * stats.MDE(0.05*0.05, WSuccess, c.repeats, c.tasks)
+		cost := 100 * (1 - math.Exp(-stats.MDE(0.10*0.10, 0.35*0.35, c.repeats, c.tasks)))
 		if math.Abs(success-c.success) > 0.05 || math.Abs(cost-c.cost) > 0.05 {
 			t.Errorf("%d × %d: success %.1f pp (study %.1f), cost %.1f%% (study %.1f)", c.tasks, c.repeats, success, c.success, cost, c.cost)
 		}
 	}
 	// The Confident tier's guard: 23 tasks × 5 runs certify no success loss beyond about 15 pp.
-	if guard := 100 * mde(zOneSided+zPower, 0.05, WSuccess, 23, 5); math.Abs(guard-14.9) > 0.05 {
+	if guard := 100 * stats.GuardMargin(0.05*0.05, WSuccess, 5, 23); math.Abs(guard-14.9) > 0.05 {
 		t.Errorf("23 × 5 guard = %.1f pp, the study sized it at 15", guard)
 	}
 }
@@ -32,7 +33,7 @@ func TestMDEReproducesTheStudysTable(t *testing.T) {
 // τ from 0.05; here from 0.10, so the low end is 14%).
 func TestDetectWithPlanningDefaults(t *testing.T) {
 	d := Detect(12, 3)
-	want := Detectable{Cost: [2]float64{0.1386, 0.2117}, Success: [2]float64{0.3060, 0.3577}, Guard: [2]float64{0.2716, 0.3175}}
+	want := Detectable{Cost: [2]float64{0.1387, 0.2118}, Success: [2]float64{0.3062, 0.3579}, Guard: [2]float64{0.2717, 0.3176}}
 	for i := range 2 {
 		for _, pair := range [][2]float64{{d.Cost[i], want.Cost[i]}, {d.Success[i], want.Success[i]}, {d.Guard[i], want.Guard[i]}} {
 			if math.Abs(pair[0]-pair[1]) > 0.0001 {
