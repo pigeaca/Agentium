@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -171,7 +172,8 @@ func SessionFolders(configDir string) []string {
 //     its history paths: Claude Code keeps working files there that its Bash tool reads, such as the shell snapshot.
 //     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
-//   - credential stores and the token file's folder.
+//   - credential stores and the token file's folder;
+//   - the user's Go build caches (goCaches), which hold hidden tests compiled before Agentium kept its own.
 //
 // Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
 func (inv Invocation) deniedPaths(userConfig string, environ []string) []string {
@@ -200,11 +202,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
-		forms := []string{filepath.Clean(p)}
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			forms = append(forms, resolved)
-		}
-		for _, form := range forms {
+		for _, form := range forms(p) {
 			if !seen[form] {
 				seen[form] = true
 				out = append(out, form)
@@ -214,24 +212,64 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	return out
 }
 
+// forms are p cleaned and, when it exists, its symlink-resolved form: the sandbox matches the real path.
+func forms(p string) []string {
+	out := []string{filepath.Clean(p)}
+	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != out[0] {
+		out = append(out, resolved)
+	}
+	return out
+}
+
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
 func (inv Invocation) DeniedPaths(environ []string) []string {
 	return inv.deniedPaths(UserConfigDir(environ, inv.Home), environ)
 }
 
-// goCaches are the user's Go build caches: GOCACHE when set, and the defaults under the home folder (macOS, Linux and
-// XDG_CACHE_HOME). Each holds what earlier builds compiled, hidden tests included.
+// goCaches are the user's Go build caches: GOCACHE when set (in the environment or with `go env -w`), and the defaults
+// under the home folder (macOS, Linux and XDG_CACHE_HOME). Each holds what earlier builds compiled, hidden tests
+// included. Values Go ignores (relative, "off") are skipped.
 func goCaches(environ []string, home string) []string {
-	paths := []string{filepath.Join(home, "Library", "Caches", "go-build"), filepath.Join(home, ".cache", "go-build")}
+	vars := map[string]string{}
 	for _, kv := range environ {
-		if v, ok := strings.CutPrefix(kv, "GOCACHE="); ok && filepath.IsAbs(v) {
+		name, v, _ := strings.Cut(kv, "=")
+		vars[name] = v
+	}
+	paths := []string{filepath.Join(home, "Library", "Caches", "go-build"), filepath.Join(home, ".cache", "go-build")}
+	for _, v := range []string{vars["GOCACHE"], goEnvFile(vars, home)["GOCACHE"], filepath.Join(vars["XDG_CACHE_HOME"], "go-build")} {
+		if filepath.IsAbs(v) {
 			paths = append(paths, v)
-		}
-		if v, ok := strings.CutPrefix(kv, "XDG_CACHE_HOME="); ok && filepath.IsAbs(v) {
-			paths = append(paths, filepath.Join(v, "go-build"))
 		}
 	}
 	return paths
+}
+
+// goEnvFile reads the settings `go env -w` keeps: $GOENV, else go/env in the user's config folder. A missing file, or
+// GOENV=off, gives none.
+func goEnvFile(vars map[string]string, home string) map[string]string {
+	path := vars["GOENV"]
+	switch {
+	case path == "off":
+		return nil
+	case path != "":
+	case runtime.GOOS == "darwin":
+		path = filepath.Join(home, "Library", "Application Support", "go", "env")
+	case filepath.IsAbs(vars["XDG_CONFIG_HOME"]):
+		path = filepath.Join(vars["XDG_CONFIG_HOME"], "go", "env")
+	default:
+		path = filepath.Join(home, ".config", "go", "env")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	settings := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			settings[name] = v
+		}
+	}
+	return settings
 }
 
 // settings are the per-run Claude Code settings (--settings).
@@ -250,7 +288,7 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 	}
 	filesystem := map[string]any{"denyRead": denied} // requirement 5
 	if inv.BuildCache != "" {
-		filesystem["allowWrite"] = []string{inv.BuildCache}
+		filesystem["allowWrite"] = forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
 	}
 	return map[string]any{
 		"sandbox": map[string]any{

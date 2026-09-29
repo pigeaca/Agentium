@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -163,8 +164,9 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 			t.Errorf("slot 0 denied %s: a slot outside its window, or its own workspace", p)
 		}
 	}
-	if w := parsed.Sandbox.Filesystem.AllowWrite; len(w) != 1 || !strings.HasSuffix(w[0], "e1-s0-t1/go-build") {
-		t.Errorf("slot 0 may write %v; want its own build cache", w)
+	allow := parsed.Sandbox.Filesystem.AllowWrite // the cache as given and as resolved (/var is /private/var on macOS)
+	if len(allow) == 0 || slices.ContainsFunc(allow, func(p string) bool { return !strings.HasSuffix(p, "e1-s0-t1/go-build") }) {
+		t.Errorf("slot 0 may write %v; want its own build cache", allow)
 	}
 	emptyWorkspaces(t, f)
 

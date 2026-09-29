@@ -612,4 +612,35 @@ func TestReq5BuildCaches(t *testing.T) {
 	if _, _, err := own.Command(environ); err == nil {
 		t.Error("a relative build cache is refused")
 	}
+
+	// A cache set with `go env -w` is denied; values Go ignores are skipped.
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "env")
+	if err := os.WriteFile(envFile, []byte("GOPRIVATE=example.com\nGOCACHE=/home/u/written\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	denied = inv.DeniedPaths(append(slices.Clone(parentEnv), "GOENV="+envFile, "GOCACHE=off", "XDG_CACHE_HOME=relative"))
+	if !slices.Contains(denied, "/home/u/written") {
+		t.Errorf("the cache in Go's env file is not denied: %v", denied)
+	}
+	for _, p := range denied {
+		if !filepath.IsAbs(p) {
+			t.Errorf("denied %q, which Go would not use as a cache", p)
+		}
+	}
+	// The sandbox matches real paths: a symlinked data folder is allowed by both spellings.
+	target := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(target, "go-build"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	own.BuildCache = filepath.Join(dir, "link", "go-build")
+	_, _, linked := command(t, own)
+	allow, _ := linked["sandbox"].(map[string]any)["filesystem"].(map[string]any)["allowWrite"].([]any)
+	resolved, _ := filepath.EvalSymlinks(filepath.Join(target, "go-build"))
+	if len(allow) != 2 || allow[0] != own.BuildCache || allow[1] != resolved {
+		t.Errorf("allowWrite = %v, want %s and %s", allow, own.BuildCache, resolved)
+	}
 }

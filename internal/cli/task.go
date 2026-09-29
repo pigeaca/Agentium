@@ -567,9 +567,13 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		}
 		arms = append(arms, task.Arm{Name: name, Snapshot: snap.CommitID})
 	}
+	buildEnv, err := run.BuildEnv(w.layout)
+	if err != nil {
+		return fail(env, err)
+	}
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
 	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: *timeout, Keep: *keep, Env: run.BuildEnv(w.layout), Progress: env.Stdout, Now: env.Now}
+		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Now: env.Now}
 	fmt.Fprintf(env.Stdout, "Validating %s in %d arm(s): %s\n", t.Name, len(arms), strings.Join(t.Verify, "; "))
 	result, err := v.Validate(ctx, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests,
 		Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}, arms)

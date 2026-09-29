@@ -203,8 +203,14 @@ func newRunFixture(t *testing.T, data string) runFixture {
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
 		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
-			Getenv:   func(key string) string { return f.vars[key] },
-			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+			Getenv: func(key string) string { return f.vars[key] },
+			Environ: func() []string {
+				environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home}
+				if v := f.vars["GOCACHE"]; v != "" { // the user's Go build cache
+					environ = append(environ, "GOCACHE="+v)
+				}
+				return environ
+			},
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
 			Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
 		return cliResult{code, stdout.String(), stderr.String()}
@@ -299,6 +305,13 @@ func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
 	if records, _ := os.ReadDir(filepath.Join(f.data, "records")); len(records) != 0 {
 		t.Errorf("a run that never started left records: %v", records)
 	}
+
+	// The user's Go build cache is denied too.
+	outer = t.TempDir()
+	f = newRunFixture(t, filepath.Join(outer, "data"))
+	f.vars["GOCACHE"] = outer
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "lies inside "+outer, "runs may not read")
 }
 
 // calibratingAgent writes a fake Claude Code that answers the calibration with real-looking tool calls: the sandbox
@@ -546,25 +559,33 @@ func TestRunRecordsTheRunningCommand(t *testing.T) {
 func TestBuildCaches(t *testing.T) {
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	marks := t.TempDir()
-	expect(t, f.run(context.Background(), "task", "edit", "value", "--verify", "echo \"$GOCACHE\" >> "+filepath.Join(marks, "verify")+"; sh run_tests.sh",
-		"--setup", "echo \"$GOCACHE\" >> "+filepath.Join(marks, "setup")), ExitOK)
+	mark := func(name string) string { // records where a command's Go build cache and temporary files went
+		return "echo \"$GOCACHE $TMPDIR $GOTMPDIR\" >> " + filepath.Join(marks, name)
+	}
+	expect(t, f.run(context.Background(), "task", "edit", "value", "--verify", mark("verify")+"; sh run_tests.sh", "--setup", mark("setup")), ExitOK)
 	expect(t, f.run(context.Background(), "task", "validate", "value"), ExitOK, "valid")
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "echo \"$GOCACHE\" > "+filepath.Join(marks, "agent")+"; printf 'new\\n' > value.txt", false)
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "verification passed")
-	own := filepath.Join(f.data, "cache", "go-build")
-	for _, name := range []string{"setup", "verify"} {
+	agent, _ := os.ReadFile(filepath.Join(marks, "agent"))
+	agentCache := strings.TrimSpace(string(agent))
+	if !strings.HasPrefix(agentCache, filepath.Join(f.data, "workspaces")) || !strings.HasSuffix(agentCache, "go-build") {
+		t.Errorf("the agent's GOCACHE = %q, want its workspace's own", agentCache)
+	}
+	own, tmp := filepath.Join(f.data, "cache", "go-build"), filepath.Join(f.data, "cache", "tmp")
+	lines := func(name string) []string {
 		data, _ := os.ReadFile(filepath.Join(marks, name))
-		if len(strings.Fields(string(data))) < 2 { // validation, then the run
-			t.Errorf("%s ran %d time(s)", name, len(strings.Fields(string(data))))
-		}
-		for _, line := range strings.Fields(string(data)) {
-			if line != own {
-				t.Errorf("%s ran with GOCACHE %q, want %s", name, line, own)
-			}
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+	// Validation (without the solution, then with it) and grading use Agentium's own cache and temporary folder; the
+	// run's setup warms the agent's cache.
+	line := func(cache string) string { return cache + " " + tmp + " " + tmp }
+	want := map[string][]string{"setup": {line(own), line(own), line(agentCache)}, "verify": {line(own), line(own), line(own)}}
+	for name, w := range want {
+		if got := lines(name); !slices.Equal(got, w) {
+			t.Errorf("%s ran with (GOCACHE TMPDIR GOTMPDIR) %q, want %q", name, got, w)
 		}
 	}
-	agent, _ := os.ReadFile(filepath.Join(marks, "agent"))
-	if got := strings.TrimSpace(string(agent)); !strings.HasPrefix(got, filepath.Join(f.data, "workspaces")) || !strings.HasSuffix(got, "go-build") {
-		t.Errorf("the agent's GOCACHE = %q, want its workspace's own", got)
+	if info, err := os.Stat(tmp); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("Agentium's temporary folder: %v, %v; want it owner-only", info, err)
 	}
 }

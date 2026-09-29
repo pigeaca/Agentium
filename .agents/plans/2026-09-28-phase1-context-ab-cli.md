@@ -167,6 +167,7 @@ That's about 5 weeks in total (roughly 25 working days), consistent with the stu
 - **Credentials:** never stored, printed or committed. Transcripts are redacted with the pre-commit guard's credential patterns before they're saved.
 - **Dependencies:** `mattn/go-sqlite3` is the only new one. Anything else needs vetting and approval first.
 - **Cost:** tests never call real models; only step 7 spends money, after approval.
+- **Build caches.** Compiled hidden tests must stay out of agents' reach. Agentium's own commands (setup, validation, grading) keep Go's cache, temporary files and XDG caches in the data folder; each run's agent gets a fresh Go cache, warmed by its setup; the user's Go caches are denied. Caches Agentium does not know (sccache, Gradle's, Bazel's output base, a `GOCACHEPROG` set with `go env -w`) stay where their tools keep them: a known gap for projects that use them.
 
 ## Verification
 
