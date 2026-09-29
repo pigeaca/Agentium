@@ -90,6 +90,16 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
 - Step 6: the report, and the preview's estimates compared with the actual spend and usage.
 
 ## Parallel ownership
+Steps 1–3 run in parallel from base `0f5e237`, one PR each, and the coordinator integrates them serially. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`.
+
+| Step | Owner | Branch / worktree | Editable scope | Must not touch |
+|---|---|---|---|---|
+| 1 | coordinator (Opus) | `claude/feat/rate-limit-awareness` / `claude-feat-rate-limit-awareness` | `internal/claude/stream.go` (readings); `internal/run`; `internal/experiment/execute.go` and a new `usage.go`; `internal/cli/experiment_run.go` (flags, pause messages); the usage lines of the preview in `internal/cli/experiment.go` | `internal/experiment/plan.go`, `analyze.go`, `lock.go`; `internal/stats`; `internal/report`; `internal/task` |
+| 2 | `implementer` (Sonnet, medium) | `claude/feat/task-fairness-check` / `claude-feat-task-fairness-check` | `internal/task` (a new fairness file); `internal/cli/task.go`; the store only if the gap count must persist; one check line in `experiment plan`'s "Before it runs" list (`internal/cli/experiment.go`) | `internal/experiment`, `internal/stats`, `internal/report`, `internal/claude` |
+| 3 | `implementer` (Opus, high: a method change) | `claude/feat/noise-one-run-verdicts` / `claude-feat-noise-one-run-verdicts` | `internal/stats` (components, simulation); `internal/experiment/analyze.go`, `plan.go` (floors), `lock.go` (`MethodVersion`); `internal/report` and its golden files | `internal/experiment/execute.go`, `internal/cli/experiment_run.go`, `internal/claude`, `internal/task` |
+
+Each implementer pushes its branch and returns a handoff; the coordinator runs the reviewer, opens the PR and integrates. `internal/cli/experiment.go` is shared by steps 1 and 2 (one small edit each), so the later of the two rebases.
+
 Step 4's spawned tasks each get their own worktree and PR. Before they merge, steps 1–3 must not edit their files: the run progress line in `internal/cli/experiment_run.go`, and the sandbox environment in `internal/claude/invoke.go`.
 
 ## Metrics

@@ -10,14 +10,15 @@
 
 Claude's ordinary prose links do not guarantee automatic file loading. Keep the standalone `@path` imports in `CLAUDE.md`; do not put them in code spans or fences. Active plans and archives are not imported automatically.
 
-## Read-only roles
+## Roles
 
-Canonical role instructions live in `.agents/roles/`; Claude subagents in `.claude/agents/<name>.md` add only discovery, tools, model and effort, and link back to the role. Both roles are read-only: neither edits, commits, merges nor installs.
+Canonical role instructions live in `.agents/roles/`; Claude subagents in `.claude/agents/<name>.md` add only discovery, tools, model and effort, and link back to the role. The investigator and the reviewer are read-only: neither edits, commits, merges nor installs. The implementer writes only in its assigned worktree and pushes only its branch; it never opens or merges pull requests.
 
 | Role | Use | Claude subagent settings |
 |---|---|---|
 | [investigator](../roles/investigator.md) | Answer one question before planning or delegation; returns a handoff with `path:line` evidence | Sonnet, medium effort, plan mode, `Read/Grep/Glob/Bash` |
 | [reviewer](../roles/reviewer.md) | Independent review of a finished change against acceptance criteria, diff and check results | Opus, high effort, `Read/Grep/Glob/Bash` |
+| [implementer](../roles/implementer.md) | One assigned plan step in its own worktree, often in parallel with others; returns an implementation handoff | Sonnet, medium effort, `Read/Edit/Write/Grep/Glob/Bash` |
 
 Give the reviewer the plan (or inline acceptance), `base...head`, the worktree path and the checks already run, not the author's conversation. Codex uses the same roles by opening the canonical file, e.g. "review `claude/fix/x` against its plan as described in `.agents/roles/reviewer.md`". New `.claude/agents` files load after a client restart; until then, a general-purpose subagent told to follow the role file is equivalent.
 
@@ -29,11 +30,12 @@ Pick the tier from the task's risk and ambiguity, not its size. These are starti
 |---|---|---|---|
 | File search, log summaries, classification, mechanical edits | fast | Haiku, low | fast model, low reasoning |
 | Investigation before planning | balanced | `investigator` subagent (Sonnet, medium) | balanced model, medium |
-| Routine features, tests, docs, inline-plan fixes | balanced | Sonnet or Opus, medium | balanced model, medium |
+| Routine features, tests, docs, inline-plan fixes | balanced | the coordinator, or an `implementer` subagent (Sonnet, medium) for an independent plan step | balanced model, medium |
 | Concurrency, persistence, security, public contracts, cross-package refactors, unclear requirements | deep | Opus, high (xhigh when stuck) | strongest model, high |
 | Independent review | deep | `reviewer` subagent (Opus, high) | strongest model, high |
 | Long multi-hour increments | deep | Fable when available | strongest model, high |
 
+- **Aliases move.** `sonnet` and `opus` in `.claude/agents` resolve to the newest model of that tier that the installed Claude Code knows, so a release (such as Sonnet 5.5 on 2026-09-29) changes the subagents' model without an edit. Record the exact model ID each agent used in the plan's Metrics.
 - **Re-tier after investigation.** If the work turns out to touch a contract, schema or several packages, stop and re-plan at the deep tier.
 - **Do not escalate for environment failures.** Missing tools, ports, permissions, locales or flaky infrastructure need fixing, not a stronger model.
 - **Bound repair loops.** After two unsuccessful fix attempts on the same failing check, stop, record what was tried, and ask the user or escalate.
