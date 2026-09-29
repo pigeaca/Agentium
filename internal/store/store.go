@@ -488,13 +488,20 @@ type Run struct {
 	Record    []byte // JSON
 	Started   time.Time
 	Finished  time.Time
+	// ExperimentID, Slot and Attempt place an experiment's run in its schedule; zero for other runs.
+	ExperimentID int64
+	Slot         int
+	Attempt      int
 }
 
 // SaveRun records a finished run.
 func (s *Store) SaveRun(ctx context.Context, run Run) error {
-	var taskID, passed any
+	var taskID, passed, experimentID, slot, attempt any
 	if run.TaskID != 0 {
 		taskID = run.TaskID
+	}
+	if run.ExperimentID != 0 {
+		experimentID, slot, attempt = run.ExperimentID, run.Slot, run.Attempt
 	}
 	if run.Passed != nil {
 		passed = *run.Passed
@@ -503,9 +510,10 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 		run.Kind = "task"
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
-		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished)); err != nil {
+		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
+		                  experiment_id, slot, attempt)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
+		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished), experimentID, slot, attempt); err != nil {
 		return fmt.Errorf("save run %s: %w", run.ID, err)
 	}
 	return nil
@@ -523,6 +531,15 @@ func (s *Store) RunByID(ctx context.Context, projectID int64, id string) (Run, e
 	return runs[0], nil
 }
 
+// HasRun reports whether any project has stored a run with this id.
+func (s *Store) HasRun(ctx context.Context, id string) (bool, error) {
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE id = ?`, id).Scan(&n); err != nil {
+		return false, fmt.Errorf("run %s: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // Runs lists a project's runs, oldest first.
 func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
 	return s.queryRuns(ctx, `WHERE project_id = ? ORDER BY started_at, id`, projectID)
@@ -530,7 +547,8 @@ func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
 
 func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at
+		SELECT id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
+		       experiment_id, slot, attempt
 		FROM runs `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query runs: %w", err)
@@ -539,14 +557,15 @@ func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Ru
 	var runs []Run
 	for rows.Next() {
 		var run Run
-		var taskID sql.NullInt64
+		var taskID, experimentID, slot, attempt sql.NullInt64
 		var passed sql.NullBool
 		var record, started, finished string
 		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Kind, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
-			&record, &started, &finished); err != nil {
+			&record, &started, &finished, &experimentID, &slot, &attempt); err != nil {
 			return nil, fmt.Errorf("read run: %w", err)
 		}
 		run.TaskID, run.Record = taskID.Int64, []byte(record)
+		run.ExperimentID, run.Slot, run.Attempt = experimentID.Int64, int(slot.Int64), int(attempt.Int64)
 		if passed.Valid {
 			run.Passed = &passed.Bool
 		}

@@ -31,6 +31,8 @@ type Spec struct {
 	// directly, so a background process that keeps the output open cannot hold Run past the command's end.
 	Output io.Writer
 	Stderr io.Writer
+	// Started, when set, is called with the process ID (also its process group's) once the command runs.
+	Started func(pid int)
 }
 
 // Result is how a command ended.
@@ -109,7 +111,13 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	}
 	cmd.WaitDelay = spec.Grace + 5*time.Second
 	start := time.Now()
-	err := cmd.Run()
+	err := cmd.Start()
+	if err == nil {
+		if spec.Started != nil {
+			spec.Started(cmd.Process.Pid)
+		}
+		err = cmd.Wait()
+	}
 	if escalate != nil {
 		escalate.Stop()
 	}

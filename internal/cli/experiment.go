@@ -32,8 +32,13 @@ const experimentUsage = `Usage:
                      an A/A calibration: one context in both arms, which must find no difference
   agentium experiment plan NAME
                      the runs, the estimated cost and the effects each size can detect; what is missing before it runs
+  agentium experiment run NAME [--budget USD]
+                     lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
+                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total
+  agentium experiment show NAME
+                     the lock and the progress per arm
   agentium experiment list
-  agentium experiment rm NAME
+  agentium experiment rm NAME        (only one that has not run)
 
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT). A tier
 samples them: quick is 12 tasks × 3 runs per arm, confident 23 × 5; --task picks them instead (repeatable).
@@ -49,6 +54,10 @@ func runExperiment(ctx context.Context, env Env, args []string) int {
 		return experimentNew(ctx, env, args[1:])
 	case "plan":
 		return experimentPlan(ctx, env, args[1:])
+	case "run":
+		return experimentRun(ctx, env, args[1:])
+	case "show":
+		return experimentShow(ctx, env, args[1:])
 	case "list":
 		return experimentList(ctx, env, args[1:])
 	case "rm":
@@ -516,15 +525,20 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, "No experiments yet: agentium experiment new NAME --b SNAPSHOT")
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", "NAME", "TEMPLATE", "ARMS (A / B)", "SIZE", "MODEL", "BUDGET", "CREATED")
+	fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s %-8s  %s\n", "NAME", "TEMPLATE", "ARMS (A / B)", "SIZE", "MODEL", "BUDGET", "STATUS", "CREATED")
 	for _, e := range all {
 		var d experiment.Design
 		if err := json.Unmarshal(e.Design, &d); err != nil || len(d.Arms) != 2 {
 			return fail(env, fmt.Errorf("experiment %s: unreadable design: %w", e.Name, errors.Join(err, errors.New("want two arms"))))
 		}
 		arms := d.Arms[0].Context + " / " + d.Arms[1].Context
-		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),
-			d.Model, fmt.Sprintf("$%.2f", d.BudgetUSD), e.CreatedAt.Format("2006-01-02 15:04"))
+		budget := d.BudgetUSD
+		var lock experiment.Lock
+		if e.Lock != nil && json.Unmarshal(e.Lock, &lock) == nil {
+			budget = lock.Design.BudgetUSD // raised on resume
+		}
+		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s %-8s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),
+			d.Model, fmt.Sprintf("$%.2f", budget), e.Status, e.CreatedAt.Format("2006-01-02 15:04"))
 	}
 	return ExitOK
 }
@@ -543,6 +557,13 @@ func experimentRemove(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer w.Close()
+	stored, err := w.db.ExperimentByName(ctx, w.project.ID, rest[0])
+	if err != nil {
+		return fail(env, err)
+	}
+	if stored.Lock != nil {
+		return fail(env, fmt.Errorf("experiment %s has run: it stays, with its lock and runs", rest[0]))
+	}
 	if err := w.db.DeleteExperiment(ctx, w.project.ID, rest[0]); err != nil {
 		return fail(env, err)
 	}

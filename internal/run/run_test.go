@@ -2,11 +2,13 @@ package run
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -166,5 +168,106 @@ func TestOnlyTheRunsOwnSessionIsExempt(t *testing.T) {
 	}
 	if got := union([]string{"b", "a"}, []string{"a", "c"}); strings.Join(got, ",") != "a,b,c" {
 		t.Errorf("union = %v", got)
+	}
+}
+
+func TestRecover(t *testing.T) {
+	layout, err := home.Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	write := func(p, body string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	started := func(id string, agent bool, pgid int, workspace string) {
+		env := Env{Meta: []byte(`{"slot":4}`)}
+		rec := Record{ID: id, Task: "fix", Arm: "B", RecordsDir: filepath.Join(layout.Records, id)}
+		if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := env.writeStart(rec, workspace, agent, pgid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// r1: records but no start file. r2: prepared, the agent never started. r3: started, killed before its result.
+	// r4: stored already.
+	write(filepath.Join(layout.Records, "r1", "setup.log"), "")
+	started("r2", false, 0, filepath.Join(layout.Workspaces, "r2"))
+	write(filepath.Join(layout.Workspaces, "r2", "repo", "a.txt"), "")
+	started("r3", true, 999999, filepath.Join(layout.Workspaces, "e1-s4-t1"))
+	write(filepath.Join(layout.Workspaces, "e1-s4-t1", "repo", "a.txt"), "")
+	write(filepath.Join(layout.Records, "r3", "verify", "a.txt"), "")
+	write(filepath.Join(layout.Records, "r3", "stream.jsonl"), `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000},"content":[]}}
+`)
+	started("r4", true, 0, filepath.Join(layout.Workspaces, "r4"))
+	stored := func(id string) (bool, error) { return id == "r4", nil }
+
+	orphans, err := Recover(layout, stored, "", now)
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	o := orphans[0].Record
+	if o.ID != "r3" || o.Outcome != "cancelled" || o.Passed != nil || o.Metrics.CostUSD != 0.082 || string(orphans[0].Meta) != `{"slot":4}` ||
+		!strings.Contains(strings.Join(o.Notes, "; "), "estimated from the transcript's requests") {
+		t.Errorf("orphan = %+v (meta %s)", o, orphans[0].Meta)
+	}
+	for _, gone := range []string{filepath.Join(layout.Records, "r1"), filepath.Join(layout.Records, "r2"), filepath.Join(layout.Workspaces, "r2"),
+		filepath.Join(layout.Workspaces, "e1-s4-t1"), filepath.Join(layout.Records, "r3", "verify")} {
+		if _, err := os.Stat(gone); err == nil {
+			t.Errorf("%s was left behind", gone)
+		}
+	}
+	for _, kept := range []string{filepath.Join(layout.Records, "r3", "stream.jsonl"), filepath.Join(layout.Records, "r4")} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s: %v", kept, err)
+		}
+	}
+
+	// A start file naming a folder outside the workspaces is not trusted with a removal.
+	started("r5", true, 0, layout.Root)
+	if _, err := Recover(layout, func(id string) (bool, error) { return id != "r5", nil }, "", now); err == nil || !strings.Contains(err.Error(), "outside") {
+		t.Errorf("a workspace outside: %v", err)
+	}
+	os.RemoveAll(filepath.Join(layout.Records, "r5"))
+
+	// An agent whose process group lives on is left alone.
+	sleeper := exec.Command("sleep", "30")
+	sleeper.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { syscall.Kill(-sleeper.Process.Pid, syscall.SIGKILL); sleeper.Wait() }()
+	started("r6", true, sleeper.Process.Pid, filepath.Join(layout.Workspaces, "r6"))
+	var alive *AliveError
+	if _, err := Recover(layout, func(id string) (bool, error) { return id != "r6", nil }, "", now); !errors.As(err, &alive) || len(alive.Runs) != 1 {
+		t.Errorf("a live agent: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(layout.Records, "r6", startFile)); err != nil {
+		t.Errorf("a live agent's run was touched: %v", err)
+	}
+}
+
+func TestPredictedFolders(t *testing.T) {
+	layout, _ := home.Resolve(func(key string) string { return map[string]string{"AGENTIUM_HOME": "/data"}[key] })
+	login := Env{Layout: layout, SignIn: "login", Home: "/home/u", Environ: []string{"CLAUDE_CONFIG_DIR=/cfg"}}
+	if got := login.Predicted("e1-s2-t1"); len(got) != 2 || got[0] != "/data/workspaces/e1-s2-t1" || got[1] != "/cfg/projects/-data-workspaces-e1-s2-t1-repo" {
+		t.Errorf("login: %v", got)
+	}
+	key := Env{Layout: layout, SignIn: "api-key", Home: "/home/u"}
+	if got := key.Predicted("e1-s2-t1"); len(got) != 1 {
+		t.Errorf("with a key, the session lives in the workspace's own config: %v", got)
 	}
 }

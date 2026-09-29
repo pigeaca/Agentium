@@ -44,6 +44,8 @@ type Invocation struct {
 	// Deny lists absolute paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data
 	// (other runs, hidden tests, the database), the user's repository, and verification copies.
 	Deny []string
+	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
+	Started func(pid int)
 }
 
 // UserConfigDir is the user's own Claude Code folder: $CLAUDE_CONFIG_DIR when set in environ, otherwise ~/.claude.
@@ -293,5 +295,5 @@ func Run(ctx context.Context, inv Invocation, environ []string, transcript, errO
 		return runner.Result{}, err
 	}
 	return runner.Run(ctx, runner.Spec{Dir: inv.Dir, Args: append([]string{inv.CLI}, args...), Environ: env,
-		Timeout: timeout, Grace: grace, Output: transcript, Stderr: errOut})
+		Timeout: timeout, Grace: grace, Output: transcript, Stderr: errOut, Started: inv.Started})
 }

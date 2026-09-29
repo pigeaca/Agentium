@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -540,5 +541,30 @@ func TestToolCallsPairResultsWithTheirUse(t *testing.T) {
 func TestSessionFolder(t *testing.T) {
 	if got := SessionFolder("/home/u/.claude", "/private/tmp/work/ws_1.2/repo"); got != "/home/u/.claude/projects/-private-tmp-work-ws-1-2-repo" {
 		t.Errorf("session folder = %s", got)
+	}
+}
+
+// A transcript cut off before its result (Agentium was killed) is priced from its requests: each message's usage is
+// counted once however many events repeat it, subagent requests at their own model's prices, and output from the
+// content's size where the stream reports less.
+func TestParseEstimatesCostWithoutAResult(t *testing.T) {
+	text := `{"type":"text","text":"` + strings.Repeat("x", 400) + `"}`
+	tool := `{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"go test ./..."}}`
+	usage := `{"input_tokens":2,"cache_creation_input_tokens":11199,"cache_read_input_tokens":16754,"output_tokens":3,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":11199}}`
+	transcript := strings.Join([]string{
+		`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash"]}`,
+		`{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":` + usage + `,"content":[` + text + `]}}`,
+		`{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":` + usage + `,"content":[` + tool + `]}}`,
+		`{"type":"assistant","parent_tool_use_id":"t1","message":{"id":"m2","model":"claude-haiku-4-5-20251001","usage":{"input_tokens":100,"cache_creation_input_tokens":1000,"output_tokens":5000},"content":[]}}`,
+		`{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m3","model":"somebody-elses-model","usage":{"input_tokens":100},"content":[]}}`,
+	}, "\n")
+	m, err := Parse(strings.NewReader(transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sonnet := (2*2 + 11199*4 + 16754*0.2 + float64((len(text)+len(tool))/4)*10) / 1e6 // output: 125 tokens of content, not 3
+	haiku := (100*1 + 1000*2 + 5000*5) / 1e6                                          // no split: the one-hour write rate
+	if m.SawResult || m.CostUSD != 0 || math.Abs(m.EstimatedCostUSD-(sonnet+haiku)) > 1e-9 || m.UnpricedRequests != 1 {
+		t.Errorf("metrics = cost %v, estimated %.7f (want %.7f), unpriced %d", m.CostUSD, m.EstimatedCostUSD, sonnet+haiku, m.UnpricedRequests)
 	}
 }

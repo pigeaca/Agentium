@@ -3,14 +3,19 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/store"
 )
 
 // fakeAgent writes a stand-in for Claude Code. It records what it saw (its folder, whether the hidden test was
@@ -198,7 +203,8 @@ func newRunFixture(t *testing.T, data string) runFixture {
 		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
 			Getenv:   func(key string) string { return f.vars[key] },
 			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
-			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
+			Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
 		return cliResult{code, stdout.String(), stderr.String()}
 	}
 	expect(t, f.run(context.Background(), "init"), ExitOK)
@@ -239,7 +245,7 @@ func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
 		cancel()
 	}()
 	expect(t, f.run(ctx, "run", "once", "value"), ExitError, "context canceled")
-	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "cancelled", "$0.40")
 }
 
 // An agent that removes its checkout's .git must not erase its run or its spend, and git must not wander into an
@@ -423,5 +429,60 @@ func TestJudgeEdgeCases(t *testing.T) {
 	truncated := []claude.ToolCall{{Name: "Bash", Input: map[string]any{"command": "seq 1 40000"}, Result: "<persisted-output> saved to: "}}
 	if _, large, _ := judge(truncated, "", "x", ""); large != checkUnverified {
 		t.Errorf("a saved-output notice without a path: %s", large)
+	}
+}
+
+// A pass graded with test-runner configuration the agent changed is flagged (and experiments do not count it as a
+// success), unless the task's reference changes that configuration too.
+func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
+	repo, data, home := t.TempDir(), filepath.Join(t.TempDir(), "data"), t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "Makefile", "test:\n\tsh run_tests.sh\n")
+	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, repo, "value.txt", "old\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "tests/value_test.sh", "grep -q new value.txt\n")
+	writeFile(t, repo, "value.txt", "new\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Make the value new")
+	writeFile(t, repo, "tests/check_test.sh", "grep -q '^check:' Makefile\n")
+	writeFile(t, repo, "Makefile", "test:\n\tsh run_tests.sh\ncheck: test\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Add a check target")
+	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": home}
+	cli := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo, Getenv: func(k string) string { return vars[k] },
+			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home} },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, cli("init"), ExitOK)
+	expect(t, cli("task", "import", "--commit", "HEAD~1", "--name", "value", "--verify", "make test"), ExitOK)
+	expect(t, cli("task", "import", "--commit", "HEAD", "--name", "check", "--verify", "make test"), ExitOK)
+	vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; printf 'check: test\\n' >> Makefile", false)
+	for _, name := range []string{"value", "check"} {
+		expect(t, cli("run", "once", name), ExitOK, "verification passed", "checks       the agent changed Makefile")
+	}
+	db, err := store.Open(context.Background(), filepath.Join(data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, _ := db.Projects(context.Background())
+	runs, err := db.Runs(context.Background(), projects[0].ID)
+	if err != nil || len(runs) != 2 {
+		t.Fatalf("runs %v, %v", runs, err)
+	}
+	for _, r := range runs {
+		var rec run.Record
+		if err := json.Unmarshal(r.Record, &rec); err != nil {
+			t.Fatal(err)
+		}
+		flagged := slices.Equal(rec.Behavior.ConfigChanged, []string{"Makefile"})
+		if want := r.TaskName == "value"; flagged != want || experiment.Success(r.Outcome, r.Passed, rec.Behavior.ConfigChanged) == want {
+			t.Errorf("task %s: config changed %v, success %v", r.TaskName, rec.Behavior.ConfigChanged, !want)
+		}
 	}
 }

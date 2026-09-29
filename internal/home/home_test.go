@@ -1,6 +1,8 @@
 package home
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,4 +112,30 @@ func TestCheckOutside(t *testing.T) {
 			t.Errorf("CheckOutside(%s) = %v, want inside=%v", root, err, inside)
 		}
 	}
+}
+
+func TestLockRunsIsExclusiveAndReleased(t *testing.T) {
+	l, err := Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	release, err := l.LockRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// flock locks belong to the open file: a second open, as another process would make, is refused.
+	if _, err := l.LockRuns(); !errors.Is(err, ErrBusy) || !strings.Contains(err.Error(), fmt.Sprintf("pid %d", os.Getpid())) {
+		t.Errorf("second lock: %v", err)
+	}
+	release()
+	again, err := l.LockRuns()
+	if err != nil {
+		t.Fatalf("after release: %v", err)
+	}
+	again()
 }

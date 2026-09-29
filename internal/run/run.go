@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,6 +71,14 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Now      func() time.Time
+	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and attempt,
+	// so runs that may overlap can deny each other's folders before they exist (see Predicted).
+	Workspace string
+	// DenyExtra adds paths the agent may not read: the predicted folders of runs that may overlap it.
+	DenyExtra []string
+	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
+	// Agentium process died (its project and experiment slot, say).
+	Meta json.RawMessage
 }
 
 // Record is a finished run.
@@ -110,6 +119,9 @@ type Behavior struct {
 	// ChecksChanged are verification scripts and test-runner configuration the agent changed; scripts the task did not
 	// need changed were restored before grading.
 	ChecksChanged []string `json:"checks_changed,omitempty"`
+	// ConfigChanged is the test-runner configuration among them that the reference solution does not change: it was
+	// graded as the agent left it, so a pass with it is not counted as a success.
+	ConfigChanged []string `json:"config_changed,omitempty"`
 	RanTests      bool     `json:"ran_tests"`  // ran a test runner
 	RanChecks     bool     `json:"ran_checks"` // ran one of the task's verification commands
 	Commits       int      `json:"commits"`    // commits on top of the context commit
@@ -138,7 +150,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
-	workspace := filepath.Join(env.Layout.Workspaces, env.ID)
+	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	repo := filepath.Join(workspace, "repo")
 	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
 	defer func() {
@@ -160,7 +172,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		Deny: env.denied(ctx, workspace)}
+		Deny: append(env.denied(ctx, workspace), env.DenyExtra...)}
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
@@ -173,6 +185,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
 		return rec, fmt.Errorf("run records: %w", err)
+	}
+	if err := env.writeStart(rec, workspace, false, 0); err != nil {
+		return rec, err
 	}
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		return rec, fmt.Errorf("run workspace: %w", err)
@@ -263,22 +278,39 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// there are the run's own; any other session folder, even one created during the run, is someone else's.
 	ownSession := claude.SessionFolder(activeConfig, repo)
 	pastSessions := claude.SessionFolders(activeConfig)
+	if err := env.writeStart(rec, workspace, true, 0); err != nil {
+		transcript.Close()
+		stderr.Close()
+		return rec, err
+	}
+	var startErr error
+	inv.Started = func(pid int) { startErr = env.writeStart(rec, workspace, true, pid) }
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
+	if runErr == nil && startErr != nil {
+		runErr = startErr
+	}
 	transcript.Close()
 	stderr.Close()
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
 	unfinished := func(err error) (Record, error) {
-		if rec.Outcome == "" {
+		switch {
+		case ctx.Err() != nil: // interrupted, even during grading: the run is not usable, and not the agent's failure
+			rec.Outcome, rec.Passed = claude.OutcomeCancelled, nil
+		case rec.Outcome == "":
 			rec.Outcome = claude.OutcomeInfra
 		}
 		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
 		return rec, err
 	}
 	var parseErr error
-	rec.Metrics, parseErr = parseFile(transcriptPath) // partial metrics are kept even when reading fails
-	if runErr != nil {                                // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
+	rec.Metrics, parseErr = parseFile(transcriptPath)               // partial metrics are kept even when reading fails
+	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 { // stopped before Claude Code's result: still spent
+		rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
+		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
+	}
+	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
 		return unfinished(runErr)
 	}
 	if parseErr != nil {
@@ -381,6 +413,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			restore = append(restore, p)
 		case slices.Contains(scripts, p) || slices.Contains(configs, p):
 			rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, p)
+			if slices.Contains(configs, p) && !slices.Contains(spec.Task.Reference, p) {
+				rec.Behavior.ConfigChanged = append(rec.Behavior.ConfigChanged, p)
+			}
 		}
 	}
 	if len(restore) > 0 {
