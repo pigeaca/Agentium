@@ -155,7 +155,19 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
       - the lock's method and dates;
     - JSON with the lock, per-run data and results;
     - *Evidence:* golden-file tests for the Markdown and JSON of a fixture experiment.
-- [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs.
+- [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs. The A/A is done (2026-09-29); the context A/B is deferred. The runs used the user's login, Claude Code 2.1.281 and claude-sonnet-5, and cost $19.51 at list prices within the $50 approved: calibration $0.15, a pilot $6.48, the A/A $12.88.
+  - **Pilot** (experiment `aa`, 10 settled runs). Isolation held end to end: after the build-cache fix, agents built and tested Go in the sandbox with a cache of their own. Three of the six tasks were unfair. One instruction read as notes about the agent's environment, so the model did nothing ($0.06 a run); two tasks had hidden tests checking messages or behaviors their instructions did not state. An independent fairness review then checked every instruction against its hidden tests; two instructions were completed and one task replaced.
+  - **A/A** (experiment `aa2`). The user stopped it after 12 of 36 runs (6 complete pairs, one per task) to stay within one five-hour usage window. Every run passed. Cost B vs A was −6% (95%: −31% to +26%) and time −3%: no difference, as an A/A must report; the verdicts are exploratory, below the floors. From the 6 pairs, σ of log cost ≈ 0.20 (roughly 0.13–0.50), in line with the default 0.19, so the planner defaults stay. τ needs an A/B, and w could not be estimated because every run passed.
+  - **Costs.** A run cost $0.38–1.69, $1.02 on average, and took about 4.5 minutes. The preview's $0.64 per run came from the pilot, whose broken tasks cost $0.06 a run, so the 12 runs cost $12.21 against an estimate of $7.69.
+  - **Limits.** With a subscription login, each run used about 5–6% of the five-hour usage window (this session's own use included), so about 15 runs fit in a window. In login mode the plan's rate limit, not money, bounds an experiment.
+  - **Deferred: the Quick-tier context A/B** (72 runs: about five usage windows, or about $75 with an API key). It waits for rate-limit awareness and for usage room or budget. The acceptance data folder holds 8 tasks, 6 of them checked for fairness. Step 3's 12 Agentium tasks, imported into another data folder, still have unreviewed instructions; an A/B needs 12 or more fair ones.
+  - **Follow-ups:**
+    - rate-limit awareness: pause before the limit, and warn in the preview;
+    - a pilot run per task, to catch unfair tasks before an experiment;
+    - σ, τ and w in the A/A report;
+    - a run interrupted before it starts prints as "none found";
+    - in the sandbox, Go warns that it cannot write the module cache's stat file;
+    - agents inherit the user's zsh, so unquoted globs such as `--include=*.go` fail.
 
 That's about 5 weeks in total (roughly 25 working days), consistent with the study's 4–5 week estimate.
 
