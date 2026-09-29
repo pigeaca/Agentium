@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -147,8 +148,25 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 			t.Errorf("slot 0's settings do not deny %s", name)
 		}
 	}
-	if strings.Contains(string(settings), "e1-s4-") || strings.Contains(string(settings), "e1-s0-t1") {
-		t.Error("slot 0 denied a slot outside its window, or its own workspace")
+	var parsed struct {
+		Sandbox struct {
+			Filesystem struct {
+				DenyRead   []string `json:"denyRead"`
+				AllowWrite []string `json:"allowWrite"`
+			} `json:"filesystem"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal(settings, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range parsed.Sandbox.Filesystem.DenyRead {
+		if strings.Contains(p, "e1-s4-") || strings.Contains(p, "e1-s0-t1") {
+			t.Errorf("slot 0 denied %s: a slot outside its window, or its own workspace", p)
+		}
+	}
+	allow := parsed.Sandbox.Filesystem.AllowWrite // the cache as given and as resolved (/var is /private/var on macOS)
+	if len(allow) == 0 || slices.ContainsFunc(allow, func(p string) bool { return !strings.HasSuffix(p, "e1-s0-t1/go-build") }) {
+		t.Errorf("slot 0 may write %v; want its own build cache", allow)
 	}
 	emptyWorkspaces(t, f)
 

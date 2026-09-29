@@ -89,6 +89,7 @@ type Validator struct {
 	LogDir   string
 	Timeout  time.Duration // per command
 	Keep     bool
+	Env      []string  // added to every setup and verification command (a build cache of Agentium's own)
 	Progress io.Writer // one line per stage
 	Now      func() time.Time
 }
@@ -262,7 +263,7 @@ func (v Validator) report(stage Stage) {
 func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.Env})
 		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {

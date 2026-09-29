@@ -79,6 +79,23 @@ type Env struct {
 	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
 	// Agentium process died (its project and experiment slot, say).
 	Meta json.RawMessage
+	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
+	// own GOCACHE.
+	CommandEnv []string
+}
+
+// BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
+// the data folder, which agents may not read, and creates it: in the user's own folders they would leave compiled
+// hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). GOCACHEPROG is
+// cleared so hidden tests go to no cache program (one set with `go env -w` still applies). Caches it does not know
+// (sccache, Gradle's, Bazel's output base) stay where their tools keep them.
+func BuildEnv(layout home.Layout) ([]string, error) {
+	tmp := filepath.Join(layout.Cache, "tmp")
+	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return nil, fmt.Errorf("build cache: %w", err)
+	}
+	return []string{"GOCACHE=" + filepath.Join(layout.Cache, "go-build"), "GOCACHEPROG=", "TMPDIR=" + tmp, "GOTMPDIR=" + tmp,
+		"XDG_CACHE_HOME=" + filepath.Join(layout.Cache, "xdg")}, nil
 }
 
 // Record is a finished run.
@@ -203,6 +220,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
+	inv.BuildCache = filepath.Join(workspace, "go-build") // the run's own: nothing compiled before it, nothing after
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
 	// reason that is not the agent's.
 	for _, denied := range inv.DeniedPaths(env.Environ) {
@@ -217,8 +235,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	recordsReady = true
-	if err := os.MkdirAll(workspace, 0o700); err != nil {
-		return rec, fmt.Errorf("run workspace: %w", err)
+	for _, dir := range []string{workspace, inv.ConfigDir, inv.BuildCache} {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
+		}
 	}
 	env.progress("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)
 
@@ -248,8 +271,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 	}
 	if len(spec.Task.Setup) > 0 {
+		// Setup builds into the agent's own cache, so a warming step (`go build ./...`) spares every agent a cold
+		// build; the workspace holds no hidden tests yet.
+		setup := env
+		setup.CommandEnv = append(slices.Clone(env.CommandEnv), "GOCACHE="+inv.BuildCache)
 		var ok bool
-		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
+		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -284,11 +311,6 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 
 	// The agent.
-	if inv.ConfigDir != "" {
-		if err := os.MkdirAll(inv.ConfigDir, 0o700); err != nil {
-			return rec, fmt.Errorf("run config folder: %w", err)
-		}
-	}
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
 	transcript, err := os.Create(transcriptPath)
 	if err != nil {
@@ -563,7 +585,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 	var results []task.Command
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running, Env: env.CommandEnv})
 		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
@@ -582,7 +604,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 // listed: a known gap for concurrent runs, whose workspaces hold no hidden tests.
 func (env Env) denied(ctx context.Context, workspace string) []string {
 	db := env.Layout.Database
-	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, db, db + "-wal", db + "-shm"}
+	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {

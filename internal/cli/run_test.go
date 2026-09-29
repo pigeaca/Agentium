@@ -203,8 +203,14 @@ func newRunFixture(t *testing.T, data string) runFixture {
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
 		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
-			Getenv:   func(key string) string { return f.vars[key] },
-			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+			Getenv: func(key string) string { return f.vars[key] },
+			Environ: func() []string {
+				environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home}
+				if v := f.vars["GOCACHE"]; v != "" { // the user's Go build cache
+					environ = append(environ, "GOCACHE="+v)
+				}
+				return environ
+			},
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
 			Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
 		return cliResult{code, stdout.String(), stderr.String()}
@@ -299,6 +305,13 @@ func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
 	if records, _ := os.ReadDir(filepath.Join(f.data, "records")); len(records) != 0 {
 		t.Errorf("a run that never started left records: %v", records)
 	}
+
+	// The user's Go build cache is denied too.
+	outer = t.TempDir()
+	f = newRunFixture(t, filepath.Join(outer, "data"))
+	f.vars["GOCACHE"] = outer
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "lies inside "+outer, "runs may not read")
 }
 
 // calibratingAgent writes a fake Claude Code that answers the calibration with real-looking tool calls: the sandbox
@@ -539,4 +552,40 @@ func TestRunRecordsTheRunningCommand(t *testing.T) {
 		t.Errorf("start file during setup (setup's process group %s): %s", pid, data)
 	}
 	expect(t, <-done, ExitOK, "verification passed")
+}
+
+// Agentium's own commands (setup, validation, grading) build with a cache in the data folder, which runs are denied;
+// the agent builds with a cache of its own, in its workspace.
+func TestBuildCaches(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	marks := t.TempDir()
+	mark := func(name string) string { // records where a command's Go build cache and temporary files went
+		return "echo \"$GOCACHE $TMPDIR $GOTMPDIR\" >> " + filepath.Join(marks, name)
+	}
+	expect(t, f.run(context.Background(), "task", "edit", "value", "--verify", mark("verify")+"; sh run_tests.sh", "--setup", mark("setup")), ExitOK)
+	expect(t, f.run(context.Background(), "task", "validate", "value"), ExitOK, "valid")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "echo \"$GOCACHE\" > "+filepath.Join(marks, "agent")+"; printf 'new\\n' > value.txt", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "verification passed")
+	agent, _ := os.ReadFile(filepath.Join(marks, "agent"))
+	agentCache := strings.TrimSpace(string(agent))
+	if !strings.HasPrefix(agentCache, filepath.Join(f.data, "workspaces")) || !strings.HasSuffix(agentCache, "go-build") {
+		t.Errorf("the agent's GOCACHE = %q, want its workspace's own", agentCache)
+	}
+	own, tmp := filepath.Join(f.data, "cache", "go-build"), filepath.Join(f.data, "cache", "tmp")
+	lines := func(name string) []string {
+		data, _ := os.ReadFile(filepath.Join(marks, name))
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+	// Validation (without the solution, then with it) and grading use Agentium's own cache and temporary folder; the
+	// run's setup warms the agent's cache.
+	line := func(cache string) string { return cache + " " + tmp + " " + tmp }
+	want := map[string][]string{"setup": {line(own), line(own), line(agentCache)}, "verify": {line(own), line(own), line(own)}}
+	for name, w := range want {
+		if got := lines(name); !slices.Equal(got, w) {
+			t.Errorf("%s ran with (GOCACHE TMPDIR GOTMPDIR) %q, want %q", name, got, w)
+		}
+	}
+	if info, err := os.Stat(tmp); err != nil || info.Mode().Perm() != 0o700 {
+		t.Errorf("Agentium's temporary folder: %v, %v; want it owner-only", info, err)
+	}
 }
