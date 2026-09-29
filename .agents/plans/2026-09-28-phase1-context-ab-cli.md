@@ -79,6 +79,45 @@ Each step is one PR, in order. The estimates are rough and assume agent-assisted
   - file-system isolation: the agent must not reach the data folder (checkouts sit next to the bare repository and its hidden tests) or credential files under `HOME` (`~/.config/gh`, `~/.netrc`, `~/.git-credentials`); processes that leave the group with `setsid` must still be stopped;
   - a fake `claude` for tests; `agentium run once` for debugging.
 - [ ] **5. Experiments** (about 4 days). From step 4's reviews: concurrent login-mode runs must deny each other's predicted session folders (`claude.SessionFolder`) up front; runs whose grading failed (`passed` unset) and runs with changed runner configuration (`checks_changed`) are not counted as successes; calibration runs (kind `calibration`) never enter results. Templates, the lock, the planner and price table (verified Anthropic prices, dated), the interleaved scheduler with concurrency, caps, infrastructure retries, resume, and orphan cleanup.
+  The plan for step 5, in two PRs:
+  - **5a, the design and the preview** (`internal/pricing`, `internal/experiment`, `agentium experiment new|plan|list|rm`), done in the experiment-planner PR. A smoke test on real data (the calibrations from step 4c and a task imported from Agentium's history, valid in both contexts) showed both contexts ready on Claude Code 2.1.281. It covered:
+    - a price table: Anthropic's list prices per model (input, 5-minute and 1-hour cache writes, cache reads, output), dated 2026-09-29 from the pricing page. Claude Code's own cost figure on a calibration run matched Sonnet 5's prices exactly, with its cache writes priced at the 1-hour rate;
+    - templates: context A/B (arms A and B, each `base` or a snapshot; the goal is cheaper with success as the guard, or better success) and A/A (one context in both arms);
+    - the tasks: those valid in every arm's context and reviewed for solution leaks. A tier takes 12 × 3 (Quick) or 23 × 5 (Confident), as a seeded sample when there are more; `--task` picks them by hand;
+    - the preview shows each tier and the experiment's own design (Custom):
+      - the number of runs;
+      - the estimated cost: the median of the project's earlier task runs on that model, else a default token profile at list price;
+      - the worst case: runs × the per-run cap;
+      - the smallest detectable cost and success effects (80% power, two-sided 5%) with σ = 0.19, w = 0.20 and τ from 0.10 to 0.25;
+      - the success margin the guard can certify;
+      - the floors: 3 runs per task per arm, 8 tasks for cost claims, 20 for success claims; below a floor a metric is exploratory;
+    - readiness checks: each arm's context calibrated on the current Claude Code version, with the experiment's model and sign-in; every task valid in every arm; a budget that covers the estimate plus the reserve below.
+  - **5b, execution** (`agentium experiment run`):
+    - the lock, written before the first run and checked on every resume. It records:
+      - Agentium's and Claude Code's versions, the model, effort, flags and sign-in mode;
+      - per arm, the snapshot commit, its file digests and its calibration;
+      - per task, the full spec with an instruction hash (runs use the locked specs);
+      - the repeats, seed and schedule, the caps and margins, and the price table's date;
+    - the schedule: repeat by repeat, with tasks in a seeded random order. The two arms of a (task, repeat) pair run next to each other, in random order. With concurrency c, a run starts only when every run more than 2c places earlier has finished: this keeps pairs close in time and bounds which runs can overlap;
+    - isolation between concurrent runs: workspaces are named by slot and attempt, so each run denies up front the predicted session folders (`claude.SessionFolder`) of every run that could overlap it;
+    - caps:
+      - the per-run cap goes to Claude Code;
+      - a run starts only when the spend so far, plus the caps of the runs in flight and its own cap (both caps for a pair's first run), fits the total budget. With concurrency c that reserves up to c + 1 caps, which the default budget adds to the estimate;
+      - a budget stop keeps the data; raising the budget on resume is allowed and recorded;
+    - retries: only infrastructure failures are retried, up to 3 attempts per slot with a backoff. The experiment stops after 3 slots in a row fail for infrastructure, or when Claude Code's version or the model differs from the lock;
+    - resume:
+      - a slot's state comes from the stored runs, so there is no separate state to lose;
+      - an interrupted run is recorded as cancelled: never counted, and not an attempt;
+      - a lock in the data folder keeps two runners apart;
+    - orphans: a run's records hold its slot and the agent's process group. At start:
+      - a records folder with no stored run is recovered (a transcript without a result is priced from its per-request usage and marked partial), and its workspace is removed;
+      - a live process group blocks the resume, with a message;
+    - counting:
+      - a slot's run is fair when its outcome is ok, capped or timeout;
+      - a success needs a pass and no test-runner configuration changed beyond what the reference changes;
+      - calibration runs never enter an experiment.
+
+    *Evidence:* end-to-end tests with the fake agent. They cover a kill (SIGKILL of the runner process) and resume that loses no finished run, a budget stop, retries, and a lock mismatch.
 - [ ] **6. Statistics and reports** (about 4 days). A Go port of the spike's statistics, checked against its 60 runs; verdict rules and floors; Markdown and JSON reports; `run show`.
 - [ ] **7. Real-run acceptance** (about 1 day, paid; separate approval). The A/A calibration and a Quick-tier context A/B on Agentium. Record the results; update the planner defaults if the measured noise differs.
 

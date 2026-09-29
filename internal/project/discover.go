@@ -124,7 +124,7 @@ func detectClaude(ctx context.Context, env Env) (ClaudeInfo, []string) {
 		path = found
 	}
 	info.Path = path
-	version, err := claudeVersion(ctx, path)
+	version, err := ClaudeVersion(ctx, path)
 	if err != nil {
 		return info, append(warnings, fmt.Sprintf("Could not read the Claude Code version from %s: %v", path, err))
 	}
@@ -137,7 +137,8 @@ func detectClaude(ctx context.Context, env Env) (ClaudeInfo, []string) {
 
 var versionPattern = regexp.MustCompile(`\b(\d+\.\d+\.\d+)\b`)
 
-func claudeVersion(ctx context.Context, path string) (string, error) {
+// ClaudeVersion runs the CLI at path with --version, outside any repository, and returns its dotted version.
+func ClaudeVersion(ctx context.Context, path string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, path, "--version")

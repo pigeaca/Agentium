@@ -39,6 +39,7 @@ Commands:
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
   task          Add, import and validate coding tasks (agentium task for details)
   run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
+  experiment    Design context experiments and preview their cost and power (agentium experiment for details)
   version       Print the version and build information
   help          Show this help
 
@@ -68,6 +69,8 @@ func Run(ctx context.Context, env Env) int {
 		return runTask(ctx, env, args)
 	case "run":
 		return runRun(ctx, env, args)
+	case "experiment":
+		return runExperiment(ctx, env, args)
 	default:
 		fmt.Fprintf(env.Stderr, "agentium: unknown command %q\n\n%s", command, usage)
 		return ExitUsage
