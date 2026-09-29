@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is in progress ([plan](plans/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration and experiments (design, preview, lock, interleaved resumable runs within a budget) work; statistics and reports work; step 7's A/A calibration ran on real runs, and its context A/B is deferred.
+Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is done ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration, experiments, statistics and reports work, and real A/A and A/B runs proved them.
 
 ## Product concept
 
