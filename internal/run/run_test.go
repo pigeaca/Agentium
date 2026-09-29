@@ -251,12 +251,13 @@ func TestRecover(t *testing.T) {
 	if err != nil || len(orphans) != 2 {
 		t.Fatalf("Recover = %+v, %v", orphans, err)
 	}
-	if kept := orphans[1].Record; kept.ID != "r7" || kept.Outcome != "ok" || kept.Passed == nil || !*kept.Passed ||
+	if kept := orphans[1].Record; kept.ID != "r7" || kept.Outcome != "ok" || kept.Passed == nil || !*kept.Passed || kept.Recovered != RecoveredFinished ||
 		!strings.Contains(strings.Join(kept.Notes, "; "), "stored on recovery") {
 		t.Errorf("a finished run is stored as it finished: %+v", kept)
 	}
 	o := orphans[0].Record
 	if o.ID != "r3" || o.Outcome != "cancelled" || o.Passed != nil || o.Metrics.CostUSD != 0.082 || string(orphans[0].Meta) != `{"slot":4}` ||
+		o.Recovered != RecoveredStopped || !o.CostEstimated ||
 		!strings.Contains(strings.Join(o.Notes, "; "), "estimated from the transcript's requests") {
 		t.Errorf("orphan = %+v (meta %s)", o, orphans[0].Meta)
 	}

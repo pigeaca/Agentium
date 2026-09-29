@@ -63,24 +63,29 @@ func fixture() Input {
 				BashCommands: 6}, Verify: []task.Command{{Command: "make test", ExitCode: 0, Seconds: 1.5}}}
 		switch s.Position {
 		case 3:
-			rec.Outcome, rec.Passed, rec.Drift = claude.OutcomeUnfair, nil, []string{"tools differ (added Monitor; missing none)"}
-		case 7:
-			rec.Behavior.ConfigChanged = []string{"pytest.ini"}
+			rec.Outcome, rec.Passed = claude.OutcomeUnfair, nil
+			rec.Drift = []string{"tools differ (added Monitor; missing none)", "1 file tool call(s) reached /home/someone/.agentium/projects"}
+		case 5: // what the agent said, and a note naming local paths, stay out of the report
+			rec.Metrics.ResultExcerpt = "Done in /home/someone/.agentium/workspaces/e1-s5-t1/repo with key sk-ant-api03-" + strings.Repeat("x", 40) // secret-scan: allow
+			rec.Notes = []string{"the hidden tests could not be added: open /home/someone/.agentium/records/r05/verify/t: denied",
+				"Agentium could not finish the run: sign-in with sk-ant-api03-" + strings.Repeat("y", 40) + " refused"} // secret-scan: allow
+		case 7: // passed with changed runner configuration: a failure
+			rec.Behavior.ConfigChanged, rec.Passed = []string{"pytest.ini"}, &yes
+		case 9: // failed with it: a failure either way, not a lost pass
+			rec.Behavior.ConfigChanged, rec.Passed = []string{"pytest.ini"}, &no
 		}
 		runs = append(runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
 		if s.Position == 10 { // an earlier attempt that failed for infrastructure, and one recovered after a stop
 			infra := rec
 			infra.ID, infra.Outcome, infra.Passed = "r10-infra", claude.OutcomeInfra, nil
-			infra.Metrics.CostUSD = 0.05
-			infra.Notes = []string{"Claude Code reported no cost: estimated from the transcript's requests at list prices"}
+			infra.Metrics.CostUSD, infra.CostEstimated = 0.05, true
 			cancelled := rec
-			cancelled.ID, cancelled.Outcome, cancelled.Passed = "r10-cancelled", claude.OutcomeCancelled, nil
-			cancelled.Notes = []string{"Agentium stopped during this run; recovered on 2026-09-29 12:30"}
+			cancelled.ID, cancelled.Outcome, cancelled.Passed, cancelled.Recovered = "r10-cancelled", claude.OutcomeCancelled, nil, run.RecoveredStopped
 			runs = append(runs[:len(runs)-1], Run{ID: infra.ID, Slot: 10, Attempt: 1, Record: infra}, Run{ID: cancelled.ID, Slot: 10, Attempt: 2, Record: cancelled},
 				Run{ID: rec.ID, Slot: 10, Attempt: 2, Record: rec})
 		}
 	}
-	return Input{Name: "lean-ab", Lock: l, Status: experiment.StatusDone, Runs: runs}
+	return Input{Name: "lean-ab", Lock: l, Status: experiment.StatusDone, Runs: runs, DataDir: "/home/someone/.agentium", Home: "/home/someone"}
 }
 
 func golden(t *testing.T, name string, got []byte) {
@@ -129,23 +134,30 @@ func TestReportContents(t *testing.T) {
 	rep.JSON(&js)
 	text := md.String()
 	for _, want := range []string{"# Experiment lean-ab", "Context A/B: A = `base`, B = `lean`. Goal: cheaper, without losing success.",
-		"**Cost -20%", "]: improved.", "**Success ", "exploratory", "60 of 60 runs settled (done)", "| B | `lean` |", "(-3000)",
+		"**Cost -20%** (95%: ", "): improved.", "**Success ", "exploratory", "60 of 60 runs settled (done)", "| B | `lean` |", "(-3000)",
 		"Runs not counted: 1 unfair (the environment drifted), 1 infrastructure failure, 1 cancelled.",
-		"Environment drift in unfair runs: tools differ (added Monitor; missing none).", "1 run(s) ended without Claude Code's cost",
-		"1 run(s) were recovered", "Arm ", "passed with test-runner configuration changed",
+		"Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.",
+		"1 run(s) ended without Claude Code's cost", "1 run(s) were cut short when Agentium stopped", "Arm ", "passed with test-runner configuration changed",
+		"Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory.",
 		"Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.",
-		"Cold-cache cost prices every cached read", "| task-0 |"} {
+		"Cold-cache cost reprices every cached read", "| task-0 |"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Markdown lacks %q", want)
 		}
 	}
-	for _, private := range []string{"personal-looking-skill", "/home/someone", "\"review\"", "/usr/local/bin"} {
+	if !strings.Contains(js.String(), "the hidden tests could not be added: open <agentium data>/records/r05") {
+		t.Error("run notes are kept, with local paths replaced")
+	}
+	for _, private := range []string{"personal-looking-skill", "/home/someone", "\"review\"", "/usr/local/bin", "sk-ant-api03", "Done in"} {
 		if strings.Contains(js.String(), private) || strings.Contains(text, private) {
 			t.Errorf("the report shows %q", private)
 		}
 	}
 	if !strings.Contains(js.String(), "(1 skill)") || !strings.Contains(js.String(), "(2 slash commands)") || !strings.Contains(js.String(), `"claude_path": "claude"`) {
 		t.Error("the JSON lock should count skills and slash commands")
+	}
+	if rep.Arms[0].Behavior.ConfigPasses+rep.Arms[1].Behavior.ConfigPasses != 1 {
+		t.Errorf("config passes %d + %d, want the one that passed", rep.Arms[0].Behavior.ConfigPasses, rep.Arms[1].Behavior.ConfigPasses)
 	}
 	// Counted runs: 60 slots, one unfair; the infra and cancelled tries of slot 10 are extra runs, not counted.
 	if rep.Arms[0].Counted+rep.Arms[1].Counted != 59 || len(rep.Runs) != 62 || rep.Settled != 60 {
@@ -181,6 +193,58 @@ func TestHeadlineGuardLossWithinTheMargin(t *testing.T) {
 		Verdict: stats.Regressed}
 	got := headline(res, experiment.Design{SuccessMargin: 0.15})
 	if !strings.Contains(got, "regressed (a loss the intervals can tell from none, though within the 15 pp margin)") || !strings.Contains(got, "80% → 77%") {
+		t.Errorf("headline %q", got)
+	}
+}
+
+// An arm with no counted runs shows no numbers, rather than zeros that read as measured.
+func TestReportArmWithoutCountedRuns(t *testing.T) {
+	in := fixture()
+	for i := range in.Runs {
+		if in.Runs[i].Record.Arm == "B" {
+			in.Runs[i].Record.Outcome, in.Runs[i].Record.Passed = claude.OutcomeUnfair, nil
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, js bytes.Buffer
+	rep.Markdown(&md)
+	if err := rep.JSON(&js); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"| B | `lean` | 0 | - | - | - | - |", "→ - |", "**Cost**: no result"} {
+		if !strings.Contains(md.String(), want) {
+			t.Errorf("Markdown lacks %q", want)
+		}
+	}
+	if strings.Contains(md.String(), "Measured noise") || strings.Contains(md.String(), "$0.000") {
+		t.Error("no paired tasks: no noise estimate, and no zero costs")
+	}
+	if !strings.Contains(js.String(), `"cost_usd": null`) {
+		t.Error("JSON: an arm without runs has null means")
+	}
+}
+
+func TestReportBetterGoalAndNoLossHeadline(t *testing.T) {
+	in := fixture()
+	in.Lock.Design.Goal = experiment.GoalBetter
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md bytes.Buffer
+	rep.Markdown(&md)
+	if !strings.Contains(md.String(), "Verdicts are given for success (primary); cost and time and output tokens are exploratory.") {
+		t.Errorf("the verdict note follows the goal:\n%s", md.String())
+	}
+	// "No loss" rests on the 90% interval, and the headline shows that one.
+	a, b := 0.80, 0.78
+	res := experiment.MetricResult{Metric: experiment.MetricSuccess, Role: experiment.RoleGuard, Tasks: 30, A: &a, B: &b, Verdict: stats.NoLoss,
+		Boot95: stats.Interval{Estimate: -0.02, Low: -0.17, High: 0.10}, T95: stats.Interval{Estimate: -0.02, Low: -0.16, High: 0.09},
+		Boot90: stats.Interval{Estimate: -0.02, Low: -0.14, High: 0.08}, T90: stats.Interval{Estimate: -0.02, Low: -0.13, High: 0.07}}
+	if got := headline(res, experiment.Design{SuccessMargin: 0.15}); !strings.Contains(got, "Δ -2 pp (90%: -14 to +8): no loss beyond 15 pp.") {
 		t.Errorf("headline %q", got)
 	}
 }

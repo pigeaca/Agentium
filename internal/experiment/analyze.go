@@ -238,7 +238,7 @@ func pairedRuns(t *stats.Table, a, b string) (median, full int) {
 func variance(cost, success *stats.Table, a, b string) (Variance, bool) {
 	sigma2, okCost := stats.WithinVariance(cost, math.Log)
 	w, okSuccess := stats.WithinVariance(success, stats.Identity)
-	if !okCost || !okSuccess {
+	if !okCost || !okSuccess || len(cost.Paired(a, b, math.Log)) < 2 { // τ needs tasks with runs in both arms
 		return Variance{}, false
 	}
 	cells, runs := 0, 0

@@ -377,7 +377,7 @@ func runShow(ctx context.Context, env Env, args []string) int {
 				}
 			}
 		}
-		fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d, attempt %d\n", name, stored.Slot+1, stored.Attempt)
+		fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
 	}
 	if entries, err := os.ReadDir(rec.RecordsDir); err == nil {
 		var names []string

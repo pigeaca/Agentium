@@ -2,8 +2,8 @@
 
 Context A/B: A = `base`, B = `lean`. Goal: cheaper, without losing success.
 
-- **Success 73% → 76%**, Δ +2 pp [-20, +23]: exploratory: too few tasks or runs for a verdict.
-- **Cost -20%** [-21%, -19%]: improved.
+- **Success 73% → 76%**, Δ +2 pp (95%: -20 to +23): exploratory: too few tasks or runs for a verdict.
+- **Cost -20%** (95%: -21% to -19%): improved.
 
 60 of 60 runs settled (done); spent $21.95 of $60.00. 10 task(s) × 3 run(s) per arm; claude-sonnet-5, effort default, Claude Code 2.1.281, sign-in login. Locked 2026-09-29 12:00 UTC (method phase1-v1).
 
@@ -41,8 +41,8 @@ Runs counted in each arm, unless a total.
 | ran the task's checks | 30 | 0 |
 | committed | 0 | 0 |
 | changed the checks | 0 | 0 |
+| passed with changed runner configuration (a failure here) | 1 | 0 |
 | permission denials (total) | 0 | 0 |
-| reads outside the checkout (total) | 0 | 0 |
 | files changed (mean) | 2.0 | 2.0 |
 | lines changed (mean) | 13.0 | 13.0 |
 | shell commands (mean) | 6.0 | 6.0 |
@@ -67,12 +67,12 @@ Runs counted in each arm, unless a total.
 ## Notes
 
 - Runs not counted: 1 unfair (the environment drifted), 1 infrastructure failure, 1 cancelled. Their spend is in the total.
-- Environment drift in unfair runs: tools differ (added Monitor; missing none).
+- Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.
 - 1 run(s) ended without Claude Code's cost: it was estimated from their transcripts at list prices.
-- 1 run(s) were recovered after Agentium stopped during them.
+- 1 run(s) were cut short when Agentium stopped, and recovered with what they spent.
 - Arm A: 1 run(s) passed with test-runner configuration changed beyond the task's reference; they count as failures.
-- Not discriminating for success (every run passed, or every run failed, in both arms): task-8, task-4, task-0. They stay in for cost.
+- Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.
 - Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.
-- Verdicts need the bootstrap and the t-interval to agree; the intervals in the summary are the wider of the two. Time and output tokens are exploratory: one primary metric, and the success guard, get verdicts.
+- Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Measured noise, for planning later experiments: per-run log-cost spread σ = 0.04, success variance w = 0.24, spread across tasks τ = 0.00 (cost) and 0.00 (success), from 3.0 run(s) per task and arm.
-- Cold-cache cost prices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.
+- Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.

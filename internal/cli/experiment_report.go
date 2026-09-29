@@ -1,12 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -51,7 +50,7 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	if len(runs) == 0 {
 		return fail(env, fmt.Errorf("experiment %s has no runs yet", name))
 	}
-	in := report.Input{Name: name, Lock: lock, Status: stored.Status, StatusNote: stored.StatusNote}
+	in := report.Input{Name: name, Lock: lock, Status: stored.Status, StatusNote: stored.StatusNote, DataDir: w.layout.Root, Home: env.Getenv("HOME")}
 	if stored.Status == store.StatusRunning && !w.layout.RunsBusy() {
 		in.Status, in.StatusNote = store.StatusStopped, "its Agentium process ended; run it again to resume"
 	}
@@ -66,27 +65,23 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	var dst io.Writer = env.Stdout
-	var file *os.File
-	if *out != "" {
-		if file, err = os.Create(*out); err != nil {
-			return fail(env, fmt.Errorf("report: %w", err))
-		}
-		dst = file
-	}
 	render := rep.Markdown
 	if *asJSON {
 		render = rep.JSON
 	}
-	err = render(dst)
-	if file != nil {
-		err = errors.Join(err, file.Close())
-	}
-	if err != nil {
+	var buf bytes.Buffer // rendered whole first, so a failure leaves no partial file
+	if err := render(&buf); err != nil {
 		return fail(env, fmt.Errorf("report: %w", err))
 	}
-	if file != nil {
-		fmt.Fprintf(env.Stdout, "Wrote the report of %s to %s.\n", name, *out)
+	if *out == "" {
+		if _, err := buf.WriteTo(env.Stdout); err != nil {
+			return fail(env, fmt.Errorf("report: %w", err))
+		}
+		return ExitOK
 	}
+	if err := os.WriteFile(*out, buf.Bytes(), 0o644); err != nil {
+		return fail(env, fmt.Errorf("report: %w", err))
+	}
+	fmt.Fprintf(env.Stdout, "Wrote the report of %s to %s.\n", name, *out)
 	return ExitOK
 }

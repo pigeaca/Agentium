@@ -103,6 +103,13 @@ type Record struct {
 	RecordsDir  string         `json:"records"`
 	ContextHead string         `json:"context_commit,omitempty"`
 	ProbeFile   string         `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
+	// CostEstimated: Claude Code reported no cost, so Metrics.CostUSD prices the transcript's requests at list prices.
+	CostEstimated bool `json:"cost_estimated,omitempty"`
+	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
+	// and is cancelled) or RecoveredFinished (it had finished).
+	Recovered string `json:"recovered,omitempty"`
+	// HarnessChanged lists what the arm's context changes that runs (hooks, settings, MCP), not only what the agent reads.
+	HarnessChanged []string `json:"harness_changed,omitempty"`
 	// ProjectSkills and ProjectCommands are the arm's own skill and command names at the context commit; calibration
 	// subtracts them to keep only what Claude Code bundles.
 	ProjectSkills   []string `json:"-"`
@@ -236,6 +243,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
 		}
 		if len(overlay.HarnessChanged) > 0 {
+			rec.HarnessChanged = overlay.HarnessChanged
 			rec.Notes = append(rec.Notes, "the arm changes what runs: "+strings.Join(overlay.HarnessChanged, ", "))
 		}
 	}
@@ -329,6 +337,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec.Metrics, parseErr = parseFile(transcriptPath)               // partial metrics are kept even when reading fails
 	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 { // stopped before Claude Code's result: still spent
 		rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
+		rec.CostEstimated = true
 		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
 	}
 	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)

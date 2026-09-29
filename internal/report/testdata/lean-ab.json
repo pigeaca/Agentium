@@ -778,9 +778,8 @@
         "ran_checks": 30,
         "committed": 0,
         "checks_changed": 0,
-        "config_changed": 1,
+        "config_passes": 1,
         "denials": 0,
-        "outside_reads": 0,
         "files_changed": 2,
         "lines_changed": 13,
         "bash_commands": 6
@@ -802,9 +801,8 @@
         "ran_checks": 0,
         "committed": 0,
         "checks_changed": 0,
-        "config_changed": 0,
+        "config_passes": 0,
         "denials": 0,
-        "outside_reads": 0,
         "files_changed": 2,
         "lines_changed": 13,
         "bash_commands": 6
@@ -985,15 +983,15 @@
   ],
   "notes": [
     "Runs not counted: 1 unfair (the environment drifted), 1 infrastructure failure, 1 cancelled. Their spend is in the total.",
-    "Environment drift in unfair runs: tools differ (added Monitor; missing none).",
+    "Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.",
     "1 run(s) ended without Claude Code's cost: it was estimated from their transcripts at list prices.",
-    "1 run(s) were recovered after Agentium stopped during them.",
+    "1 run(s) were cut short when Agentium stopped, and recovered with what they spent.",
     "Arm A: 1 run(s) passed with test-runner configuration changed beyond the task's reference; they count as failures.",
-    "Not discriminating for success (every run passed, or every run failed, in both arms): task-8, task-4, task-0. They stay in for cost.",
+    "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.",
     "Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.",
-    "Verdicts need the bootstrap and the t-interval to agree; the intervals in the summary are the wider of the two. Time and output tokens are exploratory: one primary metric, and the success guard, get verdicts.",
+    "Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%.",
     "Measured noise, for planning later experiments: per-run log-cost spread σ = 0.04, success variance w = 0.24, spread across tasks τ = 0.00 (cost) and 0.00 (success), from 3.0 run(s) per task and arm.",
-    "Cold-cache cost prices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29."
+    "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29."
   ],
   "runs": [
     {
@@ -1217,7 +1215,8 @@
         "outside_reads": 0
       },
       "drift": [
-        "tools differ (added Monitor; missing none)"
+        "tools differ (added Monitor; missing none)",
+        "1 file tool call(s) reached <agentium data>/projects"
       ],
       "context_commit": "ctx",
       "verify": [
@@ -1335,6 +1334,10 @@
         "denials": 0,
         "outside_reads": 0
       },
+      "notes": [
+        "the hidden tests could not be added: open <agentium data>/records/r05/verify/t: denied",
+        "Agentium could not finish the run: sign-in with [REDACTED] refused"
+      ],
       "context_commit": "ctx",
       "verify": [
         {
@@ -1563,6 +1566,9 @@
         "lines_removed": 3,
         "tests_changed": false,
         "tests_removed": 0,
+        "config_changed": [
+          "pytest.ini"
+        ],
         "ran_tests": true,
         "ran_checks": false,
         "commits": 0,
@@ -1627,9 +1633,7 @@
         "denials": 0,
         "outside_reads": 0
       },
-      "notes": [
-        "Claude Code reported no cost: estimated from the transcript's requests at list prices"
-      ],
+      "cost_estimated": true,
       "context_commit": "ctx",
       "verify": [
         {
@@ -1687,9 +1691,7 @@
         "denials": 0,
         "outside_reads": 0
       },
-      "notes": [
-        "Agentium stopped during this run; recovered on 2026-09-29 12:30"
-      ],
+      "recovered": "stopped",
       "context_commit": "ctx",
       "verify": [
         {

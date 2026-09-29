@@ -15,6 +15,7 @@ import (
 func (r Report) JSON(w io.Writer) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	enc.SetEscapeHTML(false) // for people reading it: "<agentium data>", not "\u003cagentium data\u003e"
 	return enc.Encode(r)
 }
 
@@ -66,11 +67,12 @@ func (r Report) Markdown(w io.Writer) error {
 
 	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|\n")
 	for i, a := range r.Arms {
-		first := fmt.Sprintf("%.0f", a.FirstRequest)
-		if i > 0 && r.Arms[0].FirstRequest > 0 {
-			first += fmt.Sprintf(" (%+.0f)", a.FirstRequest-r.Arms[0].FirstRequest)
+		first := num(a.FirstRequest, "%.0f")
+		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
+			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | $%.3f | $%.3f | %s |\n", a.Name, a.Context, a.Counted, first, a.CostUSD, a.ColdCostUSD, pct(a.CacheReadShare))
+		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s |\n", a.Name, a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
+			num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 
 	b.WriteString("\n## Behavior\n\nRuns counted in each arm, unless a total.\n\n| | A | B |\n|---|---|---|\n")
@@ -84,11 +86,11 @@ func (r Report) Markdown(w io.Writer) error {
 		{"ran the task's checks", func(x Behavior) string { return fmt.Sprint(x.RanChecks) }},
 		{"committed", func(x Behavior) string { return fmt.Sprint(x.Committed) }},
 		{"changed the checks", func(x Behavior) string { return fmt.Sprint(x.ChecksChanged) }},
+		{"passed with changed runner configuration (a failure here)", func(x Behavior) string { return fmt.Sprint(x.ConfigPasses) }},
 		{"permission denials (total)", func(x Behavior) string { return fmt.Sprint(x.Denials) }},
-		{"reads outside the checkout (total)", func(x Behavior) string { return fmt.Sprint(x.OutsideReads) }},
-		{"files changed (mean)", func(x Behavior) string { return fmt.Sprintf("%.1f", x.FilesChanged) }},
-		{"lines changed (mean)", func(x Behavior) string { return fmt.Sprintf("%.1f", x.LinesChanged) }},
-		{"shell commands (mean)", func(x Behavior) string { return fmt.Sprintf("%.1f", x.BashCommands) }},
+		{"files changed (mean)", func(x Behavior) string { return num(x.FilesChanged, "%.1f") }},
+		{"lines changed (mean)", func(x Behavior) string { return num(x.LinesChanged, "%.1f") }},
+		{"shell commands (mean)", func(x Behavior) string { return num(x.BashCommands, "%.1f") }},
 	}
 	for _, row := range behaviorRows {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
@@ -97,8 +99,8 @@ func (r Report) Markdown(w io.Writer) error {
 	b.WriteString("\n## Per task\n\n● success, ○ failure, × not counted; cost is the mean of counted runs.\n\n| Task | A | B | Cost A → B |\n|---|---|---|---|\n")
 	for _, t := range r.Tasks {
 		ca, cb := t.Arms[r.Arms[0].Name], t.Arms[r.Arms[1].Name]
-		fmt.Fprintf(&b, "| %s | %s %d/%d | %s %d/%d | $%.3f → $%.3f |\n", t.Task, orDash(ca.Marks), ca.Successes, ca.Counted, orDash(cb.Marks),
-			cb.Successes, cb.Counted, ca.CostUSD, cb.CostUSD)
+		fmt.Fprintf(&b, "| %s | %s %d/%d | %s %d/%d | %s → %s |\n", t.Task, orDash(ca.Marks), ca.Successes, ca.Counted, orDash(cb.Marks),
+			cb.Successes, cb.Counted, num(ca.CostUSD, "$%.3f"), num(cb.CostUSD, "$%.3f"))
 	}
 
 	b.WriteString("\n## Notes\n\n")
@@ -114,7 +116,7 @@ func headline(res experiment.MetricResult, d experiment.Design) string {
 	if res.Tasks < 2 {
 		return fmt.Sprintf("**%s**: no result (%s).", title(res.Metric), res.Note)
 	}
-	i := widest95(res)
+	i, level := verdictInterval(res)
 	verdict := res.Verdict
 	switch verdict {
 	case stats.Regressed:
@@ -144,10 +146,10 @@ func headline(res experiment.MetricResult, d experiment.Design) string {
 		}
 	}
 	if res.Ratio {
-		return fmt.Sprintf("**%s %s** [%s, %s]: %s.", title(res.Metric), change(i.Estimate), change(i.Low), change(i.High), verdict)
+		return fmt.Sprintf("**%s %s** (%s: %s to %s): %s.", title(res.Metric), change(i.Estimate), level, change(i.Low), change(i.High), verdict)
 	}
-	return fmt.Sprintf("**%s %s → %s**, Δ %+.0f pp [%+.0f, %+.0f]: %s.", title(res.Metric), pctOf(res.A), pctOf(res.B), 100*i.Estimate, 100*i.Low,
-		100*i.High, verdict)
+	return fmt.Sprintf("**%s %s → %s**, Δ %+.0f pp (%s: %+.0f to %+.0f): %s.", title(res.Metric), pctOf(res.A), pctOf(res.B), 100*i.Estimate, level,
+		100*i.Low, 100*i.High, verdict)
 }
 
 func change(ratio float64) string { return fmt.Sprintf("%+.0f%%", 100*(ratio-1)) }
@@ -200,6 +202,14 @@ func span(res experiment.MetricResult, i stats.Interval) string {
 		return fmt.Sprintf("[%s, %s]", change(i.Low), change(i.High))
 	}
 	return fmt.Sprintf("[%+.0f, %+.0f] pp", 100*i.Low, 100*i.High)
+}
+
+// num formats a value that may be missing.
+func num(p *float64, format string) string {
+	if p == nil {
+		return "-"
+	}
+	return fmt.Sprintf(format, *p)
 }
 
 func orDefault(effort string) string {

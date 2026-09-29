@@ -17,6 +17,12 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
+// How a recovered run was stored (Record.Recovered).
+const (
+	RecoveredStopped  = "stopped"  // the run was cut short: cancelled, with what it spent
+	RecoveredFinished = "finished" // the run had finished; only storing it was cut short
+)
+
 // startFile is written to a run's records when they are created, and again when its agent starts: if the Agentium
 // process dies, a later one finds the run (Recover), its spend in the transcript, and its agent's process group.
 const startFile = "started.json"
@@ -140,6 +146,7 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		}
 		if s.Finished && s.Record.Outcome != "" {
 			rec := s.Record
+			rec.Recovered = RecoveredFinished
 			rec.Notes = append(rec.Notes, "stored on recovery: Agentium stopped after the run finished, before storing it")
 			orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
 			continue
@@ -158,9 +165,11 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			rec.Finished = info.ModTime().UTC()
 		}
 		rec.Metrics, _ = parseFile(transcript) // what can be read is kept; a missing transcript spent nothing visible
+		rec.Recovered = RecoveredStopped
 		rec.Notes = append(rec.Notes, fmt.Sprintf("Agentium stopped during this run; recovered on %s", now.UTC().Format("2006-01-02 15:04")))
 		if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {
 			rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
+			rec.CostEstimated = true
 			rec.Notes = append(rec.Notes, fmt.Sprintf("Claude Code reported no cost: estimated from the transcript's requests at the list prices of %s", pricing.Date))
 		}
 		if rec.Metrics.UnpricedRequests > 0 {
