@@ -79,6 +79,14 @@ type Env struct {
 	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
 	// Agentium process died (its project and experiment slot, say).
 	Meta json.RawMessage
+	// CommandEnv is added to the setup and verification commands' environment (BuildEnv).
+	CommandEnv []string
+}
+
+// BuildEnv points the build caches of the commands Agentium runs itself (setup, validation, grading) into the data
+// folder, which agents may not read: the user's own caches would hold compiled hidden tests that agents could read.
+func BuildEnv(layout home.Layout) []string {
+	return []string{"GOCACHE=" + filepath.Join(layout.Cache, "go-build")}
 }
 
 // Record is a finished run.
@@ -203,6 +211,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
+	inv.BuildCache = filepath.Join(workspace, "go-build") // the run's own: nothing compiled before it, nothing after
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
 	// reason that is not the agent's.
 	for _, denied := range inv.DeniedPaths(env.Environ) {
@@ -284,9 +293,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 
 	// The agent.
-	if inv.ConfigDir != "" {
-		if err := os.MkdirAll(inv.ConfigDir, 0o700); err != nil {
-			return rec, fmt.Errorf("run config folder: %w", err)
+	for _, dir := range []string{inv.ConfigDir, inv.BuildCache} {
+		if dir == "" {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
 	}
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
@@ -563,7 +575,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 	var results []task.Command
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running, Env: env.CommandEnv})
 		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
@@ -582,7 +594,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 // listed: a known gap for concurrent runs, whose workspaces hold no hidden tests.
 func (env Env) denied(ctx context.Context, workspace string) []string {
 	db := env.Layout.Database
-	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, db, db + "-wal", db + "-shm"}
+	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {

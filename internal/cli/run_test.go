@@ -540,3 +540,31 @@ func TestRunRecordsTheRunningCommand(t *testing.T) {
 	}
 	expect(t, <-done, ExitOK, "verification passed")
 }
+
+// Agentium's own commands (setup, validation, grading) build with a cache in the data folder, which runs are denied;
+// the agent builds with a cache of its own, in its workspace.
+func TestBuildCaches(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	marks := t.TempDir()
+	expect(t, f.run(context.Background(), "task", "edit", "value", "--verify", "echo \"$GOCACHE\" >> "+filepath.Join(marks, "verify")+"; sh run_tests.sh",
+		"--setup", "echo \"$GOCACHE\" >> "+filepath.Join(marks, "setup")), ExitOK)
+	expect(t, f.run(context.Background(), "task", "validate", "value"), ExitOK, "valid")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "echo \"$GOCACHE\" > "+filepath.Join(marks, "agent")+"; printf 'new\\n' > value.txt", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "verification passed")
+	own := filepath.Join(f.data, "cache", "go-build")
+	for _, name := range []string{"setup", "verify"} {
+		data, _ := os.ReadFile(filepath.Join(marks, name))
+		if len(strings.Fields(string(data))) < 2 { // validation, then the run
+			t.Errorf("%s ran %d time(s)", name, len(strings.Fields(string(data))))
+		}
+		for _, line := range strings.Fields(string(data)) {
+			if line != own {
+				t.Errorf("%s ran with GOCACHE %q, want %s", name, line, own)
+			}
+		}
+	}
+	agent, _ := os.ReadFile(filepath.Join(marks, "agent"))
+	if got := strings.TrimSpace(string(agent)); !strings.HasPrefix(got, filepath.Join(f.data, "workspaces")) || !strings.HasSuffix(got, "go-build") {
+		t.Errorf("the agent's GOCACHE = %q, want its workspace's own", got)
+	}
+}

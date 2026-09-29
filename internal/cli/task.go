@@ -17,6 +17,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -566,9 +567,9 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		}
 		arms = append(arms, task.Arm{Name: name, Snapshot: snap.CommitID})
 	}
-	run := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
-	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(run, "checkouts"), LogDir: filepath.Join(run, "logs"),
-		Timeout: *timeout, Keep: *keep, Progress: env.Stdout, Now: env.Now}
+	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
+	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
+		Timeout: *timeout, Keep: *keep, Env: run.BuildEnv(w.layout), Progress: env.Stdout, Now: env.Now}
 	fmt.Fprintf(env.Stdout, "Validating %s in %d arm(s): %s\n", t.Name, len(arms), strings.Join(t.Verify, "; "))
 	result, err := v.Validate(ctx, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests,
 		Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}, arms)

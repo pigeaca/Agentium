@@ -21,6 +21,9 @@ type Layout struct {
 	Artifacts  string
 	Workspaces string
 	Records    string
+	// Cache holds the build caches of the commands Agentium runs itself (setup, validation, grading). Agents may not
+	// read it: it holds compiled hidden tests.
+	Cache string
 }
 
 // Resolve returns the layout under $AGENTIUM_HOME, or ~/.agentium when that is unset. getenv is os.Getenv outside tests.
@@ -38,7 +41,7 @@ func Resolve(getenv func(string) string) (Layout, error) {
 		return Layout{}, fmt.Errorf("resolve data folder %q: %w", root, err)
 	}
 	return Layout{Root: root, Database: filepath.Join(root, "agentium.db"), Artifacts: filepath.Join(root, "artifacts"),
-		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records")}, nil
+		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records"), Cache: filepath.Join(root, "cache")}, nil
 }
 
 // Ensure creates missing folders readable only by the owner: transcripts and checkouts contain source code. It never

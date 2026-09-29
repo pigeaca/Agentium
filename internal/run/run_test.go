@@ -113,7 +113,7 @@ func TestCopyTreeKeepsModesAndLinks(t *testing.T) {
 func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	data := t.TempDir()
 	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
-		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records")}
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
 	for _, dir := range []string{"workspaces/r1", "workspaces/r2"} {
 		if err := os.MkdirAll(filepath.Join(data, dir), 0o755); err != nil {
 			t.Fatal(err)
@@ -136,7 +136,7 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	denied := strings.Join(env.denied(context.Background(), filepath.Join(data, "workspaces", "r1")), "\n")
 	mainGit, _ := filepath.EvalSymlinks(filepath.Join(main, ".git"))
 	mainCheckout, _ := filepath.EvalSymlinks(main) // another worktree: it can sit at a commit holding the solution
-	for _, want := range []string{filepath.Join(data, "projects"), layout.Records, layout.Artifacts, layout.Database + "-wal",
+	for _, want := range []string{filepath.Join(data, "projects"), layout.Records, layout.Artifacts, layout.Cache, layout.Database + "-wal",
 		filepath.Join(data, "workspaces", "r2"), linked, mainGit, mainCheckout + "\n"} {
 		if !strings.Contains(denied, want) {
 			t.Errorf("%s is not denied:\n%s", want, denied)

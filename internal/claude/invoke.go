@@ -46,6 +46,10 @@ type Invocation struct {
 	Deny []string
 	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
 	Started func(pid int)
+	// BuildCache, when set, is a folder of the run's own for build caches: Go's (GOCACHE) points there, and the sandbox
+	// lets the agent write it. The user's own Go caches are denied: they hold what earlier builds compiled, the hidden
+	// tests of validations and gradings included.
+	BuildCache string
 }
 
 // UserConfigDir is the user's own Claude Code folder: $CLAUDE_CONFIG_DIR when set in environ, otherwise ~/.claude.
@@ -95,12 +99,12 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
 		}
 	}
-	settings, err := json.Marshal(inv.settings(userConfig))
+	settings, err := json.Marshal(inv.settings(userConfig, environ))
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode settings: %w", err)
 	}
@@ -115,9 +119,16 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(inv.BudgetUSD, 'f', -1, 64))
 	}
-	env = append(Environ(environ),
-		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
+	for _, kv := range Environ(environ) {
+		if !(inv.BuildCache != "" && strings.HasPrefix(kv, "GOCACHE=")) {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
+	if inv.BuildCache != "" {
+		env = append(env, "GOCACHE="+inv.BuildCache)
+	}
 	switch inv.SignIn { // requirement 4: a fresh config folder cannot use a subscription login
 	case SignInLogin:
 		if userConfig != filepath.Join(inv.Home, ".claude") { // the user's login lives in their own config folder
@@ -163,7 +174,7 @@ func SessionFolders(configDir string) []string {
 //   - credential stores and the token file's folder.
 //
 // Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
-func (inv Invocation) deniedPaths(userConfig string) []string {
+func (inv Invocation) deniedPaths(userConfig string, environ []string) []string {
 	active := userConfig
 	if inv.SignIn != SignInLogin {
 		active = inv.ConfigDir
@@ -185,6 +196,7 @@ func (inv Invocation) deniedPaths(userConfig string) []string {
 	for _, name := range credentialFiles() {
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
+	paths = append(paths, goCaches(environ, inv.Home)...)
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
@@ -204,12 +216,27 @@ func (inv Invocation) deniedPaths(userConfig string) []string {
 
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
 func (inv Invocation) DeniedPaths(environ []string) []string {
-	return inv.deniedPaths(UserConfigDir(environ, inv.Home))
+	return inv.deniedPaths(UserConfigDir(environ, inv.Home), environ)
+}
+
+// goCaches are the user's Go build caches: GOCACHE when set, and the defaults under the home folder (macOS, Linux and
+// XDG_CACHE_HOME). Each holds what earlier builds compiled, hidden tests included.
+func goCaches(environ []string, home string) []string {
+	paths := []string{filepath.Join(home, "Library", "Caches", "go-build"), filepath.Join(home, ".cache", "go-build")}
+	for _, kv := range environ {
+		if v, ok := strings.CutPrefix(kv, "GOCACHE="); ok && filepath.IsAbs(v) {
+			paths = append(paths, v)
+		}
+		if v, ok := strings.CutPrefix(kv, "XDG_CACHE_HOME="); ok && filepath.IsAbs(v) {
+			paths = append(paths, filepath.Join(v, "go-build"))
+		}
+	}
+	return paths
 }
 
 // settings are the per-run Claude Code settings (--settings).
-func (inv Invocation) settings(userConfig string) map[string]any {
-	denied := inv.deniedPaths(userConfig)
+func (inv Invocation) settings(userConfig string, environ []string) map[string]any {
+	denied := inv.deniedPaths(userConfig, environ)
 	readRules := make([]string, len(denied))
 	for i, p := range denied {
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
@@ -221,11 +248,15 @@ func (inv Invocation) settings(userConfig string) map[string]any {
 	if inv.TokenFile != "" {
 		files = append(files, map[string]string{"path": filepath.Dir(inv.TokenFile), "mode": "deny"})
 	}
+	filesystem := map[string]any{"denyRead": denied} // requirement 5
+	if inv.BuildCache != "" {
+		filesystem["allowWrite"] = []string{inv.BuildCache}
+	}
 	return map[string]any{
 		"sandbox": map[string]any{
 			"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
 			"network":    map[string]any{"strictAllowlist": true, "allowedDomains": []string{}},
-			"filesystem": map[string]any{"denyRead": denied}, // requirement 5
+			"filesystem": filesystem,
 			"credentials": map[string]any{
 				"envVars": []map[string]string{{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"}, {"name": "ANTHROPIC_API_KEY", "mode": "deny"}},
 				"files":   files,
