@@ -71,8 +71,8 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Now      func() time.Time
-	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and attempt,
-	// so runs that may overlap can deny each other's folders before they exist (see Predicted).
+	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
+	// runs that may overlap can deny each other's folders before they exist (see Predicted).
 	Workspace string
 	// DenyExtra adds paths the agent may not read: the predicted folders of runs that may overlap it.
 	DenyExtra []string
@@ -153,8 +153,28 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	repo := filepath.Join(workspace, "repo")
 	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
+	// The start file follows the run (see Recover): whether the agent started, the process group of whatever runs now
+	// (setup, the agent, verification), and at the end the finished record, so a runner killed before storing it
+	// loses nothing.
+	var agentStarted, recordsReady bool
+	var pgid int
+	var startErr error
+	writeStart := func(finished bool) error {
+		return env.writeStart(start{Record: rec, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: finished, Meta: env.Meta})
+	}
+	running := func(pid int) {
+		pgid = pid
+		if err := writeStart(false); err != nil && startErr == nil {
+			startErr = err
+		}
+	}
 	defer func() {
 		rec.Finished = env.Now().UTC()
+		if recordsReady {
+			if startErr := writeStart(true); startErr != nil && err == nil {
+				err = startErr
+			}
+		}
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
 			err = redactErr
 		}
@@ -186,9 +206,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
 		return rec, fmt.Errorf("run records: %w", err)
 	}
-	if err := env.writeStart(rec, workspace, false, 0); err != nil {
+	if err := writeStart(false); err != nil {
 		return rec, err
 	}
+	recordsReady = true
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		return rec, fmt.Errorf("run workspace: %w", err)
 	}
@@ -220,7 +241,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if len(spec.Task.Setup) > 0 {
 		var ok bool
-		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log")); err != nil {
+		if rec.Setup, ok, err = env.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -278,13 +299,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// there are the run's own; any other session folder, even one created during the run, is someone else's.
 	ownSession := claude.SessionFolder(activeConfig, repo)
 	pastSessions := claude.SessionFolders(activeConfig)
-	if err := env.writeStart(rec, workspace, true, 0); err != nil {
+	agentStarted, pgid = true, 0
+	if err := writeStart(false); err != nil {
 		transcript.Close()
 		stderr.Close()
 		return rec, err
 	}
-	var startErr error
-	inv.Started = func(pid int) { startErr = env.writeStart(rec, workspace, true, pid) }
+	inv.Started = running
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	if runErr == nil && startErr != nil {
@@ -298,8 +319,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		switch {
 		case ctx.Err() != nil: // interrupted, even during grading: the run is not usable, and not the agent's failure
 			rec.Outcome, rec.Passed = claude.OutcomeCancelled, nil
-		case rec.Outcome == "":
-			rec.Outcome = claude.OutcomeInfra
+		default: // Agentium's own failure, even after a fair attempt (grading failed): not the agent's result
+			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
 		}
 		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
 		return rec, err
@@ -345,7 +366,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
 	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
-		if err := env.grade(ctx, spec, repo, graded, &rec); err != nil {
+		if err := env.grade(ctx, spec, repo, graded, &rec, running); err != nil {
 			return unfinished(err)
 		}
 	}
@@ -355,7 +376,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 // grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
 // verification commands.
-func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record) error {
+func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
 	if err := syncWorkTree(repo, graded); err != nil {
 		return fmt.Errorf("grading copy: %w", err)
 	}
@@ -441,7 +462,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if !failed {
 		var commands []task.Command
 		var ok bool
-		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"))
+		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -515,8 +536,8 @@ func within(p, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-// commands runs shell commands in dir until one fails, logging to logPath.
-func (env Env) commands(ctx context.Context, dir string, commands []string, logPath string) ([]task.Command, bool, error) {
+// commands runs shell commands in dir until one fails, logging to logPath; running learns each one's process group.
+func (env Env) commands(ctx context.Context, dir string, commands []string, logPath string, running func(pid int)) ([]task.Command, bool, error) {
 	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, false, fmt.Errorf("log: %w", err)
@@ -525,7 +546,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 	var results []task.Command
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running})
 		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {

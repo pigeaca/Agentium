@@ -111,8 +111,8 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5"), ExitOK)
-	first := f.run(ctx, "experiment", "run", "lean-ab")
-	expect(t, first, ExitOK, "Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 6 runs in a seeded order (seed 5)",
+	first := f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30")
+	expect(t, first, ExitOK, "Budget raised to $30.00 (recorded in the lock)", "Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 6 runs in a seeded order (seed 5)",
 		"Running up to 2 at a time", "[1/6] value, arm ", "[6/6] value, arm ", "ok, $0.30", "spent $1.80 of $",
 		"Experiment lean-ab: done", "6 of 6 runs settled; spent $1.80", "Every run is done")
 	for _, arm := range []string{"A", "B"} {
@@ -160,7 +160,8 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "experiment", "rm", "lean-ab"), ExitError, "has run")
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "lean-ab", "done")
-	expect(t, f.run(ctx, "experiment", "show", "lean-ab"), ExitOK, "Locked ", "Claude Code 2.1.281, sign-in login", "method "+experiment.MethodVersion)
+	expect(t, f.run(ctx, "experiment", "show", "lean-ab"), ExitOK, "Locked ", "Claude Code 2.1.281, sign-in login", "method "+experiment.MethodVersion,
+		"Budget raised ", "$22.00 to $30.00")
 }
 
 func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
@@ -255,6 +256,16 @@ func TestExperimentSurvivesAKill(t *testing.T) {
 	if err := helper.Start(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { // agents left running if the test fails early
+		pids, _ := filepath.Glob(filepath.Join(ctrl, "pid-*"))
+		for _, p := range pids {
+			if data, err := os.ReadFile(p); err == nil {
+				if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+					syscall.Kill(-pid, syscall.SIGKILL)
+				}
+			}
+		}
+	})
 	waitFor(t, "the third run's agent", func() bool {
 		_, err := os.Stat(filepath.Join(ctrl, "hanging-e1-s2-t1"))
 		return err == nil
@@ -278,6 +289,9 @@ func TestExperimentSurvivesAKill(t *testing.T) {
 	syscall.Kill(-pgid, syscall.SIGKILL)
 	waitFor(t, "the agent's process group to end", func() bool { return syscall.Kill(-pgid, 0) != nil })
 	os.Remove(filepath.Join(ctrl, "hang"))
+	// Its status still says running; with no process holding the run lock, it is shown as stopped.
+	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "stopped")
+	expect(t, f.run(ctx, "experiment", "show", "kill"), ExitOK, "stopped (its Agentium process ended; run it again to resume)")
 
 	resumed := f.run(ctx, "experiment", "run", "kill")
 	expect(t, resumed, ExitOK, "Recovered run ", "left behind by a stopped Agentium: cancelled, $0.08", "Resuming experiment kill",
@@ -300,6 +314,36 @@ func TestExperimentSurvivesAKill(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ctrl, "settings-e1-s2-t2")); err != nil {
 		t.Error("the slot ran again in a fresh workspace (its second try)")
+	}
+	emptyWorkspaces(t, f)
+}
+
+// Ctrl-C stops an experiment: the run in progress is interrupted and stored as cancelled (not an attempt), and the
+// next run resumes with that slot.
+func TestExperimentRunInterrupted(t *testing.T) {
+	f, ctrl := experimentFixture(t)
+	expect(t, f.run(context.Background(), "experiment", "new", "stop", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1"), ExitOK)
+	if err := os.WriteFile(filepath.Join(ctrl, "hang"), []byte("s1-t1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		waitFor(t, "the second run's agent", func() bool {
+			_, err := os.Stat(filepath.Join(ctrl, "hanging-e1-s1-t1"))
+			return err == nil
+		})
+		cancel()
+	}()
+	expect(t, f.run(ctx, "experiment", "run", "stop"), ExitError, "cancelled", "Experiment stop: stopped: interrupted", "1 of 2 runs settled",
+		"To continue: agentium experiment run stop")
+	os.Remove(filepath.Join(ctrl, "hang"))
+	expect(t, f.run(context.Background(), "experiment", "run", "stop"), ExitOK, "[2/2] value", "Experiment stop: done", "2 of 2 runs settled")
+	runs := experimentRuns(t, f, "stop")
+	if len(runs) != 3 || runs[1].Outcome != "cancelled" || runs[1].CostUSD < 0.08 || runs[2].Attempt != 1 || runs[2].Slot != runs[1].Slot {
+		t.Errorf("runs %+v: the interrupted run is stored with its spend, and the slot's next run is still its first attempt", runs)
+	}
+	if _, err := os.Stat(filepath.Join(ctrl, "settings-e1-s1-t2")); err != nil {
+		t.Error("the slot's next run did not get a fresh workspace (its second try)")
 	}
 	emptyWorkspaces(t, f)
 }

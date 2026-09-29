@@ -191,33 +191,54 @@ func TestRecover(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	started := func(id string, agent bool, pgid int, workspace string) {
-		env := Env{Meta: []byte(`{"slot":4}`)}
+	startFileFor := func(id string, agent bool, pgid int, workspace string, finished *Record) {
 		rec := Record{ID: id, Task: "fix", Arm: "B", RecordsDir: filepath.Join(layout.Records, id)}
+		if finished != nil {
+			rec = *finished
+			rec.RecordsDir = filepath.Join(layout.Records, id)
+		}
 		if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
-		if err := env.writeStart(rec, workspace, agent, pgid); err != nil {
+		if err := (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: agent, PGID: pgid, Finished: finished != nil,
+			Meta: []byte(`{"slot":4}`)}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	started := func(id string, agent bool, pgid int, workspace string) { startFileFor(id, agent, pgid, workspace, nil) }
+	// A process group that existed and ended: the run's agent is gone.
+	gone := exec.Command("true")
+	gone.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := gone.Run(); err != nil {
+		t.Fatal(err)
+	}
+	deadGroup := gone.Process.Pid
 	// r1: records but no start file. r2: prepared, the agent never started. r3: started, killed before its result.
 	// r4: stored already.
 	write(filepath.Join(layout.Records, "r1", "setup.log"), "")
 	started("r2", false, 0, filepath.Join(layout.Workspaces, "r2"))
 	write(filepath.Join(layout.Workspaces, "r2", "repo", "a.txt"), "")
-	started("r3", true, 999999, filepath.Join(layout.Workspaces, "e1-s4-t1"))
+	started("r3", true, deadGroup, filepath.Join(layout.Workspaces, "e1-s4-t1"))
 	write(filepath.Join(layout.Workspaces, "e1-s4-t1", "repo", "a.txt"), "")
 	write(filepath.Join(layout.Records, "r3", "verify", "a.txt"), "")
 	write(filepath.Join(layout.Records, "r3", "stream.jsonl"), `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5"}
 {"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000},"content":[]}}
 `)
 	started("r4", true, 0, filepath.Join(layout.Workspaces, "r4"))
+	// r7: graded, then its runner was killed before storing it. r8: ended before its agent (Agentium's own error).
+	passed := true
+	startFileFor("r7", true, deadGroup, filepath.Join(layout.Workspaces, "r7"), &Record{ID: "r7", Task: "fix", Arm: "A", Outcome: "ok", Passed: &passed})
+	write(filepath.Join(layout.Workspaces, "r7", "repo", "a.txt"), "")
+	startFileFor("r8", false, 0, filepath.Join(layout.Workspaces, "r8"), &Record{ID: "r8"})
 	stored := func(id string) (bool, error) { return id == "r4", nil }
 
-	orphans, err := Recover(layout, stored, "", now)
-	if err != nil || len(orphans) != 1 {
+	orphans, err := Recover(context.Background(), layout, stored, "", now)
+	if err != nil || len(orphans) != 2 {
 		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if kept := orphans[1].Record; kept.ID != "r7" || kept.Outcome != "ok" || kept.Passed == nil || !*kept.Passed ||
+		!strings.Contains(strings.Join(kept.Notes, "; "), "stored on recovery") {
+		t.Errorf("a finished run is stored as it finished: %+v", kept)
 	}
 	o := orphans[0].Record
 	if o.ID != "r3" || o.Outcome != "cancelled" || o.Passed != nil || o.Metrics.CostUSD != 0.082 || string(orphans[0].Meta) != `{"slot":4}` ||
@@ -225,7 +246,8 @@ func TestRecover(t *testing.T) {
 		t.Errorf("orphan = %+v (meta %s)", o, orphans[0].Meta)
 	}
 	for _, gone := range []string{filepath.Join(layout.Records, "r1"), filepath.Join(layout.Records, "r2"), filepath.Join(layout.Workspaces, "r2"),
-		filepath.Join(layout.Workspaces, "e1-s4-t1"), filepath.Join(layout.Records, "r3", "verify")} {
+		filepath.Join(layout.Workspaces, "e1-s4-t1"), filepath.Join(layout.Records, "r3", "verify"), filepath.Join(layout.Workspaces, "r7"),
+		filepath.Join(layout.Records, "r8")} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s was left behind", gone)
 		}
@@ -238,7 +260,7 @@ func TestRecover(t *testing.T) {
 
 	// A start file naming a folder outside the workspaces is not trusted with a removal.
 	started("r5", true, 0, layout.Root)
-	if _, err := Recover(layout, func(id string) (bool, error) { return id != "r5", nil }, "", now); err == nil || !strings.Contains(err.Error(), "outside") {
+	if _, err := Recover(context.Background(), layout, func(id string) (bool, error) { return id != "r5", nil }, "", now); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Errorf("a workspace outside: %v", err)
 	}
 	os.RemoveAll(filepath.Join(layout.Records, "r5"))
@@ -252,7 +274,7 @@ func TestRecover(t *testing.T) {
 	defer func() { syscall.Kill(-sleeper.Process.Pid, syscall.SIGKILL); sleeper.Wait() }()
 	started("r6", true, sleeper.Process.Pid, filepath.Join(layout.Workspaces, "r6"))
 	var alive *AliveError
-	if _, err := Recover(layout, func(id string) (bool, error) { return id != "r6", nil }, "", now); !errors.As(err, &alive) || len(alive.Runs) != 1 {
+	if _, err := Recover(context.Background(), layout, func(id string) (bool, error) { return id != "r6", nil }, "", now); !errors.As(err, &alive) || len(alive.Runs) != 1 {
 		t.Errorf("a live agent: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(layout.Records, "r6", startFile)); err != nil {
@@ -265,6 +287,16 @@ func TestPredictedFolders(t *testing.T) {
 	login := Env{Layout: layout, SignIn: "login", Home: "/home/u", Environ: []string{"CLAUDE_CONFIG_DIR=/cfg"}}
 	if got := login.Predicted("e1-s2-t1"); len(got) != 2 || got[0] != "/data/workspaces/e1-s2-t1" || got[1] != "/cfg/projects/-data-workspaces-e1-s2-t1-repo" {
 		t.Errorf("login: %v", got)
+	}
+	// A symlinked config folder: the sandbox sees the resolved path.
+	real, link := t.TempDir(), filepath.Join(t.TempDir(), "cfg")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, _ := filepath.EvalSymlinks(real)
+	linked := Env{Layout: layout, SignIn: "login", Home: "/home/u", Environ: []string{"CLAUDE_CONFIG_DIR=" + link}}
+	if got := linked.Predicted("e1-s2-t1"); len(got) != 2 || got[1] != filepath.Join(resolved, "projects", "-data-workspaces-e1-s2-t1-repo") {
+		t.Errorf("symlinked config: %v, want it under %s", got, resolved)
 	}
 	key := Env{Layout: layout, SignIn: "api-key", Home: "/home/u"}
 	if got := key.Predicted("e1-s2-t1"); len(got) != 1 {

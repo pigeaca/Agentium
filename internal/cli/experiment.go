@@ -537,8 +537,12 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		if e.Lock != nil && json.Unmarshal(e.Lock, &lock) == nil {
 			budget = lock.Design.BudgetUSD // raised on resume
 		}
+		status := e.Status
+		if status == store.StatusRunning && !w.layout.RunsBusy() {
+			status = store.StatusStopped // its process ended without saying so
+		}
 		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s %-8s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),
-			d.Model, fmt.Sprintf("$%.2f", budget), e.Status, e.CreatedAt.Format("2006-01-02 15:04"))
+			d.Model, fmt.Sprintf("$%.2f", budget), status, e.CreatedAt.Format("2006-01-02 15:04"))
 	}
 	return ExitOK
 }

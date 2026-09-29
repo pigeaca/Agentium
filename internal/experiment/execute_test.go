@@ -95,7 +95,7 @@ func (f *fake) run(ctx context.Context, slot Slot, attempt int, overlap []int) (
 	f.ran = append(f.ran, slot.Position)
 	f.given[slot.Position] = overlap
 	f.mu.Unlock()
-	time.Sleep(time.Duration(1+slot.Position%3) * time.Millisecond)
+	time.Sleep(time.Duration(5+slot.Position%3) * time.Millisecond)
 	f.mu.Lock()
 	delete(f.inFlight, slot.Position)
 	f.mu.Unlock()
@@ -288,10 +288,14 @@ func TestExecuteInterrupted(t *testing.T) {
 
 func TestExecuteReturnsAgentiumsOwnErrors(t *testing.T) {
 	slots := scheduleOf(t, 2, 1)
-	run := func(context.Context, Slot, int, []int) (Result, error) { return Result{}, errors.New("disk full") }
+	calls := 0
+	run := func(context.Context, Slot, int, []int) (Result, error) {
+		calls++
+		return Result{Outcome: claude.OutcomeInfra}, errors.New("disk full")
+	}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3}, run)
-	if err == nil || !strings.Contains(err.Error(), "disk full") || sum.Status != StatusStopped {
-		t.Fatalf("summary %+v, %v", sum, err)
+	if err == nil || !strings.Contains(err.Error(), "disk full") || sum.Status != StatusStopped || calls != 1 {
+		t.Fatalf("summary %+v, %v, %d calls: nothing more starts after Agentium's own failure", sum, err, calls)
 	}
 }
 
@@ -383,5 +387,41 @@ func TestExecuteWindowHoldsBackPastASlowRun(t *testing.T) {
 	}
 	if len(alongside) != Window(2)-1 || slices.Max(alongside) >= Window(2) {
 		t.Errorf("ran alongside the slow slot 0: %v; want exactly slots 1 to %d", alongside, Window(2)-1)
+	}
+}
+
+// A retry waiting out its backoff comes before a pair the budget holds back: the execution waits for it instead of
+// stopping at the budget with half a pair run.
+func TestExecuteWaitsForARetryBeforeABudgetStop(t *testing.T) {
+	slots := scheduleOf(t, 3, 1) // 6 runs, 3 pairs
+	var mu sync.Mutex
+	var ran []int
+	run := func(_ context.Context, s Slot, attempt int, _ []int) (Result, error) {
+		mu.Lock()
+		ran = append(ran, s.Position)
+		mu.Unlock()
+		if s.Position == 0 && attempt == 1 {
+			return Result{Outcome: claude.OutcomeInfra, CostUSD: 0.1}, nil
+		}
+		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}, nil
+	}
+	// After slot 1 ($0.50) and slot 0's failure ($0.10), the next pair ($2 of caps) no longer fits the $2.50, but slot
+	// 0's retry ($1) does.
+	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 2.5, MaxAttempts: 3,
+		Backoff: func(int) time.Duration { return 50 * time.Millisecond }}, run)
+	if err != nil || sum.Status != StatusBudget {
+		t.Fatalf("summary %+v, %v", sum, err)
+	}
+	if len(ran) != 3 || ran[2] != 0 || sum.SpentUSD != 1.1 {
+		t.Errorf("ran %v, spent %v: slot 0's retry fit the budget and should have run before the stop", ran, sum.SpentUSD)
+	}
+	settled := map[int]bool{}
+	for _, pos := range ran {
+		settled[pos] = true
+	}
+	for pair := 0; pair < 3; pair++ {
+		if settled[2*pair] != settled[2*pair+1] {
+			t.Errorf("pair %d stopped half run: %v", pair, ran)
+		}
 	}
 }

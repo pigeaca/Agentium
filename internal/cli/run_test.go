@@ -486,3 +486,47 @@ func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// When Agentium cannot grade a fair attempt (here, the agent left a file nobody can read), the run is an
+// infrastructure failure, retried in experiments, not the agent's failure.
+func TestRunGradingFailureIsInfrastructure(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; touch locked; chmod 000 locked", false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "grading copy")
+	expect(t, f.run(context.Background(), "run", "list"), ExitOK, "infra", "$0.40")
+	// The start file ends with the finished record, which a runner killed before storing it would be recovered from.
+	files, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "started.json"))
+	if len(files) != 1 {
+		t.Fatalf("start files %v", files)
+	}
+	data, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(data), `"finished":true`) || !strings.Contains(string(data), `"outcome":"infra"`) {
+		t.Errorf("start file after the run: %s", data)
+	}
+}
+
+// While a setup command runs, the run's start file names its process group, so a runner killed meanwhile leaves
+// enough behind to see that the command still runs before its workspace is removed.
+func TestRunRecordsTheRunningCommand(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	marker := filepath.Join(t.TempDir(), "setup-pid")
+	expect(t, f.run(context.Background(), "task", "edit", "value", "--setup", "echo $$ > "+marker+"; sleep 1"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt", false)
+	done := make(chan cliResult)
+	go func() { done <- f.run(context.Background(), "run", "once", "value") }()
+	var pid string
+	waitFor(t, "the setup command", func() bool {
+		data, err := os.ReadFile(marker)
+		pid = strings.TrimSpace(string(data))
+		return err == nil && pid != ""
+	})
+	files, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "started.json"))
+	if len(files) != 1 {
+		t.Fatalf("start files %v", files)
+	}
+	data, _ := os.ReadFile(files[0])
+	if !strings.Contains(string(data), `"pgid":`+pid) || strings.Contains(string(data), `"agent_started":true`) {
+		t.Errorf("start file during setup (setup's process group %s): %s", pid, data)
+	}
+	expect(t, <-done, ExitOK, "verification passed")
+}

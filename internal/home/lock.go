@@ -13,6 +13,16 @@ import (
 // ErrBusy is returned when another process holds the run lock.
 var ErrBusy = errors.New("another Agentium process is running agents with this data folder")
 
+// RunsBusy reports whether another process holds the run lock now (its runs are in progress).
+func (l Layout) RunsBusy() bool {
+	release, err := l.LockRuns()
+	if err != nil {
+		return errors.Is(err, ErrBusy)
+	}
+	release()
+	return false
+}
+
 // LockRuns takes the data folder's run lock, held while a command starts agents: one process at a time, so runs can
 // predict everything that may overlap them, and a run found without a stored record belongs to a process that died.
 // The operating system releases the lock when the process ends, however it ends; agents never inherit it.

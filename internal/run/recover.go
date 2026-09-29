@@ -1,6 +1,7 @@
 package run
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,16 +25,17 @@ type start struct {
 	Record       Record          `json:"record"`
 	Workspace    string          `json:"workspace"`
 	AgentStarted bool            `json:"agent_started"`
-	PGID         int             `json:"pgid,omitempty"`
+	PGID         int             `json:"pgid,omitempty"` // of the command running now: setup, the agent or verification
+	Finished     bool            `json:"finished,omitempty"`
 	Meta         json.RawMessage `json:"meta,omitempty"`
 }
 
-func (env Env) writeStart(rec Record, workspace string, agent bool, pgid int) error {
-	data, err := json.Marshal(start{Record: rec, Workspace: workspace, AgentStarted: agent, PGID: pgid, Meta: env.Meta})
+func (env Env) writeStart(s start) error {
+	data, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("run start file: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(rec.RecordsDir, startFile), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(s.Record.RecordsDir, startFile), data, 0o600); err != nil {
 		return fmt.Errorf("run start file: %w", err)
 	}
 	return nil
@@ -53,7 +55,8 @@ func (env Env) Predicted(name string) []string {
 	workspace := realPath(filepath.Join(env.Layout.Workspaces, name))
 	paths := []string{workspace}
 	if env.SignIn == claude.SignInLogin {
-		paths = append(paths, claude.SessionFolder(claude.UserConfigDir(env.Environ, env.Home), filepath.Join(workspace, "repo")))
+		// Resolved as the sandbox will see it, even when the Claude config folder is a symlink.
+		paths = append(paths, realPath(claude.SessionFolder(claude.UserConfigDir(env.Environ, env.Home), filepath.Join(workspace, "repo"))))
 	}
 	return paths
 }
@@ -68,18 +71,21 @@ type Orphan struct {
 type AliveError struct{ Runs []string }
 
 func (e *AliveError) Error() string {
-	return fmt.Sprintf("the agent of %s may still be running (its Agentium process ended): wait for it to finish, or stop it, then try again",
-		strings.Join(e.Runs, ", "))
+	return fmt.Sprintf("%s may still be running (its Agentium process ended): wait for it to finish, or stop it, then try again "+
+		"(ps -o pid,command -g PGID shows what it is; after a restart the number may belong to something else)", strings.Join(e.Runs, ", "))
 }
 
 // Recover finds the runs in the records folder that stored does not know. Call it only while holding the data
 // folder's run lock (home.Layout.LockRuns), when no other process can be running agents:
+//   - a run that finished (its runner was killed before storing it) is returned as it finished;
 //   - a run whose agent never started spent nothing: its records and workspace are removed;
 //   - a started run becomes a cancelled Record with what its transcript shows it spent (priced from its requests when
-//     Claude Code wrote no result), redacted with secret; its workspace and grading copy are removed;
-//   - a run whose agent's process group still exists is left alone and reported in an *AliveError, along with the
-//     runs that were recovered.
-func Recover(layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
+//     Claude Code wrote no result), redacted with secret;
+//   - a run whose current command's process group (setup, the agent, verification) still exists is left alone and
+//     reported in an *AliveError, along with the runs that were recovered.
+//
+// The workspaces and grading copies of recovered runs are removed.
+func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
 	entries, err := os.ReadDir(layout.Records)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -90,6 +96,9 @@ func Recover(layout home.Layout, stored func(id string) (bool, error), secret st
 	var orphans []Orphan
 	alive := &AliveError{}
 	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return orphans, err
+		}
 		if !e.IsDir() {
 			continue
 		}
@@ -115,8 +124,8 @@ func Recover(layout home.Layout, stored func(id string) (bool, error), secret st
 		if err := json.Unmarshal(data, &s); err != nil {
 			return orphans, fmt.Errorf("run %s: start file: %w", e.Name(), err)
 		}
-		if s.PGID > 0 && groupExists(s.PGID) {
-			alive.Runs = append(alive.Runs, fmt.Sprintf("run %s (process group %d)", e.Name(), s.PGID))
+		if s.PGID > 0 && !s.Finished && groupExists(s.PGID) {
+			alive.Runs = append(alive.Runs, fmt.Sprintf("the agent or a command of run %s (process group %d)", e.Name(), s.PGID))
 			continue
 		}
 		workspace := realPath(s.Workspace)
@@ -129,7 +138,13 @@ func Recover(layout home.Layout, stored func(id string) (bool, error), secret st
 		if err := os.RemoveAll(filepath.Join(dir, "verify")); err != nil {
 			return orphans, fmt.Errorf("remove the grading copy of %s: %w", e.Name(), err)
 		}
-		if !s.AgentStarted {
+		if s.Finished && s.Record.Outcome != "" {
+			rec := s.Record
+			rec.Notes = append(rec.Notes, "stored on recovery: Agentium stopped after the run finished, before storing it")
+			orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
+			continue
+		}
+		if !s.AgentStarted || s.Finished { // nothing spent, or a run that ended before its agent (executeRun drops those)
 			if err := os.RemoveAll(dir); err != nil {
 				return orphans, fmt.Errorf("remove %s: %w", dir, err)
 			}

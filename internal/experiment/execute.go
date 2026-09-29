@@ -168,7 +168,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		now := time.Now()
 		blocked := false
 		var wake time.Time
-		if stopNote == "" && ctx.Err() == nil {
+		if stopNote == "" && runErr == nil && ctx.Err() == nil {
 			low := len(state)
 			for i := range state {
 				if !state[i].finished() {
@@ -247,7 +247,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			case stopNote != "":
 				sum.Status, sum.Note = StatusStopped, stopNote
 				return sum, nil
-			case blocked:
+			case blocked && wake.IsZero(): // a run waiting to be retried comes first in order, and may still fit
 				sum.Status = StatusBudget
 				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, $%.2f per run at most)", p.BudgetUSD, spent, p.RunCapUSD)
 				return sum, nil
@@ -257,7 +257,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		}
 		var timer *time.Timer
 		var tick <-chan time.Time
-		if !wake.IsZero() && running < p.Concurrency && stopNote == "" {
+		if !wake.IsZero() && running < p.Concurrency && stopNote == "" && runErr == nil {
 			timer = time.NewTimer(time.Until(wake))
 			tick = timer.C
 		}

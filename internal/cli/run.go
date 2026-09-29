@@ -208,7 +208,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 		release()
 		return nil, err
 	}
-	orphans, recoverErr := run.Recover(w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now())
+	orphans, recoverErr := run.Recover(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now())
 	for _, o := range orphans {
 		meta := runMeta{ProjectID: w.project.ID, Kind: "task"}
 		if len(o.Meta) > 0 {

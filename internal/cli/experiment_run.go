@@ -78,6 +78,15 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 
 	var lock experiment.Lock
 	if stored.Lock == nil {
+		var raised *experiment.BudgetChange
+		if *budget > 0 && *budget != d.BudgetUSD { // the design's budget, changed before anything ran
+			if *budget < d.BudgetUSD {
+				fmt.Fprintf(env.Stderr, "agentium experiment run: the budget can only be raised (it is $%.2f)\n", d.BudgetUSD)
+				return ExitUsage
+			}
+			raised = &experiment.BudgetChange{At: env.Now().UTC(), From: d.BudgetUSD, To: *budget}
+			d.BudgetUSD = *budget
+		}
 		fmt.Fprintf(out, "Checking experiment %s before its first run:\n", name)
 		eligible, reasons, err := eligibleTasks(ctx, w, d.Arms)
 		if err != nil {
@@ -93,12 +102,18 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		if lock, err = buildLock(ctx, env, w, d, cli, version, mode); err != nil {
 			return fail(env, err)
 		}
+		if raised != nil {
+			lock.BudgetChanges = append(lock.BudgetChanges, *raised)
+		}
 		encoded, err := json.Marshal(lock)
 		if err != nil {
 			return fail(env, fmt.Errorf("encode lock: %w", err))
 		}
 		if err := w.db.LockExperiment(ctx, stored.ID, encoded); err != nil {
 			return fail(env, err)
+		}
+		if raised != nil {
+			fmt.Fprintf(out, "Budget raised to $%.2f (recorded in the lock).\n", raised.To)
 		}
 		fmt.Fprintf(out, "Locked: Claude Code %s, %s, sign-in %s, %d runs in a seeded order (seed %d), prices of %s.\n",
 			lock.ClaudeCode, d.Model, lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable)
@@ -109,16 +124,27 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		if err := lock.Check(version, mode); err != nil {
 			return fail(env, fmt.Errorf("experiment %s cannot continue: %w", name, err))
 		}
+		if host := runtime.GOOS + "/" + runtime.GOARCH; host != lock.Host {
+			return fail(env, fmt.Errorf("experiment %s cannot continue: its runs ran on %s, this is %s", name, lock.Host, host))
+		}
+		var commits []string
 		for _, a := range lock.Arms {
-			if a.Snapshot != "" {
-				if _, err := gitx.Run(ctx, "--git-dir", w.bare, "cat-file", "-e", a.Snapshot+"^{commit}"); err != nil {
-					return fail(env, fmt.Errorf("experiment %s cannot continue: arm %s's snapshot commit %s is gone", name, a.Name, shortCommit(a.Snapshot)))
-				}
+			commits = append(commits, a.Snapshot)
+		}
+		for _, t := range lock.Tasks {
+			commits = append(commits, t.Base, t.Solution)
+		}
+		for _, c := range commits {
+			if c == "" {
+				continue
+			}
+			if _, err := gitx.Run(ctx, "--git-dir", w.bare, "cat-file", "-e", c+"^{commit}"); err != nil {
+				return fail(env, fmt.Errorf("experiment %s cannot continue: commit %s is gone from Agentium's repository", name, shortCommit(c)))
 			}
 		}
 		fmt.Fprintf(out, "Resuming experiment %s (locked %s on Claude Code %s).\n", name, lock.LockedAt.Format("2006-01-02 15:04"), lock.ClaudeCode)
 	}
-	if *budget > 0 && *budget != lock.Design.BudgetUSD {
+	if stored.Lock != nil && *budget > 0 && *budget != lock.Design.BudgetUSD {
 		if *budget < lock.Design.BudgetUSD {
 			fmt.Fprintf(env.Stderr, "agentium experiment run: the budget can only be raised (it is $%.2f)\n", lock.Design.BudgetUSD)
 			return ExitUsage
@@ -151,8 +177,8 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	runEnv.Progress = nil // the scheduler reports one line per run
-	if err := w.db.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil {
+	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
+	if err := w.db.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return fail(env, err)
 	}
 	total, design := len(lock.Schedule), lock.Design
@@ -192,8 +218,10 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			}
 		}
 		meta := runMeta{Kind: "task", ExperimentID: stored.ID, Slot: slot.Position, Attempt: attempt}
-		if current, err := w.db.TaskByName(ctx, w.project.ID, t.Name); err == nil {
-			meta.TaskID = current.ID
+		if current, err := w.db.TaskByName(ctx, w.project.ID, t.Name); err == nil && experiment.NewLockedTask(current.Name, current.Instruction,
+			task.Spec{Base: current.BaseCommit, Solution: current.SolutionCommit, HiddenTests: current.HiddenTests, Reference: current.Reference,
+				Setup: current.Setup, Verify: current.Verify}).Digest == t.Digest {
+			meta.TaskID = current.ID // linked only while the task is the one the lock ran
 		}
 		rec, err := executeRun(ctx, env, w, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 			Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
@@ -213,10 +241,11 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	sum, runErr := experiment.Execute(ctx, experiment.Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunBudgetUSD,
 		BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: progress}, execute)
-	if sum.Status != "" {
-		if err := w.db.SetExperimentStatus(context.WithoutCancel(ctx), stored.ID, sum.Status, sum.Note); err != nil {
-			return fail(env, errors.Join(runErr, err))
-		}
+	if sum.Status == "" { // Execute refused its input
+		sum.Status, sum.Note = experiment.StatusStopped, "Agentium could not start the runs: "+runErr.Error()
+	}
+	if err := w.db.SetExperimentStatus(context.WithoutCancel(ctx), stored.ID, sum.Status, sum.Note); err != nil {
+		return fail(env, errors.Join(runErr, err))
 	}
 	fmt.Fprintln(out)
 	if err := printProgress(context.WithoutCancel(ctx), env, w, name, stored.ID, lock); err != nil {
@@ -340,6 +369,9 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 	status := stored.Status
 	if stored.StatusNote != "" {
 		status += ": " + stored.StatusNote
+	}
+	if stored.Status == store.StatusRunning && !w.layout.RunsBusy() {
+		status = "stopped (its Agentium process ended; run it again to resume)"
 	}
 	fmt.Fprintf(out, "Experiment %s: %s\n", name, status)
 	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD)
