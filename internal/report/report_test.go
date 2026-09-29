@@ -2,8 +2,10 @@ package report
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +123,67 @@ func TestReportGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	golden(t, "lean-ab.md", md.Bytes())
-	golden(t, "lean-ab.json", js.Bytes())
+	goldenJSON(t, "lean-ab.json", js.Bytes())
+}
+
+// goldenJSON compares JSON with the golden file, numbers within 1e-9 relative: the last digits of floating-point
+// results differ between machines (arm64 fuses multiply-adds, amd64 does not).
+func goldenJSON(t *testing.T, name string, got []byte) {
+	t.Helper()
+	path := filepath.Join("testdata", name)
+	if *update {
+		golden(t, name, got)
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%v (run with -update to create it)", err)
+	}
+	var want, have any
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(got, &have); err != nil {
+		t.Fatal(err)
+	}
+	if where := jsonDiff("", want, have); where != "" {
+		t.Errorf("%s differs from the golden file at %s (run with -update after checking):\n%s", name, where, got)
+	}
+}
+
+func jsonDiff(at string, want, have any) string {
+	switch w := want.(type) {
+	case float64:
+		h, ok := have.(float64)
+		if !ok || math.Abs(w-h) > 1e-9*math.Max(1, math.Abs(w)) {
+			return at
+		}
+	case map[string]any:
+		h, ok := have.(map[string]any)
+		if !ok || len(h) != len(w) {
+			return at
+		}
+		for k, v := range w {
+			if d := jsonDiff(at+"."+k, v, h[k]); d != "" {
+				return d
+			}
+		}
+	case []any:
+		h, ok := have.([]any)
+		if !ok || len(h) != len(w) {
+			return at
+		}
+		for i := range w {
+			if d := jsonDiff(fmt.Sprintf("%s[%d]", at, i), w[i], h[i]); d != "" {
+				return d
+			}
+		}
+	default:
+		if want != have {
+			return at
+		}
+	}
+	return ""
 }
 
 func TestReportContents(t *testing.T) {
