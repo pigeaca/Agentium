@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -175,12 +176,22 @@ func Build(in Input) (Report, error) {
 	return rep, nil
 }
 
-// scrub makes text shareable: the data folder and home folder become placeholders, and credential-shaped strings are
-// redacted.
+// scrub makes text shareable: the data folder and home folder, as written and as resolved (/var and /private/var on
+// macOS), become placeholders where they are whole path components, and credential-shaped strings are redacted.
 func (in Input) scrub(text string) string {
 	for _, p := range []struct{ path, as string }{{in.DataDir, "<agentium data>"}, {in.Home, "~"}} {
-		if p.path != "" && p.path != "/" {
-			text = strings.ReplaceAll(text, p.path, p.as)
+		if p.path == "" || p.path == "/" {
+			continue
+		}
+		spellings := []string{filepath.Clean(p.path)}
+		if resolved, err := filepath.EvalSymlinks(p.path); err == nil && resolved != spellings[0] {
+			spellings = append(spellings, resolved)
+		}
+		slices.SortFunc(spellings, func(a, b string) int { return len(b) - len(a) }) // /private/var/x before /var/x
+		for _, s := range spellings {
+			// Whole components only: /Users/v must not turn /Users/vlad into ~lad, nor /var/x match in /private/var/x.
+			whole := regexp.MustCompile(`(^|[^A-Za-z0-9._/-])` + regexp.QuoteMeta(s) + `([/\s"':;,)\]]|$)`)
+			text = whole.ReplaceAllString(text, "${1}"+p.as+"${2}")
 		}
 	}
 	return string(run.Redact([]byte(text), ""))
