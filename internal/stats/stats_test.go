@@ -153,41 +153,38 @@ func TestDecide(t *testing.T) {
 	same := func(est, lo95, hi95, lo90, hi90 float64) Evidence {
 		return Evidence{Boot95: interval(est, lo95, hi95), T95: interval(est, lo95, hi95), Boot90: interval(est, lo90, hi90), T90: interval(est, lo90, hi90)}
 	}
+	cost, success := RatioMargin(0.10, LowerIsBetter), Symmetric(0.15)
 	for _, c := range []struct {
 		name       string
 		e          Evidence
 		dir        Direction
-		margin     float64
+		margin     Margin
 		guard      bool
 		belowFloor bool
 		want       string
 		warn       bool
 	}{
-		{"cost down", same(-0.2, -0.3, -0.1, -0.28, -0.12), LowerIsBetter, 0.0953, false, false, Improved, false},
-		{"cost down, small", same(-0.05, -0.08, -0.02, -0.07, -0.03), LowerIsBetter, 0.0953, false, false, ImprovedSmall, false},
+		{"cost down", same(-0.2, -0.3, -0.1, -0.28, -0.12), LowerIsBetter, cost, false, false, Improved, false},
+		{"cost down, small", same(-0.05, -0.08, -0.02, -0.07, -0.03), LowerIsBetter, cost, false, false, ImprovedSmall, false},
 		// A 9.5% reduction is within a 10% margin: small, though log 0.905 reaches past log 1.1.
-		{"cost down 9.5%", same(math.Log(0.905), math.Log(0.88), math.Log(0.93), math.Log(0.89), math.Log(0.92)), LowerIsBetter, 0, false, false, ImprovedSmall, false},
+		{"cost down 9.5%", same(math.Log(0.905), math.Log(0.88), math.Log(0.93), math.Log(0.89), math.Log(0.92)), LowerIsBetter, cost, false, false, ImprovedSmall, false},
 		// Equivalence for cost is a ratio within [0.90, 1.10].
-		{"cost equivalent", same(math.Log(0.97), math.Log(0.905), math.Log(1.04), math.Log(0.91), math.Log(1.03)), LowerIsBetter, 0, false, false, Equivalent, false},
-		{"cost not equivalent", same(math.Log(0.97), math.Log(0.88), math.Log(1.04), math.Log(0.895), math.Log(1.03)), LowerIsBetter, 0, false, false, Inconclusive, false},
-		{"cost up", same(0.2, 0.1, 0.3, 0.12, 0.28), LowerIsBetter, 0.0953, false, false, Regressed, false},
-		{"success up", same(0.2, 0.05, 0.35, 0.08, 0.32), HigherIsBetter, 0.15, false, false, Improved, false},
-		{"success down", same(-0.2, -0.35, -0.05, -0.32, -0.08), HigherIsBetter, 0.15, true, false, Regressed, false},
-		{"equivalent", same(0.01, -0.12, 0.14, -0.1, 0.12), HigherIsBetter, 0.15, true, false, Equivalent, false},
-		{"no loss", same(0.1, -0.12, 0.3, -0.1, 0.28), HigherIsBetter, 0.15, true, false, NoLoss, false},
-		{"no loss is the guard's only", same(0.1, -0.12, 0.3, -0.1, 0.28), HigherIsBetter, 0.15, false, false, Inconclusive, false},
-		{"inconclusive", same(0, -0.3, 0.3, -0.25, 0.25), HigherIsBetter, 0.15, true, false, Inconclusive, false},
-		{"below the floor", same(-0.2, -0.3, -0.1, -0.28, -0.12), LowerIsBetter, 0.0953, false, true, Exploratory, false},
-		{"a regression below the floor warns", same(0.2, 0.1, 0.3, 0.12, 0.28), LowerIsBetter, 0.0953, false, true, Exploratory, true},
+		{"cost equivalent", same(math.Log(0.97), math.Log(0.905), math.Log(1.04), math.Log(0.91), math.Log(1.03)), LowerIsBetter, cost, false, false, Equivalent, false},
+		{"cost not equivalent", same(math.Log(0.97), math.Log(0.88), math.Log(1.04), math.Log(0.895), math.Log(1.03)), LowerIsBetter, cost, false, false, Inconclusive, false},
+		{"cost up", same(0.2, 0.1, 0.3, 0.12, 0.28), LowerIsBetter, cost, false, false, Regressed, false},
+		{"success up", same(0.2, 0.05, 0.35, 0.08, 0.32), HigherIsBetter, success, false, false, Improved, false},
+		{"success down", same(-0.2, -0.35, -0.05, -0.32, -0.08), HigherIsBetter, success, true, false, Regressed, false},
+		{"equivalent", same(0.01, -0.12, 0.14, -0.1, 0.12), HigherIsBetter, success, true, false, Equivalent, false},
+		{"no loss", same(0.1, -0.12, 0.3, -0.1, 0.28), HigherIsBetter, success, true, false, NoLoss, false},
+		{"no loss is the guard's only", same(0.1, -0.12, 0.3, -0.1, 0.28), HigherIsBetter, success, false, false, Inconclusive, false},
+		{"inconclusive", same(0, -0.3, 0.3, -0.25, 0.25), HigherIsBetter, success, true, false, Inconclusive, false},
+		{"below the floor", same(-0.2, -0.3, -0.1, -0.28, -0.12), LowerIsBetter, cost, false, true, Exploratory, false},
+		{"a regression below the floor warns", same(0.2, 0.1, 0.3, 0.12, 0.28), LowerIsBetter, cost, false, true, Exploratory, true},
 		// The bootstrap excludes zero but the t-interval does not: no verdict either way.
 		{"intervals disagree", Evidence{Boot95: interval(-0.2, -0.3, -0.1), T95: interval(-0.2, -0.35, 0.02), Boot90: interval(-0.2, -0.28, -0.12),
-			T90: interval(-0.2, -0.31, -0.05)}, LowerIsBetter, 0.0953, false, false, Inconclusive, false},
+			T90: interval(-0.2, -0.31, -0.05)}, LowerIsBetter, cost, false, false, Inconclusive, false},
 	} {
-		margin := Symmetric(c.margin)
-		if c.dir == LowerIsBetter {
-			margin = RatioMargin(0.10, LowerIsBetter)
-		}
-		verdict, warning := Decide(c.e, c.dir, margin, c.guard, c.belowFloor)
+		verdict, warning := Decide(c.e, c.dir, c.margin, c.guard, c.belowFloor)
 		if verdict != c.want || (warning != "") != c.warn {
 			t.Errorf("%s: %q, warning %q; want %q (warning %v)", c.name, verdict, warning, c.want, c.warn)
 		}
