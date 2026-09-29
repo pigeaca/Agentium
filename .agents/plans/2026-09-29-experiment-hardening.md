@@ -1,0 +1,100 @@
+# Experiment hardening, then a 24-run context A/B
+
+- Date: 2026-09-29
+- Status: In Progress (plan awaiting approval by merge)
+- Scope: after Phase 1 closed, the user asked for the next step "that way" (2026-09-29): first harden experiments against what step 7 found, then run a context A/B of 12 tasks × 1 run per arm (24 runs, about two usage windows) instead of the Quick tier's 72. The paid A/B needs its own approval of budget and timing.
+
+## Why
+
+Step 7 ([Phase 1 plan](archive/2026-09-28-phase1-context-ab-cli.md)) showed that real experiments fail on logistics, not statistics:
+- **Usage limits.** With a subscription login, each run used about 5–6.7% of the five-hour window. External scripts had to pause the runs.
+- **Unfair tasks.** Three of six tasks passed validation and review but could not be solved from their instructions. Only paid runs revealed it.
+- **Hand-computed noise.** The noise estimates were worked out by hand.
+- **Floors.** The study's floors (§5.6: 3 runs per task per arm) make any 1-run design exploratory, whatever its size.
+
+## Acceptance
+
+Each item maps to evidence. Changing any of them needs the user's agreement.
+
+1. **Rate-limit awareness.**
+   - Each run records the plan's usage readings from Claude Code's stream: five-hour and seven-day utilization, reset times and status.
+   - `experiment run` takes `--usage-limit PCT` (default 85). No new pair starts when the latest reading, plus the pair's expected use, would pass the limit.
+   - Runs in flight finish and are never cancelled. The experiment then stops as "paused: usage", says when the window resets, and resumes with `experiment run`.
+   - `--wait` sleeps until the reset instead, then continues.
+   - Expected use per run is the median rise per run in this project's earlier runs (default 6%).
+   - `experiment plan` shows the use per run, the windows the experiment needs, and whether the current window fits.
+   - Runs with an API key or token report no readings; they never pause, and the preview says so.
+
+   *Evidence:* end-to-end tests with the fake `claude` and a fake clock covering a pause between pairs, a wait and resume, the preview, and a stream without readings.
+2. **Task fairness check.** For each task, list what the hidden tests require that neither the instruction nor the base code states.
+   - Go: exact string literals that the tests compare against, and identifiers (functions, methods, fields, types) that the tests use but the base does not define.
+   - Other languages: string literals only.
+
+   `task show`, `task validate` and `experiment plan` show the list, and `task list` shows its count. Marking a task reviewed with a non-empty list needs `--accept-gaps`.
+
+   *Evidence:* hermetic fixtures rebuilding step 7's three unfair cases (an exact error message, a new struct field, a note text) are flagged; with those stated in the instruction, nothing is flagged.
+3. **Noise in reports, and one-run verdicts.**
+   - Reports show σ, τ for an A/B, and w when success varies, each with a range.
+   - An A/A compares them with the planner's defaults.
+   - The cost floor counts tasks with at least one counted run in both arms, instead of three. This applies only if a seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25) shows:
+     - A/A false differences at 6% or below;
+     - 95% intervals covering the true effect in at least 93% of cases.
+
+     Otherwise the floors stay, and the A/B's verdicts stay exploratory.
+   - The success floor does not change.
+   - The method version becomes `phase1-v2`, and locked experiments keep their method.
+
+   *Evidence:* the simulation test, and updated golden reports.
+4. **Small fixes.**
+   - A run stopped before it starts is reported as such, not as "none found".
+   - Go's module-cache stat warning and the zsh glob failures are fixed, or documented with a reason.
+
+   *Evidence:* tests, or the plan's record. The three tasks already spawned can deliver these.
+5. **Twelve fair tasks** in the acceptance data folder: the six from step 7, plus six or more from Agentium's history, ideally some that agents fail sometimes. Each task:
+   - has an issue-style instruction;
+   - passes the fairness check;
+   - passes an independent review of instruction against hidden tests;
+   - is valid in both A/B arms, which pass each task base's docs check.
+
+   *Evidence:* the task list, validation logs and the recorded review.
+6. **The 24-run A/B (paid; separate approval).**
+   - Arms `full` against `minimal`, as in step 7's A/B, unless the user picks others at approval.
+   - 12 tasks × 1 run per arm, with both arms calibrated first.
+   - Run with `--usage-limit 85 --wait`.
+   - Estimated $20–25 at list prices, over about two windows.
+
+   *Evidence:* the report, the costs compared with the preview, and the usage readings.
+
+## Work
+Each step is one PR with green CI and a review, except step 5 (data, no code) and step 6 (paid runs).
+
+- [ ] **1. Rate-limit awareness** (`internal/claude` readings, `internal/run` records, `internal/experiment` pause and wait, `internal/cli` flags and preview).
+- [ ] **2. Task fairness check** (`internal/task`, using `go/parser` from the standard library).
+- [ ] **3. Noise in reports, and one-run verdicts** (`internal/stats`, `internal/experiment`, `internal/report`). The method change applies only if the simulation passes.
+- [ ] **4. Small fixes**, through the spawned tasks where they have started.
+- [ ] **5. Twelve fair tasks**: import, rewrite, check, review, validate. Free.
+- [ ] **6. The A/B**, after approval. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.
+
+## Boundaries
+- No new dependencies; `go/parser` is in the standard library.
+- No real Claude Code runs before step 6's approval; tests use the fake `claude`. Calibrations and runs in step 6 count against the approved budget.
+- Claude Code only. Phase 2 (web UI, Codex, agent comparison) is not part of this plan.
+- Usage readings are only read from the stream and stored with runs; nothing is sent anywhere.
+- The method changes only through step 3's simulation gate.
+- The user's repository is never written. Arm B's docs stay on a local branch, not merged.
+
+## Verification
+- Every step: `harness.py check changed`, CI, and a review.
+- Steps 1–3: end-to-end tests with the fake `claude`, and the seeded simulation.
+- Step 5: `task validate` in both arms, the docs check per arm, and the fairness review.
+- Step 6: the report, and the preview's estimates compared with the actual spend and usage.
+
+## Parallel ownership
+Step 4's spawned tasks each get their own worktree and PR. Before they merge, steps 1–3 must not edit their files: the run progress line in `internal/cli/experiment_run.go`, and the sandbox environment in `internal/claude/invoke.go`.
+
+## Metrics
+- Agent: <client> / <exact model id> / <effort>
+- Elapsed: <minutes>m
+- Check-fix loops: <n>
+- User corrections: <n>
+- Review: <verdict>
