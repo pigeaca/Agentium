@@ -37,6 +37,9 @@ const experimentUsage = `Usage:
                      the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total
   agentium experiment show NAME
                      the lock and the progress per arm
+  agentium experiment report NAME [--json] [--out FILE]
+                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes, as Markdown
+                     (for a pull request) or JSON (with the lock and every run)
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
 
@@ -58,6 +61,8 @@ func runExperiment(ctx context.Context, env Env, args []string) int {
 		return experimentRun(ctx, env, args[1:])
 	case "show":
 		return experimentShow(ctx, env, args[1:])
+	case "report":
+		return experimentReport(ctx, env, args[1:])
 	case "list":
 		return experimentList(ctx, env, args[1:])
 	case "rm":
