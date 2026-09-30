@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -17,6 +18,7 @@ import (
 func experimentReport(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment report", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "write JSON (the lock, every run and the results) instead of Markdown")
+	markdown := fs.Bool("markdown", false, "write Markdown even on a terminal")
 	out := fs.String("out", "", "write to this file instead of the terminal")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
@@ -65,9 +67,15 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	// Markdown is for files, pipes and pull requests; on a terminal (unless asked otherwise) the report is
+	// rendered for reading there, colored as the terminal allows.
 	render := rep.Markdown
-	if *asJSON {
+	switch {
+	case *asJSON:
 		render = rep.JSON
+	case env.Terminal && !*markdown && *out == "":
+		st := env.style()
+		render = func(w io.Writer) error { return rep.Terminal(w, st) }
 	}
 	var buf bytes.Buffer // rendered whole first, so a failure leaves no partial file
 	if err := render(&buf); err != nil {

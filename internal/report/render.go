@@ -78,22 +78,6 @@ func (r Report) Markdown(w io.Writer) error {
 	}
 
 	b.WriteString("\n## Behavior\n\nRuns counted in each arm, unless a total.\n\n| | A | B |\n|---|---|---|\n")
-	behaviorRows := []struct {
-		label string
-		value func(Behavior) string
-	}{
-		{"changed a test file", func(x Behavior) string { return fmt.Sprint(x.TestsChanged) }},
-		{"test files removed (total)", func(x Behavior) string { return fmt.Sprint(x.TestsRemoved) }},
-		{"ran tests", func(x Behavior) string { return fmt.Sprint(x.RanTests) }},
-		{"ran the task's checks", func(x Behavior) string { return fmt.Sprint(x.RanChecks) }},
-		{"committed", func(x Behavior) string { return fmt.Sprint(x.Committed) }},
-		{"changed the checks", func(x Behavior) string { return fmt.Sprint(x.ChecksChanged) }},
-		{"passed with changed runner configuration (a failure here)", func(x Behavior) string { return fmt.Sprint(x.ConfigPasses) }},
-		{"permission denials (total)", func(x Behavior) string { return fmt.Sprint(x.Denials) }},
-		{"files changed (mean)", func(x Behavior) string { return num(x.FilesChanged, "%.1f") }},
-		{"lines changed (mean)", func(x Behavior) string { return num(x.LinesChanged, "%.1f") }},
-		{"shell commands (mean)", func(x Behavior) string { return num(x.BashCommands, "%.1f") }},
-	}
 	for _, row := range behaviorRows {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
 	}
@@ -113,13 +97,38 @@ func (r Report) Markdown(w io.Writer) error {
 	return err
 }
 
+// behaviorRows are the behavior table's rows: a label and how to read it from an arm.
+var behaviorRows = []struct {
+	label string
+	value func(Behavior) string
+}{
+	{"changed a test file", func(x Behavior) string { return fmt.Sprint(x.TestsChanged) }},
+	{"test files removed (total)", func(x Behavior) string { return fmt.Sprint(x.TestsRemoved) }},
+	{"ran tests", func(x Behavior) string { return fmt.Sprint(x.RanTests) }},
+	{"ran the task's checks", func(x Behavior) string { return fmt.Sprint(x.RanChecks) }},
+	{"committed", func(x Behavior) string { return fmt.Sprint(x.Committed) }},
+	{"changed the checks", func(x Behavior) string { return fmt.Sprint(x.ChecksChanged) }},
+	{"passed with changed runner configuration (a failure here)", func(x Behavior) string { return fmt.Sprint(x.ConfigPasses) }},
+	{"permission denials (total)", func(x Behavior) string { return fmt.Sprint(x.Denials) }},
+	{"files changed (mean)", func(x Behavior) string { return num(x.FilesChanged, "%.1f") }},
+	{"lines changed (mean)", func(x Behavior) string { return num(x.LinesChanged, "%.1f") }},
+	{"shell commands (mean)", func(x Behavior) string { return num(x.BashCommands, "%.1f") }},
+}
+
 // headline says a primary or guard metric's result in words.
 func headline(res experiment.MetricResult, d experiment.Design) string {
+	bold, mid, verdict := headlineParts(res, d)
+	return "**" + bold + "**" + mid + verdict + "."
+}
+
+// headlineParts splits a headline into its bold subject, the text up to the verdict, and the verdict (without the
+// final full stop), so the terminal rendering can style the parts.
+func headlineParts(res experiment.MetricResult, d experiment.Design) (bold, mid, verdict string) {
 	if res.Tasks < 2 {
-		return fmt.Sprintf("**%s**: no result (%s).", title(res.Metric), res.Note)
+		return title(res.Metric), ": ", fmt.Sprintf("no result (%s)", res.Note)
 	}
 	i, level := verdictInterval(res)
-	verdict := res.Verdict
+	verdict = res.Verdict
 	switch verdict {
 	case stats.Regressed:
 		if res.Role == experiment.RoleGuard {
@@ -148,10 +157,10 @@ func headline(res experiment.MetricResult, d experiment.Design) string {
 		}
 	}
 	if res.Ratio {
-		return fmt.Sprintf("**%s %s** (%s: %s to %s): %s.", title(res.Metric), change(i.Estimate), level, change(i.Low), change(i.High), verdict)
+		return title(res.Metric) + " " + change(i.Estimate), fmt.Sprintf(" (%s: %s to %s): ", level, change(i.Low), change(i.High)), verdict
 	}
-	return fmt.Sprintf("**%s %s → %s**, Δ %+.0f pp (%s: %+.0f to %+.0f): %s.", title(res.Metric), pctOf(res.A), pctOf(res.B), 100*i.Estimate, level,
-		100*i.Low, 100*i.High, verdict)
+	return fmt.Sprintf("%s %s → %s", title(res.Metric), pctOf(res.A), pctOf(res.B)),
+		fmt.Sprintf(", Δ %+.0f pp (%s: %+.0f to %+.0f): ", 100*i.Estimate, level, 100*i.Low, 100*i.High), verdict
 }
 
 func change(ratio float64) string { return fmt.Sprintf("%+.0f%%", 100*(ratio-1)) }
@@ -231,24 +240,50 @@ func orDash(s string) string {
 // writeNoise writes the noise section: each component with its range, next to the planner's default, and how it was
 // estimated. Without two tasks with cost in both arms there is nothing to estimate.
 func writeNoise(b *strings.Builder, r Report) {
-	n := r.Analysis.Noise
-	if n == nil {
+	n, ok := noiseOf(r)
+	if !ok {
 		return
 	}
-	aa := r.Template == experiment.TemplateAA
-	fmt.Fprintf(b, "\n## Noise\n\nWhat the runs show, for planning later experiments: %d task(s), %.1f run(s) per task and arm on average; 95%% ranges.", n.Tasks, n.Repeats)
-	if aa {
-		b.WriteString(" Both arms use the same context, so this is the noise itself; compare it with the planner's defaults, which size every preview until a calibration replaces them.")
-	}
-	b.WriteString(" Cost ranges assume normal noise in log cost; with few tasks every range is wide.\n\n")
+	fmt.Fprintf(b, "\n## Noise\n\n%s\n\n", n.intro)
 	b.WriteString("| Component | Estimate | 95% range | Planner's default | How it was estimated |\n|---|---|---|---|---|\n")
+	for _, row := range n.rows {
+		fmt.Fprintf(b, "| %s | %s | %s | %s | %s |\n", row[0], row[1], row[2], row[3], row[4])
+	}
+	if n.noSuccessSpread {
+		b.WriteString("\nSuccess did not vary (every counted run passed, or every one failed), so there is no w.\n")
+	}
+}
+
+// noise is the noise section's content, shared by the Markdown and terminal renderings.
+type noise struct {
+	intro string
+	// rows are the table's cells: component, estimate, 95% range, planner's default, how it was estimated.
+	rows            [][]string
+	noSuccessSpread bool // success did not vary, so w has no row
+}
+
+var noiseColumns = []string{"Component", "Estimate", "95% range", "Planner's default", "How it was estimated"}
+
+// noiseOf collects the noise section; ok is false when there is no estimate.
+func noiseOf(r Report) (noise, bool) {
+	n := r.Analysis.Noise
+	if n == nil {
+		return noise{}, false
+	}
+	aa := r.Template == experiment.TemplateAA
+	out := noise{}
+	out.intro = fmt.Sprintf("What the runs show, for planning later experiments: %d task(s), %.1f run(s) per task and arm on average; 95%% ranges.", n.Tasks, n.Repeats)
+	if aa {
+		out.intro += " Both arms use the same context, so this is the noise itself; compare it with the planner's defaults, which size every preview until a calibration replaces them."
+	}
+	out.intro += " Cost ranges assume normal noise in log cost; with few tasks every range is wide."
 	tauDefault := fmt.Sprintf("%.2f–%.2f", experiment.TauLow, experiment.TauHigh)
 	row := func(label string, c *experiment.Component, low, high float64, def, missing string) {
 		if c == nil {
-			fmt.Fprintf(b, "| %s | - | - | %s | %s |\n", label, def, missing)
+			out.rows = append(out.rows, []string{label, "-", "-", def, missing})
 			return
 		}
-		fmt.Fprintf(b, "| %s | %.2f | %.2f–%.2f | %s: %s | %s |\n", label, c.Estimate, c.Low, c.High, def, compare(low, high, c), c.Basis)
+		out.rows = append(out.rows, []string{label, fmt.Sprintf("%.2f", c.Estimate), fmt.Sprintf("%.2f–%.2f", c.Low, c.High), def + ": " + compare(low, high, c), c.Basis})
 	}
 	row("σ, per-run spread of log cost", n.Sigma, experiment.SigmaLogCost, experiment.SigmaLogCost, fmt.Sprintf("%.2f", experiment.SigmaLogCost),
 		"not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ")
@@ -256,14 +291,15 @@ func writeNoise(b *strings.Builder, r Report) {
 		row("τ, spread of the cost effect across tasks", n.Tau, experiment.TauLow, experiment.TauHigh, tauDefault, "")
 	}
 	if !n.SuccessVaries {
-		b.WriteString("\nSuccess did not vary (every counted run passed, or every one failed), so there is no w.\n")
-		return
+		out.noSuccessSpread = true
+		return out, true
 	}
 	row("w, per-run variance of success", n.W, experiment.WSuccess, experiment.WSuccess, fmt.Sprintf("%.2f", experiment.WSuccess),
 		"not separable from τ with one run per arm in an A/B")
 	if !aa && n.TauSuccess != nil {
 		row("τ, spread of the success effect across tasks", n.TauSuccess, experiment.TauLow, experiment.TauHigh, tauDefault, "")
 	}
+	return out, true
 }
 
 // compare places a default (a value, or a range from low to high) against a measured range: a default outside it
