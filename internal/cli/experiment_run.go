@@ -197,7 +197,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		gate.PerRun, _ = experiment.UsagePerRun(samples)
 		var have bool
 		if gate.Latest, have = experiment.LatestUsage(samples); have {
-			status.usage, status.hasUsage = gate.Latest.FiveHourAt(env.Now()), true
+			status.usage, status.hasUsage = gate.Latest, true
 		}
 		if *wait {
 			gate.Wait = func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) }
@@ -218,8 +218,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		design.Concurrency, design.RunBudgetUSD, design.Timeout, design.BudgetUSD)
 	live.Show(func() string { return status.text(env.Now()) })
 	progress := func(e experiment.Event) {
-		status.update(e)
-		live.Tick() // the numbers changed: draw them now
+		status.update(e) // every event prints a line below, which redraws the status line with the new numbers
 		label := fmt.Sprintf("[%d/%d] %s, arm %s, repeat %d", e.Slot.Position+1, total, e.Slot.Task, e.Slot.Arm, e.Slot.Repeat)
 		switch e.Kind {
 		case "start":
@@ -514,9 +513,18 @@ type runStatus struct {
 	settled  map[int]bool // slots with a settled run, stored ones included
 	inflight int
 	spent    float64
-	usage    float64 // the five-hour window's share, 0 to 1
+	// usage is the latest reading, shown for the window that is open when the line is drawn: after a reset it reads
+	// 0% until a run reports again.
+	usage    claude.UsageReading
 	hasUsage bool
 	until    time.Time // when the usage window resets, while waiting for it
+}
+
+// read keeps u if it is later than the reading kept so far.
+func (s *runStatus) read(u claude.UsageReading) {
+	if !s.hasUsage || u.Newer(s.usage) {
+		s.usage, s.hasUsage = u, true
+	}
 }
 
 func (s *runStatus) update(e experiment.Event) {
@@ -533,11 +541,11 @@ func (s *runStatus) update(e experiment.Event) {
 			s.settled[e.Slot.Position] = true
 		}
 		if u := e.Result.Usage; u != nil {
-			s.usage, s.hasUsage = u.FiveHour, true
+			s.read(*u)
 		}
 	case "wait":
 		s.until = e.Until
-		s.usage, s.hasUsage = e.Usage, true
+		s.read(claude.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
 	}
 }
 
@@ -551,7 +559,7 @@ func (s *runStatus) text(now time.Time) string {
 	}
 	text := fmt.Sprintf("%d of %d settled; %d in flight; $%.2f of $%.2f", len(s.settled), s.total, s.inflight, s.spent, s.budget)
 	if s.hasUsage {
-		text += fmt.Sprintf("; usage %.0f%%", 100*s.usage)
+		text += fmt.Sprintf("; usage %.0f%%", 100*s.usage.FiveHourAt(now))
 	}
 	return text
 }

@@ -62,7 +62,7 @@ func TestStatusLineOrdering(t *testing.T) {
 	out.Reset()
 	now = now.Add(65 * time.Second)
 	s.Tick()
-	if want := clearLine + clearLine + "⠙ 2 of 4 settled  1m05s"; out.String() != want {
+	if want := clearLine + "⠙ 2 of 4 settled  1m05s"; out.String() != want {
 		t.Errorf("tick %q, want %q", out.String(), want)
 	}
 	out.Reset()
@@ -102,7 +102,7 @@ func TestStatusLineTruncates(t *testing.T) {
 	cols = 10 // a resize applies at the next draw
 	out.Reset()
 	s.Tick()
-	if w := Width(strings.TrimPrefix(out.String(), clearLine+clearLine)); w != 9 {
+	if w := Width(strings.TrimPrefix(out.String(), clearLine)); w != 9 {
 		t.Errorf("after resize width %d, want 9: %q", w, out.String())
 	}
 }

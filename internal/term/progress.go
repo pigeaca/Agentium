@@ -172,9 +172,11 @@ func (s *StatusLine) Stop() {
 	}
 }
 
+// redrawLocked replaces the line: a draw starts by clearing it, so the old line is cleared only when nothing is drawn.
 func (s *StatusLine) redrawLocked() {
-	s.clearLocked()
-	s.drawLocked()
+	if !s.drawLocked() {
+		s.clearLocked()
+	}
 }
 
 func (s *StatusLine) clearLocked() {
@@ -184,16 +186,17 @@ func (s *StatusLine) clearLocked() {
 	}
 }
 
-// drawLocked draws the line without a newline, cut to fit the terminal: a line that wrapped could not be cleared.
-func (s *StatusLine) drawLocked() {
+// drawLocked draws the line without a newline, cut to fit the terminal: a line that wrapped could not be cleared. It
+// reports whether it drew.
+func (s *StatusLine) drawLocked() bool {
 	if s.text == nil || s.stopped || s.midLine {
-		return
+		return false
 	}
 	frame := string(spinnerFrames[s.frame%len(spinnerFrames)])
 	plain := frame + " " + Plain(s.text()) + "  " + Elapsed(s.now().Sub(s.since))
 	plain = truncate(plain, s.width()-1)
 	if plain == "" {
-		return
+		return false
 	}
 	_, size := utf8.DecodeRuneInString(plain)
 	var b bytes.Buffer
@@ -202,9 +205,11 @@ func (s *StatusLine) drawLocked() {
 	if rest := plain[size:]; rest != "" {
 		b.WriteString(s.style.Note(rest))
 	}
-	if _, err := s.out.Write(b.Bytes()); err == nil {
-		s.drawn = true
+	if _, err := s.out.Write(b.Bytes()); err != nil {
+		return false
 	}
+	s.drawn = true
+	return true
 }
 
 // width is the terminal's columns: measured, else $COLUMNS, else 80.
