@@ -505,6 +505,26 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 	if len(missing) > 0 {
 		line(false, "task(s) removed since the experiment was made: %s", strings.Join(missing, ", "))
 	}
+	var unfair, unchecked []string
+	fair := task.NewFairness("--git-dir", w.bare)
+	for _, name := range d.Tasks {
+		t, err := w.db.TaskByName(ctx, w.project.ID, name)
+		if err != nil {
+			continue // reported above as removed
+		}
+		if gaps, err := taskGaps(ctx, fair, t); err != nil {
+			unchecked = append(unchecked, name)
+		} else if len(gaps) > 0 {
+			unfair = append(unfair, fmt.Sprintf("%s (%d)", name, len(gaps)))
+		}
+	}
+	if len(unfair) > 0 {
+		fmt.Fprintf(out, "  %-8s hidden tests require what nothing states, so a fair agent may fail them (task show lists it): %s\n",
+			"WARNING", strings.Join(unfair, ", "))
+	}
+	if len(unchecked) > 0 {
+		fmt.Fprintf(out, "  %-8s what the hidden tests require could not be checked for: %s\n", "WARNING", strings.Join(unchecked, ", "))
+	}
 	if ready {
 		fmt.Fprintf(out, "  %-8s %d task(s), each valid in every arm's context\n", "ok", len(d.Tasks))
 	}

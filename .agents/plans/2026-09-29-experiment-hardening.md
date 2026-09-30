@@ -70,8 +70,14 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
 ## Work
 Each step is one PR with green CI and a review, except step 5 (data, no code) and step 6 (paid runs).
 
-- [ ] **1. Rate-limit awareness** (`internal/claude` readings, `internal/run` records, `internal/experiment` pause and wait, `internal/cli` flags and preview).
-- [ ] **2. Task fairness check** (`internal/task`, using `go/parser` from the standard library).
+- [x] **1. Rate-limit awareness** (`internal/claude` readings, `internal/run` records, `internal/experiment` pause and wait, `internal/cli` flags and preview). Done in #25, which the independent reviewer approved on its second pass after four findings were fixed: pairs split on retry, API-key experiments pausing, the model check comparing across arms, and the estimator. Limitation: only the five-hour window is gated.
+- [x] **2. Task fairness check** (`internal/task`, using `go/parser` from the standard library). Done by an `implementer` (Sonnet 5.5) and approved by the reviewer after two fix rounds:
+  - a gap is now only a text that the solution's own code produces;
+  - every way of marking a task reviewed is gated;
+  - `git grep` replaces reading every file;
+  - name searches are case-sensitive.
+
+  On its own commit the check went from 59 gaps to 5 real ones, at about 0.5 s per task. Limitations: accepted gaps are not remembered; multi-line strings and expected texts built with `fmt.Sprintf` are missed.
 - [ ] **3. Noise in reports, and one-run verdicts** (`internal/stats`, `internal/experiment`, `internal/report`). The method change applies only if the simulation passes.
 - [ ] **4. Small fixes**, through the spawned tasks where they have started.
 - [ ] **5. Twelve fair tasks**: import, rewrite, check, review, validate. Free.
