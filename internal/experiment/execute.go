@@ -48,6 +48,7 @@ type Event struct {
 	Slot     Slot
 	Attempt  int
 	Result   Result
+	Requeued bool // "finish": the run was stopped, not counted as an attempt, and runs again on resume
 	SpentUSD float64
 	RetryIn  time.Duration
 	Until    time.Time
@@ -321,14 +322,15 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			if gate != nil && f.result.Usage != nil && f.result.Usage.Newer(gate.Latest) {
 				gate.Latest = *f.result.Usage
 			}
-			emit(Event{Kind: "finish", Slot: p.Schedule[f.pos], Attempt: f.attempt, Result: f.result})
+			requeued := f.result.Outcome == claude.OutcomeCancelled || f.err != nil && ctx.Err() != nil
+			emit(Event{Kind: "finish", Slot: p.Schedule[f.pos], Attempt: f.attempt, Result: f.result, Requeued: requeued && !Settles(f.result.Outcome)})
 			if f.err != nil && ctx.Err() == nil && runErr == nil {
 				runErr = fmt.Errorf("slot %d (task %s, arm %s): %w", f.pos, p.Schedule[f.pos].Task, p.Schedule[f.pos].Arm, f.err)
 			}
 			switch outcome := f.result.Outcome; {
 			case Settles(outcome):
 				s.settled, streak = true, nil
-			case outcome == claude.OutcomeCancelled || f.err != nil && ctx.Err() != nil:
+			case requeued:
 				// run again later; not an attempt
 			default: // infrastructure, or no outcome at all
 				s.attempts++

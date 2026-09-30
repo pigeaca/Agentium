@@ -711,3 +711,45 @@ func TestParseUsageReadingsAndSubagentModels(t *testing.T) {
 		t.Errorf("no change: %q", got)
 	}
 }
+
+// The sandbox denies writes to the module cache, where Go would record the main module's VCS-stamped version: agents
+// build with -buildvcs=false, next to the user's own GOFLAGS; Environ itself leaves GOFLAGS as the user set it.
+func TestAgentGoflagsDisableVCSStamping(t *testing.T) {
+	goflags := func(parent []string) []string {
+		_, env, err := invocation(t, SignInLogin, "").Command(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, kv := range env {
+			if strings.HasPrefix(kv, "GOFLAGS=") {
+				got = append(got, kv)
+			}
+		}
+		return got
+	}
+	if got := goflags([]string{"PATH=/usr/bin"}); len(got) != 1 || got[0] != "GOFLAGS=-buildvcs=false" {
+		t.Errorf("without user flags: %v", got)
+	}
+	if got := goflags([]string{"PATH=/usr/bin", "GOFLAGS=-mod=mod -race"}); len(got) != 1 || got[0] != "GOFLAGS=-mod=mod -race -buildvcs=false" {
+		t.Errorf("with user flags: %v", got)
+	}
+	if got := Environ([]string{"GOFLAGS=-mod=mod"}); len(got) != 1 || got[0] != "GOFLAGS=-mod=mod" {
+		t.Errorf("Environ changed the user's flags: %v", got)
+	}
+}
+
+// GOFLAGS saved with `go env -w` reach the agent too: an environment GOFLAGS would otherwise shadow them.
+func TestAgentGoflagsKeepSavedFlags(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(envFile, []byte("GOFLAGS=-tags=integration\nGOPROXY=off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, env, err := invocation(t, SignInLogin, "").Command([]string{"PATH=/usr/bin", "GOENV=" + envFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+strings.Join(env, "\n")+"\n", "\nGOFLAGS=-tags=integration -buildvcs=false\n") {
+		t.Errorf("saved flags lost: %v", env)
+	}
+}

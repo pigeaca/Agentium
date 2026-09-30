@@ -1,7 +1,6 @@
-> A real report from Phase 1's acceptance runs, printed by `agentium experiment report aa2` at commit `fb02e4d` and not edited. Both arms use the same context, so a difference here is noise. The experiment was stopped after 12 of 36 runs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
+> A real report from Phase 1's acceptance runs, printed by `agentium experiment report aa2` at commit `871e6ae` and not edited. Both arms use the same context, so a difference here is noise. The experiment was stopped after 12 of 36 runs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
 
 ---
-
 # Experiment aa2
 
 A/A calibration of context `base` (both arms).
@@ -23,6 +22,16 @@ A and B: the success rate, or the geometric mean per run. B vs A is paired by ta
 | Output tokens | secondary | 20378 | 20992 | +3% | [-21%, +31%] | [-28%, +48%] | exploratory |
 
 Success: pass@1 100% (A) and 100% (B); every run of a task passed (pass^k) in 100% and 100% of tasks.
+
+## Noise
+
+What the runs show, for planning later experiments: 6 task(s), 1.0 run(s) per task and arm on average; 95% ranges. Both arms use the same context, so this is the noise itself; compare it with the planner's defaults, which size every preview until a calibration replaces them. Cost ranges assume normal noise in log cost; with few tasks every range is wide.
+
+| Component | Estimate | 95% range | Planner's default | How it was estimated |
+|---|---|---|---|---|
+| σ, per-run spread of log cost | 0.20 | 0.13–0.50 | 0.19: within the range | the paired differences' spread over √2: with one run per arm var(d) = 2σ² + τ², and τ = 0 in an A/A; chi-square range on 5 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow |
+
+Success did not vary (every counted run passed, or every one failed), so there is no w.
 
 ## Context and cost per arm
 
@@ -69,8 +78,8 @@ Runs counted in each arm, unless a total.
 - The experiment is not finished (stopped: interrupted): 12 of 36 runs settled, and the results cover those.
 - Runs not counted: 1 cancelled. Their spend is in the total.
 - Not discriminating for success (every run passed, or every run failed, in both arms): deny-login-file, documents-filter, judge-truncated-notice, run-survives-erase, scrub-whole-paths, unreadable-files. They stay in for cost.
-- Success is exploratory: 0 of 6 task(s) have 3 counted runs in both arms, below the floor of 20.
-- Cost is exploratory: 0 of 6 task(s) have 3 counted runs in both arms, below the floor of 8.
+- Success is exploratory: 0 of 6 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v1).
+- Cost is exploratory: 0 of 6 task(s) have 3 or more counted runs in both arms, below the floor of 8 tasks (method phase1-v1).
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.
