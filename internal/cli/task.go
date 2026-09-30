@@ -646,13 +646,17 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	env, live := liveEnv(env)
+	defer live.Stop()
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
 	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now}
+		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now,
+		Started: func(arm, stage string) { live.Step("validating " + t.Name + ": " + arm + ", " + stage) }}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(arms))), strings.Join(t.Verify, "; "))
 	result, err := v.Validate(ctx, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests,
 		Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}, arms)
+	live.Stop()
 	if err != nil {
 		return fail(env, err)
 	}

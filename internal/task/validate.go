@@ -93,7 +93,9 @@ type Validator struct {
 	Env      []string   // added to every setup and verification command (a build cache of Agentium's own)
 	Progress io.Writer  // one line per stage
 	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
-	Now      func() time.Time
+	// Started, when set, is called before each stage: it only feeds a status display and must not print.
+	Started func(arm, stage string)
+	Now     func() time.Time
 }
 
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
@@ -187,6 +189,9 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 		}
 	}
 	for _, s := range plan {
+		if v.Started != nil {
+			v.Started(arm.Name, s.name)
+		}
 		stage, err := v.runStage(ctx, spec, arm, s.name, s.want, snap, overlay, solution, s.files)
 		stages = append(stages, stage)
 		if err != nil {

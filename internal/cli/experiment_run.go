@@ -53,6 +53,8 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, experimentUsage)
 		return ExitUsage
 	}
+	env, live := liveEnv(env)
+	defer live.Stop() // covers early returns and interrupts; the summary below stops it first
 	name, out := rest[0], env.Stdout
 	w, err := openProject(ctx, env)
 	if err != nil {
@@ -173,8 +175,13 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	var prior []experiment.Attempt
 	storedTries := map[int]int{} // runs per slot so far
+	status := runStatus{total: len(lock.Schedule), budget: lock.Design.BudgetUSD, settled: map[int]bool{}}
 	for _, r := range runs {
 		prior = append(prior, experiment.Attempt{Slot: r.Slot, Outcome: r.Outcome, CostUSD: r.CostUSD})
+		status.spent += r.CostUSD
+		if experiment.Settles(r.Outcome) {
+			status.settled[r.Slot] = true
+		}
 		storedTries[r.Slot]++
 	}
 	var triesMu sync.Mutex
@@ -188,7 +195,10 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		samples := usageSamples(projectRuns)
 		gate = &experiment.UsageGate{Limit: *usageLimit / 100}
 		gate.PerRun, _ = experiment.UsagePerRun(samples)
-		gate.Latest, _ = experiment.LatestUsage(samples)
+		var have bool
+		if gate.Latest, have = experiment.LatestUsage(samples); have {
+			status.usage, status.hasUsage = gate.Latest.FiveHourAt(env.Now()), true
+		}
 		if *wait {
 			gate.Wait = func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) }
 		}
@@ -206,7 +216,10 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	total, design, st := len(lock.Schedule), lock.Design, env.style()
 	fmt.Fprintf(out, "Running up to %d at a time; each run up to $%.2f and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
 		design.Concurrency, design.RunBudgetUSD, design.Timeout, design.BudgetUSD)
+	live.Show(func() string { return status.text(env.Now()) })
 	progress := func(e experiment.Event) {
+		status.update(e)
+		live.Tick() // the numbers changed: draw them now
 		label := fmt.Sprintf("[%d/%d] %s, arm %s, repeat %d", e.Slot.Position+1, total, e.Slot.Task, e.Slot.Arm, e.Slot.Repeat)
 		switch e.Kind {
 		case "start":
@@ -292,6 +305,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if err := w.db.SetExperimentStatus(context.WithoutCancel(ctx), stored.ID, sum.Status, sum.Note); err != nil {
 		return fail(env, errors.Join(runErr, err))
 	}
+	live.Stop()
 	fmt.Fprintln(out)
 	if err := printProgress(context.WithoutCancel(ctx), env, w, name, stored.ID, lock); err != nil {
 		return fail(env, errors.Join(runErr, err))
@@ -489,4 +503,55 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// runStatus is what an experiment's live status line says, kept from the scheduler's events. The scheduler reports
+// from several goroutines and the status line reads it from its ticker, so it has its own lock.
+type runStatus struct {
+	mu       sync.Mutex
+	total    int
+	budget   float64
+	settled  map[int]bool // slots with a settled run, stored ones included
+	inflight int
+	spent    float64
+	usage    float64 // the five-hour window's share, 0 to 1
+	hasUsage bool
+	until    time.Time // when the usage window resets, while waiting for it
+}
+
+func (s *runStatus) update(e experiment.Event) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch e.Kind {
+	case "start":
+		s.inflight++
+		s.until = time.Time{}
+	case "finish":
+		s.inflight = max(s.inflight-1, 0)
+		s.spent = e.SpentUSD
+		if experiment.Settles(e.Result.Outcome) {
+			s.settled[e.Slot.Position] = true
+		}
+		if u := e.Result.Usage; u != nil {
+			s.usage, s.hasUsage = u.FiveHour, true
+		}
+	case "wait":
+		s.until = e.Until
+		s.usage, s.hasUsage = e.Usage, true
+	}
+}
+
+// text is the status line's plain text at now.
+func (s *runStatus) text(now time.Time) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.until.IsZero() {
+		return fmt.Sprintf("%d of %d settled; waiting for the usage window to reset at %s (in %s)", len(s.settled), s.total,
+			clock(s.until, now), term.Elapsed(max(s.until.Sub(now), 0)))
+	}
+	text := fmt.Sprintf("%d of %d settled; %d in flight; $%.2f of $%.2f", len(s.settled), s.total, s.inflight, s.spent, s.budget)
+	if s.hasUsage {
+		text += fmt.Sprintf("; usage %.0f%%", 100*s.usage)
+	}
+	return text
 }
