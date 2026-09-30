@@ -120,11 +120,20 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(inv.BudgetUSD, 'f', -1, 64))
 	}
+	goflags := "-buildvcs=false"
 	for _, kv := range Environ(environ) {
-		if !(inv.BuildCache != "" && strings.HasPrefix(kv, "GOCACHE=")) {
+		switch {
+		case inv.BuildCache != "" && strings.HasPrefix(kv, "GOCACHE="):
+		case strings.HasPrefix(kv, "GOFLAGS="): // the user's flags stay; ours are appended below
+			goflags = strings.TrimSpace(strings.TrimPrefix(kv, "GOFLAGS=")) + " " + goflags
+		default:
 			env = append(env, kv)
 		}
 	}
+	// Go stamps the main module's version from VCS and writes a stat-cache entry into the module cache, which the
+	// sandbox rightly denies: every `go build` would print "writing stat cache ... operation not permitted" and
+	// agents would spend turns on it. Only the agent's environment gets the flag, not setup or grading commands.
+	env = append(env, "GOFLAGS="+strings.TrimSpace(goflags))
 	env = append(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	if inv.BuildCache != "" {
@@ -310,6 +319,10 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 // variables) and nothing else: no credentials, no GIT_*, no AGENTIUM_*, no CLAUDE_* (in particular not
 // CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default permission mode: requirement 3). Values are
 // passed as given: a proxy URL with a password in it would pass too.
+//
+// SHELL is kept on purpose: runs should behave like the user's own Claude Code sessions, so a user's zsh stays zsh
+// (an unquoted glob such as --include=*.go then fails with "no matches found" there, as it would for them), and
+// both arms get the same shell.
 func Environ(environ []string) []string {
 	exact := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "TMPDIR": true,
 		"LANG": true, "TERM": true, "TZ": true, "VIRTUAL_ENV": true, "JAVA_HOME": true, "CARGO_HOME": true,

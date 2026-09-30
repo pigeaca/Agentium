@@ -391,3 +391,32 @@ func TestExperimentRunInterrupted(t *testing.T) {
 	}
 	emptyWorkspaces(t, f)
 }
+
+// Ctrl-C while a run is still in its setup: the run has no outcome and no record, and the progress line says it was
+// stopped before its agent started (not "none found"); it is not an attempt, so the resume runs the whole schedule.
+func TestExperimentRunInterruptedBeforeAgent(t *testing.T) {
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	slow := filepath.Join(ctrl, "slow")
+	setup := "if [ -f " + slow + " ]; then touch " + filepath.Join(ctrl, "in-setup") + "; sleep 30; fi"
+	expect(t, f.run(ctx, "task", "edit", "value", "--setup", setup, "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "early", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1"), ExitOK)
+	writeFile(t, ctrl, "slow", "")
+	stop, cancel := context.WithCancel(ctx)
+	go func() {
+		waitFor(t, "the run's setup", func() bool {
+			_, err := os.Stat(filepath.Join(ctrl, "in-setup"))
+			return err == nil
+		})
+		cancel()
+	}()
+	res := f.run(stop, "experiment", "run", "early")
+	expect(t, res, ExitError, "stopped before its agent started", "Experiment early: stopped: interrupted")
+	if strings.Contains(res.stdout, "none found") {
+		t.Errorf("the interrupted run reads as none found:\n%s", res.stdout)
+	}
+	os.Remove(slow)
+	expect(t, f.run(ctx, "experiment", "run", "early"), ExitOK, "Experiment early: done", "2 of 2 runs settled")
+	emptyWorkspaces(t, f)
+}

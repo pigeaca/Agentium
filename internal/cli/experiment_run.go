@@ -213,7 +213,12 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			}
 			fmt.Fprintf(out, "%s: started\n", label)
 		case "finish":
-			fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, orNone(e.Result.Outcome), e.Result.CostUSD, e.SpentUSD, design.BudgetUSD)
+			outcome := orNone(e.Result.Outcome)
+			if e.Result.Outcome == "" && ctx.Err() != nil {
+				// Execute reruns such a run on resume and does not count it as an attempt.
+				outcome = "stopped before its agent started (not counted; it runs again on resume)"
+			}
+			fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, outcome, e.Result.CostUSD, e.SpentUSD, design.BudgetUSD)
 		case "retry":
 			fmt.Fprintf(out, "%s: retrying in %s\n", label, e.RetryIn)
 		case "wait":
