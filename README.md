@@ -60,7 +60,7 @@ agentium run calibrate --snapshot trimmed     # short checks: sandbox, large out
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
 agentium experiment new lean --b trimmed      # an A/B: each task's own context against trimmed, on a sample of valid tasks
 agentium experiment plan lean                 # runs, estimated cost, detectable effects; what is missing
-agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable
+agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--json for everything)
 ```

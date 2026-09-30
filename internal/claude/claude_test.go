@@ -3,9 +3,11 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -642,5 +644,70 @@ func TestReq5BuildCaches(t *testing.T) {
 	resolved, _ := filepath.EvalSymlinks(filepath.Join(target, "go-build"))
 	if len(allow) != 2 || allow[0] != own.BuildCache || allow[1] != resolved {
 		t.Errorf("allowWrite = %v, want %s and %s", allow, own.BuildCache, resolved)
+	}
+}
+
+// A subscription's usage readings are kept, first and last, and each subagent type's models are told apart from the
+// run's own: a role's model alias can move to a newer model while --model stays pinned.
+func TestParseUsageReadingsAndSubagentModels(t *testing.T) {
+	limit := func(five, seven float64, status string) string {
+		return fmt.Sprintf(`{"type":"rate_limit_event","rate_limit_info":{"status":%q,"resetsAt":1790716800,"unifiedWindows":`+
+			`{"five_hour":{"utilization":%v,"resetsAt":1790716800},"seven_day":{"utilization":%v,"resetsAt":1791025200}}}}`, status, five, seven)
+	}
+	agent := func(id, kind string) string {
+		input := `{"prompt":"look"}`
+		if kind != "" {
+			input = `{"prompt":"look","subagent_type":"` + kind + `"}`
+		}
+		return `{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-` + id + `","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"` + id + `","name":"Agent","input":` + input + `}]}}`
+	}
+	child := func(parent, model string) string {
+		return `{"type":"assistant","parent_tool_use_id":"` + parent + `","message":{"id":"c-` + parent + model + `","model":"` + model + `","content":[]}}`
+	}
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Agent","Bash"]}`,
+		limit(0.30, 0.07, "allowed"),
+		agent("a1", "investigator"), child("a1", "claude-sonnet-5-5"), child("a1", "claude-sonnet-5-5"),
+		agent("a2", ""), child("a2", "claude-sonnet-5"),
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`, // no windows: skipped
+		limit(0.36, 0.08, "allowed_warning"),
+		`{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.5}`,
+	}, "\n")
+	m, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resets := time.Unix(1790716800, 0).UTC()
+	if m.UsageFirst == nil || m.UsageLast == nil || m.UsageFirst.FiveHour != 0.30 || m.UsageLast.FiveHour != 0.36 || m.UsageLast.SevenDay != 0.08 ||
+		!m.UsageLast.FiveHourResets.Equal(resets) || m.UsageLast.Status != "allowed_warning" {
+		t.Errorf("usage readings: first %+v, last %+v", m.UsageFirst, m.UsageLast)
+	}
+	want := map[string][]string{"investigator": {"claude-sonnet-5-5"}, "general-purpose": {"claude-sonnet-5"}}
+	if !reflect.DeepEqual(m.SubagentModels, want) {
+		t.Errorf("subagent models = %v, want %v", m.SubagentModels, want)
+	}
+	if got := m.UsageLast.FiveHourAt(resets.Add(-time.Minute)); got != 0.36 {
+		t.Errorf("before the reset: %v", got)
+	}
+	if got := m.UsageLast.FiveHourAt(resets); got != 0 {
+		t.Errorf("once the window resets, nothing of it is used: %v", got)
+	}
+	if !m.UsageLast.Newer(*m.UsageFirst) || m.UsageFirst.Newer(*m.UsageLast) || !(UsageReading{FiveHour: 0.1, FiveHourResets: resets.Add(time.Hour)}).Newer(*m.UsageLast) {
+		t.Error("a later reading is one further into the same window, or in a later window")
+	}
+
+	// An API-key run reports no readings and no subagents.
+	plain, err := Parse(strings.NewReader(`{"type":"result","subtype":"success","total_cost_usd":0.1}`))
+	if err != nil || plain.UsageFirst != nil || plain.UsageLast != nil || plain.SubagentModels != nil {
+		t.Errorf("a run without readings: %+v, %v", plain, err)
+	}
+
+	// Across runs: a type that changed models is reported; one used for the first time is not.
+	seen := map[string][]string{"investigator": {"claude-sonnet-5"}}
+	if got := SubagentModelChanges(seen, m.SubagentModels); len(got) != 1 || !strings.Contains(got[0], "subagent investigator ran on claude-sonnet-5-5; earlier runs used claude-sonnet-5") {
+		t.Errorf("changes = %q", got)
+	}
+	if got := SubagentModelChanges(map[string][]string{"investigator": {"claude-sonnet-5-5"}}, m.SubagentModels); len(got) != 0 {
+		t.Errorf("no change: %q", got)
 	}
 }
