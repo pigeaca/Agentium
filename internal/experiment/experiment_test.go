@@ -56,9 +56,20 @@ func TestExploratoryFloors(t *testing.T) {
 	for _, c := range []struct {
 		tasks, repeats int
 		want           []string
-	}{{23, 5, nil}, {12, 3, []string{"success"}}, {7, 5, []string{"cost", "success"}}, {30, 2, []string{"cost", "success"}}} {
+	}{{23, 5, nil}, {12, 3, []string{"success"}}, {7, 5, []string{"cost", "success"}}, {30, 2, []string{"success"}},
+		{12, 1, []string{"success"}}, {7, 1, []string{"cost", "success"}}} { // phase1-v2: cost needs one run per arm
 		if got := Exploratory(c.tasks, c.repeats); !slices.Equal(got, c.want) {
 			t.Errorf("Exploratory(%d, %d) = %v, want %v", c.tasks, c.repeats, got, c.want)
+		}
+	}
+	for method, want := range map[string]Floors{MethodV1: {8, 3, 20, 3}, MethodV2: {8, 1, 20, 3}, "phase0": {8, 3, 20, 3}} {
+		if got := FloorsFor(method); got != want {
+			t.Errorf("FloorsFor(%s) = %+v, want %+v", method, got, want)
+		}
+	}
+	for method, want := range map[string]bool{MethodV1: true, MethodV2: true, "phase0": false, "": false} {
+		if Resumable(method) != want {
+			t.Errorf("Resumable(%q) = %v", method, !want)
 		}
 	}
 }

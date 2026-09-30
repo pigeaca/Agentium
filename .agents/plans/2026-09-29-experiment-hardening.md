@@ -78,7 +78,15 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
   - name searches are case-sensitive.
 
   On its own commit the check went from 59 gaps to 5 real ones, at about 0.5 s per task. Limitations: accepted gaps are not remembered; multi-line strings and expected texts built with `fmt.Sprintf` are missed.
-- [ ] **3. Noise in reports, and one-run verdicts** (`internal/stats`, `internal/experiment`, `internal/report`). The method change applies only if the simulation passes.
+- [x] **3. Noise in reports, and one-run verdicts** (`internal/stats`, `internal/experiment`, `internal/report`). The method change applies only if the simulation passes. Done by an `implementer` (Opus); the reviewer approved it after one round of fixes.
+  - **Simulation gate passed,** so `phase1-v2` counts a task for cost with one run per arm. Over 8–12 tasks × 1 run: false differences 4.7–5.7% under normal noise and 4.6–5.5% under skewed noise; coverage 94.3–95.4%.
+  - **Separate robustness check:** a Python run by the reviewer on Phase 0's residuals gave 4.4–4.9%.
+  - **Unchanged:** the success floor, and the verdicts of `phase1-v1` experiments.
+  - **Limitations:**
+    - the chi-square ranges assume normal noise;
+    - with unequal repeats, the τ formula uses the arithmetic mean of runs per cell, which slightly overstates τ;
+    - the largest false-difference rate sits under one standard error from the 6% limit.
+  - **For step 6:** a 12 × 1 A/B cannot measure σ or w (only τ, under the assumed σ = 0.19). Updating the planner defaults would need a one-run A/A, or a few repeated tasks, alongside.
 - [ ] **4. Small fixes**, through the spawned tasks where they have started.
 - [ ] **5. Twelve fair tasks**: import, rewrite, check, review, validate. Free.
 - [ ] **6. The A/B**, after approval. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.

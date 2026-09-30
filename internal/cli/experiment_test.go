@@ -63,7 +63,8 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
 	ready := f.run(ctx, "experiment", "plan", "lean-ab")
 	expect(t, ready, ExitOK, "ok       context base calibrated", "ok       context lean calibrated", "first request 25000 tokens",
-		"ok       1 task(s), each valid in every arm's context")
+		"ok       1 task(s), each valid in every arm's context",
+		"Floors (method phase1-v2): verdicts on cost need 8 tasks with 1 or more runs per arm, and on success 20 tasks with 3 or more;")
 	if strings.Contains(ready.stdout, "MISSING") || strings.Contains(ready.stdout, "Not ready") {
 		t.Errorf("a calibrated experiment is ready:\n%s", ready.stdout)
 	}

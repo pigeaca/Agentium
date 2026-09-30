@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +89,108 @@ func fixture() Input {
 		}
 	}
 	return Input{Name: "lean-ab", Lock: l, Status: experiment.StatusDone, Runs: runs, DataDir: "/home/someone/.agentium", Home: "/home/someone"}
+}
+
+// oneRun is a 10-task × 1-run experiment locked under method: arm B about 20% cheaper with a spread across tasks (an
+// A/B), or the same context twice (an A/A); log costs spread like Phase 0's (σ = 0.19); success mixed.
+func oneRun(method, template string) Input {
+	in := fixture()
+	l := &in.Lock
+	l.Method, l.Design.Template, l.Design.Repeats, l.Design.BudgetUSD = method, template, 1, 30
+	name := "lean-ab-1run"
+	if template == experiment.TemplateAA {
+		l.Arms[1].Context, l.Arms[1].Snapshot, l.Design.Arms[1] = "base", "", l.Arms[1].Arm
+		name = "aa-1run"
+	}
+	l.Schedule = experiment.Schedule(l.Design)
+	r := rand.New(rand.NewPCG(5, 6))
+	effects := map[string]float64{}
+	var runs []Run
+	yes, no := true, false
+	for _, s := range l.Schedule {
+		if _, ok := effects[s.Task]; !ok {
+			effects[s.Task] = math.Log(0.8) + 0.15*r.NormFloat64()
+		}
+		var ti int
+		fmt.Sscanf(s.Task, "task-%d", &ti)
+		cost := 0.30 * (1 + 0.25*float64(ti%3)) * math.Exp(0.19*r.NormFloat64())
+		if s.Arm == "B" && template != experiment.TemplateAA {
+			cost *= math.Exp(effects[s.Task])
+		}
+		passed := &yes
+		if r.Float64() < 0.3 {
+			passed = &no
+		}
+		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: l.Design.Model, SignIn: claude.SignInLogin,
+			Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", Started: l.LockedAt.Add(time.Duration(s.Position) * time.Minute),
+			Finished: l.LockedAt.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
+			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
+				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: 30000, SawInit: true, SawResult: true},
+			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, RanTests: true, BashCommands: 6}}
+		runs = append(runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
+	}
+	in.Name, in.Runs = name, runs
+	return in
+}
+
+// One run per arm: phase1-v2 gives a cost verdict, and its report shows the noise the design can estimate (σ only
+// with the planner's help in an A/B, σ and w from the paired differences in an A/A); a phase1-v1 lock keeps its floor.
+func TestReportOneRunGolden(t *testing.T) {
+	for _, c := range []struct {
+		golden, method, template string
+		want, not                []string
+	}{
+		{"lean-ab-1run.md", experiment.MethodV2, experiment.TemplateContextAB,
+			[]string{"): improved.", "Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows", "| σ, per-run spread of log cost | - | - | 0.19 | not separable",
+				"taking σ = 0.19", "| w, per-run variance of success | - |"},
+			[]string{"Cost is exploratory"}},
+		{"lean-ab-1run-v1.md", experiment.MethodV1, experiment.TemplateContextAB,
+			[]string{"Cost is exploratory: 0 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 8 tasks (method phase1-v1).", "(method phase1-v1)"},
+			[]string{"verdict rests on tasks"}},
+		{"aa-1run.md", experiment.MethodV2, experiment.TemplateAA,
+			[]string{"A/A calibration", "this is the noise itself", "τ = 0 in an A/A", "| 0.19: ", "| 0.20: "},
+			[]string{"τ, spread of the cost effect"}},
+	} {
+		in := oneRun(c.method, c.template)
+		rep, err := Build(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var md bytes.Buffer
+		if err := rep.Markdown(&md); err != nil {
+			t.Fatal(err)
+		}
+		golden(t, c.golden, md.Bytes())
+		for _, want := range c.want {
+			if !strings.Contains(md.String(), want) {
+				t.Errorf("%s lacks %q", c.golden, want)
+			}
+		}
+		for _, not := range c.not {
+			if strings.Contains(md.String(), not) {
+				t.Errorf("%s shows %q", c.golden, not)
+			}
+		}
+	}
+}
+
+func TestCompareWithDefaults(t *testing.T) {
+	c := &experiment.Component{Estimate: 0.2, Low: 0.15, High: 0.3}
+	for _, x := range []struct {
+		low, high float64
+		want      string
+	}{{0.19, 0.19, "within"}, {0.1, 0.1, "below"}, {0.35, 0.35, "above"}, {0.10, 0.25, "overlaps"}, {0.31, 0.4, "above"}, {0.05, 0.1, "below"}} {
+		if got := compare(x.low, x.high, c); !strings.HasPrefix(got, x.want) || strings.Contains(got, "hint") {
+			t.Errorf("compare(%v, %v) = %q, want %s", x.low, x.high, got, x.want)
+		}
+	}
+	if got := compare(0.10, 0.25, &experiment.Component{}); !strings.Contains(got, "no spread detected (range truncated at zero)") {
+		t.Errorf("a range truncated at zero is not compared: %q", got)
+	}
+	if got := compare(0.20, 0.20, &experiment.Component{Estimate: 0.05, Low: 0.02, High: 0.1, Bootstrap: true}); !strings.HasPrefix(got, "above") ||
+		!strings.Contains(got, "a hint, not a finding") {
+		t.Errorf("a bootstrap range gives a hint: %q", got)
+	}
 }
 
 func golden(t *testing.T, name string, got []byte) {
@@ -201,7 +304,8 @@ func TestReportContents(t *testing.T) {
 		"Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.",
 		"1 run(s) ended without Claude Code's cost", "1 run(s) were cut short when Agentium stopped", "Arm ", "passed with test-runner configuration changed",
 		"Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory.",
-		"Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.",
+		"Success is exploratory: 9 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
+		"## Noise", "| σ, per-run spread of log cost | 0.04 |",
 		"Cold-cache cost reprices every cached read", "| task-0 |"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("Markdown lacks %q", want)
@@ -239,7 +343,7 @@ func TestReportAA(t *testing.T) {
 	var md bytes.Buffer
 	rep.Markdown(&md)
 	for _, want := range []string{"A/A calibration of context `base`", "any difference is noise",
-		"The experiment is not finished (budget: the next run would not fit the $60.00 budget)", "Measured noise, for planning later experiments"} {
+		"The experiment is not finished (budget: the next run would not fit the $60.00 budget)", "## Noise", "this is the noise itself"} {
 		if !strings.Contains(md.String(), want) {
 			t.Errorf("A/A report lacks %q", want)
 		}
@@ -281,7 +385,7 @@ func TestReportArmWithoutCountedRuns(t *testing.T) {
 			t.Errorf("Markdown lacks %q", want)
 		}
 	}
-	if strings.Contains(md.String(), "Measured noise") || strings.Contains(md.String(), "$0.000") {
+	if strings.Contains(md.String(), "## Noise") || strings.Contains(md.String(), "$0.000") {
 		t.Error("no paired tasks: no noise estimate, and no zero costs")
 	}
 	if !strings.Contains(js.String(), `"cost_usd": null`) {
@@ -332,6 +436,20 @@ func TestScrubReplacesWholePaths(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("scrub(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// The one-run note names the interval that decides: the t-interval usually, the bootstrap when a skewed task reaches
+// past it, or each on its own side.
+func TestWiderNamesTheDecidingInterval(t *testing.T) {
+	i := func(lo, hi float64) stats.Interval { return stats.Interval{Low: lo, High: hi} }
+	for _, c := range []struct {
+		t, boot stats.Interval
+		want    string
+	}{{i(-0.3, 0.1), i(-0.2, 0.05), "the t-interval"}, {i(-0.2, 0.05), i(-0.3, 0.1), "the bootstrap"}, {i(-0.3, 0.05), i(-0.2, 0.1), "on each side"}} {
+		if got := wider(c.t, c.boot); !strings.Contains(got, c.want) {
+			t.Errorf("wider(%v, %v) = %q, want %q", c.t, c.boot, got, c.want)
 		}
 	}
 }
