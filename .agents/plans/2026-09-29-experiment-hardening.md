@@ -1,7 +1,7 @@
 # Experiment hardening, then a 20-run context A/B
 
 - Date: 2026-09-29
-- Status: In Progress (plan awaiting approval by merge)
+- Status: In Progress (step 6 waits for the [console plan](2026-09-30-clearer-console.md))
 - Scope: after Phase 1 closed, the user asked for the next step "that way" (2026-09-29): first harden experiments against what step 7 found, then run a context A/B of 12 tasks × 1 run per arm (24 runs, about two usage windows) instead of the Quick tier's 72. The paid A/B needs its own approval of budget and timing.
 
 ## Why
@@ -106,7 +106,7 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
     - It missed the real unfair case (a new field with the same name as a field on another type, and texts built from format strings). A fix added typed-key and format checks.
     - Its first version of that fix flagged old keys, and a NUL byte broke the search. Both were found in review and fixed.
     - On the tasks above it now reports only real gaps.
-- [ ] **6. The A/B**, after approval. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.
+- [ ] **6. The A/B**, after approval. On 2026-09-30 the user moved the [console plan](2026-09-30-clearer-console.md) ahead of it, so it runs with the new output. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.
 
 ## Boundaries
 - No new dependencies; `go/parser` is in the standard library.

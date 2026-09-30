@@ -11,5 +11,6 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-09-29 — MVP Phase 1 done: context A/B from the CLI, for Claude Code. Real runs: an A/A found no difference, and an A/B the size of one usage window ran (exploratory). See the [plan](plans/archive/2026-09-28-phase1-context-ab-cli.md).
 
 ## Next, in order
-1. Hardening, then a 20-run context A/B ([plan](plans/2026-09-29-experiment-hardening.md)): rate-limit awareness, a task fairness check, noise estimates in reports.
-2. Phase 2: clearer console output ([no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)), agent comparison, and Codex.
+1. Clearer console output ([plan](plans/2026-09-30-clearer-console.md); [no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)): colors, fitted tables, progress, terminal reports.
+2. The 20-run context A/B, the last step of [hardening](plans/2026-09-29-experiment-hardening.md).
+3. Phase 2: agent comparison and Codex.
