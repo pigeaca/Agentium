@@ -62,7 +62,7 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 
 ## Adding stack checks
 
-Go is in place: `check go`, `check vuln`, the `check changed` rules, the environment and the CI job. When the React UI arrives in Phase 2, extend the harness in one change:
+Go is in place: `check go`, `check vuln`, the `check changed` rules, the environment and the CI job. There is no web UI ([decision](../.agents/decisions/2026-09-30-console-instead-of-web-ui.md)). If a frontend or another stack is added later, which needs a new decision, extend the harness in one change:
 1. Add a `check web` scope (type check, lint, unit and browser tests) and include it in `check ci`.
 2. Map the UI's paths to it in `plan_checks`, with tests in `ChangedCheckSelection`.
 3. Register the lockfile's offline installer in `OFFLINE_INSTALLERS` (for example `pnpm-lock.yaml`).

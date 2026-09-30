@@ -2,7 +2,7 @@
 """Agentium's development process entrypoint (standard library only).
 
 Docs/adapter validation, the pre-commit guard, Go checks, check selection, task worktrees and plan metrics.
-The stack is Go + React + SQLite (see .agents/decisions); React checks arrive with the UI in Phase 2.
+The stack is Go + SQLite with no web UI (see .agents/decisions).
 """
 from __future__ import annotations
 

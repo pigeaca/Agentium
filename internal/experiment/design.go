@@ -37,7 +37,7 @@ type Arm struct {
 // DesignVersion is the version of Design's stored form.
 const DesignVersion = 1
 
-// MaxSeed bounds seeds to 53 bits, which JSON numbers (and the web UI) carry exactly.
+// MaxSeed bounds seeds to 53 bits, which JSON numbers carry exactly, even in readers that use doubles (JavaScript, jq).
 const MaxSeed = 1<<53 - 1
 
 // Design is what an experiment fixes before its first run.

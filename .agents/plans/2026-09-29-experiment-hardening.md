@@ -111,7 +111,7 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
 ## Boundaries
 - No new dependencies; `go/parser` is in the standard library.
 - No real Claude Code runs before step 6's approval; tests use the fake `claude`. Calibrations and runs in step 6 count against the approved budget.
-- Claude Code only. Phase 2 (web UI, Codex, agent comparison) is not part of this plan.
+- Claude Code only. Phase 2 (console output, Codex, agent comparison) is not part of this plan.
 - Usage readings are only read from the stream and stored with runs; nothing is sent anywhere.
 - The method changes only through step 3's simulation gate.
 - The user's repository is never written. Arm B's docs stay on a local branch, not merged.
