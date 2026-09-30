@@ -27,6 +27,8 @@ type Env struct {
 	// Terminal is whether Stdout is a terminal. With NO_COLOR, FORCE_COLOR and TERM it decides whether output is
 	// styled (term.Detect); tests leave it false and get plain text.
 	Terminal bool
+	// Columns is the terminal's width in columns, for the live status line; nil or 0 means unknown.
+	Columns  func() int
 	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)

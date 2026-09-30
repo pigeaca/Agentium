@@ -124,10 +124,13 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		}
 		arm = task.Arm{Name: *snapshotName, Snapshot: snap.CommitID}
 	}
+	env, live := liveEnv(env)
+	defer live.Stop()
 	runEnv, err := newRunEnv(env, w, *verifyTimeout)
 	if err != nil {
 		return fail(env, err)
 	}
+	runEnv.Step = live.Step
 	if cal, err := w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot); err == nil {
 		var found calibration
 		if err := json.Unmarshal(cal.Result, &found); err != nil {
@@ -152,11 +155,24 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
 		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
+	live.Stop()
 	if err != nil {
 		return fail(env, err)
 	}
 	printRun(env, rec)
 	return ExitOK
+}
+
+// liveEnv returns env with its output printing above a live status line where Stdout is a terminal (the status line
+// is a pass-through elsewhere, so the returned env behaves as before). The caller defers Stop on the line, which
+// leaves the terminal clean; errors written to Stderr go above the line too.
+func liveEnv(env Env) (Env, *term.StatusLine) {
+	live := term.NewStatusLine(env.Stdout, term.StatusOptions{Terminal: env.Terminal, Getenv: env.Getenv, Style: env.style(),
+		Columns: env.Columns, Now: env.Now})
+	if live.Live() {
+		env.Stdout, env.Stderr = live, live.Over(env.Stderr)
+	}
+	return env, live
 }
 
 // newRunEnv resolves what every run of this project needs: the CLI, the sign-in and the environment.
@@ -574,6 +590,8 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		}
 		arms = append(arms, armContext{task.Arm{Name: name, Snapshot: snap.CommitID}, src})
 	}
+	env, live := liveEnv(env)
+	defer live.Stop()
 	runEnv, err := newRunEnv(env, w, time.Minute)
 	if err != nil {
 		return fail(env, err)
@@ -596,6 +614,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		if err != nil {
 			return fail(env, err)
 		}
+		runEnv.Step = func(step string) { live.Step("calibrating arm " + a.arm.Name + ": " + step) }
 		codeword := "AGENTIUM-" + strings.ToUpper(suffix[len(suffix)-6:])
 		rec, err := executeRun(ctx, env, w, runEnv, runMeta{Kind: "calibration"}, run.Spec{TaskName: "calibration", Instruction: calibrationPrompt,
 			PlainPrompt: true, Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: head, Verify: []string{"true"}},
@@ -632,6 +651,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
+	live.Stop()
 	if err := printCalibration(env, results); err != nil {
 		return fail(env, err)
 	}

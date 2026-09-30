@@ -32,7 +32,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 
 	// No reading yet: the first pair starts; its runs report 76% and 82%, and the next pair (6% a run) would pass 85%.
 	first := f.run(ctx, "experiment", "run", "limits")
-	expect(t, first, ExitOK, "2/6] value", "Paused before the usage limit; the window resets at "+resets.Local().Format("15:04"),
+	expect(t, first, ExitOK, "2/6] value", "Paused before the usage limit; the window resets at "+clock(resets, time.Now()), // "Thu 00:06" after 23:00
 		"paused at the usage limit: the five-hour usage window is at 82%, and the next pair (about 6% a run) would pass the 85% limit")
 	if strings.Contains(first.stdout, ": cancelled,") {
 		t.Errorf("a run was cancelled:\n%s", first.stdout)
@@ -53,7 +53,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 		return nil
 	}
 	second := f.run(ctx, "experiment", "run", "limits", "--wait")
-	expect(t, second, ExitOK, "Usage: the five-hour window is at 82%; waiting for it to reset at "+resets.Local().Format("15:04"), "Every run is done")
+	expect(t, second, ExitOK, "Usage: the five-hour window is at 82%; waiting for it to reset at "+clock(resets, time.Now()), "Every run is done")
 	if waited < time.Until(resets) || waited > time.Until(resets)+2*time.Minute {
 		t.Errorf("waited %s for a reset %s away", waited, time.Until(resets).Round(time.Second))
 	}
@@ -116,7 +116,7 @@ func TestUsageFromStoredRecords(t *testing.T) {
 	if got := seen["investigator"]; len(got) != 1 || got[0] != "claude-sonnet-5" || len(seen["Explore"]) != 1 {
 		t.Errorf("seen = %v", seen)
 	}
-	now := resets.Add(-time.Hour)
+	now := time.Date(resets.Year(), resets.Month(), resets.Day(), 0, 0, 0, 0, resets.Location()) // the same day, at any hour
 	if got := clock(resets, now); got != resets.In(now.Location()).Format("15:04") {
 		t.Errorf("clock today = %q", got)
 	}

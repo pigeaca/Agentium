@@ -72,7 +72,10 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
-	Now      func() time.Time
+	// Step, when set, is called as each step begins (preparing the workspace, Claude Code working, grading), so a
+	// caller can show what is in progress. It only feeds a status display and must not print.
+	Step func(step string)
+	Now  func() time.Time
 	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
 	// runs that may overlap can deny each other's folders before they exist (see Predicted).
 	Workspace string
@@ -245,6 +248,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
 	}
+	env.step("preparing the workspace")
 	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
@@ -338,6 +342,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	inv.Started = running
+	env.step("Claude Code is working")
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	if runErr == nil && startErr != nil {
@@ -410,6 +415,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
 // verification commands.
 func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
+	env.step("grading")
 	unreadable, err := syncWorkTree(repo, graded)
 	if err != nil {
 		return fmt.Errorf("grading copy: %w", err)
@@ -632,6 +638,13 @@ func (env Env) repositoryPaths(ctx context.Context) []string {
 		}
 	}
 	return paths
+}
+
+// step tells the caller a step is starting.
+func (env Env) step(name string) {
+	if env.Step != nil {
+		env.Step(name)
+	}
 }
 
 func (env Env) progress(format string, args ...any) {
