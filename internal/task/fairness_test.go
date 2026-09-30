@@ -2,30 +2,27 @@ package task
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/pigeaca/agentium/internal/source"
 )
 
-// fairnessRepo commits base then solution (files overlaid on it) and returns views of both.
-func fairnessRepo(t *testing.T, base, solution map[string]string) (source.Source, source.Source) {
+// fairnessGaps commits base then solution (files overlaid on it) and returns the gaps for the instruction.
+func fairnessGaps(t *testing.T, base, solution map[string]string, instruction string) []Gap {
 	t.Helper()
 	repo := t.TempDir()
 	git(t, repo, "init", "-q", "-b", "main")
 	b := commit(t, repo, base, "base")
 	s := commit(t, repo, solution, "solution")
 	ctx := context.Background()
-	bs, err := source.Commit(ctx, b, "-C", repo)
+	hidden, reference, err := Split(ctx, b, s, "-C", repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ss, err := source.Commit(ctx, s, "-C", repo)
+	gaps, err := NewFairness("-C", repo).Gaps(ctx, FairnessInput{Base: b, Solution: s, Instruction: instruction, HiddenTests: hidden, Reference: reference})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return bs, ss
+	return gaps
 }
 
 func gapTexts(gaps []Gap) []string {
@@ -66,11 +63,7 @@ var (
 )
 
 func TestFairnessFlagsTheThreeUnfairCases(t *testing.T) {
-	base, solution := fairnessRepo(t, fairBase, fairSolution)
-	gaps, err := Fairness(base, solution, "Make Include reject non-documents and update the note.", []string{"ctx/ctx_test.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	gaps := fairnessGaps(t, fairBase, fairSolution, "Make Include reject non-documents and update the note.")
 	wantGaps(t, gaps, "identifier:SlashCommands", "literal:graded with the starting version", "literal:"+errText)
 	if gaps[0].File != "ctx/ctx_test.go" || !strings.Contains(gaps[0].String(), "SlashCommands") {
 		t.Errorf("gap = %+v (%s)", gaps[0], gaps[0])
@@ -78,14 +71,9 @@ func TestFairnessFlagsTheThreeUnfairCases(t *testing.T) {
 }
 
 func TestFairnessNothingWhenTheInstructionStatesThem(t *testing.T) {
-	base, solution := fairnessRepo(t, fairBase, fairSolution)
 	instruction := "Include must fail with the error text\n  \"" + errText + "\".\nNote returns \"graded with the starting version\".\n" +
 		"Add a SlashCommands field to Expect."
-	gaps, err := Fairness(base, solution, instruction, []string{"ctx/ctx_test.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantGaps(t, gaps)
+	wantGaps(t, fairnessGaps(t, fairBase, fairSolution, instruction))
 }
 
 func TestFairnessIgnoresBaseTextsTrivialLiteralsAndStdlibNames(t *testing.T) {
@@ -97,13 +85,33 @@ func TestFairnessIgnoresBaseTextsTrivialLiteralsAndStdlibNames(t *testing.T) {
 		"p/p_test.go": "package p\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestG(t *testing.T) {\n" +
 			"\tif !strings.Contains(Greeting(), \"hello there\") || Greeting() == \"12345678\" || Greeting() == \"ok\" {\n\t\tt.Fatal(\"x\", t.Name())\n\t}\n}\n",
 	}
-	b, s := fairnessRepo(t, base, solution)
-	gaps, err := Fairness(b, s, "", []string{"p/p_test.go"})
-	if err != nil {
-		t.Fatal(err)
-	}
 	// "hello there" occurs in the base; "12345678" has no letter; "ok" and "x" are short; Extra is declared but unused.
-	wantGaps(t, gaps)
+	wantGaps(t, fairnessGaps(t, base, solution, ""))
+}
+
+// A realistic fair task: table-driven tests with format strings, subtest names and inputs that the implementation
+// never produces are not requirements.
+func TestFairnessRegressionTableDrivenTestsAreFair(t *testing.T) {
+	base := map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "p/p.go": "package p\n\nfunc Upper(s string) string { return s }\n"}
+	solution := map[string]string{
+		"p/p.go": "package p\n\nimport \"strings\"\n\nfunc Upper(s string) string { return strings.ToUpper(s) }\n",
+		"p/p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestUpper(t *testing.T) {\n" +
+			"\tfor _, tc := range []struct{ name, in, want string }{\n" +
+			"\t\t{\"lower case word\", \"hello world\", \"HELLO WORLD\"},\n\t\t{\"already upper case\", \"ALREADY THERE\", \"ALREADY THERE\"},\n\t} {\n" +
+			"\t\tt.Run(\"subtest \"+tc.name, func(t *testing.T) {\n" +
+			"\t\t\tif got := Upper(tc.in); got != tc.want {\n\t\t\t\tt.Errorf(\"Upper(%q) returned %q, expected something else\", tc.in, got)\n\t\t\t}\n\t\t})\n\t}\n}\n",
+	}
+	wantGaps(t, fairnessGaps(t, base, solution, "Make Upper upper-case its input."))
+}
+
+func TestFairnessNamesFromAnotherDirectory(t *testing.T) {
+	base := map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "a/a.go": "package a\n\ntype Opt struct{ Name string }\n"}
+	solution := map[string]string{
+		"a/a.go":      "package a\n\ntype Opt struct {\n\tName  string\n\tRetry int\n}\n\nfunc Apply(o Opt, ttl int) Opt { local := o; return local }\n",
+		"b/b_test.go": "package b\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/a\"\n)\n\nfunc TestB(t *testing.T) { _ = a.Apply(a.Opt{Name: \"x\", Retry: 3}, 1) }\n",
+	}
+	// Retry (a struct member) and Apply (a function) are new; Name is old; ttl and local are not package-level.
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Apply", "identifier:Retry")
 }
 
 func TestFairnessOtherLanguagesCheckLiteralsOnly(t *testing.T) {
@@ -114,24 +122,38 @@ func TestFairnessOtherLanguagesCheckLiteralsOnly(t *testing.T) {
 	solution := map[string]string{
 		"app.py": "def note():\n    return 'graded with the starting version'\n\ndef brand_new_helper():\n    pass\n",
 		"tests/test_app.py": "from app import note, brand_new_helper\n\ndef test_old():\n    assert note()\n\n" +
-			"def test_note():\n    assert note() == 'graded with the starting version'\n    brand_new_helper()\n    assert \"a\" != \"b\"\n",
+			"def test_note():\n    assert note() == 'graded with the starting version'\n    brand_new_helper()\n    assert \"a\" != \"b\"\n" +
+			"    assert 'a test-only message' != note()\n",
 		"tests/data.json": "{\"message\": \"a long message nobody states\"}\n",
 	}
-	b, s := fairnessRepo(t, base, solution)
-	gaps, err := Fairness(b, s, "", []string{"tests/test_app.py", "tests/data.json"})
-	if err != nil {
-		t.Fatal(err)
+	// No identifiers; data files are not scanned; a text the reference lacks is the test's own.
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "literal:graded with the starting version")
+}
+
+func TestFairnessFormatStringsAndTrailingPunctuation(t *testing.T) {
+	base := map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "p/p.go": "package p\n\nfunc F() {}\n"}
+	solution := map[string]string{
+		"p/p.go": "package p\n\nimport \"fmt\"\n\nfunc F() error { return fmt.Errorf(\"cannot open %s for writing\", \"x\") }\n",
+		"p/p_test.go": "package p\n\nimport (\n\t\"strings\"\n\t\"testing\"\n)\n\nfunc TestF(t *testing.T) {\n" +
+			"\tif !strings.Contains(F().Error(), \"cannot open %s for writing.\\n\") {\n\t\tt.Fatal()\n\t}\n}\n",
 	}
-	wantGaps(t, gaps, "literal:graded with the starting version") // no identifiers; data files are not scanned
+	// The reference builds the text with a verb and no final period: the pieces still match, and the instruction misses them.
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "literal:cannot open %s for writing.")
+	wantGaps(t, fairnessGaps(t, base, solution, "The error says: cannot open the file for writing"))
 }
 
 func TestFairnessNoHiddenTestsNoGaps(t *testing.T) {
-	b, s := fairnessRepo(t, fairBase, fairSolution)
-	gaps, err := Fairness(b, s, "", nil)
+	repo := t.TempDir()
+	git(t, repo, "init", "-q", "-b", "main")
+	b := commit(t, repo, fairBase, "base")
+	s := commit(t, repo, fairSolution, "solution")
+	ctx := context.Background()
+	f := NewFairness("-C", repo)
+	gaps, err := f.Gaps(ctx, FairnessInput{Base: b, Solution: s, Reference: []string{"ctx/ctx.go"}})
 	if err != nil || len(gaps) != 0 {
 		t.Errorf("gaps = %v, %v", gaps, err)
 	}
-	if _, err := Fairness(b, s, "", []string{filepath.Join("ctx", "missing_test.go")}); err == nil {
+	if _, err := f.Gaps(ctx, FairnessInput{Base: b, Solution: s, HiddenTests: []string{"ctx/missing_test.go"}}); err == nil {
 		t.Error("a hidden test file absent from the solution should be an error")
 	}
 }

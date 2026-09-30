@@ -46,7 +46,7 @@ agentium context diff baseline trimmed --patch
 
 ```sh
 agentium task import --commit <sha>                # base: its parent; hidden tests: its test-file changes
-agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away
+agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away (--accept-gaps: hidden tests need texts or names nothing states)
 agentium task validate <name> --snapshot trimmed   # tests fail on the base and pass with the reference, in each arm
 ```
 

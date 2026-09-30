@@ -169,21 +169,41 @@ func TestTaskFairnessGaps(t *testing.T) {
 		return cliResult{code, stdout.String(), stderr.String()}
 	}
 	expect(t, run("init"), ExitOK)
-	expect(t, run("task", "import", "--commit", "HEAD", "--name", "empty", "--verify", "true"), ExitOK)
+	writeFile(t, repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+	expect(t, run("context", "snapshot", "lean", "--working-tree"), ExitOK)
+	verify := `grep -q "value must not be empty" m.go`
+	expect(t, run("task", "import", "--commit", "HEAD", "--name", "empty", "--verify", verify), ExitOK)
 	expect(t, run("task", "list"), ExitOK, "1 unstated requirement(s)")
 	expect(t, run("task", "show", "empty"), ExitOK, "Unstated requirements (1)", `text "value must not be empty" (m_test.go)`)
-	// Without --accept-gaps the task stays unreviewed.
+	expect(t, run("task", "validate", "empty"), ExitOK, "Result: valid", "Unstated requirements (1)", `text "value must not be empty"`)
+	expect(t, run("task", "validate", "empty", "--snapshot", "lean"), ExitOK, "Result: valid")
+
+	// Every way to mark the task reviewed is gated, and nothing changes when it is refused.
 	expect(t, run("task", "edit", "empty", "--reviewed"), ExitError, "value must not be empty", "pass --accept-gaps")
+	expect(t, run("task", "edit", "empty", "--instruction", "Reject empty values."), ExitError, "value must not be empty", "pass --accept-gaps")
 	expect(t, run("task", "list"), ExitOK, "instruction not reviewed")
 	expect(t, run("task", "edit", "empty", "--accept-gaps"), ExitUsage, "at least one of")
+	// The plan warns while the gap stands.
+	expect(t, run("experiment", "new", "gaps-ab", "--b", "lean", "--task", "empty"), ExitError, "instruction needs a review")
 	expect(t, run("task", "edit", "empty", "--reviewed", "--accept-gaps"), ExitOK)
-	if list := run("task", "list"); strings.Contains(list.stdout, "not reviewed") {
-		t.Errorf("after accepting:\n%s", list.stdout)
-	}
-	// Stating the text in the instruction clears the list.
+	expect(t, run("experiment", "new", "gaps-ab", "--b", "lean", "--task", "empty"), ExitOK)
+	expect(t, run("experiment", "plan", "gaps-ab"), ExitOK, "WARNING  hidden tests require what nothing states", "empty (1)")
+
+	// Stating the text in the instruction clears the list, and needs no acceptance.
 	expect(t, run("task", "edit", "empty", "--instruction", `Check returns the error "value must not be empty" for an empty string.`), ExitOK)
-	if list := run("task", "list"); strings.Contains(list.stdout, "unstated") {
+	if list := run("task", "list"); strings.Contains(list.stdout, "unstated") || strings.Contains(list.stdout, "not reviewed") {
 		t.Errorf("after stating it:\n%s", list.stdout)
 	}
-	expect(t, run("task", "edit", "empty", "--reviewed"), ExitOK)
+	if plan := run("experiment", "plan", "gaps-ab"); strings.Contains(plan.stdout, "require what nothing states") {
+		t.Errorf("after stating it:\n%s", plan.stdout)
+	}
+
+	// A task added by hand is reviewed from the start, so it is gated too.
+	base, solution := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1")), "HEAD"
+	expect(t, run("task", "add", "by-hand", "--base", base, "--solution", solution, "--instruction", "Reject empty values.", "--verify", verify),
+		ExitError, "value must not be empty", "pass --accept-gaps")
+	expect(t, run("task", "add", "by-hand", "--base", base, "--solution", solution, "--instruction", "Reject empty values.", "--verify", verify,
+		"--accept-gaps"), ExitOK)
+	expect(t, run("task", "add", "stated", "--base", base, "--solution", solution, "--verify", verify,
+		"--instruction", `Check returns the error "value must not be empty" for an empty string.`), ExitOK)
 }

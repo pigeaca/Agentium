@@ -20,13 +20,12 @@ import (
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/snapshot"
-	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
 const taskUsage = `Usage:
-  agentium task add NAME --base REF (--instruction TEXT | --instruction-file FILE) [--solution REF]
+  agentium task add NAME --base REF (--instruction TEXT | --instruction-file FILE) [--solution REF] [--accept-gaps]
                          [--setup CMD]... [--verify CMD]...
                          a task by hand; with --solution, its test-file changes are the hidden tests
   agentium task import (--commit REF | --pr N) [--name NAME] [--setup CMD]... [--verify CMD]...
@@ -35,14 +34,15 @@ const taskUsage = `Usage:
   agentium task list
   agentium task show NAME
   agentium task edit NAME [--instruction TEXT | --instruction-file FILE] [--setup CMD... | --no-setup]
-                         [--verify CMD]... [--reviewed [--accept-gaps]]
+                         [--verify CMD]... [--reviewed] [--accept-gaps]
   agentium task validate NAME [--snapshot NAME]... [--timeout DURATION] [--keep]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes)
   agentium task rm NAME
 
 task show and task validate list what the hidden tests require that neither the instruction nor the base code states
-(exact texts; for Go also new names); task list counts them. Marking such a task --reviewed needs --accept-gaps.
+(exact texts; for Go also new names); task list counts them. A task that becomes reviewed (task add --solution, task edit --instruction or --reviewed)
+with such a list needs --accept-gaps.
 
 --verify defaults to the test commands found by agentium init. --setup commands run first in every fresh
 checkout (for example, building assets the code embeds); they must pass.
@@ -129,6 +129,7 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	base := fs.String("base", "", "the commit the agent starts from")
 	solution := fs.String("solution", "", "a commit that solves the task: its test-file changes become the hidden tests")
 	instruction := addInstructionFlags(fs)
+	acceptGaps := fs.Bool("accept-gaps", false, "accept the requirements the hidden tests have that nothing states")
 	var verify, setup stringList
 	fs.Var(&verify, "verify", "a verification command (repeatable)")
 	fs.Var(&setup, "setup", "a command a fresh checkout needs first (repeatable)")
@@ -159,7 +160,7 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	return saveTask(ctx, env, w, t)
+	return saveTask(ctx, env, w, t, *acceptGaps)
 }
 
 func taskImport(ctx context.Context, env Env, args []string) int {
@@ -217,11 +218,11 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 		subject, _, _ := strings.Cut(t.Instruction, "\n")
 		t.Name = taskName(subject, t.SolutionCommit)
 	}
-	return saveTask(ctx, env, w, t)
+	return saveTask(ctx, env, w, t, false)
 }
 
 // saveTask splits the solution, fills in defaults, stores the task and reports it.
-func saveTask(ctx context.Context, env Env, w *workspace, t store.Task) int {
+func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGaps bool) int {
 	if !snapshot.ValidName(t.Name) {
 		fmt.Fprintf(env.Stderr, "agentium task: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63)\n", t.Name)
 		return ExitUsage
@@ -241,6 +242,13 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task) int {
 			return fail(env, fmt.Errorf("%s changes no test files, so there are no hidden tests to check a solution with", shortCommit(t.SolutionCommit)))
 		case len(t.Reference) == 0:
 			return fail(env, fmt.Errorf("%s changes only test files, so there is nothing for an agent to implement", shortCommit(t.SolutionCommit)))
+		}
+		if !t.NeedsReview { // a task added by hand is reviewed from the start
+			if ok, err := gapGate(ctx, env, w, t, acceptGaps); err != nil {
+				return fail(env, err)
+			} else if !ok {
+				return ExitError
+			}
 		}
 	}
 	saved, err := w.db.SaveTask(ctx, t)
@@ -423,13 +431,14 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, "No tasks yet: agentium task import --commit REF, or agentium task add NAME ...")
 		return ExitOK
 	}
+	fair := task.NewFairness("--git-dir", w.bare)
 	fmt.Fprintf(env.Stdout, "%-50s %-16s %5s %5s  %s\n", "NAME", "SOURCE", "TESTS", "FILES", "STATUS")
 	for _, t := range tasks {
 		status := validationStatus(t)
 		if t.NeedsReview {
 			status += " (instruction not reviewed)"
 		}
-		if gaps, err := taskGaps(ctx, w, t); err != nil {
+		if gaps, err := taskGaps(ctx, fair, t); err != nil {
 			status += " (unstated requirements unknown)"
 		} else if len(gaps) > 0 {
 			status += fmt.Sprintf(" (%d unstated requirement(s))", len(gaps))
@@ -439,20 +448,29 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
-// taskGaps lists what the task's hidden tests require that the instruction and the base do not state.
-func taskGaps(ctx context.Context, w *workspace, t store.Task) ([]task.Gap, error) {
+// taskGaps lists what the task's hidden tests require that the instruction and the base do not state. f caches
+// searches, so give one to every command.
+func taskGaps(ctx context.Context, f *task.Fairness, t store.Task) ([]task.Gap, error) {
 	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
 		return nil, nil
 	}
-	base, err := source.Commit(ctx, t.BaseCommit, "--git-dir", w.bare)
+	return f.Gaps(ctx, task.FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: t.Instruction,
+		HiddenTests: t.HiddenTests, Reference: t.Reference})
+}
+
+// gapGate refuses to mark t reviewed while its gaps stand, unless they are accepted. It explains why on stderr and
+// reports whether to go on.
+func gapGate(ctx context.Context, env Env, w *workspace, t store.Task, accept bool) (bool, error) {
+	gaps, err := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if err != nil {
-		return nil, err
+		return false, err
 	}
-	solution, err := source.Commit(ctx, t.SolutionCommit, "--git-dir", w.bare)
-	if err != nil {
-		return nil, err
+	if len(gaps) > 0 && !accept {
+		printGaps(env.Stderr, gaps)
+		fmt.Fprintf(env.Stderr, "agentium task: %s not marked reviewed; state the gaps in the instruction, or pass --accept-gaps\n", t.Name)
+		return false, nil
 	}
-	return task.Fairness(base, solution, t.Instruction, t.HiddenTests)
+	return true, nil
 }
 
 // printGaps shows the gaps, if any, under a heading that says what to do about them.
@@ -508,7 +526,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
 	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
 	fmt.Fprintf(out, "  status     %s\n", validationStatus(t))
-	gaps, gapErr := taskGaps(ctx, w, t)
+	gaps, gapErr := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview {
 		fmt.Fprintln(out, "Instruction (from history; review it for solution leaks, then task edit):")
 	} else {
@@ -558,16 +576,12 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if text != "" {
-		t.Instruction, t.NeedsReview = text, false
+		t.Instruction = text
 	}
-	if *reviewed {
-		gaps, err := taskGaps(ctx, w, t)
-		if err != nil {
+	if text != "" || *reviewed { // the task becomes reviewed: its gaps must be stated or accepted
+		if ok, err := gapGate(ctx, env, w, t, *acceptGaps); err != nil {
 			return fail(env, err)
-		}
-		if len(gaps) > 0 && !*acceptGaps {
-			printGaps(env.Stderr, gaps)
-			fmt.Fprintf(env.Stderr, "agentium task edit: not marked reviewed; pass --accept-gaps to accept them\n")
+		} else if !ok {
 			return ExitError
 		}
 		t.NeedsReview = false
@@ -639,7 +653,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	if err := w.db.UpdateTask(ctx, t, env.Now()); err != nil {
 		return fail(env, err)
 	}
-	if gaps, err := taskGaps(ctx, w, t); err != nil {
+	if gaps, err := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t); err != nil {
 		fmt.Fprintf(env.Stdout, "note: unstated requirements could not be checked: %v\n", err)
 	} else {
 		printGaps(env.Stdout, gaps)
