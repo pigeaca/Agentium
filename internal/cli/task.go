@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/snapshot"
+	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -33,11 +35,14 @@ const taskUsage = `Usage:
   agentium task list
   agentium task show NAME
   agentium task edit NAME [--instruction TEXT | --instruction-file FILE] [--setup CMD... | --no-setup]
-                         [--verify CMD]... [--reviewed]
+                         [--verify CMD]... [--reviewed [--accept-gaps]]
   agentium task validate NAME [--snapshot NAME]... [--timeout DURATION] [--keep]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes)
   agentium task rm NAME
+
+task show and task validate list what the hidden tests require that neither the instruction nor the base code states
+(exact texts; for Go also new names); task list counts them. Marking such a task --reviewed needs --accept-gaps.
 
 --verify defaults to the test commands found by agentium init. --setup commands run first in every fresh
 checkout (for example, building assets the code embeds); they must pass.
@@ -424,9 +429,42 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		if t.NeedsReview {
 			status += " (instruction not reviewed)"
 		}
+		if gaps, err := taskGaps(ctx, w, t); err != nil {
+			status += " (unstated requirements unknown)"
+		} else if len(gaps) > 0 {
+			status += fmt.Sprintf(" (%d unstated requirement(s))", len(gaps))
+		}
 		fmt.Fprintf(env.Stdout, "%-50s %-16s %5d %5d  %s\n", t.Name, t.Source, len(t.HiddenTests), len(t.Reference), status)
 	}
 	return ExitOK
+}
+
+// taskGaps lists what the task's hidden tests require that the instruction and the base do not state.
+func taskGaps(ctx context.Context, w *workspace, t store.Task) ([]task.Gap, error) {
+	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
+		return nil, nil
+	}
+	base, err := source.Commit(ctx, t.BaseCommit, "--git-dir", w.bare)
+	if err != nil {
+		return nil, err
+	}
+	solution, err := source.Commit(ctx, t.SolutionCommit, "--git-dir", w.bare)
+	if err != nil {
+		return nil, err
+	}
+	return task.Fairness(base, solution, t.Instruction, t.HiddenTests)
+}
+
+// printGaps shows the gaps, if any, under a heading that says what to do about them.
+func printGaps(out io.Writer, gaps []task.Gap) {
+	if len(gaps) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "Unstated requirements (%d): the hidden tests need these, but neither the instruction nor the base code states them.\n"+
+		"State them in the instruction (task edit --instruction-file), or accept them (task edit --reviewed --accept-gaps):\n", len(gaps))
+	for _, g := range gaps {
+		fmt.Fprintf(out, "  %s\n", g)
+	}
 }
 
 func validationStatus(t store.Task) string {
@@ -470,6 +508,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
 	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
 	fmt.Fprintf(out, "  status     %s\n", validationStatus(t))
+	gaps, gapErr := taskGaps(ctx, w, t)
 	if t.NeedsReview {
 		fmt.Fprintln(out, "Instruction (from history; review it for solution leaks, then task edit):")
 	} else {
@@ -483,6 +522,10 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 			fmt.Fprintf(out, "note: the instruction names reference file %s\n", p)
 		}
 	}
+	if gapErr != nil {
+		fmt.Fprintf(out, "note: unstated requirements could not be checked: %v\n", gapErr)
+	}
+	printGaps(out, gaps)
 	return ExitOK
 }
 
@@ -494,6 +537,7 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	fs.Var(&setup, "setup", "replace the setup commands (repeatable)")
 	noSetup := fs.Bool("no-setup", false, "remove the setup commands")
 	reviewed := fs.Bool("reviewed", false, "mark the instruction as reviewed for solution leaks")
+	acceptGaps := fs.Bool("accept-gaps", false, "with --reviewed: accept the requirements the hidden tests have that nothing states")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
@@ -517,6 +561,15 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 		t.Instruction, t.NeedsReview = text, false
 	}
 	if *reviewed {
+		gaps, err := taskGaps(ctx, w, t)
+		if err != nil {
+			return fail(env, err)
+		}
+		if len(gaps) > 0 && !*acceptGaps {
+			printGaps(env.Stderr, gaps)
+			fmt.Fprintf(env.Stderr, "agentium task edit: not marked reviewed; pass --accept-gaps to accept them\n")
+			return ExitError
+		}
 		t.NeedsReview = false
 	}
 	if len(verify) > 0 {
@@ -585,6 +638,11 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	}
 	if err := w.db.UpdateTask(ctx, t, env.Now()); err != nil {
 		return fail(env, err)
+	}
+	if gaps, err := taskGaps(ctx, w, t); err != nil {
+		fmt.Fprintf(env.Stdout, "note: unstated requirements could not be checked: %v\n", err)
+	} else {
+		printGaps(env.Stdout, gaps)
 	}
 	for arm, files := range result.HarnessChanged {
 		fmt.Fprintf(env.Stdout, "note: arm %s changes what runs, not only what the model reads: %s\n", arm, strings.Join(files, ", "))
