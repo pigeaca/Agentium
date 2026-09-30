@@ -46,13 +46,16 @@ func usageSamples(runs []store.Run) []experiment.UsageSample {
 	return samples
 }
 
-// subagentModels merges the models each subagent type ran on across runs, the earliest run first: what later runs of
-// an experiment must match.
-func subagentModels(runs []store.Run) map[string][]string {
-	seen := map[string][]string{}
+// subagentModels merges, per arm, the models each subagent type ran on across runs, the earliest run first: what later
+// runs of that arm must match.
+func subagentModels(runs []store.Run) map[string]map[string][]string {
+	seen := map[string]map[string][]string{}
 	for _, r := range runs {
-		if u, ok := decodeUsage(r); ok {
-			mergeSubagentModels(seen, u.Metrics.SubagentModels)
+		if u, ok := decodeUsage(r); ok && len(u.Metrics.SubagentModels) > 0 {
+			if seen[r.Arm] == nil {
+				seen[r.Arm] = map[string][]string{}
+			}
+			mergeSubagentModels(seen[r.Arm], u.Metrics.SubagentModels)
 		}
 	}
 	return seen

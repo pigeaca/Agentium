@@ -223,7 +223,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 						hold = qs
 					}
 				}
-				if gate != nil && !s.held { // a pair's second run always follows its first
+				// Only a slot that opens a pair (or has none) is gated: a pair's second run, its retry, or the half pair left
+				// by an earlier execution always runs, so pairs stay whole.
+				if gate != nil && (hold != nil || partner[pos] < 0) {
 					starting := 1
 					if hold != nil {
 						starting++
@@ -280,7 +282,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			case stopNote != "":
 				sum.Status, sum.Note = StatusStopped, stopNote
 				return sum, nil
-			case usageBlocked:
+			case usageBlocked && wake.IsZero(): // a retry that is due first goes before any pause
 				until := gate.Latest.FiveHourResets
 				if gate.Wait == nil || until.IsZero() || gate.PerRun*2 > gate.Limit {
 					sum.Status, sum.ResumeAt = StatusUsage, until

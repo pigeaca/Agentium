@@ -181,15 +181,18 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	samples := usageSamples(projectRuns)
-	gate := &experiment.UsageGate{Limit: *usageLimit / 100}
-	gate.PerRun, _ = experiment.UsagePerRun(samples)
-	gate.Latest, _ = experiment.LatestUsage(samples)
-	if *wait {
-		gate.Wait = func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) }
+	var gate *experiment.UsageGate // an API key uses no subscription: its runs never pause for one
+	if lock.SignIn != claude.SignInAPIKey {
+		samples := usageSamples(projectRuns)
+		gate = &experiment.UsageGate{Limit: *usageLimit / 100}
+		gate.PerRun, _ = experiment.UsagePerRun(samples)
+		gate.Latest, _ = experiment.LatestUsage(samples)
+		if *wait {
+			gate.Wait = func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) }
+		}
 	}
 	var subagentsMu sync.Mutex
-	seenSubagents := subagentModels(runs) // the models each subagent type ran on in this experiment so far
+	seenSubagents := subagentModels(runs) // per arm: the models each subagent type ran on in this experiment so far
 	runEnv, err := newRunEnv(env, w, lock.Design.VerifyTimeout)
 	if err != nil {
 		return fail(env, err)
@@ -256,12 +259,16 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		// A role's model alias can move to a newer model with Claude Code while --model stays pinned: the runs after
 		// it would not compare with those before.
 		subagentsMu.Lock()
-		if changes := claude.SubagentModelChanges(seenSubagents, rec.Metrics.SubagentModels); len(changes) > 0 {
+		// Per arm: arms may give a role different models on purpose (that is a context difference to measure).
+		if seenSubagents[arm.Name] == nil {
+			seenSubagents[arm.Name] = map[string][]string{}
+		}
+		if changes := claude.SubagentModelChanges(seenSubagents[arm.Name], rec.Metrics.SubagentModels); len(changes) > 0 {
 			if result.Stop == "" {
-				result.Stop = strings.Join(changes, "; ") + ": later runs would not compare"
+				result.Stop = "arm " + arm.Name + ": " + strings.Join(changes, "; ") + ": later runs would not compare"
 			}
 		} else {
-			mergeSubagentModels(seenSubagents, rec.Metrics.SubagentModels)
+			mergeSubagentModels(seenSubagents[arm.Name], rec.Metrics.SubagentModels)
 		}
 		subagentsMu.Unlock()
 		return result, err
@@ -405,6 +412,9 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 	}
 	out := env.Stdout
 	status := stored.Status
+	if status == experiment.StatusUsage {
+		status = "paused at the usage limit"
+	}
 	if stored.StatusNote != "" {
 		status += ": " + stored.StatusNote
 	}

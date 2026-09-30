@@ -21,9 +21,10 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - `experiment run` takes `--usage-limit PCT` (default 85). No new pair starts when the latest reading, plus the pair's expected use, would pass the limit.
    - Runs in flight finish and are never cancelled. The experiment then stops as "paused: usage", says when the window resets, and resumes with `experiment run`.
    - `--wait` sleeps until the reset instead, then continues.
-   - Expected use per run is the median rise per run in this project's earlier runs (default 6%).
+   - Expected use per run comes from the latest five-hour window that three or more runs read from start to end: the rise from their lowest first reading to their highest last reading, divided by those runs (default 6%). *Changed on 2026-09-30 from "the median rise per run", pending the user's agreement:* readings arrive in 1% steps and overlapping runs share a rise, so a per-run median runs low. This estimate errs high instead, because the user's own use in the window counts too.
    - `experiment plan` shows the use per run, the windows the experiment needs, and whether the current window fits.
-   - Runs with an API key or token report no readings; they never pause, and the preview says so.
+   - An experiment with an API key never pauses, and the preview says so. *Corrected on 2026-09-30, pending the user's agreement:* a `claude setup-token` token is a subscription, so its runs report readings and pause like a login.
+   - Limitation: only the five-hour window is gated. The seven-day window is recorded but not gated.
    - Added by the user on 2026-09-29: each run records which model each subagent type used. An experiment stops when a type's model changes from earlier runs, such as a role's `sonnet` alias moving to a newer model.
 
    *Evidence:* end-to-end tests with the fake `claude` and a fake clock covering a pause between pairs, a wait and resume, the preview, and a stream without readings, and a subagent changing model.
@@ -95,7 +96,7 @@ Steps 1–3 run in parallel from base `0f5e237`, one PR each, and the coordinato
 
 | Step | Owner | Branch / worktree | Editable scope | Must not touch |
 |---|---|---|---|---|
-| 1 | coordinator (Opus) | `claude/feat/rate-limit-awareness` / `claude-feat-rate-limit-awareness` | `internal/claude/stream.go` (readings); `internal/run`; `internal/experiment/execute.go` and a new `usage.go`; `internal/cli/experiment_run.go` (flags, pause messages); the usage lines of the preview in `internal/cli/experiment.go` | `internal/experiment/plan.go`, `analyze.go`, `lock.go`; `internal/stats`; `internal/report`; `internal/task` |
+| 1 | coordinator (Opus) | `claude/feat/rate-limit-awareness` / `claude-feat-rate-limit-awareness` | `internal/claude/stream.go` (readings); `internal/run`; `internal/experiment/execute.go` and a new `usage.go`; `internal/cli/experiment_run.go` (flags, pause messages); the usage lines of the preview in `internal/cli/experiment.go`; added in review: a new `internal/cli/usage.go`, `Env.Sleep` in `cli.go`, `run show` in `cli/run.go`, and the status constant in `internal/store` | `internal/experiment/plan.go`, `analyze.go`, `lock.go`; `internal/stats`; `internal/report`; `internal/task` |
 | 2 | `implementer` (Sonnet, medium) | `claude/feat/task-fairness-check` / `claude-feat-task-fairness-check` | `internal/task` (a new fairness file); `internal/cli/task.go`; the store only if the gap count must persist; one check line in `experiment plan`'s "Before it runs" list (`internal/cli/experiment.go`) | `internal/experiment`, `internal/stats`, `internal/report`, `internal/claude` |
 | 3 | `implementer` (Opus, high: a method change) | `claude/feat/noise-one-run-verdicts` / `claude-feat-noise-one-run-verdicts` | `internal/stats` (components, simulation); `internal/experiment/analyze.go`, `plan.go` (floors), `lock.go` (`MethodVersion`); `internal/report` and its golden files | `internal/experiment/execute.go`, `internal/cli/experiment_run.go`, `internal/claude`, `internal/task` |
 

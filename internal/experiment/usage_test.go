@@ -174,3 +174,41 @@ func abs(x float64) float64 {
 	}
 	return x
 }
+
+// A pair's second run is never held back by the gate: not when it retries after an infrastructure failure (the retry
+// that is due runs before any pause), and not when an earlier execution left the pair half done.
+func TestUsageGateKeepsPairsWhole(t *testing.T) {
+	slots := scheduleOf(t, 3, 1)
+	partnerOf := func(pos int) int {
+		for q, s := range slots {
+			if q != pos && s.Pair == slots[pos].Pair {
+				return q
+			}
+		}
+		return -1
+	}
+	resets := time.Now().Add(time.Hour)
+	second := partnerOf(0)
+	m := &meter{used: 0.72, resets: resets, step: 0.04}
+	f := &fake{outcome: func(slot Slot, attempt int) Result {
+		if slot.Position == second && attempt == 1 {
+			return Result{Outcome: claude.OutcomeInfra}
+		}
+		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}
+	}}
+	gate := &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: claude.UsageReading{FiveHour: 0.72, FiveHourResets: resets}}
+	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate,
+		Backoff: func(int) time.Duration { return 20 * time.Millisecond }}, m.run(f))
+	if err != nil || sum.Status != StatusUsage || sum.Settled != 2 {
+		t.Fatalf("a retried second run: %+v, %v (ran %v)", sum, err, f.ran)
+	}
+
+	// Resumed with the pair's first run stored and the window nearly full: the second still runs, then it pauses.
+	f = &fake{}
+	gate = &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: claude.UsageReading{FiveHour: 0.84, FiveHourResets: resets}}
+	sum, err = Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate,
+		Prior: []Attempt{{Slot: 0, Outcome: claude.OutcomeOK, CostUSD: 0.5}}}, f.run)
+	if err != nil || sum.Status != StatusUsage || len(f.ran) != 1 || f.ran[0] != second {
+		t.Errorf("a half pair on resume: %+v, %v (ran %v, want [%d])", sum, err, f.ran, second)
+	}
+}

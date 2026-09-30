@@ -24,7 +24,8 @@ import (
 // workspace ("s2-t1": slot 2, first try): "infra" lists runs that end without a result, "hang" runs that wait to be
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
 // "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
-// end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model. It
+// end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
+// with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. It
 // leaves its settings argument and process ID in ctrl.
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
@@ -42,6 +43,7 @@ echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model"
 limit() { echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":'"$1"',"resetsAt":'"$resets"'},"seven_day":{"utilization":0.2,"resetsAt":'"$resets"'}}}}'; }
 [ -f "$CTRL/usage" ] && { read used step resets < "$CTRL/usage"; limit "$used"; }
 sub=$(grep "^$key " "$CTRL/subagent" 2>/dev/null | cut -d' ' -f2)
+if [ -f "$CTRL/subagent-by-arm" ]; then grep -q "Keep it short" CLAUDE.md && sub=claude-sonnet-5-5 || sub=claude-sonnet-5; fi
 if [ -n "$sub" ]; then
   echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-agent","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"subagent_type":"investigator","prompt":"look"}}]}}'
   echo '{"type":"assistant","parent_tool_use_id":"agent1","message":{"id":"m-sub","model":"'"$sub"'","content":[]}}'

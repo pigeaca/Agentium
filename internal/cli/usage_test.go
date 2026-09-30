@@ -33,7 +33,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 	// No reading yet: the first pair starts; its runs report 76% and 82%, and the next pair (6% a run) would pass 85%.
 	first := f.run(ctx, "experiment", "run", "limits")
 	expect(t, first, ExitOK, "2/6] value", "Paused before the usage limit; the window resets at "+resets.Local().Format("15:04"),
-		"usage: the five-hour usage window is at 82%, and the next pair (about 6% a run) would pass the 85% limit")
+		"paused at the usage limit: the five-hour usage window is at 82%, and the next pair (about 6% a run) would pass the 85% limit")
 	if strings.Contains(first.stdout, ": cancelled,") {
 		t.Errorf("a run was cancelled:\n%s", first.stdout)
 	}
@@ -43,7 +43,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "limits"), ExitOK,
 		"Usage: about 6% of the five-hour window per run (a default until runs measure it), so 6 runs need about 0.4 window(s) at the 85% limit.",
 		"The window was 82% used at the last reading", "about 0 more run(s) fit before the limit", "add --wait")
-	expect(t, f.run(ctx, "experiment", "show", "limits"), ExitOK, "usage: the five-hour usage window is at 82%")
+	expect(t, f.run(ctx, "experiment", "show", "limits"), ExitOK, "paused at the usage limit: the five-hour usage window is at 82%")
 
 	// --wait: the wait lasts until the reset (plus a margin), then the new window takes the other two pairs.
 	var waited time.Duration
@@ -112,7 +112,7 @@ func TestUsageFromStoredRecords(t *testing.T) {
 	if per, n := experiment.UsagePerRun(samples); n != 3 || per < 0.0599 || per > 0.0601 {
 		t.Errorf("per run %v over %d runs", per, n)
 	}
-	seen := subagentModels(runs) // the earliest run wins: later ones must match it
+	seen := subagentModels(runs)[""] // per arm; the earliest run wins: later ones must match it
 	if got := seen["investigator"]; len(got) != 1 || got[0] != "claude-sonnet-5" || len(seen["Explore"]) != 1 {
 		t.Errorf("seen = %v", seen)
 	}
@@ -123,4 +123,36 @@ func TestUsageFromStoredRecords(t *testing.T) {
 	if got := clock(resets.Add(24*time.Hour), now); !strings.Contains(got, " ") {
 		t.Errorf("clock on another day = %q, want the weekday too", got)
 	}
+}
+
+// Arms may give a role different models on purpose: that is a context difference, not a change mid-experiment.
+func TestExperimentAllowsArmsWithDifferentSubagentModels(t *testing.T) {
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	if err := os.WriteFile(filepath.Join(ctrl, "subagent-by-arm"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "experiment", "new", "arms", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "arms"), ExitOK, "Every run is done")
+}
+
+// An API key uses no subscription: its experiment never pauses, whatever the subscription's window reads.
+func TestExperimentWithAnAPIKeyNeverPauses(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	ctx := context.Background()
+	f.vars["ANTHROPIC_API_KEY"] = "sk-ant-test-usage" // secret-scan: allow
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+	expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
+	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+	expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
+	ctrl := t.TempDir()
+	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, ctrl)
+	if err := os.WriteFile(filepath.Join(ctrl, "usage"), []byte(fmt.Sprintf("0.84 0.06 %d\n", time.Now().Add(time.Hour).Unix())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "experiment", "new", "keyed", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "keyed"), ExitOK, "sign-in api-key", "Every run is done")
 }
