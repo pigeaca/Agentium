@@ -18,6 +18,7 @@ import (
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -227,6 +228,72 @@ func TestReportGolden(t *testing.T) {
 	}
 	golden(t, "lean-ab.md", md.Bytes())
 	goldenJSON(t, "lean-ab.json", js.Bytes())
+	var plain bytes.Buffer
+	if err := rep.Terminal(&plain, term.Style{}); err != nil {
+		t.Fatal(err)
+	}
+	golden(t, "lean-ab.txt", plain.Bytes())
+	assertTerminalColors(t, rep, plain.String())
+}
+
+// assertTerminalColors checks that the colored rendering is the plain one plus escape codes, and that it colors.
+func assertTerminalColors(t *testing.T, rep Report, plain string) {
+	t.Helper()
+	var colored bytes.Buffer
+	if err := rep.Terminal(&colored, term.Colored()); err != nil {
+		t.Fatal(err)
+	}
+	if got := term.Plain(colored.String()); got != plain {
+		t.Errorf("the colored rendering without its escape codes differs from the plain one:\n%s", got)
+	}
+	if colored.String() == plain || strings.Contains(plain, "\x1b") {
+		t.Errorf("only the colored rendering should carry escape codes")
+	}
+}
+
+// The A/A case (with noise and a budget stop) and the one-run case (no intervals, exploratory) in words.
+func TestReportTerminalGolden(t *testing.T) {
+	in := fixture()
+	in.Lock.Design.Template = experiment.TemplateAA
+	in.Lock.Arms[1].Context, in.Lock.Arms[1].Snapshot = "base", ""
+	in.Status, in.StatusNote = experiment.StatusBudget, "the next run would not fit the $60.00 budget"
+	for name, in := range map[string]Input{"aa.txt": in, "lean-ab-1run.txt": oneRun(experiment.MethodV2, experiment.TemplateContextAB)} {
+		rep, err := Build(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var plain bytes.Buffer
+		if err := rep.Terminal(&plain, term.Style{}); err != nil {
+			t.Fatal(err)
+		}
+		golden(t, name, plain.Bytes())
+		assertTerminalColors(t, rep, plain.String())
+	}
+}
+
+// Verdicts take their colors: improved and no loss green, regressed red, exploratory and inconclusive yellow; and no
+// markup is left in the terminal rendering.
+func TestReportTerminalVerdictColorsAndNoMarkup(t *testing.T) {
+	st := term.Colored()
+	for verdict, want := range map[string]string{stats.Improved: st.Good("x"), stats.NoLoss: st.Good("x"), stats.Regressed: st.Bad("x"),
+		stats.Exploratory: st.Warn("x"), stats.Inconclusive: st.Warn("x")} {
+		if got := verdictStyle(st, verdict, "x"); got != want {
+			t.Errorf("%s: %q, want %q", verdict, got, want)
+		}
+	}
+	rep, err := Build(fixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := rep.Terminal(&out, term.Style{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, markup := range []string{"**", "`", "| ", "## ", "# "} {
+		if strings.Contains(out.String(), markup) {
+			t.Errorf("the terminal rendering has markup %q", markup)
+		}
+	}
 }
 
 // goldenJSON compares JSON with the golden file, numbers within 1e-9 relative: the last digits of floating-point
