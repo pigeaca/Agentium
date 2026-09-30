@@ -33,20 +33,25 @@ type Result struct {
 	CostUSD float64
 	// Stop, when set, says why no later run can be fair (Claude Code's version changed, say): the experiment stops.
 	Stop string
+	// Usage is the run's last subscription usage reading, if it reported one: the gate's latest reading.
+	Usage *claude.UsageReading
 }
 
 // Executor runs an attempt of a slot. overlap lists the positions of the slots whose runs may overlap it: their
 // folders must be denied to it before it starts.
 type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (Result, error)
 
-// Event reports progress: a run starting, finishing, or waiting to be retried.
+// Event reports progress: a run starting, finishing, or waiting to be retried, or the execution waiting for the usage
+// window to reset (Kind "wait": Until and Usage, the window's share used).
 type Event struct {
-	Kind     string // "start", "finish" or "retry"
+	Kind     string // "start", "finish", "retry" or "wait"
 	Slot     Slot
 	Attempt  int
 	Result   Result
 	SpentUSD float64
 	RetryIn  time.Duration
+	Until    time.Time
+	Usage    float64
 }
 
 // Plan is an execution's input.
@@ -59,6 +64,7 @@ type Plan struct {
 	Prior       []Attempt                       // the experiment's stored runs
 	Backoff     func(attempt int) time.Duration // before retrying a slot whose attempt failed for infrastructure
 	Progress    func(Event)                     // optional
+	Usage       *UsageGate                      // optional: pause before the subscription's usage limit
 }
 
 // Summary is how an execution ended.
@@ -69,6 +75,8 @@ type Summary struct {
 	Settled  int // slots with a fair or unfair run
 	Failed   int // slots out of attempts
 	Pending  int // slots still to run
+	// ResumeAt, for StatusUsage, is when the five-hour window resets.
+	ResumeAt time.Time
 }
 
 // Window is how far past the earliest unfinished slot a run may start: twice the concurrency. It keeps a pair's runs
@@ -105,6 +113,9 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 //     and its own cap (both caps for a pair's first run) fit BudgetUSD, so spending never passes it;
 //   - retries: an infrastructure failure is retried after Backoff, up to MaxAttempts per slot; InfraStreak failures in
 //     a row, on more than one slot, stop the experiment;
+//   - usage (Usage set): a new pair starts only when the latest usage reading, plus the expected use of the runs in
+//     flight and of the pair, stays within the limit; runs in flight finish, then the execution waits for the window
+//     to reset (Usage.Wait) or pauses with StatusUsage;
 //   - a Result with Stop, an executor error, or ctx's cancellation stop it; runs in flight finish first (a cancelled
 //     ctx interrupts them, and they come back cancelled).
 //
@@ -129,6 +140,11 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				partner[i] = q
 			}
 		}
+	}
+	var gate *UsageGate // a copy: finished runs update its latest reading
+	if p.Usage != nil {
+		g := *p.Usage
+		gate = &g
 	}
 	var spent float64
 	for _, a := range p.Prior {
@@ -166,7 +182,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	done := ctx.Done()
 	for {
 		now := time.Now()
-		blocked := false
+		blocked, usageBlocked := false, false
 		var wake time.Time
 		if stopNote == "" && runErr == nil && ctx.Err() == nil {
 			low := len(state)
@@ -176,10 +192,13 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 					break
 				}
 			}
-			reserved := 0.0
+			reserved, held := 0.0, 0
 			for i := range state {
 				if state[i].running || state[i].held {
 					reserved += p.RunCapUSD
+				}
+				if state[i].held && !state[i].running {
+					held++
 				}
 			}
 			for pos := low; pos < len(state) && pos < low+Window(p.Concurrency) && running < p.Concurrency; pos++ {
@@ -204,6 +223,18 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 						hold = qs
 					}
 				}
+				// Only a slot that opens a pair (or has none) is gated: a pair's second run, its retry, or the half pair left
+				// by an earlier execution always runs, so pairs stay whole.
+				if gate != nil && (hold != nil || partner[pos] < 0) {
+					starting := 1
+					if hold != nil {
+						starting++
+					}
+					if gate.projected(now, running+held+starting) > gate.Limit+1e-9 {
+						usageBlocked = true
+						break // in order, as for the budget
+					}
+				}
 				if spent+reserved+extra > p.BudgetUSD+1e-9 {
 					blocked = true
 					break // in order: a later run must not overtake one the budget holds back
@@ -211,6 +242,10 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				reserved += extra
 				if hold != nil {
 					hold.held = true
+					held++
+				}
+				if s.held {
+					held--
 				}
 				s.held, s.running = false, true
 				running++
@@ -247,6 +282,22 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			case stopNote != "":
 				sum.Status, sum.Note = StatusStopped, stopNote
 				return sum, nil
+			case usageBlocked && wake.IsZero(): // a retry that is due first goes before any pause
+				until := gate.Latest.FiveHourResets
+				if gate.Wait == nil || until.IsZero() || gate.PerRun*2 > gate.Limit {
+					sum.Status, sum.ResumeAt = StatusUsage, until
+					sum.Note = fmt.Sprintf("the five-hour usage window is at %.0f%%, and the next pair (about %.0f%% a run) would pass the %.0f%% limit",
+						100*gate.Latest.FiveHourAt(now), 100*gate.PerRun, 100*gate.Limit)
+					if gate.PerRun*2 > gate.Limit {
+						sum.Note = fmt.Sprintf("a pair needs about %.0f%% of the five-hour usage window, more than the %.0f%% limit", 200*gate.PerRun, 100*gate.Limit)
+					}
+					return sum, nil
+				}
+				emit(Event{Kind: "wait", Until: until, Usage: gate.Latest.FiveHourAt(now)})
+				if err := gate.Wait(ctx, until); err == nil {
+					gate.Latest = claude.UsageReading{} // the window has reset: nothing of the new one is used yet
+				}
+				continue // a cancelled wait ends as interrupted
 			case blocked && wake.IsZero(): // a run waiting to be retried comes first in order, and may still fit
 				sum.Status = StatusBudget
 				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, $%.2f per run at most)", p.BudgetUSD, spent, p.RunCapUSD)
@@ -267,6 +318,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			s.running = false
 			running--
 			spent += f.result.CostUSD
+			if gate != nil && f.result.Usage != nil && f.result.Usage.Newer(gate.Latest) {
+				gate.Latest = *f.result.Usage
+			}
 			emit(Event{Kind: "finish", Slot: p.Schedule[f.pos], Attempt: f.attempt, Result: f.result})
 			if f.err != nil && ctx.Err() == nil && runErr == nil {
 				runErr = fmt.Errorf("slot %d (task %s, arm %s): %w", f.pos, p.Schedule[f.pos].Task, p.Schedule[f.pos].Arm, f.err)

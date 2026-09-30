@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -300,6 +301,17 @@ func printRun(env Env, rec run.Record) {
 	fmt.Fprintf(out, "  behavior     ran tests: %v, ran the checks: %v, %d Bash command(s), %d denial(s)\n", b.RanTests, b.RanChecks, b.BashCommands, b.Denials)
 	fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", orNone(m.CLIVersion), orNone(m.Model),
 		orNone(m.PermissionMode), len(m.Tools), m.SkillCount)
+	if len(m.SubagentModels) > 0 {
+		var kinds []string
+		for kind, models := range m.SubagentModels {
+			kinds = append(kinds, kind+" on "+strings.Join(models, ", "))
+		}
+		sort.Strings(kinds)
+		fmt.Fprintf(out, "  subagents    %s\n", strings.Join(kinds, "; "))
+	}
+	if m.UsageFirst != nil && m.UsageLast != nil {
+		fmt.Fprintf(out, "  usage        five-hour window %.0f%% → %.0f%%, seven-day %.0f%%\n", 100*m.UsageFirst.FiveHour, 100*m.UsageLast.FiveHour, 100*m.UsageLast.SevenDay)
+	}
 	for _, d := range rec.Drift {
 		fmt.Fprintf(out, "unfair: %s\n", d)
 	}

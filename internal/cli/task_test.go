@@ -144,3 +144,66 @@ func TestParseNumstat(t *testing.T) {
 		t.Error("a malformed record must be an error")
 	}
 }
+
+func TestTaskFairnessGaps(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "go.mod", "module example.com/m\n\ngo 1.22\n")
+	writeFile(t, repo, "m.go", "package m\n\nfunc Check(s string) error { return nil }\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "m.go", "package m\n\nimport \"errors\"\n\nfunc Check(s string) error { return errors.New(\"value must not be empty\") }\n")
+	writeFile(t, repo, "m_test.go", "package m\n\nimport \"testing\"\n\nfunc TestCheck(t *testing.T) {\n\tif err := Check(\"\"); err == nil || err.Error() != \"value must not be empty\" {\n\t\tt.Fatal(err)\n\t}\n}\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Reject empty values\n\nCheck should fail on an empty string.")
+
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv:   func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now:      func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) },
+		})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	writeFile(t, repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+	expect(t, run("context", "snapshot", "lean", "--working-tree"), ExitOK)
+	verify := `grep -q "value must not be empty" m.go`
+	expect(t, run("task", "import", "--commit", "HEAD", "--name", "empty", "--verify", verify), ExitOK)
+	expect(t, run("task", "list"), ExitOK, "1 unstated requirement(s)")
+	expect(t, run("task", "show", "empty"), ExitOK, "Unstated requirements (1)", `text "value must not be empty" (m_test.go)`)
+	expect(t, run("task", "validate", "empty"), ExitOK, "Result: valid", "Unstated requirements (1)", `text "value must not be empty"`)
+	expect(t, run("task", "validate", "empty", "--snapshot", "lean"), ExitOK, "Result: valid")
+
+	// Every way to mark the task reviewed is gated, and nothing changes when it is refused.
+	expect(t, run("task", "edit", "empty", "--reviewed"), ExitError, "value must not be empty", "pass --accept-gaps")
+	expect(t, run("task", "edit", "empty", "--instruction", "Reject empty values."), ExitError, "value must not be empty", "pass --accept-gaps")
+	expect(t, run("task", "list"), ExitOK, "instruction not reviewed")
+	expect(t, run("task", "edit", "empty", "--accept-gaps"), ExitUsage, "at least one of")
+	// The plan warns while the gap stands.
+	expect(t, run("experiment", "new", "gaps-ab", "--b", "lean", "--task", "empty"), ExitError, "instruction needs a review")
+	expect(t, run("task", "edit", "empty", "--reviewed", "--accept-gaps"), ExitOK)
+	expect(t, run("experiment", "new", "gaps-ab", "--b", "lean", "--task", "empty"), ExitOK)
+	expect(t, run("experiment", "plan", "gaps-ab"), ExitOK, "WARNING  hidden tests require what nothing states", "empty (1)")
+
+	// Stating the text in the instruction clears the list, and needs no acceptance.
+	expect(t, run("task", "edit", "empty", "--instruction", `Check returns the error "value must not be empty" for an empty string.`), ExitOK)
+	if list := run("task", "list"); strings.Contains(list.stdout, "unstated") || strings.Contains(list.stdout, "not reviewed") {
+		t.Errorf("after stating it:\n%s", list.stdout)
+	}
+	if plan := run("experiment", "plan", "gaps-ab"); strings.Contains(plan.stdout, "require what nothing states") {
+		t.Errorf("after stating it:\n%s", plan.stdout)
+	}
+
+	// A task added by hand is reviewed from the start, so it is gated too.
+	base, solution := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1")), "HEAD"
+	expect(t, run("task", "add", "by-hand", "--base", base, "--solution", solution, "--instruction", "Reject empty values.", "--verify", verify),
+		ExitError, "value must not be empty", "pass --accept-gaps")
+	expect(t, run("task", "add", "by-hand", "--base", base, "--solution", solution, "--instruction", "Reject empty values.", "--verify", verify,
+		"--accept-gaps"), ExitOK)
+	expect(t, run("task", "add", "stated", "--base", base, "--solution", solution, "--verify", verify,
+		"--instruction", `Check returns the error "value must not be empty" for an empty string.`), ExitOK)
+}

@@ -32,9 +32,11 @@ const experimentUsage = `Usage:
                      an A/A calibration: one context in both arms, which must find no difference
   agentium experiment plan NAME
                      the runs, the estimated cost and the effects each size can detect; what is missing before it runs
-  agentium experiment run NAME [--budget USD]
+  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
-                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total
+                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total.
+                     With a subscription, no pair starts past --usage-limit (default 85) of the five-hour window:
+                     it pauses, or with --wait waits for the window to reset
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json] [--out FILE]
@@ -397,6 +399,12 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	floors := experiment.FloorsFor(experiment.MethodVersion)
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
 		"below them a metric is exploratory.\n", experiment.MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
+	runs, err := w.db.Runs(ctx, w.project.ID)
+	if err != nil {
+		return fail(env, err)
+	}
+	mode, _ := signInMode(env)
+	printUsagePreview(out, runs, 2*len(d.Tasks)*d.Repeats, mode, defaultUsageLimit/100, env.Now())
 	if !ready {
 		fmt.Fprintln(out, "Not ready to run: see above.")
 	}
@@ -497,6 +505,26 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 	}
 	if len(missing) > 0 {
 		line(false, "task(s) removed since the experiment was made: %s", strings.Join(missing, ", "))
+	}
+	var unfair, unchecked []string
+	fair := task.NewFairness("--git-dir", w.bare)
+	for _, name := range d.Tasks {
+		t, err := w.db.TaskByName(ctx, w.project.ID, name)
+		if err != nil {
+			continue // reported above as removed
+		}
+		if gaps, err := taskGaps(ctx, fair, t); err != nil {
+			unchecked = append(unchecked, name)
+		} else if len(gaps) > 0 {
+			unfair = append(unfair, fmt.Sprintf("%s (%d)", name, len(gaps)))
+		}
+	}
+	if len(unfair) > 0 {
+		fmt.Fprintf(out, "  %-8s hidden tests require what nothing states, so a fair agent may fail them (task show lists it): %s\n",
+			"WARNING", strings.Join(unfair, ", "))
+	}
+	if len(unchecked) > 0 {
+		fmt.Fprintf(out, "  %-8s what the hidden tests require could not be checked for: %s\n", "WARNING", strings.Join(unchecked, ", "))
 	}
 	if ready {
 		fmt.Fprintf(out, "  %-8s %d task(s), each valid in every arm's context\n", "ok", len(d.Tasks))

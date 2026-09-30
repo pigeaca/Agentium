@@ -46,7 +46,7 @@ agentium context diff baseline trimmed --patch
 
 ```sh
 agentium task import --commit <sha>                # base: its parent; hidden tests: its test-file changes
-agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away
+agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away (--accept-gaps: hidden tests need texts or names nothing states)
 agentium task validate <name> --snapshot trimmed   # tests fail on the base and pass with the reference, in each arm
 ```
 
@@ -60,7 +60,7 @@ agentium run calibrate --snapshot trimmed     # short checks: sandbox, large out
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
 agentium experiment new lean --b trimmed      # an A/B: each task's own context against trimmed, on a sample of valid tasks
 agentium experiment plan lean                 # runs, estimated cost, detectable effects; what is missing
-agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable
+agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--json for everything)
 ```
