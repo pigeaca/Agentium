@@ -62,7 +62,7 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
   - The reviewer found the Markdown (markup stripped) and the terminal rendering identical line by line on three fixtures; the Markdown and JSON goldens are unchanged.
   - Review follow-ups: the noise table's method sentences moved to a line under each row (rows were about 370 characters wide), and per-task counts got their own column.
   - Limitation: paragraphs are not wrapped to the terminal's width; the terminal wraps them.
-- [x] **4. Docs and samples** (acceptance 6): README and architecture; real console samples in each PR. Done on 2026-09-30: the README shows the plan preview, the terminal report and a frame of the live status line as images rendered from real terminal output (the status-line frame from a run with the fake `claude`, and labeled so), and notes `NO_COLOR`, `FORCE_COLOR` and `--markdown`. The architecture's report row names the terminal rendering.
+- [x] **4. Docs and samples** (acceptance 6): README and architecture; real console samples in each PR. Done on 2026-09-30: the README shows each example as an image rendered from real terminal output: the plan preview, the terminal report and `run show` as today's binary prints them; the recorded run's lines in today's colors, with today's `experiment show` summary; and an animated SVG of the live status line, recorded with its real timing from a run with the fake `claude`, labeled so, and notes `NO_COLOR`, `FORCE_COLOR` and `--markdown`. The architecture's report row names the terminal rendering.
 
 Then the hardening plan's step 6, the paid A/B, runs with this output.
 
