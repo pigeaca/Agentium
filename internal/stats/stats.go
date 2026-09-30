@@ -166,23 +166,8 @@ func TInterval(diffs []float64, level float64) (Interval, error) {
 // WithinVariance is the pooled within-cell variance of one run (cells are task × arm), weighted by degrees of
 // freedom; ok is false when no cell has two observations.
 func WithinVariance(t *Table, transform Transform) (v float64, ok bool) {
-	total, dof := 0.0, 0
-	for _, task := range t.tasks {
-		for _, values := range t.cells[task] {
-			if len(values) > 1 {
-				transformed := make([]float64, len(values))
-				for i, x := range values {
-					transformed[i] = transform(x)
-				}
-				total += Variance(transformed) * float64(len(values)-1)
-				dof += len(values) - 1
-			}
-		}
-	}
-	if dof == 0 {
-		return 0, false
-	}
-	return total / float64(dof), true
+	v, dof := PooledWithin(t, transform)
+	return v, dof > 0
 }
 
 // Heterogeneity is τ², the spread of the true effect across tasks, by the method of moments: the variance of the

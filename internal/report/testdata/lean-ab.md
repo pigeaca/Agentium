@@ -5,7 +5,7 @@ Context A/B: A = `base`, B = `lean`. Goal: cheaper, without losing success.
 - **Success 73% → 76%**, Δ +2 pp (95%: -20 to +23): exploratory: too few tasks or runs for a verdict.
 - **Cost -20%** (95%: -21% to -19%): improved.
 
-60 of 60 runs settled (done); spent $21.95 of $60.00. 10 task(s) × 3 run(s) per arm; claude-sonnet-5, effort default, Claude Code 2.1.281, sign-in login. Locked 2026-09-29 12:00 UTC (method phase1-v1).
+60 of 60 runs settled (done); spent $21.95 of $60.00. 10 task(s) × 3 run(s) per arm; claude-sonnet-5, effort default, Claude Code 2.1.281, sign-in login. Locked 2026-09-29 12:00 UTC (method phase1-v2).
 
 ## Metrics
 
@@ -19,6 +19,17 @@ A and B: the success rate, or the geometric mean per run. B vs A is paired by ta
 | Output tokens | secondary | 3438 | 3433 | +0% | [+0%, +0%] | [+0%, +0%] | exploratory |
 
 Success: pass@1 73% (A) and 76% (B); every run of a task passed (pass^k) in 30% and 30% of tasks.
+
+## Noise
+
+What the runs show, for planning later experiments: 10 task(s), 3.0 run(s) per task and arm on average; 95% ranges. Cost ranges assume normal noise in log cost; with few tasks every range is wide.
+
+| Component | Estimate | 95% range | Planner's default | How it was estimated |
+|---|---|---|---|---|
+| σ, per-run spread of log cost | 0.04 | 0.03–0.05 | 0.19: above the range, so plans overstate this noise | the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range |
+| τ, spread of the cost effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: above the range, so plans overstate this noise | var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95% |
+| w, per-run variance of success | 0.24 | 0.13–0.33 | 0.20: within the range | the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
+| τ, spread of the success effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: above the range, so plans overstate this noise | var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
 
 ## Context and cost per arm
 
@@ -72,7 +83,6 @@ Runs counted in each arm, unless a total.
 - 1 run(s) were cut short when Agentium stopped, and recovered with what they spent.
 - Arm A: 1 run(s) passed with test-runner configuration changed beyond the task's reference; they count as failures.
 - Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.
-- Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.
+- Success is exploratory: 9 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
-- Measured noise, for planning later experiments: per-run log-cost spread σ = 0.04, success variance w = 0.24, spread across tasks τ = 0.00 (cost) and 0.00 (success), from 3.0 run(s) per task and arm.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.

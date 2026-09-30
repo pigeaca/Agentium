@@ -6,7 +6,7 @@
   "settled": 60,
   "spent_usd": 21.95059999999999,
   "lock": {
-    "method": "phase1-v1",
+    "method": "phase1-v2",
     "agentium": "test",
     "locked_at": "2026-09-29T12:00:00Z",
     "claude_code": "2.1.281",
@@ -614,6 +614,8 @@
         "tasks": 10,
         "repeats": 3,
         "full_tasks": 9,
+        "floor_tasks": 20,
+        "floor_repeats": 3,
         "a": 0.7333333333333333,
         "b": 0.7586206896551724,
         "bootstrap_95": {
@@ -644,7 +646,9 @@
         "ratio": true,
         "tasks": 10,
         "repeats": 3,
-        "full_tasks": 9,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
         "a": 0.3910629530812869,
         "b": 0.3152964987167776,
         "bootstrap_95": {
@@ -675,7 +679,9 @@
         "ratio": true,
         "tasks": 10,
         "repeats": 3,
-        "full_tasks": 9,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
         "a": 44.407055682015134,
         "b": 44.35312159544821,
         "bootstrap_95": {
@@ -706,7 +712,9 @@
         "ratio": true,
         "tasks": 10,
         "repeats": 3,
-        "full_tasks": 9,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
         "a": 3437.9901308667518,
         "b": 3432.5355495217127,
         "bootstrap_95": {
@@ -754,12 +762,34 @@
       "task-4",
       "task-0"
     ],
-    "variance": {
-      "sigma_log_cost": 0.03680899736591974,
-      "tau_log_cost": 0,
-      "w_success": 0.23504273504273507,
-      "tau_success": 0,
-      "repeats": 2.95
+    "noise": {
+      "tasks": 10,
+      "repeats": 2.95,
+      "sigma_log_cost": {
+        "estimate": 0.03680899736591974,
+        "low": 0.030152495787036476,
+        "high": 0.047264058997626465,
+        "basis": "the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range"
+      },
+      "tau_log_cost": {
+        "estimate": 0,
+        "low": 0,
+        "high": 0,
+        "basis": "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%"
+      },
+      "w_success": {
+        "estimate": 0.23504273504273507,
+        "low": 0.1324786324786325,
+        "high": 0.33333333333333326,
+        "basis": "the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks"
+      },
+      "tau_success": {
+        "estimate": 0,
+        "low": 0,
+        "high": 0,
+        "basis": "var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks"
+      },
+      "success_varies": true
     }
   },
   "arms": [
@@ -988,9 +1018,8 @@
     "1 run(s) were cut short when Agentium stopped, and recovered with what they spent.",
     "Arm A: 1 run(s) passed with test-runner configuration changed beyond the task's reference; they count as failures.",
     "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.",
-    "Success is exploratory: 9 of 10 task(s) have 3 counted runs in both arms, below the floor of 20.",
+    "Success is exploratory: 9 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
     "Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%.",
-    "Measured noise, for planning later experiments: per-run log-cost spread σ = 0.04, success variance w = 0.24, spread across tasks τ = 0.00 (cost) and 0.00 (success), from 3.0 run(s) per task and arm.",
     "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29."
   ],
   "runs": [

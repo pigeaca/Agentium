@@ -65,6 +65,8 @@ func (r Report) Markdown(w io.Writer) error {
 		rate(r.Analysis.PassAt1, r.Arms[0].Name), rate(r.Analysis.PassAt1, r.Arms[1].Name), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
 
+	writeNoise(&b, r)
+
 	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|\n")
 	for i, a := range r.Arms {
 		first := num(a.FirstRequest, "%.0f")
@@ -224,4 +226,56 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// writeNoise writes the noise section: each component with its range, next to the planner's default, and how it was
+// estimated. Without two tasks with cost in both arms there is nothing to estimate.
+func writeNoise(b *strings.Builder, r Report) {
+	n := r.Analysis.Noise
+	if n == nil {
+		return
+	}
+	aa := r.Template == experiment.TemplateAA
+	fmt.Fprintf(b, "\n## Noise\n\nWhat the runs show, for planning later experiments: %d task(s), %.1f run(s) per task and arm on average; 95%% ranges.", n.Tasks, n.Repeats)
+	if aa {
+		b.WriteString(" Both arms use the same context, so this is the noise itself; compare it with the planner's defaults, which size every preview until a calibration replaces them.")
+	}
+	b.WriteString(" Cost ranges assume normal noise in log cost; with few tasks every range is wide.\n\n")
+	b.WriteString("| Component | Estimate | 95% range | Planner's default | How it was estimated |\n|---|---|---|---|---|\n")
+	tauDefault := fmt.Sprintf("%.2f–%.2f", experiment.TauLow, experiment.TauHigh)
+	row := func(label string, c *experiment.Component, low, high float64, def, missing string) {
+		if c == nil {
+			fmt.Fprintf(b, "| %s | - | - | %s | %s |\n", label, def, missing)
+			return
+		}
+		fmt.Fprintf(b, "| %s | %.2f | %.2f–%.2f | %s: %s | %s |\n", label, c.Estimate, c.Low, c.High, def, compare(low, high, c), c.Basis)
+	}
+	row("σ, per-run spread of log cost", n.Sigma, experiment.SigmaLogCost, experiment.SigmaLogCost, fmt.Sprintf("%.2f", experiment.SigmaLogCost),
+		"not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ")
+	if !aa {
+		row("τ, spread of the cost effect across tasks", n.Tau, experiment.TauLow, experiment.TauHigh, tauDefault, "")
+	}
+	if !n.SuccessVaries {
+		b.WriteString("\nSuccess did not vary (every counted run passed, or every one failed), so there is no w.\n")
+		return
+	}
+	row("w, per-run variance of success", n.W, experiment.WSuccess, experiment.WSuccess, fmt.Sprintf("%.2f", experiment.WSuccess),
+		"not separable from τ with one run per arm in an A/B")
+	if !aa && n.TauSuccess != nil {
+		row("τ, spread of the success effect across tasks", n.TauSuccess, experiment.TauLow, experiment.TauHigh, tauDefault, "")
+	}
+}
+
+// compare places a default (a value, or a range from low to high) against a measured range: a default outside it
+// sizes plans for noise the runs did not show.
+func compare(low, high float64, c *experiment.Component) string {
+	switch {
+	case high < c.Low:
+		return "below the range, so plans understate this noise"
+	case low > c.High:
+		return "above the range, so plans overstate this noise"
+	case low == high:
+		return "within the range"
+	}
+	return "overlaps the range"
 }

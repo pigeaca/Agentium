@@ -19,12 +19,42 @@ const (
 	TauHigh = 0.25
 )
 
-// Floors: below them a metric is exploratory and gets no verdict (the study's §5.6).
+// Floors: below them a metric is exploratory and gets no verdict (the study's §5.6). MinRepeats is the success floor's
+// runs per task and arm under every method, and the cost floor's under phase1-v1.
 const (
 	MinRepeats      = 3
 	MinTasksCost    = 8
 	MinTasksSuccess = 20
+	// MinRepeatsCost is phase1-v2's cost floor: a task counts with one run in each arm. The seeded simulation in
+	// internal/stats (TestOneRunCostVerdictsSimulation) gates it: 8–12 tasks × 1 run at σ = 0.19 and τ = 0.10–0.25 give
+	// false differences at or below 6% and 95% intervals that cover the true effect at least 93% of the time.
+	MinRepeatsCost = 1
 )
+
+// Floors are a method's floors: a metric gets a verdict only with at least Tasks tasks that each have at least Repeats
+// counted runs in both arms.
+type Floors struct {
+	CostTasks, CostRepeats       int
+	SuccessTasks, SuccessRepeats int
+}
+
+// FloorsFor returns the floors of a method. An experiment is analysed by the method it was locked under, so a
+// phase1-v1 report keeps its three-run cost floor; an unknown method gets the strictest floors.
+func FloorsFor(method string) Floors {
+	f := Floors{CostTasks: MinTasksCost, CostRepeats: MinRepeats, SuccessTasks: MinTasksSuccess, SuccessRepeats: MinRepeats}
+	if method == MethodV2 {
+		f.CostRepeats = MinRepeatsCost
+	}
+	return f
+}
+
+// Metric returns a metric's floor: success has its own, and cost, time and output tokens share cost's.
+func (f Floors) Metric(metric string) (tasks, repeats int) {
+	if metric == MetricSuccess {
+		return f.SuccessTasks, f.SuccessRepeats
+	}
+	return f.CostTasks, f.CostRepeats
+}
 
 // Tier is a preset experiment size.
 type Tier struct {
@@ -70,14 +100,14 @@ func Detect(tasks, repeats int) Detectable {
 	return d
 }
 
-// Exploratory lists the metrics a design is too small to give verdicts on.
+// Exploratory lists the metrics a design is too small to give verdicts on, by the floors of the method new experiments
+// are locked under.
 func Exploratory(tasks, repeats int) []string {
 	var out []string
-	if tasks < MinTasksCost || repeats < MinRepeats {
-		out = append(out, "cost")
-	}
-	if tasks < MinTasksSuccess || repeats < MinRepeats {
-		out = append(out, "success")
+	for _, m := range []string{MetricCost, MetricSuccess} {
+		if minTasks, minRepeats := FloorsFor(MethodVersion).Metric(m); tasks < minTasks || repeats < minRepeats {
+			out = append(out, m)
+		}
 	}
 	return out
 }

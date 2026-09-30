@@ -12,9 +12,21 @@ import (
 	"github.com/pigeaca/agentium/internal/task"
 )
 
-// MethodVersion names the rules an experiment runs by: the schedule, the caps, retries and what counts. A lock records
-// it, and a resume refuses a lock made under other rules.
-const MethodVersion = "phase1-v1"
+// Methods name the rules an experiment runs and is analysed by: the schedule, the caps, retries, what counts, and the
+// floors. A lock records its method; a resume refuses an unknown one, and the analysis applies the lock's floors.
+//   - phase1-v1: the study's floors, 3 runs per task and arm for every metric.
+//   - phase1-v2: the cost floor counts tasks with one run in each arm (FloorsFor); it runs exactly as phase1-v1, so
+//     phase1-v1 experiments still resume, and keep their floors.
+const (
+	MethodV1 = "phase1-v1"
+	MethodV2 = "phase1-v2"
+)
+
+// MethodVersion is the method new experiments are locked under.
+const MethodVersion = MethodV2
+
+// Resumable reports whether an experiment locked under method runs exactly as this Agentium runs experiments.
+func Resumable(method string) bool { return method == MethodV1 || method == MethodV2 }
 
 // MaxAttempts is how often a slot is tried when its runs fail for infrastructure reasons.
 const MaxAttempts = 3
@@ -133,8 +145,8 @@ func Schedule(d Design) []Slot {
 // earlier ones.
 func (l Lock) Check(cliVersion, signIn string) error {
 	switch {
-	case l.Method != MethodVersion:
-		return fmt.Errorf("the experiment was locked under method %s; this Agentium runs %s", l.Method, MethodVersion)
+	case !Resumable(l.Method):
+		return fmt.Errorf("the experiment was locked under method %s; this Agentium runs %s and %s", l.Method, MethodV1, MethodV2)
 	case cliVersion != l.ClaudeCode:
 		return fmt.Errorf("Claude Code is %s now, but the experiment's runs used %s: install %s again to continue, or start a new experiment", cliVersion, l.ClaudeCode, l.ClaudeCode)
 	case signIn != l.SignIn:
