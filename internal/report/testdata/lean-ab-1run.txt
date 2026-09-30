@@ -23,10 +23,13 @@ Noise
 
 What the runs show, for planning later experiments: 10 task(s), 1.0 run(s) per task and arm on average; 95% ranges. Cost ranges assume normal noise in log cost; with few tasks every range is wide.
 
-Component                                  Estimate  95% range  Planner's default              How it was estimated
-σ, per-run spread of log cost                     -          -  0.19                           not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ
-τ, spread of the cost effect across tasks      0.00  0.00–0.39  0.10–0.25: overlaps the range  var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow
-w, per-run variance of success                    -          -  0.20                           not separable from τ with one run per arm in an A/B
+Component                                  Estimate  95% range  Planner's default
+σ, per-run spread of log cost                     -          -  0.19
+  How it was estimated: not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ
+τ, spread of the cost effect across tasks      0.00  0.00–0.39  0.10–0.25: overlaps the range
+  How it was estimated: var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow
+w, per-run variance of success                    -          -  0.20
+  How it was estimated: not separable from τ with one run per arm in an A/B
 
 Context and cost per arm
 
@@ -57,17 +60,17 @@ Per task
 
 ● success, ○ failure, × not counted; cost is the mean of counted runs.
 
-Task    A      B           Cost A → B
-task-0  ● 1/1  ● 1/1  $0.268 → $0.223
-task-1  ○ 0/1  ● 1/1  $0.418 → $0.270
-task-2  ● 1/1  ● 1/1  $0.584 → $0.379
-task-3  ● 1/1  ● 1/1  $0.299 → $0.239
-task-4  ○ 0/1  ● 1/1  $0.359 → $0.315
-task-5  ○ 0/1  ● 1/1  $0.494 → $0.242
-task-6  ○ 0/1  ● 1/1  $0.249 → $0.184
-task-7  ● 1/1  ○ 0/1  $0.317 → $0.272
-task-8  ○ 0/1  ● 1/1  $0.456 → $0.600
-task-9  ○ 0/1  ● 1/1  $0.234 → $0.204
+Task    A       B            Cost A → B
+task-0  ●  1/1  ●  1/1  $0.268 → $0.223
+task-1  ○  0/1  ●  1/1  $0.418 → $0.270
+task-2  ●  1/1  ●  1/1  $0.584 → $0.379
+task-3  ●  1/1  ●  1/1  $0.299 → $0.239
+task-4  ○  0/1  ●  1/1  $0.359 → $0.315
+task-5  ○  0/1  ●  1/1  $0.494 → $0.242
+task-6  ○  0/1  ●  1/1  $0.249 → $0.184
+task-7  ●  1/1  ○  0/1  $0.317 → $0.272
+task-8  ○  0/1  ●  1/1  $0.456 → $0.600
+task-9  ○  0/1  ●  1/1  $0.234 → $0.204
 
 Notes
 

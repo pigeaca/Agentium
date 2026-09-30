@@ -78,10 +78,15 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 
 	if n, ok := noiseOf(r); ok {
 		section("Noise", n.intro)
-		cols := []term.Column{term.Left(noiseColumns[0]), term.Right(noiseColumns[1]), term.Right(noiseColumns[2]), term.Left(noiseColumns[3]), term.Left(noiseColumns[4])}
+		// How each component was estimated is a sentence: it goes on its own line under the row, so the table stays
+		// narrow enough for a terminal.
+		cols := []term.Column{term.Left(noiseColumns[0]), term.Right(noiseColumns[1]), term.Right(noiseColumns[2]), term.Left(noiseColumns[3])}
 		t := table(cols...)
 		for _, row := range n.rows {
-			t.Row(row...)
+			t.Row(row[:4]...)
+			if len(row) > 4 && row[4] != "" {
+				t.Line("  " + st.Note(noiseColumns[4]+": "+row[4]))
+			}
 		}
 		if err := t.Write(&b); err != nil {
 			return err
@@ -115,10 +120,11 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	}
 
 	section("Per task", "● success, ○ failure, × not counted; cost is the mean of counted runs.")
-	t = table(term.Left("Task"), term.Left("A"), term.Left("B"), term.Right("Cost A → B"))
+	// Marks and counts are separate columns, so the counts line up whatever the number of marks.
+	t = table(term.Left("Task"), term.Left("A"), term.Right(""), term.Left("B"), term.Right(""), term.Right("Cost A → B"))
 	for _, tr := range r.Tasks {
 		ca, cb := tr.Arms[r.Arms[0].Name], tr.Arms[r.Arms[1].Name]
-		t.Row(tr.Task, fmt.Sprintf("%s %d/%d", orDash(ca.Marks), ca.Successes, ca.Counted), fmt.Sprintf("%s %d/%d", orDash(cb.Marks), cb.Successes, cb.Counted),
+		t.Row(tr.Task, orDash(ca.Marks), fmt.Sprintf("%d/%d", ca.Successes, ca.Counted), orDash(cb.Marks), fmt.Sprintf("%d/%d", cb.Successes, cb.Counted),
 			num(ca.CostUSD, "$%.3f")+" → "+num(cb.CostUSD, "$%.3f"))
 	}
 	if err := t.Write(&b); err != nil {
