@@ -27,7 +27,7 @@ What the runs show, for planning later experiments: 10 task(s), 1.0 run(s) per t
 | Component | Estimate | 95% range | Planner's default | How it was estimated |
 |---|---|---|---|---|
 | σ, per-run spread of log cost | - | - | 0.19 | not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ |
-| τ, spread of the cost effect across tasks | 0.00 | 0.00–0.39 | 0.10–0.25: overlaps the range | var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom |
+| τ, spread of the cost effect across tasks | 0.00 | 0.00–0.39 | 0.10–0.25: overlaps the range | var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow |
 | w, per-run variance of success | - | - | 0.20 | not separable from τ with one run per arm in an A/B |
 
 ## Context and cost per arm

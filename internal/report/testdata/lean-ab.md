@@ -26,10 +26,10 @@ What the runs show, for planning later experiments: 10 task(s), 3.0 run(s) per t
 
 | Component | Estimate | 95% range | Planner's default | How it was estimated |
 |---|---|---|---|---|
-| σ, per-run spread of log cost | 0.04 | 0.03–0.05 | 0.19: above the range, so plans overstate this noise | the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range |
-| τ, spread of the cost effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: above the range, so plans overstate this noise | var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95% |
+| σ, per-run spread of log cost | 0.04 | 0.03–0.05 | 0.19: above the range, so plans may overstate this noise | the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range; it assumes normal noise, and heavier tails make it too narrow |
+| τ, spread of the cost effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: not compared: no spread detected (range truncated at zero) | var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%; it assumes normal noise, and heavier tails make it too narrow |
 | w, per-run variance of success | 0.24 | 0.13–0.33 | 0.20: within the range | the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
-| τ, spread of the success effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: above the range, so plans overstate this noise | var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
+| τ, spread of the success effect across tasks | 0.00 | 0.00–0.00 | 0.10–0.25: not compared: no spread detected (range truncated at zero) | var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
 
 ## Context and cost per arm
 

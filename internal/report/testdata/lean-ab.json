@@ -769,25 +769,27 @@
         "estimate": 0.03680899736591974,
         "low": 0.030152495787036476,
         "high": 0.047264058997626465,
-        "basis": "the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range"
+        "basis": "the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range; it assumes normal noise, and heavier tails make it too narrow"
       },
       "tau_log_cost": {
         "estimate": 0,
         "low": 0,
         "high": 0,
-        "basis": "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%"
+        "basis": "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%; it assumes normal noise, and heavier tails make it too narrow"
       },
       "w_success": {
         "estimate": 0.23504273504273507,
         "low": 0.1324786324786325,
         "high": 0.33333333333333326,
-        "basis": "the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks"
+        "basis": "the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks",
+        "bootstrap": true
       },
       "tau_success": {
         "estimate": 0,
         "low": 0,
         "high": 0,
-        "basis": "var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks"
+        "basis": "var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks",
+        "bootstrap": true
       },
       "success_varies": true
     }

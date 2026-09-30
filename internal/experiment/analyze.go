@@ -77,7 +77,12 @@ type Component struct {
 	Low      float64 `json:"low"`
 	High     float64 `json:"high"`
 	Basis    string  `json:"basis"`
+	// Bootstrap marks a range from a bootstrap over tasks, which runs narrow with few tasks: indicative, not a bound.
+	Bootstrap bool `json:"bootstrap,omitempty"`
 }
+
+// normalOnly ends the basis of every chi-square range.
+const normalOnly = "; it assumes normal noise, and heavier tails make it too narrow"
 
 // Noise is the noise the runs show, for planning later experiments (the planner's defaults are SigmaLogCost, WSuccess
 // and TauLow–TauHigh). A component the design cannot estimate is nil.
@@ -279,22 +284,22 @@ func noise(cost, success *stats.Table, a, b string, d Design) *Noise {
 	case dfW > 0:
 		low, high := sqrt(stats.VarianceInterval(s2, dfW, NoiseLevel))
 		n.Sigma = &Component{Estimate: math.Sqrt(s2), Low: low, High: high,
-			Basis: fmt.Sprintf("the pooled spread of runs within each task and arm, on %d degrees of freedom; chi-square range", dfW)}
+			Basis: fmt.Sprintf("the pooled spread of runs within each task and arm, on %d degrees of freedom; chi-square range"+normalOnly, dfW)}
 	case aa:
 		low, high := stats.VarianceInterval(varD, dfD, NoiseLevel)
 		n.Sigma = &Component{Estimate: math.Sqrt(varD / 2), Low: math.Sqrt(low / 2), High: math.Sqrt(high / 2),
-			Basis: fmt.Sprintf("the paired differences' spread over √2: with one run per arm var(d) = 2σ² + τ², and τ = 0 in an A/A; chi-square range on %d degrees of freedom", dfD)}
+			Basis: fmt.Sprintf("the paired differences' spread over √2: with one run per arm var(d) = 2σ² + τ², and τ = 0 in an A/A; chi-square range on %d degrees of freedom"+normalOnly, dfD)}
 	}
 	if !aa {
 		if dfW > 0 {
 			low, high := sqrt(stats.HeterogeneityRange(varD, dfD, s2, dfW, n.Repeats, NoiseLevel))
 			n.Tau = &Component{Estimate: math.Sqrt(stats.Heterogeneity(diffs, s2, n.Repeats)), Low: low, High: high,
-				Basis: "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%"}
+				Basis: "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%" + normalOnly}
 		} else {
 			assumed := SigmaLogCost * SigmaLogCost
 			low, high := sqrt(stats.HeterogeneityRange(varD, dfD, assumed, 0, 1, NoiseLevel))
 			n.Tau = &Component{Estimate: math.Sqrt(stats.Heterogeneity(diffs, assumed, 1)), Low: low, High: high,
-				Basis: fmt.Sprintf("var(d) − 2σ², floored at zero, taking σ = %.2f (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on %d degrees of freedom", SigmaLogCost, dfD)}
+				Basis: fmt.Sprintf("var(d) − 2σ², floored at zero, taking σ = %.2f (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on %d degrees of freedom"+normalOnly, SigmaLogCost, dfD)}
 		}
 	}
 	if n.SuccessVaries = varies(success, a, b); !n.SuccessVaries {
@@ -307,20 +312,20 @@ func noise(cost, success *stats.Table, a, b string, d Design) *Noise {
 	switch {
 	case dfSW > 0:
 		low, high := stats.BootstrapRange(success, within, noiseDraws, NoiseLevel, src)
-		n.W = &Component{Estimate: sw, Low: low, High: high, Basis: "the pooled variance of runs within each task and arm; " + boot}
+		n.W = &Component{Estimate: sw, Low: low, High: high, Basis: "the pooled variance of runs within each task and arm; " + boot, Bootstrap: true}
 		if !aa {
 			repeats := meanRuns(success, a, b)
 			tau := func(t *stats.Table) float64 {
 				return math.Sqrt(stats.Heterogeneity(t.Paired(a, b, stats.Identity), within(t), repeats))
 			}
 			low, high := stats.BootstrapRange(success, tau, noiseDraws, NoiseLevel, src)
-			n.TauSuccess = &Component{Estimate: tau(success), Low: low, High: high, Basis: "var(d) − 2w/R, floored at zero; " + boot}
+			n.TauSuccess = &Component{Estimate: tau(success), Low: low, High: high, Basis: "var(d) − 2w/R, floored at zero; " + boot, Bootstrap: true}
 		}
 	case aa && len(success.Paired(a, b, stats.Identity)) >= 2:
 		half := func(t *stats.Table) float64 { return stats.Variance(t.Paired(a, b, stats.Identity)) / 2 }
 		low, high := stats.BootstrapRange(success, half, noiseDraws, NoiseLevel, src)
 		n.W = &Component{Estimate: half(success), Low: low, High: high,
-			Basis: "half the paired differences' variance, as τ = 0 in an A/A; " + boot}
+			Basis: "half the paired differences' variance, as τ = 0 in an A/A; " + boot, Bootstrap: true}
 	}
 	return n
 }

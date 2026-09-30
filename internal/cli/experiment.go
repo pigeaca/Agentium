@@ -394,8 +394,9 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(out, "note: at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
 			"success verdict to be inconclusive unless there is no real difference and the noise is low.\n", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)
 	}
-	fmt.Fprintf(out, "Floors: verdicts on cost need %d tasks and on success %d, each with %d runs per arm; below them a metric is exploratory.\n",
-		experiment.MinTasksCost, experiment.MinTasksSuccess, experiment.MinRepeats)
+	floors := experiment.FloorsFor(experiment.MethodVersion)
+	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
+		"below them a metric is exploratory.\n", experiment.MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
 	if !ready {
 		fmt.Fprintln(out, "Not ready to run: see above.")
 	}

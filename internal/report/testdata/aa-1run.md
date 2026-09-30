@@ -26,7 +26,7 @@ What the runs show, for planning later experiments: 10 task(s), 1.0 run(s) per t
 
 | Component | Estimate | 95% range | Planner's default | How it was estimated |
 |---|---|---|---|---|
-| σ, per-run spread of log cost | 0.16 | 0.11–0.29 | 0.19: within the range | the paired differences' spread over √2: with one run per arm var(d) = 2σ² + τ², and τ = 0 in an A/A; chi-square range on 9 degrees of freedom |
+| σ, per-run spread of log cost | 0.16 | 0.11–0.29 | 0.19: within the range | the paired differences' spread over √2: with one run per arm var(d) = 2σ² + τ², and τ = 0 in an A/A; chi-square range on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow |
 | w, per-run variance of success | 0.25 | 0.05–0.42 | 0.20: within the range | half the paired differences' variance, as τ = 0 in an A/A; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks |
 
 ## Context and cost per arm
@@ -77,7 +77,7 @@ Runs counted in each arm, unless a total.
 
 - Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-2, task-3. They stay in for cost.
 - Success is exploratory: 0 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).
-- Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows: each task's difference carries the run-to-run noise, and the t-interval across tasks, wider than the bootstrap's here, decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25) checked it: false differences in about 5% of A/A experiments, and 95% intervals that cover the true effect about 95% of the time.
+- Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows: each task's difference carries the run-to-run noise, and the t-interval across tasks, the wider of the two here, decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) checked it: false differences in at most 6% of experiments without a true difference, and 95% intervals that cover the true effect at least 93% of the time.
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.

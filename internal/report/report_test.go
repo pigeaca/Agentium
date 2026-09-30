@@ -180,9 +180,16 @@ func TestCompareWithDefaults(t *testing.T) {
 		low, high float64
 		want      string
 	}{{0.19, 0.19, "within"}, {0.1, 0.1, "below"}, {0.35, 0.35, "above"}, {0.10, 0.25, "overlaps"}, {0.31, 0.4, "above"}, {0.05, 0.1, "below"}} {
-		if got := compare(x.low, x.high, c); !strings.HasPrefix(got, x.want) {
+		if got := compare(x.low, x.high, c); !strings.HasPrefix(got, x.want) || strings.Contains(got, "hint") {
 			t.Errorf("compare(%v, %v) = %q, want %s", x.low, x.high, got, x.want)
 		}
+	}
+	if got := compare(0.10, 0.25, &experiment.Component{}); !strings.Contains(got, "no spread detected (range truncated at zero)") {
+		t.Errorf("a range truncated at zero is not compared: %q", got)
+	}
+	if got := compare(0.20, 0.20, &experiment.Component{Estimate: 0.05, Low: 0.02, High: 0.1, Bootstrap: true}); !strings.HasPrefix(got, "above") ||
+		!strings.Contains(got, "a hint, not a finding") {
+		t.Errorf("a bootstrap range gives a hint: %q", got)
 	}
 }
 
@@ -429,6 +436,20 @@ func TestScrubReplacesWholePaths(t *testing.T) {
 		}
 		if got != want {
 			t.Errorf("scrub(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// The one-run note names the interval that decides: the t-interval usually, the bootstrap when a skewed task reaches
+// past it, or each on its own side.
+func TestWiderNamesTheDecidingInterval(t *testing.T) {
+	i := func(lo, hi float64) stats.Interval { return stats.Interval{Low: lo, High: hi} }
+	for _, c := range []struct {
+		t, boot stats.Interval
+		want    string
+	}{{i(-0.3, 0.1), i(-0.2, 0.05), "the t-interval"}, {i(-0.2, 0.05), i(-0.3, 0.1), "the bootstrap"}, {i(-0.3, 0.05), i(-0.2, 0.1), "on each side"}} {
+		if got := wider(c.t, c.boot); !strings.Contains(got, c.want) {
+			t.Errorf("wider(%v, %v) = %q, want %q", c.t, c.boot, got, c.want)
 		}
 	}
 }

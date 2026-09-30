@@ -267,13 +267,21 @@ func writeNoise(b *strings.Builder, r Report) {
 }
 
 // compare places a default (a value, or a range from low to high) against a measured range: a default outside it
-// sizes plans for noise the runs did not show.
+// sizes plans for noise the runs did not show. A range truncated to zero measured no spread, not a spread of zero, so
+// nothing is compared with it; a bootstrap range runs narrow with few tasks, so a default outside it is only a hint.
 func compare(low, high float64, c *experiment.Component) string {
+	if c.High == 0 {
+		return "not compared: no spread detected (range truncated at zero)"
+	}
+	hint := ""
+	if c.Bootstrap {
+		hint = " (a bootstrap range, narrow with few tasks: a hint, not a finding)"
+	}
 	switch {
 	case high < c.Low:
-		return "below the range, so plans understate this noise"
+		return "below the range, so plans may understate this noise" + hint
 	case low > c.High:
-		return "above the range, so plans overstate this noise"
+		return "above the range, so plans may overstate this noise" + hint
 	case low == high:
 		return "within the range"
 	}

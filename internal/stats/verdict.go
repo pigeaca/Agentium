@@ -22,6 +22,14 @@ const (
 	Exploratory   = "exploratory"
 )
 
+// The one-run gate: method phase1-v2 gives cost verdicts on one run per task and arm because a seeded simulation
+// (TestOneRunCostVerdictsSimulation) shows, for 8–12 tasks, false differences at or below OneRunMaxFalseDifferences
+// and 95% intervals covering the true effect at least OneRunMinCoverage of the time. Reports quote these.
+const (
+	OneRunMaxFalseDifferences = 0.06
+	OneRunMinCoverage         = 0.93
+)
+
 // Margin is a metric's decision margin in the evidence's scale, per side.
 type Margin struct {
 	Better float64 // how far the better side reaches before an improvement stops being small
