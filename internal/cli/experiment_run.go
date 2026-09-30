@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"maps"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/pricing"
@@ -39,11 +41,13 @@ func experimentWorkspace(experimentID int64, slot, try int) string {
 func experimentRun(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment run", flag.ContinueOnError)
 	budget := fs.Float64("budget", 0, "raise the experiment's budget to this total in USD (recorded in its lock)")
+	usageLimit := fs.Float64("usage-limit", defaultUsageLimit, "with a subscription, start no pair past this share of the five-hour window (percent)")
+	wait := fs.Bool("wait", false, "at the usage limit, wait for the window to reset instead of pausing")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 || *budget < 0 {
+	if len(rest) != 1 || *budget < 0 || *usageLimit <= 0 || *usageLimit > 100 {
 		fmt.Fprint(env.Stderr, experimentUsage)
 		return ExitUsage
 	}
@@ -173,6 +177,19 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	var triesMu sync.Mutex
 	tries := maps.Clone(storedTries)
+	projectRuns, err := w.db.Runs(ctx, w.project.ID)
+	if err != nil {
+		return fail(env, err)
+	}
+	samples := usageSamples(projectRuns)
+	gate := &experiment.UsageGate{Limit: *usageLimit / 100}
+	gate.PerRun, _ = experiment.UsagePerRun(samples)
+	gate.Latest, _ = experiment.LatestUsage(samples)
+	if *wait {
+		gate.Wait = func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) }
+	}
+	var subagentsMu sync.Mutex
+	seenSubagents := subagentModels(runs) // the models each subagent type ran on in this experiment so far
 	runEnv, err := newRunEnv(env, w, lock.Design.VerifyTimeout)
 	if err != nil {
 		return fail(env, err)
@@ -196,6 +213,9 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, orNone(e.Result.Outcome), e.Result.CostUSD, e.SpentUSD, design.BudgetUSD)
 		case "retry":
 			fmt.Fprintf(out, "%s: retrying in %s\n", label, e.RetryIn)
+		case "wait":
+			fmt.Fprintf(out, "Usage: the five-hour window is at %.0f%%; waiting for it to reset at %s (Ctrl-C stops; run it again to resume).\n",
+				100*e.Usage, clock(e.Until, env.Now()))
 		}
 	}
 	execute := func(ctx context.Context, slot experiment.Slot, attempt int, overlap []int) (experiment.Result, error) {
@@ -226,13 +246,24 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		rec, err := executeRun(ctx, env, w, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 			Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
 			Timeout: design.Timeout})
-		result := experiment.Result{Outcome: rec.Outcome, CostUSD: rec.Metrics.CostUSD}
+		result := experiment.Result{Outcome: rec.Outcome, CostUSD: rec.Metrics.CostUSD, Usage: rec.Metrics.UsageLast}
 		switch m := rec.Metrics; {
 		case m.SawInit && m.CLIVersion != lock.ClaudeCode:
 			result.Stop = fmt.Sprintf("Claude Code reported version %s, but the experiment is locked to %s: later runs would not compare", m.CLIVersion, lock.ClaudeCode)
 		case m.SawInit && arm.Model != "" && m.Model != arm.Model:
 			result.Stop = fmt.Sprintf("Claude Code reported model %s, but arm %s's calibration saw %s: later runs would not compare", m.Model, arm.Name, arm.Model)
 		}
+		// A role's model alias can move to a newer model with Claude Code while --model stays pinned: the runs after
+		// it would not compare with those before.
+		subagentsMu.Lock()
+		if changes := claude.SubagentModelChanges(seenSubagents, rec.Metrics.SubagentModels); len(changes) > 0 {
+			if result.Stop == "" {
+				result.Stop = strings.Join(changes, "; ") + ": later runs would not compare"
+			}
+		} else {
+			mergeSubagentModels(seenSubagents, rec.Metrics.SubagentModels)
+		}
+		subagentsMu.Unlock()
 		return result, err
 	}
 	backoff := env.Backoff
@@ -240,7 +271,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		backoff = retryBackoff
 	}
 	sum, runErr := experiment.Execute(ctx, experiment.Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunBudgetUSD,
-		BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: progress}, execute)
+		BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: progress, Usage: gate}, execute)
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = experiment.StatusStopped, "Agentium could not start the runs: "+runErr.Error()
 	}
@@ -259,6 +290,13 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		return ExitOK
 	case sum.Status == experiment.StatusBudget:
 		fmt.Fprintf(out, "Stopped at the budget. To continue: agentium experiment run %s --budget USD (a higher total)\n", name)
+		return ExitOK
+	case sum.Status == experiment.StatusUsage && !sum.ResumeAt.IsZero():
+		fmt.Fprintf(out, "Paused before the usage limit; the window resets at %s. To continue: agentium experiment run %s (--wait waits for the reset)\n",
+			clock(sum.ResumeAt, env.Now()), name)
+		return ExitOK
+	case sum.Status == experiment.StatusUsage:
+		fmt.Fprintf(out, "Paused: a pair needs more of the usage window than the limit allows. To continue: agentium experiment run %s --usage-limit PCT\n", name)
 		return ExitOK
 	}
 	fmt.Fprintf(out, "Stopped. To continue: agentium experiment run %s\n", name)

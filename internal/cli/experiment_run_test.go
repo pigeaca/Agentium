@@ -22,7 +22,9 @@ import (
 // experimentAgent writes a fake Claude Code for experiments. It matches the calibration of calibratingAgent (tools,
 // skills, slash commands), solves the fixture's task, and reads its instructions from files in ctrl, keyed by its
 // workspace ("s2-t1": slot 2, first try): "infra" lists runs that end without a result, "hang" runs that wait to be
-// killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports. It
+// killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
+// "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
+// end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model. It
 // leaves its settings argument and process ID in ctrl.
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
@@ -37,10 +39,20 @@ prev=""; for a in "$@"; do [ "$prev" = "--settings" ] && printf '%s' "$a" > "$CT
 echo $$ > "$CTRL/pid-$ws"
 echo '{"type":"system","subtype":"init","claude_code_version":"'"$version"'","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash","Edit","Read"],"skills":["review"],"slash_commands":["compact"]}'
 echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000,"cache_read_input_tokens":0,"output_tokens":10},"content":[]}}'
+limit() { echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":'"$1"',"resetsAt":'"$resets"'},"seven_day":{"utilization":0.2,"resetsAt":'"$resets"'}}}}'; }
+[ -f "$CTRL/usage" ] && { read used step resets < "$CTRL/usage"; limit "$used"; }
+sub=$(grep "^$key " "$CTRL/subagent" 2>/dev/null | cut -d' ' -f2)
+if [ -n "$sub" ]; then
+  echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-agent","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"subagent_type":"investigator","prompt":"look"}}]}}'
+  echo '{"type":"assistant","parent_tool_use_id":"agent1","message":{"id":"m-sub","model":"'"$sub"'","content":[]}}'
+fi
 grep -qx "$key" "$CTRL/infra" 2>/dev/null && exit 1
 if grep -qx "$key" "$CTRL/hang" 2>/dev/null; then touch "$CTRL/hanging-$ws"; sleep 60; fi
 sleep 0.2
 printf 'new\n' > value.txt
+if [ -f "$CTRL/usage" ]; then
+  used=$(awk "BEGIN{print $used + $step}"); echo "$used $step $resets" > "$CTRL/usage"; limit "$used"
+fi
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.30,"num_turns":2,"duration_ms":1000,"modelUsage":{}}'
 `
 	cli := filepath.Join(t.TempDir(), "claude")

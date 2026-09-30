@@ -24,8 +24,9 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - Expected use per run is the median rise per run in this project's earlier runs (default 6%).
    - `experiment plan` shows the use per run, the windows the experiment needs, and whether the current window fits.
    - Runs with an API key or token report no readings; they never pause, and the preview says so.
+   - Added by the user on 2026-09-29: each run records which model each subagent type used. An experiment stops when a type's model changes from earlier runs, such as a role's `sonnet` alias moving to a newer model.
 
-   *Evidence:* end-to-end tests with the fake `claude` and a fake clock covering a pause between pairs, a wait and resume, the preview, and a stream without readings.
+   *Evidence:* end-to-end tests with the fake `claude` and a fake clock covering a pause between pairs, a wait and resume, the preview, and a stream without readings, and a subagent changing model.
 2. **Task fairness check.** For each task, list what the hidden tests require that neither the instruction nor the base code states.
    - Go: exact string literals that the tests compare against, and identifiers (functions, methods, fields, types) that the tests use but the base does not define.
    - Other languages: string literals only.

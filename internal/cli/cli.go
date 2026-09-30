@@ -30,6 +30,8 @@ type Env struct {
 	// Backoff is how long an experiment waits before retrying a run that failed for infrastructure reasons; nil means
 	// 30 seconds, then 2 minutes.
 	Backoff func(attempt int) time.Duration
+	// Sleep waits for d or until ctx is cancelled (experiment run --wait); nil means a timer.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 const usage = `agentium measures how coding agents, models and project context change coding-agent results.
