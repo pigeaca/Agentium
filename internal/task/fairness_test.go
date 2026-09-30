@@ -157,3 +157,26 @@ func TestFairnessNoHiddenTestsNoGaps(t *testing.T) {
 		t.Error("a hidden test file absent from the solution should be an error")
 	}
 }
+
+// Names are case-sensitive: a base that only has Wait(timeout) does not state a new Timeout field.
+func TestFairnessNamesAreCaseSensitive(t *testing.T) {
+	base := map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "p/p.go": "package p\n\ntype Config struct{}\n\nfunc Wait(timeout int) {}\n"}
+	solution := map[string]string{
+		"p/p.go":      "package p\n\ntype Config struct{ Timeout int }\n\nfunc Wait(timeout int) {}\n",
+		"p/p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestC(t *testing.T) { _ = Config{Timeout: 5} }\n",
+	}
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Timeout")
+}
+
+func TestFairnessCancelledSearchIsAnErrorNotAGap(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init", "-q", "-b", "main")
+	b := commit(t, repo, fairBase, "base")
+	s := commit(t, repo, fairSolution, "solution")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := NewFairness("-C", repo).Gaps(ctx, FairnessInput{Base: b, Solution: s, HiddenTests: []string{"ctx/ctx_test.go"}, Reference: []string{"ctx/ctx.go"}})
+	if err == nil {
+		t.Error("a cancelled check should fail, not report gaps")
+	}
+}

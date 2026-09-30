@@ -82,7 +82,9 @@ type FairnessInput struct {
 //     argument of t.Run, t.Errorf, t.Fatalf, t.Logf, t.Skipf, fmt.Sprintf and fmt.Errorf, do not count. A text is cut
 //     at newlines and %-verbs; each piece of 8 or more characters must be found, and a text with none is too generic.
 //     Matching ignores case, collapsed whitespace and surrounding punctuation; base and reference are searched with
-//     git grep, so whitespace inside a piece must match exactly there.
+//     git grep, so whitespace inside a piece must match exactly there. Limitations: the format argument of fmt.Sprintf
+//     and fmt.Errorf is skipped, so an expected text built with them is not checked; a reference message built with a
+//     verb inside quotes (fmt.Errorf("value %q is empty")) is not matched by the formatted text a test compares to.
 //   - For Go: names the tests newly use as selectors (x.Name), composite-literal keys (T{Name: v}) or called functions
 //     that a changed non-test Go file declares at package level or as a struct or interface member, that the base's Go
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be
@@ -197,7 +199,7 @@ func (f *Fairness) versions(ctx context.Context, in FairnessInput, file string) 
 	return after, before, nil
 }
 
-// grep reports whether commit has pattern (fixed string, case-insensitive; a word when word is set) in the files
+// grep reports whether commit has pattern (fixed string; case-insensitive text, or a case-sensitive whole word when word is set) in the files
 // matching pathspecs (all files when none). git grep exits 1 with no output when nothing matches, which gitx
 // reports as an error with an empty message.
 func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, pathspecs []string) (bool, error) {
@@ -206,13 +208,18 @@ func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, 
 		return v, nil
 	}
 	args := append([]string{}, f.where...)
-	args = append(args, "grep", "-F", "-i", "-l")
-	if word {
+	args = append(args, "grep", "-F", "-l")
+	if word { // Go names are case-sensitive: Wait does not state Timeout
 		args = append(args, "-w")
+	} else {
+		args = append(args, "-i")
 	}
 	args = append(args, "-e", pattern, commit, "--")
 	args = append(args, pathspecs...)
 	out, err := gitx.Output(ctx, nil, args...)
+	if ctx.Err() != nil { // a cancelled git also exits without a message: never cache that as "no match"
+		return false, fmt.Errorf("fairness: %w", ctx.Err())
+	}
 	if err != nil && !strings.HasSuffix(err.Error(), ": ") {
 		return false, fmt.Errorf("fairness: %w", err)
 	}
