@@ -12,4 +12,4 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 
 ## Next, in order
 1. Hardening, then a 20-run context A/B ([plan](plans/2026-09-29-experiment-hardening.md)): rate-limit awareness, a task fairness check, noise estimates in reports.
-2. Phase 2: web UI, agent comparison, and Codex.
+2. Phase 2: clearer console output ([no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)), agent comparison, and Codex.

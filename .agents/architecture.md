@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **strategy accepted (hybrid); stack accepted: Go + React + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is done ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration, experiments, statistics and reports work, and real A/A and A/B runs proved them.
+Status: **strategy accepted (hybrid); stack accepted: Go + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md); [no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is done ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration, experiments, statistics and reports work, and real A/A and A/B runs proved them.
 
 ## Product concept
 
@@ -10,7 +10,7 @@ Shape:
 - **Hybrid.** Agentium owns context snapshots, tasks, experiment design, statistics and the UX.
 - **Local runs** drive agent CLIs headlessly in isolated checkouts.
 - **Harbor**, pinned and out of process, adds containers later.
-- **One binary:** a Go core (Go 1.27.1, module `github.com/pigeaca/agentium`), a local React + TypeScript UI embedded in Phase 2, and SQLite through `mattn/go-sqlite3` from Phase 1.
+- **One binary:** a Go core (Go 1.27.1, module `github.com/pigeaca/agentium`) and SQLite through `mattn/go-sqlite3`, used from the console.
 
 ## Go conventions
 

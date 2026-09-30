@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted by the user on 2026-09-28.
+Accepted by the user on 2026-09-28. Its UI part is superseded by [a clearer console instead of a web UI](2026-09-30-console-instead-of-web-ui.md) (2026-09-30).
 
 ## Context
 

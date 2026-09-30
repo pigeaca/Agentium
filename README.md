@@ -16,7 +16,7 @@ Agentium runs coding agents such as Claude Code (Codex comes later) on tasks fro
 - **Plain verdicts.** Paired runs with repeats give one of four verdicts: improved, regressed, no loss beyond the margin, or inconclusive. Each comes with its intervals and honesty notes.
 
 > [!NOTE]
-> Agentium is early. Phase 1, context A/B for Claude Code from the command line, is done; Phase 2 adds a web UI, Codex and agent comparison. See the [roadmap](.agents/ROADMAP.md) and the [feasibility study](docs/research/2026-09-27-ai-development-lab.md).
+> Agentium is early. Phase 1, context A/B for Claude Code from the command line, is done; Phase 2 makes the console output clearer and adds Codex and agent comparison; no web UI is planned. See the [roadmap](.agents/ROADMAP.md) and the [feasibility study](docs/research/2026-09-27-ai-development-lab.md).
 
 ## Requirements
 
