@@ -87,7 +87,10 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
     - with unequal repeats, the τ formula uses the arithmetic mean of runs per cell, which slightly overstates τ;
     - the largest false-difference rate sits under one standard error from the 6% limit.
   - **For step 6:** a 12 × 1 A/B cannot measure σ or w (only τ, under the assumed σ = 0.19). Updating the planner defaults would need a one-run A/A, or a few repeated tasks, alongside.
-- [ ] **4. Small fixes**, through the spawned tasks where they have started.
+- [x] **4. Small fixes**, done by an `implementer` (Sonnet 5.5) after one review round:
+  - A run interrupted before its agent starts is reported as "stopped before its agent started (not counted; it runs again on resume)". `Execute` marks such runs on the finish event.
+  - Agents get `-buildvcs=false` appended to their `GOFLAGS`, after the user's own flags from the environment or from `go env -w`. That stops Go writing a stat-cache entry into the read-only module cache; the warning was reproduced locally with a read-only module-cache copy. Agentium's own setup and grading are unchanged.
+  - zsh glob failures are kept on purpose: runs use the user's own shell, like their Claude Code sessions, and both arms get the same one. This is documented on `Environ`.
 - [ ] **5. Twelve fair tasks**: import, rewrite, check, review, validate. Free.
 - [ ] **6. The A/B**, after approval. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.
 
