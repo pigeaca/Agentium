@@ -37,7 +37,8 @@ func Detect(terminal bool, getenv func(string) string) Style {
 // On reports whether the Style adds escape codes.
 func (s Style) On() bool { return s.on }
 
-// Each style ends with the code that undoes only itself, so a colored word keeps the bold of a heading around it.
+// Each color ends with the code that resets only the color, so a colored word keeps the bold of a heading around it.
+// Bold and dim share their reset code (22), so Heading and Note must not nest: the inner one would end both.
 const (
 	bold, boldOff = "\x1b[1m", "\x1b[22m"
 	dim, dimOff   = "\x1b[2m", "\x1b[22m"
@@ -48,11 +49,19 @@ const (
 	colorOff      = "\x1b[39m"
 )
 
+// wrap styles each line of text on its own, so a pager showing part of the text, or a redrawn status line, never
+// starts or ends inside a style.
 func (s Style) wrap(start, end, text string) string {
 	if !s.on || text == "" {
 		return text
 	}
-	return start + text + end
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = start + line + end
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // Heading is bold: section headings and table headers.

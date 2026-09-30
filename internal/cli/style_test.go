@@ -22,7 +22,8 @@ func TestOutputIsStyledOnlyOnATerminal(t *testing.T) {
 		{"run", "once", "value"}, {"run", "list"},
 	}
 	escape := "\x1b["
-	for _, args := range commands {
+	plain := func(args ...string) cliResult {
+		t.Helper()
 		r := f.run(ctx, args...)
 		if r.code != ExitOK {
 			t.Fatalf("%v: exit %d\nstdout %s\nstderr %s", args, r.code, r.stdout, r.stderr)
@@ -30,7 +31,22 @@ func TestOutputIsStyledOnlyOnATerminal(t *testing.T) {
 		if strings.Contains(r.stdout+r.stderr, escape) {
 			t.Errorf("%v without a terminal printed escape codes:\n%q", args, r.stdout)
 		}
+		return r
 	}
+	for _, args := range commands {
+		plain(args...)
+	}
+	// The commands that change things, and run show with an ID from the list.
+	plain("init")
+	plain("context", "snapshot", "other", "--working-tree")
+	plain("context", "diff", "lean", "other")
+	plain("task", "add", "by-hand", "--base", "HEAD~1", "--instruction", "Make the value new.", "--solution", "HEAD", "--verify", "sh run_tests.sh")
+	plain("task", "edit", "by-hand", "--reviewed")
+	plain("experiment", "new", "second", "--b", "lean", "--task", "value", "--seed", "3")
+	listed := strings.Split(plain("run", "list").stdout, "\n")
+	plain("run", "show", strings.Fields(listed[1])[0], "--diff", "--log")
+	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+	plain("run", "calibrate", "--snapshot", "lean")
 
 	styled := func(what string, want bool) {
 		t.Helper()

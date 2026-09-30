@@ -79,6 +79,15 @@ func TestNestedStylesKeepTheOuterOne(t *testing.T) {
 	}
 }
 
+func TestStylesEndAtEachLine(t *testing.T) {
+	s := Colored()
+	got := s.Note("Worst case: one\n\nleave room")
+	want := dim + "Worst case: one" + dimOff + "\n\n" + dim + "leave room" + dimOff
+	if got != want {
+		t.Errorf("multi-line note = %q, want %q", got, want)
+	}
+}
+
 func TestWidth(t *testing.T) {
 	s := Colored()
 	for _, tc := range []struct {

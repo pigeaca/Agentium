@@ -47,7 +47,11 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
 6. **Docs.** The README's example results show the new output, and a note covers `NO_COLOR` and `FORCE_COLOR`. The architecture lists `internal/term`.
 
 ## Work
-- [ ] **1. Styles and tables** (acceptance 1–3): `internal/term` with detection, styles and the table helper. Wire it through `cli.Env`: `main` reports whether stdout is a terminal. Apply it to every command's statuses, headings, hints and tables.
+- [x] **1. Styles and tables** (acceptance 1–3): `internal/term` with detection, styles and the table helper. Wire it through `cli.Env`: `main` reports whether stdout is a terminal. Apply it to every command's statuses, headings, hints and tables. Done on 2026-09-30, approved in review after small fixes:
+  - Terminal detection asks for the window size (`TIOCGWINSZ`), so `/dev/null` is not a terminal; `term.Columns` is there for step 2.
+  - Beyond the listed scope: `task.Validator` and `run.Env` got a `Style` field, because their progress lines carry the verdicts.
+  - Tables can print a note line between rows, so notes stay under their row. Styles end at each line, and `Heading` and `Note` must not nest (they share a reset code).
+  - Evidence: plain and styled output compared on 28 commands by the reviewer (same words, lines and order); real output captured through a pseudo-terminal on the acceptance data.
 - [ ] **2. Progress** (acceptance 4): the status line and spinner in `internal/term`; terminal width from `TIOCGWINSZ` through `syscall`, then `COLUMNS`, then 80. Wire it into `experiment run`, `run once`, `run calibrate` and `task validate`.
 - [ ] **3. Terminal report** (acceptance 5): a terminal renderer in `internal/report` beside the Markdown one; `--markdown` on `experiment report`.
 - [ ] **4. Docs and samples** (acceptance 6): README and architecture; real console samples in each PR.
@@ -71,7 +75,7 @@ Step 1 comes first; it fixes the `internal/term` API the others use. Steps 2 and
 
 | Step | Owner | Branch / worktree | Editable scope | Must not touch |
 |---|---|---|---|---|
-| 1 | coordinator (Opus) | `claude/feat/console-styles` / `claude-feat-console-styles` | new `internal/term`; `internal/cli` output; `cmd/agentium/main.go` (the terminal flag) | `internal/report`, `internal/experiment`, `internal/store` |
+| 1 | coordinator (Opus) | `claude/feat/console-styles` / `claude-feat-console-styles` | new `internal/term`; `internal/cli` output; `cmd/agentium/main.go` (the terminal flag); added: a `Style` field in `internal/task` and `internal/run` | `internal/report`, `internal/experiment`, `internal/store` |
 | 2 | `implementer` (Sonnet, medium) | `claude/feat/console-progress` / `claude-feat-console-progress` | a new progress file in `internal/term`; `internal/cli/experiment_run.go`, `run.go` (once, calibrate), `task.go` (validate) | `internal/report`, `internal/experiment` (events are read, not changed), `internal/term`'s existing files |
 | 3 | `implementer` (Sonnet, medium) | `claude/feat/console-report` / `claude-feat-console-report` | `internal/report` (a new terminal renderer and golden file); `internal/cli/experiment_report.go` | `internal/term` (uses it only), the Markdown and JSON renderers' output |
 
