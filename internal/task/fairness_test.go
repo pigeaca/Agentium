@@ -180,3 +180,29 @@ func TestFairnessCancelledSearchIsAnErrorNotAGap(t *testing.T) {
 		t.Error("a cancelled check should fail, not report gaps")
 	}
 }
+
+// The real case that motivated this: the base already has Metrics.SlashCommands, the solution adds Expect.SlashCommands,
+// and the reference builds the drift texts with fmt.Sprintf, so the literals a test compares to are in no reference file.
+func TestFairnessSameFieldNameOnAnotherTypeAndFormattedTexts(t *testing.T) {
+	base := map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.22\n",
+		"c/c.go": "package c\n\ntype Metrics struct{ SlashCommands []string }\n\ntype Expect struct{ Skills []string }\n\n" +
+			"func Check(m Metrics, e Expect) []string { return nil }\n",
+		"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) { _ = Check(Metrics{SlashCommands: nil}, Expect{Skills: nil}) }\n",
+	}
+	solution := map[string]string{
+		"c/c.go": "package c\n\nimport \"fmt\"\n\ntype Metrics struct{ SlashCommands []string }\n\n" +
+			"type Expect struct {\n\tSkills        []string\n\tSlashCommands []string\n}\n\n" +
+			"func Check(m Metrics, e Expect) []string {\n\treturn []string{fmt.Sprintf(\"slash commands differ (%d added, %d missing)\", 1, 1),\n" +
+			"\t\tfmt.Sprintf(\"%d personal skill(s) loaded\", 2)}\n}\n",
+		"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) { _ = Check(Metrics{SlashCommands: nil}, Expect{Skills: nil}) }\n\n" +
+			"func TestNew(t *testing.T) {\n\tdrift := Check(Metrics{SlashCommands: []string{\"a\"}}, Expect{SlashCommands: []string{\"b\"}})\n" +
+			"\tif drift[0] != \"slash commands differ (1 added, 1 missing)\" || drift[1] != \"2 personal skill(s) loaded\" {\n\t\tt.Error(drift)\n\t}\n}\n",
+	}
+	instruction := "Only loaded skills should count; report a personal skill only when it is loaded."
+	wantGaps(t, fairnessGaps(t, base, solution, instruction),
+		"identifier:SlashCommands", "literal:2 personal skill(s) loaded", "literal:slash commands differ (1 added, 1 missing)")
+	// Stating the field and the fixed texts clears them.
+	stated := instruction + " Expect gets a SlashCommands field. Report \"slash commands differ (N added, M missing)\" and \"N personal skill(s) loaded\"."
+	wantGaps(t, fairnessGaps(t, base, solution, stated))
+}

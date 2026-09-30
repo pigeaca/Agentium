@@ -59,11 +59,12 @@ type Fairness struct {
 	where []string // git location, e.g. "--git-dir", bare
 	srcs  map[string]source.Source
 	found map[string]bool
+	stmts map[string]map[string]map[string]bool // baseFields by commit and directories
 }
 
 // NewFairness returns a checker for the repository located by where (for example "--git-dir", bare).
 func NewFairness(where ...string) *Fairness {
-	return &Fairness{where: where, srcs: map[string]source.Source{}, found: map[string]bool{}}
+	return &Fairness{where: where, srcs: map[string]source.Source{}, found: map[string]bool{}, stmts: map[string]map[string]map[string]bool{}}
 }
 
 // FairnessInput describes a task: commits in the repository, the instruction, and the solution's split.
@@ -81,18 +82,27 @@ type FairnessInput struct {
 //     the exact messages and notes the implementation must produce. Literals without a letter, and the format or name
 //     argument of t.Run, t.Errorf, t.Fatalf, t.Logf, t.Skipf, fmt.Sprintf and fmt.Errorf, do not count. A text is cut
 //     at newlines and %-verbs; each piece of 8 or more characters must be found, and a text with none is too generic.
+//     A text a reference format string produces (fmt.Sprintf("slash commands differ (%d added)"), each verb matching
+//     any text) counts as produced by the reference; it is a gap unless the format's fixed pieces are in the base or
+//     the instruction. Only formats the solution added or changed in non-test files are used.
 //     Matching ignores case, collapsed whitespace and surrounding punctuation; base and reference are searched with
-//     git grep, so whitespace inside a piece must match exactly there. Limitations: the format argument of fmt.Sprintf
-//     and fmt.Errorf is skipped, so an expected text built with them is not checked; a reference message built with a
-//     verb inside quotes (fmt.Errorf("value %q is empty")) is not matched by the formatted text a test compares to.
+//     git grep, so whitespace inside a piece must match exactly there. Limitation: the format argument of a
+//     call in a hidden test is skipped, so an expectation a test builds with fmt.Sprintf is not checked.
 //   - For Go: names the tests newly use as selectors (x.Name), composite-literal keys (T{Name: v}) or called functions
 //     that a changed non-test Go file declares at package level or as a struct or interface member, that the base's Go
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be
-//     flagged, so standard-library names never are; a new name equal to an old one in its directory is missed.
+//     flagged, so standard-library names never are. A key of a composite literal that names its type (T{Name: v},
+//     &T{...}) is checked against the fields of the base's struct T, so a field Name that another base type has is
+//     still flagged. Selectors (x.Name) and keys of literals with an elided type have no known receiver without
+//     go/types, so they use the word search: a new name equal to any old word in its directory is missed there.
 func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 	var gaps []Gap
 	stated := normalize(in.Instruction)
 	newNames, err := f.newNames(ctx, in) // name -> directories of the reference files declaring it
+	if err != nil {
+		return nil, err
+	}
+	formats, err := f.formats(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -106,18 +116,24 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 		}
 		isGo := path.Ext(file) == ".go"
 		old := map[string]bool{}
-		for _, lit := range literals(before, isGo) {
+		for _, lit := range literals(before, isGo, false) {
 			old[lit] = true
 		}
 		seen := map[string]bool{}
-		for _, lit := range literals(after, isGo) {
+		for _, lit := range literals(after, isGo, false) {
 			pieces := piecesOf(lit)
+			produced := false
+			if format, ok := matchFormat(formats, strings.TrimSpace(lit)); ok { // built by the reference from a format string
+				pieces, produced = piecesOf(format), true
+			}
 			key := strings.Join(pieces, "\x00")
 			if old[lit] || len(pieces) == 0 || seen[key] || !worthChecking(lit) || allIn(stated, pieces) {
 				continue
 			}
 			seen[key] = true
-			if ok, err := f.allFound(ctx, in.Solution, pieces, in.Reference); err != nil {
+			if produced {
+				// nothing to look up in the reference: the format is what it has
+			} else if ok, err := f.allFound(ctx, in.Solution, pieces, in.Reference); err != nil {
 				return nil, err
 			} else if !ok {
 				continue // the implementation does not produce it: a test's own message
@@ -131,17 +147,25 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 		if !isGo {
 			continue
 		}
-		oldNames := map[string]bool{}
+		var oldUse usage
 		if bf, err := parser.ParseFile(token.NewFileSet(), file, before, parser.SkipObjectResolution); err == nil && len(before) > 0 {
-			oldNames = used(bf)
+			oldUse = used(bf)
 		}
 		af, err := parser.ParseFile(token.NewFileSet(), file, after, parser.SkipObjectResolution)
 		if err != nil {
 			continue // not valid Go: literals were still checked by pattern
 		}
-		for name := range used(af) {
+		use := used(af)
+		flagged := map[string]bool{}
+		flag := func(name string) {
+			if !flagged[name] {
+				flagged[name] = true
+				gaps = append(gaps, Gap{Kind: GapIdentifier, Text: name, File: file})
+			}
+		}
+		for name := range use.plain {
 			dirs, isNew := newNames[name]
-			if !isNew || oldNames[name] || wordIn(stated, name) {
+			if !isNew || oldUse.plain[name] || wordIn(stated, name) {
 				continue
 			}
 			inBase, err := f.baseHasName(ctx, in.Base, name, dirs)
@@ -149,7 +173,25 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 				return nil, err
 			}
 			if !inBase {
-				gaps = append(gaps, Gap{Kind: GapIdentifier, Text: name, File: file})
+				flag(name)
+			}
+		}
+		for name, types := range use.keyed { // T{Name: v}: is Name a field the base's T lacks?
+			dirs, isNew := newNames[name]
+			if !isNew || wordIn(stated, name) {
+				continue
+			}
+			fields, err := f.baseFields(ctx, in.Base, dirs)
+			if err != nil {
+				return nil, err
+			}
+			for typ := range types {
+				if _, known := fields[typ]; !known && newNames[typ] == nil {
+					continue // a type from elsewhere (the standard library, say): nothing to compare with
+				}
+				if !fields[typ][name] {
+					flag(name)
+				}
 			}
 		}
 	}
@@ -243,6 +285,108 @@ func (f *Fairness) allFound(ctx context.Context, commit string, pieces, files []
 	return true, nil
 }
 
+// format is a reference format string made into a pattern: every verb matches any text.
+type format struct {
+	text string
+	re   *regexp.Regexp
+}
+
+// formats collects the format strings (literals with %-verbs) the solution added or changed in its non-test source
+// files, from the message calls too.
+func (f *Fairness) formats(ctx context.Context, in FairnessInput) ([]format, error) {
+	sol, err := f.source(ctx, in.Solution)
+	if err != nil {
+		return nil, err
+	}
+	base, err := f.source(ctx, in.Base)
+	if err != nil {
+		return nil, err
+	}
+	var out []format
+	for _, p := range in.Reference {
+		if !sourceExt[path.Ext(p)] || strings.HasSuffix(p, "_test.go") || !source.Has(sol, p) {
+			continue
+		}
+		after, err := sol.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var before []byte
+		if source.Has(base, p) {
+			before, _ = base.ReadFile(p)
+		}
+		isGo := path.Ext(p) == ".go"
+		old := map[string]bool{}
+		for _, lit := range literals(before, isGo, true) {
+			old[lit] = true
+		}
+		for _, lit := range literals(after, isGo, true) {
+			if old[lit] || !verbs.MatchString(lit) {
+				continue
+			}
+			parts := verbs.Split(lit, -1)
+			for i := range parts {
+				parts[i] = regexp.QuoteMeta(parts[i])
+			}
+			out = append(out, format{text: lit, re: regexp.MustCompile(`(?s)^` + strings.Join(parts, `.*`) + `$`)})
+		}
+	}
+	return out, nil
+}
+
+// matchFormat returns the format text whose pattern matches lit in full.
+func matchFormat(formats []format, lit string) (string, bool) {
+	for _, fm := range formats {
+		if fm.re.MatchString(lit) {
+			return fm.text, true
+		}
+	}
+	return "", false
+}
+
+// baseFields returns the fields of the struct types the base's Go files in dirs declare, by type name.
+func (f *Fairness) baseFields(ctx context.Context, commit string, dirs []string) (map[string]map[string]bool, error) {
+	key := commit + "\x00" + strings.Join(dirs, "\x00")
+	if out, ok := f.stmts[key]; ok {
+		return out, nil
+	}
+	src, err := f.source(ctx, commit)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]map[string]bool{}
+	f.stmts[key] = out
+	for _, p := range src.Paths() {
+		if path.Ext(p) != ".go" || !slices.Contains(dirs, path.Dir(p)) {
+			continue
+		}
+		data, err := src.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), p, data, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			if ts, ok := n.(*ast.TypeSpec); ok {
+				if st, ok := ts.Type.(*ast.StructType); ok {
+					if out[ts.Name.Name] == nil {
+						out[ts.Name.Name] = map[string]bool{}
+					}
+					for _, fl := range st.Fields.List {
+						for _, id := range fl.Names {
+							out[ts.Name.Name][id.Name] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return out, nil
+}
+
 // baseHasName reports whether the base's Go files in dirs mention name as a word.
 func (f *Fairness) baseHasName(ctx context.Context, base, name string, dirs []string) (bool, error) {
 	var specs []string
@@ -323,7 +467,7 @@ func normalize(s string) string { return strings.ToLower(spaces.ReplaceAllString
 func piecesOf(lit string) []string {
 	var out []string
 	for _, chunk := range strings.Split(verbs.ReplaceAllString(lit, "\n"), "\n") {
-		chunk = strings.Trim(spaces.ReplaceAllString(strings.TrimSpace(chunk), " "), " .,;:!?\"'`")
+		chunk = strings.Trim(spaces.ReplaceAllString(strings.TrimSpace(chunk), " "), " .,;:!?\"'`()[]")
 		if len([]rune(chunk)) >= minLiteral {
 			out = append(out, chunk)
 		}
@@ -351,9 +495,9 @@ func wordIn(text, name string) bool {
 }
 
 // literals returns the string literals of a source file: through the Go parser for Go (skipping import paths and the
-// first argument of messageCalls; falling back to the regular expression when the file does not parse), and by
+// first argument of messageCalls unless keepMessages; falling back to the regular expression when the file does not parse), and by
 // regular expression elsewhere (single-line strings only).
-func literals(src []byte, isGo bool) []string {
+func literals(src []byte, isGo, keepMessages bool) []string {
 	if len(src) == 0 {
 		return nil
 	}
@@ -366,7 +510,7 @@ func literals(src []byte, isGo bool) []string {
 				case *ast.ImportSpec:
 					skip[n.Path] = true
 				case *ast.CallExpr:
-					if sel, ok := n.Fun.(*ast.SelectorExpr); ok && messageCalls[sel.Sel.Name] && len(n.Args) > 0 {
+					if sel, ok := n.Fun.(*ast.SelectorExpr); ok && !keepMessages && messageCalls[sel.Sel.Name] && len(n.Args) > 0 {
 						if lit, ok := n.Args[0].(*ast.BasicLit); ok {
 							skip[lit] = true
 						}
@@ -392,27 +536,57 @@ func literals(src []byte, isGo bool) []string {
 	return out
 }
 
-// used collects the names a file uses as selectors, composite-literal keys and called functions.
-func used(f *ast.File) map[string]bool {
-	names := map[string]bool{}
+// usage is what a Go file uses of the package's names.
+type usage struct {
+	plain map[string]bool            // selectors (x.Name), called functions and keys of composite literals of unknown type
+	keyed map[string]map[string]bool // key -> the struct types named in literals it is a key of (T{Key: v}, &T{...})
+}
+
+// used collects the names a file uses. A selector's receiver type is unknown without type information, so selectors
+// are plain names; a composite literal that names its type (T{Key: v}, pkg.T{...}, &T{...}) says which type has the key.
+func used(f *ast.File) usage {
+	u := usage{plain: map[string]bool{}, keyed: map[string]map[string]bool{}}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.SelectorExpr:
-			names[n.Sel.Name] = true
+			u.plain[n.Sel.Name] = true
 		case *ast.CompositeLit:
+			typ := literalType(n.Type)
 			for _, el := range n.Elts {
 				if kv, ok := el.(*ast.KeyValueExpr); ok {
 					if id, ok := kv.Key.(*ast.Ident); ok {
-						names[id.Name] = true
+						if typ == "" {
+							u.plain[id.Name] = true
+						} else {
+							if u.keyed[id.Name] == nil {
+								u.keyed[id.Name] = map[string]bool{}
+							}
+							u.keyed[id.Name][typ] = true
+						}
 					}
 				}
 			}
 		case *ast.CallExpr:
 			if id, ok := n.Fun.(*ast.Ident); ok {
-				names[id.Name] = true
+				u.plain[id.Name] = true
 			}
 		}
 		return true
 	})
-	return names
+	return u
+}
+
+// literalType names the struct type of a composite literal: T, pkg.T or a generic T[...]; "" when it is elided or not a name.
+func literalType(e ast.Expr) string {
+	switch e := e.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return e.Sel.Name
+	case *ast.IndexExpr:
+		return literalType(e.X)
+	case *ast.IndexListExpr:
+		return literalType(e.X)
+	}
+	return ""
 }
