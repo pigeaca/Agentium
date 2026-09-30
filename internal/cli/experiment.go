@@ -11,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 const experimentUsage = `Usage:
@@ -203,12 +205,13 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 		CreatedAt: env.Now()}); err != nil {
 		return fail(env, err)
 	}
+	st := env.style()
 	fmt.Fprintf(env.Stdout, "Created experiment %s: %s, %d task(s) × %d run(s) per arm = %d runs, budget $%.2f.\n", name,
 		describeArms(d), len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
 	if len(tasks) == 0 && len(eligible) < tier.Tasks {
-		fmt.Fprintf(env.Stdout, "note: the %s tier asks for %d tasks; only %d can be in it\n", tier.Name, tier.Tasks, len(eligible))
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("the %s tier asks for %d tasks; only %d can be in it", tier.Name, tier.Tasks, len(eligible))))
 	}
-	fmt.Fprintf(env.Stdout, "Preview what it costs and can detect: agentium experiment plan %s\n", name)
+	fmt.Fprintf(env.Stdout, "Preview what it costs and can detect: %s\n", st.Command("agentium experiment plan "+name))
 	return ExitOK
 }
 
@@ -331,12 +334,12 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	out := env.Stdout
+	out, st := env.Stdout, env.style()
 	goal := "cheaper, with success as the guard"
 	if d.Goal == experiment.GoalBetter {
 		goal = "better success"
 	}
-	fmt.Fprintf(out, "Experiment %s: %s\n", rest[0], describeArms(d))
+	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Experiment %s: %s", rest[0], describeArms(d))))
 	for _, a := range d.Arms {
 		commit := ""
 		if a.Snapshot != "" {
@@ -352,19 +355,26 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
 	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
 
-	fmt.Fprintln(out, "\nBefore it runs:")
+	fmt.Fprintln(out, "\n"+st.Heading("Before it runs:"))
 	ready := printReadiness(ctx, env, w, d, eligible, reasons, est)
 	if ctx.Err() != nil {
 		return fail(env, ctx.Err())
 	}
 
-	fmt.Fprintln(out, "\nSizes (runs count both arms):")
-	fmt.Fprintf(out, "%-16s %6s %8s %5s %10s %10s %12s %14s %13s  %s\n", "SIZE", "TASKS", "RUNS/ARM", "RUNS", "EST. COST", "WORST CASE",
-		"COST CHANGE", "SUCCESS CHANGE", "NO-LOSS GUARD", "EXPLORATORY")
-	for _, r := range experiment.Preview(d, len(eligible), est) {
+	fmt.Fprintln(out, "\n"+st.Heading("Sizes (runs count both arms):"))
+	sizes := term.NewTable(st, term.Left("SIZE"), term.Right("TASKS"), term.Right("RUNS/ARM"), term.Right("RUNS"), term.Right("EST. COST"),
+		term.Right("WORST CASE"), term.Right("COST CHANGE"), term.Right("SUCCESS CHANGE"), term.Right("NO-LOSS GUARD"), term.Left("EXPLORATORY"))
+	rows := experiment.Preview(d, len(eligible), est)
+	marked := false // a row's task count carries a footnote mark; the others get a space so the digits line up
+	for _, r := range rows {
+		marked = marked || r.Short
+	}
+	for i, r := range rows {
 		tasks := fmt.Sprint(r.Tasks)
 		if r.Short {
 			tasks += "*"
+		} else if marked {
+			tasks += " "
 		}
 		cost := "unknown"
 		if est.Known {
@@ -373,28 +383,37 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		effects := []string{percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp")}
 		exploratory := strings.Join(r.Exploratory, ", ")
 		if r.Tasks == 0 {
-			effects, exploratory = []string{"-", "-", "-"}, "no tasks"
+			effects, exploratory = []string{"-", "-", "-"}, st.Warn("no tasks")
 		} else if exploratory == "" {
 			exploratory = "-"
+		} else {
+			exploratory = st.Warn(exploratory)
 		}
-		fmt.Fprintf(out, "%-16s %6s %8d %5d %10s %10s %12s %14s %13s  %s\n", r.Name, tasks, r.Repeats, r.Runs, cost, fmt.Sprintf("$%.2f", r.WorstUSD),
+		name := r.Name
+		if i == len(rows)-1 { // this experiment's own size
+			name = st.Heading(name)
+		}
+		sizes.Row(name, tasks, strconv.Itoa(r.Repeats), strconv.Itoa(r.Runs), cost, fmt.Sprintf("$%.2f", r.WorstUSD),
 			effects[0], effects[1], effects[2], exploratory)
+	}
+	if err := sizes.Write(out); err != nil {
+		return fail(env, err)
 	}
 	tiers := experiment.Tiers()
 	if len(eligible) < tiers[len(tiers)-1].Tasks {
-		fmt.Fprintf(out, "* only %d task(s) can be in this experiment; a tier asking for more uses them all\n", len(eligible))
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("* only %d task(s) can be in this experiment; a tier asking for more uses them all", len(eligible))))
 	}
 	fmt.Fprintf(out, "Estimated cost: %s.\n", est.Basis)
-	fmt.Fprintf(out, "Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
-		"leave room for its own cap, so spending never passes the $%.2f budget.\n", d.RunBudgetUSD, d.BudgetUSD)
-	fmt.Fprintf(out, "Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
+	fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
+		"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
+	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
 		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
 		"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
-		"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.\n",
-		experiment.SigmaLogCost, experiment.WSuccess, experiment.TauLow, experiment.TauHigh)
+		"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.",
+		experiment.SigmaLogCost, experiment.WSuccess, experiment.TauLow, experiment.TauHigh)))
 	if own := experiment.Detect(len(d.Tasks), d.Repeats); d.Goal == experiment.GoalCheaper && len(d.Tasks) > 0 && own.Guard[0] > d.SuccessMargin {
-		fmt.Fprintf(out, "note: at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
-			"success verdict to be inconclusive unless there is no real difference and the noise is low.\n", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)
+		fmt.Fprintln(out, note(st, fmt.Sprintf("at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
+			"success verdict to be inconclusive unless there is no real difference and the noise is low.", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)))
 	}
 	floors := experiment.FloorsFor(experiment.MethodVersion)
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
@@ -404,9 +423,9 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	mode, _ := signInMode(env)
-	printUsagePreview(out, runs, 2*len(d.Tasks)*d.Repeats, mode, defaultUsageLimit/100, env.Now())
+	printUsagePreview(out, st, runs, 2*len(d.Tasks)*d.Repeats, mode, defaultUsageLimit/100, env.Now())
 	if !ready {
-		fmt.Fprintln(out, "Not ready to run: see above.")
+		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}
 	return ExitOK
 }
@@ -429,11 +448,14 @@ func percentRange(v [2]float64, unit string) string {
 // experiment's model, the snapshot commits, and every task still eligible. It reports whether all is in place.
 func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Design, eligible []string, reasons map[string]string,
 	est experiment.Estimate) bool {
-	out := env.Stdout
+	out, st := env.Stdout, env.style()
 	ready := true
+	check := func(status, text string) {
+		fmt.Fprintf(out, "  %s %s\n", st.Status(fmt.Sprintf("%-8s", status)), text)
+	}
 	line := func(ok bool, format string, a ...any) {
 		ready = ready && ok
-		fmt.Fprintf(out, "  %-8s "+format+"\n", append([]any{map[bool]string{true: "ok", false: "MISSING"}[ok]}, a...)...)
+		check(map[bool]string{true: "ok", false: "MISSING"}[ok], fmt.Sprintf(format, a...))
 	}
 	mode, _ := signInMode(env)
 	version := ""
@@ -460,6 +482,7 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 		if a.Snapshot != "" {
 			calibrate += " --snapshot " + a.Context
 		}
+		calibrate = st.Command(calibrate)
 		stored, err := w.db.LatestCalibration(ctx, w.project.ID, a.Context, a.Snapshot)
 		if errors.Is(err, store.ErrNotFound) {
 			line(false, "context %s is not calibrated: %s", a.Context, calibrate)
@@ -520,19 +543,18 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 		}
 	}
 	if len(unfair) > 0 {
-		fmt.Fprintf(out, "  %-8s hidden tests require what nothing states, so a fair agent may fail them (task show lists it): %s\n",
-			"WARNING", strings.Join(unfair, ", "))
+		check("WARNING", "hidden tests require what nothing states, so a fair agent may fail them (task show lists it): "+strings.Join(unfair, ", "))
 	}
 	if len(unchecked) > 0 {
-		fmt.Fprintf(out, "  %-8s what the hidden tests require could not be checked for: %s\n", "WARNING", strings.Join(unchecked, ", "))
+		check("WARNING", "what the hidden tests require could not be checked for: "+strings.Join(unchecked, ", "))
 	}
 	if ready {
-		fmt.Fprintf(out, "  %-8s %d task(s), each valid in every arm's context\n", "ok", len(d.Tasks))
+		check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
 	expected, reserve := float64(d.Runs())*est.PerRunUSD, experiment.Reserve(d)
 	if est.Known && d.BudgetUSD < expected+reserve {
-		fmt.Fprintf(out, "  %-8s the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early\n",
-			"WARNING", d.BudgetUSD, expected, reserve)
+		check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early",
+			d.BudgetUSD, expected, reserve))
 	}
 	return ready
 }
@@ -556,10 +578,12 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if len(all) == 0 {
-		fmt.Fprintln(env.Stdout, "No experiments yet: agentium experiment new NAME --b SNAPSHOT")
+		fmt.Fprintln(env.Stdout, "No experiments yet: "+env.style().Command("agentium experiment new NAME --b SNAPSHOT"))
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s %-8s  %s\n", "NAME", "TEMPLATE", "ARMS (A / B)", "SIZE", "MODEL", "BUDGET", "STATUS", "CREATED")
+	st := env.style()
+	table := term.NewTable(st, term.Left("NAME"), term.Left("TEMPLATE"), term.Left("ARMS (A / B)"), term.Left("SIZE"), term.Left("MODEL"),
+		term.Right("BUDGET"), term.Left("STATUS"), term.Left("CREATED"))
 	for _, e := range all {
 		var d experiment.Design
 		if err := json.Unmarshal(e.Design, &d); err != nil || len(d.Arms) != 2 {
@@ -575,8 +599,11 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		if status == store.StatusRunning && !w.layout.RunsBusy() {
 			status = store.StatusStopped // its process ended without saying so
 		}
-		fmt.Fprintf(env.Stdout, "%-24s %-11s %-30s %-10s %-18s %9s %-8s  %s\n", e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats),
-			d.Model, fmt.Sprintf("$%.2f", budget), status, e.CreatedAt.Format("2006-01-02 15:04"))
+		table.Row(e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats), d.Model, fmt.Sprintf("$%.2f", budget),
+			st.Status(status), e.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	if err := table.Write(env.Stdout); err != nil {
+		return fail(env, err)
 	}
 	return ExitOK
 }

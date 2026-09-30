@@ -28,6 +28,7 @@ Shape:
 | `AGENTS.md`, `CLAUDE.md`, `.agents/` | Shared instructions: rules, references, roles, skills, templates, plans, decisions |
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
 | `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `experiment`, `version`, `help`) |
+| `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
 | `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, run workspaces and run records; caches and temporary files of Agentium's own commands; the run lock (one process starts agents at a time) |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments (design, lock, status; runs keep their slot and attempt) |
 | `internal/project` | Read-only repository discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
@@ -37,12 +38,12 @@ Shape:
 | `internal/snapshot` | Context versions as parentless commits in `projects/<id>/repo.git` in the data folder; diffs; overlay planning that refuses to change code or configuration and reports harness changes |
 | `internal/checkout` | Isolated working copies: a fresh repository holding only the base commit (depth 1), so hidden tests and solutions are unreachable; safe file writes |
 | `internal/runner` | Commands (through a shell or as arguments) in their own process group with a timeout and no credentials; a gentle stop (SIGINT, then SIGKILL); the group is killed when the command ends; the process group is reported when it starts |
-| `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths (the user's Go caches too) and credentials, its own writable build cache, an allowlisted environment); stream-json metrics (with usage readings), outcomes and drift |
+| `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths (Go caches too) and credentials, its own writable build cache, an allowlisted environment); stream-json metrics (with usage readings), outcomes and drift |
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), per-arm validation, and unstated-requirement gaps |
 | `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed) and their preview; the lock (with its method); the seeded interleaved schedule; execution (a window, a budget no run passes, usage pauses, retries, stop rules, resume); counting and analysis (roles, floors, verdicts, noise) |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context and costs, behavior, per-task results and honesty notes, as Markdown or JSON (without personal names or paths) |
-| `internal/pricing` | Anthropic's list prices per model, dated, for cost estimates and for transcripts that end without Claude Code's cost |
+| `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, redacted records; a start file to recover a dead process's runs; the folders a run will use, predicted for runs that may overlap it |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |

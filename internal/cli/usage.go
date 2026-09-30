@@ -11,6 +11,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // resetMargin is how long --wait waits past the five-hour window's reset, so the first reading comes from the new
@@ -97,7 +98,7 @@ func clock(t, now time.Time) string {
 
 // printUsagePreview says how much of the subscription's five-hour window an experiment of runs needs, and whether the
 // current window fits it. An API key reports no usage: its runs never pause.
-func printUsagePreview(out io.Writer, runs []store.Run, experimentRuns int, signIn string, limit float64, now time.Time) {
+func printUsagePreview(out io.Writer, st term.Style, runs []store.Run, experimentRuns int, signIn string, limit float64, now time.Time) {
 	if signIn == claude.SignInAPIKey {
 		fmt.Fprintln(out, "Usage: runs with an API key report no subscription usage, so they never pause for it.")
 		return
@@ -126,6 +127,6 @@ func printUsagePreview(out io.Writer, runs []store.Run, experimentRuns int, sign
 	fmt.Fprintf(out, "The window was %.0f%% used at the last reading and resets at %s: about %d more run(s) fit before the limit.\n",
 		100*used, clock(latest.FiveHourResets, now), fits)
 	if fits < experimentRuns {
-		fmt.Fprintln(out, "experiment run pauses between pairs at the limit (--usage-limit); run it again later, or add --wait to wait for the reset.")
+		fmt.Fprintln(out, st.Warn("experiment run pauses between pairs at the limit (--usage-limit); run it again later, or add --wait to wait for the reset."))
 	}
 }

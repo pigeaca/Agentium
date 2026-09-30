@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/claudectx"
@@ -17,6 +18,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 const contextUsage = `Usage:
@@ -155,9 +157,12 @@ func contextShow(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	printContext(env.Stdout, w.project.Name, src.Describe(), resolved)
+	st := env.style()
+	if err := printContext(env.Stdout, st, w.project.Name, src.Describe(), resolved); err != nil {
+		return fail(env, err)
+	}
 	for _, file := range aboveRepository(w.root) {
-		fmt.Fprintf(env.Stdout, "warning: %s is above the repository: Claude Code loads it when you work here, but it is not the project's context and experiments exclude it.\n", file)
+		fmt.Fprintln(env.Stdout, warning(st, file+" is above the repository: Claude Code loads it when you work here, but it is not the project's context and experiments exclude it."))
 	}
 	return ExitOK
 }
@@ -175,49 +180,61 @@ func aboveRepository(root string) []string {
 	return found
 }
 
-func printContext(out io.Writer, project, where string, resolved claudectx.Context) {
+func printContext(out io.Writer, st term.Style, project, where string, resolved claudectx.Context) error {
 	startup := resolved.StartupBytes()
-	fmt.Fprintf(out, "Claude Code context of %s (%s)\n", project, where)
+	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Claude Code context of %s (%s)", project, where)))
 	fmt.Fprintf(out, "At session start: about %d tokens (%s, estimated)\n", claudectx.EstimateTokens(startup), sizeLabel(int64(startup)))
-	var onDemand, harness []claudectx.Entry
+	files := func() *term.Table {
+		table := term.NewTable(st, term.Left(""), term.Left(""), term.Right(""), term.Left(""))
+		table.Indent = "  "
+		return table
+	}
+	atStart, onDemand := files(), files()
+	var harness []claudectx.Entry
+	demand := 0
 	for _, e := range resolved.Entries {
 		switch {
 		case e.Kind == claudectx.KindHarness:
 			harness = append(harness, e)
 		case e.StartupBytes == 0:
-			onDemand = append(onDemand, e)
+			onDemand.Row(e.Path, e.Kind, sizeLabel(int64(e.Bytes)))
+			demand++
 		default:
-			note := ""
+			var notes []string
 			if e.Via != "" {
-				note = " via " + e.Via
+				notes = append(notes, "via "+e.Via)
 			}
 			if e.StartupBytes != e.Bytes {
-				note += fmt.Sprintf(" (description only; %s in full)", sizeLabel(int64(e.Bytes)))
+				notes = append(notes, fmt.Sprintf("(description only; %s in full)", sizeLabel(int64(e.Bytes))))
 			}
-			fmt.Fprintf(out, "  %-44s %-12s %8s%s\n", e.Path, e.Kind, sizeLabel(int64(e.StartupBytes)), note)
+			atStart.Row(e.Path, e.Kind, sizeLabel(int64(e.StartupBytes)), st.Note(strings.Join(notes, " ")))
 		}
 	}
-	if len(onDemand) > 0 {
-		fmt.Fprintln(out, "On demand:")
-		for _, e := range onDemand {
-			fmt.Fprintf(out, "  %-44s %-12s %8s\n", e.Path, e.Kind, sizeLabel(int64(e.Bytes)))
+	if err := atStart.Write(out); err != nil {
+		return err
+	}
+	if demand > 0 {
+		fmt.Fprintln(out, st.Heading("On demand:"))
+		if err := onDemand.Write(out); err != nil {
+			return err
 		}
 	}
 	if len(harness) > 0 {
-		fmt.Fprintln(out, "Harness (changes what runs, not what the model reads):")
+		fmt.Fprintln(out, st.Heading("Harness (changes what runs, not what the model reads):"))
 		for _, e := range harness {
 			fmt.Fprintf(out, "  %s\n", e.Path)
 		}
 	}
 	if len(resolved.Linked) > 0 {
-		fmt.Fprintln(out, "Linked (read only if the agent opens them; in a snapshot only with --include):")
+		fmt.Fprintln(out, st.Heading("Linked (read only if the agent opens them; in a snapshot only with --include):"))
 		for _, p := range resolved.Linked {
 			fmt.Fprintf(out, "  %s\n", p)
 		}
 	}
-	for _, warning := range resolved.Warnings {
-		fmt.Fprintf(out, "warning: %s\n", warning)
+	for _, w := range resolved.Warnings {
+		fmt.Fprintln(out, warning(st, w))
 	}
+	return nil
 }
 
 // stringList is a repeatable string flag.
@@ -295,6 +312,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	if _, err := gitx.Run(ctx, "--git-dir", w.bare, "update-ref", "refs/agentium/snapshots/"+name, commitID); err != nil {
 		return fail(env, errors.Join(err, w.db.DeleteSnapshot(ctx, w.project.ID, name)))
 	}
+	st := env.style()
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
 		name, label, shortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
 	if *workingTree {
@@ -303,14 +321,14 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 		if len(changes) > 0 {
-			fmt.Fprintf(env.Stdout, "note: %d changed file(s) are not context and are not in this snapshot (e.g. %s)\n", len(changes), changes[0])
+			fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d changed file(s) are not context and are not in this snapshot (e.g. %s)", len(changes), changes[0])))
 		}
 	}
 	if linked := notIncluded(src, manifest); len(linked) > 0 {
-		fmt.Fprintf(env.Stdout, "note: %d file(s) linked from the context are not in this snapshot (e.g. %s); add them with --include PATH\n", len(linked), linked[0])
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d file(s) linked from the context are not in this snapshot (e.g. %s); add them with --include PATH", len(linked), linked[0])))
 	}
-	for _, warning := range manifest.Warnings {
-		fmt.Fprintf(env.Stdout, "warning: %s\n", warning)
+	for _, w := range manifest.Warnings {
+		fmt.Fprintln(env.Stdout, warning(st, w))
 	}
 	return ExitOK
 }
@@ -353,17 +371,20 @@ func contextList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if len(snaps) == 0 {
-		fmt.Fprintln(env.Stdout, "No snapshots yet: agentium context snapshot NAME")
+		fmt.Fprintln(env.Stdout, "No snapshots yet: "+env.style().Command("agentium context snapshot NAME"))
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "%-20s %-16s %-14s %6s %14s\n", "NAME", "SOURCE", "COMMIT", "FILES", "START TOKENS")
+	table := term.NewTable(env.style(), term.Left("NAME"), term.Left("SOURCE"), term.Left("COMMIT"), term.Right("FILES"), term.Right("START TOKENS"))
 	for _, snap := range snaps {
 		var manifest snapshot.Manifest
 		if err := json.Unmarshal(snap.Manifest, &manifest); err != nil {
 			return fail(env, fmt.Errorf("snapshot %s: %w", snap.Name, err))
 		}
-		fmt.Fprintf(env.Stdout, "%-20s %-16s %-14s %6d %14s\n", snap.Name, snap.Source, shortCommit(snap.SourceCommit),
-			len(manifest.Files), fmt.Sprintf("~%d", claudectx.EstimateTokens(manifest.StartupBytes)))
+		table.Row(snap.Name, snap.Source, shortCommit(snap.SourceCommit), strconv.Itoa(len(manifest.Files)),
+			fmt.Sprintf("~%d", claudectx.EstimateTokens(manifest.StartupBytes)))
+	}
+	if err := table.Write(env.Stdout); err != nil {
+		return fail(env, err)
 	}
 	return ExitOK
 }

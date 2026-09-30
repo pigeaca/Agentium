@@ -22,6 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 const taskUsage = `Usage:
@@ -263,10 +264,12 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 		fmt.Fprintf(env.Stdout, "  setup:  %s\n", strings.Join(saved.Setup, "; "))
 	}
 	fmt.Fprintf(env.Stdout, "  verify: %s\n", strings.Join(saved.Verify, "; "))
+	st := env.style()
 	if saved.NeedsReview {
-		fmt.Fprintf(env.Stdout, "Review the instruction for solution leaks (it came from history): agentium task show %s, then task edit %s --instruction-file FILE or --reviewed\n", saved.Name, saved.Name)
+		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review the instruction for solution leaks (it came from history)"),
+			st.Command("agentium task show "+saved.Name), st.Command("task edit "+saved.Name+" --instruction-file FILE")+" or "+st.Command("--reviewed"))
 	}
-	fmt.Fprintf(env.Stdout, "Next: agentium task validate %s\n", saved.Name)
+	fmt.Fprintf(env.Stdout, "Next: %s\n", st.Command("agentium task validate "+saved.Name))
 	return ExitOK
 }
 
@@ -428,22 +431,27 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if len(tasks) == 0 {
-		fmt.Fprintln(env.Stdout, "No tasks yet: agentium task import --commit REF, or agentium task add NAME ...")
+		st := env.style()
+		fmt.Fprintf(env.Stdout, "No tasks yet: %s, or %s\n", st.Command("agentium task import --commit REF"), st.Command("agentium task add NAME ..."))
 		return ExitOK
 	}
 	fair := task.NewFairness("--git-dir", w.bare)
-	fmt.Fprintf(env.Stdout, "%-50s %-16s %5s %5s  %s\n", "NAME", "SOURCE", "TESTS", "FILES", "STATUS")
+	st := env.style()
+	table := term.NewTable(st, term.Left("NAME"), term.Left("SOURCE"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS"))
 	for _, t := range tasks {
-		status := validationStatus(t)
+		status := st.Status(validationStatus(t))
 		if t.NeedsReview {
-			status += " (instruction not reviewed)"
+			status += st.Warn(" (instruction not reviewed)")
 		}
 		if gaps, err := taskGaps(ctx, fair, t); err != nil {
-			status += " (unstated requirements unknown)"
+			status += st.Warn(" (unstated requirements unknown)")
 		} else if len(gaps) > 0 {
-			status += fmt.Sprintf(" (%d unstated requirement(s))", len(gaps))
+			status += st.Warn(fmt.Sprintf(" (%d unstated requirement(s))", len(gaps)))
 		}
-		fmt.Fprintf(env.Stdout, "%-50s %-16s %5d %5d  %s\n", t.Name, t.Source, len(t.HiddenTests), len(t.Reference), status)
+		table.Row(t.Name, t.Source, strconv.Itoa(len(t.HiddenTests)), strconv.Itoa(len(t.Reference)), status)
+	}
+	if err := table.Write(env.Stdout); err != nil {
+		return fail(env, err)
 	}
 	return ExitOK
 }
@@ -466,7 +474,7 @@ func gapGate(ctx context.Context, env Env, w *workspace, t store.Task, accept bo
 		return false, err
 	}
 	if len(gaps) > 0 && !accept {
-		printGaps(env.Stderr, gaps)
+		printGaps(env.Stderr, term.Style{}, gaps) // stderr stays plain
 		fmt.Fprintf(env.Stderr, "agentium task: %s not marked reviewed; state the gaps in the instruction, or pass --accept-gaps\n", t.Name)
 		return false, nil
 	}
@@ -474,12 +482,12 @@ func gapGate(ctx context.Context, env Env, w *workspace, t store.Task, accept bo
 }
 
 // printGaps shows the gaps, if any, under a heading that says what to do about them.
-func printGaps(out io.Writer, gaps []task.Gap) {
+func printGaps(out io.Writer, st term.Style, gaps []task.Gap) {
 	if len(gaps) == 0 {
 		return
 	}
-	fmt.Fprintf(out, "Unstated requirements (%d): the hidden tests need these, but neither the instruction nor the base code states them.\n"+
-		"State them in the instruction (task edit --instruction-file), or accept them (task edit --reviewed --accept-gaps):\n", len(gaps))
+	fmt.Fprintln(out, st.Warn(fmt.Sprintf("Unstated requirements (%d): the hidden tests need these, but neither the instruction nor the base code states them.\n"+
+		"State them in the instruction (task edit --instruction-file), or accept them (task edit --reviewed --accept-gaps):", len(gaps))))
 	for _, g := range gaps {
 		fmt.Fprintf(out, "  %s\n", g)
 	}
@@ -514,8 +522,8 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	out := env.Stdout
-	fmt.Fprintf(out, "Task %s (%s)\n  base       %s\n", t.Name, t.Source, t.BaseCommit)
+	out, st := env.Stdout, env.style()
+	fmt.Fprintf(out, "%s\n  base       %s\n", st.Heading(fmt.Sprintf("Task %s (%s)", t.Name, t.Source)), t.BaseCommit)
 	if t.SolutionCommit != "" {
 		fmt.Fprintf(out, "  solution   %s\n", t.SolutionCommit)
 	}
@@ -525,25 +533,25 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  verify     %s\n", strings.Join(t.Verify, "; "))
 	fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
 	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
-	fmt.Fprintf(out, "  status     %s\n", validationStatus(t))
+	fmt.Fprintf(out, "  status     %s\n", st.Status(validationStatus(t)))
 	gaps, gapErr := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview {
-		fmt.Fprintln(out, "Instruction (from history; review it for solution leaks, then task edit):")
+		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(from history; review it for solution leaks, then task edit)")+st.Heading(":"))
 	} else {
-		fmt.Fprintln(out, "Instruction:")
+		fmt.Fprintln(out, st.Heading("Instruction:"))
 	}
 	for _, line := range strings.Split(t.Instruction, "\n") {
 		fmt.Fprintf(out, "  %s\n", line)
 	}
 	for _, p := range t.Reference { // names of reference files in the instruction tell the agent where the fix goes
 		if strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p)) {
-			fmt.Fprintf(out, "note: the instruction names reference file %s\n", p)
+			fmt.Fprintln(out, note(st, "the instruction names reference file "+p))
 		}
 	}
 	if gapErr != nil {
-		fmt.Fprintf(out, "note: unstated requirements could not be checked: %v\n", gapErr)
+		fmt.Fprintln(out, note(st, fmt.Sprintf("unstated requirements could not be checked: %v", gapErr)))
 	}
-	printGaps(out, gaps)
+	printGaps(out, st, gaps)
 	return ExitOK
 }
 
@@ -640,8 +648,9 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	}
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
 	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Now: env.Now}
-	fmt.Fprintf(env.Stdout, "Validating %s in %d arm(s): %s\n", t.Name, len(arms), strings.Join(t.Verify, "; "))
+		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now}
+	st := env.style()
+	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(arms))), strings.Join(t.Verify, "; "))
 	result, err := v.Validate(ctx, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests,
 		Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}, arms)
 	if err != nil {
@@ -654,14 +663,14 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if gaps, err := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t); err != nil {
-		fmt.Fprintf(env.Stdout, "note: unstated requirements could not be checked: %v\n", err)
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("unstated requirements could not be checked: %v", err)))
 	} else {
-		printGaps(env.Stdout, gaps)
+		printGaps(env.Stdout, st, gaps)
 	}
 	for arm, files := range result.HarnessChanged {
-		fmt.Fprintf(env.Stdout, "note: arm %s changes what runs, not only what the model reads: %s\n", arm, strings.Join(files, ", "))
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("arm %s changes what runs, not only what the model reads: %s", arm, strings.Join(files, ", "))))
 	}
-	fmt.Fprintf(env.Stdout, "Result: %s (logs: %s)\n", result.Summary(), v.LogDir)
+	fmt.Fprintf(env.Stdout, "Result: %s %s\n", st.Status(result.Summary()), st.Note("(logs: "+v.LogDir+")"))
 	if result.Status == task.StatusInvalid {
 		return ExitError
 	}

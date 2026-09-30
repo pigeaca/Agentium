@@ -16,6 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // Validation statuses.
@@ -89,8 +90,9 @@ type Validator struct {
 	LogDir   string
 	Timeout  time.Duration // per command
 	Keep     bool
-	Env      []string  // added to every setup and verification command (a build cache of Agentium's own)
-	Progress io.Writer // one line per stage
+	Env      []string   // added to every setup and verification command (a build cache of Agentium's own)
+	Progress io.Writer  // one line per stage
+	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
 	Now      func() time.Time
 }
 
@@ -256,7 +258,7 @@ func (v Validator) report(stage Stage) {
 	case !stage.OK:
 		verdict = "NOT OK"
 	}
-	fmt.Fprintf(v.Progress, "  %-10s %-13s want %-4s got %-4s %s\n", stage.Arm, stage.Stage, stage.Want, got, verdict)
+	fmt.Fprintf(v.Progress, "  %-10s %-13s want %-4s got %-4s %s\n", stage.Arm, stage.Stage, stage.Want, got, v.Style.Status(verdict))
 }
 
 // run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.

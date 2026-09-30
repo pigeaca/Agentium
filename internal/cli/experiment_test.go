@@ -142,7 +142,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// Later changes to the tasks show up before running.
 	expect(t, f.run(ctx, "task", "validate", "value"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "MISSING  task value: not validated in context lean", "Not ready",
-		"Quick                0*        3     0", "-  no tasks")
+		"Quick               0*         3     0", "-  no tasks")
 	expect(t, f.run(ctx, "task", "rm", "value"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "task(s) removed since the experiment was made: value")
 }

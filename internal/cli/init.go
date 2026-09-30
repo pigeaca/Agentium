@@ -81,10 +81,10 @@ func runInit(ctx context.Context, env Env, args []string) int {
 }
 
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
-	w := env.Stdout
-	fmt.Fprintf(w, "Registered %s (project %d)\n", saved.Name, saved.ID)
+	w, st := env.Stdout, env.style()
+	fmt.Fprintln(w, st.Heading(fmt.Sprintf("Registered %s (project %d)", saved.Name, saved.ID)))
 	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, shortCommit(info.Head))
-	claude := "not found"
+	claude := st.Bad("not found")
 	if info.Claude.Path != "" {
 		claude = strings.TrimSpace(info.Claude.Path + " " + info.Claude.Version)
 	}
@@ -97,11 +97,11 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 			startup++
 		}
 	}
-	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: agentium context show\n",
-		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup)
+	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: %s\n",
+		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup, st.Command("agentium context show"))
 	fmt.Fprintf(w, "  data         %s (your repository was not modified)\n", layout.Root)
-	for _, warning := range info.Warnings {
-		fmt.Fprintf(w, "warning: %s\n", warning)
+	for _, text := range info.Warnings {
+		fmt.Fprintln(w, warning(st, text))
 	}
 }
 

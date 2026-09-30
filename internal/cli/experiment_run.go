@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"maps"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // retryBackoff is how long a slot waits after an infrastructure failure before its next attempt.
@@ -91,7 +93,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			raised = &experiment.BudgetChange{At: env.Now().UTC(), From: d.BudgetUSD, To: *budget}
 			d.BudgetUSD = *budget
 		}
-		fmt.Fprintf(out, "Checking experiment %s before its first run:\n", name)
+		fmt.Fprintln(out, env.style().Heading(fmt.Sprintf("Checking experiment %s before its first run:", name)))
 		eligible, reasons, err := eligibleTasks(ctx, w, d.Arms)
 		if err != nil {
 			return fail(env, err)
@@ -201,7 +203,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if err := w.db.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return fail(env, err)
 	}
-	total, design := len(lock.Schedule), lock.Design
+	total, design, st := len(lock.Schedule), lock.Design, env.style()
 	fmt.Fprintf(out, "Running up to %d at a time; each run up to $%.2f and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
 		design.Concurrency, design.RunBudgetUSD, design.Timeout, design.BudgetUSD)
 	progress := func(e experiment.Event) {
@@ -213,17 +215,17 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			}
 			fmt.Fprintf(out, "%s: started\n", label)
 		case "finish":
-			outcome := orNone(e.Result.Outcome)
+			outcome := st.Status(orNone(e.Result.Outcome))
 			if e.Result.Outcome == "" && e.Requeued {
 				// Execute reruns such a run on resume and does not count it as an attempt.
-				outcome = "stopped before its agent started (not counted; it runs again on resume)"
+				outcome = st.Warn("stopped before its agent started (not counted; it runs again on resume)")
 			}
 			fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, outcome, e.Result.CostUSD, e.SpentUSD, design.BudgetUSD)
 		case "retry":
-			fmt.Fprintf(out, "%s: retrying in %s\n", label, e.RetryIn)
+			fmt.Fprintf(out, "%s: %s in %s\n", label, st.Warn("retrying"), e.RetryIn)
 		case "wait":
-			fmt.Fprintf(out, "Usage: the five-hour window is at %.0f%%; waiting for it to reset at %s (Ctrl-C stops; run it again to resume).\n",
-				100*e.Usage, clock(e.Until, env.Now()))
+			fmt.Fprintln(out, st.Warn(fmt.Sprintf("Usage: the five-hour window is at %.0f%%; waiting for it to reset at %s (Ctrl-C stops; run it again to resume).",
+				100*e.Usage, clock(e.Until, env.Now()))))
 		}
 	}
 	execute := func(ctx context.Context, slot experiment.Slot, attempt int, overlap []int) (experiment.Result, error) {
@@ -298,20 +300,21 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	case runErr != nil:
 		return fail(env, runErr)
 	case sum.Status == experiment.StatusDone:
-		fmt.Fprintf(out, "Every run is done. The report: agentium experiment report %s\n", name)
+		fmt.Fprintf(out, "%s The report: %s\n", st.Good("Every run is done."), st.Command("agentium experiment report "+name))
 		return ExitOK
 	case sum.Status == experiment.StatusBudget:
-		fmt.Fprintf(out, "Stopped at the budget. To continue: agentium experiment run %s --budget USD (a higher total)\n", name)
+		fmt.Fprintf(out, "%s To continue: %s (a higher total)\n", st.Warn("Stopped at the budget."), st.Command("agentium experiment run "+name+" --budget USD"))
 		return ExitOK
 	case sum.Status == experiment.StatusUsage && !sum.ResumeAt.IsZero():
-		fmt.Fprintf(out, "Paused before the usage limit; the window resets at %s. To continue: agentium experiment run %s (--wait waits for the reset)\n",
-			clock(sum.ResumeAt, env.Now()), name)
+		fmt.Fprintf(out, "%s To continue: %s (--wait waits for the reset)\n",
+			st.Warn(fmt.Sprintf("Paused before the usage limit; the window resets at %s.", clock(sum.ResumeAt, env.Now()))), st.Command("agentium experiment run "+name))
 		return ExitOK
 	case sum.Status == experiment.StatusUsage:
-		fmt.Fprintf(out, "Paused: a pair needs more of the usage window than the limit allows. To continue: agentium experiment run %s --usage-limit PCT\n", name)
+		fmt.Fprintf(out, "%s To continue: %s\n", st.Warn("Paused: a pair needs more of the usage window than the limit allows."),
+			st.Command("agentium experiment run "+name+" --usage-limit PCT"))
 		return ExitOK
 	}
-	fmt.Fprintf(out, "Stopped. To continue: agentium experiment run %s\n", name)
+	fmt.Fprintf(out, "%s To continue: %s\n", st.Warn("Stopped."), st.Command("agentium experiment run "+name))
 	return ExitError
 }
 
@@ -415,7 +418,7 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 			c.Settled++
 		}
 	}
-	out := env.Stdout
+	out, st := env.Stdout, env.style()
 	status := stored.Status
 	if status == experiment.StatusUsage {
 		status = "paused at the usage limit"
@@ -426,18 +429,22 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 	if stored.Status == store.StatusRunning && !w.layout.RunsBusy() {
 		status = "stopped (its Agentium process ended; run it again to resume)"
 	}
-	fmt.Fprintf(out, "Experiment %s: %s\n", name, status)
+	fmt.Fprintf(out, "%s %s\n", st.Heading("Experiment "+name+":"), st.Heading(st.Status(status)))
 	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD)
-	fmt.Fprintf(out, "%-4s %-20s %8s %6s %10s %7s %6s %10s %9s\n", "ARM", "CONTEXT", "SETTLED", "FAIR", "SUCCESSES", "UNFAIR", "INFRA", "CANCELLED", "COST")
+	table := term.NewTable(st, term.Left("ARM"), term.Left("CONTEXT"), term.Right("SETTLED"), term.Right("FAIR"), term.Right("SUCCESSES"),
+		term.Right("UNFAIR"), term.Right("INFRA"), term.Right("CANCELLED"), term.Right("COST"))
 	for _, a := range lock.Arms {
 		c := counts[a.Name]
-		fmt.Fprintf(out, "%-4s %-20s %8s %6d %10d %7d %6d %10d %9s\n", a.Name, a.Context, fmt.Sprintf("%d/%d", c.Settled, len(lock.Schedule)/2),
-			c.Fair, c.Successes, c.Unfair, c.Infra, c.Cancelled, fmt.Sprintf("$%.2f", c.CostUSD))
+		table.Row(a.Name, a.Context, fmt.Sprintf("%d/%d", c.Settled, len(lock.Schedule)/2), strconv.Itoa(c.Fair), strconv.Itoa(c.Successes),
+			strconv.Itoa(c.Unfair), strconv.Itoa(c.Infra), strconv.Itoa(c.Cancelled), fmt.Sprintf("$%.2f", c.CostUSD))
 		if c.Passed > c.Successes {
-			fmt.Fprintf(out, "  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes\n", a.Name, c.Passed-c.Successes)
+			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", a.Name, c.Passed-c.Successes)))
 		}
 	}
-	fmt.Fprintln(out, "Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted.")
+	if err := table.Write(out); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, st.Note("Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted."))
 	return nil
 }
 
@@ -465,7 +472,7 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	}
 	out := env.Stdout
 	if stored.Lock == nil {
-		fmt.Fprintf(out, "Experiment %s: %s; not run yet. Preview: agentium experiment plan %s\n", rest[0], describeArms(d), rest[0])
+		fmt.Fprintf(out, "Experiment %s: %s; not run yet. Preview: %s\n", rest[0], describeArms(d), env.style().Command("agentium experiment plan "+rest[0]))
 		return ExitOK
 	}
 	var lock experiment.Lock
