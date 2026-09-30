@@ -1,8 +1,8 @@
 # Clearer console output
 
 - Date: 2026-09-30
-- Status: In Progress (plan awaiting approval by merge)
-- Scope: the user dropped the web UI ([decision](../decisions/2026-09-30-console-instead-of-web-ui.md)) and moved this work ahead of the hardening plan's paid A/B ("swap the order, console first", 2026-09-30), so the A/B runs with it. Free: no real Claude Code runs.
+- Status: Completed
+- Scope: the user dropped the web UI ([decision](../../decisions/2026-09-30-console-instead-of-web-ui.md)) and moved this work ahead of the hardening plan's paid A/B ("swap the order, console first", 2026-09-30), so the A/B runs with it. Free: no real Claude Code runs.
 
 ## Why
 
@@ -52,9 +52,17 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
   - Beyond the listed scope: `task.Validator` and `run.Env` got a `Style` field, because their progress lines carry the verdicts.
   - Tables can print a note line between rows, so notes stay under their row. Styles end at each line, and `Heading` and `Note` must not nest (they share a reset code).
   - Evidence: plain and styled output compared on 28 commands by the reviewer (same words, lines and order); real output captured through a pseudo-terminal on the acceptance data.
-- [ ] **2. Progress** (acceptance 4): the status line and spinner in `internal/term`; terminal width from `TIOCGWINSZ` through `syscall`, then `COLUMNS`, then 80. Wire it into `experiment run`, `run once`, `run calibrate` and `task validate`.
-- [ ] **3. Terminal report** (acceptance 5): a terminal renderer in `internal/report` beside the Markdown one; `--markdown` on `experiment report`.
-- [ ] **4. Docs and samples** (acceptance 6): README and architecture; real console samples in each PR.
+- [x] **2. Progress** (acceptance 4): the status line and spinner in `internal/term`; terminal width from `TIOCGWINSZ` through `syscall`, then `COLUMNS`, then 80. Wire it into `experiment run`, `run once`, `run calibrate` and `task validate`. Done on 2026-09-30 by an `implementer` (Sonnet 5.5), PR #37:
+  - Review: changes requested, then approved. The status line kept a stale usage reading after `--wait`; it now keeps the newest reading and shows it for the window open when it draws. Redraws wrote the clear sequence twice.
+  - Beyond the listed scope: `Env.Columns` in `internal/cli` and `cmd/agentium`, `run.Env.Step` and `task.Validator.Started` (start hooks that only feed the line).
+  - Also fixed: usage tests that failed between 23:00 and midnight (they expected "00:06" where the output says "Thu 00:06").
+  - Limitations: at 80 columns a long waiting line loses its elapsed time (the countdown stays); shrinking the terminal while the line shows can leave a fragment (no resize signal handling); `task validate` shows the previous stage while the next arm's checkout is prepared.
+  - Evidence: `task validate` through a real pseudo-terminal on a copy of the acceptance data, and an `experiment run` with the fake `claude`, replayed frame by frame. The reviewer suggested a second review from Codex, because the line runs alongside concurrent runs.
+- [x] **3. Terminal report** (acceptance 5): a terminal renderer in `internal/report` beside the Markdown one; `--markdown` on `experiment report`. Done on 2026-09-30 by an `implementer` (Sonnet 5.5), PR #36, approved in review:
+  - The reviewer found the Markdown (markup stripped) and the terminal rendering identical line by line on three fixtures; the Markdown and JSON goldens are unchanged.
+  - Review follow-ups: the noise table's method sentences moved to a line under each row (rows were about 370 characters wide), and per-task counts got their own column.
+  - Limitation: paragraphs are not wrapped to the terminal's width; the terminal wraps them.
+- [x] **4. Docs and samples** (acceptance 6): README and architecture; real console samples in each PR. Done on 2026-09-30: the README shows the plan preview, the terminal report and a frame of the live status line as images rendered from real terminal output (the status-line frame from a run with the fake `claude`, and labeled so), and notes `NO_COLOR`, `FORCE_COLOR` and `--markdown`. The architecture's report row names the terminal rendering.
 
 Then the hardening plan's step 6, the paid A/B, runs with this output.
 
@@ -82,8 +90,9 @@ Step 1 comes first; it fixes the `internal/term` API the others use. Steps 2 and
 Each implementer pushes its branch and returns a handoff; the coordinator runs the reviewer, opens the PR and integrates. Step 4 is the coordinator's, after steps 2 and 3.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code / claude-opus-5-5 / default (coordinator: step 1, reviews' fixes, step 4); two `implementer` subagents on claude-sonnet-5-5 / medium (steps 2 and 3, in parallel)
+- Elapsed: about 3.5 hours (2026-09-30 19:40 to 23:20), including waits for merges and one usage-limit stop of both reviewers
+- Check-fix loops: 5 (table spacing in older tests; the docs word budget, twice; a test command that needed a validated snapshot; the double-clear and midnight test failures after step 2's fix)
+- User corrections: 0
+- Real runs: none
+- Review: an independent reviewer on each code PR: step 1 approved (5 low findings fixed), step 2 changes requested (1 fixed, then approved), step 3 approved (2 low findings fixed)

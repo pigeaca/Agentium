@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="742" viewBox="0 0 1064 742" role="img" aria-label="agentium experiment report ab">
+<rect width="1064" height="742" rx="8" fill="#1e1e1e"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="532" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium experiment report ab</text>
+<g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
+<text x="16" y="54"><tspan fill="#29b8db">$</tspan>&#160;agentium&#160;experiment&#160;report&#160;ab</text>
+<text x="16" y="73"><tspan font-weight="bold">Experiment&#160;ab</tspan></text>
+<text x="16" y="92"></text>
+<text x="16" y="111">Context&#160;A/B:&#160;A&#160;=&#160;full,&#160;B&#160;=&#160;minimal.&#160;Goal:&#160;cheaper,&#160;without&#160;losing&#160;success.</text>
+<text x="16" y="130"></text>
+<text x="16" y="149">-&#160;<tspan font-weight="bold">Success&#160;100%&#160;→&#160;75%</tspan>,&#160;Δ&#160;-25&#160;pp&#160;(95%:&#160;-105&#160;to&#160;+55):&#160;<tspan fill="#e5c07b">exploratory:&#160;too&#160;few&#160;tasks&#160;or&#160;runs&#160;for&#160;a&#160;verdict</tspan>.</text>
+<text x="16" y="168">-&#160;<tspan font-weight="bold">Cost&#160;+11%</tspan>&#160;(95%:&#160;-45%&#160;to&#160;+123%):&#160;<tspan fill="#e5c07b">exploratory:&#160;too&#160;few&#160;tasks&#160;or&#160;runs&#160;for&#160;a&#160;verdict</tspan>.</text>
+<text x="16" y="187"></text>
+<text x="16" y="206">8&#160;of&#160;12&#160;runs&#160;settled&#160;(<tspan fill="#e5c07b">stopped</tspan>);&#160;spent&#160;$7.33&#160;of&#160;$24.00.&#160;6&#160;task(s)&#160;×&#160;1&#160;run(s)&#160;per&#160;arm;&#160;claude-sonnet-5,&#160;effort&#160;default,&#160;Cl</text>
+<text x="16" y="225">aude&#160;Code&#160;2.1.281,&#160;sign-in&#160;login.&#160;Locked&#160;2026-09-29&#160;16:22&#160;UTC&#160;(method&#160;phase1-v1).</text>
+<text x="16" y="244"></text>
+<text x="16" y="263"><tspan font-weight="bold">Metrics</tspan></text>
+<text x="16" y="282"></text>
+<text x="16" y="301"><tspan fill="#8b8b8b">A&#160;and&#160;B:&#160;the&#160;success&#160;rate,&#160;or&#160;the&#160;geometric&#160;mean&#160;per&#160;run.&#160;B&#160;vs&#160;A&#160;is&#160;paired&#160;by&#160;task:&#160;a&#160;difference&#160;for&#160;success,&#160;a&#160;ratio&#160;of</tspan></text>
+<text x="16" y="320"><tspan fill="#8b8b8b">&#160;geometric&#160;means&#160;for&#160;the&#160;others.</tspan></text>
+<text x="16" y="339"></text>
+<text x="16" y="358"><tspan font-weight="bold">Metric</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">Role</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">A</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">B</tspan>&#160;&#160;<tspan font-weight="bold">B&#160;vs&#160;A</tspan>&#160;&#160;<tspan font-weight="bold">95%&#160;bootstrap</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">95%&#160;t</tspan>&#160;&#160;<tspan font-weight="bold">Verdict</tspan></text>
+<text x="16" y="377">Success&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;guard&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;100%&#160;&#160;&#160;&#160;&#160;75%&#160;&#160;-25&#160;pp&#160;&#160;&#160;[-75,&#160;+0]&#160;pp&#160;&#160;[-105,&#160;+55]&#160;pp&#160;&#160;<tspan fill="#e5c07b">exploratory</tspan></text>
+<text x="16" y="396">Cost&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;primary&#160;&#160;&#160;&#160;$0.659&#160;&#160;$0.728&#160;&#160;&#160;&#160;+11%&#160;&#160;&#160;[-27%,&#160;+62%]&#160;&#160;&#160;[-45%,&#160;+123%]&#160;&#160;<tspan fill="#e5c07b">exploratory</tspan></text>
+<text x="16" y="415">Time&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;secondary&#160;&#160;&#160;163&#160;s&#160;&#160;&#160;179&#160;s&#160;&#160;&#160;&#160;+10%&#160;&#160;&#160;[-35%,&#160;+72%]&#160;&#160;&#160;[-54%,&#160;+166%]&#160;&#160;<tspan fill="#e5c07b">exploratory</tspan></text>
+<text x="16" y="434">Output&#160;tokens&#160;&#160;secondary&#160;&#160;&#160;14937&#160;&#160;&#160;19075&#160;&#160;&#160;&#160;+28%&#160;&#160;[-17%,&#160;+123%]&#160;&#160;&#160;[-47%,&#160;+211%]&#160;&#160;<tspan fill="#e5c07b">exploratory</tspan></text>
+<text x="16" y="453"></text>
+<text x="16" y="472">Success:&#160;pass@1&#160;100%&#160;(A)&#160;and&#160;75%&#160;(B);&#160;every&#160;run&#160;of&#160;a&#160;task&#160;passed&#160;(pass^k)&#160;in&#160;100%&#160;and&#160;75%&#160;of&#160;tasks.</text>
+<text x="16" y="491">…</text>
+<text x="16" y="510"><tspan font-weight="bold">Per&#160;task</tspan></text>
+<text x="16" y="529"></text>
+<text x="16" y="548"><tspan fill="#8b8b8b">●&#160;success,&#160;○&#160;failure,&#160;×&#160;not&#160;counted;&#160;cost&#160;is&#160;the&#160;mean&#160;of&#160;counted&#160;runs.</tspan></text>
+<text x="16" y="567"></text>
+<text x="16" y="586"><tspan font-weight="bold">Task</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">A</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">B</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">Cost&#160;A&#160;→&#160;B</tspan></text>
+<text x="16" y="605">deny-login-file&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;●&#160;&#160;1/1&#160;&#160;●&#160;&#160;1/1&#160;&#160;$0.265&#160;→&#160;$0.485</text>
+<text x="16" y="624">documents-filter&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;●&#160;&#160;1/1&#160;&#160;○&#160;&#160;0/1&#160;&#160;$1.135&#160;→&#160;$0.706</text>
+<text x="16" y="643">judge-truncated-notice&#160;&#160;-&#160;&#160;0/0&#160;&#160;-&#160;&#160;0/0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;-&#160;→&#160;-</text>
+<text x="16" y="662">run-survives-erase&#160;&#160;&#160;&#160;&#160;&#160;●&#160;&#160;1/1&#160;&#160;●&#160;&#160;1/1&#160;&#160;$1.217&#160;→&#160;$1.376</text>
+<text x="16" y="681">scrub-whole-paths&#160;&#160;&#160;&#160;&#160;&#160;&#160;●&#160;&#160;1/1&#160;&#160;●&#160;&#160;1/1&#160;&#160;$0.514&#160;→&#160;$0.597</text>
+<text x="16" y="700">unreadable-files&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;×&#160;&#160;0/0&#160;&#160;×&#160;&#160;0/0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;-&#160;→&#160;-</text>
+<text x="16" y="719">…</text>
+</g></svg>
