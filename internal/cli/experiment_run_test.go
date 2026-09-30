@@ -418,5 +418,9 @@ func TestExperimentRunInterruptedBeforeAgent(t *testing.T) {
 	}
 	os.Remove(slow)
 	expect(t, f.run(ctx, "experiment", "run", "early"), ExitOK, "Experiment early: done", "2 of 2 runs settled")
+	runs := experimentRuns(t, f, "early")
+	if len(runs) != 2 || runs[0].Attempt != 1 || runs[1].Attempt != 1 {
+		t.Errorf("runs %+v: want the two slots' first attempts, and nothing stored for the interrupted try", runs)
+	}
 	emptyWorkspaces(t, f)
 }

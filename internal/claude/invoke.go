@@ -120,12 +120,12 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(inv.BudgetUSD, 'f', -1, 64))
 	}
-	goflags := "-buildvcs=false"
+	goflags, userSet := "-buildvcs=false", false
 	for _, kv := range Environ(environ) {
 		switch {
 		case inv.BuildCache != "" && strings.HasPrefix(kv, "GOCACHE="):
 		case strings.HasPrefix(kv, "GOFLAGS="): // the user's flags stay; ours are appended below
-			goflags = strings.TrimSpace(strings.TrimPrefix(kv, "GOFLAGS=")) + " " + goflags
+			goflags, userSet = strings.TrimSpace(strings.TrimPrefix(kv, "GOFLAGS=")+" "+goflags), true
 		default:
 			env = append(env, kv)
 		}
@@ -133,7 +133,19 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	// Go stamps the main module's version from VCS and writes a stat-cache entry into the module cache, which the
 	// sandbox rightly denies: every `go build` would print "writing stat cache ... operation not permitted" and
 	// agents would spend turns on it. Only the agent's environment gets the flag, not setup or grading commands.
-	env = append(env, "GOFLAGS="+strings.TrimSpace(goflags))
+	// Go reads GOFLAGS from `go env -w` only while the environment leaves it unset, so setting it here would hide the
+	// user's saved flags from the agent: start from them.
+	if !userSet {
+		vars := map[string]string{}
+		for _, kv := range environ {
+			name, v, _ := strings.Cut(kv, "=")
+			vars[name] = v
+		}
+		if saved := strings.TrimSpace(goEnvFile(vars, inv.Home)["GOFLAGS"]); saved != "" {
+			goflags = saved + " " + goflags
+		}
+	}
+	env = append(env, "GOFLAGS="+goflags)
 	env = append(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	if inv.BuildCache != "" {

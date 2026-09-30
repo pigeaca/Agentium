@@ -738,3 +738,18 @@ func TestAgentGoflagsDisableVCSStamping(t *testing.T) {
 		t.Errorf("Environ changed the user's flags: %v", got)
 	}
 }
+
+// GOFLAGS saved with `go env -w` reach the agent too: an environment GOFLAGS would otherwise shadow them.
+func TestAgentGoflagsKeepSavedFlags(t *testing.T) {
+	envFile := filepath.Join(t.TempDir(), "env")
+	if err := os.WriteFile(envFile, []byte("GOFLAGS=-tags=integration\nGOPROXY=off\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, env, err := invocation(t, SignInLogin, "").Command([]string{"PATH=/usr/bin", "GOENV=" + envFile})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains("\n"+strings.Join(env, "\n")+"\n", "\nGOFLAGS=-tags=integration -buildvcs=false\n") {
+		t.Errorf("saved flags lost: %v", env)
+	}
+}

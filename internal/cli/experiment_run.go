@@ -214,7 +214,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			fmt.Fprintf(out, "%s: started\n", label)
 		case "finish":
 			outcome := orNone(e.Result.Outcome)
-			if e.Result.Outcome == "" && ctx.Err() != nil {
+			if e.Result.Outcome == "" && e.Requeued {
 				// Execute reruns such a run on resume and does not count it as an attempt.
 				outcome = "stopped before its agent started (not counted; it runs again on resume)"
 			}
