@@ -1,7 +1,6 @@
-> A real report from Phase 1's acceptance runs, printed by `agentium experiment report ab` at commit `fb02e4d` and not edited. Claude Code 2.1.281 and claude-sonnet-5 worked on tasks taken from this repository. The experiment was stopped after 4 complete pairs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
+> A real report from Phase 1's acceptance runs, printed by `agentium experiment report ab` at commit `871e6ae` and not edited. Claude Code 2.1.281 and claude-sonnet-5 worked on tasks taken from this repository. The experiment was stopped after 4 complete pairs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
 
 ---
-
 # Experiment ab
 
 Context A/B: A = `full`, B = `minimal`. Goal: cheaper, without losing success.
@@ -23,6 +22,16 @@ A and B: the success rate, or the geometric mean per run. B vs A is paired by ta
 | Output tokens | secondary | 14937 | 19075 | +28% | [-17%, +123%] | [-47%, +211%] | exploratory |
 
 Success: pass@1 100% (A) and 75% (B); every run of a task passed (pass^k) in 100% and 75% of tasks.
+
+## Noise
+
+What the runs show, for planning later experiments: 4 task(s), 1.0 run(s) per task and arm on average; 95% ranges. Cost ranges assume normal noise in log cost; with few tasks every range is wide.
+
+| Component | Estimate | 95% range | Planner's default | How it was estimated |
+|---|---|---|---|---|
+| σ, per-run spread of log cost | - | - | 0.19 | not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ |
+| τ, spread of the cost effect across tasks | 0.35 | 0.00–1.63 | 0.10–0.25: overlaps the range | var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 3 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow |
+| w, per-run variance of success | - | - | 0.20 | not separable from τ with one run per arm in an A/B |
 
 ## Context and cost per arm
 
@@ -69,7 +78,7 @@ Runs counted in each arm, unless a total.
 - The experiment is not finished (stopped: interrupted): 8 of 12 runs settled, and the results cover those.
 - Runs not counted: 2 cancelled. Their spend is in the total.
 - Not discriminating for success (every run passed, or every run failed, in both arms): deny-login-file, run-survives-erase, scrub-whole-paths. They stay in for cost.
-- Success is exploratory: 0 of 4 task(s) have 3 counted runs in both arms, below the floor of 20.
-- Cost is exploratory: 0 of 4 task(s) have 3 counted runs in both arms, below the floor of 8.
+- Success is exploratory: 0 of 4 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v1).
+- Cost is exploratory: 0 of 4 task(s) have 3 or more counted runs in both arms, below the floor of 8 tasks (method phase1-v1).
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.
