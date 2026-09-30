@@ -42,8 +42,9 @@ const experimentUsage = `Usage:
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json | --markdown] [--out FILE]
-                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes, as Markdown
-                     (for a pull request) or JSON (with the lock and every run)
+                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes: styled for
+                     a terminal; as Markdown (for a pull request) when piped, with --out or --markdown; or JSON (with
+                     the lock and every run)
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
 
