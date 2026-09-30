@@ -206,3 +206,53 @@ func TestFairnessSameFieldNameOnAnotherTypeAndFormattedTexts(t *testing.T) {
 	stated := instruction + " Expect gets a SlashCommands field. Report \"slash commands differ (N added, M missing)\" and \"N personal skill(s) loaded\"."
 	wantGaps(t, fairnessGaps(t, base, solution, stated))
 }
+
+// Typed keys must be resolved in the type's own package and against the base test's own uses.
+func TestFairnessTypedKeysDoNotFlagOldOrForeignTypes(t *testing.T) {
+	base := map[string]string{
+		"go.mod":      "module example.com/m\n\ngo 1.22\n",
+		"cli/cli.go":  "package cli\n\ntype Info struct{ Name string }\n",
+		"run/run.go":  "package run\n\ntype Record struct{ Arm int }\n",
+		"claude/c.go": "package claude\n\ntype Expect struct{ CLIVersion string }\n\ntype Local struct{ N int }\n",
+		"claude/c_test.go": "package claude\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/run\"\n)\n\n" +
+			"func TestOld(t *testing.T) { _ = run.Record{Arm: 1} }\n",
+	}
+	solution := map[string]string{
+		// The references add fields named like keys the tests use: CLIVersion in another package, Arm on a local type.
+		"cli/cli.go":  "package cli\n\ntype Info struct {\n\tName       string\n\tCLIVersion string\n}\n",
+		"claude/c.go": "package claude\n\ntype Expect struct{ CLIVersion string }\n\ntype Local struct {\n\tN   int\n\tArm int\n}\n",
+		"claude/c_test.go": "package claude\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/run\"\n)\n\n" +
+			"func TestOld(t *testing.T) { _ = run.Record{Arm: 1} }\n\n" +
+			"func TestNew(t *testing.T) { _ = Expect{CLIVersion: \"v\"}; _ = &run.Record{Arm: 2} }\n",
+	}
+	// run.Record{Arm:} is unchanged or another package's; Expect{CLIVersion:} names a field the base's Expect has.
+	wantGaps(t, fairnessGaps(t, base, solution, ""))
+	// A new field on a type the test names in its own directory is still found.
+	solution["claude/c_test.go"] += "\nfunc TestLocal(t *testing.T) { _ = Local{Arm: 3} }\n"
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Arm")
+}
+
+func TestFairnessGenericFormatDoesNotHideLiteralGaps(t *testing.T) {
+	solution := map[string]string{}
+	for k, v := range fairSolution {
+		solution[k] = v
+	}
+	solution["ctx/extra.go"] = "package ctx\n\nimport \"fmt\"\n\nfunc Number(n int) string { return fmt.Sprintf(\"%d\", n) }\n\nfunc Pair(a, b any) string { return fmt.Sprintf(\"%s: %v\", a, b) }\n"
+	gaps := fairnessGaps(t, fairBase, solution, "Make Include reject non-documents and update the note.")
+	wantGaps(t, gaps, "identifier:SlashCommands", "literal:graded with the starting version", "literal:"+errText)
+}
+
+func TestFairnessControlCharactersSeparatePieces(t *testing.T) {
+	if got := strings.Join(piecesOf("3\t1\ta.go\x00"), "|"); got != "" {
+		t.Errorf("pieces = %q", got)
+	}
+	if got := strings.Join(piecesOf("first chunk of text\x00second chunk of text"), "|"); got != "first chunk of text|second chunk of text" {
+		t.Errorf("pieces = %q", got)
+	}
+	base := map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "p/p.go": "package p\n\nfunc F() {}\n"}
+	solution := map[string]string{
+		"p/p.go":      "package p\n\nfunc F() string { return \"first chunk of text\" + \"\\x00\" + \"second chunk of text\" }\n",
+		"p/p_test.go": "package p\n\nimport \"testing\"\n\nfunc TestF(t *testing.T) {\n\tif F() != \"first chunk of text\\x00second chunk of text\" {\n\t\tt.Fatal()\n\t}\n}\n",
+	}
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "literal:first chunk of text\x00second chunk of text")
+}
