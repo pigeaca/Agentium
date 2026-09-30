@@ -47,7 +47,7 @@ var (
 	// sourceExt lists the test-file extensions scanned; other hidden files (data, snapshots) are not.
 	sourceExt = map[string]bool{".go": true, ".py": true, ".rb": true, ".js": true, ".jsx": true, ".ts": true,
 		".tsx": true, ".mjs": true, ".cjs": true, ".mts": true, ".cts": true}
-	moduleLine = regexp.MustCompile(`(?m)^module\s+(\S+)`)
+	moduleLine = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)"?`)
 	spaces     = regexp.MustCompile(`\s+`)
 	verbs      = regexp.MustCompile(`%[-+# 0-9.*]*[a-zA-Z%]`)
 	// messageCalls are Go calls whose first argument is a format or a name, not an expectation (t.Run, t.Errorf, fmt.Sprintf...).
@@ -95,7 +95,7 @@ type FairnessInput struct {
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be
 //     flagged, so standard-library names never are. A key of a composite literal that names its type (T{Name: v},
 //     &T{...}, pkg.T{...}) is checked against the fields of the base's struct T in T's own directory (pkg through the
-//     module path in go.mod; packages outside the module are skipped), so a field Name that another base type has is
+//     module path in go.mod; a type that cannot be resolved falls back to the word search), so a field Name that another base type has is
 //     still flagged, and a key the base's test already sets on that type is not. Selectors (x.Name) and keys of literals with an elided type have no known receiver without
 //     go/types, so they use the word search: a new name equal to any old word in its directory is missed there.
 func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
@@ -186,18 +186,33 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 				continue
 			}
 			for ref := range refs {
-				typeDir, ok := f.typeDir(ctx, in, af, dir, ref)
-				if !ok || !slices.Contains(dirs, typeDir) || oldUse.keyed[name][ref] {
-					continue // an unresolved type, a field declared elsewhere, or one the base's test already sets
+				if oldUse.keyed[name][ref] {
+					continue // the base's test already sets it on this type
 				}
-				fields, err := f.baseFields(ctx, in.Base, []string{typeDir})
+				known := false
+				typeDir, ok := f.typeDir(ctx, in, af, dir, ref)
+				var fields map[string]map[string]bool
+				if ok {
+					var err error
+					if fields, err = f.baseFields(ctx, in.Base, []string{typeDir}); err != nil {
+						return nil, err
+					}
+					_, inBase := fields[ref.Name]
+					known = inBase || slices.Contains(newTypes[ref.Name], typeDir)
+				}
+				if known {
+					if slices.Contains(dirs, typeDir) && !fields[ref.Name][name] {
+						flag(name) // the field is declared with the type, and the base's struct lacks it
+					}
+					continue
+				}
+				// The type is not resolved (a dot import, a package name that differs from its directory, another
+				// module): treat the key like a selector.
+				inBase, err := f.baseHasName(ctx, in.Base, name, dirs)
 				if err != nil {
 					return nil, err
 				}
-				if _, known := fields[ref.Name]; !known && !slices.Contains(newTypes[ref.Name], typeDir) {
-					continue // not a struct the base or the reference declares there
-				}
-				if !fields[ref.Name][name] {
+				if !inBase {
 					flag(name)
 				}
 			}

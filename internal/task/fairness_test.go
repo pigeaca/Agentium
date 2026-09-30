@@ -256,3 +256,23 @@ func TestFairnessControlCharactersSeparatePieces(t *testing.T) {
 	}
 	wantGaps(t, fairnessGaps(t, base, solution, ""), "literal:first chunk of text\x00second chunk of text")
 }
+
+// A qualified or dot-imported type that cannot be resolved falls back to the word search instead of being dropped.
+func TestFairnessUnresolvedTypedKeysFallBackToWordSearch(t *testing.T) {
+	base := map[string]string{
+		"go.mod":       "module \"example.com/m\"\n\ngo 1.22\n",
+		"run/run.go":   "package run\n\ntype Record struct{ Arm int }\n",
+		"foo-bar/f.go": "package foobar\n\ntype Item struct{ Arm int }\n",
+		"t/t_test.go":  "package t\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) {}\n",
+	}
+	solution := map[string]string{
+		"run/run.go":   "package run\n\ntype Record struct {\n\tArm   int\n\tExtra int\n}\n",
+		"foo-bar/f.go": "package foobar\n\ntype Item struct {\n\tArm   int\n\tExtra2 int\n}\n",
+	}
+	dot := "package t\n\nimport (\n\t\"testing\"\n\n\t. \"example.com/m/run\"\n)\n\nfunc TestNew(t *testing.T) { _ = Record{Extra: 1} }\n"
+	solution["t/t_test.go"] = dot
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Extra")
+	named := "package t\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/foo-bar\"\n)\n\nfunc TestNew(t *testing.T) { _ = foobar.Item{Extra2: 1} }\n"
+	solution["t/t_test.go"] = named // package foobar lives in foo-bar/: the import's last element does not name it
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Extra2")
+}
