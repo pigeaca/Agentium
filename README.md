@@ -62,40 +62,18 @@ agentium experiment new lean --b trimmed      # an A/B: each task's own context 
 agentium experiment plan lean                 # runs, estimated cost, detectable effects; what is missing
 agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
-agentium experiment report lean               # verdicts, intervals, per-task results (--json for everything)
+agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
-Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder.
+Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off, and `FORCE_COLOR=1` keeps it through a pipe (for `less -R`).
 
 ## Example results
 
-This is real output from Phase 1's acceptance runs: Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. It is copied from the terminal as printed. Paths into the home folder are shortened to `~`, and `…` marks lines left out. The experiment compared today's docs (`full`) with a minimal version (`minimal`). It was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
+This is real output from Phase 1's acceptance runs: Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. The pictures show it as today's `agentium` prints it in a 120-column terminal; the text blocks are copied from the terminal as printed at the time. Paths into the home folder are shortened to `~`, and `…` marks lines left out. The experiment compared today's docs (`full`) with a minimal version (`minimal`). It was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
 
 **1. Plan it:** what it costs and what it can detect, before anything runs.
 
-```console
-$ agentium experiment plan ab
-Experiment ab: context A/B, A = full, B = minimal
-  arm A: context full (d638b824df11)
-  arm B: context minimal (a12708938200)
-  model claude-sonnet-5, effort the CLI's default; each run up to $2.00 and 20m0s; 2 at a time
-  goal: cheaper, with success as the guard (margins: cost 10%, success 15 pp); budget $24.00
-  tasks (6, seed 1919198069636433): deny-login-file, documents-filter, judge-truncated-notice, run-survives-erase, scrub-whole-paths, unreadable-files
-
-Before it runs:
-  ok       Claude Code 2.1.281 at ~/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude
-  ok       context full calibrated 2026-09-29 16:22: first request 31087 tokens
-  ok       context minimal calibrated 2026-09-29 16:22: first request 26564 tokens
-  ok       6 task(s), each valid in every arm's context
-
-Sizes (runs count both arms):
-SIZE              TASKS RUNS/ARM  RUNS  EST. COST WORST CASE  COST CHANGE SUCCESS CHANGE NO-LOSS GUARD  EXPLORATORY
-Quick                6*        3    36     $25.82     $72.00       19–29%       43–51 pp      38–45 pp  cost, success
-Confident            6*        5    60     $43.04    $120.00       16–27%       34–43 pp      30–38 pp  cost, success
-This experiment       6        1    12      $8.61     $24.00       28–34%       73–78 pp      65–69 pp  cost, success
-…
-Floors: verdicts on cost need 8 tasks and on success 20, each with 3 runs per arm; below them a metric is exploratory.
-```
+<img src="docs/images/console-plan.svg" alt="agentium experiment plan ab: the arms, checks marked ok, and a table of sizes with their cost and detectable effects">
 
 **2. Run it:** pairs of runs, interleaved, within the budget. It was stopped here with Ctrl-C, and `experiment run ab` would resume it.
 
@@ -128,44 +106,13 @@ Successes need a pass with the hidden tests; unfair (drifted), infrastructure an
 Stopped. To continue: agentium experiment run ab
 ```
 
-**3. Report it:** Markdown you can paste into a pull request (`--json` for everything). The rest of the report covers context and cost per arm, behavior (tests run, files changed, denials), per-task results and notes. See the [full report](docs/examples/context-ab-report.md).
+On a terminal, a status line under the events shows the progress, redrawn in place, and clears itself at the end. This frame comes from a run with a stand-in agent (Agentium's test double for Claude Code):
 
-```console
-$ agentium experiment report ab
-# Experiment ab
+<img src="docs/images/console-live.svg" alt="agentium experiment run: event lines, and a status line reading 3 of 6 settled; 2 in flight; $0.90 of $30.00; usage 34%">
 
-Context A/B: A = `full`, B = `minimal`. Goal: cheaper, without losing success.
+**3. Report it:** verdicts in words, then the metrics with both intervals, noise, context and cost per arm, behavior (tests run, files changed, denials), per-task results and notes. On a terminal it looks like this; piped, with `--out FILE` or with `--markdown`, it is Markdown you can paste into a pull request, like the [full report](docs/examples/context-ab-report.md) (`--json` for everything).
 
-- **Success 100% → 75%**, Δ -25 pp (95%: -105 to +55): exploratory: too few tasks or runs for a verdict.
-- **Cost +11%** (95%: -45% to +123%): exploratory: too few tasks or runs for a verdict.
-
-8 of 12 runs settled (stopped); spent $7.33 of $24.00. 6 task(s) × 1 run(s) per arm; claude-sonnet-5, effort default, Claude Code 2.1.281, sign-in login. Locked 2026-09-29 16:22 UTC (method phase1-v1).
-
-## Metrics
-
-A and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.
-
-| Metric | Role | A | B | B vs A | 95% bootstrap | 95% t | Verdict |
-|---|---|---|---|---|---|---|---|
-| Success | guard | 100% | 75% | -25 pp | [-75, +0] pp | [-105, +55] pp | exploratory |
-| Cost | primary | $0.659 | $0.728 | +11% | [-27%, +62%] | [-45%, +123%] | exploratory |
-| Time | secondary | 163 s | 179 s | +10% | [-35%, +72%] | [-54%, +166%] | exploratory |
-| Output tokens | secondary | 14937 | 19075 | +28% | [-17%, +123%] | [-47%, +211%] | exploratory |
-
-Success: pass@1 100% (A) and 75% (B); every run of a task passed (pass^k) in 100% and 75% of tasks.
-
-## Noise
-
-What the runs show, for planning later experiments: 4 task(s), 1.0 run(s) per task and arm on average; 95% ranges. Cost ranges assume normal noise in log cost; with few tasks every range is wide.
-
-| Component | Estimate | 95% range | Planner's default | How it was estimated |
-|---|---|---|---|---|
-| σ, per-run spread of log cost | - | - | 0.19 | not separable from τ with one run per arm in an A/B: the paired differences' variance is 2σ² + τ²; the τ below takes the default σ |
-| τ, spread of the cost effect across tasks | 0.35 | 0.00–1.63 | 0.10–0.25: overlaps the range | var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 3 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow |
-| w, per-run variance of success | - | - | 0.20 | not separable from τ with one run per arm in an A/B |
-
-…
-```
+<img src="docs/images/console-report.svg" alt="agentium experiment report ab on a terminal: exploratory verdicts in yellow, the metrics table, and per-task results">
 
 **4. Look at one run:** the minimal-docs run that failed its hidden tests (`--diff` and `--log` show the agent's changes and the grading output).
 
@@ -186,7 +133,7 @@ The minimal docs cut Claude Code's first request by about 4.6k tokens, but cost 
 
 The [A/A report](docs/examples/aa-report.md) is the sanity check: the same context in both arms. It reported no difference (cost −6%, 95%: −31% to +26%), and every run passed.
 
-A larger A/B, 12 tasks × 1 run per arm, is planned in the [hardening plan](.agents/plans/2026-09-29-experiment-hardening.md).
+A larger A/B, 10 tasks × 1 run per arm, is planned in the [hardening plan](.agents/plans/2026-09-29-experiment-hardening.md).
 
 ## Development
 

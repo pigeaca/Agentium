@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="552" viewBox="0 0 1064 552" role="img" aria-label="agentium experiment plan ab">
+<rect width="1064" height="552" rx="8" fill="#1e1e1e"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="532" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium experiment plan ab</text>
+<g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
+<text x="16" y="54"><tspan fill="#29b8db">$</tspan>&#160;agentium&#160;experiment&#160;plan&#160;ab</text>
+<text x="16" y="73"><tspan font-weight="bold">Experiment&#160;ab:&#160;context&#160;A/B,&#160;A&#160;=&#160;full,&#160;B&#160;=&#160;minimal</tspan></text>
+<text x="16" y="92">&#160;&#160;arm&#160;A:&#160;context&#160;full&#160;(d638b824df11)</text>
+<text x="16" y="111">&#160;&#160;arm&#160;B:&#160;context&#160;minimal&#160;(a12708938200)</text>
+<text x="16" y="130">&#160;&#160;model&#160;claude-sonnet-5,&#160;effort&#160;the&#160;CLI&#x27;s&#160;default;&#160;each&#160;run&#160;up&#160;to&#160;$2.00&#160;and&#160;20m0s;&#160;2&#160;at&#160;a&#160;time</text>
+<text x="16" y="149">&#160;&#160;goal:&#160;cheaper,&#160;with&#160;success&#160;as&#160;the&#160;guard&#160;(margins:&#160;cost&#160;10%,&#160;success&#160;15&#160;pp);&#160;budget&#160;$24.00</text>
+<text x="16" y="168">&#160;&#160;tasks&#160;(6,&#160;seed&#160;1919198069636433):&#160;deny-login-file,&#160;documents-filter,&#160;judge-truncated-notice,&#160;run-survives-erase,&#160;scrub</text>
+<text x="16" y="187">-whole-paths,&#160;unreadable-files</text>
+<text x="16" y="206"></text>
+<text x="16" y="225"><tspan font-weight="bold">Before&#160;it&#160;runs:</tspan></text>
+<text x="16" y="244">&#160;&#160;<tspan fill="#23d18b">ok&#160;&#160;&#160;&#160;&#160;&#160;</tspan>&#160;Claude&#160;Code&#160;2.1.281&#160;at&#160;~/Library/Application&#160;Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/cla</text>
+<text x="16" y="263">ude</text>
+<text x="16" y="282">&#160;&#160;<tspan fill="#23d18b">ok&#160;&#160;&#160;&#160;&#160;&#160;</tspan>&#160;context&#160;full&#160;calibrated&#160;2026-09-29&#160;16:22:&#160;first&#160;request&#160;31087&#160;tokens</text>
+<text x="16" y="301">&#160;&#160;<tspan fill="#23d18b">ok&#160;&#160;&#160;&#160;&#160;&#160;</tspan>&#160;context&#160;minimal&#160;calibrated&#160;2026-09-29&#160;16:22:&#160;first&#160;request&#160;26564&#160;tokens</text>
+<text x="16" y="320">&#160;&#160;<tspan fill="#23d18b">ok&#160;&#160;&#160;&#160;&#160;&#160;</tspan>&#160;6&#160;task(s),&#160;each&#160;valid&#160;in&#160;every&#160;arm&#x27;s&#160;context</text>
+<text x="16" y="339"></text>
+<text x="16" y="358"><tspan font-weight="bold">Sizes&#160;(runs&#160;count&#160;both&#160;arms):</tspan></text>
+<text x="16" y="377"><tspan font-weight="bold">SIZE</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">TASKS</tspan>&#160;&#160;<tspan font-weight="bold">RUNS/ARM</tspan>&#160;&#160;<tspan font-weight="bold">RUNS</tspan>&#160;&#160;<tspan font-weight="bold">EST.&#160;COST</tspan>&#160;&#160;<tspan font-weight="bold">WORST&#160;CASE</tspan>&#160;&#160;<tspan font-weight="bold">COST&#160;CHANGE</tspan>&#160;&#160;<tspan font-weight="bold">SUCCESS&#160;CHANGE</tspan>&#160;&#160;<tspan font-weight="bold">NO-LOSS&#160;GUARD</tspan>&#160;&#160;<tspan font-weight="bold">EXPLORATORY</tspan></text>
+<text x="16" y="396">Quick&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;12&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;3&#160;&#160;&#160;&#160;72&#160;&#160;&#160;&#160;&#160;$51.07&#160;&#160;&#160;&#160;&#160;$144.00&#160;&#160;&#160;&#160;&#160;&#160;&#160;14–21%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;31–36&#160;pp&#160;&#160;&#160;&#160;&#160;&#160;&#160;27–32&#160;pp&#160;&#160;<tspan fill="#e5c07b">success</tspan></text>
+<text x="16" y="415">Confident&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;12*&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;5&#160;&#160;&#160;120&#160;&#160;&#160;&#160;&#160;$85.12&#160;&#160;&#160;&#160;&#160;$240.00&#160;&#160;&#160;&#160;&#160;&#160;&#160;12–20%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;24–31&#160;pp&#160;&#160;&#160;&#160;&#160;&#160;&#160;22–27&#160;pp&#160;&#160;<tspan fill="#e5c07b">success</tspan></text>
+<text x="16" y="434"><tspan font-weight="bold">This&#160;experiment</tspan>&#160;&#160;&#160;&#160;&#160;6&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;12&#160;&#160;&#160;&#160;&#160;&#160;$8.51&#160;&#160;&#160;&#160;&#160;&#160;$24.00&#160;&#160;&#160;&#160;&#160;&#160;&#160;28–34%&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;73–78&#160;pp&#160;&#160;&#160;&#160;&#160;&#160;&#160;65–69&#160;pp&#160;&#160;<tspan fill="#e5c07b">cost,&#160;success</tspan></text>
+<text x="16" y="453"><tspan fill="#8b8b8b">*&#160;only&#160;12&#160;task(s)&#160;can&#160;be&#160;in&#160;this&#160;experiment;&#160;a&#160;tier&#160;asking&#160;for&#160;more&#160;uses&#160;them&#160;all</tspan></text>
+<text x="16" y="472">…</text>
+<text x="16" y="491">Floors&#160;(method&#160;phase1-v2):&#160;verdicts&#160;on&#160;cost&#160;need&#160;8&#160;tasks&#160;with&#160;1&#160;or&#160;more&#160;runs&#160;per&#160;arm,&#160;and&#160;on&#160;success&#160;20&#160;tasks&#160;with&#160;3&#160;or&#160;</text>
+<text x="16" y="510">more;</text>
+<text x="16" y="529">below&#160;them&#160;a&#160;metric&#160;is&#160;exploratory.</text>
+</g></svg>
