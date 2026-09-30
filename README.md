@@ -69,46 +69,19 @@ Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output i
 
 ## Example results
 
-This is real output from Phase 1's acceptance runs: Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. The pictures show it as today's `agentium` prints it in a 120-column terminal; the text blocks are copied from the terminal as printed at the time. Paths into the home folder are shortened to `~`, and `…` marks lines left out. The experiment compared today's docs (`full`) with a minimal version (`minimal`). It was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
+This is real output from Phase 1's acceptance runs: Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. The pictures show it as today's `agentium` prints it in a 120-column terminal. Paths into the home folder are shortened to `~`, and `…` marks lines left out. The experiment compared today's docs (`full`) with a minimal version (`minimal`). It was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
 
 **1. Plan it:** what it costs and what it can detect, before anything runs.
 
 <img src="docs/images/console-plan.svg" alt="agentium experiment plan ab: the arms, checks marked ok, and a table of sizes with their cost and detectable effects">
 
-**2. Run it:** pairs of runs, interleaved, within the budget. It was stopped here with Ctrl-C, and `experiment run ab` would resume it.
+**2. Run it:** pairs of runs, interleaved, within the budget. It was stopped here with Ctrl-C, and `experiment run ab` would resume it. The lines are the ones recorded during the run, in today's colors; the summary under them is today's `experiment show ab`.
 
-```console
-$ agentium experiment run ab
-Checking experiment ab before its first run:
-  ok       Claude Code 2.1.281 at ~/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude
-  ok       context full calibrated 2026-09-29 16:22: first request 31087 tokens
-  ok       context minimal calibrated 2026-09-29 16:22: first request 26564 tokens
-  ok       6 task(s), each valid in every arm's context
-Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 12 runs in a seeded order (seed 1919198069636433), prices of 2026-09-29.
-Running up to 2 at a time; each run up to $2.00 and 20m0s; budget $24.00. Ctrl-C stops it; run it again to resume.
-[2/12] scrub-whole-paths, arm A, repeat 1: ok, $0.51 (spent $0.51 of $24.00)
-[1/12] scrub-whole-paths, arm B, repeat 1: ok, $0.60 (spent $1.11 of $24.00)
-[4/12] deny-login-file, arm A, repeat 1: ok, $0.27 (spent $1.38 of $24.00)
-[3/12] deny-login-file, arm B, repeat 1: ok, $0.48 (spent $1.86 of $24.00)
-[6/12] documents-filter, arm B, repeat 1: ok, $0.71 (spent $2.57 of $24.00)
-[5/12] documents-filter, arm A, repeat 1: ok, $1.13 (spent $3.70 of $24.00)
-[7/12] run-survives-erase, arm A, repeat 1: ok, $1.22 (spent $4.92 of $24.00)
-[8/12] run-survives-erase, arm B, repeat 1: ok, $1.38 (spent $6.30 of $24.00)
-[10/12] unreadable-files, arm A, repeat 1: cancelled, $0.32 (spent $6.61 of $24.00)
-[9/12] unreadable-files, arm B, repeat 1: cancelled, $0.71 (spent $7.33 of $24.00)
+<img src="docs/images/console-run.svg" alt="agentium experiment run ab: checks marked ok, twelve runs started and finished in pairs with their cost, two cancelled, and a summary per arm">
 
-Experiment ab: stopped: interrupted
-  8 of 12 runs settled; spent $7.33 of $24.00
-ARM  CONTEXT               SETTLED   FAIR  SUCCESSES  UNFAIR  INFRA  CANCELLED      COST
-A    full                      4/6      4          4       0      0          1     $3.45
-B    minimal                   4/6      4          3       0      0          1     $3.88
-Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted.
-Stopped. To continue: agentium experiment run ab
-```
+While runs go, a status line under the events shows the progress and redraws in place. This animation is a short run with a stand-in agent (Agentium's test double for Claude Code), at its real speed:
 
-On a terminal, a status line under the events shows the progress, redrawn in place, and clears itself at the end. This frame comes from a run with a stand-in agent (Agentium's test double for Claude Code):
-
-<img src="docs/images/console-live.svg" alt="agentium experiment run: event lines, and a status line reading 3 of 6 settled; 2 in flight; $0.90 of $30.00; usage 34%">
+<img src="docs/images/console-live.svg" alt="An animation of agentium experiment run: event lines appear while a status line below them counts runs settled and in flight, spend and usage, then the summary">
 
 **3. Report it:** verdicts in words, then the metrics with both intervals, noise, context and cost per arm, behavior (tests run, files changed, denials), per-task results and notes. On a terminal it looks like this; piped, with `--out FILE` or with `--markdown`, it is Markdown you can paste into a pull request, like the [full report](docs/examples/context-ab-report.md) (`--json` for everything).
 
@@ -116,18 +89,7 @@ On a terminal, a status line under the events shows the progress, redrawn in pla
 
 **4. Look at one run:** the minimal-docs run that failed its hidden tests (`--diff` and `--log` show the agent's changes and the grading output).
 
-```console
-$ agentium run show 20260929T162923Z-1c89cb
-Run 20260929T162923Z-1c89cb: task documents-filter, arm B
-  outcome      ok; verification failed
-  cost         $0.7061, 20 turn(s), 1m31s, first request 26102 tokens
-  changes      5 file(s), +23 -8, 0 commit(s); tests changed: true, test files removed: 0
-  behavior     ran tests: true, ran the checks: false, 21 Bash command(s), 0 denial(s)
-  environment  Claude Code 2.1.281, claude-sonnet-5, permission mode acceptEdits, 12 tool(s), 17 skill(s)
-  records      ~/.agentium-acceptance/records/20260929T162923Z-1c89cb
-  experiment   ab, slot 5 (from 0), attempt 1
-  files        agent.diff, setup.log, started.json, stderr.txt, stream.jsonl, verify.log
-```
+<img src="docs/images/console-run-show.svg" alt="agentium run show: outcome ok in green, verification failed in red, then cost, changes, behavior, environment and records">
 
 The minimal docs cut Claude Code's first request by about 4.6k tokens, but cost did not fall, and one task failed. With four pairs the intervals are far too wide to call either a result, and the report says so in words.
 

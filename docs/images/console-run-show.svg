@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="935" height="248" viewBox="0 0 935 248" role="img" aria-label="agentium run show">
+<rect width="935" height="248" rx="8" fill="#1e1e1e"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="468" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium run show</text>
+<g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
+<text x="16" y="54"><tspan fill="#29b8db">$</tspan>&#160;agentium&#160;run&#160;show&#160;20260929T162923Z-1c89cb</text>
+<text x="16" y="73"><tspan font-weight="bold">Run&#160;20260929T162923Z-1c89cb:&#160;task&#160;documents-filter,&#160;arm&#160;B</tspan></text>
+<text x="16" y="92">&#160;&#160;outcome&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#23d18b">ok</tspan>;&#160;verification&#160;<tspan fill="#f14c4c">failed</tspan></text>
+<text x="16" y="111">&#160;&#160;cost&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;$0.7061,&#160;20&#160;turn(s),&#160;1m31s,&#160;first&#160;request&#160;26102&#160;tokens</text>
+<text x="16" y="130">&#160;&#160;changes&#160;&#160;&#160;&#160;&#160;&#160;5&#160;file(s),&#160;+23&#160;-8,&#160;0&#160;commit(s);&#160;tests&#160;changed:&#160;true,&#160;test&#160;files&#160;removed:&#160;0</text>
+<text x="16" y="149">&#160;&#160;behavior&#160;&#160;&#160;&#160;&#160;ran&#160;tests:&#160;true,&#160;ran&#160;the&#160;checks:&#160;false,&#160;21&#160;Bash&#160;command(s),&#160;0&#160;denial(s)</text>
+<text x="16" y="168">&#160;&#160;environment&#160;&#160;Claude&#160;Code&#160;2.1.281,&#160;claude-sonnet-5,&#160;permission&#160;mode&#160;acceptEdits,&#160;12&#160;tool(s),&#160;17&#160;skill(s)</text>
+<text x="16" y="187">&#160;&#160;records&#160;&#160;&#160;&#160;&#160;&#160;~/.agentium-acceptance/records/20260929T162923Z-1c89cb</text>
+<text x="16" y="206">&#160;&#160;experiment&#160;&#160;&#160;ab,&#160;slot&#160;5&#160;(from&#160;0),&#160;attempt&#160;1</text>
+<text x="16" y="225">&#160;&#160;files&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;agent.diff,&#160;setup.log,&#160;started.json,&#160;stderr.txt,&#160;stream.jsonl,&#160;verify.log</text>
+</g></svg>
