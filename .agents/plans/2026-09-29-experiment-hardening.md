@@ -1,4 +1,4 @@
-# Experiment hardening, then a 24-run context A/B
+# Experiment hardening, then a 20-run context A/B
 
 - Date: 2026-09-29
 - Status: In Progress (plan awaiting approval by merge)
@@ -52,18 +52,18 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - Go's module-cache stat warning and the zsh glob failures are fixed, or documented with a reason.
 
    *Evidence:* tests, or the plan's record. The three tasks already spawned can deliver these.
-5. **Twelve fair tasks** in the acceptance data folder: the six from step 7, plus six or more from Agentium's history, ideally some that agents fail sometimes. Each task:
+5. **Ten fair tasks** in the acceptance data folder: the six from step 7, plus four or more from Agentium's history, ideally some that agents fail sometimes. *Changed from twelve by the user on 2026-09-30:* the arms are snapshots of the docs as of 2026-09-29, and on bases from after Phase 1 closed they break the repository's docs check. Each task:
    - has an issue-style instruction;
    - passes the fairness check;
    - passes an independent review of instruction against hidden tests;
    - is valid in both A/B arms, which pass each task base's docs check.
 
    *Evidence:* the task list, validation logs and the recorded review.
-6. **The 24-run A/B (paid; separate approval).**
+6. **The 20-run A/B (paid; separate approval).**
    - Arms `full` against `minimal`, as in step 7's A/B, unless the user picks others at approval.
-   - 12 tasks × 1 run per arm, with both arms calibrated first.
+   - 10 tasks × 1 run per arm, with both arms calibrated first.
    - Run with `--usage-limit 85 --wait`.
-   - Estimated $20–25 at list prices, over about two windows.
+   - Estimated $16–21 at list prices, over about two windows.
 
    *Evidence:* the report, the costs compared with the preview, and the usage readings.
 
@@ -77,7 +77,7 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
   - `git grep` replaces reading every file;
   - name searches are case-sensitive.
 
-  On its own commit the check went from 59 gaps to 5 real ones, at about 0.5 s per task. Limitations: accepted gaps are not remembered; multi-line strings and expected texts built with `fmt.Sprintf` are missed.
+  On its own commit the check went from 59 gaps to 5 real ones, at about 0.5 s per task. Limitations: accepted gaps are not remembered; multi-line strings, and expected texts that a test builds itself with `fmt.Sprintf`, are missed.
 - [x] **3. Noise in reports, and one-run verdicts** (`internal/stats`, `internal/experiment`, `internal/report`). The method change applies only if the simulation passes. Done by an `implementer` (Opus); the reviewer approved it after one round of fixes.
   - **Simulation gate passed,** so `phase1-v2` counts a task for cost with one run per arm. Over 8–12 tasks × 1 run: false differences 4.7–5.7% under normal noise and 4.6–5.5% under skewed noise; coverage 94.3–95.4%.
   - **Separate robustness check:** a Python run by the reviewer on Phase 0's residuals gave 4.4–4.9%.
@@ -91,7 +91,21 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
   - A run interrupted before its agent starts is reported as "stopped before its agent started (not counted; it runs again on resume)". `Execute` marks such runs on the finish event.
   - Agents get `-buildvcs=false` appended to their `GOFLAGS`, after the user's own flags from the environment or from `go env -w`. That stops Go writing a stat-cache entry into the read-only module cache; the warning was reproduced locally with a read-only module-cache copy. Agentium's own setup and grading are unchanged.
   - zsh glob failures are kept on purpose: runs use the user's own shell, like their Claude Code sessions, and both arms get the same one. This is documented on `Environ`.
-- [ ] **5. Twelve fair tasks**: import, rewrite, check, review, validate. Free.
+- [x] **5. Ten fair tasks**: import, rewrite, check, review, validate. Free. Done on 2026-09-30:
+  - **The tasks:** the six from step 7, plus `active-config-files` (rewritten in full, now that its hidden tests' needs are known), `temp-files-in-data` (2fbd5cd), `stats-review` (ae407ee) and `fresh-checkouts` (e64def4).
+  - **Checks:**
+    - all ten are valid in the base, `full` and `minimal` contexts;
+    - each arm passes each task base's docs check;
+    - the fairness check shows no gaps against the stored instructions;
+    - an independent reviewer approved every new instruction against its hidden tests, after small fixes.
+  - **Likely hard:** `fresh-checkouts` (six small fixes); `temp-files-in-data` may be too.
+  - **Dropped:**
+    - `experiment-errors` (9710ea5), `budget-reserve` (9111086) and `calibration-transcript` (ccd96e7): their hidden tests need too many exact texts and internal signatures to state fairly, 400 words or more.
+    - `names-case-sensitive` (9b808ea) and `pairs-whole-at-limit` (0193996): valid and fair, but their bases postdate the docs snapshots.
+  - **The fairness check itself:**
+    - It missed the real unfair case (a new field with the same name as a field on another type, and texts built from format strings). A fix added typed-key and format checks.
+    - Its first version of that fix flagged old keys, and a NUL byte broke the search. Both were found in review and fixed.
+    - On the tasks above it now reports only real gaps.
 - [ ] **6. The A/B**, after approval. Then record the results, update the planner defaults if the measured noise differs, and archive this plan.
 
 ## Boundaries
