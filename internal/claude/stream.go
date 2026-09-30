@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/pricing"
 )
@@ -53,6 +54,41 @@ type Metrics struct {
 
 	Commands  []string `json:"-"` // Bash commands, in order: behavior flags come from them
 	FilePaths []string `json:"-"` // paths the file tools touched
+
+	// UsageFirst and UsageLast are the first and last of the subscription's usage readings in the run (none with an
+	// API key): experiments pause before the five-hour limit, and estimate a run's share of the window from them.
+	UsageFirst *UsageReading `json:"usage_first,omitempty"`
+	UsageLast  *UsageReading `json:"usage_last,omitempty"`
+	// SubagentModels maps each subagent type the run used to the models its requests ran on. A role that names a
+	// model by alias (model: sonnet) follows Claude Code to newer models, which the run's pinned --model does not
+	// cover: an experiment compares these across its runs.
+	SubagentModels map[string][]string `json:"subagent_models,omitempty"`
+}
+
+// UsageReading is a subscription's usage as Claude Code reports it (rate_limit_event): the share of the five-hour and
+// seven-day windows used, when each resets, and the status (allowed, allowed_warning, rejected).
+type UsageReading struct {
+	FiveHour       float64   `json:"five_hour"`
+	FiveHourResets time.Time `json:"five_hour_resets"`
+	SevenDay       float64   `json:"seven_day"`
+	SevenDayResets time.Time `json:"seven_day_resets"`
+	Status         string    `json:"status"`
+}
+
+// FiveHourAt is the five-hour window's share used at now: nothing once the window has reset.
+func (u UsageReading) FiveHourAt(now time.Time) float64 {
+	if u.FiveHourResets.IsZero() || !now.Before(u.FiveHourResets) {
+		return 0
+	}
+	return u.FiveHour
+}
+
+// Newer reports whether u is a later reading than v: a later window, or more of the same window used.
+func (u UsageReading) Newer(v UsageReading) bool {
+	if !u.FiveHourResets.Equal(v.FiveHourResets) {
+		return u.FiveHourResets.After(v.FiveHourResets)
+	}
+	return u.FiveHour > v.FiveHour
 }
 
 var fileTools = map[string]bool{"Read": true, "Edit": true, "Write": true, "NotebookEdit": true}
@@ -106,6 +142,19 @@ type (
 		PermissionDenials []json.RawMessage          `json:"permission_denials"`
 		ModelUsage        map[string]json.RawMessage `json:"modelUsage"`
 	}
+	rateLimitEvent struct {
+		Info struct {
+			Status  string `json:"status"`
+			Windows struct {
+				FiveHour *usageWindow `json:"five_hour"`
+				SevenDay *usageWindow `json:"seven_day"`
+			} `json:"unifiedWindows"`
+		} `json:"rate_limit_info"`
+	}
+	usageWindow struct {
+		Utilization float64 `json:"utilization"`
+		ResetsAt    int64   `json:"resetsAt"` // Unix seconds
+	}
 	modelUsage struct {
 		Input         float64 `json:"inputTokens"`
 		Output        float64 `json:"outputTokens"`
@@ -120,7 +169,8 @@ func Parse(r io.Reader) (Metrics, error) {
 	m := Metrics{ToolUses: map[string]int{}}
 	seen := map[string]bool{}
 	firstSeen := false
-	requests := map[string]*request{} // by message ID: a message's content blocks arrive as separate events
+	requests := map[string]*request{}    // by message ID: a message's content blocks arrive as separate events
+	subagentTypes := map[string]string{} // Agent (Task) tool calls by ID: the subagent type their messages run as
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // tool results can be large
 	for scanner.Scan() {
@@ -146,6 +196,21 @@ func Parse(r io.Reader) (Metrics, error) {
 			}
 		case event.Type == "system" && event.Subtype == "api_retry":
 			m.APIRetries++
+		case event.Type == "rate_limit_event":
+			var limit rateLimitEvent
+			if json.Unmarshal(line, &limit) != nil || limit.Info.Windows.FiveHour == nil {
+				continue
+			}
+			w := limit.Info.Windows
+			reading := UsageReading{FiveHour: w.FiveHour.Utilization, FiveHourResets: unixTime(w.FiveHour.ResetsAt), Status: limit.Info.Status}
+			if w.SevenDay != nil {
+				reading.SevenDay, reading.SevenDayResets = w.SevenDay.Utilization, unixTime(w.SevenDay.ResetsAt)
+			}
+			if m.UsageFirst == nil {
+				first := reading
+				m.UsageFirst = &first
+			}
+			m.UsageLast = &reading
 		case event.Type == "assistant":
 			var message assistantMessage
 			if json.Unmarshal(event.Message, &message) != nil {
@@ -170,6 +235,18 @@ func Parse(r io.Reader) (Metrics, error) {
 			if usageOK {
 				req.add(usage)
 			}
+			if event.ParentToolUseID != nil && message.Model != "" { // a subagent's request
+				kind := subagentTypes[*event.ParentToolUseID]
+				if kind == "" {
+					kind = "unknown"
+				}
+				if m.SubagentModels == nil {
+					m.SubagentModels = map[string][]string{}
+				}
+				if !slices.Contains(m.SubagentModels[kind], message.Model) {
+					m.SubagentModels[kind] = sorted(append(m.SubagentModels[kind], message.Model))
+				}
+			}
 			for _, raw := range message.Content {
 				req.contentBytes += int64(len(raw))
 			}
@@ -180,6 +257,13 @@ func Parse(r io.Reader) (Metrics, error) {
 				}
 				seen[block.ID] = true
 				m.ToolUses[block.Name]++
+				if block.Name == "Agent" || block.Name == "Task" { // Task is the tool's older name
+					kind, _ := block.Input["subagent_type"].(string)
+					if kind == "" {
+						kind = "general-purpose"
+					}
+					subagentTypes[block.ID] = kind
+				}
 				switch {
 				case block.Name == "Bash":
 					if command, ok := block.Input["command"].(string); ok {
@@ -231,6 +315,34 @@ func Parse(r io.Reader) (Metrics, error) {
 		return m, fmt.Errorf("read transcript: %w", err)
 	}
 	return m, nil
+}
+
+func unixTime(seconds int64) time.Time {
+	if seconds <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0).UTC()
+}
+
+// SubagentModelChanges lists the subagent types whose models in a run (now) differ from those earlier runs used
+// (seen): a role's model alias that moved to a newer model, say. A type no earlier run used is not a change.
+func SubagentModelChanges(seen, now map[string][]string) []string {
+	var changes []string
+	for _, kind := range sortedKeys(now) {
+		if before, ok := seen[kind]; ok && !slices.Equal(before, now[kind]) {
+			changes = append(changes, fmt.Sprintf("subagent %s ran on %s; earlier runs used %s", kind, strings.Join(now[kind], ", "), strings.Join(before, ", ")))
+		}
+	}
+	return changes
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // request is one model request, as far as the stream shows it.
