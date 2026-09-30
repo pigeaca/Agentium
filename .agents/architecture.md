@@ -27,7 +27,8 @@ Shape:
 |---|---|
 | `AGENTS.md`, `CLAUDE.md`, `.agents/` | Shared instructions: rules, references, roles, skills, templates, plans, decisions |
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
-| `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `experiment`, `version`, `help`) |
+| `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `experiment`) |
+| `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
 | `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, run workspaces and run records; caches and temporary files of Agentium's own commands; the run lock (one process starts agents at a time) |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments (design, lock, status; runs keep their slot and attempt) |
 | `internal/project` | Read-only repository discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
@@ -42,7 +43,7 @@ Shape:
 | `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed) and their preview; the lock (with its method); the seeded interleaved schedule; execution (a window, a budget no run passes, usage pauses, retries, stop rules, resume); counting and analysis (roles, floors, verdicts, noise) |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context and costs, behavior, per-task results and honesty notes, as Markdown or JSON (without personal names or paths) |
-| `internal/pricing` | Anthropic's list prices per model, dated, for cost estimates and for transcripts that end without Claude Code's cost |
+| `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, redacted records; a start file to recover a dead process's runs; the folders a run will use, predicted for runs that may overlap it |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |

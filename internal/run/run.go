@@ -32,6 +32,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // Spec is what to run.
@@ -70,6 +71,7 @@ type Env struct {
 	// project skills are filled in by the run.
 	Expect   claude.Expect
 	Progress io.Writer
+	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
 	Now      func() time.Time
 	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
 	// runs that may overlap can deny each other's folders before they exist (see Predicted).
@@ -243,7 +245,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
 	}
-	env.progress("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)
+	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
 	if err := checkout.New(ctx, env.Bare, spec.Task.Base, repo); err != nil {
@@ -392,7 +394,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
 	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
-	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", rec.Outcome, rec.Metrics.CostUSD, rec.Metrics.Turns)
+	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Metrics.CostUSD, rec.Metrics.Turns)
 
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
@@ -506,7 +508,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	}
 	passed := !failed
 	rec.Passed = &passed
-	env.progress("  verification: %s", map[bool]string{true: "passed", false: "failed"}[passed])
+	env.progress("  verification: %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
 	return nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/cli"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // version is set for releases: go build -ldflags "-X main.version=v0.1.0" ./cmd/agentium. The linker can only set a
@@ -24,7 +25,7 @@ func main() {
 	// Interrupts cancel the context so long-running commands can stop agent processes cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
-		Args: os.Args[1:], Stdout: os.Stdout, Stderr: os.Stderr, Version: version,
+		Args: os.Args[1:], Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
 		Dir: dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
 	})
 	stop()

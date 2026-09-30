@@ -186,6 +186,8 @@ type runFixture struct {
 	run              func(ctx context.Context, args ...string) cliResult
 	// sleep stands in for Env.Sleep (experiment run --wait); nil returns at once.
 	sleep *func(ctx context.Context, d time.Duration) error
+	// terminal is Env.Terminal: whether stdout counts as a terminal (false: plain output).
+	terminal *bool
 }
 
 func newRunFixture(t *testing.T, data string) runFixture {
@@ -203,9 +205,10 @@ func newRunFixture(t *testing.T, data string) runFixture {
 	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
 	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
 	f.sleep = new(func(ctx context.Context, d time.Duration) error)
+	f.terminal = new(bool)
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
+		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
 			Getenv: func(key string) string { return f.vars[key] },
 			Environ: func() []string {
 				environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home}
@@ -380,7 +383,7 @@ func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
 
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "")
 	cal := f.run(context.Background(), "run", "calibrate", "--snapshot", "long")
-	expect(t, cal, ExitOK, "Calibrating 2 arm(s)", "base             ok       ok         ok           ok",
+	expect(t, cal, ExitOK, "Calibrating 2 arm(s)", "base  ok       ok       ok            ok",
 		"long: measured +0 tokens, estimated +430 (measured/estimated 0.00)")
 	if strings.Contains(cal.stdout, "review") {
 		t.Errorf("skill names must not be printed:\n%s", cal.stdout)
@@ -398,10 +401,10 @@ func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
 func TestCalibrationChecksRestOnTheTranscript(t *testing.T) {
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	for mode, want := range map[string]string{
-		"redirect":       "base             ok       ok         unverified   ok",
-		"denied":         "base             ok       ok         FAILED       ok",
-		"sandbox-error":  "base             ok       FAILED     ok           ok",
-		"read-claude-md": "base             ok       ok         ok           unverified",
+		"redirect":       "base  ok       ok       unverified    ok",
+		"denied":         "base  ok       ok       FAILED        ok",
+		"sandbox-error":  "base  ok       FAILED   ok            ok",
+		"read-claude-md": "base  ok       ok       ok            unverified",
 	} {
 		f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, ``, 25000, mode)
 		expect(t, f.run(context.Background(), "run", "calibrate"), ExitError, want, "failed arms were not saved")
@@ -414,7 +417,7 @@ func TestCalibrationChecksRestOnTheTranscript(t *testing.T) {
 	gitIn(t, f.repo, "rm", "-q", "CLAUDE.md")
 	expect(t, f.run(context.Background(), "context", "snapshot", "bare", "--working-tree"), ExitOK)
 	gitIn(t, f.repo, "checkout", "-q", "HEAD", "--", "CLAUDE.md")
-	expect(t, f.run(context.Background(), "run", "calibrate", "--snapshot", "bare"), ExitOK, "bare             ok       ok         ok           n/a")
+	expect(t, f.run(context.Background(), "run", "calibrate", "--snapshot", "bare"), ExitOK, "bare  ok       ok       ok            n/a")
 }
 
 func TestCalibrationKeepsOnlyBundledSkills(t *testing.T) {
@@ -437,7 +440,7 @@ func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
 	}
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Read"`, `"my-secret-skill"`, 25000, "")
 	cal := f.run(context.Background(), "run", "calibrate")
-	expect(t, cal, ExitError, "base             unfair", "unfair: 1 personal skill(s) loaded")
+	expect(t, cal, ExitError, "base  unfair", "unfair: 1 personal skill(s) loaded")
 	if strings.Contains(cal.stdout, "my-secret-skill") {
 		t.Errorf("a personal skill name was printed:\n%s", cal.stdout)
 	}

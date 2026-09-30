@@ -7,6 +7,8 @@ import (
 	"io"
 	"runtime"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // Exit codes: 0 success, 1 runtime failure, 2 usage error.
@@ -18,10 +20,13 @@ const (
 
 // Env is everything a command needs from the process, so tests can supply their own.
 type Env struct {
-	Args     []string
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Version  string
+	Args    []string
+	Stdout  io.Writer
+	Stderr  io.Writer
+	Version string
+	// Terminal is whether Stdout is a terminal. With NO_COLOR, FORCE_COLOR and TERM it decides whether output is
+	// styled (term.Detect); tests leave it false and get plain text.
+	Terminal bool
 	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)
@@ -87,3 +92,12 @@ func fail(env Env, err error) int {
 	fmt.Fprintf(env.Stderr, "agentium: %v\n", err)
 	return ExitError
 }
+
+// style is how output to Stdout is styled.
+func (env Env) style() term.Style { return term.Detect(env.Terminal, env.Getenv) }
+
+// warning is a warning line's text, its label styled.
+func warning(st term.Style, text string) string { return st.Warn("warning:") + " " + text }
+
+// note is a note line's text, dimmed.
+func note(st term.Style, text string) string { return st.Note("note: " + text) }

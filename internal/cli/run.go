@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 const runUsage = `Usage:
@@ -134,10 +136,10 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		runEnv.Expect = claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}
 		fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, cal.CreatedAt.Format("2006-01-02 15:04"))
 		if found.RequestedModel != *model {
-			fmt.Fprintf(env.Stdout, "note: the calibration used %s, this run %s: its tool set may differ by model\n", found.RequestedModel, *model)
+			fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("the calibration used %s, this run %s: its tool set may differ by model", found.RequestedModel, *model)))
 		}
 	} else if errors.Is(err, store.ErrNotFound) {
-		fmt.Fprintf(env.Stdout, "note: arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate\n", arm.Name)
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate", arm.Name)))
 	} else {
 		return fail(env, err)
 	}
@@ -177,7 +179,7 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	}
 	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), Environ: environ,
 		SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second, CommandEnv: buildEnv,
-		Progress: env.Stdout, Now: env.Now}, nil
+		Progress: env.Stdout, Style: env.style(), Now: env.Now}, nil
 }
 
 // claudePath finds Claude Code: AGENTIUM_CLAUDE, else PATH.
@@ -228,8 +230,8 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 			release()
 			return nil, err
 		}
-		fmt.Fprintf(env.Stdout, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: cancelled, $%.2f\n",
-			o.Record.ID, o.Record.Task, o.Record.Arm, o.Record.Metrics.CostUSD)
+		fmt.Fprintf(env.Stdout, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
+			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Metrics.CostUSD)
 	}
 	if recoverErr != nil {
 		release()
@@ -283,13 +285,13 @@ func executeRun(ctx context.Context, env Env, w *workspace, runEnv run.Env, meta
 }
 
 func printRun(env Env, rec run.Record) {
-	out := env.Stdout
+	out, st := env.Stdout, env.style()
 	passed := "not run"
 	if rec.Passed != nil {
-		passed = map[bool]string{true: "passed", false: "failed"}[*rec.Passed]
+		passed = st.Status(map[bool]string{true: "passed", false: "failed"}[*rec.Passed])
 	}
-	fmt.Fprintf(out, "Run %s: task %s, arm %s\n", rec.ID, rec.Task, rec.Arm)
-	fmt.Fprintf(out, "  outcome      %s; verification %s\n", rec.Outcome, passed)
+	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Run %s: task %s, arm %s", rec.ID, rec.Task, rec.Arm)))
+	fmt.Fprintf(out, "  outcome      %s; verification %s\n", st.Status(rec.Outcome), passed)
 	m, b := rec.Metrics, rec.Behavior
 	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", m.CostUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
@@ -313,10 +315,10 @@ func printRun(env Env, rec run.Record) {
 		fmt.Fprintf(out, "  usage        five-hour window %.0f%% → %.0f%%, seven-day %.0f%%\n", 100*m.UsageFirst.FiveHour, 100*m.UsageLast.FiveHour, 100*m.UsageLast.SevenDay)
 	}
 	for _, d := range rec.Drift {
-		fmt.Fprintf(out, "unfair: %s\n", d)
+		fmt.Fprintf(out, "%s %s\n", st.Warn("unfair:"), d)
 	}
 	for _, n := range rec.Notes {
-		fmt.Fprintf(out, "note: %s\n", n)
+		fmt.Fprintln(out, note(st, n))
 	}
 	fmt.Fprintf(out, "  records      %s\n", rec.RecordsDir)
 }
@@ -340,10 +342,11 @@ func runList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if len(runs) == 0 {
-		fmt.Fprintln(env.Stdout, "No runs yet: agentium run once TASK")
+		fmt.Fprintln(env.Stdout, "No runs yet: "+env.style().Command("agentium run once TASK"))
 		return ExitOK
 	}
-	fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-9s %-6s %8s\n", "ID", "TASK", "ARM", "OUTCOME", "PASSED", "COST")
+	st := env.style()
+	table := term.NewTable(st, term.Left("ID"), term.Left("TASK"), term.Left("ARM"), term.Left("OUTCOME"), term.Left("PASSED"), term.Right("COST"))
 	for _, r := range runs {
 		passed := "-"
 		if r.Passed != nil {
@@ -351,9 +354,12 @@ func runList(ctx context.Context, env Env, args []string) int {
 		}
 		name := r.TaskName
 		if r.Kind == "calibration" {
-			name = "(calibration)"
+			name = st.Note("(calibration)")
 		}
-		fmt.Fprintf(env.Stdout, "%-24s %-40s %-14s %-9s %-6s %8s\n", r.ID, name, r.Arm, r.Outcome, passed, fmt.Sprintf("$%.2f", r.CostUSD))
+		table.Row(r.ID, name, r.Arm, st.Status(r.Outcome), st.Status(passed), fmt.Sprintf("$%.2f", r.CostUSD))
+	}
+	if err := table.Write(env.Stdout); err != nil {
+		return fail(env, err)
 	}
 	return ExitOK
 }
@@ -413,12 +419,12 @@ func runShow(ctx context.Context, env Env, args []string) int {
 		data, err := os.ReadFile(filepath.Join(rec.RecordsDir, name))
 		switch {
 		case errors.Is(err, os.ErrNotExist):
-			fmt.Fprintf(env.Stdout, "\n--- %s: none (%s)\n", name, map[string]string{"agent.diff": "the run was not graded",
+			fmt.Fprintf(env.Stdout, "\n%s: none (%s)\n", env.style().Heading("--- "+name), map[string]string{"agent.diff": "the run was not graded",
 				"setup.log": "the task has no setup", "verify.log": "the verification did not run"}[name])
 		case err != nil:
 			return fail(env, fmt.Errorf("run %s: %w", stored.ID, err))
 		default:
-			fmt.Fprintf(env.Stdout, "\n--- %s\n%s", name, data)
+			fmt.Fprintf(env.Stdout, "\n%s\n%s", env.style().Heading("--- "+name), data)
 			if len(data) > 0 && data[len(data)-1] != '\n' {
 				fmt.Fprintln(env.Stdout)
 			}
@@ -626,9 +632,11 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	printCalibration(env, results)
+	if err := printCalibration(env, results); err != nil {
+		return fail(env, err)
+	}
 	if !healthy {
-		fmt.Fprintln(env.Stdout, "Not every arm passed: failed arms were not saved as calibrations (see the run records).")
+		fmt.Fprintln(env.Stdout, env.style().Bad("Not every arm passed: failed arms were not saved as calibrations (see the run records)."))
 		return ExitError
 	}
 	return ExitOK
@@ -650,19 +658,23 @@ func without(list []string, others ...[]string) []string {
 }
 
 // printCalibration reports each arm and compares the measured context sizes with Agentium's estimates.
-func printCalibration(env Env, results []calibration) {
-	out := env.Stdout
-	fmt.Fprintf(out, "%-16s %-8s %-10s %-12s %-12s %13s %13s %6s %7s %8s\n", "ARM", "OUTCOME", "SANDBOX", "LARGE OUTPUT", "INSTRUCTIONS",
-		"FIRST REQUEST", "ESTIMATED CTX", "TOOLS", "SKILLS", "COST")
+func printCalibration(env Env, results []calibration) error {
+	out, st := env.Stdout, env.style()
+	table := term.NewTable(st, term.Left("ARM"), term.Left("OUTCOME"), term.Left("SANDBOX"), term.Left("LARGE OUTPUT"), term.Left("INSTRUCTIONS"),
+		term.Right("FIRST REQUEST"), term.Right("ESTIMATED CTX"), term.Right("TOOLS"), term.Right("SKILLS"), term.Right("COST"))
 	for _, c := range results {
-		fmt.Fprintf(out, "%-16s %-8s %-10s %-12s %-12s %13d %13d %6d %7d %8s\n", c.Arm, c.Outcome, c.Sandbox, c.LargeOutput, c.Instructions,
-			c.FirstRequest, c.EstimatedContext, len(c.Tools), len(c.Skills), fmt.Sprintf("$%.3f", c.CostUSD))
+		table.Row(c.Arm, st.Status(c.Outcome), st.Status(c.Sandbox), st.Status(c.LargeOutput), st.Status(c.Instructions),
+			strconv.FormatInt(c.FirstRequest, 10), strconv.Itoa(c.EstimatedContext), strconv.Itoa(len(c.Tools)), strconv.Itoa(len(c.Skills)),
+			fmt.Sprintf("$%.3f", c.CostUSD))
 		for _, d := range c.Drift {
-			fmt.Fprintf(out, "  unfair: %s\n", d)
+			table.Line(fmt.Sprintf("  %s %s", st.Warn("unfair:"), d))
 		}
 	}
-	fmt.Fprintln(out, "Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;")
-	fmt.Fprintln(out, "INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file.")
+	if err := table.Write(out); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, st.Note("Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;"))
+	fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file."))
 	if len(results) > 0 {
 		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools; between arms:\n",
 			orNone(results[0].CLIVersion), orNone(results[0].Model))
@@ -678,4 +690,5 @@ func printCalibration(env Env, results []calibration) {
 		}
 		fmt.Fprintf(out, "  %s: measured %+d tokens, estimated %+d (measured/estimated %s)\n", c.Arm, measured, estimated, ratio)
 	}
+	return nil
 }
