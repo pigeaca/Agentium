@@ -67,6 +67,44 @@ agentium experiment report lean               # verdicts, intervals, per-task re
 
 Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder.
 
+## Example results
+
+`agentium experiment report` prints Markdown you can paste into a pull request (or `--json`). These excerpts are real reports from Phase 1's acceptance runs: Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. Both experiments were stopped early to fit one usage window, so they are small. Every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
+
+**Context A/B: today's docs (`full`) against a minimal version (`minimal`), 4 complete pairs**
+
+> - **Success 100% → 75%**, Δ -25 pp (95%: -105 to +55): exploratory: too few tasks or runs for a verdict.
+> - **Cost +11%** (95%: -45% to +123%): exploratory: too few tasks or runs for a verdict.
+>
+> | Metric | Role | A | B | B vs A | 95% bootstrap | 95% t | Verdict |
+> |---|---|---|---|---|---|---|---|
+> | Success | guard | 100% | 75% | -25 pp | [-75, +0] pp | [-105, +55] pp | exploratory |
+> | Cost | primary | $0.659 | $0.728 | +11% | [-27%, +62%] | [-45%, +123%] | exploratory |
+> | Time | secondary | 163 s | 179 s | +10% | [-35%, +72%] | [-54%, +166%] | exploratory |
+> | Output tokens | secondary | 14937 | 19075 | +28% | [-17%, +123%] | [-47%, +211%] | exploratory |
+>
+> | Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |
+> |---|---|---|---|---|---|---|
+> | A | `full` | 4 | 30586 | $0.783 | $7.772 | 97% |
+> | B | `minimal` | 4 | 25979 (-4607) | $0.791 | $7.268 | 96% |
+>
+> ● success, ○ failure, × not counted; cost is the mean of counted runs.
+>
+> | Task | A | B | Cost A → B |
+> |---|---|---|---|
+> | deny-login-file | ● 1/1 | ● 1/1 | $0.265 → $0.485 |
+> | documents-filter | ● 1/1 | ○ 0/1 | $1.135 → $0.706 |
+> | judge-truncated-notice | - 0/0 | - 0/0 | - → - |
+> | run-survives-erase | ● 1/1 | ● 1/1 | $1.217 → $1.376 |
+> | scrub-whole-paths | ● 1/1 | ● 1/1 | $0.514 → $0.597 |
+> | unreadable-files | × 0/0 | × 0/0 | - → - |
+
+The minimal docs cut Claude Code's first request by about 4.6k tokens, but cost did not fall, and one task failed. With four pairs the intervals are far too wide to call either a result, and the report says so in words. The [full report](docs/examples/context-ab-report.md) also lists behavior flags (tests run, files changed, permission denials) and notes, such as the number of tasks and runs a verdict needs.
+
+**A/A: the same context in both arms.** A sanity check that the method reports no difference when there is none. Cost was -6% (95%: -31% to +26%) and every run passed, so it found none. This is also how Agentium measures the noise that later experiments are planned with. See the [full report](docs/examples/aa-report.md).
+
+A 72-run Quick-tier A/B, big enough for a verdict, is still to come: it waits for the [hardening plan](.agents/plans/2026-09-29-experiment-hardening.md).
+
 ## Development
 
 Agentium is built by AI coding agents (Claude Code and Codex) under shared rules in [`.agents/`](.agents/README.md):
