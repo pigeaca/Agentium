@@ -1,7 +1,7 @@
 # LLM judge pilot
 
 - Date: 2026-09-30
-- Status: Planned, not started. Step 1 is urgent (see Data). Step 4 makes paid judge calls and needs its own approval of cost and timing.
+- Status: Planned; step 1 done. Step 4 makes paid judge calls and needs its own approval of cost and timing.
 - Scope: on 2026-09-30 the user asked whether tests alone should decide results, and proposed an LLM judge "since we know results": each task has a reference solution to compare with. The [study](../../docs/research/2026-09-27-ai-development-lab.md) puts rubric judges in Phase 3, never as the primary metric (§5.5). This pilot measures whether a reference-guided judge adds anything, before any product code is written.
 
 ## Why
@@ -29,7 +29,7 @@ Fixed before any labels or judge calls are seen.
 - **The Phase 1 acceptance data:** 30 graded runs (24 passed, 6 failed) on 6 tasks, from the A/A and A/B.
 - **The 20-run A/B's runs,** once that experiment has run (hardening step 6). Together that is about 50 diffs and 20–25 same-task pairs.
 - **Only Agentium's own repository,** which is public. Diffs and instructions reach Anthropic through Claude Code, as the runs already do.
-- **Urgent:** the acceptance data folder sits in an old session's scratchpad under `/private/tmp`, which macOS may clear. Step 1 copies it to a durable, owner-only folder outside every repository.
+- **Where it lives:** the acceptance data folder, `~/.agentium-acceptance` (owner-only, outside every repository). An older snapshot in a session scratchpad under `/private/tmp` holds the same runs and is not needed.
 
 ## Method
 - **Judge.** Claude Code headless (`claude -p`) on a pinned model (`claude-opus-5-5`) at a fixed effort. It runs with no tools and no project context, in an empty folder, under the same credential rules as runs.
@@ -52,7 +52,7 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 - **Otherwise no-go:** tests stay the only grader. The baseline alone may still earn a report line.
 
 ## Acceptance
-1. The acceptance data is copied to a durable folder, and its run count matches the database. *Evidence:* the listing in this plan.
+1. The pilot's data is in a durable folder, and its runs and diffs are complete. *Evidence:* step 1's record.
 2. Protocol, prompt, label form, thresholds and seed are committed before any label or judge call. *Evidence:* commit order.
 3. The script passes its unit tests (prompt building, blinding, verdict parsing, baseline, intervals) and a dry run with a fake judge. *Evidence:* the test output.
 4. The human labels are complete and blind. *Evidence:* the committed label file, with no arm or result columns.
@@ -61,7 +61,7 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 7. Nothing in `internal/` changes, and no dependency is added.
 
 ## Work
-- [ ] **1. Preserve the data** (now, free).
+- [x] **1. Preserve the data.** Checked on 2026-09-30: `~/.agentium-acceptance` already held it. Its runs table matches the `/private/tmp` snapshot row for row (35 task runs and 5 calibrations; 24 passed, 6 failed, 5 cancelled), its 35 `agent.diff` files are byte-identical, and it keeps 40 `stream.jsonl` transcripts. No copy was needed.
 - [ ] **2. Protocol and script,** with a fake-judge dry run and three real calls to price the judgement (free apart from those three calls).
 - [ ] **3. Human labels,** after the 20-run A/B has run (the user).
 - [ ] **4. Judge calls (paid; separate approval).** About 150 single and 50 pair judgements, estimated at $20–60 at Opus 5.5 list prices, or a share of the usage windows with a subscription. Step 2's priced calls refine the estimate before approval.
