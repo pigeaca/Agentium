@@ -27,7 +27,7 @@ Each item maps to evidence. Changing any of them needs the user's agreement.
    - Limitation: only the five-hour window is gated. The seven-day window is recorded but not gated.
    - Added by the user on 2026-09-29: each run records which model each subagent type used. An experiment stops when a type's model changes from earlier runs, such as a role's `sonnet` alias moving to a newer model.
 
-   *Evidence:* end-to-end tests with the fake `claude` and a fake clock covering a pause between pairs, a wait and resume, the preview, and a stream without readings, and a subagent changing model.
+   *Evidence:* end-to-end tests with the fake `claude` (and a faked wait) covering a pause between pairs, a wait and resume, the preview, and a stream without readings, and a subagent changing model.
 2. **Task fairness check.** For each task, list what the hidden tests require that neither the instruction nor the base code states.
    - Go: exact string literals that the tests compare against, and identifiers (functions, methods, fields, types) that the tests use but the base does not define.
    - Other languages: string literals only.
