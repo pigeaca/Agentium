@@ -184,6 +184,8 @@ type runFixture struct {
 	repo, data, home string
 	vars             map[string]string
 	run              func(ctx context.Context, args ...string) cliResult
+	// sleep stands in for Env.Sleep (experiment run --wait); nil returns at once.
+	sleep *func(ctx context.Context, d time.Duration) error
 }
 
 func newRunFixture(t *testing.T, data string) runFixture {
@@ -200,6 +202,7 @@ func newRunFixture(t *testing.T, data string) runFixture {
 	gitIn(t, f.repo, "add", "-A")
 	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
 	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
+	f.sleep = new(func(ctx context.Context, d time.Duration) error)
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
 		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
@@ -212,7 +215,13 @@ func newRunFixture(t *testing.T, data string) runFixture {
 				return environ
 			},
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
-			Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
+			Backoff: func(int) time.Duration { return 10 * time.Millisecond },
+			Sleep: func(ctx context.Context, d time.Duration) error {
+				if *f.sleep != nil {
+					return (*f.sleep)(ctx, d)
+				}
+				return nil
+			}})
 		return cliResult{code, stdout.String(), stderr.String()}
 	}
 	expect(t, f.run(context.Background(), "init"), ExitOK)

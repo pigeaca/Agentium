@@ -32,9 +32,11 @@ const experimentUsage = `Usage:
                      an A/A calibration: one context in both arms, which must find no difference
   agentium experiment plan NAME
                      the runs, the estimated cost and the effects each size can detect; what is missing before it runs
-  agentium experiment run NAME [--budget USD]
+  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
-                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total
+                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total.
+                     With a subscription, no pair starts past --usage-limit (default 85) of the five-hour window:
+                     it pauses, or with --wait waits for the window to reset
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json] [--out FILE]
@@ -396,6 +398,12 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	}
 	fmt.Fprintf(out, "Floors: verdicts on cost need %d tasks and on success %d, each with %d runs per arm; below them a metric is exploratory.\n",
 		experiment.MinTasksCost, experiment.MinTasksSuccess, experiment.MinRepeats)
+	runs, err := w.db.Runs(ctx, w.project.ID)
+	if err != nil {
+		return fail(env, err)
+	}
+	mode, _ := signInMode(env)
+	printUsagePreview(out, runs, 2*len(d.Tasks)*d.Repeats, mode, defaultUsageLimit/100, env.Now())
 	if !ready {
 		fmt.Fprintln(out, "Not ready to run: see above.")
 	}

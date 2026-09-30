@@ -18,7 +18,7 @@ type Experiment struct {
 	Design     []byte // JSON
 	CreatedAt  time.Time
 	Lock       []byte // JSON; nil until the first run
-	Status     string // draft, running, stopped, budget, done
+	Status     string // draft, running, stopped, budget, usage, done
 	StatusNote string
 }
 
@@ -28,6 +28,7 @@ const (
 	StatusRunning = "running" // or its process died: a resume tells
 	StatusStopped = "stopped" // interrupted, or stopped by repeated infrastructure failures or a changed environment
 	StatusBudget  = "budget"  // the next run would not fit the budget
+	StatusUsage   = "usage"   // paused before the subscription's five-hour usage limit
 	StatusDone    = "done"    // every slot settled
 )
 
