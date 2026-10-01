@@ -238,7 +238,7 @@ func eligibleTasks(ctx context.Context, w *workspace, arms []experiment.Arm) ([]
 	var eligible []string
 	reasons := map[string]string{}
 	for _, t := range all {
-		c := experiment.Candidate{Name: t.Name, NeedsReview: t.NeedsReview}
+		c := experiment.Candidate{Name: t.Name, NeedsReview: t.NeedsReview, Grading: t.Grading}
 		if t.Validation != nil {
 			var v task.Validation
 			if err := json.Unmarshal(t.Validation, &v); err != nil {
