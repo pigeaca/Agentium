@@ -70,7 +70,7 @@ func TestParseTicketErrors(t *testing.T) {
 		"no issues":   {"x.json", `{"issues":[]}`, "holds 0 issues"},
 		"no summary":  {"x.json", `{"key":"A-1","fields":{"description":"d"}}`, "no fields.summary"},
 		"no fields":   {"x.json", `{"key":"A-1"}`, "no fields"},
-		"not json":    {"x.json", `nope`, "not a JSON object"},
+		"not json":    {"x.json", `nope`, "read the Jira export: invalid character"},
 		"bad field":   {"x.json", `{"fields":{"summary":"a","description":42}}`, "Jira description"},
 		"empty title": {"x.json", `{"fields":{"summary":"  "}}`, "has no title"},
 		"empty md":    {"x.md", "\n\n  \n", "is empty"},
@@ -101,6 +101,30 @@ func TestParseTicketVariants(t *testing.T) {
 	if err != nil || tk.Key != "ABC-12" || tk.Description != "It is slow." ||
 		strings.Join(tk.Acceptance, "|") != "Under a second for 1000 rows.|No new dependencies." {
 		t.Errorf("paragraph criteria: %+v, %v", tk, err)
+	}
+	// Empty ADF list items are dropped (with an empty content array too), and numbering skips them.
+	tk, err = ParseTicket("x.json", []byte(`{"fields":{"summary":"T","description":{"type":"doc","content":[`+
+		`{"type":"bulletList","content":[{"type":"listItem","content":[]},{"type":"listItem"}]},`+
+		`{"type":"orderedList","content":[{"type":"listItem","content":[]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"one"}]}]}]},`+
+		`{"type":"taskList","content":[{"type":"taskItem","content":[]}]}]}}}`))
+	if err != nil || tk.Description != "1. one" {
+		t.Errorf("empty list items: %q, %v", tk.Description, err)
+	}
+	// An acceptance field that repeats its own heading gives that section's items; other headings are skipped.
+	for field, want := range map[string]string{
+		`"h3. Acceptance criteria\n* a\n* b"`:        "a|b",
+		`"Intro line\nh3. Acceptance Criteria\n* a"`: "a",
+		`"h4. Functional\n* a\n* b"`:                 "a|b",
+	} {
+		tk, err = ParseTicket("x.json", []byte(`{"fields":{"summary":"T","customfield_1":`+field+`},"names":{"customfield_1":"Acceptance Criteria"}}`))
+		if got := strings.Join(tk.Acceptance, "|"); err != nil || got != want {
+			t.Errorf("field %s: criteria %q, %v; want %q", field, got, err, want)
+		}
+	}
+	// JSON errors keep their cause.
+	deep := `{"fields":` + strings.Repeat("[", 10001) + strings.Repeat("]", 10001) + `}`
+	if _, err := ParseTicket("x.json", []byte(deep)); err == nil || !strings.Contains(err.Error(), "depth") {
+		t.Errorf("deep nesting: %v", err)
 	}
 	// An "Acceptance criteria" heading inside a code block is code.
 	tk, err = ParseTicket("x.md", []byte("# T\n\n```\n## Acceptance criteria\n```\n"))
@@ -138,5 +162,12 @@ func TestStripHTML(t *testing.T) {
 		if got := stripHTML(in); got != want {
 			t.Errorf("stripHTML(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestSolutionSections(t *testing.T) {
+	got := SolutionSections("Title\n\nRoot cause\nThe cache.\n\n## Proposed fix:\nDrop it.\n\n    Fix\n\nFix the cache when it is stale and more words follow.")
+	if strings.Join(got, "|") != "Root cause|## Proposed fix:" {
+		t.Errorf("SolutionSections = %q", got)
 	}
 }

@@ -51,24 +51,23 @@ func adfBlock(n adfNode) string {
 			level = int(l)
 		}
 		return strings.Repeat("#", level) + " " + oneLine(adfInline(n.Content))
-	case "bulletList", "orderedList":
-		var items []string
-		for i, item := range n.Content {
-			marker := "- "
-			if n.Type == "orderedList" {
-				start := 1
-				if s, ok := n.Attrs["order"].(float64); ok {
-					start = int(s)
-				}
-				marker = strconv.Itoa(start+i) + ". "
-			}
-			items = append(items, prefixLines(adfListItem(item), marker, strings.Repeat(" ", len(marker))))
+	case "bulletList", "orderedList", "taskList":
+		number := 1
+		if s, ok := n.Attrs["order"].(float64); ok {
+			number = int(s)
 		}
-		return strings.Join(items, "\n")
-	case "taskList":
 		var items []string
 		for _, item := range n.Content {
-			items = append(items, prefixLines(adfListItem(item), "- ", "  "))
+			text := adfListItem(item)
+			if strings.TrimSpace(text) == "" { // an empty item would be a bare "-" or "1."
+				continue
+			}
+			marker := "- "
+			if n.Type == "orderedList" {
+				marker = strconv.Itoa(number) + ". "
+				number++
+			}
+			items = append(items, prefixLines(text, marker, strings.Repeat(" ", len(marker))))
 		}
 		return strings.Join(items, "\n")
 	case "codeBlock":
@@ -98,7 +97,7 @@ func adfBlock(n adfNode) string {
 
 // adfListItem renders a list item's blocks one per line (nested lists right under their item).
 func adfListItem(item adfNode) string {
-	if item.Type == "taskItem" || item.Content == nil || isADFInline(item.Content[0].Type) {
+	if item.Type == "taskItem" || len(item.Content) == 0 || isADFInline(item.Content[0].Type) {
 		return adfInline(item.Content)
 	}
 	var lines []string
@@ -204,7 +203,9 @@ var (
 
 // wikiToText converts basic Jira wiki markup to Markdown-like plain text (headings as "#" lines, see plainHeadings):
 // emphasis and macros are dropped, links become "text (url)", lists "- " and "1. " lines, code is indented by four
-// spaces, and known HTML tags are stripped. Plain text passes through unchanged.
+// spaces, and known HTML tags are stripped. Every string is read as wiki markup, so plain text without markup stays
+// as it is, but Markdown does not: \\ becomes a line break, {{x}} becomes x, and a line starting with "#" becomes a
+// numbered item, so a Markdown heading in a Jira text field turns into a list item and its section is lost.
 func wikiToText(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	var out []string

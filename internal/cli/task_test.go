@@ -334,6 +334,11 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 	gitIn(t, repo, "add", "-A")
 	gitIn(t, repo, "commit", "-q", "-m", "Docs")
 	docsOnly := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	gitIn(t, repo, "checkout", "-q", "-b", "big", base)
+	writeFile(t, repo, "big.txt", strings.Repeat("a line of generated data, 40 chars...\n", 1200))
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Big")
+	big := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
 	gitIn(t, repo, "checkout", "-q", "main")
 
 	tickets := t.TempDir() // outside the repository, which the commands must leave alone
@@ -344,6 +349,8 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 	writeFile(t, tickets, "SHOP-42.json", string(jira))
 	writeFile(t, tickets, "web.md", "# WEB-9: Refuse empty carts\n\nCarts may be empty.\n\n## Acceptance criteria\n- the file says refuse\n")
 	writeFile(t, tickets, "untitled.json", `{"fields":{"description":"no summary"}}`)
+	writeFile(t, tickets, "leaky.md", "# Refuse empty carts\n\nCarts may be empty.\n\n## Root cause\nNo length check.\n")
+	writeFile(t, tickets, "huge.json", `{"fields":{"summary":"x","description":"`+strings.Repeat("x", 1<<20)+`"}}`)
 
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	run := func(args ...string) cliResult {
@@ -376,6 +383,10 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 	expect(t, add("missing", noTests, "--ticket-file", filepath.Join(tickets, "nope.json")), ExitError, "read ticket")
 	expect(t, add("untitled", noTests, "--ticket-file", filepath.Join(tickets, "untitled.json")), ExitError, "ticket untitled.json", "no fields.summary")
 	expect(t, add("nothing", base, "--ticket-file", jiraFile), ExitError, "changes no files")
+	expect(t, add("huge", noTests, "--ticket-file", filepath.Join(tickets, "huge.json")), ExitError, "ticket huge.json is larger than 1024 KiB")
+	expect(t, add("leaky", noTests, "--ticket-file", filepath.Join(tickets, "leaky.md")), ExitOK, "sections that may give the solution away: ## Root cause")
+	expect(t, add("big", big, "--instruction", "Add the data.", "--judge-graded"), ExitOK)
+	expect(t, run("task", "validate", "big"), ExitOK, "the judge reads the first 40000, so it will see a cut copy", "Result: valid")
 
 	// A ticket with a solution without tests makes a judge-graded task, to be reviewed.
 	expect(t, add("shop", noTests, "--ticket-file", jiraFile), ExitOK, "Added task shop (ticket SHOP-42)", "judge-graded (no hidden tests), 1 reference file(s)",

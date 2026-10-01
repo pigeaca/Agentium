@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/gitx"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -209,14 +210,25 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	return saveTask(ctx, env, w, t, *acceptGaps, judging)
 }
 
+// maxTicketBytes bounds a ticket file: one exported issue is far smaller.
+const maxTicketBytes = 1 << 20
+
 // readTicket reads and parses an exported ticket file (relative to the working directory).
 func readTicket(env Env, file string) (task.Ticket, error) {
 	if !filepath.IsAbs(file) {
 		file = filepath.Join(env.Dir, file)
 	}
-	data, err := os.ReadFile(file)
+	f, err := os.Open(file)
 	if err != nil {
 		return task.Ticket{}, fmt.Errorf("read ticket: %w", err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxTicketBytes+1))
+	if err != nil {
+		return task.Ticket{}, fmt.Errorf("read ticket: %w", err)
+	}
+	if len(data) > maxTicketBytes {
+		return task.Ticket{}, fmt.Errorf("ticket %s is larger than %d KiB: export one issue, without attachments", filepath.Base(file), maxTicketBytes>>10)
 	}
 	ticket, err := task.ParseTicket(file, data)
 	if err != nil {
@@ -353,6 +365,9 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	st := env.style()
 	if saved.Grading == task.GradingJudge {
 		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote))
+	}
+	if sections := task.SolutionSections(saved.Instruction); saved.NeedsReview && len(sections) > 0 {
+		fmt.Fprintln(env.Stdout, st.Warn("The instruction has sections that may give the solution away: "+strings.Join(sections, ", ")))
 	}
 	if saved.NeedsReview {
 		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review the instruction "+reviewReason(saved)),
@@ -913,6 +928,10 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		orNone(strings.Join(result.Judge.CodeFiles, ", ")))
 	if skipped := len(t.Reference) - len(result.Judge.CodeFiles); skipped > 0 {
 		fmt.Fprintln(out, note(st, fmt.Sprintf("%d reference file(s) are documents the judge does not compare", skipped)))
+	}
+	if chars := utf8.RuneCountInString(diff); chars > llmjudge.MaxDiffChars {
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The reference diff has %d characters; the judge reads the first %d, so it will see a cut copy "+
+			"(the task stays valid)", chars, llmjudge.MaxDiffChars)))
 	}
 	fmt.Fprintln(out, note(st, "hidden-test checks are skipped: there are no hidden tests"))
 	fmt.Fprintln(out, note(st, judgeGradedNote))

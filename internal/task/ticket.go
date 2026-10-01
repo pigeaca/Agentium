@@ -116,10 +116,10 @@ func parseJira(data []byte) (Ticket, error) {
 		if err != nil {
 			return Ticket{}, fmt.Errorf("Jira %s: %w", field, err)
 		}
-		t.Acceptance = criteriaItems(strings.Split(criteria, "\n"))
+		t.Acceptance = fieldCriteria(criteria)
 	}
 	// Teams often keep the criteria in the description instead, or as well: its section joins the field's list.
-	description, inDescription := splitAcceptance(description)
+	description, inDescription, _ := splitAcceptance(description)
 	for _, c := range inDescription {
 		if !slices.Contains(t.Acceptance, c) {
 			t.Acceptance = append(t.Acceptance, c)
@@ -127,6 +127,21 @@ func parseJira(data []byte) (Ticket, error) {
 	}
 	t.Description = plainHeadings(description)
 	return t, nil
+}
+
+// fieldCriteria reads an acceptance-criteria field's text. A field that repeats its own heading ("h3. Acceptance
+// criteria") gives that section's criteria; otherwise every line but headings counts.
+func fieldCriteria(text string) []string {
+	if _, criteria, found := splitAcceptance(text); found {
+		return criteria
+	}
+	var lines []string
+	for _, l := range strings.Split(text, "\n") {
+		if !mdHeading.MatchString(l) {
+			lines = append(lines, l)
+		}
+	}
+	return criteriaItems(lines)
 }
 
 // oneJiraIssue finds the single issue in an export: an issue object, a search result {"issues": [...]} or an array.
@@ -143,7 +158,7 @@ func oneJiraIssue(data []byte) (jiraIssue, error) {
 			return jiraIssue{}, fmt.Errorf("read the Jira export: %w", err)
 		}
 	case json.Unmarshal(trimmed, &probe) != nil:
-		return jiraIssue{}, errors.New("read the Jira export: not a JSON object")
+		return jiraIssue{}, fmt.Errorf("read the Jira export: %w", json.Unmarshal(trimmed, &probe))
 	case probe.Fields == nil && probe.Issues != nil:
 		if err := json.Unmarshal(probe.Issues, &issues); err != nil {
 			return jiraIssue{}, fmt.Errorf("read the Jira export's issues: %w", err)
@@ -188,8 +203,8 @@ func acceptanceField(issue jiraIssue) string {
 	return slices.Min(found) // a stable choice when several fields qualify
 }
 
-// jiraText converts a Jira text field to plain text: null is "", a string is wiki markup (plain text passes through),
-// an object is Atlassian Document Format, and an array of strings is a list.
+// jiraText converts a Jira text field to plain text: null is "", a string is wiki markup (see wikiToText: plain text
+// stays as it is, Markdown does not), an object is Atlassian Document Format, and an array of strings is a list.
 func jiraText(raw json.RawMessage) (string, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || string(trimmed) == "null" {
@@ -246,7 +261,7 @@ func parseMarkdown(text string) (Ticket, error) {
 	if j := firstContent(body); j < len(body) && headingText(body[j]) == "description" {
 		body = body[j+1:] // the layout already says it is the description
 	}
-	description, criteria := splitAcceptance(strings.Join(body, "\n"))
+	description, criteria, _ := splitAcceptance(strings.Join(body, "\n"))
 	t.Description, t.Acceptance = stripHTMLOutsideCode(description), criteria
 	return t, nil
 }
@@ -306,6 +321,23 @@ func headingText(line string) string {
 	return strings.ToLower(s)
 }
 
+// SolutionSections lists the instruction's lines that look like headings of sections that may give the solution away
+// ("Solution", "Proposed fix", "Root cause" and the like), as written.
+func SolutionSections(instruction string) []string {
+	var found []string
+	for _, l := range strings.Split(instruction, "\n") {
+		if strings.HasPrefix(l, "    ") || strings.HasPrefix(l, "\t") {
+			continue
+		}
+		switch headingText(l) {
+		case "solution", "proposed solution", "suggested solution", "possible solution", "fix", "proposed fix", "suggested fix",
+			"possible fix", "root cause", "cause", "workaround", "implementation", "implementation notes", "technical notes", "how to fix":
+			found = append(found, strings.TrimSpace(l))
+		}
+	}
+	return found
+}
+
 func isAcceptanceHeading(line string) bool {
 	switch headingText(line) {
 	case "acceptance criteria", "acceptance criterion", "acceptance":
@@ -316,8 +348,9 @@ func isAcceptanceHeading(line string) bool {
 
 // splitAcceptance takes the "Acceptance criteria" section out of Markdown-like text. A Markdown heading's section ends
 // at the next heading of the same or a higher level; a bold or plain "Acceptance criteria:" line's at the next
-// heading of any level. Lines in fenced or indented code never start or end it.
-func splitAcceptance(text string) (description string, criteria []string) {
+// heading of any level. Lines in fenced or indented code never start or end it. found reports whether there was such
+// a heading.
+func splitAcceptance(text string) (description string, criteria []string, found bool) {
 	lines := strings.Split(text, "\n")
 	start, level := -1, 7
 	inFence := false
@@ -341,13 +374,13 @@ func splitAcceptance(text string) (description string, criteria []string) {
 		if m := mdHeading.FindStringSubmatch(strings.TrimSpace(l)); m != nil && len(m[1]) <= level {
 			criteria = criteriaItems(lines[start+1 : i])
 			rest := append(append([]string{}, lines[:start]...), lines[i:]...)
-			return tidy(strings.Join(rest, "\n")), criteria
+			return tidy(strings.Join(rest, "\n")), criteria, true
 		}
 	}
 	if start < 0 {
-		return tidy(text), nil
+		return tidy(text), nil, false
 	}
-	return tidy(strings.Join(lines[:start], "\n")), criteriaItems(lines[start+1:])
+	return tidy(strings.Join(lines[:start], "\n")), criteriaItems(lines[start+1:]), true
 }
 
 // criteriaItems turns a section's lines into criteria: its list items (continuation lines joined on), or, when it has
