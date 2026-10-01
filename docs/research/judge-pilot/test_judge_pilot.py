@@ -352,6 +352,16 @@ class Verdicts(unittest.TestCase):
         self.assertIn("**Grading tasks without tests (promising, not proven): GO**", text)
         self.assertIn("A/A pairs (the same context in both arms): 2 judged; arm A preferred in 0 of the 0 with a preference", text)
 
+    def test_question_3_leaves_out_runs_where_you_and_the_tests_disagree_either_way(self):
+        # 10 passing runs judged fixed; 3 failing runs judged not fixed; 1 failing run you call fixed, judged fixed.
+        singles = [(True, "yes", ["yes"] * 3, False)] * 10 + [(False, "no", ["no"] * 3, False)] * 3 + [(False, "yes", ["yes"] * 3, False)]
+        synthetic(self.work, singles, [])
+        text = jp.analyze(self.work, unblinded=set())
+        self.assertIn("without the 1 where your label and the tests disagree: 13 of 13, 100%", text)
+        self.assertIn("**Grading tasks without tests (promising, not proven): GO**", text)
+        # An unblinded single's label does not count: S14 stays in, and the judge is counted wrong on it.
+        self.assertIn("without the 0 where your label and the tests disagree: 13 of 14", jp.analyze(self.work, unblinded={"S14"}))
+
     def test_a_judge_that_prefers_one_arm_fails_the_a_a_check(self):
         pairs = [("context-ab", "first", "first", "second")] * 6 + [("aa", "tie", "first", "second")] * 7
         synthetic(self.work, [(True, "yes", ["yes"] * 3, False)], pairs)

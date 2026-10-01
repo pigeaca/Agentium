@@ -50,7 +50,7 @@ An optional note can follow, after a space.
   It signs in with the user's own login. A verification call used 2,939 input tokens for a 4,760-character prompt: Claude Code's own scaffolding, and no user memory (none exists on this machine).
 - **Repeats:** each single is judged 3 times; each pair once in each order.
 - **Malformed answers:** an answer without a valid verdict is asked once more within the same judgement. If it fails again, it stays an error.
-- **Calls that bring no answer:** a non-zero exit with no JSON, an error result (such as a refused model) or a 600-second timeout is recorded and tried again on the next `judge` run, at most 3 times per judgement. A timed-out call's cost is unknown.
+- **Calls that bring no answer:** a non-zero exit with no JSON, an error result or a 600-second timeout is recorded and tried again on the next `judge` run, at most 3 times per judgement. An error result counts as no answer whatever its cause: a refused model, an outage, or Claude Code giving up on the schema. A timed-out call's cost is unknown.
 - **Budget:** `--budget` stops new calls once the recorded cost reaches it. It can be passed by at most one judgement.
 
 System prompt (also shown to you):
@@ -72,7 +72,7 @@ The exact text is `SYSTEM_PROMPT`, `SINGLE_PROMPT` and `PAIR_PROMPT` in the scri
 - **The judge's verdict on a single:** the majority of the answers it gave. With no majority, it is "partly": one of each, or two different answers when a repeat ended in an error.
 - **The judge's verdict on a pair:** its preference when both orders agree once mapped back. Otherwise the pair is an order flip and counts as a tie.
 - **False passes:** passing runs you label not fixed.
-- **Question 3's rate:** it leaves out the empty changes and the false passes you found, because there the tests themselves are in doubt. The plain rate over all runs is reported too.
+- **Question 3's rate:** it leaves out the empty changes, and every run where your label and the test result disagree, either way (a passing run you judge not fixed, a failing run you judge fixed). There the tests themselves are in doubt. S01's label does not count for this. The failing runs are counted after this, and the plain rate over all runs is reported too.
 - **Baselines:**
   - **"Always fixed"** (question 1), **"always tie"** (question 2) and **"every change is fixed"** (question 3).
   - **File overlap:** a single counts as fixed when it touches at least half of the reference's files. In a pair, the change with the higher file overlap (Jaccard) with the reference wins; on equal overlap, the one closer in changed lines to the reference wins, and otherwise it is a tie.
@@ -92,7 +92,7 @@ Each use gets **GO**, **NO-GO** or **INCONCLUSIVE**. A check with no cases is "n
 - it agrees with you in at least 70% of pairs (first, second or tie);
 - it agrees with you more often than "always tie" and than the file baseline;
 - the pair order flips its preference in at most 10% of pairs;
-- its arm preference on the A/A pairs is not significant (p ≥ 0.05).
+- its arm preference on the A/A pairs is not significant (p ≥ 0.05). A tie is no preference, so A/A pairs that are all ties meet this check. It is "n/a" only when no A/A pair was judged.
 
 **Grading tasks without tests** (at best "promising", never proven with this data). INCONCLUSIVE if fewer than 3 failing runs have a change. Otherwise GO only if all of these hold:
 - it matches the tests in at least 90% of question 3's runs;
@@ -108,7 +108,7 @@ A GO adds a decision record and a product plan. A NO-GO or INCONCLUSIVE records 
 - **Bias toward "tested":** a judge that reads diffs cannot run them, and neither can you.
 
 ## Cost
-- **Pricing:** three pricing calls and one verification call ran on items that are not part of the results. They cost $0.036–0.042 each, most of it output at high effort.
+- **Pricing:** three pricing calls and one verification call cost $0.036–0.042 each, most of it output at high effort. All four judged S01, whose verdicts do not count. The pricing calls ran on a copy of the first items; the verification call ran on S01 as rebuilt, with documents dropped, and its verdict was not shown.
 - **Size of the judge run:** 46 × 3 single and 19 × 2 pair judgements, 176 in all, at about $9. A $15 cap is proposed.
 
 ## What is committed
@@ -130,3 +130,6 @@ All on 2026-10-01, before any label and before any verdict that counts.
    - **Environment allowlist:** the judge's environment is an allowlist, like runs'. The first calls inherited an enclosing Claude Code session's variables. One verification call confirmed the change.
    - **Retries:** errors are split. A malformed answer is asked twice and then kept as an error; a call that brought no answer is tried again at most 3 times. The first version retried every error without a limit. A timeout is now recorded instead of stopping the run.
    - **Label form:** it now shows the judge's rubric. The pair holding S01's diff is left out too. The blinding limits and the statistical limits are stated.
+4. **After the review's second pass:**
+   - Question 3 drops runs where you and the tests disagree in both directions (it first dropped only your false passes), and S01's label never moves it.
+   - The protocol records that the verification call judged S01, that error results count as no answer, and that all-tie A/A sets meet the check.

@@ -550,15 +550,17 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
 
     w("## Q3. Tasks without tests: without seeing results, does the judge's verdict match the tests?\n")
     judged = [s for s in singles if s in judge_fixed]
-    # The rate leaves out empty changes (obvious failures) and passing runs you judged not fixed (there the tests
-    # themselves are in doubt, and a judge that catches the false pass would be counted wrong).
-    doubted = {s for s in judged if key["singles"][s]["passed"] and s in labels["singles"] and not fixed(labels["singles"][s]["fixed"])}
+    # The rate leaves out empty changes (obvious failures) and runs where your label and the test result disagree, either
+    # way: there the tests themselves are in doubt, and a judge that agrees with you would be counted wrong. Unblinded
+    # singles' labels do not count, so they never leave.
+    doubted = {s for s in judged if s in labels["singles"] and s not in unblinded
+               and fixed(labels["singles"][s]["fixed"]) != key["singles"][s]["passed"]}
     nonempty = [s for s in judged if singles[s]["candidate"].strip() and s not in doubted]
     match = sum(fixed(judge_fixed[s]) == key["singles"][s]["passed"] for s in nonempty)
     trivial = sum(key["singles"][s]["passed"] for s in nonempty)  # "every change is fixed"
     failing = [s for s in nonempty if not key["singles"][s]["passed"]]
     flagged = sum(not fixed(judge_fixed[s]) for s in failing)
-    w("- Runs with a change, without the %d false passes you found: %s match their tests; all runs: %s." %
+    w("- Runs with a change, without the %d where your label and the tests disagree: %s match their tests; all runs: %s." %
       (len(doubted), pct(match, len(nonempty)), pct(sum(fixed(judge_fixed[s]) == key["singles"][s]["passed"] for s in judged), len(judged))))
     w("- Failing runs with a change, judged not fixed: %s." % pct(flagged, len(failing)))
     w("- Passing runs, judged fixed: %s." % pct(sum(fixed(judge_fixed[s]) for s in nonempty if key["singles"][s]["passed"]),
@@ -588,7 +590,7 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
 
     def verdict(name: str, enough: bool, reason: str, checks: List[Tuple[str, str]]) -> None:
         if not enough:
-            w("**%s: INCONCLUSIVE** (%s)." % (name, reason))
+            w("**%s: INCONCLUSIVE** (%s).\n" % (name, reason))
             return
         for label_, state in checks:
             w("- %s: %s" % (state, label_))
@@ -613,7 +615,7 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
             ])
     verdict("Grading tasks without tests (promising, not proven)", len(failing) >= 3, "only %d failing runs have a change; at least 3 "
             "are needed" % len(failing), [
-                ("matches the tests in >= 90% of runs with a change (false passes you found left out)", at_least(rate(match, len(nonempty)), 0.90)),
+                ("matches the tests in >= 90% of runs with a change (runs where you and the tests disagree left out)", at_least(rate(match, len(nonempty)), 0.90)),
                 ("judges >= 3 of the failing runs with a change not fixed", "met" if flagged >= 3 else "NOT met"),
                 ("matches more often than \"every change is fixed\"", above(match, trivial, len(nonempty))),
             ])
