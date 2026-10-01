@@ -25,8 +25,8 @@ import (
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
 // "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
-// with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. It
-// leaves its settings argument and process ID in ctrl.
+// with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
+// "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl.
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
 	script := `#!/bin/sh
@@ -48,6 +48,7 @@ if [ -n "$sub" ]; then
   echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-agent","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"agent1","name":"Agent","input":{"subagent_type":"investigator","prompt":"look"}}]}}'
   echo '{"type":"assistant","parent_tool_use_id":"agent1","message":{"id":"m-sub","model":"'"$sub"'","content":[]}}'
 fi
+[ -f "$CTRL/read-value" ] && echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-read","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"read1","name":"Read","input":{"file_path":"'"$PWD"'/value.txt"}}]}}'
 grep -qx "$key" "$CTRL/infra" 2>/dev/null && exit 1
 if grep -qx "$key" "$CTRL/hang" 2>/dev/null; then touch "$CTRL/hanging-$ws"; sleep 60; fi
 sleep 0.2

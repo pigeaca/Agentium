@@ -54,6 +54,14 @@ type Metrics struct {
 
 	Commands  []string `json:"-"` // Bash commands, in order: behavior flags come from them
 	FilePaths []string `json:"-"` // paths the file tools touched
+	ReadPaths []string `json:"-"` // paths the Read tool read: what the agent looked at, not what it wrote
+	// CWD is the folder Claude Code started in, from its init event: file tools name paths under it. A local path.
+	CWD string `json:"-"`
+	// SkillCalls are the skills the agent invoked through the Skill tool, in order. Names can be personal: compared,
+	// never stored.
+	SkillCalls []string `json:"-"`
+	// SubagentTypes are the subagent types the agent started through the Agent (Task) tool, sorted, each once.
+	SubagentTypes []string `json:"-"`
 
 	// UsageFirst and UsageLast are the first and last of the subscription's usage readings in the run (none with an
 	// API key): experiments pause before the five-hour limit, and estimate a run's share of the window from them.
@@ -109,6 +117,7 @@ type (
 		Tools             []string `json:"tools"`
 		Skills            []string `json:"skills"`
 		SlashCommands     []string `json:"slash_commands"`
+		CWD               string   `json:"cwd"`
 	}
 	assistantMessage struct {
 		ID      string            `json:"id"`
@@ -188,6 +197,7 @@ func Parse(r io.Reader) (Metrics, error) {
 			m.SawInit = true
 			m.CLIVersion, m.Model, m.PermissionMode = init.ClaudeCodeVersion, init.Model, init.PermissionMode
 			m.Tools, m.Skills, m.SlashCommands = sorted(init.Tools), sorted(init.Skills), sorted(init.SlashCommands)
+			m.CWD = init.CWD
 			m.SkillCount, m.MCPTools = len(m.Skills), 0
 			for _, tool := range m.Tools {
 				if strings.HasPrefix(tool, "mcp__") {
@@ -263,15 +273,25 @@ func Parse(r io.Reader) (Metrics, error) {
 						kind = "general-purpose"
 					}
 					subagentTypes[block.ID] = kind
+					if !slices.Contains(m.SubagentTypes, kind) {
+						m.SubagentTypes = sorted(append(m.SubagentTypes, kind))
+					}
 				}
 				switch {
 				case block.Name == "Bash":
 					if command, ok := block.Input["command"].(string); ok {
 						m.Commands = append(m.Commands, command)
 					}
+				case block.Name == "Skill":
+					if name := skillName(block.Input); name != "" {
+						m.SkillCalls = append(m.SkillCalls, name)
+					}
 				case fileTools[block.Name]:
 					if p, ok := block.Input["file_path"].(string); ok {
 						m.FilePaths = append(m.FilePaths, p)
+						if block.Name == "Read" {
+							m.ReadPaths = append(m.ReadPaths, p)
+						}
 					}
 				}
 			}
@@ -315,6 +335,17 @@ func Parse(r io.Reader) (Metrics, error) {
 		return m, fmt.Errorf("read transcript: %w", err)
 	}
 	return m, nil
+}
+
+// skillName is the skill a Skill tool call invokes: its skill input (command in older Claude Code versions), without a
+// leading slash.
+func skillName(input map[string]any) string {
+	for _, key := range []string{"skill", "command"} {
+		if name, ok := input[key].(string); ok && strings.TrimSpace(name) != "" {
+			return strings.TrimPrefix(strings.TrimSpace(name), "/")
+		}
+	}
+	return ""
 }
 
 func unixTime(seconds int64) time.Time {

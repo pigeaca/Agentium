@@ -1,7 +1,9 @@
 // Package report turns an experiment's lock and runs into its report: verdicts in plain words, the metrics with both
-// intervals, a per-task table, behavior counts per arm, the context overhead, costs, and honesty notes. It renders
-// Markdown (for a pull request) and JSON (with the lock and every run). Both are meant to be shared: skill and command
-// names, local paths and what the agents said are left out, and credential-shaped text is redacted.
+// intervals, a per-task table, behavior counts per arm, the context overhead and what the runs used of it, costs, and
+// honesty notes. It renders Markdown (for a pull request) and JSON (with the lock and every run). Both are meant to be
+// shared: Claude Code's and personal skill and command names, personal subagent types, local paths and what the agents
+// said are left out, and credential-shaped text is redacted. The project's own context files, skills, commands and
+// subagents are named, as its repository names them, and so are Claude Code's own subagent types.
 package report
 
 import (
@@ -69,6 +71,20 @@ type Arm struct {
 	ColdCostUSD    *float64 `json:"cold_cost_usd"`    // mean with every cached read repriced as a one-hour cache write
 	CacheReadShare *float64 `json:"cache_read_share"` // of all input tokens
 	Behavior       Behavior `json:"behavior"`
+	// ContextUse counts what the counted runs used of their context.
+	ContextUse ArmContextUse `json:"context_use"`
+}
+
+// ArmContextUse counts what an arm's counted runs used of their context (see run.ContextUse). Recorded is how many of
+// them have it: runs recorded before Agentium kept it, whose transcripts are gone, do not. Each map counts runs.
+type ArmContextUse struct {
+	Recorded  int            `json:"recorded"`
+	Start     []string       `json:"start"` // loaded at start, in any of the runs
+	Files     map[string]int `json:"files,omitempty"`
+	Skills    map[string]int `json:"skills,omitempty"`
+	Subagents map[string]int `json:"subagents,omitempty"`
+	// OtherSubagents counts runs that started subagents of other types, which are not named.
+	OtherSubagents int `json:"other_subagents,omitempty"`
 }
 
 // Behavior counts what the agents did, over an arm's counted runs. (Runs that read outside their checkout are unfair,
@@ -105,25 +121,26 @@ type TaskCell struct {
 
 // RunRow is one run's data, as shared: no local paths, and not what the agent said.
 type RunRow struct {
-	ID             string         `json:"id"`
-	Slot           int            `json:"slot"`
-	Attempt        int            `json:"attempt"`
-	Task           string         `json:"task"`
-	Arm            string         `json:"arm"`
-	Outcome        string         `json:"outcome"`
-	Passed         *bool          `json:"passed,omitempty"`
-	Success        bool           `json:"success"`
-	Metrics        claude.Metrics `json:"metrics"` // without the result excerpt
-	Behavior       run.Behavior   `json:"behavior"`
-	CostEstimated  bool           `json:"cost_estimated,omitempty"`
-	Recovered      string         `json:"recovered,omitempty"`
-	HarnessChanged []string       `json:"harness_changed,omitempty"`
-	Drift          []string       `json:"drift,omitempty"`
-	Notes          []string       `json:"notes,omitempty"`
-	ContextCommit  string         `json:"context_commit,omitempty"`
-	Verify         []taskCommand  `json:"verify,omitempty"`
-	Started        string         `json:"started"`
-	Finished       string         `json:"finished"`
+	ID             string          `json:"id"`
+	Slot           int             `json:"slot"`
+	Attempt        int             `json:"attempt"`
+	Task           string          `json:"task"`
+	Arm            string          `json:"arm"`
+	Outcome        string          `json:"outcome"`
+	Passed         *bool           `json:"passed,omitempty"`
+	Success        bool            `json:"success"`
+	Metrics        claude.Metrics  `json:"metrics"` // without the result excerpt
+	Behavior       run.Behavior    `json:"behavior"`
+	CostEstimated  bool            `json:"cost_estimated,omitempty"`
+	Recovered      string          `json:"recovered,omitempty"`
+	HarnessChanged []string        `json:"harness_changed,omitempty"`
+	Drift          []string        `json:"drift,omitempty"`
+	Notes          []string        `json:"notes,omitempty"`
+	ContextCommit  string          `json:"context_commit,omitempty"`
+	ContextUse     *run.ContextUse `json:"context_use,omitempty"`
+	Verify         []taskCommand   `json:"verify,omitempty"`
+	Started        string          `json:"started"`
+	Finished       string          `json:"finished"`
 }
 
 type taskCommand struct {
@@ -157,10 +174,11 @@ func Build(in Input) (Report, error) {
 		rec := r.Record
 		metrics := rec.Metrics
 		metrics.ResultExcerpt = "" // what the agent said can hold anything
+		metrics.SubagentModels = shareableModels(rec)
 		row := RunRow{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
 			CostEstimated: rec.CostEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
-			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
+			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
 			Finished: rec.Finished.UTC().Format("2006-01-02T15:04:05Z")}
 		for _, c := range rec.Verify {
 			row.Verify = append(row.Verify, taskCommand{Command: c.Command, ExitCode: c.ExitCode, Seconds: c.Seconds})
@@ -261,6 +279,23 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		if len(b.ConfigChanged) > 0 && rec.Passed != nil && *rec.Passed {
 			counts.ConfigPasses++
 		}
+		if u := rec.ContextUse; u != nil {
+			use := &arm.ContextUse
+			use.Recorded++
+			for _, p := range u.Start {
+				if !slices.Contains(use.Start, p) {
+					use.Start = append(use.Start, p)
+				}
+			}
+			use.Files, use.Skills, use.Subagents = tally(use.Files, u.Files), tally(use.Skills, u.Skills), tally(use.Subagents, u.Subagents)
+			if u.OtherSubagents > 0 {
+				use.OtherSubagents++
+			}
+		}
+	}
+	slices.Sort(arm.ContextUse.Start)
+	if arm.ContextUse.Start == nil {
+		arm.ContextUse.Start = []string{}
 	}
 	arm.FirstRequest, arm.CostUSD = mean(first), mean(cost)
 	if len(cold) == len(cost) { // every counted run could be repriced
@@ -272,6 +307,40 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		arm.CacheReadShare = &share
 	}
 	return arm
+}
+
+// shareableModels keeps the models of the subagent types a report may name, which are those the run's context use
+// names (the project's and Claude Code's own); every other type, and every type of a run without context use, shares one
+// "other" entry. The database keeps them all, for the check that a subagent's model did not change.
+func shareableModels(rec run.Record) map[string][]string {
+	if rec.Metrics.SubagentModels == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for kind, models := range rec.Metrics.SubagentModels {
+		key := "other"
+		if rec.ContextUse != nil && slices.Contains(rec.ContextUse.Subagents, kind) {
+			key = kind
+		}
+		for _, m := range models {
+			if !slices.Contains(out[key], m) {
+				out[key] = append(out[key], m)
+			}
+		}
+		slices.Sort(out[key])
+	}
+	return out
+}
+
+// tally adds one to counts for each name, creating counts when there are names.
+func tally(counts map[string]int, names []string) map[string]int {
+	for _, n := range names {
+		if counts == nil {
+			counts = map[string]int{}
+		}
+		counts[n]++
+	}
+	return counts
 }
 
 // coldCost is a run's cost with every cached read repriced as a one-hour cache write (the cache Claude Code writes):

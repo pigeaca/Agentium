@@ -279,3 +279,22 @@ func TestValidName(t *testing.T) {
 		}
 	}
 }
+
+// Apply is the base as an arm's checkout holds it, and refuses what PlanOverlay refuses.
+func TestApplyIsTheArmsView(t *testing.T) {
+	lean := memSource{"CLAUDE.md": "# Lean\n"}
+	arm, err := Apply(full, lean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// AGENTS.md, the rule and the hook load by being present and the snapshot lacks them, so they go; code stays.
+	if got, want := arm.Paths(), []string{"CLAUDE.md", "main.go"}; !slices.Equal(got, want) {
+		t.Errorf("paths = %v, want %v", got, want)
+	}
+	if data, err := arm.ReadFile("CLAUDE.md"); err != nil || string(data) != "# Lean\n" {
+		t.Errorf("CLAUDE.md = %q, %v", data, err)
+	}
+	if _, err := Apply(full, memSource{"CLAUDE.md": "# Lean\n", "main.go": "package other\n"}); !errors.Is(err, ErrTouchesNonContext) {
+		t.Errorf("a snapshot changing code: %v", err)
+	}
+}

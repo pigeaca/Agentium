@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/report"
@@ -56,12 +58,37 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	if stored.Status == store.StatusRunning && !w.layout.RunsBusy() {
 		in.Status, in.StatusNote = store.StatusStopped, "its Agentium process ended; run it again to resume"
 	}
+	// Runs recorded before Agentium kept their context use get it from their transcripts, where those remain. A run
+	// whose context use cannot be worked out is reported without it, with a warning: the report itself still holds.
+	bases, snapshots := map[string]string{}, map[string]string{}
+	for _, t := range lock.Tasks {
+		bases[t.Name] = t.Base
+	}
+	for _, a := range lock.Arms {
+		snapshots[a.Name] = a.Snapshot
+	}
+	recovery := run.Recovery{Bare: w.bare, Records: w.layout.Records}
+	unrecovered := map[string]int{} // by reason: every run of an arm shares one
 	for _, r := range runs {
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
 			return fail(env, fmt.Errorf("run %s: %w", r.ID, err))
 		}
+		if rec.ContextUse == nil && bases[rec.Task] != "" {
+			if rec.ContextUse, err = recovery.Recover(ctx, rec, bases[rec.Task], snapshots[rec.Arm]); err != nil {
+				if ctx.Err() != nil {
+					return fail(env, ctx.Err())
+				}
+				unrecovered[err.Error()]++
+			}
+		}
 		in.Runs = append(in.Runs, report.Run{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Record: rec})
+	}
+	if ctx.Err() != nil { // a cancelled recovery may have read less than there is: write no report
+		return fail(env, ctx.Err())
+	}
+	for _, reason := range slices.Sorted(maps.Keys(unrecovered)) {
+		fmt.Fprintf(env.Stderr, "agentium: context use not recovered for %d run(s): %s\n", unrecovered[reason], reason)
 	}
 	rep, err := report.Build(in)
 	if err != nil {

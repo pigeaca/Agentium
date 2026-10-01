@@ -753,3 +753,57 @@ func TestAgentGoflagsKeepSavedFlags(t *testing.T) {
 		t.Errorf("saved flags lost: %v", env)
 	}
 }
+
+// Context use reads the working folder, the skills invoked, the subagents started and the files read (not written)
+// from the transcript, subagents' calls included.
+func TestParseContextUseInputs(t *testing.T) {
+	call := func(id, name, input string, parent string) string {
+		p := "null"
+		if parent != "" {
+			p = `"` + parent + `"`
+		}
+		return `{"type":"assistant","parent_tool_use_id":` + p + `,"message":{"id":"m-` + id + `","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"` +
+			id + `","name":"` + name + `","input":` + input + `}]}}`
+	}
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","cwd":"/work/repo","claude_code_version":"2.1.281","model":"claude-sonnet-5","tools":["Read","Skill","Agent"]}`,
+		call("s1", "Skill", `{"skill":"product-increment"}`, ""),
+		call("s2", "Skill", `{"command":"/review"}`, ""), // older Claude Code
+		call("s3", "Skill", `{"skill":"  "}`, ""),
+		call("a1", "Agent", `{"prompt":"look","subagent_type":"investigator"}`, ""),
+		call("a2", "Task", `{"prompt":"look"}`, ""),
+		call("a3", "Agent", `{"prompt":"again","subagent_type":"investigator"}`, ""),
+		call("r1", "Read", `{"file_path":"/work/repo/docs/a.md"}`, ""),
+		call("r2", "Read", `{"file_path":"/work/repo/.agents/roles/investigator.md"}`, "a1"),
+		call("w1", "Write", `{"file_path":"/work/repo/docs/b.md","content":"x"}`, ""),
+		`{"type":"result","subtype":"success","total_cost_usd":0.1}`,
+	}, "\n")
+	m, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.CWD != "/work/repo" {
+		t.Errorf("cwd = %q", m.CWD)
+	}
+	if want := []string{"product-increment", "review"}; !reflect.DeepEqual(m.SkillCalls, want) {
+		t.Errorf("skill calls = %v, want %v", m.SkillCalls, want)
+	}
+	if want := []string{"general-purpose", "investigator"}; !reflect.DeepEqual(m.SubagentTypes, want) {
+		t.Errorf("subagent types = %v, want %v", m.SubagentTypes, want)
+	}
+	if want := []string{"/work/repo/docs/a.md", "/work/repo/.agents/roles/investigator.md"}; !reflect.DeepEqual(m.ReadPaths, want) {
+		t.Errorf("read paths = %v, want %v", m.ReadPaths, want)
+	}
+	if len(m.FilePaths) != 3 {
+		t.Errorf("file tool paths, writes included: %v", m.FilePaths)
+	}
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"/work/repo", "product-increment", "skill_calls"} {
+		if strings.Contains(string(data), private) {
+			t.Errorf("stored metrics hold %q: %s", private, data)
+		}
+	}
+}

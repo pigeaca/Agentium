@@ -125,6 +125,9 @@ type Record struct {
 	RecordsDir  string         `json:"records"`
 	ContextHead string         `json:"context_commit,omitempty"`
 	ProbeFile   string         `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
+	// ContextUse is what the run used of its arm's context; nil in records made before Agentium kept it, and in runs
+	// that ended before their transcript could be read.
+	ContextUse *ContextUse `json:"context_use,omitempty"`
 	// CostEstimated: Claude Code reported no cost, so Metrics.CostUSD prices the transcript's requests at list prices.
 	CostEstimated bool `json:"cost_estimated,omitempty"`
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
@@ -377,9 +380,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
 	// The context commit (Agentium's grading repository), not the agent's tree, which may have lost its .git.
-	if rec.ProjectSkills, rec.ProjectCommands, err = projectNames(ctx, graded); err != nil {
+	armSource, armContext, err := contextAt(ctx, graded)
+	if err != nil {
 		return unfinished(err)
 	}
+	rec.ProjectSkills, rec.ProjectCommands = claudectx.SkillNames(armContext, armSource), claudectx.CommandNames(armContext)
+	realRepo, _ := filepath.EvalSymlinks(repo) // Claude Code may name files under the resolved path (/private/var)
+	use := UseOf(armContext, armSource, rec.Metrics, repo, realRepo, rec.Metrics.CWD)
+	rec.ContextUse = &use
 	expect := env.Expect
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills
 	// A calibration holds only what Claude Code bundles: the arm's own skills and commands at its base are added here.
@@ -725,17 +733,17 @@ func appendProbe(ctx context.Context, repo, line string) (string, error) {
 	return "", nil
 }
 
-// projectNames lists the project skill and command names of the arm's context in repo.
-func projectNames(ctx context.Context, repo string) (skills, commands []string, err error) {
+// contextAt resolves the context of the working tree at repo: the arm's context as its run started.
+func contextAt(ctx context.Context, repo string) (source.Source, claudectx.Context, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
-		return nil, nil, err
+		return nil, claudectx.Context{}, err
 	}
 	resolved, err := claudectx.Resolve(src)
 	if err != nil {
-		return nil, nil, err
+		return nil, claudectx.Context{}, err
 	}
-	return claudectx.SkillNames(resolved, src), claudectx.CommandNames(resolved), nil
+	return src, resolved, nil
 }
 
 // instructionFilesAbove lists instruction files in the folders above dir, which Claude Code would load into a run.

@@ -815,6 +815,22 @@
         "files_changed": 2,
         "lines_changed": 13,
         "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 30,
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": {
+          "docs/testing.md": 15
+        },
+        "skills": {
+          "review-change": 6
+        },
+        "subagents": {
+          "Explore": 1
+        }
       }
     },
     {
@@ -838,6 +854,19 @@
         "files_changed": 2,
         "lines_changed": 13,
         "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 28,
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": {
+          "docs/testing.md": 8
+        },
+        "subagents": {
+          "Explore": 1
+        },
+        "other_subagents": 3
       }
     }
   ],
@@ -1073,6 +1102,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "subagents": [
+          "Explore"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1131,6 +1168,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "subagents": [
+          "Explore"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1189,6 +1235,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1250,6 +1305,11 @@
         "1 file tool call(s) reached <agentium data>/projects"
       ],
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1308,6 +1368,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1370,6 +1436,11 @@
         "Agentium could not finish the run: sign-in with [REDACTED] refused"
       ],
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1428,6 +1499,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1489,6 +1565,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1547,6 +1632,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1608,6 +1699,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1666,6 +1762,15 @@
       },
       "cost_estimated": true,
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1724,6 +1829,15 @@
       },
       "recovered": "stopped",
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1782,6 +1896,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1840,6 +1963,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -1956,6 +2087,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2014,6 +2154,18 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2072,6 +2224,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2130,6 +2290,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
       "verify": [
         {
           "command": "make test",
@@ -2188,6 +2354,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2246,6 +2421,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2304,6 +2485,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2362,6 +2548,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2420,6 +2611,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2478,6 +2678,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2536,6 +2745,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
       "verify": [
         {
           "command": "make test",
@@ -2594,6 +2809,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2652,6 +2875,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2710,6 +2942,18 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2768,6 +3012,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2826,6 +3078,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2884,6 +3144,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -2942,6 +3211,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3000,6 +3274,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3058,6 +3338,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3116,6 +3405,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3174,6 +3468,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3232,6 +3532,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3290,6 +3595,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3348,6 +3658,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3406,6 +3722,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3464,6 +3786,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3522,6 +3849,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3580,6 +3916,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3638,6 +3982,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3696,6 +4048,18 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3754,6 +4118,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3812,6 +4185,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3870,6 +4248,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
       "verify": [
         {
           "command": "make test",
@@ -3928,6 +4312,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -3986,6 +4379,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4044,6 +4442,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4102,6 +4506,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4160,6 +4569,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4218,6 +4633,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4276,6 +4696,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4334,6 +4760,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4392,6 +4827,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4450,6 +4890,11 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4508,6 +4953,12 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4566,6 +5017,14 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",
@@ -4624,6 +5083,15 @@
         "outside_reads": 0
       },
       "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
       "verify": [
         {
           "command": "make test",

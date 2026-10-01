@@ -110,6 +110,28 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		return err
 	}
 
+	if desc, rows, ok := contextUse(r); ok {
+		section("Context use", desc)
+		cols := []term.Column{term.Left("")}
+		for _, a := range r.Arms {
+			cols = append(cols, term.Right(a.Name))
+		}
+		t = table(cols...)
+		for _, row := range rows {
+			t.Row(append([]string{row.label + row.name}, row.cells...)...)
+		}
+		if err := t.Write(&b); err != nil {
+			return err
+		}
+		for _, a := range r.Arms {
+			files := "none"
+			if len(a.ContextUse.Start) > 0 {
+				files = strings.Join(a.ContextUse.Start, ", ")
+			}
+			fmt.Fprintf(&b, "Loaded at start in %s: %s\n", a.Name, files)
+		}
+	}
+
 	section("Behavior", "Runs counted in each arm, unless a total.")
 	t = table(term.Left(""), term.Right("A"), term.Right("B"))
 	for _, row := range behaviorRows {

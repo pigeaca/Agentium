@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -77,6 +79,31 @@ func (r Report) Markdown(w io.Writer) error {
 			num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 
+	if desc, rows, ok := contextUse(r); ok {
+		fmt.Fprintf(&b, "\n## Context use\n\n%s\n\n|", desc)
+		for _, a := range r.Arms {
+			fmt.Fprintf(&b, " | %s", a.Name)
+		}
+		b.WriteString(" |\n|---" + strings.Repeat("|---", len(r.Arms)) + "|\n")
+		for _, row := range rows {
+			label := row.label
+			if row.name != "" {
+				label += "`" + row.name + "`"
+			}
+			fmt.Fprintf(&b, "| %s | %s |\n", label, strings.Join(row.cells, " | "))
+		}
+		b.WriteString("\nLoaded at start: ")
+		for i, a := range r.Arms {
+			files := "none"
+			if len(a.ContextUse.Start) > 0 {
+				files = "`" + strings.Join(a.ContextUse.Start, "`, `") + "`"
+			}
+			sep := map[bool]string{true: "; ", false: ""}[i > 0]
+			fmt.Fprintf(&b, "%s%s, %s", sep, a.Name, files)
+		}
+		b.WriteString(".\n")
+	}
+
 	b.WriteString("\n## Behavior\n\nRuns counted in each arm, unless a total.\n\n| | A | B |\n|---|---|---|\n")
 	for _, row := range behaviorRows {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
@@ -95,6 +122,81 @@ func (r Report) Markdown(w io.Writer) error {
 	}
 	_, err := io.WriteString(w, b.String())
 	return err
+}
+
+// useRow is a row of the context-use table: a label, the item's name (empty for the first row) and a cell per arm.
+type useRow struct {
+	label, name string
+	cells       []string
+}
+
+// contextUse lays out the context-use section: its description and rows. ok is false when no counted run in any arm
+// has its context use recorded, and the section is left out.
+func contextUse(r Report) (desc string, rows []useRow, ok bool) {
+	var missing []string
+	for _, a := range r.Arms {
+		ok = ok || a.ContextUse.Recorded > 0
+		if a.ContextUse.Recorded < a.Counted {
+			missing = append(missing, fmt.Sprintf("%d of %s's %d counted runs", a.Counted-a.ContextUse.Recorded, a.Name, a.Counted))
+		}
+	}
+	if !ok {
+		return "", nil, false
+	}
+	desc = "What the counted runs used of their context beyond what loads at start: path-scoped rules and folder instructions " +
+		"that loaded for the files the agent worked with; context files and linked documents the agent or its subagents read " +
+		"(with the Read tool, or given to cat, sed, grep and the like); the project's skills and commands they invoked; and the " +
+		"subagents they started (the project's and Claude Code's by name, any other only counted)."
+	if len(missing) > 0 {
+		desc += " Not recorded or not recoverable for " + strings.Join(missing, " and ") + "."
+	}
+	first := useRow{label: "files loaded at start"}
+	for _, a := range r.Arms {
+		first.cells = append(first.cells, fmt.Sprint(len(a.ContextUse.Start)))
+	}
+	rows = append(rows, first)
+	kinds := []struct {
+		label string
+		of    func(ArmContextUse) map[string]int
+	}{
+		{"", func(u ArmContextUse) map[string]int { return u.Files }},
+		{"skill ", func(u ArmContextUse) map[string]int { return u.Skills }},
+		{"subagent ", func(u ArmContextUse) map[string]int { return u.Subagents }},
+	}
+	for _, k := range kinds {
+		names := map[string]bool{}
+		for _, a := range r.Arms {
+			for n := range k.of(a.ContextUse) {
+				names[n] = true
+			}
+		}
+		for _, n := range slices.Sorted(maps.Keys(names)) {
+			row := useRow{label: k.label, name: n}
+			for _, a := range r.Arms {
+				cell := "-"
+				if a.ContextUse.Recorded > 0 {
+					cell = fmt.Sprintf("%d of %d", k.of(a.ContextUse)[n], a.ContextUse.Recorded)
+				}
+				row.cells = append(row.cells, cell)
+			}
+			rows = append(rows, row)
+		}
+	}
+	if slices.ContainsFunc(r.Arms, func(a Arm) bool { return a.ContextUse.OtherSubagents > 0 }) {
+		row := useRow{label: "other subagents"}
+		for _, a := range r.Arms {
+			cell := "-"
+			if a.ContextUse.Recorded > 0 {
+				cell = fmt.Sprintf("%d of %d", a.ContextUse.OtherSubagents, a.ContextUse.Recorded)
+			}
+			row.cells = append(row.cells, cell)
+		}
+		rows = append(rows, row)
+	}
+	if len(rows) == 1 {
+		desc += " No counted run used such a file, invoked a project skill or started a subagent."
+	}
+	return desc, rows, true
 }
 
 // behaviorRows are the behavior table's rows: a label and how to read it from an arm.

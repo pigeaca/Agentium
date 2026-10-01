@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,27 @@ func fixture() Input {
 				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: first, SawInit: true, SawResult: true},
 			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, TestsChanged: s.Arm == "A", RanTests: true, RanChecks: s.Arm == "A",
 				BashCommands: 6}, Verify: []task.Command{{Command: "make test", ExitCode: 0, Seconds: 1.5}}}
+		// What the runs used of their context: arm A reads the testing doc and invokes its skill more than lean B; one
+		// counted run predates context use.
+		use := &run.ContextUse{Start: []string{"AGENTS.md", "CLAUDE.md"}}
+		if s.Arm == "B" {
+			use.Start = []string{"CLAUDE.md"}
+		}
+		if ti%2 == 0 && (s.Arm == "A" || ti%4 == 0) {
+			use.Files = []string{"docs/testing.md"}
+		}
+		if s.Arm == "A" && ti%5 == 0 {
+			use.Skills = []string{"review-change"}
+		}
+		if ti == 3 && s.Repeat == 1 {
+			use.Subagents = []string{"Explore"}
+		}
+		if ti == 5 && s.Arm == "B" { // a subagent type that is neither the project's nor Claude Code's: counted, not named
+			use.OtherSubagents = 1
+		}
+		if s.Position != 12 {
+			rec.ContextUse = use
+		}
 		switch s.Position {
 		case 3:
 			rec.Outcome, rec.Passed = claude.OutcomeUnfair, nil
@@ -518,5 +540,26 @@ func TestWiderNamesTheDecidingInterval(t *testing.T) {
 		if got := wider(c.t, c.boot); !strings.Contains(got, c.want) {
 			t.Errorf("wider(%v, %v) = %q, want %q", c.t, c.boot, got, c.want)
 		}
+	}
+}
+
+// The shared report names only the subagent types the run's context use names; the rest share "other".
+func TestReportSubagentModelsAreShareable(t *testing.T) {
+	in := fixture()
+	rec := &in.Runs[0].Record
+	rec.Metrics.SubagentModels = map[string][]string{"Explore": {"claude-haiku-4-5"}, "my-personal-agent": {"claude-sonnet-5"},
+		"unknown": {"claude-sonnet-5"}}
+	rec.ContextUse = &run.ContextUse{Start: []string{"CLAUDE.md"}, Subagents: []string{"Explore"}, OtherSubagents: 1}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rep.Runs[0].Metrics.SubagentModels
+	want := map[string][]string{"Explore": {"claude-haiku-4-5"}, "other": {"claude-sonnet-5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("subagent models = %v, want %v", got, want)
+	}
+	if in.Runs[0].Record.Metrics.SubagentModels["my-personal-agent"] == nil {
+		t.Error("the input's record was changed")
 	}
 }
