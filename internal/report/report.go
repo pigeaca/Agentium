@@ -163,10 +163,7 @@ func Build(in Input) (Report, error) {
 	l := in.Lock
 	var data []experiment.RunData
 	for _, r := range in.Runs {
-		m := r.Record.Metrics
-		data = append(data, experiment.RunData{Slot: r.Slot, Task: r.Record.Task, Arm: r.Record.Arm, Outcome: r.Record.Outcome,
-			Passed: r.Record.Passed, ConfigChanged: r.Record.Behavior.ConfigChanged, CostUSD: r.Record.Spend().AgentUSD, DurationS: float64(m.DurationMS) / 1000,
-			OutputTokens: float64(m.OutputTokens)})
+		data = append(data, runData(r.Slot, r.Record))
 	}
 	analysis, err := experiment.Analyze(l, data)
 	if err != nil {

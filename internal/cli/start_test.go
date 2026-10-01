@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -70,7 +73,7 @@ func TestStartReachesAPreviewWithoutPromptsOrPaidRuns(t *testing.T) {
 	t.Parallel()
 	f, ctrl := startFixture(t, 9)
 	ctx := context.Background()
-	got := f.run(ctx, "start", "--reviewed")
+	got := f.run(ctx, "start", "--accept-mined")
 	expect(t, got, ExitOK, "Registered ", "Context: saved snapshot baseline from HEAD", "Mining: ", "imported 8 of 8 tried (verify: make test)",
 		"Validating 8 task(s) in 2 context(s)", "8 valid of 8", "Tasks: 8 ready (needs 8), in ", "Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs",
 		"A/A calibration of baseline", "Before it runs:", "Sizes (runs count both arms):", "is not calibrated", "Nothing was run: fix what is missing",
@@ -81,8 +84,8 @@ func TestStartReachesAPreviewWithoutPromptsOrPaidRuns(t *testing.T) {
 	list := f.run(ctx, "experiment", "list")
 	expect(t, list, ExitOK, "quick-aa-baseline", "aa", "baseline / baseline", "8 × 1")
 
-	again := f.run(ctx, "start", "--reviewed")
-	expect(t, again, ExitOK, "Project ", "registered (skipped)", "Context: snapshot baseline (skipped)", "Tasks: 8 ready (needs 8) (skipped)",
+	again := f.run(ctx, "start", "--accept-mined")
+	expect(t, again, ExitOK, "Project ", "registered (skipped)", "Context: snapshot baseline from ", "Tasks: skipped (the experiment exists)",
 		"Experiment quick-aa-baseline: exists (skipped)", "Nothing was run")
 	for _, not := range []string{"Mining:", "Validating", "Registered ", "created"} {
 		if strings.Contains(again.stdout, not) {
@@ -101,7 +104,7 @@ func TestStartWithBComparesContexts(t *testing.T) {
 	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
 
 	expect(t, f.run(ctx, "start", "--b", "nope"), ExitError, "snapshot", "nope")
-	got := f.run(ctx, "start", "--b", "lean", "--reviewed")
+	got := f.run(ctx, "start", "--b", "lean", "--accept-mined")
 	expect(t, got, ExitOK, "Context: saved snapshot baseline from HEAD", "Validating 8 task(s) in 3 context(s)",
 		"Experiment quick-baseline-vs-lean: created, 8 task(s) × 1 run per arm = 16 runs", "baseline", "lean")
 	if strings.Contains(got.stdout, "no second context was given") {
@@ -114,7 +117,7 @@ func TestStartYesRunsTheExperiment(t *testing.T) {
 	t.Parallel()
 	f, ctrl := startFixture(t, 9)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "start", "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK)
 	// Calibration inside experiment run is a later step: calibrate the baseline here, as the readiness check asks.
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
 	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "baseline"), ExitOK)
@@ -146,7 +149,7 @@ func TestStartWithTooFewTasks(t *testing.T) {
 	t.Parallel()
 	f, ctrl := startFixture(t, 5)
 	ctx := context.Background()
-	got := f.run(ctx, "start", "--reviewed", "--yes")
+	got := f.run(ctx, "start", "--accept-mined", "--yes")
 	expect(t, got, ExitError, "Mining: ", "5 valid of 5", "only 5 of the 8 an experiment needs are ready", "the history has no more candidates",
 		"agentium task mine --dry-run", "agentium task add")
 	if strings.Contains(got.stdout, "Experiment ") || strings.Contains(got.stdout, "Before it runs") {
@@ -160,15 +163,16 @@ func TestStartWithTooFewTasks(t *testing.T) {
 	}
 }
 
-// Mined instructions wait for a person unless --reviewed accepts them.
+// Mined instructions wait for a person unless --accept-mined accepts them.
 func TestStartWaitsForReviews(t *testing.T) {
 	t.Parallel()
 	f, _ := startFixture(t, 9)
 	ctx := context.Background()
 	got := f.run(ctx, "start")
 	expect(t, got, ExitError, "8 valid of 8", "8 valid, 0 ready of the 8 an experiment needs: the others wait for your review", "Read each instruction for solution leaks",
-		"agentium task show NAME", "agentium task edit NAME --reviewed", "agentium start --reviewed")
-	expect(t, f.run(ctx, "start", "--reviewed"), ExitOK, "Tasks: 8 ready", "Experiment quick-aa-baseline: created")
+		"agentium task show NAME", "agentium task edit NAME --reviewed", "agentium start --accept-mined", "without your review")
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK, "Accepted 8 mined instruction(s) without your review (--accept-mined)", "a message that explains the fix is not detected",
+		"Tasks: 8 ready", "Experiment quick-aa-baseline: created")
 }
 
 func TestStartUsage(t *testing.T) {
@@ -204,7 +208,7 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 			t.Parallel()
 			var out strings.Builder
 			s := &starter{env: Env{Stdin: strings.NewReader(c.input), StdinTerminal: c.stdinTTY, Terminal: c.stdoutTTY, Stdout: &out}}
-			if got := s.confirm(12.5); got != c.want {
+			if got := s.confirm(context.Background(), 12.5); got != c.want {
 				t.Errorf("confirm = %v, want %v", got, c.want)
 			}
 			if asked := strings.Contains(out.String(), "Run it now?"); asked != c.asked {
@@ -213,7 +217,164 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 		})
 	}
 	var out strings.Builder
-	if (&starter{env: Env{Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(1) || out.Len() != 0 {
+	if (&starter{env: Env{Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(context.Background(), 1) || out.Len() != 0 {
 		t.Error("a terminal without a stdin reader was asked")
+	}
+}
+
+// readyFixture is startFixture with the experiment created and its baseline calibrated, so the next start is ready to
+// ask. It leaves the experiment agent as Claude Code.
+func readyFixture(t *testing.T) (runFixture, string) {
+	t.Helper()
+	f, ctrl := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "baseline"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, ctrl)
+	return f, ctrl
+}
+
+// terminalRun runs start as a person at a terminal would, answering the prompt with stdin.
+func terminalRun(f runFixture, ctx context.Context, stdin io.Reader, args ...string) cliResult {
+	var stdout, stderr bytes.Buffer
+	code := Run(ctx, Env{Args: args, Stdin: stdin, StdinTerminal: true, Terminal: true, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
+		Getenv: func(key string) string {
+			if key == "NO_COLOR" {
+				return "1"
+			}
+			return f.vars[key]
+		},
+		Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
+		Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
+	return cliResult{code, stdout.String(), stderr.String()}
+}
+
+// The prompt inside start: asked on a terminal, "n" runs nothing, "y" runs the experiment; it quotes the budget the run
+// would have, which --budget raises, and a lower --budget is refused before asking.
+func TestStartPromptQuotesTheEffectiveBudget(t *testing.T) {
+	t.Parallel()
+	f, ctrl := readyFixture(t)
+	ctx := context.Background()
+	declined := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
+	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $42.00. [y/N]", "Nothing was run and nothing was spent",
+		"up to $42.00): agentium experiment run quick-aa-baseline\n")
+	raised := terminalRun(f, ctx, strings.NewReader("n\n"), "start", "--budget", "100")
+	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the experiment's $42.00, raised by --budget)", "spends up to $100.00. [y/N]",
+		"up to $100.00): agentium experiment run quick-aa-baseline --budget 100")
+	lower := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "10")
+	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $42.00")
+	if strings.Contains(lower.stdout, "Run it now?") {
+		t.Errorf("a lower budget was asked about:\n%s", lower.stdout)
+	}
+	if stored, started := paidRuns(t, f, ctrl); started != 0 {
+		t.Errorf("declined prompts ran %d run(s) (%d stored)", started, stored)
+	}
+	yes := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "100")
+	expect(t, yes, ExitOK, "spends up to $100.00. [y/N]", "[16/16]")
+	if runs := experimentRuns(t, f, "quick-aa-baseline"); len(runs) < 16 {
+		t.Errorf("answering y stored %d run(s), want 16", len(runs))
+	}
+}
+
+// Ctrl-C while the prompt waits is a no.
+func TestStartPromptStopsOnCancel(t *testing.T) {
+	t.Parallel()
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	var out strings.Builder
+	s := &starter{env: Env{Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: &out}}
+	done := make(chan bool)
+	go func() { done <- s.confirm(ctx, 5) }()
+	cancel()
+	select {
+	case got := <-done:
+		if got {
+			t.Error("a cancelled prompt said yes")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the prompt kept waiting after cancel")
+	}
+}
+
+// Another snapshot saved later does not change which experiment start resumes (arm A stays baseline), and a committed
+// context that moved on is noted.
+func TestStartKeepsBaselineAsArmA(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK, "Experiment quick-aa-baseline: created")
+	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+	expect(t, f.run(ctx, "context", "snapshot", "later", "--working-tree"), ExitOK)
+	again := f.run(ctx, "start")
+	expect(t, again, ExitOK, "Context: snapshot baseline from ", "Tasks: skipped (the experiment exists)", "Experiment quick-aa-baseline: exists (skipped)")
+	if strings.Contains(again.stdout, "created") {
+		t.Errorf("a new snapshot made a new experiment:\n%s", again.stdout)
+	}
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Shorten the rules")
+	expect(t, f.run(ctx, "start"), ExitOK, "the context committed at HEAD differs from snapshot baseline", "agentium context snapshot NAME")
+}
+
+// --accept-mined accepts only what start mined itself: a task imported by hand keeps waiting for its review.
+func TestStartAcceptMinedLeavesOtherTasksAlone(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 10)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	head := strings.TrimSpace(gitIn(t, f.repo, "rev-parse", "HEAD"))
+	expect(t, f.run(ctx, "task", "import", "--commit", head, "--name", "by-hand", "--verify", "make test"), ExitOK)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Accepted 8 mined instruction(s) without your review", "Experiment quick-aa-baseline: created")
+	for _, line := range strings.Split(got.stdout, "\n") {
+		if strings.HasPrefix(line, "Accepted ") && strings.Contains(line, "by-hand") {
+			t.Errorf("the hand-imported task was accepted: %s", line)
+		}
+	}
+	for _, task := range storedTasks(t, f.data) {
+		if (task.Name == "by-hand") != task.NeedsReview {
+			t.Errorf("task %s needs review = %v", task.Name, task.NeedsReview)
+		}
+	}
+}
+
+func TestNamesReferenceFile(t *testing.T) {
+	t.Parallel()
+	for instruction, want := range map[string]bool{"Add Reverse to strutil.go.": true, "Add Reverse to the library.": false, "Edit pkg/strutil.go": true} {
+		got := namesReferenceFile(store.Task{Instruction: instruction, Reference: []string{"pkg/strutil.go"}})
+		if got != want {
+			t.Errorf("%q: names a reference file = %v, want %v", instruction, got, want)
+		}
+	}
+}
+
+// When every candidate fails validation, start stops after the first round instead of importing the whole history.
+func TestStartStopsWhenNothingValidates(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "Makefile", "test:\n\tsh run_tests.sh\n")
+	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, repo, "CLAUDE.md", "# Rules\n")
+	writeFile(t, repo, "lib.sh", "base() { echo base; }\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Initial commit")
+	for i := 1; i <= 12; i++ { // each commit's test passes on the base already: the task is invalid
+		writeFile(t, repo, "lib.sh", fmt.Sprintf("# change %d\nbase() { echo base; }\n", i))
+		writeFile(t, repo, fmt.Sprintf("tests/b%d_test.sh", i), ". ./lib.sh\n[ \"$(base)\" = base ]\n")
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", fmt.Sprintf("Explain base again, %d\n\nA comment says what base prints.", i))
+	}
+	f := runFixtureAt(repo, filepath.Join(t.TempDir(), "data"), t.TempDir())
+	got := f.run(context.Background(), "start", "--accept-mined")
+	expect(t, got, ExitError, "imported 8 of 8 tried", "0 valid of 8", "set aside: ", "only 0 of the 8 an experiment needs are ready",
+		"none of the 8 tasks just validated is valid")
+	if n := strings.Count(got.stdout, "Mining:"); n != 1 {
+		t.Errorf("start mined %d times, want once:\n%s", n, got.stdout)
+	}
+	if tasks := storedTasks(t, f.data); len(tasks) != 8 {
+		t.Errorf("%d tasks imported, want 8", len(tasks))
 	}
 }

@@ -17,6 +17,9 @@ import (
 // (`agentium init`) to its first decisive verdict. It is computed from stored data (the project's registration, its
 // experiments and runs), so it needs no migration and is the same whenever it is read.
 //
+// Only experiments that ran to their end (status done) count: one that stopped for its budget or the usage window may
+// still change its verdict when it resumes.
+//
 // A verdict is decisive when it is improved, regressed or no loss beyond the margin (also "improved, but small" and
 // "equivalent", which are as firm); inconclusive and exploratory verdicts do not count. Only the primary metric and the
 // guard have verdicts that count (the others are exploratory by role). An A/A calibration never counts: it measures
@@ -60,7 +63,7 @@ func LoadNorthStar(ctx context.Context, p experiment.Project) (NorthStar, error)
 	}
 	var first *firstVerdict
 	for _, e := range experiments {
-		if e.Lock == nil {
+		if e.Lock == nil || e.Status != store.StatusDone { // only an experiment that ran to its end gives a verdict to count
 			continue
 		}
 		found, err := decisiveOf(ctx, p, e)
@@ -114,10 +117,7 @@ func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
 			return nil, fmt.Errorf("run %s: %w", r.ID, err)
 		}
-		// The same mapping Build uses, so the verdict is the one the experiment's report shows.
-		data = append(data, experiment.RunData{Slot: r.Slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
-			ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
-			OutputTokens: float64(rec.Metrics.OutputTokens)})
+		data = append(data, runData(r.Slot, rec))
 		out.started = latest(out.started, r.Started)
 		out.finished = latest(out.finished, r.Finished)
 	}
@@ -134,6 +134,14 @@ func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (
 		}
 	}
 	return nil, nil
+}
+
+// runData is what the analysis reads of a run: the one mapping Build and the north star share, so the verdict counted
+// is the one the experiment's report shows.
+func runData(slot int, rec run.Record) experiment.RunData {
+	return experiment.RunData{Slot: slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
+		ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
+		OutputTokens: float64(rec.Metrics.OutputTokens)}
 }
 
 func latest(a, b time.Time) time.Time {

@@ -49,11 +49,14 @@ func Load(ctx context.Context, p experiment.Project, name, home string, warn io.
 	if err != nil {
 		return Report{}, err
 	}
-	star, err := LoadNorthStar(ctx, p)
-	if err != nil {
-		return Report{}, err
+	// The north star reads the project's other experiments too; one that cannot be analyzed costs the line, not the report.
+	if star, err := LoadNorthStar(ctx, p); ctx.Err() != nil {
+		return Report{}, ctx.Err()
+	} else if err != nil {
+		fmt.Fprintf(warn, "agentium: the first-decisive-verdict line is left out: %v\n", err)
+	} else {
+		rep.NorthStar = &star
 	}
-	rep.NorthStar = &star
 	return rep, nil
 }
 

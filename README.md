@@ -29,7 +29,7 @@ Agentium runs coding agents such as Claude Code (Codex comes later) on tasks fro
 ```sh
 go install ./cmd/agentium          # from a clone of this repository; puts agentium in your Go bin folder
 cd /path/to/your/repo
-agentium start                     # registers it, snapshots the context, mines and validates 8 tasks, creates an experiment, previews its cost
+agentium start                     # registers, snapshots, mines and validates 8 tasks, creates an experiment, previews its cost; stops at your review of the tasks
 ```
 
 `agentium start` never writes to your repository and makes no paid run on its own. It does the steps below for you, skipping those already done, so run it again to resume:
@@ -40,9 +40,9 @@ agentium start                     # registers it, snapshots the context, mines 
 - prints the preview: runs, estimated cost, detectable effect, and what is missing;
 - stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it).
 
-Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`). `start --reviewed` accepts those whose instructions show no solution sections and state every requirement of the hidden tests.
+Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`), so a first `start` stops there. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
 
-It also shows how long it took, and what was spent, to your first decisive verdict (improved, regressed or no loss; inconclusive does not count), here and in `experiment report`. The manual commands follow.
+It also shows how long it took, and what was spent, to your first decisive verdict (improved, regressed or no loss; inconclusive does not count), here and in `experiment report`, from finished experiments only. The manual commands follow.
 
 ```sh
 agentium init /path/to/your/repo   # registers it; Agentium never writes to your repository

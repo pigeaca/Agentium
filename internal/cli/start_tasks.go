@@ -2,8 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,6 +78,18 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 	return c, nil
 }
 
+// reachable counts the tasks that are ready or can become so without a person: the waiting ones too, unless
+// --accept-mined is the way they are accepted, when only those start mined count.
+func (s *starter) reachable(c taskCounts) int {
+	n := len(c.ready)
+	for _, name := range c.waiting {
+		if !s.args.acceptMined || s.mined[name] {
+			n++
+		}
+	}
+	return n
+}
+
 // supplyTasks mines and validates until the cost floor of tasks can be in the experiment, or the candidates run out.
 // It reports whether the floor is met; when it is not, it says why and what to do.
 func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
@@ -79,14 +97,16 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 	out, started := s.env.Stdout, s.env.Now()
 	attempted, exhausted, worked := map[string]bool{}, false, false
 	for {
-		if s.args.reviewed {
-			n, err := s.acceptReviews(ctx)
+		if s.args.acceptMined {
+			names, err := s.acceptMined(ctx)
 			if err != nil {
 				return false, err
 			}
-			if n > 0 {
+			if len(names) > 0 {
 				worked = true
-				fmt.Fprintf(out, "Reviewed: accepted %d instruction(s) that show no solution sections and state every requirement of their tests (--reviewed)\n", n)
+				fmt.Fprintf(out, "Accepted %d mined instruction(s) without your review (--accept-mined): %s\n"+
+					"  Only solution headings, reference-file names and unstated test requirements were checked; a message that explains the fix is not detected.\n",
+					len(names), strings.Join(names, ", "))
 			}
 		}
 		c, err := s.countTasks(ctx, attempted)
@@ -109,9 +129,13 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 			if err := s.validate(ctx, c.pending, attempted); err != nil {
 				return false, err
 			}
-		case len(c.ready)+len(c.waiting) < floor && !exhausted:
+		case s.reachable(c) < floor && !exhausted && s.stopped == "":
 			worked = true
-			if exhausted, err = s.mineMore(ctx, floor-len(c.ready)-len(c.waiting)); err != nil {
+			if s.imported >= maxMineFactor*floor {
+				s.stopped = fmt.Sprintf("stopped mining after %d imported task(s), %d times the floor", s.imported, maxMineFactor)
+				continue
+			}
+			if exhausted, err = s.mineMore(ctx, floor-s.reachable(c)); err != nil {
 				return false, err
 			}
 		default:
@@ -151,6 +175,9 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 		}
 		counts[status]++
 		if status != task.StatusValid {
+			if p := r.problem(); p != "" {
+				status = p
+			}
 			bad = append(bad, r.task.Name+": "+status)
 		}
 	}
@@ -159,6 +186,9 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 		line += "; set aside: " + strings.Join(bad, ", ")
 	}
 	fmt.Fprintln(s.env.Stdout, line)
+	if counts[task.StatusValid] == 0 && len(results) > 0 {
+		s.stopped = "none of the " + fmt.Sprint(len(results)) + " tasks just validated is valid, so mining more would likely repeat that"
+	}
 	return nil
 }
 
@@ -182,20 +212,35 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 		}})
 	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned,
 		len(imp.Tasks), imp.Tried, strings.Join(prep.Verify, "; "))
+	s.imported += len(imp.Tasks)
+	for _, t := range imp.Tasks {
+		s.mined[t.Name] = true
+	}
+	if err := s.saveMined(); err != nil {
+		return false, err
+	}
 	return len(imp.Tasks) < want, nil // fewer imported than asked: every candidate was tried
 }
 
-// acceptReviews marks waiting tasks reviewed when the automatic checks find nothing to review: no section that may
-// give the solution away, and no requirement of the hidden tests that nothing states. The rest stay for a person.
-func (s *starter) acceptReviews(ctx context.Context) (accepted int, err error) {
+// maxMineFactor caps how many tasks start imports, as a multiple of the floor, when many fail validation.
+const maxMineFactor = 3
+
+// acceptMined marks waiting tasks that start itself mined (now or in an earlier run: minedFile) as reviewed when the
+// automatic checks find nothing: no section that may give the solution away, no reference-file name in the
+// instruction, and no requirement of the hidden tests that nothing states. A task from a pull request, a ticket or
+// `task import` is never accepted. It returns the accepted names; a mined instruction that explains the fix in plain
+// words passes these checks, which is why the flag is opt-in and says so.
+func (s *starter) acceptMined(ctx context.Context) ([]string, error) {
 	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	quiet := s.env
 	quiet.Stderr = io.Discard
+	var accepted []string
 	for _, t := range tasks {
-		if !t.NeedsReview || t.SolutionCommit == "" || t.Grading == task.GradingJudge || len(task.SolutionSections(t.Instruction)) > 0 {
+		if !s.mined[t.Name] || !t.NeedsReview || !strings.HasPrefix(t.Source, "commit ") || t.SolutionCommit == "" ||
+			t.Grading == task.GradingJudge || len(task.SolutionSections(t.Instruction)) > 0 || namesReferenceFile(t) {
 			continue
 		}
 		if ok, err := gapGate(ctx, quiet, s.w, t, false); err != nil {
@@ -207,9 +252,52 @@ func (s *starter) acceptReviews(ctx context.Context) (accepted int, err error) {
 		if err := s.w.db.UpdateTask(ctx, t, s.env.Now()); err != nil {
 			return accepted, err
 		}
-		accepted++
+		accepted = append(accepted, t.Name)
 	}
 	return accepted, nil
+}
+
+// namesReferenceFile is whether the instruction names a file of the reference solution, which tells the agent where
+// the fix goes (the check `task show` makes).
+func namesReferenceFile(t store.Task) bool {
+	return slices.ContainsFunc(t.Reference, func(p string) bool {
+		return strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p))
+	})
+}
+
+// minedFile records, beside the project's repository, which tasks start mined, so --accept-mined in a later run still
+// knows them. It is not task data and needs no migration.
+func (s *starter) minedFile() string {
+	return filepath.Join(filepath.Dir(s.w.bare), "start-mined.json")
+}
+
+func (s *starter) loadMined() error {
+	data, err := os.ReadFile(s.minedFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	var names []string
+	if err := json.Unmarshal(data, &names); err != nil {
+		return fmt.Errorf("%s: %w", s.minedFile(), err)
+	}
+	for _, n := range names {
+		s.mined[n] = true
+	}
+	return nil
+}
+
+func (s *starter) saveMined() error {
+	data, err := json.Marshal(slices.Sorted(maps.Keys(s.mined)))
+	if err != nil {
+		return err
+	}
+	tmp := s.minedFile() + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, s.minedFile())
 }
 
 // explainShortage says how many tasks start found and what to do next.
@@ -218,13 +306,17 @@ func (s *starter) explainShortage(c taskCounts, floor int, exhausted bool) {
 	if len(c.waiting) > 0 {
 		fmt.Fprintf(out, "Tasks: %s\n", st.Warn(fmt.Sprintf("%d valid, %d ready of the %d an experiment needs: the others wait for your review", len(c.ready)+len(c.waiting), len(c.ready), floor)))
 		fmt.Fprintf(out, "  Read each instruction for solution leaks: %s, then %s\n"+
-			"  (or %s accepts those whose instructions pass the leak and gap checks)\n", st.Command("agentium task show NAME"),
-			st.Command("agentium task edit NAME --reviewed"), st.Command("agentium start --reviewed"))
+			"  (or %s accepts the ones start mined without your review, after automatic checks that miss an instruction explaining the fix)\n", st.Command("agentium task show NAME"),
+			st.Command("agentium task edit NAME --reviewed"), st.Command("agentium start --accept-mined"))
 		fmt.Fprintf(out, "  waiting: %s\n", strings.Join(c.waiting, ", "))
 	} else {
 		fmt.Fprintf(out, "Tasks: %s\n", st.Bad(fmt.Sprintf("only %d of the %d an experiment needs are ready", len(c.ready), floor)))
 	}
-	if exhausted && len(c.ready)+len(c.waiting) < floor {
+	if s.stopped != "" && s.reachable(c) < floor {
+		fmt.Fprintf(out, "  %s: look at the tasks set aside above (%s shows each task's status), or add tasks with %s\n", s.stopped,
+			st.Command("agentium task list"), st.Command("agentium task import --commit REF"))
+	}
+	if exhausted && s.reachable(c) < floor {
 		fmt.Fprintf(out, "  the history has no more candidates: %s shows why commits were set aside; add tasks with %s or %s, then run %s again\n",
 			st.Command("agentium task mine --dry-run"), st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"))
 	}
