@@ -227,7 +227,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	expect(t, plan, ExitOK, "Estimated cost per run on claude-sonnet-5:",
 		"from each task's own earlier runs (their median): costly $1.80 (2 run(s))",
 		"value, without runs of their own: $0.40, the median of this project's 6 earlier task runs on claude-sonnet-5",
-		"The tiers' estimates average the 2 eligible task(s), each estimated the same way.")
+		"The tiers' estimates average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
 	// The experiment sums its tasks' estimates; Quick would draw 2 tasks × 3 runs per arm at their average, $1.10 a run.
 	if row := armRow(plan.stdout, "Quick"); len(row) < 6 || row[4] != "$13.20" || row[5] != "$36.00" {
 		t.Errorf("Quick row = %v, want $13.20 and the worst case $36.00:\n%s", row, plan.stdout)
@@ -237,6 +237,13 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	}
 	if strings.Contains(plan.stdout, "WARNING") {
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
+	}
+	// The tiers draw from every eligible task, also those outside the experiment: the note shows the average they use.
+	expect(t, f.run(ctx, "experiment", "new", "solo", "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	solo := f.run(ctx, "experiment", "plan", "solo")
+	expect(t, solo, ExitOK, "value, without runs of their own: $0.40", "average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
+	if strings.Contains(solo.stdout, "costly $1.80") {
+		t.Errorf("only the experiment's own tasks are listed:\n%s", solo.stdout)
 	}
 	// A budget set by hand below the tasks' estimates plus the reserve is flagged.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1", "--budget", "12"), ExitOK)

@@ -264,7 +264,8 @@ func printIneligible(w io.Writer, reasons map[string]string) {
 // estimateRun estimates runs on model from the project's earlier fair task runs on it that reported their cost (a run
 // stopped before Claude Code's result has none): each task from its own runs, when it has some. A run is a task's own
 // only while it is linked to it: a removed task's runs, and an experiment's runs of a task changed after the lock, are
-// not, so a task imported again under the same name starts without history.
+// not, so a task imported again under the same name starts without history. A task edited in place keeps its ID, and
+// so its earlier runs.
 func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Estimate, error) {
 	runs, err := w.db.Runs(ctx, w.project.ID)
 	if err != nil {
@@ -438,7 +439,8 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 }
 
 // printCostBasis says how each of the experiment's tasks is estimated: from its own earlier runs, or from the fallback
-// for tasks without any. The tiers draw from the eligible tasks, so they average those tasks' estimates.
+// for tasks without any. The tiers draw from the eligible tasks, so they average those tasks' estimates, which may
+// include tasks outside the experiment: the note shows that average.
 func printCostBasis(out io.Writer, st term.Style, d experiment.Design, eligible []string, est experiment.Estimate) {
 	var own, other []string
 	for _, t := range d.Tasks {
@@ -459,8 +461,8 @@ func printCostBasis(out io.Writer, st term.Style, d experiment.Design, eligible 
 		}
 		fmt.Fprintf(out, "  %s, without runs of their own: %s\n", strings.Join(other, ", "), fallback)
 	}
-	if slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
-		fmt.Fprintln(out, st.Note(fmt.Sprintf("The tiers' estimates average the %d eligible task(s), each estimated the same way.", len(eligible))))
+	if mean, known := est.MeanUSD(eligible); known && slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("The tiers' estimates average the %d eligible task(s), each estimated the same way: $%.2f a run.", len(eligible), mean)))
 	}
 }
 
