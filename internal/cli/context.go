@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -109,6 +110,11 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 }
 
 func (w *workspace) Close() { w.db.Close() }
+
+// service is the workspace as the services in internal/experiment take it.
+func (w *workspace) service() experiment.Project {
+	return experiment.Project{DB: w.db, ID: w.project.ID, Layout: w.layout, Root: w.root, Bare: w.bare}
+}
 
 // read returns a read-only view of the working tree (ref == "") or of ref, and the commit HEAD or ref names. Nothing
 // is copied: commits are read in place with ls-tree and cat-file.
@@ -293,28 +299,13 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		}
 		include = append(include, resolved.Linked...) // documents only
 	}
-	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include)
+	manifest, err := saveSnapshot(ctx, env, w, name, label, commit, src, include)
 	if err != nil {
 		return fail(env, err)
-	}
-	encoded, err := json.Marshal(manifest)
-	if err != nil {
-		return fail(env, fmt.Errorf("encode manifest: %w", err))
-	}
-	// The database decides who owns a name (a concurrent snapshot with the same name fails here); the ref then keeps
-	// the commit from garbage collection.
-	if _, err := w.db.SaveSnapshot(ctx, store.Snapshot{ProjectID: w.project.ID, Name: name, Source: label, SourceCommit: commit,
-		CommitID: commitID, Manifest: encoded, CreatedAt: env.Now()}); errors.Is(err, store.ErrExists) {
-		return fail(env, fmt.Errorf("snapshot %q already exists; choose another name", name))
-	} else if err != nil {
-		return fail(env, err)
-	}
-	if _, err := gitx.Run(ctx, "--git-dir", w.bare, "update-ref", "refs/agentium/snapshots/"+name, commitID); err != nil {
-		return fail(env, errors.Join(err, w.db.DeleteSnapshot(ctx, w.project.ID, name)))
 	}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
-		name, label, shortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
+		name, label, experiment.ShortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
 	if *workingTree {
 		changes, err := snapshot.UncapturedChanges(ctx, w.root, manifest.Paths())
 		if err != nil {
@@ -331,6 +322,30 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, warning(st, w))
 	}
 	return ExitOK
+}
+
+// saveSnapshot builds the snapshot's commit in Agentium's repository and records it under name.
+func saveSnapshot(ctx context.Context, env Env, w *workspace, name, label, commit string, src source.Source, include []string) (snapshot.Manifest, error) {
+	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include)
+	if err != nil {
+		return manifest, err
+	}
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		return manifest, fmt.Errorf("encode manifest: %w", err)
+	}
+	// The database decides who owns a name (a concurrent snapshot with the same name fails here); the ref then keeps
+	// the commit from garbage collection.
+	if _, err := w.db.SaveSnapshot(ctx, store.Snapshot{ProjectID: w.project.ID, Name: name, Source: label, SourceCommit: commit,
+		CommitID: commitID, Manifest: encoded, CreatedAt: env.Now()}); errors.Is(err, store.ErrExists) {
+		return manifest, fmt.Errorf("snapshot %q already exists; choose another name", name)
+	} else if err != nil {
+		return manifest, err
+	}
+	if _, err := gitx.Run(ctx, "--git-dir", w.bare, "update-ref", "refs/agentium/snapshots/"+name, commitID); err != nil {
+		return manifest, errors.Join(err, w.db.DeleteSnapshot(ctx, w.project.ID, name))
+	}
+	return manifest, nil
 }
 
 // notIncluded lists linked documents of src that the snapshot does not capture.
@@ -380,7 +395,7 @@ func contextList(ctx context.Context, env Env, args []string) int {
 		if err := json.Unmarshal(snap.Manifest, &manifest); err != nil {
 			return fail(env, fmt.Errorf("snapshot %s: %w", snap.Name, err))
 		}
-		table.Row(snap.Name, snap.Source, shortCommit(snap.SourceCommit), strconv.Itoa(len(manifest.Files)),
+		table.Row(snap.Name, snap.Source, experiment.ShortCommit(snap.SourceCommit), strconv.Itoa(len(manifest.Files)),
 			fmt.Sprintf("~%d", claudectx.EstimateTokens(manifest.StartupBytes)))
 	}
 	if err := table.Write(env.Stdout); err != nil {

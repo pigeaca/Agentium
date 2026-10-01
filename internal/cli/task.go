@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/mine"
@@ -319,7 +320,7 @@ func (w *workspace) commitTask(ctx context.Context, ref, instruction string, t s
 	if err != nil {
 		return t, err
 	}
-	t.Source, t.NeedsReview = "commit "+shortCommit(t.SolutionCommit), true
+	t.Source, t.NeedsReview = "commit "+experiment.ShortCommit(t.SolutionCommit), true
 	if instruction == "" {
 		if instruction, err = mine.CommitInstruction(ctx, t.SolutionCommit, "-C", w.root); err != nil {
 			return t, err
@@ -344,7 +345,7 @@ func (w *workspace) keepSolution(ctx context.Context, ref string, t store.Task) 
 		return t, ctx.Err()
 	}
 	if err != nil || parent == "" {
-		return t, fmt.Errorf("commit %s has no parent to start from", shortCommit(t.SolutionCommit))
+		return t, fmt.Errorf("commit %s has no parent to start from", experiment.ShortCommit(t.SolutionCommit))
 	}
 	if t.BaseCommit, err = w.keepCommit(ctx, parent); err != nil {
 		return t, err
@@ -373,17 +374,17 @@ func (w *workspace) completeTask(ctx context.Context, t store.Task, judging judg
 	}
 	switch {
 	case len(t.HiddenTests) == 0 && len(t.Reference) == 0:
-		return t, fmt.Errorf("%s changes no files against the base, so there is nothing to implement", shortCommit(t.SolutionCommit))
+		return t, fmt.Errorf("%s changes no files against the base, so there is nothing to implement", experiment.ShortCommit(t.SolutionCommit))
 	case len(t.HiddenTests) == 0 && judging != judgeNever:
 		t.Grading = task.GradingJudge
 	case len(t.HiddenTests) == 0:
 		return t, fmt.Errorf("%s changes no test files, so there are no hidden tests to check a solution with (to grade it with the judge instead: task add --judge-graded)",
-			shortCommit(t.SolutionCommit))
+			experiment.ShortCommit(t.SolutionCommit))
 	case judging == judgeRequired:
 		return t, fmt.Errorf("--judge-graded is for solutions without tests, but %s changes %d test file(s): leave the flag out to grade by them",
-			shortCommit(t.SolutionCommit), len(t.HiddenTests))
+			experiment.ShortCommit(t.SolutionCommit), len(t.HiddenTests))
 	case len(t.Reference) == 0:
-		return t, fmt.Errorf("%s changes only test files, so there is nothing for an agent to implement", shortCommit(t.SolutionCommit))
+		return t, fmt.Errorf("%s changes only test files, so there is nothing for an agent to implement", experiment.ShortCommit(t.SolutionCommit))
 	}
 	return t, nil
 }
@@ -414,10 +415,10 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	}
 	if saved.Grading == task.GradingJudge {
 		fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, judge-graded (no hidden tests), %d reference file(s)\n",
-			saved.Name, saved.Source, shortCommit(saved.BaseCommit), len(saved.Reference))
+			saved.Name, saved.Source, experiment.ShortCommit(saved.BaseCommit), len(saved.Reference))
 	} else {
 		fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, %d hidden test file(s), %d reference file(s)\n",
-			saved.Name, saved.Source, shortCommit(saved.BaseCommit), len(saved.HiddenTests), len(saved.Reference))
+			saved.Name, saved.Source, experiment.ShortCommit(saved.BaseCommit), len(saved.HiddenTests), len(saved.Reference))
 	}
 	if len(saved.Setup) > 0 {
 		fmt.Fprintf(env.Stdout, "  setup:  %s\n", strings.Join(saved.Setup, "; "))
@@ -475,9 +476,9 @@ func taskName(subject, commit string) string {
 		}
 	}
 	if slug == "" {
-		return "c" + shortCommit(commit)[:7]
+		return "c" + experiment.ShortCommit(commit)[:7]
 	}
-	return slug + "-" + shortCommit(commit)[:7]
+	return slug + "-" + experiment.ShortCommit(commit)[:7]
 }
 
 // mergedPR is a merged pull request as gh reports it.
@@ -538,7 +539,7 @@ func pullRequest(ctx context.Context, env Env, root string, number int) (mergedP
 // solution. Renames are detected on both sides, as GitHub reports them.
 func checkWholePR(ctx context.Context, root string, pr mergedPR) error {
 	if _, err := gitx.Run(ctx, "-C", root, "cat-file", "-e", "--end-of-options", pr.commit+"^{commit}"); err != nil {
-		return fmt.Errorf("pull request #%d was merged as %s, which is not in your repository yet: fetch it first", pr.number, shortCommit(pr.commit))
+		return fmt.Errorf("pull request #%d was merged as %s, which is not in your repository yet: fetch it first", pr.number, experiment.ShortCommit(pr.commit))
 	}
 	out, err := gitx.Output(ctx, nil, "-C", root, "diff", "--numstat", "-z", "-M", pr.commit+"^1", pr.commit)
 	if err != nil {
@@ -550,7 +551,7 @@ func checkWholePR(ctx context.Context, root string, pr mergedPR) error {
 	}
 	mismatch := func(detail string) error {
 		return fmt.Errorf("pull request #%d does not match its merge commit %s (%s): it was probably rebase-merged; import its commits with --commit",
-			pr.number, shortCommit(pr.commit), detail)
+			pr.number, experiment.ShortCommit(pr.commit), detail)
 	}
 	if len(local) != len(pr.files) {
 		return mismatch(fmt.Sprintf("%d file(s) in the pull request, %d in the commit", len(pr.files), len(local)))
@@ -647,7 +648,7 @@ func taskStatus(ctx context.Context, st term.Style, fair *task.Fairness, t store
 	if n := untestedCount(t); n > 0 {
 		status += st.Warn(fmt.Sprintf(" (%d untested hunk(s))", n))
 	}
-	if gaps, err := taskGaps(ctx, fair, t); err != nil {
+	if gaps, err := task.Gaps(ctx, fair, t); err != nil {
 		status += st.Warn(" (unstated requirements unknown)")
 	} else if len(gaps) > 0 {
 		status += st.Warn(fmt.Sprintf(" (%d unstated requirement(s))", len(gaps)))
@@ -655,20 +656,10 @@ func taskStatus(ctx context.Context, st term.Style, fair *task.Fairness, t store
 	return status
 }
 
-// taskGaps lists what the task's hidden tests require that the instruction and the base do not state. f caches
-// searches, so give one to every command.
-func taskGaps(ctx context.Context, f *task.Fairness, t store.Task) ([]task.Gap, error) {
-	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
-		return nil, nil
-	}
-	return f.Gaps(ctx, task.FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: t.Instruction,
-		HiddenTests: t.HiddenTests, Reference: t.Reference})
-}
-
 // gapGate refuses to mark t reviewed while its gaps stand, unless they are accepted. It explains why on stderr and
 // reports whether to go on.
 func gapGate(ctx context.Context, env Env, w *workspace, t store.Task, accept bool) (bool, error) {
-	gaps, err := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
+	gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if err != nil {
 		return false, err
 	}
@@ -778,7 +769,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	if t.Grading == task.GradingJudge {
 		fmt.Fprintln(out, note(st, judgeGradedNote))
 	}
-	gaps, gapErr := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
+	gaps, gapErr := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview && isTicket(t) {
 		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(converted from a ticket; review it, then task edit)")+st.Heading(":"))
 	} else if t.NeedsReview {
@@ -853,13 +844,26 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
-func taskValidate(ctx context.Context, env Env, args []string) int {
+// validateArgs is what task validate was asked for.
+type validateArgs struct {
+	name      string // the task, unless all
+	all       bool
+	status    string
+	jobs      int
+	snapshots stringList
+	weak      bool
+	opts      task.ValidateOptions
+	// notApplied are the flags given that only apply to running checks (for a judge-graded task).
+	notApplied []string
+}
+
+// parseValidate reads and checks task validate's arguments; a mistake is reported and its exit code returned.
+func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("task validate", flag.ContinueOnError)
 	all := fs.Bool("all", false, "validate every task of the project, --jobs at a time")
-	status := fs.String("status", "", "with --all: only tasks with this status ("+strings.Join(batchStatuses, ", ")+")")
+	status := fs.String("status", "", "with --all: only tasks with this status ("+strings.Join(task.BatchStatuses(), ", ")+")")
 	jobs := fs.Int("jobs", 2, "with --all: how many tasks to validate at once")
-	var snapshots stringList
-	fs.Var(&snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
+	fs.Var(&a.snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
 	repeat := fs.Int("repeat", 1, "run every stage this many times; a stage whose runs disagree makes the task flaky")
 	weak := fs.Bool("weak-tests", false, "also remove each hunk of the reference solution and list those no hidden test needs")
 	maxHunks := fs.Int("max-hunks", task.DefaultMaxHunks, "with --weak-tests: how many hunks to try, in file and line order")
@@ -867,13 +871,18 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	keep := fs.Bool("keep", false, "keep the checkouts for inspection")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
-		return code
+		return a, code, false
 	}
 	given := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
-	usage := func(format string, args ...any) int {
+	fs.Visit(func(f *flag.Flag) {
+		given[f.Name] = true
+		if f.Name != "weak-tests" && f.Name != "max-hunks" {
+			a.notApplied = append(a.notApplied, "--"+f.Name)
+		}
+	})
+	usage := func(format string, args ...any) (validateArgs, int, bool) {
 		fmt.Fprintf(env.Stderr, "agentium task validate: "+format+"\n", args...)
-		return ExitUsage
+		return a, ExitUsage, false
 	}
 	switch {
 	case *all && len(rest) != 0:
@@ -882,13 +891,13 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		return usage("--weak-tests checks one task at a time: give its NAME instead of --all")
 	case *all && *jobs < 1:
 		return usage("--jobs must be at least 1")
-	case *all && given["status"] && !slices.Contains(batchStatuses, *status):
-		return usage("--status must be one of %s", strings.Join(batchStatuses, ", "))
+	case *all && given["status"] && !slices.Contains(task.BatchStatuses(), *status):
+		return usage("--status must be one of %s", strings.Join(task.BatchStatuses(), ", "))
 	case !*all && (given["status"] || given["jobs"]):
 		return usage("--status and --jobs need --all")
 	case !*all && len(rest) != 1:
 		fmt.Fprint(env.Stderr, taskUsage)
-		return ExitUsage
+		return a, ExitUsage, false
 	case *repeat < 1 || *repeat > 20:
 		return usage("--repeat must be 1 to 20")
 	case given["max-hunks"] && !*weak:
@@ -896,41 +905,48 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	case *maxHunks < 1:
 		return usage("--max-hunks must be at least 1")
 	}
-	for i, name := range snapshots {
-		if name == "base" || slices.Contains(snapshots[:i], name) { // arm names name checkouts and logs
+	for i, name := range a.snapshots {
+		if name == "base" || slices.Contains(a.snapshots[:i], name) { // arm names name checkouts and logs
 			return usage("--snapshot %q is repeated or reserved (\"base\" is the task's own context)", name)
 		}
+	}
+	if len(rest) == 1 {
+		a.name = rest[0]
+	}
+	a.all, a.status, a.jobs, a.weak = *all, *status, *jobs, *weak
+	a.opts = task.ValidateOptions{Repeat: *repeat, Weak: *weak, MaxHunks: *maxHunks, Timeout: *timeout, Keep: *keep}
+	return a, ExitOK, true
+}
+
+func taskValidate(ctx context.Context, env Env, args []string) int {
+	a, code, ok := parseValidate(env, args)
+	if !ok {
+		return code
 	}
 	w, err := openProject(ctx, env)
 	if err != nil {
 		return fail(env, err)
 	}
 	defer w.Close()
-	o := validateOptions{repeat: *repeat, weak: *weak, maxHunks: *maxHunks, timeout: *timeout, keep: *keep}
-	if *all {
-		if o.arms, err = w.validationArms(ctx, snapshots); err != nil {
+	o := a.opts
+	if a.all {
+		if o.Arms, err = w.validating(nil, env.Now).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 			return fail(env, err)
 		}
-		return validateAll(ctx, env, w, *status, o, *jobs)
+		return validateAll(ctx, env, w, a.status, o, a.jobs)
 	}
-	t, err := w.db.TaskByName(ctx, w.project.ID, rest[0])
+	t, err := w.db.TaskByName(ctx, w.project.ID, a.name)
 	if err != nil {
 		return fail(env, err)
 	}
 	if t.Grading == task.GradingJudge {
-		var notApplied []string
-		fs.Visit(func(f *flag.Flag) {
-			if f.Name != "weak-tests" && f.Name != "max-hunks" {
-				notApplied = append(notApplied, "--"+f.Name)
-			}
-		})
-		if *weak {
+		if a.weak {
 			fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs hidden tests; %s is judge-graded and has none\n", t.Name)
 			return ExitUsage
 		}
-		return validateJudged(ctx, env, w, t, notApplied)
+		return validateJudged(ctx, env, w, t, a.notApplied)
 	}
-	if *weak && (t.SolutionCommit == "" || len(t.Reference) == 0 || len(t.HiddenTests) == 0) {
+	if a.weak && (t.SolutionCommit == "" || len(t.Reference) == 0 || len(t.HiddenTests) == 0) {
 		fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs a task with a solution (hidden tests and a reference); %s has none\n", t.Name)
 		return ExitUsage
 	}
@@ -939,29 +955,35 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	if o.arms, err = w.validationArms(ctx, snapshots); err != nil {
+	if o.Arms, err = w.validating(nil, env.Now).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 		return fail(env, err)
 	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
 		return fail(env, err)
 	}
+	return validateOne(ctx, env, w, w.validating(buildEnv, env.Now), t, o)
+}
+
+// validateOne validates t with o in the arms o names, with a live line and the stages' progress, stores the validation
+// and reports it.
+func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating, t store.Task, o task.ValidateOptions) int {
 	env, live := liveEnv(env)
 	defer live.Stop()
-	v := w.validator(t, o, buildEnv, env.Now)
+	v := val.Validator(t, o)
 	v.Progress, v.Style = env.Stdout, env.style()
 	v.Started = func(arm, stage string) { live.Step("validating " + t.Name + ": " + arm + ", " + stage) }
 	st := env.style()
-	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(o.arms))), strings.Join(t.Verify, "; "))
-	result, err := v.Validate(ctx, taskSpec(t), o.arms)
+	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(o.Arms))), strings.Join(t.Verify, "; "))
+	result, err := v.Validate(ctx, task.SpecOf(t), o.Arms)
 	live.Stop()
 	if err != nil {
 		return fail(env, err)
 	}
-	if t, err = w.storeValidation(ctx, t, result, env.Now()); err != nil {
+	if t, err = val.StoreValidation(ctx, t, result, env.Now()); err != nil {
 		return fail(env, err)
 	}
-	if gaps, err := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t); err != nil {
+	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err != nil {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("unstated requirements could not be checked: %v", err)))
 	} else {
 		printGaps(env.Stdout, st, gaps)
@@ -977,80 +999,15 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
-// validateOptions are the validation settings task validate takes from its flags, for one task or many.
-type validateOptions struct {
-	arms     []task.Arm
-	repeat   int
-	weak     bool
-	maxHunks int
-	timeout  time.Duration
-	keep     bool
+// validating is what validating w's tasks needs; buildEnv is the environment commands run in (run.BuildEnv).
+func (w *workspace) validating(buildEnv []string, now func() time.Time) task.Validating {
+	return task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Now: now,
+		ReferenceDiff: func(ctx context.Context, base, solution string, reference []string) (string, error) {
+			return llmjudge.ReferenceDiff(ctx, w.bare, base, solution, reference)
+		}}
 }
 
-// validationArms is the base's own context followed by the named snapshots (validated as distinct and not "base").
-func (w *workspace) validationArms(ctx context.Context, snapshots []string) ([]task.Arm, error) {
-	arms := []task.Arm{{Name: "base"}}
-	for _, name := range snapshots {
-		snap, err := w.db.SnapshotByName(ctx, w.project.ID, name)
-		if err != nil {
-			return nil, err
-		}
-		arms = append(arms, task.Arm{Name: name, Snapshot: snap.CommitID})
-	}
-	return arms, nil
-}
-
-// validator is a Validator for t, its checkouts and logs in a folder of its own under the artifacts (task ID and time),
-// with no progress output.
-func (w *workspace) validator(t store.Task, o validateOptions, buildEnv []string, now func() time.Time) task.Validator {
-	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), now().UTC().Format("20060102T150405Z"))
-	return task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: o.timeout, Keep: o.keep, Repeats: o.repeat, WeakTests: o.weak, MaxHunks: o.maxHunks, Env: buildEnv, Now: now}
-}
-
-// taskSpec is what validation needs of t.
-func taskSpec(t store.Task) task.Spec {
-	return task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference,
-		Setup: t.Setup, Verify: t.Verify}
-}
-
-// errTaskChanged means a validation was not stored: the task's commands changed, or it was removed, while it ran.
-var errTaskChanged = errors.New("not stored: the task changed during validation")
-
-// storeValidation records result as t's validation, if t still has the verify and setup commands it was validated
-// with (errTaskChanged otherwise), and returns the task as stored now: edits made meanwhile (an instruction, the review
-// flag) are kept, not overwritten from t. It stores even when ctx is cancelled: a validation that finished is kept
-// through an interrupt.
-func (w *workspace) storeValidation(ctx context.Context, t store.Task, result task.Validation, now time.Time) (store.Task, error) {
-	ctx = context.WithoutCancel(ctx)
-	encoded, err := json.Marshal(result)
-	if err != nil {
-		return t, fmt.Errorf("encode validation: %w", err)
-	}
-	stored, err := w.db.SetTaskValidation(ctx, t.ID, t.Verify, t.Setup, encoded, now)
-	if err != nil {
-		return t, err
-	}
-	if !stored {
-		return t, errTaskChanged
-	}
-	return w.db.TaskByName(ctx, t.ProjectID, t.Name)
-}
-
-// judgedValidation checks a judge-graded task without running anything (task.ValidateJudged) and returns the
-// reference diff the judge would read.
-func (w *workspace) judgedValidation(ctx context.Context, t store.Task, now time.Time) (task.Validation, string, error) {
-	var diff string
-	if len(task.JudgedFiles(t.Reference)) > 0 && t.SolutionCommit != "" {
-		var err error
-		if diff, err = llmjudge.ReferenceDiff(ctx, w.bare, t.BaseCommit, t.SolutionCommit, t.Reference); err != nil {
-			return task.Validation{}, "", err
-		}
-	}
-	return task.ValidateJudged(t.Instruction, t.Reference, diff, now), diff, nil
-}
-
-// validateJudged checks a judge-graded task (judgedValidation), stores the result and reports it. notApplied lists the
+// validateJudged checks a judge-graded task (task.Validating.Judged), stores the result and reports it. notApplied lists the
 // flags given that only apply to running checks.
 func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, notApplied []string) int {
 	out, st := env.Stdout, env.style()
@@ -1058,11 +1015,12 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	if len(notApplied) > 0 {
 		fmt.Fprintln(out, note(st, strings.Join(notApplied, ", ")+" do(es) not apply: nothing runs for a judge-graded task"))
 	}
-	result, diff, err := w.judgedValidation(ctx, t, env.Now())
+	val := w.validating(nil, env.Now)
+	result, diff, err := val.Judged(ctx, t, env.Now())
 	if err != nil {
 		return fail(env, err)
 	}
-	if t, err = w.storeValidation(ctx, t, result, env.Now()); err != nil {
+	if t, err = val.StoreValidation(ctx, t, result, env.Now()); err != nil {
 		return fail(env, err)
 	}
 	words := len(strings.Fields(t.Instruction))

@@ -1,0 +1,224 @@
+package experiment
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	llmjudge "github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
+)
+
+// Review is a stored experiment looked over before it runs: its design, the tasks that can be in it, what a run is
+// estimated to cost, whether everything running needs is in place, the sizes the study offers, and the project's runs
+// (for the usage preview).
+type Review struct {
+	Design    Design
+	Eligible  []string
+	Reasons   map[string]string
+	Estimate  Estimate
+	Readiness Readiness
+	Rows      []Row
+	Runs      []store.Run
+}
+
+// LoadReview reads experiment name and checks it. Nothing is changed.
+func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Review, error) {
+	d, err := p.Load(ctx, name)
+	if err != nil {
+		return Review{}, err
+	}
+	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
+	if err != nil {
+		return Review{}, err
+	}
+	est, err := p.EstimateFor(ctx, d.Model)
+	if err != nil {
+		return Review{}, err
+	}
+	runs, err := p.DB.Runs(ctx, p.ID)
+	if err != nil {
+		return Review{}, err
+	}
+	return Review{Design: d, Eligible: eligible, Reasons: reasons, Estimate: est, Runs: runs,
+		Readiness: CheckReadiness(ctx, p, e, d, eligible, reasons, est), Rows: Preview(d, eligible, est)}, nil
+}
+
+// Write prints the review: the design, what is missing before it runs, the sizes with their costs and detectable
+// effects, and the notes that explain them. now and signIn (the sign-in runs would use) feed the usage preview. A
+// cancelled ctx stops it after the readiness checks, whose answers it may have cut short.
+func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, signIn string, now time.Time) error {
+	r.writeDesign(out, st, name)
+	fmt.Fprintln(out, "\n"+st.Heading("Before it runs:"))
+	r.Readiness.Write(out, st)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	fmt.Fprintln(out, "\n"+st.Heading("Sizes (runs count both arms):"))
+	if err := r.writeSizes(out, st); err != nil {
+		return err
+	}
+	d := r.Design
+	WriteCostBasis(out, st, d, r.Eligible, r.Estimate)
+	r.writeWorstCase(out, st)
+	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
+		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
+		"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
+		"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.",
+		SigmaLogCost, WSuccess, TauLow, TauHigh)))
+	if own := Detect(len(d.Tasks), d.Repeats); d.Goal == GoalCheaper && len(d.Tasks) > 0 && own.Guard[0] > d.SuccessMargin {
+		fmt.Fprintln(out, st.Note("note: "+fmt.Sprintf("at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
+			"success verdict to be inconclusive unless there is no real difference and the noise is low.", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)))
+	}
+	floors := FloorsFor(MethodVersion)
+	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
+		"below them a metric is exploratory.\n", MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
+	WriteUsagePreview(out, st, r.Runs, 2*len(d.Tasks)*d.Repeats, signIn, DefaultUsageLimit/100, now)
+	if !r.Readiness.Ready {
+		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
+	}
+	return nil
+}
+
+// writeDesign prints the experiment's arms, model, goal, tasks and judge.
+func (r Review) writeDesign(out io.Writer, st term.Style, name string) {
+	d := r.Design
+	goal := "cheaper, with success as the guard"
+	if d.Goal == GoalBetter {
+		goal = "better success"
+	}
+	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Experiment %s: %s", name, DescribeArms(d))))
+	for _, a := range d.Arms {
+		commit := ""
+		if a.Snapshot != "" {
+			commit = " (" + ShortCommit(a.Snapshot) + ")"
+		}
+		fmt.Fprintf(out, "  arm %s: context %s%s\n", a.Name, a.Context, commit)
+	}
+	effort := d.Effort
+	if effort == "" {
+		effort = "the CLI's default"
+	}
+	fmt.Fprintf(out, "  model %s, effort %s; each run up to $%.2f and %s; %d at a time\n", d.Model, effort, d.RunBudgetUSD, d.Timeout, d.Concurrency)
+	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
+	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
+	if d.Judge != nil {
+		fmt.Fprintf(out, "  judge: %s; each run's judgement up to $%.2f; a second opinion, it decides nothing\n", DescribeJudge(*d.Judge), d.JudgeCapUSD())
+	}
+}
+
+// writeSizes prints the table of sizes, and the footnote of a tier asking for more tasks than are eligible.
+func (r Review) writeSizes(out io.Writer, st term.Style) error {
+	sizes := term.NewTable(st, term.Left("SIZE"), term.Right("TASKS"), term.Right("RUNS/ARM"), term.Right("RUNS"), term.Right("EST. COST"),
+		term.Right("WORST CASE"), term.Right("COST CHANGE"), term.Right("SUCCESS CHANGE"), term.Right("NO-LOSS GUARD"), term.Left("EXPLORATORY"))
+	marked := false // a row's task count carries a footnote mark; the others get a space so the digits line up
+	for _, row := range r.Rows {
+		marked = marked || row.Short
+	}
+	for i, row := range r.Rows {
+		tasks := fmt.Sprint(row.Tasks)
+		if row.Short {
+			tasks += "*"
+		} else if marked {
+			tasks += " "
+		}
+		cost := "unknown"
+		if row.CostKnown {
+			cost = fmt.Sprintf("$%.2f", row.CostUSD+row.JudgeUSD) // the judge's share is stated below the table
+		}
+		effects := []string{percentRange(row.Detect.Cost, "%"), percentRange(row.Detect.Success, " pp"), percentRange(row.Detect.Guard, " pp")}
+		exploratory := strings.Join(row.Exploratory, ", ")
+		if row.Tasks == 0 {
+			effects, exploratory = []string{"-", "-", "-"}, st.Warn("no tasks")
+		} else if exploratory == "" {
+			exploratory = "-"
+		} else {
+			exploratory = st.Warn(exploratory)
+		}
+		name := row.Name
+		if i == len(r.Rows)-1 { // this experiment's own size
+			name = st.Heading(name)
+		}
+		sizes.Row(name, tasks, strconv.Itoa(row.Repeats), strconv.Itoa(row.Runs), cost, fmt.Sprintf("$%.2f", row.WorstUSD),
+			effects[0], effects[1], effects[2], exploratory)
+	}
+	if err := sizes.Write(out); err != nil {
+		return err
+	}
+	tiers := Tiers()
+	if len(r.Eligible) < tiers[len(tiers)-1].Tasks {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("* only %d task(s) can be in this experiment; a tier asking for more uses them all", len(r.Eligible))))
+	}
+	return nil
+}
+
+// writeWorstCase prints the judge's share of the cost, when there is a judge, and the worst case the budget guards.
+func (r Review) writeWorstCase(out io.Writer, st term.Style) {
+	d := r.Design
+	if d.Judge != nil {
+		j := d.Judge
+		own := r.Rows[len(r.Rows)-1]
+		agent := "unknown"
+		if own.CostKnown {
+			agent = fmt.Sprintf("$%.2f", own.CostUSD)
+		}
+		fmt.Fprintf(out, "The judge: about $%.2f for this experiment's %d runs × %d call(s) at $%.3f a call (EST. COST includes it; the agent's\n"+
+			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
+			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
+	}
+	if d.Judge == nil {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
+			"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
+	} else {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap, and its judgement $%.2f (%d call(s) at $%.2f, each asked twice at\n"+
+			"most). A run starts only when the spend so far and the caps of the runs in flight leave room for its own cap, so\n"+
+			"spending never passes the $%.2f budget.", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, llmjudge.CallCapUSD, d.BudgetUSD)))
+	}
+}
+
+// WriteCostBasis says how each of the experiment's tasks is estimated: from its own earlier runs, or from the fallback
+// for tasks without any. The tiers draw from the eligible tasks, so they average those tasks' estimates, which may
+// include tasks outside the experiment: the note shows that average.
+func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, est Estimate) {
+	var own, other []string
+	for _, t := range d.Tasks {
+		if c, ok := est.Tasks[t]; ok {
+			own = append(own, fmt.Sprintf("%s $%.2f (%d run(s))", t, c.PerRunUSD, c.Runs))
+		} else {
+			other = append(other, t)
+		}
+	}
+	fmt.Fprintf(out, "Estimated cost per run on %s:\n", d.Model)
+	if len(own) > 0 {
+		fmt.Fprintf(out, "  from each task's own earlier runs (their median): %s\n", strings.Join(own, ", "))
+	}
+	if len(other) > 0 {
+		fallback := "no estimate (" + est.Basis + ")"
+		if est.Known {
+			fallback = fmt.Sprintf("$%.2f, %s", est.PerRunUSD, est.Basis)
+		}
+		fmt.Fprintf(out, "  %s, without runs of their own: %s\n", strings.Join(other, ", "), fallback)
+	}
+	if mean, known := est.MeanUSD(eligible); known && slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("The tiers' estimates average the %d eligible task(s), each estimated the same way: $%.2f a run.", len(eligible), mean)))
+	}
+}
+
+// percentRange shows a detectable effect's range; success effects of 100 pp or more cannot be detected at all.
+func percentRange(v [2]float64, unit string) string {
+	end := func(x float64) string {
+		if unit == " pp" && x >= 1 {
+			return "100+"
+		}
+		return fmt.Sprintf("%.0f", 100*x)
+	}
+	if lo, hi := end(v[0]), end(v[1]); lo != hi {
+		return lo + "–" + hi + unit
+	}
+	return end(v[1]) + unit
+}
