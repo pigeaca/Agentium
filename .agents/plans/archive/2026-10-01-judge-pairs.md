@@ -1,8 +1,8 @@
 # Judge: which arm fixed it better
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 1a (the pair core in `internal/judge`) under way with an implementer on `claude/feat/judge-pairs-core`. Step 1b needs the [per-run judge](2026-10-01-llm-judge.md)'s step 2. Its real check is paid and needs approval.
-- Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
+- Status: Parked (2026-10-01): step 1a merged (#53). Step 1b and the rest wait for the judge gate in the [next chapter](../2026-10-01-next-chapter.md): the pilot gave pairs a NO-GO on order flips. Resume from this file.
+- Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
 
 ## Why
 When both arms pass a task, tests cannot say which fix is better. The pilot's pair judge showed two things, without any labels:

@@ -1,68 +1,84 @@
-# The next chapter: fast, cheap verdicts
+# The next chapter: decisive verdicts, fast and affordable
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): wave 1 started. The user approved this plan (the [roadmap page](https://claude.ai/artifact/NfBAZ7iHuMTahxazQMR92q)), and with it these paid checks:
-  - one temp-folder probe session (cents);
-  - the judge's small real check (a few dollars);
-  - the Java and Rust pilot, which gets its estimate first.
-- Scope: the coordinating plan for the roadmap. Items get their own plan file only when they start.
+- Status: In Progress (2026-10-01): wave 1.
+  - **Approvals:** the user approved this plan and, with it, these paid checks: the temp-folder probes (done, $0.14) and the judge's small real check. The wave-2 external verdict (about $60) and the Java and Rust pilot get their own approval, with an estimate.
+  - **Revised the same day** after an independent review, which the user accepted in full ("apply all"). The review found:
+    - a north-star unit that counted "inconclusive";
+    - a pull-request budget below the validation minimum;
+    - verdicts promised for time and tokens, which never get one;
+    - a smoke check that flags about 83% of unchanged pull requests;
+    - cost features that break existing safeguards;
+    - a security gap for teammates' pull requests;
+    - a work-in-progress limit broken in every wave.
+- Scope: the coordinating plan for the roadmap. Items get their own plan file only when they start. Later items stay one-line entries.
 
 ## Vision
-- **The line:** know what your AI setup really changes, in an afternoon, for a few dollars.
-- **Where we are:** the engine (isolation, hidden tests, paired statistics, honest verdicts) works and stays.
-- **What's next:** make a verdict fast and cheap to get, then put it where developers work.
+- **The line:** know what your AI setup really changes, with a clear answer within a day, for tens of dollars, not hundreds.
+- **Keep:** the engine (isolation, hidden tests, paired statistics, honest verdicts) stays as it is.
+- **What's next:** make a *decisive* verdict reachable, then cheaper, then automatic.
 
 ## North-star metrics
-Every item says which one it moves.
-- **Time to first verdict:** commands and minutes from `init` on a fresh clone to the first report with a verdict that is not exploratory.
-  - Today: about 14 commands, plus importing, reviewing and validating 8–20 tasks by hand.
-  - Target: 3 commands, under an hour.
-- **Dollars per verdict:** spend up to that verdict.
-  - Today: a success verdict needs about 120 runs, about $120–180 at this repository's $1–1.50 per run.
-  - Target: $60 or less.
-- **Measured** at each wave's end, by a scripted walkthrough on a public repository, recorded here.
+- **Time to the first decisive verdict:** improved, regressed or no loss. Inconclusive and exploratory don't count. Each verdict states its detectable effect, and the clock runs from `init` on a fresh clone.
+  - Today there has been none yet, on any repository.
+  - Target: setup in 3 commands, and the first decisive verdict within a day.
+- **Dollars to the first decisive verdict:** total spend up to it.
+  - Today: a cost verdict at the floor (8 tasks × 1 run per arm, 16 runs) costs $16–24. The 16-run A/B cost $19.65 and was still inconclusive: it could only detect changes of about 25–30%.
+  - A success verdict at the floor (20 × 3 per arm, 120 runs) costs about $120–180. At that size it only certifies a margin of about 21–25 percentage points, not the 15-point default.
+  - Target: a decisive cost or model verdict for $40 or less. The success target is set after the wave-3 statistics note names a lever that reaches it: reuse with a pinned Claude Code, or a cheaper screening model (study §5.8).
+- **Trust guard:** A/A experiments give a false decisive verdict at most 5% of the time, checked by the seeded simulation and by real A/A runs.
+- **Measured:**
+  - by a scripted walkthrough at the end of each wave, recorded here;
+  - from wave 2, by Agentium itself: it records the time and spend up to each project's first decisive verdict.
 
 ## How the work runs in parallel
-- **Limit:** at most two feature tracks and one maintenance track in flight, and at most three agents at once (reviewers included).
-- **Each code step:** an implementer in its own worktree, then a reviewer, fixes, and a PR. The coordinator integrates.
-- **Light process:**
-  - a re-review only when fixes change behavior;
-  - docs-only PRs need no review;
-  - one-PR changes use an inline plan.
-- **Package ownership per wave** avoids merge conflicts. When two items touch the same files, the later one starts after the earlier one merges.
+- **At most two feature tracks and one maintenance track per wave.** At most three agents at once, reviewers included. At most five plans in progress; the rest are Planned, Parked, or one-line roadmap entries.
+- **Each code step:** an implementer in its own worktree, then a reviewer, fixes, and a PR. Re-review only when the fixes change behavior. Docs-only PRs need no review.
+- **Package ownership:** `internal/cli/experiment_run.go` and `internal/experiment` are hotspots, so items touching them run one after another.
 
 ## Waves
-| Wave | Track | Item | Plan | Touches | Starts after | Moves |
-|---|---|---|---|---|---|---|
-| 0 | — | Judge step 2 (experiments); ticket tasks step 1 | [judge](2026-10-01-llm-judge.md), [tickets](2026-10-01-ticket-tasks.md) | cli, run, experiment, task, store | — (in review) | trust |
-| 1 | Maintenance | Temp-folder isolation | [plan](2026-10-01-run-temp-isolation.md) | claude, run | now | trust |
-| 1 | Speed | `task mine` and `task validate --all` | [plan](2026-10-01-task-mine.md) | new `internal/mine`, task, cli/task.go | core now; CLI after the tickets merge | time ↓↓ |
-| 1 | Maintenance | Refactor round, steps 1–2: one spending record; command handlers into services | [plan](2026-10-01-refactor-round.md) | run, experiment, cli, report | judge step 2 merges | speed of change |
-| 1 | Reach | Java and Rust step 3: Maven, Gradle and Cargo profiles | [plan](2026-09-30-java-rust.md) | buildtool, claude, run | temp isolation merges | reach |
-| 2 | Maintenance | Refactor steps 3–4 (merge helpers, faster tests); judge step 3 (reports), then its real check | refactor, judge | claude, run, report, cli tests | Java/Rust step 3 | trust |
-| 2 | Speed | Quick start: `agentium start`, calibration inside `experiment run` | its own plan when it starts | cli, experiment | `task mine`, refactor step 2 | time ↓ |
-| 2 | Cost | Cheaper verdicts: run reuse, then early stopping | its own plan when it starts | experiment, stats, store | refactor steps 1–2 | $ ↓ |
-| 2 | Reach | Java and Rust pilot (paid; estimate first) | [plan](2026-09-30-java-rust.md) | — | step 3 | reach |
-| 2 | Automation | A1 headless foundation (`--json`, exit codes, `start --yes`, `agentium.toml`); A2 supply loop (`pool update`); (A3 Linux spike moved later: automation starts on the user's Mac) | [automation](2026-10-01-automation.md) | cli, new | quick start, task mining, temp isolation | time ↓ |
-| 3 | Automation | A4 fast check on pull requests (`ci check`, policy exit codes; git and Claude Code hooks trigger it on the user's Mac, comments through `gh`); A5 deep watch (`watch --once` from a launchd calendar entry, drift, history, digest) | [automation](2026-10-01-automation.md) | cli, report, experiment, new | A1, A2, cheaper verdicts | reach ↑↑ |
-| 3 | Reach | Claude Code skill `/agentium compare` | its own plan when it starts | new | A1 | reach |
-| 3 | Trust | Judge: check its claims by execution; then pairs (1b) and ticket grading (step 2) | [pairs](2026-10-01-judge-pairs.md), [tickets](2026-10-01-ticket-tasks.md) | judge, experiment | judge step 3 | trust |
-| 3 | Reach | Model and effort A/B | [plan](2026-10-01-model-ab.md) | experiment, run | refactor step 2 | reach |
-| Later | — | Autopilot (A6: propose, test and open pull requests with context changes); Codex (deferred by the user); containers (Harbor); live Jira; benchmarks; team sharing | [automation](2026-10-01-automation.md) | — | — | — |
+| Wave | Features (at most 2) | Maintenance (1) | Exit gate |
+|---|---|---|---|
+| 0 (done) | The judge in experiments (#54); tasks from tickets (#55) | — | merged |
+| 1 Finish | [Task mining](2026-10-01-task-mine.md); [judge](2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](2026-10-01-run-temp-isolation.md), then [refactor](2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
+| 2 First decisive verdict | Quick start (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
+| 3 Cheaper verdicts | The statistics note, then run reuse with a pinned Claude Code; group-sequential stopping | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The simulation shows at most 5% false verdicts, and a reused-against-fresh A/A passes |
+| 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) | A Python or TypeScript smoke test; the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
+| Later | The judge gate, then [judge pairs](archive/2026-10-01-judge-pairs.md) (1b) and [ticket grading](archive/2026-10-01-ticket-tasks.md) (step 2); a Claude Code skill; autopilot; [Codex](archive/2026-10-01-phase2-agents-codex.md); hosted CI; live Jira; positioning against `claude plugin eval` and Promptfoo's CI | | |
+
+## Wave 3 requirement: a statistics note before any code
+Run reuse, early stopping and the deep watch each break a safeguard the engine has today:
+- the version lock (`experiment/lock.go`), since Claude Code changed version five times in three days;
+- interleaving in time (`execute.go`);
+- the study's rule against optional stopping (§5.6, rule 7).
+
+The note must fix these before any code:
+- **The reuse key:** the snapshot digest, task base, model, effort, the Claude Code version (pinned per experiment through `AGENTIUM_CLAUDE`), a fingerprint of the invocation (sandbox settings, build profile, temp policy) and a maximum age. The prompt-cache state is a known source of cost noise (about 9%).
+- **Validating reuse:** an A/A of reused against fresh runs before reuse can count toward a verdict.
+- **Stopping:** a group-sequential design with a maximum sample, a schedule of looks, O'Brien–Fleming alpha spending and non-binding futility stops. The existing seeded simulation gates it at no more than 5% false verdicts.
+- **Drift checks:** treated as a control chart with a false-alarm budget, not a fresh 5% test per new version.
+
+## The judge gate (before pairs and ticket grading)
+- **Why:** the pilot gave pairs a NO-GO (11% order flips, without labels) and grading without tests an INCONCLUSIVE.
+- **The gate:**
+  - check the judge's claims by running them: its "partly" verdicts on passing runs, turned into tests;
+  - pre-register the thresholds before measuring, as the pilot did.
+- **Only if it passes:** pairs step 1b and ticket step 2 start. Until then the judge stays a per-run second opinion.
 
 ## Assignments (wave 1)
-- **Temp-folder isolation:** the coordinator investigates (read-only), then an implementer fixes it in `claude/fix/run-temp-isolation`, and one probe session checks it.
-- **`task mine` core:** an implementer, in `claude/feat/task-mine` from main `6aaa1e6`. The core first, in a new `internal/mine` package that touches no CLI files; the CLI follows once the ticket tasks merge.
-- **Refactor step 1:** an implementer, once judge step 2 merges.
-- **Java and Rust step 3:** an implementer, once temp isolation merges.
+- **Temp isolation:** step 2 done (`e27a899`) and in security review; then the coordinator runs one real probe.
+- **Task mining:** step 1 done (`4e1395e`) and in re-review. Step 2 (the CLI) builds `RunsTest` from the build-tool profiles.
+- **Judge step 3:** reports, then the real check; starts when an agent slot is free.
+- **Refactor steps 1–2:** start after judge step 3, which shares the report and CLI code.
 
 ## Acceptance
-1. Each wave's items meet their own plans' acceptance.
-2. The north-star figures are measured and recorded here at the end of waves 1 and 2.
-3. The roadmap and this table stay current; finished plans are archived.
+1. Each wave's items meet their own plans' acceptance, and each wave passes its exit gate.
+2. The north-star figures are recorded here at each wave's end, with the trust guard.
+3. At most five plans in progress; this table, the roadmap and the plans' statuses stay current.
 
 ## Verification
-Per item, as in its plan. Per wave: the scripted walkthrough for the north-star metrics.
+- **Per item:** as in its plan.
+- **Per wave:** the scripted walkthrough, and the trust guard's simulation from wave 3.
 
 ## Metrics
 - Agent: <client> / <exact model id> / <effort>
