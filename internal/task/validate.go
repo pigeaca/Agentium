@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -112,12 +113,15 @@ type Validator struct {
 	LogDir    string
 	Timeout   time.Duration // per command
 	Keep      bool
-	WeakTests bool       // also try the reference solution without each of its hunks (see weakTests)
-	MaxHunks  int        // how many hunks that tries; 0 means DefaultMaxHunks
-	Repeats   int        // runs per stage, each in a fresh checkout; below 2 means once
-	Env       []string   // added to every setup and verification command (a build cache of Agentium's own)
-	Progress  io.Writer  // one line per stage
-	Style     term.Style // styles each progress line's verdict; the zero Style prints plain text
+	WeakTests bool     // also try the reference solution without each of its hunks (see weakTests)
+	MaxHunks  int      // how many hunks that tries; 0 means DefaultMaxHunks
+	Repeats   int      // runs per stage, each in a fresh checkout; below 2 means once
+	Env       []string // added to every setup and verification command (a build cache of Agentium's own)
+	// Cache is the data folder's cache root (home.Layout.Cache): with it, each checkout's own build tools (Maven,
+	// Gradle, Cargo) keep their caches there too, or have their wrappers cleared, like Go's in Env. Empty: Env alone.
+	Cache    string
+	Progress io.Writer  // one line per stage
+	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
 	// Started, when set, is called before each stage: it only feeds a status display and must not print.
 	Started func(arm, stage string)
 	Now     func() time.Time
@@ -423,11 +427,19 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 	fmt.Fprintln(v.Progress, line)
 }
 
+// envFor is Env plus the caches of the build tools the checkout in dir uses (see Cache).
+func (v Validator) envFor(dir string) []string {
+	if v.Cache == "" {
+		return v.Env
+	}
+	return append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(dir)), v.Cache)...)
+}
+
 // run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.
 func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.Env})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir)})
 		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {

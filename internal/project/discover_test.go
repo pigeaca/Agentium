@@ -178,6 +178,27 @@ func TestNpmPlaceholderIsNotATestCommand(t *testing.T) {
 	}
 }
 
+// init proposes each build tool's test command from fixture repositories, the repository's wrapper first.
+func TestJVMAndRustTestCommands(t *testing.T) {
+	for name, c := range map[string]struct {
+		files map[string]string
+		want  []string
+	}{
+		"maven wrapper":   {map[string]string{"pom.xml": "<project/>", "mvnw": "#!/bin/sh\n"}, []string{"./mvnw -q test"}},
+		"maven":           {map[string]string{"pom.xml": "<project/>"}, []string{"mvn -q test"}},
+		"gradle wrapper":  {map[string]string{"build.gradle.kts": "", "settings.gradle.kts": "", "gradlew": "#!/bin/sh\n"}, []string{"./gradlew test"}},
+		"gradle":          {map[string]string{"build.gradle": ""}, []string{"gradle test"}},
+		"cargo":           {map[string]string{"Cargo.toml": "[package]\n"}, []string{"cargo test"}},
+		"wrapper only":    {map[string]string{"mvnw": "#!/bin/sh\n", "gradlew": "#!/bin/sh\n"}, nil},
+		"nested pom only": {map[string]string{"service/pom.xml": "<project/>"}, nil},
+		"maven and cargo": {map[string]string{"pom.xml": "<project/>", "Cargo.toml": "[package]\n", "Makefile": "test:\n\ttrue\n"}, []string{"mvn -q test", "cargo test", "make test"}},
+	} {
+		if got := testCommands(repo(t, c.files)); !reflect.DeepEqual(got, c.want) && !(len(got) == 0 && len(c.want) == 0) {
+			t.Errorf("%s: commands %q, want %q", name, got, c.want)
+		}
+	}
+}
+
 func TestClaudeRunsOutsideTheRepositoryAndEdgeCases(t *testing.T) {
 	dir := repo(t, map[string]string{".claude/rules/go.md": "a\n", ".claude/rules/web/react.md": "b\n"})
 	// A CLI that drops a file wherever it runs: it must not run in the repository.

@@ -39,7 +39,8 @@ func TestProfilesKeepTheirContracts(t *testing.T) {
 			}
 		}
 		if p.AgentEnv != nil {
-			for _, kv := range p.AgentEnv(agentFixture, agentFixture, "/nonexistent-home") {
+			for _, kv := range p.AgentEnv(AgentContext{Allowed: agentFixture, Environ: agentFixture, Home: "/nonexistent-home",
+				BuildCache: "/run/cache", Deps: "/data/deps/1", JavaHome: "/jdk"}) {
 				name, _, _ := strings.Cut(kv, "=")
 				if name == "" || runner.IsCredential(name) || reserved(name, false) {
 					t.Errorf("%s: AgentEnv sets %q, which is empty, a credential or reserved", p.Name, name)
@@ -147,22 +148,22 @@ func TestGoAgentEnv(t *testing.T) {
 		{nil, []string{"GOENV=off"}, "GOFLAGS=-buildvcs=false"},
 		{nil, []string{"GOENV=" + envFile + ".missing"}, "GOFLAGS=-buildvcs=false"},
 	} {
-		if got := AgentEnv(c.allowed, c.environ, "/nonexistent-home"); !slices.Equal(got, []string{c.want}) {
+		if got := AgentEnv(Select(nil), AgentContext{Allowed: c.allowed, Environ: c.environ, Home: "/nonexistent-home"}); !slices.Equal(got, []string{c.want}) {
 			t.Errorf("AgentEnv(%q, %q) = %q, want %s", c.allowed, c.environ, got, c.want)
 		}
 	}
 }
 
 func TestAllowlistAndRunners(t *testing.T) {
-	names, prefixes := EnvAllowlist()
+	names, prefixes := EnvAllowlist(Select(nil))
 	if !slices.Contains(names, "GOFLAGS") || !slices.Contains(prefixes, "CGO_") || slices.Contains(names, "GOCACHEPROG") {
 		t.Errorf("Go's allowlist: %q, %q", names, prefixes)
 	}
 	if got := RunnerConfigs()["go"]; !slices.Equal(got, []string{"go.mod"}) {
 		t.Errorf("go's configuration: %q", got)
 	}
-	if got := strings.Join(TestPatterns(), "|"); got != "go test" {
-		t.Errorf("test patterns: %s", got)
+	if !slices.Contains(TestPatterns(), "go test") {
+		t.Errorf("test patterns: %q", TestPatterns())
 	}
 }
 

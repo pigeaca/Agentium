@@ -32,6 +32,10 @@ func TestResolve(t *testing.T) {
 	if layout.Root != "/Users/someone/.agentium" {
 		t.Errorf("default root = %q", layout.Root)
 	}
+	// Agents read the deps folder, so it is none of the folders they are denied (cache, projects, records, artifacts).
+	if layout.Deps != "/Users/someone/.agentium/deps" {
+		t.Errorf("deps folder = %q", layout.Deps)
+	}
 	if got := layout.ProjectRepo(7); got != "/Users/someone/.agentium/projects/7/repo.git" {
 		t.Errorf("project repository = %q", got)
 	}

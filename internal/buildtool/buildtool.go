@@ -11,16 +11,24 @@
 //   - EnvNames and EnvPrefixes widen the agent's environment allowlist, which never passes credentials
 //     (runner.IsCredential is applied after it).
 //
-// The table is global today: every profile's allowlist (EnvNames, EnvPrefixes), AgentEnv, AgentCaches, CommandCaches
-// and UserCaches apply to every project, whatever Detect finds; only discovery's test commands follow Detect. That is
-// harmless with one profile. Before a second profile is added (step 3 of the Java and Rust plan), the run must select
-// profiles per repository with Detect, for everything but UserCaches: those stay global, because a user's cache of any
-// tool may hold hidden tests compiled earlier.
+// Profiles are selected per repository: Select returns the ones marked Always (Go's, whose special cases applied to
+// every project before profiles existed, so a Go project's runs stay exactly as they were) and those Detect finds at
+// the repository's root. Everything but UserCaches follows the selection: the allowlist, the agent's environment and
+// caches, the environment of Agentium's own commands, the sandbox's settings, and the hooks that warm and stop a run's
+// tools. UserCaches stay global, whatever the project: a user's cache of any tool may hold hidden tests that an earlier
+// build compiled, and an agent in any repository could read it.
 //
-// Only Go has a profile so far. The golden test in internal/run (TestGoProfileGolden) pins a Go project's behavior.
+// Dependencies offline (Cargo, Maven and Gradle; the recipes were proved in real sessions, see the Java and Rust plan):
+// the agent's sandbox has no network and writes only its checkout and its run's own build cache. Dependencies come
+// from a deps folder in the data folder (home.Layout.Deps) that agents may read and not write. Only a run's setup
+// writes it, before any hidden test exists in a checkout, so it never holds compiled hidden tests (Profile.Warm).
+// Each tool keeps its own subfolder of the run cache; Go's cache stays at its root.
+//
+// The golden test in internal/run (TestGoProfileGolden) pins a Go project's behavior.
 package buildtool
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,11 +36,12 @@ import (
 	"strings"
 )
 
-// Profile is one build tool's special cases. Every field is optional except Name. Until profiles are selected per
-// repository (see the package documentation), a profile's environment and cache entries apply to every project, not
-// only those Detect matches.
+// Profile is one build tool's special cases. Every field is optional except Name. A profile's environment, cache and
+// hook entries apply to a repository only when Select chooses it, except UserCaches, which apply to all.
 type Profile struct {
 	Name string
+	// Always selects the profile for every repository, whatever Detect finds (Go's, for compatibility).
+	Always bool
 	// Detect are files at the repository root that mark a project of this tool; discovery asks TestCommand only when
 	// one of them is present.
 	Detect []string
@@ -61,10 +70,24 @@ type Profile struct {
 	// the agent's environment and in the task's setup, so setup warms the agent's builds. The variables are dropped from
 	// the user's environment when the run has such a cache.
 	AgentCaches []CacheVar
+	// CommandVars are variables this tool needs, beyond CommandCaches, in the environment of Agentium's own commands
+	// (a Maven repository is an argument, not a variable of its own): cache is the data folder's cache root.
+	CommandVars func(cache string) []string
 	// AgentEnv returns variables to set in the agent's environment, replacing any of the same name the allowlist kept:
-	// what the tool needs to build and test offline in the sandbox. allowed is the allowlisted environment, environ the
-	// parent's whole environment, home the user's home folder.
-	AgentEnv func(allowed, environ []string, home string) []string
+	// what the tool needs to build and test offline in the sandbox.
+	AgentEnv func(c AgentContext) []string
+	// LocalBinding asks the sandbox to let the agent bind local sockets (outbound network stays blocked): Gradle's
+	// file-lock service binds a local UDP socket and fails without it.
+	LocalBinding bool
+	// Warm returns the commands that fetch this tool's dependencies into deps, run by a run's setup in the checkout
+	// before hidden tests are anywhere near it (see the package documentation); has reports files at the repository root.
+	Warm func(has func(name string) bool, deps string) []WarmStep
+	// PrepareRun makes the run's own folders for the tool (inside buildCache) before the agent starts: the agent
+	// cannot write deps, so what must be writable is copied or created here.
+	PrepareRun func(ctx context.Context, deps, buildCache string) error
+	// StopRun ends what the tool left running when the run's agent ended; it must not run anything from the checkout,
+	// which the agent may have changed.
+	StopRun func(buildCache string, host Host) error
 	// UserCaches are the user's own caches of this tool, which the agent may not read: they hold what earlier builds
 	// compiled, the hidden tests of validations and gradings included. Only absolute paths count.
 	UserCaches func(environ []string, home string) []string
@@ -88,7 +111,50 @@ func (c CacheVar) Value(root string) string {
 
 // Profiles is the table, in the order discovery proposes test commands. It returns a fresh copy each call.
 func Profiles() []Profile {
-	return []Profile{goProfile()}
+	return []Profile{goProfile(), mavenProfile(), gradleProfile(), cargoProfile()}
+}
+
+// AgentContext is what a profile's AgentEnv may use.
+type AgentContext struct {
+	Allowed, Environ []string // the allowlisted environment and the parent's whole one
+	Home             string   // the user's home folder
+	BuildCache       string   // the run's own build cache; "" without one
+	Deps             string   // the deps folder agents read; "" without one
+	JavaHome         string   // a JDK resolved on the host (ResolveJavaHome); "" when none was found
+}
+
+// WarmStep is a command that fetches dependencies, with the variables it needs added to the environment.
+type WarmStep struct {
+	Command string
+	Env     []string
+}
+
+// DetectIn names the profiles of the repository checked out at dir, from the regular files at its root.
+func DetectIn(dir string) []string {
+	return DetectedNames(func(name string) bool {
+		info, err := os.Stat(filepath.Join(dir, name))
+		return err == nil && info.Mode().IsRegular()
+	})
+}
+
+// Select returns the profiles for a repository: the Always ones and those named (see DetectedNames), in table order.
+func Select(names []string) []Profile {
+	var out []Profile
+	for _, p := range Profiles() {
+		if p.Always || slices.Contains(names, p.Name) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// DetectedNames names the profiles whose Detect files has reports: what a run keeps (Select) for its repository.
+func DetectedNames(has func(name string) bool) []string {
+	var names []string
+	for _, p := range Detected(has) {
+		names = append(names, p.Name)
+	}
+	return names
 }
 
 // goProfile holds Go's special cases.
@@ -108,6 +174,7 @@ func goProfile() Profile {
 			"GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOWORK", "GO111MODULE", "GOTMPDIR", "GOEXPERIMENT",
 			"GODEBUG", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOOS", "GOARCH", "GOAMD64", "GOARM64"},
 		EnvPrefixes: []string{"CGO_"},
+		Always:      true,
 		// GOCACHEPROG is cleared so hidden tests go to no cache program (one set with `go env -w` still applies).
 		CommandCaches: []CacheVar{{Name: "GOCACHE", Dir: "go-build"}, {Name: "GOCACHEPROG", Clear: true}},
 		TempVars:      []string{"GOTMPDIR"},
@@ -122,7 +189,8 @@ func goProfile() Profile {
 // permitted" and agents would spend turns on it. Only the agent's environment gets the flag, not setup or grading
 // commands. The user's own GOFLAGS stay, ours appended. Go reads GOFLAGS from `go env -w` only while the environment
 // leaves it unset, so setting it here would hide the user's saved flags from the agent: start from them.
-func goAgentEnv(allowed, environ []string, home string) []string {
+func goAgentEnv(c AgentContext) []string {
+	allowed, environ, home := c.Allowed, c.Environ, c.Home
 	goflags, userSet := "-buildvcs=false", false
 	for _, kv := range allowed {
 		if v, ok := strings.CutPrefix(kv, "GOFLAGS="); ok {
@@ -189,19 +257,25 @@ func vars(environ []string) map[string]string {
 	return m
 }
 
-// CommandEnv is the environment of the commands Agentium runs itself (setup, validation, grading): every profile's
-// caches under cache, then TMPDIR and every profile's temporary-folder variables set to tmp, then XDG_CACHE_HOME under
-// cache (tools that follow it, Jest's included). Both folders are in the data folder, which agents may not read.
+// CommandEnv is the environment of the commands Agentium runs itself (setup, validation, grading) for every project:
+// the Always profiles' caches under cache, then TMPDIR and their temporary-folder variables set to tmp, then
+// XDG_CACHE_HOME under cache (tools that follow it, Jest's included). Both folders are in the data folder, which
+// agents may not read. CommandEnvFor adds a repository's other tools.
 func CommandEnv(cache, tmp string) []string {
 	var env []string
-	profiles := Profiles()
-	for _, p := range profiles {
+	var always []Profile
+	for _, p := range Profiles() {
+		if p.Always {
+			always = append(always, p)
+		}
+	}
+	for _, p := range always {
 		for _, c := range p.CommandCaches {
 			env = append(env, c.Value(cache))
 		}
 	}
 	env = append(env, "TMPDIR="+tmp)
-	for _, p := range profiles {
+	for _, p := range always {
 		for _, name := range p.TempVars {
 			env = append(env, name+"="+tmp)
 		}
@@ -209,10 +283,28 @@ func CommandEnv(cache, tmp string) []string {
 	return append(env, "XDG_CACHE_HOME="+filepath.Join(cache, "xdg"))
 }
 
-// AgentCacheEnv points every profile's agent caches into the run's own build cache.
-func AgentCacheEnv(buildCache string) []string {
+// CommandEnvFor is what the selected profiles that are not Always add to CommandEnv: their caches (or cleared
+// variables) and variables, under the data folder's cache root. Later entries replace earlier ones of the same name.
+func CommandEnvFor(selected []Profile, cache string) []string {
 	var env []string
-	for _, p := range Profiles() {
+	for _, p := range selected {
+		if p.Always {
+			continue
+		}
+		for _, c := range p.CommandCaches {
+			env = append(env, c.Value(cache))
+		}
+		if p.CommandVars != nil {
+			env = append(env, p.CommandVars(cache)...)
+		}
+	}
+	return env
+}
+
+// AgentCacheEnv points the selected profiles' agent caches into the run's own build cache.
+func AgentCacheEnv(selected []Profile, buildCache string) []string {
+	var env []string
+	for _, p := range selected {
 		for _, c := range p.AgentCaches {
 			env = append(env, c.Value(buildCache))
 		}
@@ -221,9 +313,9 @@ func AgentCacheEnv(buildCache string) []string {
 }
 
 // AgentCacheNames are the variables AgentCacheEnv sets.
-func AgentCacheNames() []string {
+func AgentCacheNames(selected []Profile) []string {
 	var names []string
-	for _, p := range Profiles() {
+	for _, p := range selected {
 		for _, c := range p.AgentCaches {
 			names = append(names, c.Name)
 		}
@@ -231,18 +323,19 @@ func AgentCacheNames() []string {
 	return names
 }
 
-// AgentEnv is every profile's AgentEnv, in table order.
-func AgentEnv(allowed, environ []string, home string) []string {
+// AgentEnv is the selected profiles' AgentEnv, in table order.
+func AgentEnv(selected []Profile, c AgentContext) []string {
 	var env []string
-	for _, p := range Profiles() {
+	for _, p := range selected {
 		if p.AgentEnv != nil {
-			env = append(env, p.AgentEnv(allowed, environ, home)...)
+			env = append(env, p.AgentEnv(c)...)
 		}
 	}
 	return env
 }
 
-// UserCaches is every profile's UserCaches, in table order.
+// UserCaches is every profile's UserCaches, in table order: global, whatever the repository (see the package
+// documentation).
 func UserCaches(environ []string, home string) []string {
 	var paths []string
 	for _, p := range Profiles() {
@@ -253,13 +346,18 @@ func UserCaches(environ []string, home string) []string {
 	return paths
 }
 
-// EnvAllowlist is every profile's EnvNames and EnvPrefixes.
-func EnvAllowlist() (names, prefixes []string) {
-	for _, p := range Profiles() {
+// EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.
+func EnvAllowlist(selected []Profile) (names, prefixes []string) {
+	for _, p := range selected {
 		names = append(names, p.EnvNames...)
 		prefixes = append(prefixes, p.EnvPrefixes...)
 	}
 	return names, prefixes
+}
+
+// LocalBinding reports whether a selected profile needs the sandbox to allow local sockets.
+func LocalBinding(selected []Profile) bool {
+	return slices.ContainsFunc(selected, func(p Profile) bool { return p.LocalBinding })
 }
 
 // Detected returns the profiles whose Detect files has reports, in table order.

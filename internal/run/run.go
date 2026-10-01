@@ -100,8 +100,10 @@ type Env struct {
 // BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
 // the data folder, which agents may not read, and creates it: in the user's own folders they would leave compiled
 // hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). The build tools'
-// profiles say which variables (buildtool.CommandEnv). Caches no profile knows (sccache, Gradle's, Bazel's output base)
-// stay where their tools keep them.
+// profiles say which variables (buildtool.CommandEnv: Go's, for every project). Once a run or validation knows its
+// repository's build tools, their caches are added (buildtool.CommandEnvFor: Maven's and Gradle's under the cache
+// folder, rustc wrappers such as sccache cleared). Caches no profile knows (Bazel's output base) stay where their tools
+// keep them.
 func BuildEnv(layout home.Layout) ([]string, error) {
 	tmp := filepath.Join(layout.Cache, "tmp")
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
@@ -201,6 +203,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// (setup, the agent, verification), and at the end the finished record, so a runner killed before storing it
 	// loses nothing.
 	var agentStarted, recordsReady bool
+	// stopTools ends what the build tools left running (Gradle daemons) once the agent is done; set when the run's tools
+	// are known, called when the agent ends and again, harmlessly, at the very end.
+	var stopTools func()
 	var pgid int
 	var startErr error
 	writeStart := func(finished bool) error {
@@ -221,6 +226,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
 			err = redactErr
+		}
+		if stopTools != nil {
+			stopTools()
 		}
 		if !spec.Keep {
 			os.RemoveAll(workspace)
@@ -318,11 +326,36 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			rec.Notes = append(rec.Notes, "the arm changes what runs: "+strings.Join(overlay.HarnessChanged, ", "))
 		}
 	}
+	// The repository's build tools (profiles) choose the agent's environment and sandbox, add their caches to the
+	// environment of Agentium's own commands, and warm the dependencies the agent will read.
+	inv.Tools, inv.Deps = buildtool.DetectIn(repo), env.depsFolder()
+	profiles := buildtool.Select(inv.Tools)
+	if slices.Contains(inv.Tools, "maven") || slices.Contains(inv.Tools, "gradle") {
+		inv.JavaHome = buildtool.ResolveJavaHome(env.Environ, buildtool.CommandOutput)
+	}
+	if env.Layout.Cache != "" {
+		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, env.Layout.Cache)...)
+	}
+	stopped := false
+	stopTools = func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		if stopErr := buildtool.StopRun(profiles, inv.BuildCache, buildtool.SystemHost()); stopErr != nil {
+			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
+		}
+	}
+	notes, err := env.prepareTools(ctx, profiles, repo, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
+	rec.Notes = append(rec.Notes, notes...)
+	if err != nil {
+		return rec, err
+	}
 	if len(spec.Task.Setup) > 0 {
 		// Setup builds into the agent's own cache, so a warming step (`go build ./...`) spares every agent a cold
 		// build; the workspace holds no hidden tests yet.
 		setup := env
-		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(inv.BuildCache)...)
+		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 		var ok bool
 		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
@@ -392,6 +425,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	transcript.Close()
 	stderr.Close()
+	stopTools() // before grading: a daemon would sit on its heap meanwhile
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
 	unfinished := func(err error) (Record, error) {
@@ -600,7 +634,7 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	for word, files := range map[string][]string{
 		"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
 		"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
-		"cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+		"jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
 	} {
 		runners[word] = append(runners[word], files...)
 	}
@@ -922,9 +956,10 @@ func measure(numstat string, b *Behavior) []string {
 	return paths
 }
 
-// testRunner matches commands that run tests: the build tools' patterns from their profiles, then other runners.
+// testRunner matches commands that run tests: the build tools' patterns from their profiles (Go, Maven, Gradle, Cargo),
+// then other runners.
 var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(), `pytest|python3? -m (pytest|unittest)|`+
-	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|cargo test|make test|mvn( -\S+)* test|gradlew? test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
+	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
 
 func ranTests(commands []string) bool {
 	for _, c := range commands {

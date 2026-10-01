@@ -22,6 +22,7 @@ Agentium runs coding agents such as Claude Code (Codex comes later) on tasks fro
 
 - Go 1.27.1 and a C compiler (SQLite is built with cgo)
 - Git
+- Your project's own build tool, on the machine that runs Agentium: Go, Maven or Gradle (`mvnw` and `gradlew` preferred; Java and Kotlin, with a JDK) or Cargo. Go is proven in real runs; the Maven, Gradle and Cargo profiles are built from recipes proved in real Claude Code sessions, and their pilot on real repositories is still to come.
 - [Claude Code](https://claude.com/claude-code), signed in. `ANTHROPIC_API_KEY` or a token file in `AGENTIUM_CLAUDE_TOKEN_FILE` works too.
 
 ## Quick start
@@ -54,7 +55,7 @@ agentium task validate <name> --repeat 3           # run every stage 3 times: a 
 agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
 
-Mined tasks verify with your build tool's test command (`go test ./...` for Go); `--verify` changes it. Validation builds and runs tests on your machine, two tasks at a time by default: `--jobs` above 1 assumes your tests can run side by side (no fixed ports, shared `/tmp` paths or databases), so use `--jobs 1` if they cannot.
+Mined tasks verify with your build tool's test command (`go test ./...`, `./mvnw -q test` or `mvn -q test`, `./gradlew test` or `gradle test`, `cargo test`); `--verify` changes it. Dependencies for the agent's offline builds are fetched once per project, by a run's setup, into `~/.agentium/deps`. Validation builds and runs tests on your machine, two tasks at a time by default: `--jobs` above 1 assumes your tests can run side by side (no fixed ports, shared `/tmp` paths or databases), so use `--jobs 1` if they cannot.
 
 **3. Run and compare**
 

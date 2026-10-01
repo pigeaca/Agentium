@@ -62,6 +62,15 @@ type Invocation struct {
 	TempRoot string
 	// UID is the user's id (os.Getuid()), which names Claude Code's temp folders (claude-<uid>); read only with TempRoot.
 	UID int
+	// Tools names the build-tool profiles the run's repository has (buildtool.DetectedNames); the always-on ones (Go's)
+	// apply besides. They choose the environment allowlist, the agent's environment and caches, and the sandbox's
+	// local-binding setting.
+	Tools []string
+	// Deps is the folder of warmed dependencies (home.Layout.Deps for the project): the agent's offline builds read it,
+	// and the sandbox keeps it read-only. It lies outside every denied folder. Empty: none.
+	Deps string
+	// JavaHome is a JDK resolved on the host (buildtool.ResolveJavaHome), which the JVM tools' environments name.
+	JavaHome string
 }
 
 // Claude Code 2.1.285's limits on its temp root, which TempRootFits checks:
@@ -194,7 +203,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
 		}
@@ -221,15 +230,17 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	}
 	// The build tools' own variables (Go's GOFLAGS) replace any of the same name the allowlist kept, and come right
 	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
-	allowed := Environ(environ)
-	toolEnv := buildtool.AgentEnv(allowed, environ, inv.Home)
+	profiles := buildtool.Select(inv.Tools)
+	allowed := EnvironFor(environ, profiles)
+	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home,
+		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
 		name, _, _ := strings.Cut(kv, "=")
 		replaced[name] = true
 	}
 	if inv.BuildCache != "" {
-		for _, name := range buildtool.AgentCacheNames() {
+		for _, name := range buildtool.AgentCacheNames(profiles) {
 			replaced[name] = true
 		}
 	}
@@ -242,7 +253,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	env = append(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	if inv.BuildCache != "" {
-		env = append(env, buildtool.AgentCacheEnv(inv.BuildCache)...)
+		env = append(env, buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 	}
 	if inv.TempRoot != "" { // the parent's own CLAUDE_CODE_TMPDIR was dropped with every CLAUDE_* (Environ)
 		env = append(env, "CLAUDE_CODE_TMPDIR="+inv.TempRoot)
@@ -348,6 +359,9 @@ func withForms(paths []string) []string {
 // roots under /tmp among them), which is never the agent's to write either.
 func (inv Invocation) deniedWrites(userConfig string, environ []string) []string {
 	paths := append([]string{}, inv.Deny...)
+	if inv.Deps != "" {
+		paths = append(paths, inv.Deps) // already read-only by default; stated, so no allowWrite above it can open it
+	}
 	if inv.TempRoot != "" {
 		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
 	}
@@ -404,10 +418,14 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 	if inv.BuildCache != "" {
 		filesystem["allowWrite"] = forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
 	}
+	network := map[string]any{"strictAllowlist": true, "allowedDomains": []string{}}
+	if buildtool.LocalBinding(buildtool.Select(inv.Tools)) {
+		network["allowLocalBinding"] = true // Gradle's file-lock service binds a local UDP socket; outbound stays blocked
+	}
 	return map[string]any{
 		"sandbox": map[string]any{
 			"enabled": true, "failIfUnavailable": true, "allowUnsandboxedCommands": false, "autoAllowBashIfSandboxed": true,
-			"network":    map[string]any{"strictAllowlist": true, "allowedDomains": []string{}},
+			"network":    network,
 			"filesystem": filesystem,
 			"credentials": map[string]any{
 				"envVars": []map[string]string{{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"}, {"name": "ANTHROPIC_API_KEY", "mode": "deny"}},
@@ -432,13 +450,21 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 // (an unquoted glob such as --include=*.go then fails with "no matches found" there, as it would for them), and
 // both arms get the same shell.
 func Environ(environ []string) []string {
+	return EnvironFor(environ, buildtool.Select(nil))
+}
+
+// EnvironFor is Environ for a repository whose build-tool profiles are selected (buildtool.Select): the allowlist
+// widens by theirs. The base list keeps JAVA_HOME, CARGO_HOME and the RUSTC* prefix for every project, as before
+// profiles: a profile that owns one of them (Maven's and Gradle's JAVA_HOME, Cargo's CARGO_HOME and wrappers) sets or
+// clears it in the agent's environment instead.
+func EnvironFor(environ []string, selected []buildtool.Profile) []string {
 	exact := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "TMPDIR": true,
 		"LANG": true, "TERM": true, "TZ": true, "VIRTUAL_ENV": true, "JAVA_HOME": true, "CARGO_HOME": true,
 		"RUSTUP_HOME": true, "PNPM_HOME": true, "BUN_INSTALL": true, "DENO_DIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true}
 	prefixes := []string{"LC_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
-	toolNames, toolPrefixes := buildtool.EnvAllowlist() // Go's GO* variables and CGO_
+	toolNames, toolPrefixes := buildtool.EnvAllowlist(selected)
 	for _, name := range toolNames {
 		exact[name] = true
 	}

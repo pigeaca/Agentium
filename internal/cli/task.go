@@ -1005,7 +1005,7 @@ func (w *workspace) validationArms(ctx context.Context, snapshots []string) ([]t
 func (w *workspace) validator(t store.Task, o validateOptions, buildEnv []string, now func() time.Time) task.Validator {
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), now().UTC().Format("20060102T150405Z"))
 	return task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: o.timeout, Keep: o.keep, Repeats: o.repeat, WeakTests: o.weak, MaxHunks: o.maxHunks, Env: buildEnv, Now: now}
+		Timeout: o.timeout, Keep: o.keep, Repeats: o.repeat, WeakTests: o.weak, MaxHunks: o.maxHunks, Env: buildEnv, Cache: w.layout.Cache, Now: now}
 }
 
 // taskSpec is what validation needs of t.
