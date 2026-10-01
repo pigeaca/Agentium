@@ -34,7 +34,7 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
 
 ## Work
 - [ ] **1a. Pair core** (`internal/judge`): the pilot's pair prompt and schema, word for word, both orders, mapping back, flips counted as ties, and the preference statistics with their floor. Unit tests with a fake caller.
-- [ ] **1b. Experiments:** `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2).
+- [ ] **1b. Experiments** (note from 1a's review: with repeats above 1, pairs of one task are not independent; add an honesty note or cluster by task): `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2).
 - [ ] **2. Report.**
 - [ ] **3. Real check (paid; approval).**
 

@@ -15,6 +15,6 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-10-01 — Judge pilot: no GO ([results](../docs/research/2026-10-01-judge-pilot-results.md)); built anyway ([decision](decisions/2026-10-01-llm-judge-alongside-tests.md)).
 
 ## Next, in order
-1. [Judge per run](plans/2026-10-01-llm-judge.md), alongside [Java and Rust](plans/2026-09-30-java-rust.md).
+1. [Judge per run](plans/2026-10-01-llm-judge.md), alongside [Java and Rust](plans/2026-09-30-java-rust.md); [temp isolation](plans/2026-10-01-run-temp-isolation.md).
 2. Judge: [which arm is better](plans/2026-10-01-judge-pairs.md), [ticket tasks](plans/2026-10-01-ticket-tasks.md); [model and effort A/B](plans/2026-10-01-model-ab.md).
 3. [Codex](plans/2026-10-01-phase2-agents-codex.md), deferred.
