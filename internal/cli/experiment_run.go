@@ -190,8 +190,9 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	var judgePaused atomic.Bool
 	var judgeNote string
 	var judgeErr error
+	unfunded := 0                 // runs the budget left no room to judge
 	if lock.Design.Judge != nil { // first the graded runs a stopped execution left without a verdict
-		judgeNote, judgeErr = judgePending(ctx, env, w, runEnv, lock, runs)
+		judgeNote, unfunded, judgeErr = judgePending(ctx, env, w, runEnv, lock, runs)
 	}
 	var prior []experiment.Attempt
 	storedTries := map[int]int{} // runs per slot so far
@@ -343,12 +344,16 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		sum.Status, sum.Note = experiment.StatusStopped, "Agentium could not start the runs: "+runErr.Error()
 	}
 	// Every slot settled is not done while a graded run still needs the judge: the last runs' judgements may have
-	// stopped at a usage limit or an interrupt.
+	// stopped at a usage limit or an interrupt, or the budget may have left no room to judge them (a budget stop, which
+	// a higher --budget resumes, not a failure).
 	if sum.Status == experiment.StatusDone && design.Judge != nil {
 		if n, err := unjudged(context.WithoutCancel(ctx), w, stored.ID, lock); err != nil {
 			runErr = errors.Join(runErr, err)
 		} else if n > 0 && judgePaused.Load() {
 			sum.Status, sum.Note = experiment.StatusUsage, judgeLimitNote
+		} else if n > 0 && unfunded > 0 {
+			sum.Status, sum.Note = experiment.StatusBudget, fmt.Sprintf("%d run(s) still need the judge, but the budget leaves no room for a judgement ($%.2f)",
+				n, design.JudgeCapUSD())
 		} else if n > 0 {
 			sum.Status, sum.Note = experiment.StatusStopped, fmt.Sprintf("%d run(s) still need the judge", n)
 		}
@@ -433,20 +438,19 @@ func judgeCostUSD(record []byte) float64 {
 // judgePending judges, one at a time, the experiment's graded runs that still need it (run.NeedsJudging): those a
 // stopped execution left without a verdict, and those whose judgement stopped early. Each is stored with its verdict
 // in place (runs[i].Record too), so the spend that follows counts it. A judgement starts only when the spend so far and
-// its cap fit the budget; one that does not is left for a resume with a higher budget. It returns a pause note when a
-// verdict stopped at a usage limit, and an error only when a record cannot be read or stored. A cancelled ctx ends it
+// its cap fit the budget; one that does not is left for a resume with a higher budget, and counted in unfunded. It
+// returns a pause note when a verdict stopped at a usage limit, and an error only when a record cannot be read or stored. A cancelled ctx ends it
 // quietly: the execution that follows sees the cancellation. Judgements that leave no verdict (a missing diff, say)
 // are reported here, not stored, so resumes do not repeat their notes.
-func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lock experiment.Lock, runs []store.Run) (string, error) {
+func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lock experiment.Lock, runs []store.Run) (note string, unfunded int, err error) {
 	design, out, st := lock.Design, env.Stdout, env.style()
 	spent := 0.0
 	for _, r := range runs {
 		spent += r.CostUSD + judgeCostUSD(r.Record)
 	}
-	unfunded := 0
 	for i, r := range runs {
 		if ctx.Err() != nil {
-			return "", nil
+			return "", unfunded, nil
 		}
 		t, ok := lock.Task(r.TaskName)
 		if !ok || !experiment.Fair(r.Outcome) {
@@ -454,7 +458,7 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 		}
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
-			return "", fmt.Errorf("run %s: %w", r.ID, err)
+			return "", 0, fmt.Errorf("run %s: %w", r.ID, err)
 		}
 		if !run.NeedsJudging(rec, t.Spec()) {
 			continue
@@ -474,22 +478,22 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 		spent += rec.JudgeCostUSD() - before
 		encoded, err := json.Marshal(rec)
 		if err != nil {
-			return "", fmt.Errorf("encode run %s: %w", r.ID, err)
+			return "", 0, fmt.Errorf("encode run %s: %w", r.ID, err)
 		}
 		if err := w.db.SetRunRecord(context.WithoutCancel(ctx), r.ID, encoded); err != nil {
-			return "", err
+			return "", 0, err
 		}
 		runs[i].Record = encoded
 		fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, run.Describe(*rec.Judge), rec.JudgeCostUSD()-before, spent, design.BudgetUSD)
 		if rec.Judge.Stopped == llmjudge.StoppedLimit {
-			return judgeLimitNote, nil
+			return judgeLimitNote, unfunded, nil
 		}
 	}
 	if unfunded > 0 {
 		fmt.Fprintln(out, st.Warn(fmt.Sprintf("%d run(s) still need the judge, but the budget leaves no room for a judgement ($%.2f): raise it with --budget",
 			unfunded, design.JudgeCapUSD())))
 	}
-	return "", nil
+	return "", unfunded, nil
 }
 
 // buildLock fixes an experiment for its first run: the machine's Claude Code, each arm's context files and calibrated
