@@ -92,8 +92,30 @@ func openOnce(ctx context.Context, file string) (*Store, error) {
 }
 
 // ErrSchema is returned by OpenReadOnly when the database's schema is not the one this binary knows (older, newer, or
-// not initialized).
-var ErrSchema = errors.New("database schema differs from this Agentium's")
+// not initialized); ErrSchemaNewer is also wrapped when it is newer. Other failures (busy, corrupt) are not ErrSchema.
+var (
+	ErrSchema      = errors.New("database schema differs from this Agentium's")
+	ErrSchemaNewer = errors.New("database schema is newer than this Agentium's")
+)
+
+// FileState is what OpenReadOnly callers compare before and after reading, to detect a writer that started
+// meanwhile: the database file's size and modification time, and whether its -wal file exists.
+type FileState struct {
+	Size   int64
+	ModNs  int64
+	HasWAL bool
+}
+
+// StateOf reads the FileState of the database at file; a missing file is the zero state.
+func StateOf(file string) FileState {
+	var st FileState
+	if info, err := os.Stat(file); err == nil {
+		st.Size, st.ModNs = info.Size(), info.ModTime().UnixNano()
+	}
+	_, err := os.Stat(file + "-wal")
+	st.HasWAL = err == nil
+	return st
+}
 
 // readOnlyBusy is how long OpenReadOnly waits on a lock before giving up: it is for callers (editor hooks) that must
 // answer in well under a second.
@@ -129,11 +151,18 @@ func OpenReadOnly(ctx context.Context, file string) (*Store, error) {
 	var newest sql.NullInt64
 	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("open database %s: read schema version: %w", file, errors.Join(ErrSchema, err))
+		if strings.Contains(err.Error(), "no such table") {
+			err = errors.Join(ErrSchema, err)
+		}
+		return nil, fmt.Errorf("open database %s: read schema version: %w", file, err)
 	}
 	if !newest.Valid || int(newest.Int64) != latest {
 		db.Close()
-		return nil, fmt.Errorf("open database %s: schema version %d, this Agentium knows %d: %w", file, newest.Int64, latest, ErrSchema)
+		err := ErrSchema
+		if newest.Int64 > int64(latest) {
+			err = errors.Join(ErrSchema, ErrSchemaNewer)
+		}
+		return nil, fmt.Errorf("open database %s: schema version %d, this Agentium knows %d: %w", file, newest.Int64, latest, err)
 	}
 	return &Store{db: db}, nil
 }

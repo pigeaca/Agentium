@@ -552,7 +552,14 @@ func TestOpenReadOnlySchemaAndMissingFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.Close()
-	if _, err := OpenReadOnly(ctx, file); !errors.Is(err, ErrSchema) {
-		t.Errorf("a newer schema: %v, want ErrSchema", err)
+	if _, err := OpenReadOnly(ctx, file); !errors.Is(err, ErrSchema) || !errors.Is(err, ErrSchemaNewer) {
+		t.Errorf("a newer schema: %v, want ErrSchema and ErrSchemaNewer", err)
+	}
+	notDB := filepath.Join(dir, "garbage.db")
+	if err := os.WriteFile(notDB, []byte(strings.Repeat("not a database ", 500)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReadOnly(ctx, notDB); err == nil || errors.Is(err, ErrSchema) {
+		t.Errorf("a corrupt file is unreadable, not another schema: %v", err)
 	}
 }

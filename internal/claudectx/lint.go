@@ -8,19 +8,21 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/source"
 )
 
-// CodexDocMaxBytes is Codex's project_doc_max_bytes default: it reads only the first 32 KiB of AGENTS.md files and
-// does not follow @imports (see the feasibility study, section 4).
+// CodexDocMaxBytes is Codex's project_doc_max_bytes default: Codex joins the AGENTS.md files from the repository root
+// down to the working folder and reads only the first 32 KiB of the whole. That it does not follow @imports is
+// unverified (H: it reads them as plain text), as in the feasibility study, section 4.
 const CodexDocMaxBytes = 32 * 1024
 
 // Lint is the free check of a context: no agent runs, no network.
 type Lint struct {
 	StartupBytes int // what Claude Code loads at session start: information for the size change, never a problem
-	// Problems are broken @imports and AGENTS.md files over CodexDocMaxBytes.
+	// Problems are broken @imports and AGENTS.md chains over CodexDocMaxBytes.
 	Problems []string
 	// Warnings are the rest of what `context show` warns about.
 	Warnings []string
@@ -35,16 +37,7 @@ func LintContext(src source.Source) (Lint, error) {
 		return Lint{}, err
 	}
 	l := Lint{StartupBytes: resolved.StartupBytes(), Problems: slices.Clone(resolved.Broken)}
-	// Codex reads every AGENTS.md from the root down, loaded by Claude Code or not, so look at the files, not the entries.
-	for _, p := range src.Paths() {
-		if path.Base(p) != "AGENTS.md" {
-			continue
-		}
-		if data, err := src.ReadFile(p); err == nil && len(data) > CodexDocMaxBytes {
-			l.Problems = append(l.Problems, fmt.Sprintf("%s is %.1f KiB: Codex reads only its first %d KiB (project_doc_max_bytes).",
-				p, float64(len(data))/1024, CodexDocMaxBytes/1024))
-		}
-	}
+	l.Problems = append(l.Problems, codexChains(src)...)
 	for _, w := range resolved.Warnings {
 		if !slices.Contains(resolved.Broken, w) {
 			l.Warnings = append(l.Warnings, w)
@@ -56,6 +49,62 @@ func LintContext(src source.Source) (Lint, error) {
 		}
 	}
 	return l, nil
+}
+
+// codexChains warns for each folder where the AGENTS.md files Codex joins (the root's down to that folder's) first pass
+// CodexDocMaxBytes. It looks at the files, not the entries: Codex reads them whether or not Claude Code loads them.
+// Files in test-data or vendored folders are skipped, and a folder under an already over-long chain is not repeated.
+func codexChains(src source.Source) []string {
+	sizes := map[string]int{} // folder -> its AGENTS.md size
+	for _, p := range src.Paths() {
+		if path.Base(p) != "AGENTS.md" || InDataFolder(p) {
+			continue
+		}
+		if data, err := src.ReadFile(p); err == nil {
+			sizes[path.Dir(p)] = len(data)
+		}
+	}
+	folders := make([]string, 0, len(sizes))
+	for dir := range sizes {
+		folders = append(folders, dir)
+	}
+	sort.Strings(folders)
+	var problems []string
+	for _, dir := range folders {
+		var files []string
+		total, above := 0, 0
+		for _, d := range chainOf(dir) {
+			if size, ok := sizes[d]; ok {
+				files = append(files, path.Join(d, "AGENTS.md"))
+				total += size
+				if d != dir {
+					above += size
+				}
+			}
+		}
+		if total > CodexDocMaxBytes && above <= CodexDocMaxBytes {
+			where := "the repository root"
+			if dir != "." {
+				where = dir
+			}
+			problems = append(problems, fmt.Sprintf("the AGENTS.md files Codex loads for %s total %.1f KiB; Codex reads only the first %d KiB (%s).",
+				where, float64(total)/1024, CodexDocMaxBytes/1024, strings.Join(files, ", ")))
+		}
+	}
+	return problems
+}
+
+// chainOf lists dir and its ancestors from the root (".") down.
+func chainOf(dir string) []string {
+	chain := []string{"."}
+	if dir == "." {
+		return chain
+	}
+	parts := strings.Split(dir, "/")
+	for i := range parts {
+		chain = append(chain, strings.Join(parts[:i+1], "/"))
+	}
+	return chain
 }
 
 // HookPayload is the part of a Claude Code PostToolUse payload that lint reads.

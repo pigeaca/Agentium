@@ -5,13 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"github.com/pigeaca/agentium/internal/claudectx"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/claudectx"
 )
 
 // lintRepoFixture is a committed repository whose context has a broken import.
@@ -89,7 +90,7 @@ func TestContextLintReportsBrokenImportsAndCodexsLimit(t *testing.T) {
 	writeFile(t, repo, "AGENTS.md", strings.Repeat("Codex instruction line.\n", 2000))
 	expect(t, run("context", "lint", "--ref", "HEAD"), ExitOK, "(commit ", "+0 tokens against snapshot first") // HEAD still equals the snapshot
 	r = run("context", "lint")
-	expect(t, r, ExitOK, "(working tree)", "tokens against snapshot first", "AGENTS.md is 46.9 KiB: Codex reads only its first 32 KiB", "does not exist")
+	expect(t, r, ExitOK, "(working tree)", "tokens against snapshot first", "the AGENTS.md files Codex loads for the repository root total 46.9 KiB; Codex reads only the first 32 KiB (AGENTS.md)", "does not exist")
 	if strings.Count(r.stdout, "docs/missing.md") != 1 {
 		t.Errorf("a broken import is reported once:\n%s", r.stdout)
 	}
@@ -149,6 +150,11 @@ func TestContextLintHook(t *testing.T) {
 	writeFile(t, repo, "docs/guide.md", "A guide.\n")
 	writeFile(t, repo, "docs/other.md", "Unrelated.\n")
 	message(t, hookIn(t, repo, data, editPayload("Edit", repo, filepath.Join(repo, "docs/guide.md"))))
+	// The import is reached by extension, even from a folder IsDocument treats as test data.
+	writeFile(t, repo, "CLAUDE.md", "# Project\n@test/README.md\n")
+	writeFile(t, repo, "test/README.md", "Testing notes.\n")
+	message(t, hookIn(t, repo, data, editPayload("Edit", repo, filepath.Join(repo, "test/README.md"))))
+	writeFile(t, repo, "CLAUDE.md", "# Project\n@docs/guide.md\n")
 
 	silent := map[string]string{
 		"a document that is not imported": editPayload("Edit", repo, filepath.Join(repo, "docs/other.md")),

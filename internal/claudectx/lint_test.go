@@ -22,7 +22,7 @@ func TestLintContextSeparatesProblemsFromWarnings(t *testing.T) {
 	}
 	// A large CLAUDE.md is information (the size change), not a problem; only AGENTS.md has Codex's limit.
 	if len(l.Problems) != 2 || !strings.Contains(l.Problems[0], "docs/missing.md") ||
-		!strings.Contains(l.Problems[1], "AGENTS.md is 32.0 KiB: Codex reads only its first 32 KiB") || strings.Contains(l.Problems[1], "pkg/") {
+		!strings.Contains(l.Problems[1], "the AGENTS.md files Codex loads for the repository root total 32.0 KiB; Codex reads only the first 32 KiB (AGENTS.md)") || strings.Contains(l.Problems[1], "pkg/") {
 		t.Errorf("problems: %q", l.Problems)
 	}
 	if len(l.Warnings) != 2 || !strings.Contains(strings.Join(l.Warnings, "\n"), "CLAUDE.local.md") || strings.Contains(strings.Join(l.Warnings, "\n"), "missing.md") {
@@ -73,5 +73,32 @@ func TestReachesFollowsASymlinkedContextFile(t *testing.T) {
 	}
 	if l.Reaches(root, "src/main.go") {
 		t.Error("an unrelated file is not context")
+	}
+}
+
+func TestCodexChainsCountFilesFromTheRootDown(t *testing.T) {
+	t.Parallel()
+	half := strings.Repeat("x", 20*1024)
+	l, err := LintContext(memSource{
+		"AGENTS.md":                  half,
+		"api/AGENTS.md":              half,
+		"api/v1/AGENTS.md":           half, // the chain was already cut off above: not repeated
+		"web/AGENTS.md":              "small",
+		"vendor/lib/AGENTS.md":       strings.Repeat("x", 3*CodexDocMaxBytes),
+		"testdata/fixture/AGENTS.md": strings.Repeat("x", 3*CodexDocMaxBytes),
+		"tools/AGENTS.md":            half, // a sibling chain: root + tools is over as well
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chains []string
+	for _, p := range l.Problems {
+		if strings.Contains(p, "Codex loads for") {
+			chains = append(chains, p)
+		}
+	}
+	if len(chains) != 2 || !strings.Contains(chains[0], "for api total 40.0 KiB") || !strings.Contains(chains[0], "(AGENTS.md, api/AGENTS.md)") ||
+		!strings.Contains(chains[1], "for tools total 40.0 KiB") {
+		t.Errorf("chains: %q", chains)
 	}
 }

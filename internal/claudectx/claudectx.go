@@ -352,18 +352,27 @@ func stripCodeSpans(line string) string {
 // folders. Snapshots may change documents and instruction files, never code, configuration or test inputs, which would
 // change what a task builds and tests. Plain .txt is excluded: requirements.txt and CMakeLists.txt are build inputs.
 func IsDocument(p string) bool {
+	return IsDocumentExt(p) && !InDataFolder(p)
+}
+
+// IsDocumentExt is IsDocument by file extension only, wherever the file is.
+func IsDocumentExt(p string) bool {
 	switch strings.ToLower(path.Ext(p)) {
 	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
-	default:
-		return false
+		return true
 	}
+	return false
+}
+
+// InDataFolder reports whether p is under a folder of tests, fixtures, vendored or installed code.
+func InDataFolder(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch strings.ToLower(dir) {
 		case "test", "tests", "testdata", "fixtures", "__fixtures__", "__snapshots__", "golden", "node_modules", "vendor":
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // linkPattern finds Markdown link targets: [text](target) or [text](target "title").

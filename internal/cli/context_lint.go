@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -101,6 +102,7 @@ func (r *lintResult) compare(ctx context.Context, env Env, root string) {
 }
 
 func lastSnapshot(ctx context.Context, env Env, root string) (name string, startupBytes int, why string) {
+	const busy = "no snapshot comparison: the database is busy or unreadable"
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
 		return "", 0, "no snapshot comparison: " + err.Error()
@@ -108,29 +110,47 @@ func lastSnapshot(ctx context.Context, env Env, root string) (name string, start
 	if _, err := os.Stat(layout.Database); err != nil {
 		return "", 0, "not registered with Agentium (agentium init), so no snapshot comparison"
 	}
+	// OpenReadOnly may read the file without locks (no other process had it open); if anything changed while we
+	// read, a writer started meanwhile and the result is not trusted.
+	before := store.StateOf(layout.Database)
 	db, err := store.OpenReadOnly(ctx, layout.Database)
-	if errors.Is(err, store.ErrSchema) {
+	switch {
+	case errors.Is(err, store.ErrSchemaNewer):
+		return "", 0, "no snapshot comparison: the database was made by a newer Agentium"
+	case errors.Is(err, store.ErrSchema):
 		return "", 0, "no snapshot comparison: the database was made by another Agentium version; run any other agentium command first"
-	} else if err != nil {
-		return "", 0, "no snapshot comparison: the database is busy or unreadable"
+	case err != nil:
+		return "", 0, busy
 	}
 	defer db.Close()
+	name, startupBytes, why, trusted := readLastSnapshot(ctx, db, root)
+	if !trusted || store.StateOf(layout.Database) != before {
+		return "", 0, busy
+	}
+	return name, startupBytes, why
+}
+
+// readLastSnapshot finds the registered project's last snapshot; trusted is false when the database could not be read.
+func readLastSnapshot(ctx context.Context, db *store.Store, root string) (name string, startupBytes int, why string, trusted bool) {
 	project, err := db.ProjectByRoot(ctx, root)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", 0, "not registered with Agentium (agentium init), so no snapshot comparison"
+		return "", 0, "not registered with Agentium (agentium init), so no snapshot comparison", true
 	} else if err != nil {
-		return "", 0, "no snapshot comparison: the database is busy or unreadable"
+		return "", 0, "", false
 	}
 	snaps, err := db.Snapshots(ctx, project.ID)
-	if err != nil || len(snaps) == 0 {
-		return "", 0, "no snapshot yet (agentium context snapshot NAME), so nothing to compare with"
+	if err != nil {
+		return "", 0, "", false
+	}
+	if len(snaps) == 0 {
+		return "", 0, "no snapshot yet (agentium context snapshot NAME), so nothing to compare with", true
 	}
 	last := snaps[len(snaps)-1]
 	var manifest snapshot.Manifest
 	if err := json.Unmarshal(last.Manifest, &manifest); err != nil {
-		return "", 0, "no snapshot comparison: snapshot " + last.Name + " is unreadable"
+		return "", 0, "no snapshot comparison: snapshot " + last.Name + " is unreadable", true
 	}
-	return last.Name, manifest.StartupBytes, ""
+	return last.Name, manifest.StartupBytes, "", true
 }
 
 func (r lintResult) print(out io.Writer, st term.Style, heading string) {
@@ -207,6 +227,9 @@ func hookMessage(ctx context.Context, env Env, data []byte) string {
 	if !filepath.IsAbs(file) {
 		file = filepath.Join(payload.Cwd, file)
 	}
+	if !mayBeContext(file) {
+		return "" // decided from the path alone, before git runs
+	}
 	if _, err := os.Stat(file); err != nil {
 		return "" // an edit leaves the file in place; a path that is gone is not something to lint
 	}
@@ -225,7 +248,7 @@ func hookMessage(ctx context.Context, env Env, data []byte) string {
 		return ""
 	}
 	rel = filepath.ToSlash(rel)
-	if !claudectx.LoadsByPresence(rel) && !claudectx.IsDocument(rel) {
+	if !claudectx.LoadsByPresence(rel) && !claudectx.IsDocumentExt(rel) {
 		return "" // only documents can be imported or linked as context
 	}
 	result, err := lintTree(ctx, root, "")
@@ -244,18 +267,38 @@ func hookMessage(ctx context.Context, env Env, data []byte) string {
 	return out.String()
 }
 
+// mayBeContext is the broad path check made before git starts: the name or extension of a context file, or a place
+// Claude Code reads configuration from. The exact check follows.
+func mayBeContext(file string) bool {
+	slash := filepath.ToSlash(file)
+	switch path.Base(slash) {
+	case "CLAUDE.md", "AGENTS.md":
+		return true
+	}
+	return claudectx.IsDocumentExt(slash) || strings.Contains(slash, "/.claude/") || strings.HasSuffix(slash, ".mcp.json")
+}
+
 // hookCommand is the hook's command line: the absolute path of this binary, so a non-interactive shell without the
 // user's PATH still finds it, quoted for the shell.
 func hookCommand() string {
-	exe, err := os.Executable()
-	if err == nil {
-		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-			exe = resolved
-		}
-	} else {
+	exe, err := os.Executable() // not resolved: a link such as Homebrew's survives upgrades
+	if err != nil {
 		exe = "agentium"
 	}
 	return shellQuote(exe) + " context lint --hook"
+}
+
+// underTempDir reports whether exe lives in a temporary folder, as a binary built by `go run` does.
+func underTempDir(exe string) bool {
+	tmp, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil {
+		tmp = os.TempDir()
+	}
+	real, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		real = exe
+	}
+	return strings.HasPrefix(real, tmp+string(filepath.Separator))
 }
 
 func shellQuote(s string) string {
@@ -269,6 +312,9 @@ func printHookSettings(env Env) int {
 	snippet, err := claudectx.HookSettings(hookCommand())
 	if err != nil {
 		return fail(env, err)
+	}
+	if exe, err := os.Executable(); err == nil && underTempDir(exe) {
+		fmt.Fprintf(env.Stderr, "warning: %s is in a temporary folder (as with `go run`) and will disappear: install agentium (go install ./cmd/agentium) and print the hook again.\n", exe)
 	}
 	fmt.Fprintln(env.Stderr, "Merge this object into your own ~/.claude/settings.json (add the PostToolUse entry to any \"hooks\" you already have).")
 	fmt.Fprintln(env.Stderr, "After each Edit, Write or MultiEdit of a context file, Claude Code then shows its size change and warnings.")
