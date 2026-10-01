@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/gitx"
 )
 
@@ -168,12 +169,10 @@ func olderThan(version, minimum string) bool {
 	return len(a) < len(b)
 }
 
-// testCommands proposes verification commands from the files at the repository root.
+// testCommands proposes verification commands from the files at the repository root: the build tools' first, from
+// their profiles, then other runners'.
 func testCommands(root string) []string {
-	var commands []string
-	if fileExists(filepath.Join(root, "go.mod")) {
-		commands = append(commands, "go test ./...")
-	}
+	commands := buildtool.TestCommands(func(name string) bool { return fileExists(filepath.Join(root, name)) })
 	if script := npmTestScript(filepath.Join(root, "package.json")); script {
 		switch {
 		case fileExists(filepath.Join(root, "pnpm-lock.yaml")):

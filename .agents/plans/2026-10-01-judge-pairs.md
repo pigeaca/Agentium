@@ -1,0 +1,52 @@
+# Judge: which arm fixed it better
+
+- Date: 2026-10-01
+- Status: Planned, not started. Needs the [per-run judge](2026-10-01-llm-judge.md) (its steps 1–3). Its real check is paid and needs its own approval.
+- Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
+
+## Why
+When both arms pass a task, tests cannot say which fix is better. The pilot's pair judge showed two things, without any labels:
+- swapping the order flipped its preference in 2 of 19 pairs;
+- it showed no arm bias on A/A pairs (p = 0.69).
+
+So each comparison must be asked in both orders, and a flip counts as a tie.
+
+## Outcome
+- With `--judge-pairs`, after a task's paired runs in both arms have passed, the judge compares their changes in both orders.
+- The report gets a "Judge prefers" line per arm, with a paired interval and plain words; the A/A template is the bias check. Each task's row shows which change the judge preferred and why.
+- Like the per-run judge, it decides nothing: success and cost verdicts are unchanged.
+
+## Design
+- **Prompt:** the pilot's pair prompt and schema ("first", "second" or "tie"), asked in both orders. When the two orders disagree once mapped back, the result is a tie and counts as a flip.
+- **Pairing:** the same slots the experiment already pairs for its paired statistics: a task's run in each arm with the same repeat index.
+- **Statistics:** a preference share per arm over the pairs that have a preference, with an exact binomial test and a Wilson interval. The flip rate is reported too. With fewer than 5 preferences, the result is "too few to say".
+- **Cost:** about $0.18 per pair (two orders), counted in the preview and the budget like the per-run judge.
+
+## Acceptance
+1. **Unit tests:**
+   - pairing over paired slots;
+   - both orders asked, mapped back, and flips counted as ties;
+   - the statistics, and the floor of 5 preferences.
+2. **CLI tests** with a fake Claude Code: `--judge-pairs` is validated and locked, and the preview and budget include it.
+3. **Reports:** the preference line and the per-task cells in all three formats; reports without it are unchanged (golden files).
+4. **Real check (paid; approval):** an A/A with `--judge-pairs`, 4 tasks × 1, shows no arm bias and plausible reasons.
+5. **Docs:** README and help.
+
+## Work
+- [ ] **1. Pair judging:** the core (reusing `internal/judge`), experiments and statistics.
+- [ ] **2. Report.**
+- [ ] **3. Real check (paid; approval).**
+
+## Boundaries
+- Pairs whose two runs both passed only. Quality is never compared across failing runs.
+- No new Go modules.
+
+## Verification
+Unit, CLI and golden tests; `harness.py check changed`; CI; a reviewer per step; one paid real check.
+
+## Metrics
+- Agent: <client> / <exact model id> / <effort>
+- Elapsed: <minutes>m
+- Check-fix loops: <n>
+- User corrections: <n>
+- Review: <verdict>

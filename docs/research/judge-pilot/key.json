@@ -1,0 +1,621 @@
+{
+ "pairs": {
+  "P01": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20260930T235505Z-1386a0"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260930T235859Z-1ab134"
+   },
+   "task": "unreadable-files",
+   "template": "context-ab"
+  },
+  "P02": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "B",
+    "run": "20260929T113024Z-d63fa5"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20260929T112941Z-cb19f5"
+   },
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "P03": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "A",
+    "run": "20260929T112809Z-e8d973"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T112809Z-ca1f7d"
+   },
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "P04": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "A",
+    "run": "20260929T115441Z-3855b2"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T115931Z-56eae3"
+   },
+   "task": "documents-filter",
+   "template": "aa"
+  },
+  "P05": {
+   "experiment": "aa",
+   "first": {
+    "arm": "A",
+    "run": "20260929T071507Z-deec9a"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T071507Z-bb2107"
+   },
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "P06": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20260930T200619Z-e4a648"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260930T200619Z-25e53f"
+   },
+   "task": "stats-review",
+   "template": "context-ab"
+  },
+  "P07": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20261001T002657Z-d1ef50"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20261001T002304Z-13faff"
+   },
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "P08": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20260930T235059Z-05ecc4"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260930T235059Z-4d911b"
+   },
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "P09": {
+   "experiment": "ab",
+   "first": {
+    "arm": "A",
+    "run": "20260929T163334Z-2c81b1"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T163335Z-3894be"
+   },
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "P10": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "B",
+    "run": "20260929T113344Z-6a5371"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20260929T113511Z-3250f2"
+   },
+   "task": "unreadable-files",
+   "template": "aa"
+  },
+  "P11": {
+   "experiment": "aa",
+   "first": {
+    "arm": "A",
+    "run": "20260929T072347Z-846c57"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T072520Z-08d944"
+   },
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "P12": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "B",
+    "run": "20260929T114637Z-4fe8e0"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20260929T114311Z-a82a89"
+   },
+   "task": "judge-truncated-notice",
+   "template": "aa"
+  },
+  "P13": {
+   "experiment": "ab",
+   "first": {
+    "arm": "B",
+    "run": "20260929T162651Z-5d07af"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20260929T162721Z-41e01e"
+   },
+   "task": "deny-login-file",
+   "template": "context-ab"
+  },
+  "P14": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20261001T002141Z-7ec341"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20261001T001749Z-dc04cb"
+   },
+   "task": "active-config-files",
+   "template": "context-ab"
+  },
+  "P15": {
+   "experiment": "ab",
+   "first": {
+    "arm": "A",
+    "run": "20260929T162253Z-6e7cd6"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260929T162253Z-f6c2d0"
+   },
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "P16": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "B",
+    "run": "20261001T000735Z-c40bfa"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20261001T000253Z-37ccce"
+   },
+   "task": "temp-files-in-data",
+   "template": "context-ab"
+  },
+  "P17": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "B",
+    "run": "20261001T001724Z-f98e66"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20261001T001311Z-913e7b"
+   },
+   "task": "judge-truncated-notice",
+   "template": "context-ab"
+  },
+  "P18": {
+   "experiment": "aa2",
+   "first": {
+    "arm": "B",
+    "run": "20260929T115210Z-f71589"
+   },
+   "second": {
+    "arm": "A",
+    "run": "20260929T114703Z-1c9010"
+   },
+   "task": "run-survives-erase",
+   "template": "aa"
+  },
+  "P19": {
+   "experiment": "ab16",
+   "first": {
+    "arm": "A",
+    "run": "20260930T201406Z-5018f4"
+   },
+   "second": {
+    "arm": "B",
+    "run": "20260930T201307Z-9694ba"
+   },
+   "task": "fresh-checkouts",
+   "template": "context-ab"
+  }
+ },
+ "singles": {
+  "S01": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T113024Z-d63fa5",
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "S02": {
+   "arm": "B",
+   "experiment": "aa",
+   "passed": true,
+   "run": "20260929T071507Z-bb2107",
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "S03": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T115931Z-56eae3",
+   "task": "documents-filter",
+   "template": "aa"
+  },
+  "S04": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T001724Z-f98e66",
+   "task": "judge-truncated-notice",
+   "template": "context-ab"
+  },
+  "S05": {
+   "arm": "B",
+   "experiment": "aa",
+   "passed": false,
+   "run": "20260929T072258Z-6d3ebb",
+   "task": "documents-filter",
+   "template": "aa"
+  },
+  "S06": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T002141Z-7ec341",
+   "task": "active-config-files",
+   "template": "context-ab"
+  },
+  "S07": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T235059Z-05ecc4",
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "S08": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T201307Z-9694ba",
+   "task": "fresh-checkouts",
+   "template": "context-ab"
+  },
+  "S09": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T113344Z-6a5371",
+   "task": "unreadable-files",
+   "template": "aa"
+  },
+  "S10": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T002304Z-13faff",
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "S11": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T114311Z-a82a89",
+   "task": "judge-truncated-notice",
+   "template": "aa"
+  },
+  "S12": {
+   "arm": "B",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T162253Z-f6c2d0",
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "S13": {
+   "arm": "B",
+   "experiment": "aa",
+   "passed": true,
+   "run": "20260929T072520Z-08d944",
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "S14": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T001749Z-dc04cb",
+   "task": "active-config-files",
+   "template": "context-ab"
+  },
+  "S15": {
+   "arm": "A",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T162847Z-970686",
+   "task": "documents-filter",
+   "template": "context-ab"
+  },
+  "S16": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T002657Z-d1ef50",
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "S17": {
+   "arm": "B",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T162651Z-5d07af",
+   "task": "deny-login-file",
+   "template": "context-ab"
+  },
+  "S18": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T115210Z-f71589",
+   "task": "run-survives-erase",
+   "template": "aa"
+  },
+  "S19": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T114637Z-4fe8e0",
+   "task": "judge-truncated-notice",
+   "template": "aa"
+  },
+  "S20": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T000253Z-37ccce",
+   "task": "temp-files-in-data",
+   "template": "context-ab"
+  },
+  "S21": {
+   "arm": "A",
+   "experiment": "aa",
+   "passed": true,
+   "run": "20260929T071507Z-deec9a",
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "S22": {
+   "arm": "A",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T163334Z-2c81b1",
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "S23": {
+   "arm": "B",
+   "experiment": "ab",
+   "passed": false,
+   "run": "20260929T162923Z-1c89cb",
+   "task": "documents-filter",
+   "template": "context-ab"
+  },
+  "S24": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T200619Z-25e53f",
+   "task": "stats-review",
+   "template": "context-ab"
+  },
+  "S25": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T000735Z-c40bfa",
+   "task": "temp-files-in-data",
+   "template": "context-ab"
+  },
+  "S26": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T235059Z-4d911b",
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "S27": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T114703Z-1c9010",
+   "task": "run-survives-erase",
+   "template": "aa"
+  },
+  "S28": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T200619Z-e4a648",
+   "task": "stats-review",
+   "template": "context-ab"
+  },
+  "S29": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T112809Z-e8d973",
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "S30": {
+   "arm": "A",
+   "experiment": "aa",
+   "passed": true,
+   "run": "20260929T072635Z-94571f",
+   "task": "judge-truncated-notice",
+   "template": "aa"
+  },
+  "S31": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T235505Z-1386a0",
+   "task": "unreadable-files",
+   "template": "context-ab"
+  },
+  "S32": {
+   "arm": "B",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T163335Z-3894be",
+   "task": "run-survives-erase",
+   "template": "context-ab"
+  },
+  "S33": {
+   "arm": "B",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T112809Z-ca1f7d",
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "S34": {
+   "arm": "A",
+   "experiment": "aa",
+   "passed": false,
+   "run": "20260929T072041Z-c2a3e7",
+   "task": "documents-filter",
+   "template": "aa"
+  },
+  "S35": {
+   "arm": "A",
+   "experiment": "aa",
+   "passed": false,
+   "run": "20260929T073018Z-00669a",
+   "task": "active-config-files",
+   "template": "aa"
+  },
+  "S36": {
+   "arm": "A",
+   "experiment": "aa",
+   "passed": true,
+   "run": "20260929T072347Z-846c57",
+   "task": "deny-login-file",
+   "template": "aa"
+  },
+  "S37": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T112941Z-cb19f5",
+   "task": "scrub-whole-paths",
+   "template": "aa"
+  },
+  "S38": {
+   "arm": "B",
+   "experiment": "aa",
+   "passed": false,
+   "run": "20260929T073036Z-3c815e",
+   "task": "active-config-files",
+   "template": "aa"
+  },
+  "S39": {
+   "arm": "B",
+   "experiment": "aa",
+   "passed": false,
+   "run": "20260929T072747Z-b67a1c",
+   "task": "judge-truncated-notice",
+   "template": "aa"
+  },
+  "S40": {
+   "arm": "A",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T162721Z-41e01e",
+   "task": "deny-login-file",
+   "template": "context-ab"
+  },
+  "S41": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20261001T001311Z-913e7b",
+   "task": "judge-truncated-notice",
+   "template": "context-ab"
+  },
+  "S42": {
+   "arm": "B",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T235859Z-1ab134",
+   "task": "unreadable-files",
+   "template": "context-ab"
+  },
+  "S43": {
+   "arm": "A",
+   "experiment": "ab16",
+   "passed": true,
+   "run": "20260930T201406Z-5018f4",
+   "task": "fresh-checkouts",
+   "template": "context-ab"
+  },
+  "S44": {
+   "arm": "A",
+   "experiment": "ab",
+   "passed": true,
+   "run": "20260929T162253Z-6e7cd6",
+   "task": "scrub-whole-paths",
+   "template": "context-ab"
+  },
+  "S45": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T115441Z-3855b2",
+   "task": "documents-filter",
+   "template": "aa"
+  },
+  "S46": {
+   "arm": "A",
+   "experiment": "aa2",
+   "passed": true,
+   "run": "20260929T113511Z-3250f2",
+   "task": "unreadable-files",
+   "template": "aa"
+  }
+ }
+}
