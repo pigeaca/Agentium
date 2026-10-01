@@ -11,6 +11,12 @@
 //   - EnvNames and EnvPrefixes widen the agent's environment allowlist, which never passes credentials
 //     (runner.IsCredential is applied after it).
 //
+// The table is global today: every profile's allowlist (EnvNames, EnvPrefixes), AgentEnv, AgentCaches, CommandCaches
+// and UserCaches apply to every project, whatever Detect finds; only discovery's test commands follow Detect. That is
+// harmless with one profile. Before a second profile is added (step 3 of the Java and Rust plan), the run must select
+// profiles per repository with Detect, for everything but UserCaches: those stay global, because a user's cache of any
+// tool may hold hidden tests compiled earlier.
+//
 // Only Go has a profile so far. The golden test in internal/run (TestGoProfileGolden) pins a Go project's behavior.
 package buildtool
 
@@ -21,7 +27,9 @@ import (
 	"strings"
 )
 
-// Profile is one build tool's special cases. Every field is optional except Name.
+// Profile is one build tool's special cases. Every field is optional except Name. Until profiles are selected per
+// repository (see the package documentation), a profile's environment and cache entries apply to every project, not
+// only those Detect matches.
 type Profile struct {
 	Name string
 	// Detect are files at the repository root that mark a project of this tool; discovery asks TestCommand only when
@@ -34,7 +42,9 @@ type Profile struct {
 	// the files at the repository root that configure it: grading reports an agent's change to them.
 	Runners []string
 	Configs []string
-	// TestPatterns are regular-expression alternatives matching an agent's command that runs tests (whole words).
+	// TestPatterns are regular-expression alternatives matching an agent's command that runs tests. Every profile's
+	// alternatives are joined, with other runners', into one `\b(...)\b` group, so each must be valid inside it: no
+	// anchors, and no unbalanced groups.
 	TestPatterns []string
 	// EnvNames and EnvPrefixes are the variables the agent's environment keeps for this tool.
 	EnvNames    []string

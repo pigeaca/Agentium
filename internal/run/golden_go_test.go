@@ -167,6 +167,24 @@ func TestGoProfileGolden(t *testing.T) {
 		fmt.Fprintf(&out, "%v %s\n", ranTests([]string{c}), c)
 	}
 
+	// Added after the refactor, at the end so earlier lines stay as recorded: without a build cache of the run's own,
+	// the user's GOCACHE reaches the agent as it is (and is still denied to it).
+	noCache := base
+	noCache.SignIn = claude.SignInLogin
+	noCacheEnviron := append(slices.Clone(user), "GOCACHE=/golden/home/gocache")
+	_, env, err := noCache.Command(noCacheEnviron)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fmt.Fprintf(&out, "== agent: login, no build cache, the user's GOCACHE\n-- env\n")
+	for _, kv := range env {
+		fmt.Fprintf(&out, "%s\n", kv)
+	}
+	fmt.Fprintf(&out, "-- denied paths\n")
+	for _, p := range noCache.DeniedPaths(noCacheEnviron) {
+		fmt.Fprintf(&out, "%s\n", p)
+	}
+
 	got := out.String()
 	keys := make([]string, 0, len(replace))
 	for k := range replace {

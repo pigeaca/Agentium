@@ -539,3 +539,68 @@ true jest
 true vitest
 true rspec
 true dotnet test
+== agent: login, no build cache, the user's GOCACHE
+-- env
+PATH=/usr/local/go/bin:/usr/bin:/bin
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+LC_ALL=C
+TERM=xterm
+GOPATH=/golden/home/go
+GOROOT=/usr/local/go
+GOMODCACHE=/golden/home/go/pkg/mod
+GOPROXY=https://proxy.golang.org
+GOPRIVATE=example.com
+GOTOOLCHAIN=local
+GOTMPDIR=/golden/gotmp
+CGO_ENABLED=1
+GOEXPERIMENT=
+GODEBUG=x=1
+GOMAXPROCS=4
+JAVA_HOME=/golden/jdk
+CARGO_HOME=/golden/home/.cargo
+RUSTUP_HOME=/golden/home/.rustup
+RUSTC_WRAPPER=sccache
+XDG_CONFIG_HOME=/golden/home/.config
+PYTHONPATH=/golden/py
+NODE_OPTIONS=--max-old-space-size=4096
+HOMEBREW_PREFIX=/opt/homebrew
+HTTPS_PROXY=http://proxy:3128
+SSL_CERT_FILE=/golden/certs.pem
+GOCACHE=/golden/home/gocache
+GOFLAGS=-buildvcs=false
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+CLAUDE_CONFIG_DIR=/golden/home/.claude-work
+-- denied paths
+/golden/data/projects
+/golden/data/records
+/golden/repo
+/golden/home/.claude-work/file-history
+/golden/home/.claude-work/history.jsonl
+/golden/home/.claude-work/todos
+/golden/home/.claude-work/sessions
+/golden/home/.claude-work/plans
+/golden/home/.claude-work/.claude.json
+/golden/home/.claude-work/.credentials.json
+/golden/home/.claude
+/golden/home/.claude.json
+/golden/home/.ssh
+/golden/home/.codex
+/golden/home/.config/gh
+/golden/home/.config/agentium
+/golden/home/.netrc
+/golden/home/.git-credentials
+/golden/home/.aws
+/golden/home/.docker
+/golden/home/.npmrc
+/golden/home/.pypirc
+/golden/home/.kube
+/golden/home/.gnupg
+/golden/home/Library/Caches/go-build
+/golden/home/.cache/go-build
+/golden/home/gocache

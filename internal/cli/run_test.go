@@ -303,6 +303,37 @@ func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {
 	}
 }
 
+// Setup builds into the agent's own cache (the build tools' agent caches: Go's GOCACHE is the run's go-build folder), so
+// a warming step spares the agent a cold build; verification keeps Agentium's cache in the data folder.
+func TestRunSetupUsesTheAgentsBuildCache(t *testing.T) {
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	seen := t.TempDir()
+	expect(t, f.run(context.Background(), "task", "add", "cache", "--base", "HEAD~1", "--instruction", "Anything.",
+		"--setup", `printf %s "$GOCACHE" > `+filepath.Join(seen, "setup"),
+		"--verify", `printf %s "$GOCACHE" > `+filepath.Join(seen, "verify")), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "true", false)
+	expect(t, f.run(context.Background(), "run", "once", "cache", "--keep"), ExitOK, "outcome      ok; verification passed")
+	workspaces, _ := os.ReadDir(filepath.Join(f.data, "workspaces"))
+	if len(workspaces) != 1 {
+		t.Fatalf("workspaces %v", workspaces)
+	}
+	if got, want := readString(t, filepath.Join(seen, "setup")), filepath.Join(f.data, "workspaces", workspaces[0].Name(), "go-build"); got != want {
+		t.Errorf("setup's GOCACHE = %q, want the run's own %q", got, want)
+	}
+	if got, want := readString(t, filepath.Join(seen, "verify")), filepath.Join(f.data, "cache", "go-build"); got != want {
+		t.Errorf("verification's GOCACHE = %q, want Agentium's %q", got, want)
+	}
+}
+
+func readString(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
 	outer := t.TempDir()
 	f := newRunFixture(t, filepath.Join(outer, "data"))

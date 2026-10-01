@@ -29,8 +29,21 @@ func TestProfilesKeepTheirContracts(t *testing.T) {
 			}
 		}
 		for _, name := range p.EnvNames {
-			if runner.IsCredential(name) {
-				t.Errorf("%s: allowlists %s, a credential", p.Name, name)
+			if name == "" || runner.IsCredential(name) || reserved(name, false) {
+				t.Errorf("%s: allowlists %q, which is empty, a credential or reserved", p.Name, name)
+			}
+		}
+		for _, prefix := range p.EnvPrefixes {
+			if prefix == "" || reserved(prefix, true) {
+				t.Errorf("%s: allowlists the prefix %q, which is empty or overlaps a reserved one", p.Name, prefix)
+			}
+		}
+		if p.AgentEnv != nil {
+			for _, kv := range p.AgentEnv(agentFixture, agentFixture, "/nonexistent-home") {
+				name, _, _ := strings.Cut(kv, "=")
+				if name == "" || runner.IsCredential(name) || reserved(name, false) {
+					t.Errorf("%s: AgentEnv sets %q, which is empty, a credential or reserved", p.Name, name)
+				}
 			}
 		}
 		for _, f := range append(slices.Clone(p.Configs), p.Detect...) {
@@ -39,7 +52,7 @@ func TestProfilesKeepTheirContracts(t *testing.T) {
 			}
 		}
 		for _, pattern := range p.TestPatterns {
-			if _, err := regexp.Compile(pattern); err != nil {
+			if _, err := regexp.Compile(`\b(` + pattern + `|other)\b`); err != nil || strings.ContainsAny(pattern, "^$") {
 				t.Errorf("%s: test pattern %q: %v", p.Name, pattern, err)
 			}
 		}
@@ -56,6 +69,40 @@ func TestProfilesKeepTheirContracts(t *testing.T) {
 	first[0].EnvNames[0] = "CHANGED"
 	if Profiles()[0].EnvNames[0] == "CHANGED" {
 		t.Error("Profiles shares its table with callers")
+	}
+}
+
+// reservedPrefixes are kept out of the agent's environment only because no allowlist entry matches them: git's
+// redirections, Claude Code's own settings (CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces the default permission mode),
+// Agentium's and Anthropic's credentials. The run sets the ones it needs itself.
+var reservedPrefixes = []string{"GIT_", "CLAUDE", "AGENTIUM_", "ANTHROPIC_"}
+
+// reserved reports whether a name (or, with prefix, every name a prefix allows) could be a reserved one.
+func reserved(s string, prefix bool) bool {
+	for _, r := range reservedPrefixes {
+		if strings.HasPrefix(s, r) || (prefix && strings.HasPrefix(r, s)) {
+			return true
+		}
+	}
+	return false
+}
+
+// agentFixture is a user's environment with the build tools' variables, credentials and reserved names.
+var agentFixture = []string{"PATH=/usr/bin", "HOME=/home/u", "GOFLAGS=-mod=mod", "GOENV=off", "GOCACHE=/home/u/gocache",
+	"GITHUB_TOKEN=x", "ANTHROPIC_API_KEY=x", "CLAUDE_CODE_OAUTH_TOKEN=x", "CLAUDE_CONFIG_DIR=/home/u/.c", "GIT_DIR=/r/.git",
+	"AGENTIUM_HOME=/data", "AWS_SECRET_ACCESS_KEY=x"} // secret-scan: allow (fake values)
+
+// The reserved check itself: names and prefixes that would let a reserved variable through are caught.
+func TestReservedNames(t *testing.T) {
+	for _, c := range []struct {
+		s      string
+		prefix bool
+		want   bool
+	}{{"GIT_DIR", false, true}, {"CLAUDE_CODE_X", false, true}, {"GOFLAGS", false, false}, {"G", true, true},
+		{"CLA", true, true}, {"AGENTIUM_X", true, true}, {"CGO_", true, false}, {"GITHUB", false, false}} {
+		if got := reserved(c.s, c.prefix); got != c.want {
+			t.Errorf("reserved(%q, %v) = %v", c.s, c.prefix, got)
+		}
 	}
 }
 

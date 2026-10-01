@@ -532,23 +532,23 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 // restores) and the configuration of the test runners they call (reported when changed).
 func checkFiles(verify []string, base source.Source) (scripts, configs []string) {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
+	// The build tools' runners come from their profiles; the rest are runners without one.
+	runners := buildtool.RunnerConfigs()
+	for word, files := range map[string][]string{
+		"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
+		"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
+		"cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+	} {
+		runners[word] = append(runners[word], files...)
+	}
 	for _, command := range verify {
 		for _, token := range strings.FieldsFunc(command, split) {
 			if p := path.Clean(strings.TrimPrefix(token, "./")); source.Has(base, p) && !slices.Contains(scripts, p) {
 				scripts = append(scripts, p)
 			}
 		}
-		// The build tools' runners come from their profiles; the rest are runners without one.
-		runners := buildtool.RunnerConfigs()
-		for word, files := range map[string][]string{
-			"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
-			"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
-			"cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
-		} {
-			runners[word] = append(runners[word], files...)
-		}
 		for word, files := range runners {
-			if regexp.MustCompile(`\b` + word + `\b`).MatchString(command) {
+			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
 				for _, f := range files {
 					if source.Has(base, f) && !slices.Contains(configs, f) {
 						configs = append(configs, f)
