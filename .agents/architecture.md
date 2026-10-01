@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **strategy accepted (hybrid); stack accepted: Go + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md); [no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is done ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration, experiments, statistics and reports work, and real A/A and A/B runs proved them.
+Status: **strategy accepted (hybrid); stack accepted: Go + SQLite** ([decision](decisions/2026-09-28-stack-go-react-sqlite.md); [no web UI](decisions/2026-09-30-console-instead-of-web-ui.md)). The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) describes the design, and the [Phase 0 results](../docs/research/2026-09-27-phase0-spike-results.md) list what Phase 1 must do. Phase 1 is done ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)): `init`, context snapshots, tasks, single runs, calibration, experiments, statistics and reports work; real A/A and A/B runs proved them.
 
 ## Product concept
 
@@ -35,7 +35,7 @@ Shape:
 | `internal/mine` | Task candidates from git history: explained scores, rejections, import |
 | `internal/gitx` | Every git call: hooks, fsmonitor, prompts and optional index writes off, inherited `GIT_*` dropped; hook-free fetch of a user's commit into Agentium's bare repository (for task bases) |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
-| `internal/claudectx` | Which files Claude Code loads, as experiments run it: instructions, `@` imports (5 hops, also from rules and nested files), rules, skill/subagent/command descriptions, harness files, linked documents, and warnings |
+| `internal/claudectx` | Which files Claude Code loads, as experiments run it: instructions, `@` imports (5 hops, also from rules and nested files), rules, skill/subagent/command descriptions, harness files, linked documents, warnings, lint and its hook |
 | `internal/snapshot` | Context versions as parentless commits in `projects/<id>/repo.git` in the data folder; diffs; overlay planning that refuses to change code or configuration and reports harness changes |
 | `internal/checkout` | Isolated working copies: a fresh repository holding only the base commit (depth 1), so hidden tests and solutions are unreachable; safe file writes |
 | `internal/runner` | Commands (shell or arguments) in their own process group with a timeout and no credentials; a gentle stop (SIGINT, then SIGKILL); the group is killed at the end and reported at the start |
@@ -48,7 +48,7 @@ Shape:
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths); `Load` reads the store |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run (and calibration): a workspace prepared as the arm, Claude Code denied everything else, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`: agent and judge costs, one total); a start file recovering dead runs; its temp root; folders for overlapping runs |
-| `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
+| `scripts/harness.py` | Standard-library entrypoint: checks (docs, harness, Go, vulnerabilities), hooks, worktrees, metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
 | `.github/` | CI, the PR template, issue forms and community files (contributing, security, conduct) |

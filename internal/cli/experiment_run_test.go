@@ -81,15 +81,21 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","tot
 // both calibrated, and experimentAgent as Claude Code.
 func experimentFixture(t *testing.T) (runFixture, string) {
 	t.Helper()
-	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	ctx := context.Background()
-	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
-	expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
-	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
-	expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
-	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
-	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
-	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
+	dirs := templates["experiment"].build(t, "experiment", []string{"repo", "data", "home"}, func(d []string) {
+		f := runFixtureAt(d[0], d[1], d[2])
+		// The run fixture's steps, repeated here on the template's own folders.
+		cloneDirs(t, runTemplate(t), d)
+		ctx := context.Background()
+		writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+		expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
+		gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+		expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
+		expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+		f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+		expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
+	})
+	f := runFixtureAt(t.TempDir(), filepath.Join(t.TempDir(), "data"), t.TempDir())
+	cloneDirs(t, dirs, []string{f.repo, f.data, f.home})
 	ctrl := t.TempDir()
 	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, ctrl)
 	return f, ctrl
@@ -442,4 +448,41 @@ func TestExperimentRunInterruptedBeforeAgent(t *testing.T) {
 		t.Errorf("runs %+v: want the two slots' first attempts, and nothing stored for the interrupted try", runs)
 	}
 	emptyWorkspaces(t, f)
+}
+
+// A run whose start file cannot be read (the file of a killed write, damaged) does not block the next start: it is
+// reported with what its transcript spent, not stored as a run, and its file is moved aside.
+func TestStartReportsAnUnreadableStartFile(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "unreadable", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	dir := filepath.Join(f.data, "records", "r-old")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000},"content":[]}}
+`
+	for name, body := range map[string]string{"started.json": `{"record":{"id":"r-old"`, "stream.jsonl": transcript} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := f.run(ctx, "experiment", "run", "unreadable")
+	expect(t, out, ExitOK, "Run r-old left behind by a stopped Agentium has an unreadable start file, so it is not stored.",
+		"$0.08 spent", "neither experiment budgets nor `agentium experiment show` count", "started.json.corrupt")
+	for _, r := range experimentRuns(t, f, "unreadable") {
+		if r.ID == "r-old" {
+			t.Errorf("the unreadable run was stored: %+v", r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "started.json.corrupt")); err != nil {
+		t.Error(err)
+	}
 }

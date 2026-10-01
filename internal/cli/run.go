@@ -236,6 +236,12 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	}
 	orphans, recoverErr := run.Recover(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now())
 	for _, o := range orphans {
+		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored
+			fmt.Fprintf(env.Stdout, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+
+				"Its transcript shows $%.2f spent (judge spend, if any, is not included), which neither experiment budgets nor `agentium experiment show` count; the file was moved to %s\n",
+				o.Record.ID, o.Record.Spend().AgentUSD, o.Unreadable)
+			continue
+		}
 		meta := runMeta{ProjectID: w.project.ID, Kind: "task"}
 		if len(o.Meta) > 0 {
 			if err := json.Unmarshal(o.Meta, &meta); err != nil {

@@ -119,6 +119,20 @@ func TestAgentsMdLoadsOnlyWithoutClaudeMd(t *testing.T) {
 	}
 }
 
+func TestAgentsMdWarningWithClaudeMdVariants(t *testing.T) {
+	const warning = "AGENTS.md is not loaded"
+	// A symbolic link is followed by the source, so CLAUDE.md -> AGENTS.md reads as the same bytes.
+	if ctx := resolve(t, memSource{"CLAUDE.md": "Rules\n", "AGENTS.md": "Rules\n"}); hasWarning(ctx, warning) {
+		t.Errorf("CLAUDE.md linked to AGENTS.md warned: %q", ctx.Warnings)
+	}
+	if ctx := resolve(t, memSource{"CLAUDE.md": "Other\n", "AGENTS.md": "Rules\n"}); !hasWarning(ctx, warning) {
+		t.Errorf("a separate CLAUDE.md lost the warning: %q", ctx.Warnings)
+	}
+	if ctx := resolve(t, memSource{"CLAUDE.md": "@AGENTS.md\n", "AGENTS.md": "Rules\n"}); hasWarning(ctx, warning) {
+		t.Errorf("an importing CLAUDE.md warned: %q", ctx.Warnings)
+	}
+}
+
 func TestImportDepthCyclesAndPersonalFiles(t *testing.T) {
 	ctx := resolve(t, memSource{
 		"CLAUDE.md": "@a.md\n", "a.md": "@b.md\n", "b.md": "@c.md\n", "c.md": "@d.md\n", "d.md": "@e.md\n", "e.md": "@f.md\n@CLAUDE.md\nthanks @alice\n", "f.md": "too deep\n",
