@@ -1,0 +1,23 @@
+key: CORE-123
+format: jira
+
+Trim spaces in user names
+
+Problem
+User names keep leading and trailing spaces, so "bob " and "bob" are two users.
+See the report (https://example.com/r/1) and https://example.com/r/2.
+
+1. Sign up as " bob"
+2. Sign in as "bob"
+
+    String name = input; // List<String> stays
+
+Input | Stored
+" bob " | " bob "
+
+Notes
+Ask @user before releasing.
+
+Acceptance criteria:
+- Names are trimmed on sign-up and sign-in
+- Existing names are left alone

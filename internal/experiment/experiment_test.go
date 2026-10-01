@@ -252,6 +252,7 @@ func TestIneligible(t *testing.T) {
 		want      string
 	}{
 		"review":      {Candidate{Name: "t", NeedsReview: true, Validation: valid}, "agentium task edit t --reviewed"},
+		"judged":      {Candidate{Name: "t", Grading: task.GradingJudge, Validation: valid}, "judge-graded"},
 		"never":       {Candidate{Name: "t"}, "not validated (agentium task validate t --snapshot lean)"},
 		"unchecked":   {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusUnchecked}}, "no solution"},
 		"invalid":     {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusInvalid}}, "validation failed"},

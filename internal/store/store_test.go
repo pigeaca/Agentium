@@ -49,6 +49,36 @@ func TestMigrationsApplyOnceAndSurviveReopen(t *testing.T) {
 	}
 }
 
+// A database from before the grading column keeps its tasks, all graded by tests.
+func TestGradingMigrationKeepsOldTasks(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	old := open(t, file)
+	app, err := old.SaveProject(ctx, "/work/app", "app", []byte(`{}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Turn the fresh database back into one from before migration 8, with a task stored the old way.
+	for _, stmt := range []string{`ALTER TABLE tasks DROP COLUMN grading`, `DELETE FROM schema_migrations WHERE version = 8`,
+		`INSERT INTO tasks (project_id, name, instruction, source, base_commit, verify, created_at, updated_at)
+		 VALUES (?, 'old', 'Fix it.', 'manual', 'base', '["make test"]', '2026-09-28T10:00:00Z', '2026-09-28T10:00:00Z')`} {
+		var args []any
+		if strings.Contains(stmt, "?") {
+			args = append(args, app.ID)
+		}
+		if _, err := old.db.ExecContext(ctx, stmt, args...); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	old.Close()
+
+	s := open(t, file)
+	got, err := s.TaskByName(ctx, app.ID, "old")
+	if err != nil || got.Grading != "tests" || got.Instruction != "Fix it." {
+		t.Errorf("after the migration: %+v, %v", got, err)
+	}
+}
+
 func TestSaveProjectUpsertsByRoot(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
 	ctx := context.Background()
@@ -238,8 +268,21 @@ func TestTasksRoundTripUpdateAndCascade(t *testing.T) {
 		t.Errorf("after update: %+v", again)
 	}
 	list, err := s.Tasks(ctx, app.ID)
-	if err != nil || len(list) != 2 || list[1].Name != "manual" || list[1].HiddenTests == nil || len(list[1].HiddenTests) != 0 {
+	if err != nil || len(list) != 2 || list[1].Name != "manual" || list[1].HiddenTests == nil || len(list[1].HiddenTests) != 0 ||
+		list[0].Grading != "tests" || list[1].Grading != "tests" {
 		t.Errorf("Tasks = %+v, %v", list, err)
+	}
+	judged := Task{ProjectID: app.ID, Name: "judged", Instruction: "Do it.", Source: "ticket ABC-1", BaseCommit: "base", SolutionCommit: "sol",
+		Reference: []string{"p/parser.go"}, Verify: []string{"make test"}, Grading: "judge", CreatedAt: now.Add(2 * time.Minute)}
+	if _, err := s.SaveTask(ctx, judged); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.TaskByName(ctx, app.ID, "judged"); err != nil || got.Grading != "judge" || got.Source != "ticket ABC-1" {
+		t.Errorf("judged = %+v, %v", got, err)
+	}
+	judged.Name, judged.Grading = "unknown", "vibes"
+	if _, err := s.SaveTask(ctx, judged); err == nil {
+		t.Error("an unknown grading mode must be refused")
 	}
 	if err := s.DeleteTask(ctx, app.ID, "manual"); err != nil {
 		t.Fatal(err)
@@ -289,6 +332,17 @@ func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
 	}
 	if _, err := s.RunByID(ctx, app.ID, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing run: %v", err)
+	}
+	// A record replaced (a verdict added on resume) leaves the columns as they were.
+	if err := s.SetRunRecord(ctx, "20260928T100000Z-aaaaaa", []byte(`{"id":"a","judge":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.RunByID(ctx, app.ID, "20260928T100000Z-aaaaaa"); err != nil || string(got.Record) != `{"id":"a","judge":{}}` || got.CostUSD != 0.31 ||
+		got.Outcome != "ok" || got.Passed == nil || !*got.Passed {
+		t.Errorf("after SetRunRecord = %+v, %v", got, err)
+	}
+	if err := s.SetRunRecord(ctx, "nope", []byte(`{}`)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRunRecord of a missing run: %v", err)
 	}
 }
 

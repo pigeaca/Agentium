@@ -116,6 +116,9 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if t.Grading == task.GradingJudge { // its verification commands would grade it as if they were its tests
+		return fail(env, fmt.Errorf("task %s is judge-graded (no hidden tests); run once takes judge-graded tasks in a later version", t.Name))
+	}
 	arm := task.Arm{Name: "base"}
 	if *snapshotName != "" {
 		snap, err := w.db.SnapshotByName(ctx, w.project.ID, *snapshotName)

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -58,6 +59,10 @@ type Design struct {
 	VerifyTimeout time.Duration `json:"verify_timeout"` // one setup or verification command
 	Concurrency   int           `json:"concurrency"`
 	Seed          uint64        `json:"seed"` // the task sample and, when it runs, the schedule
+	// Judge, when set, asks the LLM judge about every graded run (internal/judge). Its verdicts sit beside the tests
+	// and decide nothing; its cost counts against BudgetUSD but never toward an arm's cost. Omitted when off, so designs
+	// and locks made before the judge read and encode as they did.
+	Judge *judge.Settings `json:"judge,omitempty"`
 }
 
 // Default margins (the study's §5.6).
@@ -69,8 +74,34 @@ const (
 // MaxConcurrency bounds parallel runs: each is a full agent session with its own checkout and verification.
 const MaxConcurrency = 8
 
+// MaxJudgeRepeats bounds the judge's repeats per run: each is a paid call.
+const MaxJudgeRepeats = 9
+
 // Runs is the number of agent runs the design asks for.
 func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
+
+// JudgeCapUSD is what one run's judgement may spend at most: each repeat's call up to judge.CallCapUSD, twice, since a
+// malformed reply is asked again. Zero without the judge. Claude Code checks --max-budget-usd after a turn, so a call
+// can pass its cap a little: the reserve is an estimate, as the agent's own cap is.
+func (d Design) JudgeCapUSD() float64 {
+	if d.Judge == nil {
+		return 0
+	}
+	return float64(d.Judge.WithDefaults().Repeats) * 2 * judge.CallCapUSD
+}
+
+// RunCapUSD is what one run may spend at most: the agent's cap and its judgement's. The budget reserves it for every
+// run in flight (Execute), so spending never passes the budget.
+func (d Design) RunCapUSD() float64 { return d.RunBudgetUSD + d.JudgeCapUSD() }
+
+// JudgeEstimateUSD is the judge's expected cost for every run of d, at the judge pilot's mean cost of a call
+// (judge.EstimateUSD): a stated figure, not a measure of this project. Zero without the judge.
+func (d Design) JudgeEstimateUSD() float64 {
+	if d.Judge == nil {
+		return 0
+	}
+	return float64(d.Runs()*d.Judge.WithDefaults().Repeats) * judge.EstimateUSD
+}
 
 // Validate checks that the design is complete and consistent.
 func (d Design) Validate() error {
@@ -123,7 +154,7 @@ func (d Design) Validate() error {
 	}
 	if d.RunBudgetUSD <= 0 || d.BudgetUSD <= 0 {
 		errs = append(errs, errors.New("budgets must be positive"))
-	} else if pair := 2 * d.RunBudgetUSD; d.BudgetUSD < pair {
+	} else if pair := 2 * d.RunCapUSD(); d.BudgetUSD < pair {
 		errs = append(errs, fmt.Errorf("the budget $%.2f is below one pair of runs at their caps ($%.2f)", d.BudgetUSD, pair))
 	}
 	if d.Timeout <= 0 || d.VerifyTimeout <= 0 {
@@ -135,6 +166,14 @@ func (d Design) Validate() error {
 	if d.Seed > MaxSeed {
 		errs = append(errs, fmt.Errorf("the seed must be at most %d", uint64(MaxSeed)))
 	}
+	if j := d.Judge; j != nil {
+		if j.Repeats < 1 || j.Repeats > MaxJudgeRepeats {
+			errs = append(errs, fmt.Errorf("the judge's repeats must be 1 to %d", MaxJudgeRepeats))
+		}
+		if j.Model == "" || j.Effort == "" {
+			errs = append(errs, errors.New("the judge needs a model and an effort"))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -142,13 +181,18 @@ func (d Design) Validate() error {
 type Candidate struct {
 	Name        string
 	NeedsReview bool
+	Grading     string           // task.GradingTests (or "") or task.GradingJudge
 	Validation  *task.Validation // nil when never validated
 }
 
 // Ineligible says why a task cannot be in an experiment with these arms, or returns "" when it can: it must be
 // reviewed for solution leaks, and its hidden tests must fail on the base and pass with the reference in every arm's
-// context (the last `task validate`).
+// context (the last `task validate`). Judge-graded tasks are refused: experiments grade by tests only, and must not
+// count such a task's runs as if its verification commands decided them.
 func Ineligible(c Candidate, arms []Arm) string {
+	if c.Grading == task.GradingJudge {
+		return "it is judge-graded (its solution has no tests); experiments take judge-graded tasks in a later version"
+	}
 	if c.NeedsReview {
 		return fmt.Sprintf("its instruction needs a review for solution leaks (then: agentium task edit %s --reviewed)", c.Name)
 	}

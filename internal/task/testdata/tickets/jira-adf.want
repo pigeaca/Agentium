@@ -1,0 +1,23 @@
+key: API-7
+format: jira
+
+Paginate the orders endpoint
+
+GET /orders returns every order at once. See the API guide (https://example.com/api).
+Reported by @Dana
+
+Current behaviour
+
+- No limit parameter
+  - large shops time out
+- No cursor
+
+    func List(ctx context.Context) ([]Order, error)
+    // returns all
+
+Param | Default
+limit | 50
+
+Acceptance criteria:
+- limit defaults to 50 and is capped at 200
+- the response has a next cursor
