@@ -28,6 +28,23 @@ Agentium runs coding agents such as Claude Code (Codex comes later) on tasks fro
 
 ```sh
 go install ./cmd/agentium          # from a clone of this repository; puts agentium in your Go bin folder
+cd /path/to/your/repo
+agentium start                     # registers it, snapshots the context, mines and validates 8 tasks, creates an experiment, previews its cost
+```
+
+`agentium start` never writes to your repository and makes no paid run on its own. It does the steps below for you, skipping those already done, so run it again to resume:
+
+- registers the repository (`init`) and saves the committed context as the snapshot `baseline`;
+- mines and validates tasks until 8 are ready, the cost floor;
+- creates the experiment `quick-...` at the floor, 8 tasks × 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
+- prints the preview: runs, estimated cost, detectable effect, and what is missing;
+- stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it).
+
+Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`). `start --reviewed` accepts those whose instructions show no solution sections and state every requirement of the hidden tests.
+
+It also shows how long it took, and what was spent, to your first decisive verdict (improved, regressed or no loss; inconclusive does not count), here and in `experiment report`. The manual commands follow.
+
+```sh
 agentium init /path/to/your/repo   # registers it; Agentium never writes to your repository
 cd /path/to/your/repo
 ```
