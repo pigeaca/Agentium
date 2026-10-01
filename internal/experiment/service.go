@@ -63,6 +63,46 @@ func (p Project) ResolveArm(ctx context.Context, name, contextName string) (Arm,
 	return Arm{Name: name, Context: contextName, Snapshot: snap.CommitID}, nil
 }
 
+// CalibrationFor returns the newest calibration of arm a's context. A model-ab arm needs one on its own model (tools
+// and skills can differ by model), so it takes the newest of those, and ErrNotFound when there is none: the caller
+// names the command that makes it. Other arms take the newest, whatever its model, as before.
+func (p Project) CalibrationFor(ctx context.Context, d Design, a Arm) (store.Calibration, error) {
+	if !d.PerArmProfiles() {
+		return p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
+	}
+	all, err := p.DB.Calibrations(ctx, p.ID, a.Context, a.Snapshot)
+	if err != nil {
+		return store.Calibration{}, err
+	}
+	for _, c := range all {
+		var cal run.Calibration
+		if err := json.Unmarshal(c.Result, &cal); err != nil {
+			return store.Calibration{}, fmt.Errorf("calibration of %s: %w", a.Context, err)
+		}
+		if cal.RequestedModel == a.Model {
+			return c, nil
+		}
+	}
+	return store.Calibration{}, fmt.Errorf("calibration of %s on %s: %w", a.Context, a.Model, store.ErrNotFound)
+}
+
+// EstimatesFor estimates each arm on its own model: the same estimate twice when the arms share one.
+func (p Project) EstimatesFor(ctx context.Context, d Design) (ArmEstimates, error) {
+	var out ArmEstimates
+	for i, a := range d.Arms[:2] {
+		if i == 1 && d.ArmModel(a) == d.ArmModel(d.Arms[0]) {
+			out[1] = out[0]
+			break
+		}
+		est, err := p.EstimateFor(ctx, d.ArmModel(a))
+		if err != nil {
+			return out, err
+		}
+		out[i] = est
+	}
+	return out, nil
+}
+
 // EligibleTasks returns the names of the tasks that can be in an experiment with these arms, and why each other task
 // cannot.
 func (p Project) EligibleTasks(ctx context.Context, arms []Arm) ([]string, map[string]string, error) {
@@ -144,8 +184,12 @@ func DescribeJudge(s llmjudge.Settings) string {
 
 // DescribeArms is the experiment's arms in words.
 func DescribeArms(d Design) string {
-	if d.Template == TemplateAA {
+	switch d.Template {
+	case TemplateAA:
 		return "A/A calibration of context " + d.Arms[0].Context
+	case TemplateModelAB:
+		return fmt.Sprintf("model A/B on context %s, A = %s, B = %s", d.Arms[0].Context, Profile(d.Arms[0].Model, d.Arms[0].Effort),
+			Profile(d.Arms[1].Model, d.Arms[1].Effort))
 	}
 	return fmt.Sprintf("context A/B, A = %s, B = %s", d.Arms[0].Context, d.Arms[1].Context)
 }

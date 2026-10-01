@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/judge"
@@ -17,7 +18,12 @@ import (
 const (
 	TemplateContextAB = "context-ab" // two contexts: does B change results against A?
 	TemplateAA        = "aa"         // one context in both arms: measures the noise, and must find no difference
+	// TemplateModelAB compares two Claude Code profiles (a model and an effort level) on the same tasks and one context.
+	TemplateModelAB = "model-ab"
 )
+
+// Efforts are the effort levels Claude Code's --effort takes; a model-ab arm names one of them or none (the CLI's own).
+var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
 
 // Goals pick the primary metric.
 const (
@@ -33,6 +39,13 @@ type Arm struct {
 	Name     string `json:"name"`               // A or B
 	Context  string `json:"context"`            // BaseContext or a snapshot name
 	Snapshot string `json:"snapshot,omitempty"` // the snapshot commit; empty for the base's own context
+	// Model, Effort and RunBudgetUSD are a model-ab arm's own profile; context templates leave them empty. An arm with a
+	// Model runs on it at its Effort (empty: the CLI's default), not Design.Effort. The JSON name of Model is not "model":
+	// a LockedArm embeds Arm and records the model its calibration saw under that name. A zero RunBudgetUSD is the
+	// design's.
+	Model        string  `json:"requested_model,omitempty"`
+	Effort       string  `json:"effort,omitempty"`
+	RunBudgetUSD float64 `json:"run_budget_usd,omitempty"`
 }
 
 // DesignVersion is the version of Design's stored form.
@@ -77,6 +90,67 @@ const MaxConcurrency = 8
 // MaxJudgeRepeats bounds the judge's repeats per run: each is a paid call.
 const MaxJudgeRepeats = 9
 
+// ArmModel is the model arm a runs on: its own in a model-ab experiment, else the design's.
+func (d Design) ArmModel(a Arm) string {
+	if a.Model != "" {
+		return a.Model
+	}
+	return d.Model
+}
+
+// ArmEffort is arm a's effort level, "" for the CLI's default. An arm with its own model has its own effort, so a
+// default effort does not leak into the other arm.
+func (d Design) ArmEffort(a Arm) string {
+	if a.Model != "" {
+		return a.Effort
+	}
+	return d.Effort
+}
+
+// ArmRunBudgetUSD is the cost Claude Code stops one of arm a's runs at.
+func (d Design) ArmRunBudgetUSD(a Arm) float64 {
+	if a.RunBudgetUSD > 0 {
+		return a.RunBudgetUSD
+	}
+	return d.RunBudgetUSD
+}
+
+// ArmRunCapUSD is what one of arm a's runs may spend at most: the agent's cap and its judgement's.
+func (d Design) ArmRunCapUSD(a Arm) float64 { return d.ArmRunBudgetUSD(a) + d.JudgeCapUSD() }
+
+// ModelLabel is the model of an experiment in words: the design's, or each arm's in a model-ab experiment.
+func (d Design) ModelLabel() string {
+	if !d.PerArmProfiles() || len(d.Arms) != 2 {
+		return d.Model
+	}
+	return "A = " + Profile(d.Arms[0].Model, d.Arms[0].Effort) + ", B = " + Profile(d.Arms[1].Model, d.Arms[1].Effort)
+}
+
+// PerArmProfiles reports whether the arms differ by model or effort (model-ab) rather than by context.
+func (d Design) PerArmProfiles() bool { return d.Template == TemplateModelAB }
+
+// Profile is a model and effort as `--a` and `--b` write them: MODEL or MODEL:EFFORT.
+func Profile(model, effort string) string {
+	if effort == "" {
+		return model
+	}
+	return model + ":" + effort
+}
+
+// ParseProfile reads MODEL[:EFFORT]. It checks the effort level only; the model is Claude Code's to accept.
+func ParseProfile(s string) (model, effort string, err error) {
+	model, effort, _ = strings.Cut(s, ":")
+	switch {
+	case model == "":
+		return "", "", fmt.Errorf("%q names no model (write MODEL or MODEL:EFFORT)", s)
+	case strings.Contains(s, ":") && effort == "":
+		return "", "", fmt.Errorf("%q names no effort after the colon (write MODEL or MODEL:EFFORT)", s)
+	case effort != "" && !slices.Contains(Efforts, effort):
+		return "", "", fmt.Errorf("%q: unknown effort %q (use %s)", s, effort, strings.Join(Efforts, ", "))
+	}
+	return model, effort, nil
+}
+
 // Runs is the number of agent runs the design asks for.
 func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
 
@@ -90,9 +164,23 @@ func (d Design) JudgeCapUSD() float64 {
 	return float64(d.Judge.WithDefaults().Repeats) * 2 * judge.CallCapUSD
 }
 
-// RunCapUSD is what one run may spend at most: the agent's cap and its judgement's. The budget reserves it for every
-// run in flight (Execute), so spending never passes the budget.
-func (d Design) RunCapUSD() float64 { return d.RunBudgetUSD + d.JudgeCapUSD() }
+// RunCapUSD is what one run may spend at most: the agent's cap and its judgement's; the larger of the arms' when they
+// differ. Reserve holds it back for every run in flight, so spending never passes the budget.
+func (d Design) RunCapUSD() float64 {
+	capUSD := d.RunBudgetUSD + d.JudgeCapUSD()
+	for _, a := range d.Arms {
+		capUSD = max(capUSD, d.ArmRunCapUSD(a))
+	}
+	return capUSD
+}
+
+// PairCapUSD is what a pair of runs, one per arm, may spend at most.
+func (d Design) PairCapUSD() float64 {
+	if len(d.Arms) != 2 {
+		return 2 * d.RunCapUSD()
+	}
+	return d.ArmRunCapUSD(d.Arms[0]) + d.ArmRunCapUSD(d.Arms[1])
+}
 
 // JudgeEstimateUSD is the judge's expected cost for every run of d, at the judge pilot's mean cost of a call
 // (judge.EstimateUSD): a stated figure, not a measure of this project. Zero without the judge.
@@ -110,9 +198,9 @@ func (d Design) Validate() error {
 		errs = append(errs, fmt.Errorf("design version %d (this Agentium writes %d)", d.Version, DesignVersion))
 	}
 	switch d.Template {
-	case TemplateContextAB, TemplateAA:
+	case TemplateContextAB, TemplateAA, TemplateModelAB:
 	default:
-		errs = append(errs, fmt.Errorf("unknown template %q (use %s or %s)", d.Template, TemplateContextAB, TemplateAA))
+		errs = append(errs, fmt.Errorf("unknown template %q (use %s, %s or %s)", d.Template, TemplateContextAB, TemplateAA, TemplateModelAB))
 	}
 	if len(d.Arms) != 2 || d.Arms[0].Name != "A" || d.Arms[1].Name != "B" {
 		errs = append(errs, errors.New("an experiment has two arms, A and B"))
@@ -123,7 +211,10 @@ func (d Design) Validate() error {
 			errs = append(errs, fmt.Errorf("both arms use context %s: a comparison of one context with itself is the %s template", d.Arms[0].Context, TemplateAA))
 		case d.Template == TemplateAA && !same:
 			errs = append(errs, fmt.Errorf("an %s experiment uses one context in both arms", TemplateAA))
+		case d.Template == TemplateModelAB && !same:
+			errs = append(errs, fmt.Errorf("a %s experiment uses one context in both arms", TemplateModelAB))
 		}
+		errs = append(errs, d.validateProfiles()...)
 		for _, a := range d.Arms {
 			if (a.Context == BaseContext) != (a.Snapshot == "") {
 				errs = append(errs, fmt.Errorf("arm %s: context %q and snapshot %q do not match", a.Name, a.Context, a.Snapshot))
@@ -154,7 +245,7 @@ func (d Design) Validate() error {
 	}
 	if d.RunBudgetUSD <= 0 || d.BudgetUSD <= 0 {
 		errs = append(errs, errors.New("budgets must be positive"))
-	} else if pair := 2 * d.RunCapUSD(); d.BudgetUSD < pair {
+	} else if pair := d.PairCapUSD(); d.BudgetUSD < pair {
 		errs = append(errs, fmt.Errorf("the budget $%.2f is below one pair of runs at their caps ($%.2f)", d.BudgetUSD, pair))
 	}
 	if d.Timeout <= 0 || d.VerifyTimeout <= 0 {
@@ -175,6 +266,34 @@ func (d Design) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// validateProfiles checks the arms' own profiles: a model-ab experiment gives each arm a model, the profiles differ,
+// and efforts are known levels; context templates give none.
+func (d Design) validateProfiles() []error {
+	var errs []error
+	for _, a := range d.Arms {
+		if d.Template != TemplateModelAB {
+			if a.Model != "" || a.Effort != "" || a.RunBudgetUSD != 0 {
+				errs = append(errs, fmt.Errorf("arm %s: a %s experiment compares contexts, so its arms take no model, effort or run budget of their own (use the %s template)",
+					a.Name, d.Template, TemplateModelAB))
+			}
+			continue
+		}
+		switch {
+		case a.Model == "":
+			errs = append(errs, fmt.Errorf("arm %s: a %s experiment gives each arm a model", a.Name, TemplateModelAB))
+		case a.Effort != "" && !slices.Contains(Efforts, a.Effort):
+			errs = append(errs, fmt.Errorf("arm %s: unknown effort %q (use %s)", a.Name, a.Effort, strings.Join(Efforts, ", ")))
+		case a.RunBudgetUSD < 0:
+			errs = append(errs, fmt.Errorf("arm %s: the run budget must be positive", a.Name))
+		}
+	}
+	if d.Template == TemplateModelAB && len(d.Arms) == 2 && d.Arms[0].Model == d.Arms[1].Model && d.Arms[0].Effort == d.Arms[1].Effort {
+		errs = append(errs, fmt.Errorf("both arms run %s: a comparison of one profile with itself measures noise, not a difference (the %s template does that for a context)",
+			Profile(d.Arms[0].Model, d.Arms[0].Effort), TemplateAA))
+	}
+	return errs
 }
 
 // Candidate is a stored task as an experiment sees it.

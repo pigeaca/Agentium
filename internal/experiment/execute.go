@@ -72,7 +72,9 @@ type Event struct {
 type Plan struct {
 	Schedule    []Slot
 	Concurrency int
-	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD)
+	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD): the larger arm's
+	// ArmCapUSD, when the arms' caps differ (model-ab), gives each arm's own; an arm without an entry has RunCapUSD.
+	ArmCapUSD   map[string]float64
 	BudgetUSD   float64
 	MaxAttempts int
 	Prior       []Attempt                       // the experiment's stored runs
@@ -178,6 +180,12 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	for i := range state {
 		state[i].failed = !state[i].settled && state[i].attempts >= p.MaxAttempts
 	}
+	capOf := func(pos int) float64 { // what the run at pos may spend at most
+		if c, ok := p.ArmCapUSD[p.Schedule[pos].Arm]; ok {
+			return c
+		}
+		return p.RunCapUSD
+	}
 	emit := func(e Event) {
 		if p.Progress != nil {
 			e.SpentUSD = spent
@@ -212,7 +220,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			reserved, held := 0.0, 0
 			for i := range state {
 				if state[i].running || state[i].held {
-					reserved += p.RunCapUSD
+					reserved += capOf(i)
 				}
 				if state[i].held && !state[i].running {
 					held++
@@ -231,12 +239,12 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				}
 				extra := 0.0
 				if !s.held {
-					extra += p.RunCapUSD
+					extra += capOf(pos)
 				}
 				var hold *slotState
 				if q := partner[pos]; q >= 0 {
 					if qs := &state[q]; !qs.finished() && !qs.running && !qs.held {
-						extra += p.RunCapUSD
+						extra += capOf(q)
 						hold = qs
 					}
 				}

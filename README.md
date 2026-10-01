@@ -74,6 +74,16 @@ agentium experiment show lean                 # the lock and the progress per ar
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
+**Templates.** `experiment new` has three: `context-ab` (the default; `--b` names the snapshot to compare with arm A's context), `aa` (one context in both arms, which must find no difference: it measures the noise) and `model-ab`, which compares two Claude Code profiles on the same tasks and one context:
+
+```sh
+agentium run calibrate --model claude-sonnet-5    # each arm's model needs its own calibration of the context
+agentium run calibrate --model claude-opus-5-5
+agentium experiment new models --template model-ab --a claude-sonnet-5 --b claude-opus-5-5:high [--context trimmed]
+```
+
+`--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default). The arms must differ in model or effort. Both run one context: the base's own, or `--context SNAPSHOT`. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget-a` and `--run-budget-b` give an arm its own run cap. Reports of model experiments name the arms by profile in their heading and summary; fuller per-profile reports are planned.
+
 **Judge (second opinion).** Tests decide pass and fail. `experiment new ... --judge` also asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference solution does? The judge reads the instruction and both changes' code, never the tests; tasks whose reference solution has no code are skipped. It answers fixed, partly or no, with a one-line reason, and takes the majority of a few repeats. `--judge-model`, `--judge-effort` and `--judge-repeats` set it.
 
 The report's Judge section shows, for each arm:
