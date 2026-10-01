@@ -39,7 +39,7 @@ const taskUsage = `Usage:
   agentium task validate NAME [--snapshot NAME]... [--repeat N] [--timeout DURATION] [--keep]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes);
-                         --repeat N runs every stage N times, and a stage whose runs disagree makes the
+                         --repeat N (1 to 20) runs every stage N times, and a stage whose runs disagree makes the
                          task flaky, which experiments reject (experiment plan asks for at least 3)
   agentium task rm NAME
 

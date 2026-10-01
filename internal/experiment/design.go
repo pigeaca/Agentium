@@ -159,7 +159,7 @@ func Ineligible(c Candidate, arms []Arm) string {
 	case v.Status == task.StatusUnchecked:
 		return "it has no solution to check with, so its hidden tests are unproven"
 	case v.Status == task.StatusFlaky:
-		return "its validation is " + v.Summary() + " (rerun it to see if it holds: agentium task validate " + c.Name + " --repeat 3)"
+		return "its validation is " + v.Summary() + " (make the check deterministic, then revalidate: " + validateCommand(c.Name, arms) + " --repeat 3)"
 	case v.Status != task.StatusValid:
 		return "its validation failed: " + v.Summary()
 	}
@@ -172,7 +172,12 @@ func Ineligible(c Candidate, arms []Arm) string {
 }
 
 func validateHint(name string, arms []Arm) string {
-	hint := " (agentium task validate " + name
+	return " (" + validateCommand(name, arms) + ")"
+}
+
+// validateCommand is the task validate command that covers every arm's context.
+func validateCommand(name string, arms []Arm) string {
+	hint := "agentium task validate " + name
 	var named []string
 	for _, a := range arms {
 		if a.Context != BaseContext && !slices.Contains(named, a.Context) {
@@ -180,7 +185,7 @@ func validateHint(name string, arms []Arm) string {
 			hint += " --snapshot " + a.Context
 		}
 	}
-	return hint + ")"
+	return hint
 }
 
 // Sample picks n of names with a seeded shuffle, returned sorted; all of them when there are no more than n.

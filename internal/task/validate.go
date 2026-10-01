@@ -77,6 +77,7 @@ type Stage struct {
 	PassedRuns      int  `json:"passed_runs,omitempty"`
 	OKRuns          int  `json:"ok_runs,omitempty"`
 	SetupFailedRuns int  `json:"setup_failed_runs,omitempty"`
+	TimedOutRuns    int  `json:"timed_out_runs,omitempty"`
 	Flaky           bool `json:"flaky,omitempty"`
 }
 
@@ -259,8 +260,8 @@ func (v Validator) runStageRepeated(ctx context.Context, spec Spec, arm Arm, nam
 }
 
 // fold combines the runs of one stage: the first run that was not OK represents it (else the first), counts say how
-// the runs went, and disagreement makes it flaky and so not OK. With one run, or fewer than n after an error, it only
-// returns that run (an error's partial result is not OK).
+// the runs went, and disagreement makes it flaky and so not OK. Runs is how many runs happened: below n after an
+// error, which also is never flaky (the partial result is not OK). With one run (n == 1) it returns that run as is.
 func fold(runs []Stage, n int) Stage {
 	stage := runs[0]
 	if n == 1 {
@@ -272,8 +273,8 @@ func fold(runs []Stage, n int) Stage {
 			break
 		}
 	}
-	stage.Runs = n
-	stage.PassedRuns, stage.OKRuns, stage.SetupFailedRuns = 0, 0, 0
+	stage.Runs = len(runs)
+	stage.PassedRuns, stage.OKRuns, stage.SetupFailedRuns, stage.TimedOutRuns = 0, 0, 0, 0
 	for _, r := range runs {
 		if r.Passed {
 			stage.PassedRuns++
@@ -283,6 +284,9 @@ func fold(runs []Stage, n int) Stage {
 		}
 		if r.SetupFailed {
 			stage.SetupFailedRuns++
+		}
+		if timedOut(r.Commands) {
+			stage.TimedOutRuns++
 		}
 	}
 	stage.Flaky = len(runs) == n && (stage.PassedRuns != 0 && stage.PassedRuns != n || stage.OKRuns != 0 && stage.OKRuns != n)
@@ -294,9 +298,17 @@ func fold(runs []Stage, n int) Stage {
 
 // flakyText says how a flaky stage's runs disagreed.
 func flakyText(s Stage) string {
-	text := fmt.Sprintf("%s/%s passed %d of %d times", s.Arm, s.Stage, s.PassedRuns, s.Runs)
+	var text string
+	if s.PassedRuns != 0 && s.PassedRuns != s.Runs {
+		text = fmt.Sprintf("%s/%s passed %d of %d times", s.Arm, s.Stage, s.PassedRuns, s.Runs)
+	} else { // the runs agree on passing or failing, but only some behaved as required (the others timed out)
+		text = fmt.Sprintf("%s/%s behaved as required %d of %d times", s.Arm, s.Stage, s.OKRuns, s.Runs)
+	}
+	if s.TimedOutRuns > 0 {
+		text += fmt.Sprintf("; %d timed out", s.TimedOutRuns)
+	}
 	if s.SetupFailedRuns > 0 {
-		text += fmt.Sprintf(" (its setup failed %d times)", s.SetupFailedRuns)
+		text += fmt.Sprintf(" (its setup failed %d %s)", s.SetupFailedRuns, map[bool]string{true: "time", false: "times"}[s.SetupFailedRuns == 1])
 	}
 	return text
 }

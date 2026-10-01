@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // flip passes on one call and fails on the next, using a marker outside every checkout (each stage has a fresh one).
@@ -87,8 +88,11 @@ func TestRepeatWithFlakySetupAndHiddenTests(t *testing.T) {
 	v.Repeats = 2
 	// Setup that fails on one repeat only: the runs disagree, so the stage is flaky and says why.
 	got, err := v.Validate(ctx, Spec{Base: f.base, Setup: []string{flip(marker)}, Verify: []string{"true"}}, []Arm{{Name: "base"}})
-	if err != nil || got.Status != StatusFlaky || got.Stages[0].SetupFailedRuns != 1 || !strings.Contains(got.Summary(), "its setup failed 1 times") {
+	if err != nil || got.Status != StatusFlaky || got.Stages[0].SetupFailedRuns != 1 || !strings.Contains(got.Summary(), "its setup failed 1 time)") {
 		t.Errorf("flaky setup: %s, %+v, %v", got.Summary(), got.Stages, err)
+	}
+	if !strings.Contains(got.Summary(), "its setup failed 1 time)") {
+		t.Errorf("grammar: %q", got.Summary())
 	}
 	// Hidden tests must fail: one failing run and one passing run disagree even though one of them is "right".
 	os.Remove(marker)
@@ -96,6 +100,26 @@ func TestRepeatWithFlakySetupAndHiddenTests(t *testing.T) {
 		Reference: []string{"value.txt"}, Verify: []string{flip(marker)}}, []Arm{{Name: "base"}})
 	if err != nil || got.Status != StatusFlaky || len(got.Stages) != 1 || got.Stages[0].Stage != StageHiddenTests {
 		t.Errorf("flaky hidden tests: %s, %v", stages(got), err)
+	}
+}
+
+// Two normal failures and a timeout agree on "not passed", so the text must not say it passed 0 times.
+func TestFlakyTimeoutIsNotMisreported(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	marker := filepath.Join(t.TempDir(), "marker")
+	v, _ := validator(t, f.bare)
+	v.Repeats = 3
+	v.Timeout = 500 * time.Millisecond
+	// Fails twice (touch the marker, then see it), times out on the third run: marker counts runs.
+	verify := fmt.Sprintf("echo x >> %[1]s; n=$(wc -l < %[1]s); [ $n -eq 3 ] && sleep 5; exit 1", marker)
+	got, err := v.Validate(ctx, Spec{Base: f.base, Solution: f.solution, HiddenTests: []string{"tests/value_test.sh"},
+		Reference: []string{"value.txt"}, Verify: []string{verify}}, []Arm{{Name: "base"}})
+	if err != nil || got.Status != StatusFlaky {
+		t.Fatalf("%s, %v", got.Status, err)
+	}
+	if want := "flaky: base/hidden-tests behaved as required 2 of 3 times; 1 timed out"; got.Summary() != want {
+		t.Errorf("summary %q, want %q", got.Summary(), want)
 	}
 }
 
@@ -114,7 +138,7 @@ func TestRepeatStopsWhenCancelled(t *testing.T) {
 	if err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want a cancellation", err)
 	}
-	if got.Status == StatusFlaky || len(got.Stages) != 1 || got.Stages[0].Flaky || got.Stages[0].OK {
+	if got.Status == StatusFlaky || len(got.Stages) != 1 || got.Stages[0].Flaky || got.Stages[0].OK || got.Stages[0].Runs != 2 {
 		t.Errorf("a cancelled repeat is no verdict: %s %+v", got.Status, got.Stages)
 	}
 	if entries, _ := os.ReadDir(v.WorkDir); len(entries) != 0 {

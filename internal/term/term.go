@@ -94,7 +94,7 @@ var statuses = map[string]func(Style, string) string{
 	"budget": Style.Warn, "infra": Style.Warn, "unfair": Style.Warn, "unchecked": Style.Warn,
 	"unverified": Style.Warn, "not validated": Style.Warn,
 	// failed
-	"MISSING": Style.Bad, "NOT OK": Style.Bad, "invalid": Style.Bad, "no": Style.Bad, "fail": Style.Bad,
+	"MISSING": Style.Bad, "NOT OK": Style.Bad, "invalid": Style.Bad, "flaky": Style.Bad, "no": Style.Bad, "fail": Style.Bad,
 	"failed": Style.Bad, "FAILED": Style.Bad, "regressed": Style.Bad, "capped": Style.Bad, "timeout": Style.Bad, "error": Style.Bad,
 }
 

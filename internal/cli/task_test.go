@@ -81,6 +81,7 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	expect(t, run("task", "validate", name, "--snapshot", "base"), ExitUsage, "repeated or reserved")
 
 	expect(t, run("task", "validate", name, "--repeat", "0"), ExitUsage, "--repeat must be 1 to 20")
+	expect(t, run("task", "validate", name, "--repeat", "21"), ExitUsage, "--repeat must be 1 to 20")
 	repeated := run("task", "validate", name, "--repeat", "3")
 	expect(t, repeated, ExitOK, "(1/3)", "(3/3)", "Result: valid")
 	if strings.Contains(repeated.stdout, "flaky") {
