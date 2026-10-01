@@ -70,7 +70,7 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
   - **Three priced calls:** $0.038–0.042 each, mostly output (high effort). That puts the full run at about $9, and $13.50 with a 50% margin.
   - **S01:** its pricing verdicts were shown in the session, so it is left out of the comparisons with your labels.
   - **Pairs:** 19 rather than 20–25; 8 of them are A/A.
-- [ ] **3. Human labels** (the user); the A/B's diffs are in.
+- [ ] **3. Human labels** (the user); the A/B's diffs are in. Paging long diffs in the terminal form was clumsy, so a browser form was added before any label (`label --web`; see the protocol's Changes).
 - [ ] **4. Judge calls (paid; separate approval).** 138 single and 38 pair judgements, priced in step 2 at about $9 (list prices, or a share of the usage windows with a subscription). A budget cap of $15 is proposed.
 - [ ] **5. Analysis:** results doc, go/no-go, roadmap update; then archive this plan.
 

@@ -25,16 +25,18 @@ The acceptance data folder (`~/.agentium-acceptance`) holds every graded run of 
 ## Blinding
 - **What items hold:** `items.json` has only the instruction and the diffs. Runs, arms, experiments and results are in `key.json`.
 - **Your rule:** label every item before opening `key.json`, the records or any judge output.
-- **What you see:** the label form shows the judge's rubric (its system prompt) and its prompt, word for word.
+- **What you see:** the label form shows the judge's rubric (its system prompt) and its prompt: word for word in the terminal, and in the browser as the prompt's parts under its own headings, with the question word for word.
 - **Limits:** you may still infer results. Two empty changes are obvious failures. Some tasks ran only in `ab16`, whose runs all passed. You may remember Phase 1's outcomes. Answer from the diffs, not from memory.
 - **S01:** its pricing verdicts were shown in the coordinator's session. S01, and the pair that holds S01's diff, are left out of every comparison with your labels. S01 stays in question 3, which compares the judge with tests, not with you.
 
 ## Labels (you)
-Run `python3 docs/research/judge-pilot/judge_pilot.py label` from the repository root. It shows one item at a time, saves after every answer, and resumes where it stopped. Answer:
+Run `python3 docs/research/judge-pilot/judge_pilot.py label --web` from the repository root and open the address it prints. It shows one item at a time, saves every answer at once, and starts at the first item without one. Answer with the buttons or keys:
 - **For a single change:** `y` (yes, fully), `p` (partly) or `n` (no), against the prompt's question.
 - **For a pair:** `1`, `2` or `t` (tie).
 
-An optional note can follow, after a space.
+An optional note is saved with the answer. The browser form shows the prompt's parts under the prompt's own headings, with the diffs clipped as the judge sees them and coloured, and the question word for word. You can go back and change an answer. The form listens only on 127.0.0.1 and never reads `key.json`.
+
+Without `--web`, the same items are shown in the terminal as the whole prompt text, in `less` (`q` closes an item; then type the answer, and a note after a space).
 
 ## Judge
 - **Call:** Claude Code headless (`claude -p`, the desktop app's bundled 2.1.284; see Changes), model `claude-opus-5-5`, effort `high`. It runs with:
@@ -133,3 +135,4 @@ All on 2026-10-01, before any label and before any verdict that counts.
 4. **After the review's second pass:**
    - Question 3 drops runs where you and the tests disagree in both directions (it first dropped only your false passes), and S01's label never moves it.
    - The protocol records that the verification call judged S01, that error results count as no answer, and that all-tie A/A sets meet the check.
+5. **A browser label form.** Paging long diffs in the terminal form was clumsy, and an interrupt lost the item in view. `label --web` shows the same items, rubric and questions in a browser and lets you change an answer; it was added before any label. Neither the questions nor what is hidden changed.

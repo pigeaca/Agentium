@@ -3,7 +3,7 @@
 
 Commands (the work folder sits in the data folder, outside every repository):
   prepare   build the blind items from the acceptance data folder
-  label     label the items in the terminal, resumably
+  label     label the items in the terminal, resumably (--web: in a browser form on 127.0.0.1)
   judge     ask the judge about every item, resumably (--limit N for a few calls; --judge-cmd for a fake)
   analyze   compute every number of the results document
 
@@ -13,6 +13,7 @@ only; Python 3.9.
 
 import argparse
 import collections
+import http.server
 import json
 import math
 import os
@@ -261,11 +262,30 @@ def show(text: str) -> None:
         print(text)
 
 
+LABEL_CODES = {"y": "yes", "p": "partly", "n": "no", "1": "first", "2": "second", "t": "tie"}
+MAX_NOTE_CHARS = 2000
+
+
+def save_label(work: Path, kind: str, item_id: str, code: str, note: str) -> Optional[str]:
+    """Records one answer (a key of LABEL_CODES) in labels.json; returns None, or why the answer was refused."""
+    items = read_json(work / "items.json")
+    if kind not in ("singles", "pairs") or item_id not in {i["id"] for i in items[kind]}:
+        return "unknown item"
+    value = LABEL_CODES.get(code)
+    if value not in (FIXED if kind == "singles" else PREFER):
+        return "answer %s with %s" % (item_id, "y, p or n" if kind == "singles" else "1, 2 or t")
+    if len(note) > MAX_NOTE_CHARS:
+        return "the note is longer than %d characters" % MAX_NOTE_CHARS
+    labels = read_json(work / "labels.json", {"singles": {}, "pairs": {}})
+    labels[kind][item_id] = {"fixed" if kind == "singles" else "prefer": value, "note": note.strip()}
+    write_json(work / "labels.json", labels)
+    return None
+
+
 def label(work: Path, ask=input, show=show) -> int:
     """Labels unlabeled items, singles then pairs, saving after each; returns how many are left."""
     items = read_json(work / "items.json")
     labels = read_json(work / "labels.json", {"singles": {}, "pairs": {}})
-    answers = {"y": "yes", "p": "partly", "n": "no", "1": "first", "2": "second", "t": "tie"}
     queue = [("singles", i) for i in items["singles"] if i["id"] not in labels["singles"]] + \
             [("pairs", i) for i in items["pairs"] if i["id"] not in labels["pairs"]]
     for done, (kind, item) in enumerate(queue):
@@ -277,13 +297,84 @@ def label(work: Path, ask=input, show=show) -> int:
             if reply == "q":
                 return len(queue) - done
             code, _, note = reply.partition(" ")
-            value = answers.get(code)
-            if value in (FIXED if kind == "singles" else PREFER):
-                field = "fixed" if kind == "singles" else "prefer"
-                labels[kind][item["id"]] = {field: value, "note": note.strip()}
-                write_json(work / "labels.json", labels)
+            if save_label(work, kind, item["id"], code, note) is None:
                 break
     return 0
+
+
+FORM_PAGE = Path(__file__).resolve().parent / "label_form.html"
+
+
+def closing_question(prompt: str) -> str:
+    """The prompt's last paragraph, the question it asks, as one line."""
+    return " ".join(prompt.rsplit("\n\n", 1)[1].split())
+
+
+def form_state(work: Path) -> dict:
+    """What the browser form shows: the rubric, each prompt's question, the items with their diffs clipped as the judge
+    sees them, and your labels so far. It never reads key.json."""
+    items = read_json(work / "items.json")
+    return {"rubric": SYSTEM_PROMPT,
+            "questions": {"singles": closing_question(SINGLE_PROMPT), "pairs": closing_question(PAIR_PROMPT)},
+            "items": {"singles": [dict(i, reference=clip(i["reference"]), candidate=clip(i["candidate"])) for i in items["singles"]],
+                      "pairs": [dict(i, reference=clip(i["reference"]), first=clip(i["first"]), second=clip(i["second"]))
+                                for i in items["pairs"]]},
+            "labels": read_json(work / "labels.json", {"singles": {}, "pairs": {}})}
+
+
+def label_server(work: Path, port: int) -> http.server.HTTPServer:
+    """The label form on 127.0.0.1, saving every answer to labels.json like the terminal form. It answers only requests
+    addressed to it by that name (no DNS rebinding) and takes answers only as JSON, which a page on another site cannot
+    send without a preflight this server never grants. One request at a time, so answers never race."""
+    page = FORM_PAGE.read_bytes()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def reply(self, status: int, body, content_type: str = "application/json") -> None:
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def addressed(self) -> bool:
+            port = self.server.server_address[1]
+            if self.headers.get("Host") in ("127.0.0.1:%d" % port, "localhost:%d" % port):
+                return True
+            self.reply(403, {"error": "this form answers only on 127.0.0.1:%d" % port})
+            return False
+
+        def do_GET(self) -> None:
+            if not self.addressed():
+                return
+            if self.path == "/":
+                self.reply(200, page, "text/html; charset=utf-8")
+            elif self.path == "/state":
+                self.reply(200, form_state(work))
+            else:
+                self.reply(404, {"error": "not found"})
+
+        def do_POST(self) -> None:
+            if not self.addressed():
+                return
+            if self.path != "/label" or self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+                self.reply(400, {"error": "answers go to /label as JSON"})
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+                error = save_label(work, str(body["kind"]), str(body["id"]), str(body["code"]), str(body.get("note", "")))
+            except (ValueError, KeyError, TypeError, AttributeError):
+                error = "the answer needs kind, id, code and an optional note"
+            if error:
+                self.reply(400, {"error": error})
+            else:
+                self.reply(200, {"labels": read_json(work / "labels.json")})
+
+        def log_message(self, format, *args) -> None:  # noqa: A002 (the base class's name)
+            pass
+
+    return http.server.HTTPServer(("127.0.0.1", port), Handler)
 
 
 # ---- judge ----
@@ -628,7 +719,9 @@ def main(argv=None) -> int:
     parser.add_argument("--work", help="the pilot's folder (default: DATA/judge-pilot)")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("prepare")
-    sub.add_parser("label")
+    lab = sub.add_parser("label")
+    lab.add_argument("--web", action="store_true", help="label in a browser form instead of the terminal")
+    lab.add_argument("--port", type=int, default=8765)
     j = sub.add_parser("judge")
     j.add_argument("--judge-cmd", default="claude")
     j.add_argument("--limit", type=int)
@@ -641,8 +734,21 @@ def main(argv=None) -> int:
     if args.command == "prepare":
         counts = prepare(data, work)
         print("Prepared %(singles)d diffs and %(pairs)d pairs (%(aa_pairs)d from A/A experiments) in " % counts + str(work))
+    elif args.command == "label" and args.web:
+        server = label_server(work, args.port)
+        print("Label form: http://127.0.0.1:%d/ (every answer is saved at once; Ctrl-C stops the form)" % server.server_address[1])
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nStopped; your answers are saved.")
+        finally:
+            server.server_close()
     elif args.command == "label":
-        left = label(work)
+        try:
+            left = label(work)
+        except KeyboardInterrupt:
+            print("\nStopped; your answers so far are saved. Run label again to go on.")
+            return 0
         print("All labeled." if left == 0 else "%d left; run label again to go on." % left)
     elif args.command == "judge":
         result = judge(work, args.judge_cmd, args.limit, args.budget)
