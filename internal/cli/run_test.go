@@ -42,6 +42,7 @@ EOF
 }
 
 func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
@@ -141,6 +142,7 @@ func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
 }
 
 func TestRunOnceRefusesInstructionFilesAboveTheWorkspace(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "a.txt", "a\n")
@@ -252,6 +254,7 @@ printf '* filter=leak\n' > .gitattributes`, false)
 }
 
 func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	ready := filepath.Join(t.TempDir(), "ready")
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "touch "+ready, true)
@@ -271,6 +274,7 @@ func TestRunInterruptedIsStoredWithItsCost(t *testing.T) {
 // An agent that removes its checkout's .git must not erase its run or its spend, and git must not wander into an
 // enclosing repository.
 func TestRunSurvivesAnAgentRemovingItsGitFolder(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "rm -rf .git", false)
 	result := f.run(context.Background(), "run", "once", "value")
@@ -279,6 +283,7 @@ func TestRunSurvivesAnAgentRemovingItsGitFolder(t *testing.T) {
 }
 
 func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nBe brief.\n")
 	expect(t, f.run(context.Background(), "context", "snapshot", "brief", "--working-tree"), ExitOK)
@@ -306,6 +311,7 @@ func TestRunKeepSnapshotArmAndSetupOutputs(t *testing.T) {
 // Setup builds into the agent's own cache (the build tools' agent caches: Go's GOCACHE is the run's go-build folder), so
 // a warming step spares the agent a cold build; verification keeps Agentium's cache in the data folder.
 func TestRunSetupUsesTheAgentsBuildCache(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	seen := t.TempDir()
 	expect(t, f.run(context.Background(), "task", "add", "cache", "--base", "HEAD~1", "--instruction", "Anything.",
@@ -335,6 +341,7 @@ func readString(t *testing.T, path string) string {
 }
 
 func TestRunRefusesAWorkspaceInsideADeniedPath(t *testing.T) {
+	t.Parallel()
 	outer := t.TempDir()
 	f := newRunFixture(t, filepath.Join(outer, "data"))
 	token := filepath.Join(outer, "token") // its folder is denied to runs, and it holds the data folder
@@ -407,6 +414,7 @@ func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, mode
 }
 
 func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	writeFile(t, f.repo, "CLAUDE.md", "# Rules\n"+strings.Repeat("A longer context line for the trimmed arm.\n", 40))
 	expect(t, f.run(context.Background(), "context", "snapshot", "long", "--working-tree"), ExitOK)
@@ -430,6 +438,7 @@ func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
 }
 
 func TestCalibrationChecksRestOnTheTranscript(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	for mode, want := range map[string]string{
 		"redirect":       "base  ok       ok       unverified    ok",
@@ -452,6 +461,7 @@ func TestCalibrationChecksRestOnTheTranscript(t *testing.T) {
 }
 
 func TestCalibrationKeepsOnlyBundledSkills(t *testing.T) {
+	t.Parallel()
 	// The base is calibrated at HEAD, which has a project skill the task's older base does not: the calibration
 	// stores only the bundled skill, and a run adds its own project skills, so it is not unfair.
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
@@ -465,6 +475,7 @@ func TestCalibrationKeepsOnlyBundledSkills(t *testing.T) {
 }
 
 func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	if err := os.MkdirAll(filepath.Join(f.home, ".claude", "skills", "my-secret-skill"), 0o755); err != nil {
 		t.Fatal(err)
@@ -480,6 +491,7 @@ func TestCalibrationWithPersonalSkillsIsNotSaved(t *testing.T) {
 }
 
 func TestJudgeEdgeCases(t *testing.T) {
+	t.Parallel()
 	grep := []claude.ToolCall{{Name: "Grep", Input: map[string]any{"pattern": "codeword"}, Result: "AGENTS.md:3:Calibration codeword: AGENTIUM-ABC"}}
 	if _, _, instructions := judge(grep, "CODEWORD=AGENTIUM-ABC", "AGENTIUM-ABC", "CLAUDE.md"); instructions != checkUnverified {
 		t.Errorf("a codeword found with a tool counts as loaded: %s", instructions)
@@ -493,6 +505,7 @@ func TestJudgeEdgeCases(t *testing.T) {
 // A pass graded with test-runner configuration the agent changed is flagged (and experiments do not count it as a
 // success), unless the task's reference changes that configuration too.
 func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
+	t.Parallel()
 	repo, data, home := t.TempDir(), filepath.Join(t.TempDir(), "data"), t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "Makefile", "test:\n\tsh run_tests.sh\n")
@@ -548,6 +561,7 @@ func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
 // When Agentium cannot grade a fair attempt (here its own grading repository is damaged, which the fake agent can do
 // because it runs unsandboxed), the run is an infrastructure failure, retried in experiments, not the agent's failure.
 func TestRunGradingFailureIsInfrastructure(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; rm -rf '"+f.data+"'/records/*/verify/.git", false)
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitError, "not a git repository")
@@ -565,6 +579,7 @@ func TestRunGradingFailureIsInfrastructure(t *testing.T) {
 
 // What the agent leaves unreadable is its own doing: graded without it, the run keeps its outcome.
 func TestRunGradesWithoutUnreadableFiles(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt; touch locked; chmod 000 locked", false)
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "outcome      ok; verification passed",
@@ -574,6 +589,7 @@ func TestRunGradesWithoutUnreadableFiles(t *testing.T) {
 // While a setup command runs, the run's start file names its process group, so a runner killed meanwhile leaves
 // enough behind to see that the command still runs before its workspace is removed.
 func TestRunRecordsTheRunningCommand(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	marker := filepath.Join(t.TempDir(), "setup-pid")
 	expect(t, f.run(context.Background(), "task", "edit", "value", "--setup", "echo $$ > "+marker+"; sleep 1"), ExitOK)
@@ -600,6 +616,7 @@ func TestRunRecordsTheRunningCommand(t *testing.T) {
 // Agentium's own commands (setup, validation, grading) build with a cache in the data folder, which runs are denied;
 // the agent builds with a cache of its own, in its workspace.
 func TestBuildCaches(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	marks := t.TempDir()
 	mark := func(name string) string { // records where a command's Go build cache and temporary files went

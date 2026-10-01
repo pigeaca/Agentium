@@ -18,6 +18,7 @@ import (
 // With a subscription, an experiment pauses between pairs before the usage limit and says when the window resets; the
 // preview shows what the runs read; a resume with --wait waits for the reset and finishes. Nothing is cancelled.
 func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	resets := time.Now().Add(time.Hour).Truncate(time.Second)
@@ -72,6 +73,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 // A subagent type whose model changes from earlier runs (a role's alias moving to a newer model) stops the experiment:
 // later runs would not compare. run show lists each run's subagents.
 func TestExperimentStopsWhenASubagentChangesModel(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	if err := os.WriteFile(filepath.Join(ctrl, "subagent"), []byte("s0-t1 claude-sonnet-5\ns1-t1 claude-sonnet-5\ns2-t1 claude-sonnet-5-5\n"), 0o644); err != nil {
@@ -89,6 +91,7 @@ func TestExperimentStopsWhenASubagentChangesModel(t *testing.T) {
 
 // The stored runs' readings and subagent models are read back for the gate and the check.
 func TestUsageFromStoredRecords(t *testing.T) {
+	t.Parallel()
 	resets := time.Date(2026, 9, 30, 1, 20, 0, 0, time.UTC)
 	rec := func(first, last float64, models map[string][]string) []byte {
 		var m struct {
@@ -129,6 +132,7 @@ func TestUsageFromStoredRecords(t *testing.T) {
 // usage per run comes from task runs only, from an older window when the latest holds only calibrations, or else the
 // default. The latest reading still comes from every run.
 func TestUsagePreviewLeavesOutCalibrationRuns(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "ab", "--b", "lean", "--task", "value", "--repeats", "2"), ExitOK)
@@ -160,6 +164,7 @@ func TestUsagePreviewLeavesOutCalibrationRuns(t *testing.T) {
 
 // Arms may give a role different models on purpose: that is a context difference, not a change mid-experiment.
 func TestExperimentAllowsArmsWithDifferentSubagentModels(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	if err := os.WriteFile(filepath.Join(ctrl, "subagent-by-arm"), nil, 0o644); err != nil {
@@ -171,6 +176,7 @@ func TestExperimentAllowsArmsWithDifferentSubagentModels(t *testing.T) {
 
 // An API key uses no subscription: its experiment never pauses, whatever the subscription's window reads.
 func TestExperimentWithAnAPIKeyNeverPauses(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	ctx := context.Background()
 	f.vars["ANTHROPIC_API_KEY"] = "sk-ant-test-usage" // secret-scan: allow
