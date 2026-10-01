@@ -8,7 +8,10 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import unittest
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -272,6 +275,58 @@ class Pipeline(unittest.TestCase):
         answers = iter(["n"] * 4 + ["1", "t"])
         self.assertEqual(jp.label(self.work, ask=lambda _: next(answers), show=lambda _: None), 0)
         self.assertEqual(len(json.loads((self.work / "labels.json").read_text())["pairs"]), 2)
+
+    def test_browser_form_is_blind_saves_answers_and_refuses_other_callers(self):
+        jp.prepare(self.data, self.work)
+        server = jp.label_server(self.work, 0)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        base = "http://127.0.0.1:%d" % server.server_address[1]
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never through a configured proxy
+
+        def call(path, body=None, content_type="application/json", host=None):
+            req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode())
+            if body is not None:
+                req.add_header("Content-Type", content_type)
+            if host:
+                req.add_header("Host", host)
+            try:
+                with opener.open(req) as resp:
+                    return resp.status, resp.read()
+            except urllib.error.HTTPError as e:
+                return e.code, e.read()
+
+        status, page = call("/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"<title>Judge pilot labels</title>", page)
+        status, raw = call("/state")
+        state = json.loads(raw)
+        self.assertEqual((len(state["items"]["singles"]), len(state["items"]["pairs"])), (6, 2))
+        self.assertEqual(state["rubric"], jp.SYSTEM_PROMPT)
+        self.assertTrue(state["questions"]["singles"].startswith("Does the candidate change do what the task asks"))
+        for hidden in (b"r1", b"\"arm\"", b"passed", b"tests/value_test.sh"):
+            self.assertNotIn(hidden, raw)
+
+        self.assertEqual(call("/label", {"kind": "singles", "id": "S02", "code": "p", "note": " misses one case "})[0], 200)
+        self.assertEqual(call("/label", {"kind": "pairs", "id": "P01", "code": "t"})[0], 200)
+        status, raw = call("/label", {"kind": "singles", "id": "S02", "code": "n"})  # an answer can be changed
+        self.assertEqual(json.loads(raw)["labels"]["singles"]["S02"], {"fixed": "no", "note": ""})
+        labels = json.loads((self.work / "labels.json").read_text())
+        self.assertEqual(labels, {"singles": {"S02": {"fixed": "no", "note": ""}}, "pairs": {"P01": {"prefer": "tie", "note": ""}}})
+
+        refused = [
+            call("/label", {"kind": "singles", "id": "S02", "code": "1"}),  # a pair's answer for a single
+            call("/label", {"kind": "singles", "id": "S99", "code": "y"}),
+            call("/label", {"kind": "key", "id": "S01", "code": "y"}),
+            call("/label", ["S01", "y"]),
+            call("/label", {"kind": "singles", "id": "S01", "code": "y"}, content_type="text/plain"),  # a cross-site form
+            call("/state", host="attacker.example:%d" % server.server_address[1]),  # DNS rebinding
+            call("/label", {"kind": "singles", "id": "S01", "code": "y"}, host="attacker.example"),
+        ]
+        self.assertEqual([s for s, _ in refused], [400, 400, 400, 400, 400, 403, 403])
+        self.assertEqual(json.loads((self.work / "labels.json").read_text()), labels)
+        self.assertEqual(call("/key.json")[0], 404)
 
     def test_analyze_on_the_prepared_items(self):
         jp.prepare(self.data, self.work)

@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Judge pilot labels</title>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --text: #1c1917; --muted: #6b6560; --line: #e4e2df;
+  --add: #e7f5ea; --add-text: #14532d; --del: #fdecec; --del-text: #7f1d1d;
+  --hunk: #eef1fd; --hunk-text: #3730a3; --file: #f1f0ee;
+  --accent: #2557d6; --accent-text: #ffffff; --warn: #b42318;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f0e0d; --panel: #1a1918; --text: #e8e6e3; --muted: #a29d97; --line: #2c2a28;
+    --add: #10301b; --add-text: #c3f3d2; --del: #3a1414; --del-text: #fcd0d0;
+    --hunk: #1d1d45; --hunk-text: #c9d2ff; --file: #23211f;
+    --accent: #4f7cf0; --accent-text: #ffffff; --warn: #f97066;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f0e0d; --panel: #1a1918; --text: #e8e6e3; --muted: #a29d97; --line: #2c2a28;
+  --add: #10301b; --add-text: #c3f3d2; --del: #3a1414; --del-text: #fcd0d0;
+  --hunk: #1d1d45; --hunk-text: #c9d2ff; --file: #23211f;
+  --accent: #4f7cf0; --accent-text: #ffffff; --warn: #f97066;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { margin: 0; font-size: 15px; }
+#item-id { font-weight: 600; }
+.progress { color: var(--muted); font-size: 13px; }
+.bar { flex: 1 1 120px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar > div { height: 100%; width: 0; background: var(--accent); }
+nav { display: flex; gap: 6px; }
+button { font: inherit; font-size: 14px; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 6px; padding: 5px 12px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button:disabled { opacity: .45; cursor: default; }
+main { max-width: 1600px; margin: 0 auto; padding: 14px 16px 190px; }
+details.rubric { margin-bottom: 14px; color: var(--muted); font-size: 14px; }
+details.rubric summary { cursor: pointer; }
+section { margin-bottom: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+section h2 { margin: 0; padding: 7px 12px; font-size: 12px; font-weight: 600; letter-spacing: .03em; text-transform: uppercase;
+  color: var(--muted); border-bottom: 1px solid var(--line); }
+.text { padding: 10px 12px; white-space: pre-wrap; }
+.empty { padding: 10px 12px; color: var(--muted); font-style: italic; }
+pre.diff { margin: 0; padding: 6px 0; overflow-x: auto; font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+pre.diff span { display: block; min-width: max-content; padding: 0 12px; white-space: pre; }
+pre.diff .file { margin-top: 6px; padding-top: 3px; padding-bottom: 3px; font-weight: 600; background: var(--file); }
+pre.diff .meta { color: var(--muted); }
+pre.diff .hunk { color: var(--hunk-text); background: var(--hunk); }
+pre.diff .add { color: var(--add-text); background: var(--add); }
+pre.diff .del { color: var(--del-text); background: var(--del); }
+.pair { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; }
+@media (min-width: 1100px) { .pair { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.answer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 10px 16px 12px;
+  background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 14px rgba(0, 0, 0, .06); }
+.answer .inner { max-width: 1600px; margin: 0 auto; }
+.question { margin-bottom: 8px; font-size: 14px; }
+.choices { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.choices button { min-width: 110px; padding: 7px 14px; font-weight: 600; }
+.choices button.chosen { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
+kbd { padding: 0 5px; font: 12px ui-monospace, Menlo, monospace; border: 1px solid var(--line); border-radius: 4px; opacity: .8; }
+#note { flex: 1 1 220px; min-width: 0; padding: 7px 10px; font: inherit; font-size: 14px; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+.status { margin-top: 6px; font-size: 13px; color: var(--muted); }
+.status.error { color: var(--warn); }
+.done { padding: 12px 14px; margin-bottom: 14px; border: 1px solid var(--accent); border-radius: 8px; background: var(--panel); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Judge pilot labels</h1>
+  <span id="item-id"></span>
+  <span class="progress" id="progress"></span>
+  <div class="bar"><div id="bar"></div></div>
+  <nav>
+    <button id="prev" title="Previous item (←)">← Previous</button>
+    <button id="next" title="Next item (→)">Next →</button>
+    <button id="todo" title="The next item without your answer">Next unlabelled</button>
+  </nav>
+</header>
+<main>
+  <div id="done" class="done" hidden>Every item has your answer. You can still go back and change any of them; then close this page.</div>
+  <details class="rubric" open>
+    <summary>Rubric (the judge's system prompt)</summary>
+    <p id="rubric"></p>
+  </details>
+  <div id="item"></div>
+</main>
+<div class="answer">
+  <div class="inner">
+    <div class="question" id="question"></div>
+    <div class="choices">
+      <span id="buttons" class="choices"></span>
+      <input id="note" placeholder="Optional note, e.g. misses the /private/var spelling" autocomplete="off">
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+</div>
+<script>
+"use strict";
+const CHOICES = {
+  singles: [["y", "Yes", "yes"], ["p", "Partly", "partly"], ["n", "No", "no"]],
+  pairs: [["1", "Change 1", "first"], ["2", "Change 2", "second"], ["t", "Tie", "tie"]],
+};
+const FIELD = { singles: "fixed", pairs: "prefer" };
+let state = null, order = [], pos = 0;
+const $ = (id) => document.getElementById(id);
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function saved(kind, id) { return state.labels[kind][id]; }
+
+function nextUnlabelled(from) {
+  for (let k = 0; k < order.length; k++) {
+    const j = (from + k) % order.length;
+    if (!saved(order[j][0], order[j][1].id)) return j;
+  }
+  return -1;
+}
+
+function diff(text) {
+  if (!text.trim()) return el("div", "empty", "(no change)");
+  const pre = el("pre", "diff");
+  for (const line of text.replace(/\n$/, "").split("\n")) {
+    let cls = "";
+    if (line.startsWith("diff --git")) cls = "file";
+    else if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("index ") || line.startsWith("new file") ||
+             line.startsWith("deleted file") || line.startsWith("[... diff cut")) cls = "meta";
+    else if (line.startsWith("@@")) cls = "hunk";
+    else if (line.startsWith("+")) cls = "add";
+    else if (line.startsWith("-")) cls = "del";
+    pre.appendChild(el("span", cls, line || " "));
+  }
+  return pre;
+}
+
+function block(title, body) {
+  const s = el("section");
+  s.appendChild(el("h2", "", title));
+  s.appendChild(body);
+  return s;
+}
+
+function render() {
+  const [kind, it] = order[pos];
+  const total = order.length;
+  const done = Object.keys(state.labels.singles).length + Object.keys(state.labels.pairs).length;
+  $("item-id").textContent = it.id + (kind === "singles" ? " · one change" : " · two changes");
+  $("progress").textContent = done + " of " + total + " labelled";
+  $("bar").style.width = (100 * done / total) + "%";
+  $("done").hidden = done < total;
+  $("prev").disabled = pos === 0;
+  $("next").disabled = pos === total - 1;
+  $("todo").disabled = nextUnlabelled(pos + 1) === -1 || nextUnlabelled(pos + 1) === pos;
+
+  const box = $("item");
+  box.replaceChildren();
+  box.appendChild(block("Task instruction", el("div", "text", it.instruction)));
+  box.appendChild(block("Reference change (the developer's fix, test files left out)", diff(it.reference)));
+  if (kind === "singles") {
+    box.appendChild(block("Candidate change (test files left out)", diff(it.candidate)));
+  } else {
+    const pair = el("div", "pair");
+    pair.appendChild(block("Change 1 (test files left out)", diff(it.first)));
+    pair.appendChild(block("Change 2 (test files left out)", diff(it.second)));
+    box.appendChild(pair);
+  }
+
+  const current = saved(kind, it.id);
+  $("question").textContent = state.questions[kind];
+  const buttons = $("buttons");
+  buttons.replaceChildren();
+  for (const [code, name, value] of CHOICES[kind]) {
+    const b = el("button");
+    b.append(name + " ");
+    b.appendChild(el("kbd", "", code));
+    if (current && current[FIELD[kind]] === value) b.classList.add("chosen");
+    b.addEventListener("click", () => answer(code));
+    buttons.appendChild(b);
+  }
+  $("note").value = current ? current.note : "";
+  status(current ? "Saved: " + current[FIELD[kind]] + (current.note ? " (with a note)" : "") + ". Choose again to change it."
+                 : "Not labelled yet. Keys: " + CHOICES[kind].map((c) => c[0]).join(" ") + " to answer, ← → to move.");
+}
+
+function status(text, error) {
+  const s = $("status");
+  s.textContent = text;
+  s.classList.toggle("error", !!error);
+}
+
+function go(to) {
+  if (to < 0 || to >= order.length) return;
+  pos = to;
+  render();
+  window.scrollTo(0, 0);
+}
+
+async function answer(code) {
+  const [kind, it] = order[pos];
+  status("Saving…");
+  let response, body;
+  try {
+    response = await fetch("/label", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: kind, id: it.id, code: code, note: $("note").value }),
+    });
+    body = await response.json();
+  } catch (e) {
+    status("Not saved: the form's server is not running. Start it again with judge_pilot.py label --web.", true);
+    return;
+  }
+  if (!response.ok) { status("Not saved: " + body.error, true); return; }
+  state.labels = body.labels;
+  const next = nextUnlabelled(pos + 1);
+  if (next === -1 || next === pos) { render(); status("Saved. Every item has your answer."); return; }
+  go(next);
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!state || e.metaKey || e.ctrlKey || e.altKey || e.target.tagName === "INPUT") return;
+  const kind = order[pos][0];
+  if (e.key === "ArrowLeft") { go(pos - 1); e.preventDefault(); return; }
+  if (e.key === "ArrowRight") { go(pos + 1); e.preventDefault(); return; }
+  const choice = CHOICES[kind].find((c) => c[0] === e.key.toLowerCase());
+  if (choice) { answer(choice[0]); e.preventDefault(); }
+});
+$("note").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const [kind, it] = order[pos];
+  const current = saved(kind, it.id);
+  const code = current && CHOICES[kind].find((c) => c[2] === current[FIELD[kind]]);
+  if (code) answer(code[0]);
+  else status("Choose an answer first; the note is saved with it.", true);
+});
+$("prev").addEventListener("click", () => go(pos - 1));
+$("next").addEventListener("click", () => go(pos + 1));
+$("todo").addEventListener("click", () => { const j = nextUnlabelled(pos + 1); if (j !== -1) go(j); });
+
+(async () => {
+  try {
+    state = await (await fetch("/state")).json();
+  } catch (e) {
+    status("Could not load the items: is judge_pilot.py label --web running?", true);
+    return;
+  }
+  $("rubric").textContent = state.rubric;
+  order = state.items.singles.map((i) => ["singles", i]).concat(state.items.pairs.map((i) => ["pairs", i]));
+  const first = nextUnlabelled(0);
+  go(first === -1 ? 0 : first);
+})();
+</script>
+</body>
+</html>
