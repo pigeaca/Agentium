@@ -162,18 +162,6 @@ func TestPreference(t *testing.T) {
 	if none.Enough || none.P != 1 || none.Low != 0 || none.High != 1 || none.BShare != 0 {
 		t.Errorf("none: %+v", none)
 	}
-	if p := binomialTwoSided(0, 8); math.Abs(p-2.0/256) > 1e-12 {
-		t.Errorf("p(0 of 8) = %v", p)
-	}
-	if p := binomialTwoSided(4, 8); p != 1 {
-		t.Errorf("p(4 of 8) = %v", p)
-	}
-	if lo, hi := wilson(17, 17); hi != 1 || lo <= 0 {
-		t.Errorf("wilson 17/17 = %v %v", lo, hi)
-	}
-	if lo, hi := wilson(0, 17); lo != 0 || hi >= 1 {
-		t.Errorf("wilson 0/17 = %v %v", lo, hi)
-	}
 }
 
 // TestPairCaller: the pair schema, not the single one, reaches a fake Claude Code, and its answer is read.

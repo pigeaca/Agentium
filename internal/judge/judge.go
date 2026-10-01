@@ -410,7 +410,7 @@ func PairCaller(s Settings, j claude.Judgement, environ []string, timeout time.D
 }
 
 func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration, schema string) (Caller, error) {
-	if above := instructionFilesAbove(filepath.Join(j.Dir, "call")); len(above) > 0 { // the calls start one level below
+	if above := claudectx.InstructionFilesAbove(filepath.Join(j.Dir, "call")); len(above) > 0 { // the calls start one level below
 		return nil, fmt.Errorf("judge: Claude Code would load %s above the judge's folder", strings.Join(above, ", "))
 	}
 	s = s.WithDefaults()
@@ -449,20 +449,6 @@ func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Du
 		}
 		return Reply{Stdout: stdout, Stderr: strings.TrimSpace(string(stderr)), ExitCode: result.ExitCode, TimedOut: result.TimedOut}, nil
 	}, nil
-}
-
-// instructionFilesAbove lists the instruction files Claude Code would load from the folders above dir (as
-// internal/run's guard for runs does).
-func instructionFilesAbove(dir string) []string {
-	var found []string
-	for d := filepath.Dir(dir); d != filepath.Dir(d); d = filepath.Dir(d) {
-		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
-			if info, err := os.Stat(filepath.Join(d, name)); err == nil && !info.IsDir() {
-				found = append(found, filepath.Join(d, name))
-			}
-		}
-	}
-	return found
 }
 
 // ReferenceDiff is the reference solution's change to its code: git diff from base to solution in the bare repository,

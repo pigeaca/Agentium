@@ -16,6 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 const initUsage = `Usage: agentium init [path]
@@ -113,7 +114,7 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	}
 	fmt.Fprintf(w, "  Claude Code  %s\n", claude)
 	fmt.Fprintf(w, "  sign-in      %s\n", describeSignIn(info.Claude.SignIn))
-	fmt.Fprintf(w, "  tests        %s\n", orNone(strings.Join(info.TestCommands, "; ")))
+	fmt.Fprintf(w, "  tests        %s\n", term.OrNone(strings.Join(info.TestCommands, "; ")))
 	startup := 0
 	for _, e := range resolved.Entries {
 		if e.StartupBytes > 0 {
@@ -158,11 +159,4 @@ func sizeLabel(bytes int64) string {
 		return fmt.Sprintf("%d B", bytes)
 	}
 	return fmt.Sprintf("%.1f KB", float64(bytes)/1024)
-}
-
-func orNone(value string) string {
-	if value == "" {
-		return "none found"
-	}
-	return value
 }

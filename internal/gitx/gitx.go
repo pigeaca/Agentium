@@ -49,13 +49,7 @@ func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...strin
 // filter or program configured in a repository must not see an API key), plus: never prompt, ignore system-wide
 // config, and never take optional locks (so `git status` does not rewrite the user's index).
 func Environ(environ []string) []string {
-	out := make([]string, 0, len(environ)+3)
-	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		if !strings.HasPrefix(name, "GIT_") && !runner.IsCredential(name) {
-			out = append(out, kv)
-		}
-	}
+	out := runner.EnvPolicy{DropPrefixes: []string{runner.GitPrefix}}.Filter(environ)
 	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0")
 }
 

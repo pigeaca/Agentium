@@ -199,17 +199,8 @@ func credentialFiles() []string {
 // Command returns the arguments and environment for the run. environ is the parent's environment (os.Environ()),
 // filtered through an allowlist; the sign-in secret is the only credential the child receives.
 func (inv Invocation) Command(environ []string) (args, env []string, err error) {
-	switch inv.SignIn {
-	case SignInAPIKey, SignInTokenFile:
-		if inv.Secret == "" || inv.ConfigDir == "" {
-			return nil, nil, fmt.Errorf("sign-in %s needs a secret and a fresh config folder", inv.SignIn)
-		}
-	case SignInLogin:
-		if inv.Secret != "" {
-			return nil, nil, errors.New("sign-in login takes no secret")
-		}
-	default:
-		return nil, nil, fmt.Errorf("unknown sign-in mode %q", inv.SignIn)
+	if err := checkSignIn(inv.SignIn, inv.Secret, inv.ConfigDir); err != nil {
+		return nil, nil, err
 	}
 	if inv.CLI == "" || inv.Dir == "" || inv.Prompt == "" || inv.Model == "" || inv.Home == "" {
 		return nil, nil, errors.New("a run needs the CLI, a folder, a prompt, a model and the home folder")
@@ -278,17 +269,43 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.TempRoot != "" { // the parent's own CLAUDE_CODE_TMPDIR was dropped with every CLAUDE_* (Environ)
 		env = append(env, "CLAUDE_CODE_TMPDIR="+inv.TempRoot)
 	}
-	switch inv.SignIn { // requirement 4: a fresh config folder cannot use a subscription login
+	env = append(env, signInEnv(inv.SignIn, inv.Secret, inv.ConfigDir, inv.Home, userConfig)...) // requirement 4
+	return args, env, nil
+}
+
+// checkSignIn refuses a sign-in the mode cannot use: a login takes no secret, and the other modes need a secret and a
+// fresh config folder. Runs (Invocation) and judge calls (Judgement) share it.
+func checkSignIn(mode, secret, configDir string) error {
+	switch mode {
+	case SignInAPIKey, SignInTokenFile:
+		if secret == "" || configDir == "" {
+			return fmt.Errorf("sign-in %s needs a secret and a fresh config folder", mode)
+		}
 	case SignInLogin:
-		if userConfig != filepath.Join(inv.Home, ".claude") { // the user's login lives in their own config folder
-			env = append(env, "CLAUDE_CONFIG_DIR="+userConfig)
+		if secret != "" {
+			return errors.New("sign-in login takes no secret")
+		}
+	default:
+		return fmt.Errorf("unknown sign-in mode %q", mode)
+	}
+	return nil
+}
+
+// signInEnv is the sign-in's variables, after checkSignIn: a fresh config folder cannot use a subscription login. A
+// login keeps the user's own config folder (userConfig, UserConfigDir) when it is not ~/.claude; the other modes get
+// the fresh folder and the one credential the child receives.
+func signInEnv(mode, secret, configDir, home, userConfig string) []string {
+	switch mode {
+	case SignInLogin:
+		if userConfig != filepath.Join(home, ".claude") { // the user's login lives in their own config folder
+			return []string{"CLAUDE_CONFIG_DIR=" + userConfig}
 		}
 	case SignInAPIKey:
-		env = append(env, "CLAUDE_CONFIG_DIR="+inv.ConfigDir, "ANTHROPIC_API_KEY="+inv.Secret)
+		return []string{"CLAUDE_CONFIG_DIR=" + configDir, "ANTHROPIC_API_KEY=" + secret}
 	case SignInTokenFile:
-		env = append(env, "CLAUDE_CONFIG_DIR="+inv.ConfigDir, "CLAUDE_CODE_OAUTH_TOKEN="+inv.Secret)
+		return []string{"CLAUDE_CONFIG_DIR=" + configDir, "CLAUDE_CODE_OAUTH_TOKEN=" + secret}
 	}
-	return args, env, nil
+	return nil
 }
 
 // historyPaths are the parts of a Claude Code config folder the agent may not read: what records past work (file
@@ -483,29 +500,15 @@ func Environ(environ []string) []string {
 // profiles: a profile that owns one of them (Maven's and Gradle's JAVA_HOME, Cargo's CARGO_HOME and wrappers) sets or
 // clears it in the agent's environment instead.
 func EnvironFor(environ []string, selected []buildtool.Profile) []string {
-	exact := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true, "TMPDIR": true,
-		"LANG": true, "TERM": true, "TZ": true, "VIRTUAL_ENV": true, "JAVA_HOME": true, "CARGO_HOME": true,
-		"RUSTUP_HOME": true, "PNPM_HOME": true, "BUN_INSTALL": true, "DENO_DIR": true,
-		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
-		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true}
+	names := []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR",
+		"LANG", "TERM", "TZ", "VIRTUAL_ENV", "JAVA_HOME", "CARGO_HOME",
+		"RUSTUP_HOME", "PNPM_HOME", "BUN_INSTALL", "DENO_DIR",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+		"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
 	prefixes := []string{"LC_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
 	toolNames, toolPrefixes := buildtool.EnvAllowlist(selected)
-	for _, name := range toolNames {
-		exact[name] = true
-	}
-	prefixes = append(prefixes, toolPrefixes...)
-	var out []string
-	for _, kv := range environ {
-		name, _, _ := strings.Cut(kv, "=")
-		keep := exact[name]
-		for _, prefix := range prefixes {
-			keep = keep || strings.HasPrefix(name, prefix)
-		}
-		if keep && !runner.IsCredential(name) {
-			out = append(out, kv)
-		}
-	}
-	return out
+	// Credentials are dropped by the shared policy; GIT_*, AGENTIUM_* and CLAUDE_* are simply not on the list.
+	return runner.EnvPolicy{Allowlist: true, Names: append(names, toolNames...), Prefixes: append(prefixes, toolPrefixes...)}.Filter(environ)
 }
 
 // ReadToken reads a `claude setup-token` token file. The file must be readable by its owner only and hold one token.

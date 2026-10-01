@@ -758,9 +758,9 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	if t.Grading == task.GradingJudge {
 		fmt.Fprintln(out, "  hidden     none (judge-graded)")
 	} else {
-		fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
+		fmt.Fprintf(out, "  hidden     %s\n", term.OrNone(strings.Join(t.HiddenTests, ", ")))
 	}
-	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
+	fmt.Fprintf(out, "  reference  %s\n", term.OrNone(strings.Join(t.Reference, ", ")))
 	fmt.Fprintf(out, "  status     %s\n", st.Status(validationStatus(t)))
 	var stored task.Validation
 	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
@@ -1026,7 +1026,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	words := len(strings.Fields(t.Instruction))
 	fmt.Fprintf(out, "  instruction  %d word(s)\n", words)
 	fmt.Fprintf(out, "  reference    %d code file(s), %d changed line(s): %s\n", len(result.Judge.CodeFiles), result.Judge.ChangedLines,
-		orNone(strings.Join(result.Judge.CodeFiles, ", ")))
+		term.OrNone(strings.Join(result.Judge.CodeFiles, ", ")))
 	if skipped := len(t.Reference) - len(result.Judge.CodeFiles); skipped > 0 {
 		fmt.Fprintln(out, note(st, fmt.Sprintf("%d reference file(s) are documents the judge does not compare", skipped)))
 	}

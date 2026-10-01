@@ -324,8 +324,8 @@ func printRun(env Env, rec run.Record) {
 		fmt.Fprintf(out, "  checks       the agent changed %s\n", strings.Join(b.ChecksChanged, ", "))
 	}
 	fmt.Fprintf(out, "  behavior     ran tests: %v, ran the checks: %v, %d Bash command(s), %d denial(s)\n", b.RanTests, b.RanChecks, b.BashCommands, b.Denials)
-	fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", orNone(m.CLIVersion), orNone(m.Model),
-		orNone(m.PermissionMode), len(m.Tools), m.SkillCount)
+	fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", term.OrNone(m.CLIVersion), term.OrNone(m.Model),
+		term.OrNone(m.PermissionMode), len(m.Tools), m.SkillCount)
 	if len(m.SubagentModels) > 0 {
 		var kinds []string
 		for kind, models := range m.SubagentModels {

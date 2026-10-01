@@ -262,7 +262,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if tempRoot == "" {
 		return rec, errors.New("the data folder's layout names no folder for the runs' temp roots")
 	}
-	if found := instructionFilesAbove(repo); len(found) > 0 {
+	if found := claudectx.InstructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
 	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so
@@ -909,19 +909,6 @@ func contextAt(ctx context.Context, repo string) (source.Source, claudectx.Conte
 		return nil, claudectx.Context{}, err
 	}
 	return src, resolved, nil
-}
-
-// instructionFilesAbove lists instruction files in the folders above dir, which Claude Code would load into a run.
-func instructionFilesAbove(dir string) []string {
-	var found []string
-	for d := filepath.Dir(dir); d != filepath.Dir(d); d = filepath.Dir(d) {
-		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
-			if info, err := os.Stat(filepath.Join(d, name)); err == nil && !info.IsDir() {
-				found = append(found, filepath.Join(d, name))
-			}
-		}
-	}
-	return found
 }
 
 // outsideReads counts file tool paths inside a watched root but outside the run's workspace. Relative paths are the
