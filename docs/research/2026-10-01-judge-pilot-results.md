@@ -71,7 +71,7 @@ Most claims can be checked by running them: build the input, apply the agent's c
 
 ## Decision
 - **Under the pilot's rules, no use got a GO.**
-- **The user's decision (2026-10-01):** build the judge anyway, without relying on this pilot. It gives an opt-in verdict per run, shown alongside the tests and never deciding ([decision](../../.agents/decisions/2026-10-01-llm-judge-alongside-tests.md), [plan](../../.agents/plans/2026-10-01-llm-judge.md)). Tests remain the only grader of pass and fail.
+- **The user's decision (2026-10-01):** build the judge anyway, without relying on this pilot. It gives an opt-in verdict per run, shown alongside the tests and never deciding ([decision](../../.agents/decisions/2026-10-01-llm-judge-alongside-tests.md), [plan](../../.agents/plans/archive/2026-10-01-llm-judge.md)). Tests remain the only grader of pass and fail.
 - Even with careful labels, the judge as configured fails both reliability bars. A product judge would need to be steadier first.
 - Exploratory, outside the rules: the judge flags passing runs on only some tasks, not across the board, and its claims are specific. A careful look is still worth having. Its "not fixed" on all 4 failing runs with a change shows less than it seems, because on `documents-filter` it judged passing and failing runs alike.
 
