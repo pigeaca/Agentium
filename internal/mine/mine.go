@@ -44,9 +44,11 @@ type Options struct {
 	MaxFiles, MaxLines int
 	// Exclude holds the full hashes of commits that are already tasks.
 	Exclude map[string]bool
-	// RunsTest reports whether the project's verify commands run the test file at path; a commit none of whose test
-	// files run is rejected (ReasonTestLanguage). Nil accepts every test file.
-	RunsTest func(path string) bool
+	// Languages names the languages the project's verify commands test, as the languages table names them ("go",
+	// "python", "rust", "java", "kotlin", ...). When it is set, a commit is rejected (ReasonTestLanguage) unless one of
+	// its test files with a source extension is in one of them or, when every test file is data (golden files,
+	// snapshots: no source extension), one of its code files is. Empty accepts every commit.
+	Languages []string
 	// TestCommand names the verify commands in that rejection's detail (for example "go test"); optional.
 	TestCommand string
 }
@@ -66,6 +68,7 @@ const (
 	ReasonEmpty        Reason = "no file changes"
 	ReasonDocsOnly     Reason = "documentation only"
 	ReasonNoTests      Reason = "no test changes"
+	ReasonVendored     Reason = "vendored code changes"
 	ReasonDependencies Reason = "dependency update"
 	ReasonTestsOnly    Reason = "tests only"
 	ReasonNoSource     Reason = "no source code"
@@ -80,7 +83,7 @@ const (
 // order.
 func ReasonOrder() []Reason {
 	return []Reason{ReasonUnreadable, ReasonMerge, ReasonShallow, ReasonRoot, ReasonImported, ReasonFixup, ReasonRevert,
-		ReasonEmpty, ReasonDocsOnly, ReasonNoTests, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
+		ReasonEmpty, ReasonDocsOnly, ReasonNoTests, ReasonVendored, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
 		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust}
 }
 
@@ -100,7 +103,7 @@ type Candidate struct {
 	Date          time.Time
 	Tests, Code   []string
 	Docs          []string // documentation the commit also changes
-	Dependencies  []string // manifests, lockfiles and vendored files the commit also changes
+	Dependencies  []string // manifests and lockfiles the commit also changes (not counted in the limits)
 	// TestLines and Lines are added plus deleted lines: in test files, and in test and code files together (docs and
 	// dependencies are not counted).
 	TestLines, Lines int
@@ -453,13 +456,19 @@ var dependencyFiles = map[string]bool{
 	"pom.xml": true, "build.gradle": true, "build.gradle.kts": true, "gradle.lockfile": true, "libs.versions.toml": true,
 }
 
-// isDependencyFile reports whether p is a manifest, a lockfile or vendored code.
-func isDependencyFile(p string) bool {
+// isVendored reports whether p is vendored code: an offline agent could not reproduce a change to it, so such a
+// commit is no task.
+func isVendored(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		if dir == "vendor" || dir == "node_modules" {
 			return true
 		}
 	}
+	return false
+}
+
+// isDependencyFile reports whether p is a manifest or a lockfile.
+func isDependencyFile(p string) bool {
 	base := path.Base(p)
 	return dependencyFiles[base] || strings.HasPrefix(base, "requirements") && strings.HasSuffix(base, ".txt")
 }
@@ -471,6 +480,15 @@ var languages = map[string]string{
 	".rb": "ruby", ".php": "php", ".cs": "c#", ".swift": "swift", ".c": "c", ".h": "c", ".cc": "c++", ".cpp": "c++",
 	".hpp": "c++", ".m": "objective-c", ".dart": "dart", ".ex": "elixir", ".exs": "elixir", ".erl": "erlang", ".hs": "haskell",
 	".clj": "clojure", ".lua": "lua", ".sh": "shell", ".vue": "vue", ".svelte": "svelte", ".zig": "zig",
+	".cxx": "c++", ".hxx": "c++", ".hh": "c++", ".mm": "objective-c", ".groovy": "groovy", ".fs": "f#", ".vb": "visual basic",
+	".r": "r", ".jl": "julia", ".pl": "perl", ".ml": "ocaml", ".sql": "sql", ".proto": "protobuf", ".html": "html",
+	".css": "css", ".scss": "scss",
+}
+
+// isSource reports whether p has a known source extension.
+func isSource(p string) bool {
+	_, ok := languages[strings.ToLower(path.Ext(p))]
+	return ok
 }
 
 // language names p's language, or its extension when it is not a known source language.
@@ -514,8 +532,12 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	}
 	cand := Candidate{Hash: c.hash, Parent: c.parents[0], Subject: c.subject, Body: stripTrailers(c.rawBody), Date: c.date, raw: c.rawBody}
 	codeLines, codeBinary := 0, 0
+	var vendored []string
 	for _, f := range c.files {
 		switch {
+		case isVendored(f.path):
+			vendored = append(vendored, f.path)
+			continue
 		case task.IsTestFile(f.path):
 			cand.Tests = append(cand.Tests, f.path)
 			cand.TestLines += f.lines
@@ -537,10 +559,12 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	switch {
 	case len(c.files) == 0:
 		return reject(ReasonEmpty, "")
-	case len(cand.Tests) == 0 && len(cand.Code) == 0 && len(cand.Dependencies) == 0:
+	case len(cand.Tests) == 0 && len(cand.Code) == 0 && len(cand.Dependencies) == 0 && len(vendored) == 0:
 		return reject(ReasonDocsOnly, "%d documents", len(cand.Docs))
 	case len(cand.Tests) == 0:
-		return reject(ReasonNoTests, "%d code files, no test files", len(cand.Code)+len(cand.Dependencies))
+		return reject(ReasonNoTests, "%d code files, no test files", len(cand.Code)+len(cand.Dependencies)+len(vendored))
+	case len(vendored) > 0:
+		return reject(ReasonVendored, "%d vendored files, such as %s", len(vendored), vendored[0])
 	case len(cand.Code) == 0 && len(cand.Dependencies) > 0:
 		return reject(ReasonDependencies, "only manifests or lockfiles change besides tests: %s", strings.Join(cand.Dependencies, ", "))
 	case len(cand.Code) == 0:
@@ -548,17 +572,10 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	case len(cand.Dependencies) > 0 && depsMessage.MatchString(c.subject):
 		return reject(ReasonDependencies, "the subject reads as a dependency update and %s changes", strings.Join(cand.Dependencies, ", "))
 	}
-	if !slices.ContainsFunc(cand.Code, func(p string) bool { _, ok := languages[strings.ToLower(path.Ext(p))]; return ok }) {
+	if !slices.ContainsFunc(cand.Code, isSource) {
 		return reject(ReasonNoSource, "only %s", strings.Join(cand.Code, ", "))
 	}
-	if o.RunsTest != nil && !slices.ContainsFunc(cand.Tests, o.RunsTest) {
-		var langs []string
-		for _, p := range cand.Tests {
-			if l := language(p); !slices.Contains(langs, l) {
-				langs = append(langs, l)
-			}
-		}
-		detail := strings.Join(langs, " and ") + " tests"
+	if detail := testLanguage(cand, o.Languages); detail != "" {
 		if o.TestCommand != "" {
 			detail += "; the verify command is " + o.TestCommand
 		}
@@ -567,8 +584,8 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	if formatMessage.MatchString(c.subject) {
 		return reject(ReasonFormatting, "the subject names a formatting change")
 	}
-	if len(cand.Code) >= sweepFiles && codeLines <= sweepLines*(len(cand.Code)-codeBinary) {
-		return reject(ReasonFormatting, "%d code files with %d changed lines in all", len(cand.Code), codeLines)
+	if text := len(cand.Code) - codeBinary; text >= sweepFiles && codeLines <= sweepLines*text {
+		return reject(ReasonFormatting, "%d text code files with %d changed lines in all", text, codeLines)
 	}
 	if files := len(cand.Tests) + len(cand.Code); files > o.MaxFiles {
 		return reject(ReasonTooLarge, "%d files (limit %d)", files, o.MaxFiles)
@@ -577,6 +594,35 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 		return reject(ReasonTooLarge, "%d changed lines (limit %d)", cand.Lines, o.MaxLines)
 	}
 	return cand, nil
+}
+
+// testLanguage returns why the verify commands for langs would not run c's tests, or "" when they would (or langs
+// is empty). Test files with a source extension must include one in langs; when every test file is data, a code file
+// must be in langs instead (a golden file serves the tests of the code beside it).
+func testLanguage(c Candidate, langs []string) string {
+	if len(langs) == 0 {
+		return ""
+	}
+	in := func(p string) bool { return isSource(p) && slices.Contains(langs, language(p)) }
+	names := func(paths []string, keep func(string) bool) string {
+		var out []string
+		for _, p := range paths {
+			if l := language(p); keep(p) && !slices.Contains(out, l) {
+				out = append(out, l)
+			}
+		}
+		return strings.Join(out, " and ")
+	}
+	if slices.ContainsFunc(c.Tests, isSource) {
+		if slices.ContainsFunc(c.Tests, in) {
+			return ""
+		}
+		return names(c.Tests, isSource) + " tests"
+	}
+	if slices.ContainsFunc(c.Code, in) {
+		return ""
+	}
+	return names(c.Tests, func(string) bool { return true }) + " test data for " + names(c.Code, isSource) + " code"
 }
 
 // inspect applies the checks that read file contents, for a commit that passed classify.
@@ -760,7 +806,7 @@ func score(c Candidate, newest, oldest time.Time) (int, []Part) {
 	}
 
 	if len(c.Dependencies) > 0 {
-		add(-2, "changes dependencies (the agent works offline)")
+		add(-2, "changes a manifest or lockfile (new dependencies cannot be fetched offline)")
 	}
 
 	if span := newest.Sub(oldest); span > 0 {

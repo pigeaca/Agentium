@@ -250,7 +250,7 @@ func TestScanCandidatesAndReasons(t *testing.T) {
 		h.merge:       {ReasonMerge, "2 parents"},
 		h.rust:        {ReasonInlineRust, "lib.rs"},
 		h.revert:      {ReasonRevert, ""},
-		h.sweep:       {ReasonFormatting, "6 code files with 6 changed lines in all"},
+		h.sweep:       {ReasonFormatting, "6 text code files with 6 changed lines in all"},
 		h.generated:   {ReasonGenerated, "kind_string.go"},
 		h.style:       {ReasonFormatting, "the subject names a formatting change"},
 		h.fixup:       {ReasonFixup, "to be squashed into another commit"},
@@ -319,7 +319,7 @@ func TestScanOptions(t *testing.T) {
 	}
 
 	// Only Go tests run: the Python commit is set aside, with the languages in the detail.
-	res, err = Scan(ctx, f.root, Options{RunsTest: func(p string) bool { return strings.HasSuffix(p, "_test.go") }, TestCommand: "go test"})
+	res, err = Scan(ctx, f.root, Options{Languages: []string{"go"}, TestCommand: "go test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,6 +341,84 @@ func TestScanOptions(t *testing.T) {
 	}
 	if _, err := Scan(ctx, f.root, Options{Ref: "no-such-branch"}); err == nil {
 		t.Fatal("an unknown ref was accepted")
+	}
+}
+
+// TestScanDataVendoredBinary covers test data without a source extension, vendored code and binary files.
+func TestScanDataVendoredBinary(t *testing.T) {
+	f := newFixture(t)
+	f.commit("Initial commit", map[string]string{"report.go": "package report\n", "report_test.go": "package report\n"})
+	golden := f.commit("fix(report): a narrower noise table\n\nThe table drops the empty columns, so it fits 80 columns.", map[string]string{
+		"report.go": "package report\n" + lines("// report", 20), "testdata/noise.golden": lines("noise", 12)})
+	pyData := f.commit("Add the sampler script\n\nThe script samples durations and prints a summary per unit.", map[string]string{
+		"tools/sample.py": lines("# sample", 20), "tools/testdata/sample.golden": lines("sample", 10)})
+	vendored := f.commit("Patch the vendored yaml decoder\n\nThe decoder accepts tabs after keys, which the loader needs.", map[string]string{
+		"vendor/example.com/yaml/decode.go": lines("// decode", 20), "report.go": "package report\n" + lines("// report", 22),
+		"report_test.go": "package report\n" + lines("// test", 10)})
+	images := map[string]string{"report.go": "package report\n" + lines("// report", 25), "report_test.go": "package report\n" + lines("// test", 12)}
+	for i := range 4 {
+		images[fmt.Sprintf("img/%d.png", i)] = fmt.Sprintf("\x89PNG\x00%d", i)
+	}
+	binary := f.commit("Add the report icons and draw them in the table\n\nEach verdict gets an icon in the first column.", images)
+
+	ctx := context.Background()
+	res, err := Scan(ctx, f.root, Options{Languages: []string{"go"}, TestCommand: "go test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(hashes(res.Candidates), []string{golden, binary}) && !slices.Equal(hashes(res.Candidates), []string{binary, golden}) {
+		t.Fatalf("candidates %v, want the golden and binary commits; rejected %+v", hashes(res.Candidates), res.Rejected)
+	}
+	if g := find(t, res.Candidates, golden); !slices.Equal(g.Tests, []string{"testdata/noise.golden"}) || !slices.Equal(g.Code, []string{"report.go"}) {
+		t.Fatalf("golden candidate %+v", g)
+	}
+	if b := find(t, res.Candidates, binary); len(b.Code) != 5 || b.Lines != 5 {
+		t.Fatalf("binary candidate %+v", b)
+	}
+	want := map[string][2]string{
+		pyData:   {string(ReasonTestLanguage), ".golden test data for python code; the verify command is go test"},
+		vendored: {string(ReasonVendored), "1 vendored files, such as vendor/example.com/yaml/decode.go"},
+	}
+	for _, r := range res.Rejected {
+		if w, ok := want[r.Hash]; ok && (string(r.Reason) != w[0] || r.Detail != w[1]) {
+			t.Errorf("%s rejected as %q (%q), want %q (%q)", r.Hash[:7], r.Reason, r.Detail, w[0], w[1])
+		}
+		delete(want, r.Hash)
+	}
+	if len(want) != 0 {
+		t.Errorf("not rejected: %v", want)
+	}
+
+	// Without languages every test file is accepted; with Python only, the Go golden commit is set aside.
+	if res, err = Scan(ctx, f.root, Options{}); err != nil || !slices.Contains(hashes(res.Candidates), pyData) {
+		t.Fatalf("no languages: %v, candidates %v", err, hashes(res.Candidates))
+	}
+	if res, err = Scan(ctx, f.root, Options{Languages: []string{"python"}}); err != nil || slices.Contains(hashes(res.Candidates), golden) ||
+		!slices.Contains(hashes(res.Candidates), pyData) {
+		t.Fatalf("python: %v, candidates %v", err, hashes(res.Candidates))
+	}
+	for _, r := range res.Rejected {
+		if r.Hash == golden && r.Detail != ".golden test data for go code" {
+			t.Errorf("golden detail %q", r.Detail)
+		}
+	}
+}
+
+func TestTestLanguage(t *testing.T) {
+	for _, tc := range []struct {
+		tests, code []string
+		want        string
+	}{
+		{[]string{"a_test.go"}, []string{"a.go"}, ""},
+		{[]string{"test_a.py", "a_test.go"}, []string{"a.go"}, ""},
+		{[]string{"test_a.py"}, []string{"a.go"}, "python tests"},
+		{[]string{"test_a.py", "testdata/x.txt"}, []string{"a.go"}, "python tests"},
+		{[]string{"testdata/x.txt"}, []string{"a.go"}, ""},
+		{[]string{"__snapshots__/a.snap", "testdata/x.txt"}, []string{"a.ts", "b.py"}, ".snap and .txt test data for typescript and python code"},
+	} {
+		if got := testLanguage(Candidate{Tests: tc.tests, Code: tc.code}, []string{"go"}); got != tc.want {
+			t.Errorf("testLanguage(%v, %v) = %q, want %q", tc.tests, tc.code, got, tc.want)
+		}
 	}
 }
 
