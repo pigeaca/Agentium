@@ -1,7 +1,7 @@
 # Judge: which arm fixed it better
 
 - Date: 2026-10-01
-- Status: Planned, not started. Needs the [per-run judge](2026-10-01-llm-judge.md) (its steps 1–3). Its real check is paid and needs its own approval.
+- Status: In Progress (2026-10-01): step 1a (the pair core in `internal/judge`) under way with an implementer on `claude/feat/judge-pairs-core`. Step 1b needs the [per-run judge](2026-10-01-llm-judge.md)'s step 2. Its real check is paid and needs approval.
 - Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
 
 ## Why
@@ -33,7 +33,8 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
 5. **Docs:** README and help.
 
 ## Work
-- [ ] **1. Pair judging:** the core (reusing `internal/judge`), experiments and statistics.
+- [ ] **1a. Pair core** (`internal/judge`): the pilot's pair prompt and schema, word for word, both orders, mapping back, flips counted as ties, and the preference statistics with their floor. Unit tests with a fake caller.
+- [ ] **1b. Experiments** (note from 1a's review: with repeats above 1, pairs of one task are not independent; add an honesty note or cluster by task): `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2).
 - [ ] **2. Report.**
 - [ ] **3. Real check (paid; approval).**
 

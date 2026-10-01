@@ -1,7 +1,7 @@
 # Tasks from tickets, graded without tests
 
 - Date: 2026-10-01
-- Status: Planned, not started. Needs the [per-run judge](2026-10-01-llm-judge.md). Live Jira access needs its own approval (credentials and a live integration). The real check is paid and needs approval.
+- Status: In Progress (2026-10-01): step 1 under way with an implementer on `claude/feat/ticket-tasks`, based on #51 (same files). Step 2 needs the [per-run judge](2026-10-01-llm-judge.md)'s step 2. Live Jira needs its own approval (credentials and a live integration). The real check is paid and needs approval.
 - Scope: the user's question on 2026-09-30 about using "some specific Jira task" in an A/B, and the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) that lists grading tasks without tests as a later use.
 
 ## Why

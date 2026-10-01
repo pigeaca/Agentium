@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/store"
 )
 
 func TestTaskImportValidateAndManage(t *testing.T) {
@@ -265,4 +267,49 @@ func TestTaskValidateWeakTests(t *testing.T) {
 	// A task without a solution has no hunks to take out.
 	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
 	expect(t, run("task", "validate", "manual", "--weak-tests"), ExitUsage, "--weak-tests needs a task with a solution")
+}
+
+func TestTaskRefusesInlineRustTests(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "src/lib.rs", "pub fn double(x: i32) -> i32 { x }\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "src/lib.rs", "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn doubles() { assert_eq!(super::double(2), 4); }\n}\n")
+	writeFile(t, repo, "tests/api.rs", "#[test]\nfn api() {}\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Double\n\nDouble the value.")
+
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv:   func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now:      func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) },
+		})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	const reason = "the solution changes Rust tests inside source files (src/lib.rs)"
+	expect(t, run("task", "import", "--commit", "HEAD", "--verify", "true"), ExitError, reason, "move them to a file under tests/")
+	base := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1"))
+	expect(t, run("task", "add", "inline", "--base", base, "--solution", "HEAD", "--instruction", "Double it.", "--verify", "true"), ExitError, reason)
+	expect(t, run("task", "list"), ExitOK, "No tasks yet")
+	if w, err := openProject(context.Background(), Env{Dir: repo, Getenv: func(key string) string { return vars[key] }}); err != nil {
+		t.Fatal(err)
+	} else {
+		defer w.Close()
+		if tasks, err := w.db.Tasks(context.Background(), w.project.ID); err != nil || len(tasks) != 0 {
+			t.Errorf("stored tasks = %v, %v; want none", tasks, err)
+		}
+		// A task stored before the rule existed is refused when validated, before anything runs.
+		if _, err := w.db.SaveTask(context.Background(), store.Task{ProjectID: w.project.ID, Name: "old", Instruction: "Double it.", Source: "test",
+			BaseCommit: base, SolutionCommit: strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD")), HiddenTests: []string{"tests/api.rs"},
+			Reference: []string{"src/lib.rs"}, Verify: []string{"true"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	expect(t, run("task", "validate", "old"), ExitError, reason)
 }

@@ -69,6 +69,18 @@ func TestPromptsAreThePilots(t *testing.T) {
 	if want != promptTemplate {
 		t.Errorf("prompt differs from the pilot's:\n%s\n---\n%s", promptTemplate, want)
 	}
+	pair := regexp.MustCompile(`(?s)PAIR_PROMPT = """(.*?)"""`).FindStringSubmatch(py)
+	if pair == nil {
+		t.Fatal("PAIR_PROMPT not found in the pilot")
+	}
+	wantPair := strings.NewReplacer("{instruction}", "%s", "{reference}", "%s", "{first}", "%s", "{second}", "%s").Replace(pair[1])
+	if wantPair != pairTemplate {
+		t.Errorf("pair prompt differs from the pilot's:\n%s\n---\n%s", pairTemplate, wantPair)
+	}
+	// json.dumps(PAIR_SCHEMA) in the pilot, byte for byte.
+	if PairSchema != `{"type": "object", "properties": {"prefer": {"type": "string", "enum": ["first", "second", "tie"]}, "reason": {"type": "string"}}, "required": ["prefer", "reason"], "additionalProperties": false}` {
+		t.Errorf("pair schema = %s", PairSchema)
+	}
 	// json.dumps(SINGLE_SCHEMA) in the pilot, byte for byte.
 	if Schema != `{"type": "object", "properties": {"fixed": {"type": "string", "enum": ["yes", "partly", "no"]}, "reason": {"type": "string"}}, "required": ["fixed", "reason"], "additionalProperties": false}` {
 		t.Errorf("schema = %s", Schema)
