@@ -11,6 +11,7 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-09-29 — MVP Phase 1 done: context A/B from the CLI, for Claude Code, with real A/A and A/B runs ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)).
 - 2026-09-30 — Clearer console output, no web UI ([plan](plans/archive/2026-09-30-clearer-console.md), [decision](decisions/2026-09-30-console-instead-of-web-ui.md)).
 - 2026-10-01 — Experiment hardening done; a 16-run full vs minimal A/B was inconclusive ([plan](plans/archive/2026-09-29-experiment-hardening.md)).
+- 2026-10-01 — Usage and cost estimates from task runs ([plan](plans/archive/2026-10-01-run-estimates.md)).
 
 ## Next, in order
 1. [Task checks and context use](plans/2026-09-30-task-checks-context-use.md).

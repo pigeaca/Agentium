@@ -1,6 +1,7 @@
 package experiment
 
 import (
+	"fmt"
 	"math"
 	"slices"
 	"strings"
@@ -75,12 +76,12 @@ func TestExploratoryFloors(t *testing.T) {
 }
 
 func TestEstimateRun(t *testing.T) {
-	past := EstimateRun("claude-sonnet-5", []float64{0.9, 0.2, 0.4, 0.3})
+	past := EstimateRun("claude-sonnet-5", []PastRun{{"a", 0.9}, {"b", 0.2}, {"c", 0.4}, {"d", 0.3}})
 	if !past.Known || past.PerRunUSD != 0.35 || !strings.Contains(past.Basis, "median of this project's 4") {
 		t.Errorf("past runs: %+v", past)
 	}
 	// Too few earlier runs: the default profile, with Claude Code's one-hour cache writes.
-	profile := EstimateRun("claude-sonnet-5", []float64{0.3})
+	profile := EstimateRun("claude-sonnet-5", []PastRun{{"a", 0.3}})
 	if !profile.Known || math.Abs(profile.PerRunUSD-1.612) > 1e-9 || !strings.Contains(profile.Basis, "list prices") {
 		t.Errorf("profile: %+v", profile)
 	}
@@ -88,7 +89,7 @@ func TestEstimateRun(t *testing.T) {
 		t.Errorf("an alias has no price: %+v", unknown)
 	}
 	d := validDesign()
-	d.Tasks = make([]string, 12) // 72 runs
+	d.Tasks = []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"} // 72 runs, none with runs of its own
 	if got := DefaultBudget(d, profile); got != 155 {
 		t.Errorf("DefaultBudget = %v, want 155 (1.25 × 72 × $1.612 + 3 caps of $3 held for runs in flight, rounded up)", got)
 	}
@@ -105,10 +106,73 @@ func TestEstimateRun(t *testing.T) {
 	}
 }
 
+// A task's own earlier runs estimate it; tasks without any fall back to the project's median. The budget and the
+// design's cost sum the tasks' own estimates.
+func TestEstimateFromEachTasksOwnRuns(t *testing.T) {
+	// The 16-run A/B's case: cheap tasks set the project's median, and a new task cost far more.
+	// A run without a task (its task was removed) counts toward the project's median only.
+	past := []PastRun{{"cheap", 0.5}, {"cheap", 0.7}, {"cheap", 0.6}, {"mid", 0.8}, {"costly", 1.6}, {"costly", 2.0}, {"costly", 1.9}, {"", 0.8}}
+	est := EstimateRun("claude-sonnet-5", past)
+	if !est.Known || est.PerRunUSD != 0.8 || !strings.Contains(est.Basis, "median of this project's 8 earlier task runs on claude-sonnet-5") {
+		t.Errorf("fallback: %+v", est)
+	}
+	want := map[string]TaskCost{"cheap": {0.6, 3}, "mid": {0.8, 1}, "costly": {1.9, 3}}
+	if len(est.Tasks) != len(want) {
+		t.Errorf("tasks = %+v, want %+v", est.Tasks, want)
+	}
+	for task, w := range want {
+		if got := est.Tasks[task]; math.Abs(got.PerRunUSD-w.PerRunUSD) > 1e-9 || got.Runs != w.Runs {
+			t.Errorf("task %s = %+v, want %+v", task, got, w)
+		}
+	}
+	if got, ok := est.TaskUSD("new"); !ok || got != 0.8 {
+		t.Errorf("a task without runs = %v, %v; want the project's median", got, ok)
+	}
+
+	d := validDesign()
+	d.Tasks, d.Repeats = []string{"cheap", "costly", "new"}, 1 // 2 runs each
+	if got, ok := est.DesignUSD(d); !ok || math.Abs(got-2*(0.6+1.9+0.8)) > 1e-9 {
+		t.Errorf("DesignUSD = %v, %v; want 6.60", got, ok)
+	}
+	if got := DefaultBudget(d, est); got != 18 { // 1.25 × $6.60 + 3 caps of $3, rounded up; the project's median gave 15
+		t.Errorf("DefaultBudget = %v, want 18", got)
+	}
+	rows := Preview(d, []string{"cheap", "costly", "mid", "new"}, est)
+	own := rows[len(rows)-1]
+	if !own.CostKnown || math.Abs(own.CostUSD-6.6) > 1e-9 || own.WorstUSD != 18 {
+		t.Errorf("own row = %+v; the worst case stays every run at its cap", own)
+	}
+	// A tier would draw from the eligible tasks: it costs their average run, (0.6 + 1.9 + 0.8 + 0.8) / 4.
+	if quick := rows[0]; quick.Tasks != 4 || !quick.CostKnown || math.Abs(quick.CostUSD-24*1.025) > 1e-9 {
+		t.Errorf("quick = %+v, want 24 runs at $1.025", quick)
+	}
+
+	// No price and too few runs: tasks with their own runs still have an estimate; the others make the total unknown.
+	alias := EstimateRun("sonnet", []PastRun{{"cheap", 0.5}, {"cheap", 0.7}})
+	if alias.Known || alias.Tasks["cheap"].PerRunUSD != 0.6 {
+		t.Errorf("alias = %+v", alias)
+	}
+	d.Tasks = []string{"cheap"}
+	if got, ok := alias.DesignUSD(d); !ok || math.Abs(got-1.2) > 1e-9 || DefaultBudget(d, alias) != 11 {
+		t.Errorf("a design of tasks with their own runs = %v, %v, budget %v", got, ok, DefaultBudget(d, alias))
+	}
+	d.Tasks = []string{"cheap", "new"}
+	if _, ok := alias.DesignUSD(d); ok || DefaultBudget(d, alias) != 0 {
+		t.Error("a task without an estimate makes the design's unknown")
+	}
+	if rows := Preview(d, []string{"cheap", "new"}, alias); rows[0].CostKnown || rows[0].CostUSD != 0 || rows[len(rows)-1].CostKnown {
+		t.Errorf("rows with an unknown task = %+v", rows)
+	}
+}
+
 func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 	d := validDesign()
 	d.Tasks, d.Repeats = []string{"a", "b", "c", "d", "e"}, 4
-	rows := Preview(d, 17, Estimate{PerRunUSD: 0.5, Known: true})
+	eligible := make([]string, 17)
+	for i := range eligible {
+		eligible[i] = fmt.Sprintf("t%d", i)
+	}
+	rows := Preview(d, eligible, Estimate{PerRunUSD: 0.5, Known: true})
 	if len(rows) != len(Tiers())+1 || rows[0].Name != "Quick" || rows[1].Name != "Confident" || rows[2].Name != "This experiment" {
 		t.Fatalf("rows = %+v", rows)
 	}
@@ -122,7 +186,10 @@ func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 	if own.Tasks != 5 || own.Repeats != 4 || own.Runs != 40 || !slices.Equal(own.Exploratory, []string{"cost", "success"}) {
 		t.Errorf("own = %+v", own)
 	}
-	if unknown := Preview(d, 17, Estimate{}); unknown[0].CostUSD != 0 || unknown[0].WorstUSD != 216 {
+	if own.CostUSD != 20 || !own.CostKnown {
+		t.Errorf("own cost = %v, want 40 runs at $0.50", own.CostUSD)
+	}
+	if unknown := Preview(d, eligible, Estimate{}); unknown[0].CostUSD != 0 || unknown[0].CostKnown || unknown[0].WorstUSD != 216 {
 		t.Errorf("an unknown estimate still has a worst case: %+v", unknown[0])
 	}
 }

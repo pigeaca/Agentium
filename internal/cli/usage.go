@@ -36,12 +36,13 @@ func decodeUsage(r store.Run) (recordUsage, bool) {
 	return u, json.Unmarshal(r.Record, &u) == nil
 }
 
-// usageSamples are the runs' first and last usage readings, for those that read any.
+// usageSamples are the runs' first and last usage readings, for those that read any, with calibration runs marked.
 func usageSamples(runs []store.Run) []experiment.UsageSample {
 	var samples []experiment.UsageSample
 	for _, r := range runs {
 		if u, ok := decodeUsage(r); ok && u.Metrics.UsageFirst != nil && u.Metrics.UsageLast != nil {
-			samples = append(samples, experiment.UsageSample{First: *u.Metrics.UsageFirst, Last: *u.Metrics.UsageLast})
+			samples = append(samples, experiment.UsageSample{First: *u.Metrics.UsageFirst, Last: *u.Metrics.UsageLast,
+				Calibration: r.Kind == "calibration"})
 		}
 	}
 	return samples
@@ -105,9 +106,9 @@ func printUsagePreview(out io.Writer, st term.Style, runs []store.Run, experimen
 	}
 	samples := usageSamples(runs)
 	perRun, measured := experiment.UsagePerRun(samples)
-	basis := fmt.Sprintf("measured over %d runs in one window", measured)
+	basis := fmt.Sprintf("measured over %d task runs in one window", measured)
 	if measured == 0 {
-		basis = "a default until runs measure it"
+		basis = fmt.Sprintf("a default until %d task runs in one window measure it", experiment.MinUsageRuns)
 	}
 	fmt.Fprintf(out, "Usage: about %.0f%% of the five-hour window per run (%s), so %d runs need about %.1f window(s) at the %.0f%% limit.\n",
 		100*perRun, basis, experimentRuns, experiment.UsageWindows(experimentRuns, perRun, limit), 100*limit)
