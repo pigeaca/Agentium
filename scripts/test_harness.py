@@ -287,17 +287,20 @@ class CheckScopes(unittest.TestCase):
             harness.main(["check", "everything"])
 
 
-def fake_go(root, version, modcache="", gofmt_lists="", gofmt_code=0, run_out="", run_err="", run_code=0, version_code=0):
-    """A stand-in GOROOT at `root`: `go version`, `go env GOROOT|GOMODCACHE`, `go run` and a gofmt that records its
-    arguments in <root>/gofmt.args and lists `gofmt_lists` as unformatted."""
+def fake_go(root, version, modcache="", gofmt_lists="", gofmt_code=0, run_out="", run_err="", run_code=0, version_code=0,
+            list_out="", list_code=0):
+    """A stand-in GOROOT at `root`: `go version`, `go env GOROOT|GOMODCACHE`, `go run`, `go list` (printing `list_out`)
+    and a gofmt that records its arguments in <root>/gofmt.args and lists `gofmt_lists` as unformatted."""
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
+    (root / "list.out").write_text(list_out)
     go = bin_dir / "go"
     go.write_text("#!/bin/sh\n"
                   f'case "$1" in\n'
                   f'  version) echo "go version go{version} test/arch"; exit {version_code};;\n'
                   f'  env) case "$2" in GOROOT) echo "{root}";; GOMODCACHE) echo "{modcache}";; esac;;\n'
                   f'  run) printf "{run_out}"; printf "{run_err}" >&2; exit {run_code};;\n'
+                  f'  list) cat "{root}/list.out"; exit {list_code};;\n'
                   "esac\n")
     gofmt = bin_dir / "gofmt"
     gofmt.write_text(f'#!/bin/sh\necho "$@" > "{root}/gofmt.args"\nprintf "{gofmt_lists}"\nexit {gofmt_code}\n')
@@ -383,6 +386,40 @@ class GoToolchain(unittest.TestCase):
         with patch.object(harness, "go_binary", return_value=go), patch.dict(harness.os.environ, {"CI": "true"}):
             harness.check_go()
         self.assertEqual(harness.run.call_args.kwargs, {"extra_env": {}})
+
+    def test_changed_go_tests_only_the_packages_the_change_can_affect(self):
+        module, repo = "example.com/x", self.repo
+        for folder, files in {"internal/a": ["a.go", "testdata/x.txt"], "internal/b": ["b.go"], "internal/c": ["c.go"],
+                              "internal/d": ["d.go"], "internal/store": ["store.go", "migrations/0001.sql"]}.items():
+            for name in files:
+                (repo / folder / name).parent.mkdir(parents=True, exist_ok=True)
+                (repo / folder / name).write_text("package x\n")
+        a, b, c, d, store = (f"{module}/internal/{name}" for name in ("a", "b", "c", "d", "store"))
+        rows = [(module, repo, ""), (a, repo / "internal/a", ""), (f"{a} [{a}.test]", repo / "internal/a", ""),
+                (f"{a}.test", repo / "internal/a", f"{a} [{a}.test] fmt"),
+                (b, repo / "internal/b", a), (f"{b}.test", repo / "internal/b", f"{a} {b} [{b}.test]"),
+                (c, repo / "internal/c", ""), (f"{c}.test", repo / "internal/c", f"{c} [{c}.test]"),
+                (d, repo / "internal/d", a),  # no tests of its own
+                (store, repo / "internal/store", ""), (f"{store}.test", repo / "internal/store", f"{store} [{store}.test]")]
+        go = fake_go(self.base / "list", "1.27.1", list_out="".join(f"{name}\t{folder}\t{deps}\n" for name, folder, deps in rows))
+        targets = lambda *paths: harness.go_test_targets(go, list(paths))
+        self.assertEqual(targets("internal/a/a.go"), [a, b])  # b's tests import a
+        self.assertEqual(targets("internal/a/testdata/x.txt"), [a, b])  # test data belongs to the folder's package
+        self.assertEqual(targets("internal/store/migrations/0001.sql"), [store])  # embedded files too
+        self.assertEqual(targets("internal/c/c.go", "internal/b/b.go"), [b, c])
+        self.assertEqual(targets("internal/d/d.go"), [])  # nothing with tests depends on d
+        self.assertIsNone(targets("internal/c/c.go", "go.sum"))  # module changes test everything
+        self.assertIsNone(targets("internal/gone/gone.go"))  # a deleted package maps to nothing: test everything
+        failing = fake_go(self.base / "listfail", "1.27.1", list_code=1)
+        self.assertIsNone(harness.go_test_targets(failing, ["internal/a/a.go"]))
+        with patch.object(harness, "go_binary", return_value=go), patch("builtins.print") as output:
+            harness.check_go(["internal/c/c.go"])
+            self.assertEqual(harness.run.call_args.args, (str(go), "test", "-race", "-count=1", c))
+            harness.check_go(["internal/d/d.go"])
+            self.assertEqual(harness.run.call_args.args, (str(go), "vet", "./..."))  # no tests to run
+            self.assertIn("no package with tests is affected", output.call_args.args[0])
+            harness.check_go()
+            self.assertEqual(harness.run.call_args.args, (str(go), "test", "-race", "-count=1", "./..."))
 
     def test_vuln_skips_uncached_locally_and_downloads_only_in_ci(self):
         cache = self.base / "modcache"

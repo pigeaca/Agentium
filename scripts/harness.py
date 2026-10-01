@@ -202,7 +202,40 @@ def offline_go_env() -> dict[str, str]:
     return {} if os.environ.get("CI") else {"GOPROXY": "off"}
 
 
-def check_go() -> None:
+def go_test_targets(go: Path, paths: list[str]) -> list[str] | None:
+    """The packages whose tests a change to `paths` can affect: each changed file's package (embedded files and
+    testdata belong to the nearest package folder above them) and every package whose test binary depends on one of
+    them. None means every package: the module files changed, `go list` failed, or a Go file's folder is no longer a
+    package (a deleted one)."""
+    if any(path in {"go.mod", "go.sum"} for path in paths):
+        return None
+    listing = subprocess.run([str(go), "list", "-test", "-f", "{{.ImportPath}}\t{{.Dir}}\t{{join .Deps \" \"}}", "./..."],
+                             cwd=ROOT, capture_output=True, text=True, env={**ENV, **offline_go_env()})
+    if listing.returncode:
+        return None  # let go test report the error
+    packages, binaries = {}, {}
+    for line in listing.stdout.splitlines():
+        name, folder, deps = (line.split("\t") + ["", ""])[:3]
+        if name.endswith(".test"):  # a test binary: its dependencies cover internal and external test files
+            binaries[name[:-len(".test")]] = {dep.split(" ")[0] for dep in deps.split()}
+        elif " " not in name:  # a package itself, not a test variant of it
+            packages[Path(folder).resolve()] = name
+    root = ROOT.resolve()
+    changed = set()
+    for path in paths:
+        folder = (root / path).parent
+        # A Go file belongs to its own folder's package; when that is gone (a deleted package), test everything.
+        while not path.endswith(".go") and folder not in packages and root in folder.parents:
+            folder = folder.parent
+        if folder not in packages:
+            return None
+        changed.add(packages[folder])
+    return sorted(name for name, deps in binaries.items() if name in changed or deps & changed)
+
+
+def check_go(changed: list[str] | None = None) -> None:
+    """gofmt, vet and race tests. With `changed` (from check changed), only the packages those paths affect are
+    tested; CI and `check go` test every package."""
     go = go_binary()
     gofmt = toolchain_tool(go, "gofmt")
     if not gofmt:
@@ -215,7 +248,14 @@ def check_go() -> None:
         if result.stdout.split():
             raise ValueError(f"Not gofmt-formatted: {', '.join(result.stdout.split())} (run gofmt -w on them).")
     run(str(go), "vet", "./...", extra_env=offline_go_env())
-    run(str(go), "test", "-race", "-count=1", "./...", extra_env=offline_go_env())
+    targets = go_test_targets(go, changed) if changed is not None else None
+    if targets is None:
+        run(str(go), "test", "-race", "-count=1", "./...", extra_env=offline_go_env())
+    elif targets:
+        print(f"\n[harness] testing the {len(targets)} package(s) the change can affect; CI tests them all", flush=True)
+        run(str(go), "test", "-race", "-count=1", *targets, extra_env=offline_go_env())
+    else:
+        print("\n[harness] no package with tests is affected by the change; CI tests them all", flush=True)
 
 
 def check_vuln() -> None:
@@ -326,6 +366,11 @@ def remote_default() -> str:
     raise ValueError("No remote default branch; run `git remote set-head <remote> --auto`.")
 
 
+def go_path(path: str) -> bool:
+    """Go code plus everything embedded or read by Go tests (migrations, testdata) under cmd/ and internal/."""
+    return path.endswith(".go") or path in {"go.mod", "go.sum"} or path.startswith(("cmd/", "internal/"))
+
+
 def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str]]:
     """Map changed paths to harness commands (fast to slow) plus suggestions that are not run.
 
@@ -343,8 +388,7 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
         if path in {"scripts/harness.py", "scripts/test_harness.py"} or path.startswith(".githooks/"):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
-        # Go code plus everything embedded or read by Go tests (migrations, testdata) under cmd/ and internal/.
-        if path.endswith(".go") or path in {"go.mod", "go.sum"} or path.startswith(("cmd/", "internal/")):
+        if go_path(path):
             reasons.setdefault(("check", "go"), []).append(path)
             mapped = True
         if path in {"go.mod", "go.sum"}:
@@ -383,7 +427,10 @@ def check_changed(args: list[str]) -> None:
     if dry_run:
         return
     for command, _ in planned:
-        main(command)
+        if command == ["check", "go"]:
+            check_go([path for path in paths if go_path(path)])
+        else:
+            main(command)
 
 
 # --- Task worktrees ---------------------------------------------------------------------------

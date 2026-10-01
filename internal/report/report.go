@@ -41,6 +41,8 @@ type Input struct {
 	// DataDir and Home are replaced in any text the report shows, so it names no local paths.
 	DataDir string
 	Home    string
+
+	paths []pathPattern // Build resolves DataDir and Home once (see scrub); empty, scrub resolves them per call
 }
 
 // Report is an experiment's results, ready to render.
@@ -154,6 +156,7 @@ type taskCommand struct {
 
 // Build computes the report.
 func Build(in Input) (Report, error) {
+	in.paths = in.pathPatterns()
 	l := in.Lock
 	var data []experiment.RunData
 	for _, r := range in.Runs {
@@ -198,9 +201,17 @@ func Build(in Input) (Report, error) {
 	return rep, nil
 }
 
-// scrub makes text shareable: the data folder and home folder, as written and as resolved (/var and /private/var on
-// macOS), become placeholders where they are whole path components, and credential-shaped strings are redacted.
-func (in Input) scrub(text string) string {
+// pathPattern replaces one spelling of a local folder with its placeholder.
+type pathPattern struct {
+	whole *regexp.Regexp
+	as    string
+}
+
+// pathPatterns resolves the data folder and home folder, as written and as resolved (/var and /private/var on macOS),
+// into patterns that match them as whole path components. Resolving touches the file system (an automounted /home
+// can take a second), so Build does it once per report.
+func (in Input) pathPatterns() []pathPattern {
+	var out []pathPattern
 	for _, p := range []struct{ path, as string }{{in.DataDir, "<agentium data>"}, {in.Home, "~"}} {
 		if p.path == "" || p.path == "/" {
 			continue
@@ -212,9 +223,21 @@ func (in Input) scrub(text string) string {
 		slices.SortFunc(spellings, func(a, b string) int { return len(b) - len(a) }) // /private/var/x before /var/x
 		for _, s := range spellings {
 			// Whole components only: /Users/v must not turn /Users/vlad into ~lad, nor /var/x match in /private/var/x.
-			whole := regexp.MustCompile(`(^|[^A-Za-z0-9._/-])` + regexp.QuoteMeta(s) + `([/\s"':;,)\]]|$)`)
-			text = whole.ReplaceAllString(text, "${1}"+p.as+"${2}")
+			out = append(out, pathPattern{regexp.MustCompile(`(^|[^A-Za-z0-9._/-])` + regexp.QuoteMeta(s) + `([/\s"':;,)\]]|$)`), p.as})
 		}
+	}
+	return out
+}
+
+// scrub makes text shareable: the data folder and home folder become placeholders where they are whole path
+// components (pathPatterns), and credential-shaped strings are redacted.
+func (in Input) scrub(text string) string {
+	patterns := in.paths
+	if patterns == nil {
+		patterns = in.pathPatterns()
+	}
+	for _, p := range patterns {
+		text = p.whole.ReplaceAllString(text, "${1}"+p.as+"${2}")
 	}
 	return string(run.Redact([]byte(text), ""))
 }

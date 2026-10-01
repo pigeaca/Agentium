@@ -7,7 +7,7 @@ Run `python3 scripts/harness.py <command>` from the repository root, or use the 
 | `doctor` | Show Python, git, gh, corepack, and the Go toolchain resolved for `go.mod` | Environment diagnosis |
 | `check docs` | Doc links, Claude imports, skill and subagent adapters, context size, plan archive | Documentation change |
 | `check harness` | Harness regression tests (temporary fixtures only) | Harness change |
-| `check go` | Go code: gofmt (listing), `go vet ./...`, `go test -race -count=1 ./...` | Go change |
+| `check go` | Go code: gofmt (listing), `go vet ./...`, `go test -race -count=1 ./...` (from `check changed`: only affected packages) | Go change |
 | `check vuln` | govulncheck at the pinned version (reads the online Go vulnerability database). Locally only when the tool is already cached | `go.mod`/`go.sum` change; CI |
 | `check ci` (also plain `check`) | `docs` + `harness` + `go` (when `go.mod` exists); what CI runs, followed there by `check vuln` | Before opening a PR |
 | `check changed [--dry-run] [base]` | Select and run the checks for everything changed since the merge base with the remote default branch | Before committing or opening a PR |
@@ -59,6 +59,12 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 - any other file → a suggestion that it has no mapped check yet.
 
 `--dry-run` prints the selection without running it.
+
+**Tests run by `check changed`:** its `check go` still formats and vets everything, but it runs the race tests only for the packages the change can affect:
+- each changed file's package (embedded files and test data count for the nearest package folder above them);
+- every package whose test binary depends on one of those, according to `go list -test`.
+
+It tests every package when `go.mod` or `go.sum` changed, when `go list` fails, or when a changed Go file's folder is no longer a package. `check go` on its own, `check ci` and CI always test every package.
 
 ## Adding stack checks
 
