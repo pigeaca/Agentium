@@ -79,7 +79,11 @@ const (
 // falling back to the shared folders. Both root as written and its symlink-resolved form (/tmp is /private/tmp on
 // macOS) must fit: Claude Code checks the path as given, and a resolved form that fits is the safe side.
 func TempRootFits(root string, uid int) error {
-	for _, form := range forms(root) {
+	measured := []string{filepath.Clean(root)} // measured, not denied: any link is followed (forms would not, in /tmp)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != measured[0] {
+		measured = append(measured, resolved)
+	}
+	for _, form := range measured {
 		if n := len(form + "/claude-" + strconv.Itoa(uid)); n > maxTempDir {
 			return fmt.Errorf("the run's temp root %s is too long for Claude Code (%s/claude-%d is %d bytes of %d): it would fall back to the shared temp folder", form, form, uid, n, maxTempDir)
 		}
@@ -352,12 +356,26 @@ func (inv Invocation) deniedWrites(userConfig string, environ []string) []string
 }
 
 // forms are p cleaned and, when it exists, its symlink-resolved form: the sandbox matches the real path.
+//
+// A name directly in /tmp is the exception. Another local user can create any name there that is not taken yet, as a
+// link too (/tmp/claude and /tmp/cc-socks carry no uid), and following such a link would deny its target: anything the
+// other user chose, which can make a run refuse to start. So for /tmp only the system's own /tmp → /private/tmp link is
+// followed; for any other target the /private/tmp twin is listed instead.
 func forms(p string) []string {
 	out := []string{filepath.Clean(p)}
-	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != out[0] {
-		out = append(out, resolved)
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil || resolved == out[0] {
+		return out
 	}
-	return out
+	if dir := filepath.Dir(out[0]); dir == "/tmp" || dir == "/private/tmp" {
+		if twin := filepath.Join("/private/tmp", filepath.Base(out[0])); resolved != twin {
+			if twin != out[0] {
+				out = append(out, twin)
+			}
+			return out
+		}
+	}
+	return append(out, resolved)
 }
 
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).

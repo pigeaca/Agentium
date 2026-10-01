@@ -927,3 +927,47 @@ func TestTempRootFits(t *testing.T) {
 		t.Error("Command took a temp root too long")
 	}
 }
+
+// A name in the world-writable /tmp may be another user's link: only the system's own /tmp → /private/tmp link is
+// followed, so a planted link cannot make a run deny (and refuse to start over) a folder of the other user's choosing.
+func TestFormsNeverFollowALinkOutOfTmp(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-test-%d", os.Getpid()))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create %s: %v", link, err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	got := forms(link)
+	want := []string{link, filepath.Join("/private/tmp", filepath.Base(link))}
+	if !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q (never the link's target %s)", link, got, want, target)
+	}
+	real := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-dir-%d", os.Getpid()))
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(real) })
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{real}
+	if resolved != real { // macOS: /tmp is the system's link to /private/tmp, which is followed
+		want = append(want, resolved)
+	}
+	if got := forms(real); !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q", real, got, want)
+	}
+	if outside := t.TempDir(); !slices.Equal(forms(outside), formsResolved(outside)) {
+		t.Errorf("a path outside /tmp is not resolved as before")
+	}
+}
+
+// formsResolved is the plain rule outside /tmp: the path and, when different, its resolved form.
+func formsResolved(p string) []string {
+	out := []string{filepath.Clean(p)}
+	if r, err := filepath.EvalSymlinks(p); err == nil && r != out[0] {
+		out = append(out, r)
+	}
+	return out
+}
