@@ -1,7 +1,7 @@
 # Refactor round
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 4 (faster tests) started first, because it touches only test code. Steps 1–2 start when the judge's step 3 (reports) merges, since they change the same report and experiment code. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
+- Status: In Progress (2026-10-01): step 4 (faster tests) in #59: the CLI tests went from 125 s to about 30 s under `-race`. Steps 1–2 start when the judge's step 3 (reports) merges. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
 - Scope: the code findings of the 2026-10-01 review. No change in behavior.
 
 ## Why
@@ -31,7 +31,7 @@ Each step is one PR with a review.
 - [ ] **1. Spending record** (`run`, `experiment`, `cli`, `report`).
 - [ ] **2. Command handlers into services** (`experiment`, `cli`): `new`, `plan`, `run`, `report` and `calibrate`.
 - [ ] **3. Shared helpers** (`claude`, `run`, `gitx`, `runner`, `stats`, `judge`), after Java and Rust step 3.
-- [ ] **4. Faster tests** (`cli` tests).
+- [x] **4. Faster tests** (`cli` tests): [#59](https://github.com/pigeaca/Agentium/pull/59), `t.Parallel()` on every independent test, 125 s → about 30 s.
 
 ## Boundaries
 Refactors only: no new features, no new Go modules, no change to output.
