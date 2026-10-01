@@ -388,6 +388,27 @@ func (s *Store) UpdateTask(ctx context.Context, task Task, now time.Time) error 
 	return nil
 }
 
+// SetTaskValidation stores a validation of the task with this id, and its update time, only while the task still has
+// the verify and setup commands it was validated with: no other field is written, so edits made while it ran (an
+// instruction, the review flag) stay. It reports whether a row matched; false means the task was removed, or its
+// commands changed and the validation no longer applies.
+func (s *Store) SetTaskValidation(ctx context.Context, id int64, verify, setup []string, validation []byte, now time.Time) (bool, error) {
+	lists, err := encodeLists(verify, setup)
+	if err != nil {
+		return false, fmt.Errorf("store validation of task %d: %w", id, err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET validation = ?, updated_at = ? WHERE id = ? AND verify = ? AND setup = ?`,
+		string(validation), formatTime(now), id, lists[0], lists[1])
+	if err != nil {
+		return false, fmt.Errorf("store validation of task %d: %w", id, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store validation of task %d: %w", id, err)
+	}
+	return n > 0, nil
+}
+
 // TaskByName returns a project's task, or ErrNotFound.
 func (s *Store) TaskByName(ctx context.Context, projectID int64, name string) (Task, error) {
 	tasks, err := s.queryTasks(ctx, `WHERE project_id = ? AND name = ?`, projectID, name)

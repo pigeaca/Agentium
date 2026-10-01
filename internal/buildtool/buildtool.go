@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 )
 
@@ -38,6 +39,9 @@ type Profile struct {
 	// TestCommand proposes the default test command; has reports whether a file exists at the repository root (a
 	// wrapper script such as mvnw, say). An empty result proposes nothing.
 	TestCommand func(has func(name string) bool) string
+	// Languages are the languages this tool's tests are written in, as internal/mine names them ("go", "java",
+	// "kotlin", ...): task mine keeps only commits whose tests the project's tools run.
+	Languages []string
 	// Runners are the command words that run this tool (matched as whole words in a verification command), and Configs
 	// the files at the repository root that configure it: grading reports an agent's change to them.
 	Runners []string
@@ -96,6 +100,7 @@ func goProfile() Profile {
 		Name:         "go",
 		Detect:       []string{"go.mod"},
 		TestCommand:  func(func(string) bool) string { return "go test ./..." },
+		Languages:    []string{"go"},
 		Runners:      []string{"go"},
 		Configs:      []string{"go.mod"},
 		TestPatterns: []string{"go test"},
@@ -257,17 +262,23 @@ func EnvAllowlist() (names, prefixes []string) {
 	return names, prefixes
 }
 
+// Detected returns the profiles whose Detect files has reports, in table order.
+func Detected(has func(name string) bool) []Profile {
+	var found []Profile
+	for _, p := range Profiles() {
+		if slices.ContainsFunc(p.Detect, has) {
+			found = append(found, p)
+		}
+	}
+	return found
+}
+
 // TestCommands proposes every detected profile's test command, in table order.
 func TestCommands(has func(name string) bool) []string {
 	var commands []string
-	for _, p := range Profiles() {
-		for _, marker := range p.Detect {
-			if has(marker) {
-				if c := p.TestCommand(has); c != "" {
-					commands = append(commands, c)
-				}
-				break
-			}
+	for _, p := range Detected(has) {
+		if c := p.TestCommand(has); c != "" {
+			commands = append(commands, c)
 		}
 	}
 	return commands

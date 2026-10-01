@@ -120,6 +120,20 @@ func (c Candidate) Instruction() string {
 	return c.Subject + "\n\n" + c.Body
 }
 
+// CommitInstruction reads commit's message in the git repository that gitArgs select (such as "-C", root) and
+// returns the instruction a candidate of it gives (see Candidate.Instruction): task import --commit and task mine
+// make the same instruction of the same commit.
+func CommitInstruction(ctx context.Context, commit string, gitArgs ...string) (string, error) {
+	args := append(slices.Clone(gitArgs), "log", "-1", "--no-show-signature", "--no-color", "--encoding=UTF-8",
+		"--format=%s"+fieldSep+"%b", commit, "--")
+	out, err := gitx.Output(ctx, nil, args...)
+	if err != nil {
+		return "", fmt.Errorf("mine: read the message of %s: %w", commit, err)
+	}
+	subject, body, _ := strings.Cut(strings.TrimSuffix(string(out), "\n"), fieldSep)
+	return Candidate{Subject: subject, Body: stripTrailers(body)}.Instruction(), nil
+}
+
 // dirs counts the folders of the candidate's tests and code.
 func (c Candidate) dirs() int {
 	dirs := map[string]bool{}
