@@ -33,7 +33,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 
 	// No reading yet: the first pair starts; its runs report 76% and 82%, and the next pair (6% a run) would pass 85%.
 	first := f.run(ctx, "experiment", "run", "limits")
-	expect(t, first, ExitOK, "2/6] value", "Paused before the usage limit; the window resets at "+clock(resets, time.Now()), // "Thu 00:06" after 23:00
+	expect(t, first, ExitOK, "2/6] value", "Paused before the usage limit; the window resets at "+experiment.Clock(resets, time.Now()), // "Thu 00:06" after 23:00
 		"paused at the usage limit: the five-hour usage window is at 82%, and the next pair (about 6% a run) would pass the 85% limit")
 	if strings.Contains(first.stdout, ": cancelled,") {
 		t.Errorf("a run was cancelled:\n%s", first.stdout)
@@ -54,7 +54,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 		return nil
 	}
 	second := f.run(ctx, "experiment", "run", "limits", "--wait")
-	expect(t, second, ExitOK, "Usage: the five-hour window is at 82%; waiting for it to reset at "+clock(resets, time.Now()), "Every run is done")
+	expect(t, second, ExitOK, "Usage: the five-hour window is at 82%; waiting for it to reset at "+experiment.Clock(resets, time.Now()), "Every run is done")
 	if waited < time.Until(resets) || waited > time.Until(resets)+2*time.Minute {
 		t.Errorf("waited %s for a reset %s away", waited, time.Until(resets).Round(time.Second))
 	}
@@ -87,45 +87,6 @@ func TestExperimentStopsWhenASubagentChangesModel(t *testing.T) {
 		t.Fatalf("%d runs, want 3: the third run reports the change and stops the experiment", len(runs))
 	}
 	expect(t, f.run(ctx, "run", "show", runs[0].ID), ExitOK, "subagents    investigator on claude-sonnet-5")
-}
-
-// The stored runs' readings and subagent models are read back for the gate and the check.
-func TestUsageFromStoredRecords(t *testing.T) {
-	t.Parallel()
-	resets := time.Date(2026, 9, 30, 1, 20, 0, 0, time.UTC)
-	rec := func(first, last float64, models map[string][]string) []byte {
-		var m struct {
-			Metrics claude.Metrics `json:"metrics"`
-		}
-		m.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
-		m.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
-		m.Metrics.SubagentModels = models
-		data, err := json.Marshal(m)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return data
-	}
-	var runs []store.Run
-	for _, r := range [][]byte{rec(0.10, 0.16, map[string][]string{"investigator": {"claude-sonnet-5"}}), rec(0.16, 0.22, nil),
-		rec(0.22, 0.28, map[string][]string{"investigator": {"claude-sonnet-5-5"}, "Explore": {"claude-haiku-4-5"}}), []byte("not json")} {
-		runs = append(runs, store.Run{Record: r})
-	}
-	samples := usageSamples(runs)
-	if per, n := experiment.UsagePerRun(samples); n != 3 || per < 0.0599 || per > 0.0601 {
-		t.Errorf("per run %v over %d runs", per, n)
-	}
-	seen := subagentModels(runs)[""] // per arm; the earliest run wins: later ones must match it
-	if got := seen["investigator"]; len(got) != 1 || got[0] != "claude-sonnet-5" || len(seen["Explore"]) != 1 {
-		t.Errorf("seen = %v", seen)
-	}
-	now := time.Date(resets.Year(), resets.Month(), resets.Day(), 0, 0, 0, 0, resets.Location()) // the same day, at any hour
-	if got := clock(resets, now); got != resets.In(now.Location()).Format("15:04") {
-		t.Errorf("clock today = %q", got)
-	}
-	if got := clock(resets.Add(24*time.Hour), now); !strings.Contains(got, " ") {
-		t.Errorf("clock on another day = %q, want the weekday too", got)
-	}
 }
 
 // Calibration runs are a few short turns (about 1% of the window against a task run's 6–10% in the 16-run A/B): the

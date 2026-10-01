@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/source"
@@ -83,7 +84,7 @@ func runInit(ctx context.Context, env Env, args []string) int {
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
 	w, st := env.Stdout, env.style()
 	fmt.Fprintln(w, st.Heading(fmt.Sprintf("Registered %s (project %d)", saved.Name, saved.ID)))
-	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, shortCommit(info.Head))
+	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, experiment.ShortCommit(info.Head))
 	claude := st.Bad("not found")
 	if info.Claude.Path != "" {
 		claude = strings.TrimSpace(info.Claude.Path + " " + info.Claude.Version)
@@ -114,13 +115,6 @@ func describeSignIn(mode string) string {
 	default:
 		return "your Claude login, restricted to project settings (checked on the first run)"
 	}
-}
-
-func shortCommit(commit string) string {
-	if len(commit) > 12 {
-		return commit[:12]
-	}
-	return commit
 }
 
 func sizeLabel(bytes int64) string {
