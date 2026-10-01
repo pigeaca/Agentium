@@ -29,9 +29,10 @@ Shape:
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
 | `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `experiment`) |
 | `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
-| `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, run workspaces and run records; caches and temporary files of Agentium's own commands; the run lock (one process starts agents at a time) |
+| `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, workspaces, records; caches and temporary files of Agentium's own commands; the run lock |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments (design, lock, status; runs keep their slot and attempt) |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
+| `internal/mine` | Task candidates from git history: explained scores, rejections |
 | `internal/gitx` | Every git call: hooks, fsmonitor, prompts and optional index writes off, inherited `GIT_*` dropped; hook-free fetch of a user's commit into Agentium's bare repository (for task bases) |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
 | `internal/claudectx` | Which files Claude Code loads, as experiments run it: instructions, `@` imports (5 hops, also from rules and nested files), rules, skill/subagent/command descriptions, harness files, linked documents, and warnings |
