@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -65,15 +66,48 @@ func IsCredential(name string) bool {
 	return false
 }
 
-// Environ is environ without credentials, GIT_* (a hook's GIT_DIR would redirect git in the child) and AGENTIUM_*.
-func Environ(environ []string) []string {
-	out := make([]string, 0, len(environ))
+// EnvPolicy is how an environment is filtered; runner.Environ, gitx.Environ and claude.Environ are each one policy.
+// Whatever the policy, a variable that IsCredential is dropped: that is the part all three share.
+type EnvPolicy struct {
+	// Allowlist keeps only the variables named in Names or starting with one of Prefixes; otherwise everything not
+	// dropped is kept.
+	Allowlist bool
+	Names     []string
+	Prefixes  []string
+	// DropPrefixes drops variables by name prefix (for example GIT_), even when the allowlist names them.
+	DropPrefixes []string
+}
+
+// GitPrefix is the prefix of git's own variables. A hook's GIT_DIR would redirect git in a child, and an inherited
+// GIT_INDEX_FILE would write the user's index.
+const GitPrefix = "GIT_"
+
+// Filter returns the variables of environ the policy keeps, in their order, unchanged. It is nil when none is kept.
+func (p EnvPolicy) Filter(environ []string) []string {
+	var out []string
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if IsCredential(name) || strings.HasPrefix(name, "GIT_") || strings.HasPrefix(name, "AGENTIUM_") {
+		if IsCredential(name) || hasAnyPrefix(name, p.DropPrefixes) {
+			continue
+		}
+		if p.Allowlist && !slices.Contains(p.Names, name) && !hasAnyPrefix(name, p.Prefixes) {
 			continue
 		}
 		out = append(out, kv)
+	}
+	return out
+}
+
+func hasAnyPrefix(name string, prefixes []string) bool {
+	return slices.ContainsFunc(prefixes, func(prefix string) bool { return strings.HasPrefix(name, prefix) })
+}
+
+// Environ is environ without credentials, GIT_* (a hook's GIT_DIR would redirect git in the child) and AGENTIUM_*.
+// It is never nil: Spec.Environ nil means "use this default".
+func Environ(environ []string) []string {
+	out := EnvPolicy{DropPrefixes: []string{GitPrefix, "AGENTIUM_"}}.Filter(environ)
+	if out == nil {
+		out = []string{}
 	}
 	return out
 }

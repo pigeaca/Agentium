@@ -23,3 +23,24 @@ func Wilson(k, n int) (low, high float64) {
 	}
 	return low, high
 }
+
+// BinomialTwoSided is the exact two-sided p-value of k successes in n at p = 0.5: the total probability of outcomes no
+// likelier than k's (within the pilot's 1e-12), as the pilot's.
+func BinomialTwoSided(k, n int) float64 {
+	if n == 0 {
+		return 1
+	}
+	prob := func(i int) float64 {
+		a, _ := math.Lgamma(float64(n + 1))
+		b, _ := math.Lgamma(float64(i + 1))
+		c, _ := math.Lgamma(float64(n - i + 1))
+		return math.Exp(a - b - c - float64(n)*math.Ln2)
+	}
+	pk, sum := prob(k), 0.0
+	for i := 0; i <= n; i++ {
+		if p := prob(i); p <= pk+1e-12 {
+			sum += p
+		}
+	}
+	return math.Min(1, sum)
+}
