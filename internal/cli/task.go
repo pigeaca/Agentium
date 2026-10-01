@@ -245,6 +245,9 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 		if t.HiddenTests, t.Reference, err = task.Split(ctx, t.BaseCommit, t.SolutionCommit, "--git-dir", w.bare); err != nil {
 			return fail(env, err)
 		}
+		if err := task.RefuseInlineRustTests(ctx, t.BaseCommit, t.SolutionCommit, t.Reference, "--git-dir", w.bare); err != nil {
+			return fail(env, err)
+		}
 		switch {
 		case len(t.HiddenTests) == 0:
 			return fail(env, fmt.Errorf("%s changes no test files, so there are no hidden tests to check a solution with", shortCommit(t.SolutionCommit)))
@@ -697,6 +700,11 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	if *weak && (t.SolutionCommit == "" || len(t.Reference) == 0 || len(t.HiddenTests) == 0) {
 		fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs a task with a solution (hidden tests and a reference); %s has none\n", t.Name)
 		return ExitUsage
+	}
+	if t.SolutionCommit != "" {
+		if err := task.RefuseInlineRustTests(ctx, t.BaseCommit, t.SolutionCommit, t.Reference, "--git-dir", w.bare); err != nil {
+			return fail(env, err)
+		}
 	}
 	arms := []task.Arm{{Name: "base"}}
 	for i, name := range snapshots {

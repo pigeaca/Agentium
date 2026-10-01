@@ -46,7 +46,7 @@ var (
 	quoted = regexp.MustCompile("\"(?:[^\"\\\\\\n]|\\\\.)*\"|'(?:[^'\\\\\\n]|\\\\.)*'|`[^`]*`")
 	// sourceExt lists the test-file extensions scanned; other hidden files (data, snapshots) are not.
 	sourceExt = map[string]bool{".go": true, ".py": true, ".rb": true, ".js": true, ".jsx": true, ".ts": true,
-		".tsx": true, ".mjs": true, ".cjs": true, ".mts": true, ".cts": true}
+		".tsx": true, ".mjs": true, ".cjs": true, ".mts": true, ".cts": true, ".java": true, ".kt": true, ".rs": true}
 	moduleLine = regexp.MustCompile(`(?m)^module\s+"?([^\s"]+)"?`)
 	spaces     = regexp.MustCompile(`\s+`)
 	verbs      = regexp.MustCompile(`%[-+# 0-9.*]*[a-zA-Z%]`)
@@ -119,11 +119,11 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 		}
 		isGo := path.Ext(file) == ".go"
 		old := map[string]bool{}
-		for _, lit := range literals(before, isGo, false) {
+		for _, lit := range literalsOf(before, path.Ext(file), false) {
 			old[lit] = true
 		}
 		seen := map[string]bool{}
-		for _, lit := range literals(after, isGo, false) {
+		for _, lit := range literalsOf(after, path.Ext(file), false) {
 			pieces := piecesOf(lit)
 			produced := false
 			if format, ok := matchFormat(formats, strings.TrimSpace(lit)); ok { // built by the reference from a format string
@@ -339,12 +339,11 @@ func (f *Fairness) formats(ctx context.Context, in FairnessInput) ([]format, err
 		if source.Has(base, p) {
 			before, _ = base.ReadFile(p)
 		}
-		isGo := path.Ext(p) == ".go"
 		old := map[string]bool{}
-		for _, lit := range literals(before, isGo, true) {
+		for _, lit := range literalsOf(before, path.Ext(p), true) {
 			old[lit] = true
 		}
-		for _, lit := range literals(after, isGo, true) {
+		for _, lit := range literalsOf(after, path.Ext(p), true) {
 			pieces := piecesOf(lit)
 			if old[lit] || !verbs.MatchString(lit) || len(pieces) == 0 { // "%d" or "%s: %v" would match almost any text
 				continue
@@ -573,6 +572,22 @@ func worthChecking(lit string) bool {
 
 func wordIn(text, name string) bool {
 	return regexp.MustCompile(`(?i)(^|[^\w])` + regexp.QuoteMeta(name) + `($|[^\w])`).MatchString(text)
+}
+
+// literalsOf returns the string literals of a source file of the given extension: Java, Kotlin and Rust through the
+// small lexer in lex.go (multi-line text blocks, raw strings and byte strings included), others through literals.
+// A Rust {} placeholder is not treated as a format verb, so a reference format string such as "got {}" only matches
+// the exact text.
+func literalsOf(src []byte, ext string, keepMessages bool) []string {
+	switch ext {
+	case ".java":
+		return stringLiterals(string(src), langJava)
+	case ".kt":
+		return stringLiterals(string(src), langKotlin)
+	case ".rs":
+		return stringLiterals(string(src), langRust)
+	}
+	return literals(src, ext == ".go", keepMessages)
 }
 
 // literals returns the string literals of a source file: through the Go parser for Go (skipping import paths and the
