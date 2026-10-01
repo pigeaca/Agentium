@@ -13,8 +13,8 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-10-01 — Experiment hardening done; a 16-run full vs minimal A/B was inconclusive ([plan](plans/archive/2026-09-29-experiment-hardening.md)).
 - 2026-10-01 — Usage and cost estimates from task runs ([plan](plans/archive/2026-10-01-run-estimates.md)).
 - 2026-10-01 — Task checks and context use ([plan](plans/archive/2026-09-30-task-checks-context-use.md)).
+- 2026-10-01 — LLM judge pilot: no-go ([results](../docs/research/2026-10-01-judge-pilot-results.md)).
 
 ## Next, in order
-1. [LLM judge pilot](plans/2026-09-30-judge-pilot.md).
-2. [Java and Rust](plans/2026-09-30-java-rust.md).
-3. Phase 2: agent comparison and Codex.
+1. [Java and Rust](plans/2026-09-30-java-rust.md).
+2. Phase 2: agent comparison and Codex.

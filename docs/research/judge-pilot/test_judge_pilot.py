@@ -70,6 +70,8 @@ class Statistics(unittest.TestCase):
         self.assertAlmostEqual(lo, 0.6696, places=3)
         self.assertAlmostEqual(hi, 0.8876, places=3)
         self.assertEqual(jp.wilson(0, 0), (0.0, 1.0))
+        self.assertEqual((jp.wilson(0, 17)[0], jp.wilson(17, 17)[1]), (0.0, 1.0))  # never -0% or above 100%
+        self.assertEqual(jp.pct(0, 17), "0 of 17, 0% (95%: 0–18%)")
 
     def test_binomial(self):
         self.assertAlmostEqual(jp.binomial_two_sided(0, 8), 2 / 256)
@@ -394,6 +396,11 @@ class Verdicts(unittest.TestCase):
         self.assertIn("**Secondary score for quality: NO-GO**", text)
         self.assertIn("- NOT met: judges >= 3 of the failing runs with a change not fixed", text)
         self.assertIn("**Grading tasks without tests (promising, not proven): NO-GO**", text)
+        # Each verdict comes before its own checks.
+        self.assertLess(text.index("**Secondary score for false passes: NO-GO**"), text.index("- NOT met: catches >= 2/3"))
+        self.assertLess(text.index("**Secondary score for quality: NO-GO**"), text.index("agrees with you in >= 70% of pairs"))
+        self.assertIn("- Failing runs with a change, judged not fixed, whatever your label: 0 of 4", text)
+        self.assertIn("- Passing runs judged not fixed, by task: t 0 of 20.", text)
 
     def test_a_judge_that_matches_your_labels_gets_go(self):
         singles = [(True, "yes", ["yes"] * 3, False)] * 16 + [(True, "no", ["no"] * 3, False)] * 4 + \

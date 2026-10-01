@@ -11,3 +11,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Experiment hardening, then a 16-run context A/B](2026-09-29-experiment-hardening.md) — 2026-09-29 to 2026-10-01
 - [Usage and cost estimates from task runs](2026-10-01-run-estimates.md) — 2026-10-01
 - [Task checks and context use](2026-09-30-task-checks-context-use.md) — 2026-09-30 to 2026-10-01
+- [LLM judge pilot](2026-09-30-judge-pilot.md) — 2026-09-30 to 2026-10-01
