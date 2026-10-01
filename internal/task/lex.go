@@ -118,9 +118,12 @@ func isIdentByte(c byte) bool {
 
 // stringLiterals returns the text of every string literal of a Java, Kotlin or Rust file, comments and character
 // literals skipped. Escapes are decoded in the common cases (\n, \t, \", \', \\, a Rust line continuation); other
-// escapes keep the escaped character. A Kotlin $name or ${...} template inside a string becomes a line break, so it
-// separates pieces the way a format verb does. Limits: a string nested in a Kotlin ${...} is not returned, and a Java
-// text block keeps its indentation (the fairness check normalizes whitespace anyway).
+// escapes keep the escaped character as a letter (\u{1F600} becomes u{1F600}, \x41 becomes x41, \0 becomes 0, Java
+// \s becomes s). A Kotlin $name or ${...} template inside a string becomes a line break, so it separates pieces the way
+// a format verb does. Limits: the lexer ends a string at the first inner quote, so "${map["key"]} tail" is cut
+// there and code fragments such as key"]} tail come back as literals (a stated or base text hides them; a
+// reference that produces one would flag it); a Java text block keeps its indentation (the fairness check
+// normalizes whitespace anyway).
 func stringLiterals(src string, l lang) []string {
 	var out []string
 	for i := 0; i < len(src); {

@@ -319,10 +319,14 @@ func TestSolutionFilesKeepTheArmsContext(t *testing.T) {
 
 func TestIsTestFileJavaAndKotlinClasses(t *testing.T) {
 	for p, want := range map[string]bool{
-		"src/main/java/app/ParserTest.java": true, "app/ParserTests.java": true, "app/ParserIT.java": true,
+		"src/main/java/app/ParserTest.java": false, "app/ParserTests.java": true, "app/ParserIT.java": true,
 		"core/UserServiceTest.kt": true, "core/UserServiceIT.kt": true, "src/test/java/app/Helper.java": true,
 		"src/main/java/app/Parser.java": false, "app/Contest.java": false, "app/Test.txt": false, "app/ParserTest.xml": false,
 		"app/ParserTester.java": false, "app/Wait.kt": false, "app/ParserTest.scala": false,
+		"src/main/java/com/x/ABTest.java": false, "app/LoadTest.kt": true, "src/GIT.java": false, "src/AUDIT.kt": false,
+		"src/main/java/Test.java": false, "x/IT.java": false, "src/main/java/RetryingTest.java": false,
+		"mod/src/main/kotlin/CartesianTest.kt": false, "src/test/java/RetryingTest.java": true, "src/Web3Test.java": true,
+		"src/tests.rs": true, "src/contests.rs": false,
 	} {
 		if got := IsTestFile(p); got != want {
 			t.Errorf("IsTestFile(%q) = %v, want %v", p, got, want)

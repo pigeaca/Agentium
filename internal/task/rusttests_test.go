@@ -23,6 +23,13 @@ func TestRustTestItems(t *testing.T) {
 		"tricky tokens": {"#[cfg(test)]\nmod tests {\n    // } in a comment\n    /* nested /* } */ } */\n" +
 			"    fn a<'a>(x: &'a str) { let _ = '}'; let _ = '\\''; let _ = \"}\\\"\"; let _ = r#\"}\"#; let _ = br\"}\"; let r#fn = 1; }\n}\nfn after() {}\n",
 			[]string{"#[cfg(test)]"}},
+		"cfg test field":                      {"struct S {\n #[cfg(test)]\n x: i32,\n y: i32,\n}\n\nfn main() { let a = 1; }\n", []string{"#[cfg(test)]"}},
+		"cfg test arm":                        {"fn f(n: i32) -> i32 {\n match n {\n #[cfg(test)]\n 0 => 1,\n _ => 2,\n }\n}\nfn later() {}\n", []string{"#[cfg(test)]"}},
+		"cfg test last field":                 {"struct S {\n a: i32,\n #[cfg(test)]\n x: i32\n}\nfn later() {}\n", []string{"#[cfg(test)]"}},
+		"generic test fn":                     {"#[test]\nfn a<A, B>() where A: Copy, B: Copy { let _ = 1; }\nfn later() {}\n", []string{"#[test]"}},
+		"test_case":                           {"#[test_case(1)]\nfn a(x: i32) {}\n#[wasm_bindgen_test]\nfn b() {}\n#[rstest]\nfn c() {}\n", []string{"#[test_case(1)]", "#[wasm_bindgen_test]", "#[rstest]"}},
+		"cfg test with not":                   {"#[cfg(all(test, not(miri)))]\nmod a {}\n#[cfg(all(test, not(feature = \"x\")))]\nmod b {}\n", []string{"#[cfg(all(test, not(miri)))]", "#[cfg(all(test, not(feature = \"x\")))]"}},
+		"cfg strings are not test":            {"#[cfg(feature = \"test-util\")]\nmod a {}\n#[cfg(feature=\"test\")]\nmod b {}\n#[cfg(target_os = \"test\")]\nmod c {}\n", nil},
 		"signature with array":                {"#[test]\nfn a() -> [u8; 2] { [0; 2] }\nfn b() {}\n", []string{"#[test]"}},
 		"attribute text in string or comment": {"// #[test]\nconst S: &str = \"#[cfg(test)]\";\nconst R: &str = r#\"#[test]\"#;\n", nil},
 	} {
@@ -81,10 +88,13 @@ func TestInlineRustTests(t *testing.T) {
 		"tests in tests dir": {
 			map[string]string{"src/lib.rs": "pub fn f() {}\n", "tests/t.rs": "#[test]\nfn a() {}\n"},
 			map[string]string{"src/lib.rs": "pub fn f() { }\n", "tests/t.rs": "#[test]\nfn a() { }\n"}, nil},
+		"tests.rs declared": {
+			map[string]string{"src/lib.rs": "pub fn f() {}\n"},
+			map[string]string{"src/lib.rs": "pub fn f() {}\n#[cfg(test)]\nmod tests;\n", "src/tests.rs": "#[test]\nfn a() {}\n"}, []string{"src/lib.rs"}},
 		"not rust": {
 			map[string]string{"a.py": "x = 1\n"}, map[string]string{"a.py": "#[test]\nx = 2\n"}, nil},
 		"unbalanced": {
-			map[string]string{"src/lib.rs": "fn a() {}\n"}, map[string]string{"src/lib.rs": "#[cfg(test)]\nmod t {\n"}, []string{"src/lib.rs (unbalanced brackets: '{' is never closed)"}},
+			map[string]string{"src/lib.rs": "fn a() {}\n"}, map[string]string{"src/lib.rs": "#[cfg(test)]\nmod t {\n"}, []string{"src/lib.rs (unbalanced brackets: '{' opened on line 2 is never closed)"}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

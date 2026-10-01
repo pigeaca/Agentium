@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/store"
 )
 
 func TestTaskImportValidateAndManage(t *testing.T) {
@@ -294,7 +296,20 @@ func TestTaskRefusesInlineRustTests(t *testing.T) {
 	expect(t, run("task", "import", "--commit", "HEAD", "--verify", "true"), ExitError, reason, "move them to a file under tests/")
 	base := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1"))
 	expect(t, run("task", "add", "inline", "--base", base, "--solution", "HEAD", "--instruction", "Double it.", "--verify", "true"), ExitError, reason)
-	if list := run("task", "list"); strings.Contains(list.stdout, "inline") {
-		t.Errorf("a refused task was saved:\n%s", list.stdout)
+	expect(t, run("task", "list"), ExitOK, "No tasks yet")
+	if w, err := openProject(context.Background(), Env{Dir: repo, Getenv: func(key string) string { return vars[key] }}); err != nil {
+		t.Fatal(err)
+	} else {
+		defer w.Close()
+		if tasks, err := w.db.Tasks(context.Background(), w.project.ID); err != nil || len(tasks) != 0 {
+			t.Errorf("stored tasks = %v, %v; want none", tasks, err)
+		}
+		// A task stored before the rule existed is refused when validated, before anything runs.
+		if _, err := w.db.SaveTask(context.Background(), store.Task{ProjectID: w.project.ID, Name: "old", Instruction: "Double it.", Source: "test",
+			BaseCommit: base, SolutionCommit: strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD")), HiddenTests: []string{"tests/api.rs"},
+			Reference: []string{"src/lib.rs"}, Verify: []string{"true"}}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	expect(t, run("task", "validate", "old"), ExitError, reason)
 }
