@@ -55,11 +55,18 @@ func (env Env) workspaceName() string {
 }
 
 // Predicted lists the folders a run in the named workspace will use: the workspace (its checkout and, with an API key
-// or token, its Claude config) and, with the user's login, its session folder under the user's Claude config. A run
-// that may overlap it denies these before either starts, since its deny list is fixed when it starts.
+// or token, its Claude config), its temp root (as written and resolved: /tmp is /private/tmp on macOS) and, with the
+// user's login, its session folder under the user's Claude config. A run that may overlap it denies these before
+// either starts, since its deny list is fixed when it starts.
 func (env Env) Predicted(name string) []string {
 	workspace := realPath(filepath.Join(env.Layout.Workspaces, name))
 	paths := []string{workspace}
+	if temp := env.Layout.RunTemp(name); temp != "" {
+		paths = append(paths, temp)
+		if resolved := realPath(temp); resolved != temp {
+			paths = append(paths, resolved)
+		}
+	}
 	if env.SignIn == claude.SignInLogin {
 		// Resolved as the sandbox will see it, even when the Claude config folder is a symlink.
 		paths = append(paths, realPath(claude.SessionFolder(claude.UserConfigDir(env.Environ, env.Home), filepath.Join(workspace, "repo"))))
@@ -90,7 +97,8 @@ func (e *AliveError) Error() string {
 //   - a run whose current command's process group (setup, the agent, verification) still exists is left alone and
 //     reported in an *AliveError, along with the runs that were recovered.
 //
-// The workspaces and grading copies of recovered runs are removed.
+// The workspaces, temp roots and grading copies of recovered runs are removed. A run's temp root is found from its
+// workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
 func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
 	entries, err := os.ReadDir(layout.Records)
 	if errors.Is(err, os.ErrNotExist) {
@@ -140,6 +148,9 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		}
 		if err := os.RemoveAll(workspace); err != nil {
 			return orphans, fmt.Errorf("remove %s: %w", workspace, err)
+		}
+		if err := removeRunTemp(layout.RunTemp(filepath.Base(s.Workspace))); err != nil {
+			return orphans, fmt.Errorf("run %s: %w", e.Name(), err)
 		}
 		if err := os.RemoveAll(filepath.Join(dir, "verify")); err != nil {
 			return orphans, fmt.Errorf("remove the grading copy of %s: %w", e.Name(), err)

@@ -113,9 +113,17 @@ func TestCopyTreeKeepsModesAndLinks(t *testing.T) {
 func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	data := t.TempDir()
 	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
-		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache"),
+		Temp: t.TempDir()}
 	for _, dir := range []string{"workspaces/r1", "workspaces/r2"} {
 		if err := os.MkdirAll(filepath.Join(data, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Temp roots: the run's own, another run's (of this data folder or another), and a folder that is no run's.
+	otherTemp, notARun := layout.RunTemp("r2"), filepath.Join(layout.Temp, "ag-notarun")
+	for _, dir := range []string{layout.RunTemp("r1"), otherTemp, filepath.Join(layout.Temp, "ag-abcdef0123"), notARun} {
+		if err := os.Mkdir(dir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,14 +141,27 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	git(main, "worktree", "add", "-q", linked)
 	env := Env{Layout: layout, ProjectRoot: linked, Now: time.Now}
-	denied := strings.Join(env.denied(context.Background(), filepath.Join(data, "workspaces", "r1")), "\n")
+	list, err := env.denied(context.Background(), filepath.Join(data, "workspaces", "r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := strings.Join(list, "\n")
 	mainGit, _ := filepath.EvalSymlinks(filepath.Join(main, ".git"))
 	mainCheckout, _ := filepath.EvalSymlinks(main) // another worktree: it can sit at a commit holding the solution
 	for _, want := range []string{filepath.Join(data, "projects"), layout.Records, layout.Artifacts, layout.Cache, layout.Database + "-wal",
-		filepath.Join(data, "workspaces", "r2"), linked, mainGit, mainCheckout + "\n"} {
+		filepath.Join(data, "workspaces", "r2"), linked, mainGit, mainCheckout + "\n", otherTemp, filepath.Join(layout.Temp, "ag-abcdef0123")} {
 		if !strings.Contains(denied, want) {
 			t.Errorf("%s is not denied:\n%s", want, denied)
 		}
+	}
+	if strings.Contains(denied, layout.RunTemp("r1")) || strings.Contains(denied, notARun) {
+		t.Errorf("the run's own temp root, or a folder that is no run's, is denied:\n%s", denied)
+	}
+	// A temp folder that cannot be listed stops the run instead of leaving other runs' roots open to it.
+	unlisted := env
+	unlisted.Layout.Temp = filepath.Join(t.TempDir(), "missing")
+	if _, err := unlisted.denied(context.Background(), filepath.Join(data, "workspaces", "r1")); err == nil {
+		t.Error("an unlisted temp folder must be an error")
 	}
 	if strings.Contains(denied, filepath.Join(data, "workspaces", "r1")+"\n") || strings.HasSuffix(denied, filepath.Join(data, "workspaces", "r1")) {
 		t.Errorf("the run's own workspace is denied:\n%s", denied)
@@ -196,6 +217,7 @@ func TestRecover(t *testing.T) {
 	if err := layout.Ensure(); err != nil {
 		t.Fatal(err)
 	}
+	layout.Temp = t.TempDir() // not the real /tmp
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	write := func(p, body string) {
 		t.Helper()
@@ -246,6 +268,11 @@ func TestRecover(t *testing.T) {
 	write(filepath.Join(layout.Workspaces, "r7", "repo", "a.txt"), "")
 	startFileFor("r8", false, 0, filepath.Join(layout.Workspaces, "r8"), &Record{ID: "r8"})
 	stored := func(id string) (bool, error) { return id == "r4", nil }
+	// Temp roots: r3's (an older start file reads the same: the root follows from the workspace's name), r7's, and the
+	// stored r4's, which is not touched.
+	for _, name := range []string{"e1-s4-t1", "r7", "r4"} {
+		write(filepath.Join(layout.RunTemp(name), "claude-501", "shell-snapshot"), "")
+	}
 
 	orphans, err := Recover(context.Background(), layout, stored, "", now)
 	if err != nil || len(orphans) != 2 {
@@ -263,12 +290,12 @@ func TestRecover(t *testing.T) {
 	}
 	for _, gone := range []string{filepath.Join(layout.Records, "r1"), filepath.Join(layout.Records, "r2"), filepath.Join(layout.Workspaces, "r2"),
 		filepath.Join(layout.Workspaces, "e1-s4-t1"), filepath.Join(layout.Records, "r3", "verify"), filepath.Join(layout.Workspaces, "r7"),
-		filepath.Join(layout.Records, "r8")} {
+		filepath.Join(layout.Records, "r8"), layout.RunTemp("e1-s4-t1"), layout.RunTemp("r7")} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s was left behind", gone)
 		}
 	}
-	for _, kept := range []string{filepath.Join(layout.Records, "r3", "stream.jsonl"), filepath.Join(layout.Records, "r4")} {
+	for _, kept := range []string{filepath.Join(layout.Records, "r3", "stream.jsonl"), filepath.Join(layout.Records, "r4"), layout.RunTemp("r4")} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Errorf("%s: %v", kept, err)
 		}
@@ -301,8 +328,14 @@ func TestRecover(t *testing.T) {
 func TestPredictedFolders(t *testing.T) {
 	layout, _ := home.Resolve(func(key string) string { return map[string]string{"AGENTIUM_HOME": "/data"}[key] })
 	login := Env{Layout: layout, SignIn: "login", Home: "/home/u", Environ: []string{"CLAUDE_CONFIG_DIR=/cfg"}}
-	if got := login.Predicted("e1-s2-t1"); len(got) != 2 || got[0] != "/data/workspaces/e1-s2-t1" || got[1] != "/cfg/projects/-data-workspaces-e1-s2-t1-repo" {
-		t.Errorf("login: %v", got)
+	// The temp root, as written and, where /tmp is a link (macOS), resolved.
+	temp := []string{layout.RunTemp("e1-s2-t1")}
+	if resolved := realPath(temp[0]); resolved != temp[0] {
+		temp = append(temp, resolved)
+	}
+	want := append(append([]string{"/data/workspaces/e1-s2-t1"}, temp...), "/cfg/projects/-data-workspaces-e1-s2-t1-repo")
+	if got := login.Predicted("e1-s2-t1"); !slices.Equal(got, want) {
+		t.Errorf("login: %v, want %v", got, want)
 	}
 	// A symlinked config folder: the sandbox sees the resolved path.
 	real, link := t.TempDir(), filepath.Join(t.TempDir(), "cfg")
@@ -311,11 +344,11 @@ func TestPredictedFolders(t *testing.T) {
 	}
 	resolved, _ := filepath.EvalSymlinks(real)
 	linked := Env{Layout: layout, SignIn: "login", Home: "/home/u", Environ: []string{"CLAUDE_CONFIG_DIR=" + link}}
-	if got := linked.Predicted("e1-s2-t1"); len(got) != 2 || got[1] != filepath.Join(resolved, "projects", "-data-workspaces-e1-s2-t1-repo") {
+	if got := linked.Predicted("e1-s2-t1"); len(got) != len(want) || got[len(got)-1] != filepath.Join(resolved, "projects", "-data-workspaces-e1-s2-t1-repo") {
 		t.Errorf("symlinked config: %v, want it under %s", got, resolved)
 	}
 	key := Env{Layout: layout, SignIn: "api-key", Home: "/home/u"}
-	if got := key.Predicted("e1-s2-t1"); len(got) != 1 {
+	if got := key.Predicted("e1-s2-t1"); !slices.Equal(got, want[:len(want)-1]) {
 		t.Errorf("with a key, the session lives in the workspace's own config: %v", got)
 	}
 }

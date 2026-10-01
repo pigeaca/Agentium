@@ -12,6 +12,7 @@ import (
 // codes; on one, or with FORCE_COLOR, it is styled unless NO_COLOR or a dumb TERM says otherwise. Errors on stderr
 // are never styled.
 func TestOutputIsStyledOnlyOnATerminal(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--seed", "5"), ExitOK)

@@ -1,7 +1,7 @@
 // Package claude runs Claude Code headless for Agentium and reads what it reports. Each run is isolated the way the
 // Phase 0 spike found necessary (docs/research/2026-09-27-phase0-spike-results.md): project settings only, no account
 // connectors, a fixed permission mode, a sandbox without network that cannot read hidden paths or credentials, and an
-// environment built from an allowlist. Checked against Claude Code 2.1.281.
+// environment built from an allowlist. Checked against Claude Code 2.1.285.
 package claude
 
 import (
@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,6 +52,99 @@ type Invocation struct {
 	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied
 	// (buildtool.UserCaches): they hold what earlier builds compiled, the hidden tests of validations and gradings included.
 	BuildCache string
+	// TempRoot, when set, is the run's own Claude Code temp root (CLAUDE_CODE_TMPDIR), an existing owner-only folder:
+	// Claude Code keeps its temp files in <TempRoot>/claude-<uid>, points the agent's shells' TMPDIR there, and keeps
+	// its sockets in <TempRoot>/cc-socks (unless XDG_RUNTIME_DIR is set). Then the folders every other Claude Code
+	// session of the user shares (SharedTempDirs) are denied to the agent, for reading and writing: they would be a
+	// channel between runs, and a view of other sessions' temp files. It must be short (TempRootFits): a longer one
+	// makes Claude Code fall back to the shared folders. The sandbox lets the agent write it without an allowWrite
+	// entry (verified in a probe session).
+	TempRoot string
+	// UID is the user's id (os.Getuid()), which names Claude Code's temp folders (claude-<uid>); read only with TempRoot.
+	UID int
+}
+
+// Claude Code 2.1.285's limits on its temp root, which TempRootFits checks:
+//   - maxTempDir: the shells' TMPDIR, <root>/claude-<uid> as written, is used only up to 44 bytes, and the root itself
+//     too (longer, Claude Code falls back to /tmp/claude-<uid>, and to /tmp);
+//   - maxSocketPath: a socket, <root>/cc-socks/<pid>.sock, up to 103 bytes (a Unix socket path holds 104 with its final
+//     NUL on macOS); longer, it falls back to /tmp/cc-socks-<uid>. socketName is the longest name: a 7-digit process id.
+const (
+	maxTempDir    = 44
+	maxSocketPath = 103
+	socketName    = "/cc-socks/4194304.sock"
+)
+
+// TempRootFits reports whether Claude Code keeps its temp files and sockets under root for the user uid, rather than
+// falling back to the shared folders. Both root as written and its symlink-resolved form (/tmp is /private/tmp on
+// macOS) must fit: Claude Code checks the path as given, and a resolved form that fits is the safe side.
+func TempRootFits(root string, uid int) error {
+	measured := []string{filepath.Clean(root)} // measured, not denied: any link is followed (forms would not, in /tmp)
+	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != measured[0] {
+		measured = append(measured, resolved)
+	}
+	for _, form := range measured {
+		if n := len(form + "/claude-" + strconv.Itoa(uid)); n > maxTempDir {
+			return fmt.Errorf("the run's temp root %s is too long for Claude Code (%s/claude-%d is %d bytes of %d): it would fall back to the shared temp folder", form, form, uid, n, maxTempDir)
+		}
+		if n := len(form + socketName); n > maxSocketPath {
+			return fmt.Errorf("the run's temp root %s is too long for Claude Code's sockets (%d bytes of %d): it would fall back to the shared socket folder", form, n, maxSocketPath)
+		}
+	}
+	return nil
+}
+
+// SharedTempDirs are the folders Claude Code shares between all the user's sessions (2.1.285), in /tmp in both forms
+// (the sandbox matches the resolved /private/tmp on macOS, the Read tool the path as written):
+//   - claude-<uid>, the default temp folder, and claude, which the sandbox lets every shell write;
+//   - cc-socks, cc-socks-<uid> and cc-daemon-<uid>, the sockets' and the background daemon's folders (Anthropic's own
+//     eval-shell isolation denies writes to exactly these);
+//   - under the user's own CLAUDE_CODE_TMPDIR, when environ sets one: claude-<uid> and cc-socks;
+//   - $XDG_RUNTIME_DIR/cc-socks, when environ sets XDG_RUNTIME_DIR (it passes the allowlist, and Claude Code then keeps
+//     every session's sockets there, the run's own included: its Claude Code process is not sandboxed, its agent is).
+func SharedTempDirs(environ []string, uid int) []string {
+	id := strconv.Itoa(uid)
+	var dirs []string
+	add := func(dir string) {
+		if !slices.Contains(dirs, dir) {
+			dirs = append(dirs, dir)
+		}
+	}
+	// Each name in both forms, side by side: the order stays the same whether /tmp/<name> exists (and its resolved form
+	// is added after it, see forms) or not.
+	for _, name := range []string{"claude-" + id, "claude", "cc-socks", "cc-socks-" + id, "cc-daemon-" + id} {
+		add(filepath.Join("/tmp", name))
+		add(filepath.Join("/private/tmp", name))
+	}
+	if root := lookup(environ, "CLAUDE_CODE_TMPDIR"); filepath.IsAbs(root) {
+		add(filepath.Join(root, "claude-"+id))
+		add(filepath.Join(root, "cc-socks"))
+	}
+	if runtime := lookup(environ, "XDG_RUNTIME_DIR"); filepath.IsAbs(runtime) {
+		add(filepath.Join(runtime, "cc-socks"))
+	}
+	return dirs
+}
+
+// sharedLogDirs are the folders outside the temp folders that the sandbox lets every shell write (Claude Code
+// 2.1.285): npm's logs and Claude Code's debug folder, ~/.claude/debug, and in login mode the user's config folder's
+// (a run with its own config folder writes its own). All the user's sessions share them.
+func (inv Invocation) sharedLogDirs(userConfig string) []string {
+	dirs := []string{filepath.Join(inv.Home, ".npm", "_logs"), filepath.Join(inv.Home, ".claude", "debug")}
+	if inv.SignIn == SignInLogin && filepath.Clean(userConfig) != filepath.Join(inv.Home, ".claude") {
+		dirs = append(dirs, filepath.Join(userConfig, "debug"))
+	}
+	return dirs
+}
+
+// lookup is the value of name in environ, or "".
+func lookup(environ []string, name string) string {
+	for _, kv := range environ {
+		if value, ok := strings.CutPrefix(kv, name+"="); ok {
+			return value
+		}
+	}
+	return ""
 }
 
 // UserConfigDir is the user's own Claude Code folder: $CLAUDE_CONFIG_DIR when set in environ, otherwise ~/.claude.
@@ -100,9 +194,14 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
+		}
+	}
+	if inv.TempRoot != "" {
+		if err := TempRootFits(inv.TempRoot, inv.UID); err != nil {
+			return nil, nil, err
 		}
 	}
 	settings, err := json.Marshal(inv.settings(userConfig, environ))
@@ -144,6 +243,9 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	if inv.BuildCache != "" {
 		env = append(env, buildtool.AgentCacheEnv(inv.BuildCache)...)
+	}
+	if inv.TempRoot != "" { // the parent's own CLAUDE_CODE_TMPDIR was dropped with every CLAUDE_* (Environ)
+		env = append(env, "CLAUDE_CODE_TMPDIR="+inv.TempRoot)
 	}
 	switch inv.SignIn { // requirement 4: a fresh config folder cannot use a subscription login
 	case SignInLogin:
@@ -189,7 +291,9 @@ func SessionFolders(configDir string) []string {
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
 //   - credential stores and the token file's folder;
 //   - the build tools' caches of the user (buildtool.UserCaches: Go's build caches), which hold hidden tests compiled
-//     before Agentium kept its own.
+//     before Agentium kept its own;
+//   - with a temp root of the run's own, the user's shared Claude Code temp folders (SharedTempDirs);
+//   - the log folders the sandbox lets every shell write (sharedLogDirs).
 //
 // Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
 func (inv Invocation) deniedPaths(userConfig string, environ []string) []string {
@@ -215,6 +319,15 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
+	if inv.TempRoot != "" {
+		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
+	}
+	paths = append(paths, inv.sharedLogDirs(userConfig)...)
+	return withForms(paths)
+}
+
+// withForms lists every path's forms (see forms), each once, in order.
+func withForms(paths []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
@@ -228,13 +341,41 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	return out
 }
 
+// deniedWrites are the paths the sandbox must stop the agent writing, beyond its default (only the checkout and the
+// allowWrite folders): the folders the sandbox lets every shell write, shared by all the user's Claude Code sessions,
+// so with a temp root of the run's own the shared temp folders (SharedTempDirs: denyRead alone does not stop writes),
+// and the log folders (sharedLogDirs); and inv.Deny, what belongs to Agentium, the user and other runs (their temp
+// roots under /tmp among them), which is never the agent's to write either.
+func (inv Invocation) deniedWrites(userConfig string, environ []string) []string {
+	paths := append([]string{}, inv.Deny...)
+	if inv.TempRoot != "" {
+		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
+	}
+	paths = append(paths, inv.sharedLogDirs(userConfig)...)
+	return withForms(paths)
+}
+
 // forms are p cleaned and, when it exists, its symlink-resolved form: the sandbox matches the real path.
+//
+// A name directly in /tmp is the exception. Another local user can create any name there that is not taken yet, as a
+// link too (/tmp/claude and /tmp/cc-socks carry no uid), and following such a link would deny its target: anything the
+// other user chose, which can make a run refuse to start. So for /tmp only the system's own /tmp → /private/tmp link is
+// followed; for any other target the /private/tmp twin is listed instead.
 func forms(p string) []string {
 	out := []string{filepath.Clean(p)}
-	if resolved, err := filepath.EvalSymlinks(p); err == nil && resolved != out[0] {
-		out = append(out, resolved)
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil || resolved == out[0] {
+		return out
 	}
-	return out
+	if dir := filepath.Dir(out[0]); dir == "/tmp" || dir == "/private/tmp" {
+		if twin := filepath.Join("/private/tmp", filepath.Base(out[0])); resolved != twin {
+			if twin != out[0] {
+				out = append(out, twin)
+			}
+			return out
+		}
+	}
+	return append(out, resolved)
 }
 
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
@@ -257,6 +398,9 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		files = append(files, map[string]string{"path": filepath.Dir(inv.TokenFile), "mode": "deny"})
 	}
 	filesystem := map[string]any{"denyRead": denied} // requirement 5
+	if writes := inv.deniedWrites(userConfig, environ); len(writes) > 0 {
+		filesystem["denyWrite"] = writes
+	}
 	if inv.BuildCache != "" {
 		filesystem["allowWrite"] = forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
 	}
@@ -280,6 +424,9 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 // variables, the build tools' among them: buildtool.EnvAllowlist) and nothing else: no credentials, no GIT_*, no
 // AGENTIUM_*, no CLAUDE_* (in particular not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default
 // permission mode: requirement 3). Values are passed as given: a proxy URL with a password in it would pass too.
+//
+// TMPDIR is kept as the user's own (macOS: /var/folders/.../T). Claude Code points its shells' TMPDIR at the run's
+// temp root, but the user's folder itself stays readable to the agent: a follow-up (the run temp isolation plan).
 //
 // SHELL is kept on purpose: runs should behave like the user's own Claude Code sessions, so a user's zsh stays zsh
 // (an unquoted glob such as --include=*.go then fails with "no matches found" there, as it would for them), and

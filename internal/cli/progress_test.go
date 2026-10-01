@@ -56,6 +56,7 @@ func liveChecks(t *testing.T, r cliResult, want ...string) []string {
 }
 
 func TestExperimentRunShowsAStatusLineOnATerminal(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
@@ -76,6 +77,7 @@ func TestExperimentRunShowsAStatusLineOnATerminal(t *testing.T) {
 }
 
 func TestExperimentRunHasNoStatusLineElsewhere(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "1", "--seed", "5"), ExitOK)
@@ -93,6 +95,7 @@ func TestExperimentRunHasNoStatusLineElsewhere(t *testing.T) {
 }
 
 func TestRunOnceAndValidateShowTheStepInProgress(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	*f.terminal = true
@@ -106,6 +109,7 @@ func TestRunOnceAndValidateShowTheStepInProgress(t *testing.T) {
 }
 
 func TestRunStatusText(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
 	s := runStatus{total: 6, budget: 10, settled: map[int]bool{0: true}, spent: 0.3}
 	if got, want := s.text(now), "1 of 6 settled; 0 in flight; $0.30 of $10.00"; got != want {
