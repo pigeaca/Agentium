@@ -28,6 +28,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
@@ -51,6 +52,9 @@ type Spec struct {
 	// the resolver finds it) before the context commit: calibration asks the agent to repeat it, which proves that
 	// file really loads.
 	Probe string
+	// Judge, when set, has the judge give a graded run a verdict (Env.Judge), after grading and inside the run, so the
+	// experiment's concurrency bounds the calls too. It never changes the run's outcome or result.
+	Judge *judge.Settings
 }
 
 // Env is what a run needs from Agentium and the machine.
@@ -139,6 +143,9 @@ type Record struct {
 	// subtracts them to keep only what Claude Code bundles.
 	ProjectSkills   []string `json:"-"`
 	ProjectCommands []string `json:"-"`
+	// Judge is the judge's verdict on a graded run, when its experiment asked for one: a second opinion beside Passed
+	// that decides nothing. Its cost is kept here, apart from Metrics.CostUSD, which stays the agent's alone.
+	Judge *judge.Verdict `json:"judge,omitempty"`
 }
 
 // Behavior is what the agent did, beyond passing or failing.
@@ -415,6 +422,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if err := env.grade(ctx, spec, repo, graded, &rec, running); err != nil {
 			return unfinished(err)
 		}
+		if spec.Judge != nil {
+			// The graded run is complete: if Agentium dies while judging, recovery stores it as finished, without a
+			// verdict, and a resume judges it.
+			rec.Finished = env.Now().UTC() // the deferred write sets it again once judged
+			if err := writeStart(true); err != nil {
+				return unfinished(err)
+			}
+			env.step("judging")
+			env.Judge(ctx, spec, *spec.Judge, &rec)
+		}
 	}
 	return rec, nil
 }
@@ -448,7 +465,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			rec.Behavior.TestsRemoved++
 		}
 	}
-	patch, err := gitx.Output(ctx, nil, "-C", graded, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--no-color", rec.ContextHead)
+	// The patch's form is pinned against the user's git settings (renames, prefixes): the judge reads its file headers.
+	patch, err := gitx.Output(ctx, nil, "-C", graded, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "--cached",
+		"--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", rec.ContextHead)
 	if err != nil {
 		return err
 	}
