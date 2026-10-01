@@ -45,9 +45,11 @@ agentium context diff baseline trimmed --patch
 **2. Turn past commits into tasks**
 
 ```sh
-agentium task import --commit <sha>                # base: its parent; hidden tests: its test-file changes
+agentium task mine --dry-run                       # commits that would make good tasks (tests and code changed, small, a clear message), and why others don't
+agentium task mine --limit 10                      # import the best 10 and validate them: base: the parent; hidden tests: the test-file changes
 agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away (--accept-gaps: hidden tests need texts or names nothing states)
-agentium task validate <name> --snapshot trimmed   # tests fail on the base and pass with the reference, in each arm
+agentium task validate --all --snapshot trimmed    # tests fail on the base and pass with the reference, in each arm (--jobs N at a time)
+agentium task import --commit <sha>                # one commit by hand (mining skips commits that are already tasks)
 agentium task validate <name> --repeat 3           # run every stage 3 times: a task whose runs disagree is flaky, and experiments reject it
 agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
