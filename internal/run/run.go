@@ -277,6 +277,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	recordsReady = true
+	// An experiment slot's retry reuses its workspace name; a dead process's unreadable run left it behind unstored
+	// (Recover could not find it). The caller holds the run lock, so nothing else uses it.
+	if err := removeStaleWorkspace(env.Layout.Workspaces, workspace, tempRoot); err != nil {
+		return rec, err
+	}
 	for _, dir := range []string{workspace, inv.ConfigDir, inv.BuildCache} {
 		if dir == "" {
 			continue
@@ -991,4 +996,21 @@ func copyTree(src, dst string) (unreadable []string, err error) {
 		return nil // sockets and devices are not copied
 	})
 	return unreadable, err
+}
+
+// removeStaleWorkspace removes a workspace and its temp root left by a run that no one stored, before a new run reuses
+// the name. Only a real folder (not a symlink) that is a direct child of the workspaces folder is removed, so a name
+// that escapes it is left alone and the run's own checks fail as before.
+func removeStaleWorkspace(workspaces, workspace, tempRoot string) error {
+	resolved := realPath(workspace)
+	if filepath.Dir(resolved) != realPath(workspaces) || !within(resolved, realPath(workspaces)) {
+		return nil
+	}
+	if info, err := os.Lstat(workspace); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return nil // nothing there, or a link: not ours to remove
+	}
+	if err := os.RemoveAll(workspace); err != nil {
+		return fmt.Errorf("remove the stale workspace %s: %w", workspace, err)
+	}
+	return removeRunTemp(tempRoot)
 }
