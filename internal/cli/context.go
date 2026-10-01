@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -109,6 +110,11 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 }
 
 func (w *workspace) Close() { w.db.Close() }
+
+// service is the workspace as the services in internal/experiment take it.
+func (w *workspace) service() experiment.Project {
+	return experiment.Project{DB: w.db, ID: w.project.ID, Layout: w.layout, Root: w.root, Bare: w.bare}
+}
 
 // read returns a read-only view of the working tree (ref == "") or of ref, and the commit HEAD or ref names. Nothing
 // is copied: commits are read in place with ls-tree and cat-file.
