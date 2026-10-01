@@ -265,6 +265,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
 		return rec, err
 	}
+	if slices.Contains(tools, "cargo") { // what the user's Cargo configs name must be readable by Agentium, or the run waits
+		if err := buildtool.CheckConfigs(env.Environ, env.Home, env.ProjectRoot); err != nil {
+			return rec, err
+		}
+	}
 	prompt := spec.Instruction + suffix
 	if spec.PlainPrompt {
 		prompt = spec.Instruction
@@ -310,6 +315,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
+	}
+	// Resolved once, before the agent starts, and only this string goes to the stop hook: the sandbox lets the agent
+	// write the build cache path itself, so later it could replace the folder with a link to another run's, and
+	// anything resolved at stop time would follow it.
+	buildCacheReal, err := filepath.EvalSymlinks(inv.BuildCache)
+	if err != nil {
+		return rec, fmt.Errorf("run folder go-build: %w", err)
 	}
 	// After the start file, so a dead process's root is found and removed (Recover); before the agent's settings are
 	// made, so the root's resolved form (/private/tmp) is known.
@@ -363,12 +375,19 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		// Even a cancelled run stops what it started, within half a minute.
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
-		if stopErr := buildtool.StopRun(stopCtx, profiles, inv.BuildCache, buildtool.SystemHost()); stopErr != nil {
+		if stopErr := buildtool.StopRun(stopCtx, profiles, buildCacheReal, buildtool.SystemHost()); stopErr != nil {
 			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
 		}
 	}
 	notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
+	if errors.Is(err, errWarmWait) {
+		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
+		// not counted against it (an infrastructure failure is retried or left out).
+		rec.Outcome = claude.OutcomeInfra
+		rec.Notes = append(rec.Notes, err.Error())
+		return rec, nil
+	}
 	if err != nil {
 		return rec, err
 	}

@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // gradleProfile holds Gradle's special cases (Java or Kotlin projects); the repository's own wrapper (gradlew) is
@@ -134,37 +135,38 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 // stopGradleDaemons ends the Gradle daemons the run started. It starts from the machine's own process list (the user's
 // GradleDaemon processes), never from files the agent can write, and signals a process only when it holds open the log
 // that daemon would keep in the run's own Gradle home: <buildCache>/gradle/daemon/<version>/daemon-<pid>.out.log, with
-// its pid. So an agent cannot make Agentium kill the user's daemon, another run's, or a process it names, and planted
-// logs cannot hide the real daemon.
+// its pid.
 //
-// The root is the run's build cache resolved once, plus "gradle": the build cache is a folder Agentium made before the
-// agent started, and the agent cannot replace it (the sandbox lets it write inside the folder, not in its parent), but
-// it can replace <buildCache>/gradle, so that is checked not to be a link. When the machine cannot tell
-// what a process has open (no lsof), nothing is signalled and the error says so. Nothing in the checkout is run: the
-// agent may have changed gradlew.
+// buildCache is the run's build cache RESOLVED ONCE, by the caller, before the agent started: the sandbox lets the
+// agent write the build cache path itself, so afterwards it could move the folder away and put a link to another run's
+// folder, or to the user's Gradle home, in its place. So this touches no file-system state at stop time: lsof reports
+// real paths, and they are compared textually with the pre-resolved root. A daemon the agent moved elsewhere (its own
+// -Dgradle.user.home, or a renamed log) is not found, like a daemon that left the process group with setsid: a known
+// limitation, not a way to kill anything. When the machine cannot tell what a process has open (no lsof), nothing is
+// signalled and the error says so. Nothing in the checkout is run: the agent may have changed gradlew.
 func stopGradleDaemons(ctx context.Context, buildCache string, host Host) error {
-	resolved, err := filepath.EvalSymlinks(buildCache)
-	if err != nil {
-		return nil // no build cache: nothing ran
-	}
-	root := filepath.Join(resolved, "gradle")
-	if info, err := os.Lstat(root); err != nil || !info.IsDir() {
-		return nil // no Gradle home, or one the agent replaced with a link or a file: no daemon of this run's is there
-	}
+	root := filepath.Join(buildCache, "gradle")
 	pids, err := host.Daemons(ctx)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, pid := range pids {
-		open, err := host.OpenFiles(ctx, pid)
-		if err != nil {
-			errs = append(errs, err)
-			continue
+		holds := func(ctx context.Context) (bool, error) {
+			open, err := host.OpenFiles(ctx, pid)
+			wanted := "daemon-" + strconv.Itoa(pid) + ".out.log"
+			return slices.ContainsFunc(open, func(f string) bool { return daemonLog(root, f, wanted) }), err
 		}
-		wanted := "daemon-" + strconv.Itoa(pid) + ".out.log"
-		if slices.ContainsFunc(open, func(f string) bool { return daemonLog(root, f, wanted) }) {
-			host.terminate(ctx, pid)
+		if ok, err := holds(ctx); err != nil {
+			errs = append(errs, err)
+		} else if ok {
+			// The match is repeated just before SIGKILL, with a context of its own: the pid may have been reused.
+			host.terminate(ctx, pid, func() bool {
+				again, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				defer cancel()
+				ok, err := holds(again)
+				return ok && err == nil
+			})
 		}
 	}
 	return errors.Join(errs...)

@@ -52,7 +52,7 @@ func NeedsLocalBinding(ctx context.Context, bare string, commits []string) (bool
 // and denied to agents besides (buildtool.DepsDenied). One folder per project (the bare
 // repository's folder name), shared by its tasks and runs; it only grows.
 func (env Env) depsFolder() string {
-	if env.Layout.Deps == "" {
+	if env.Layout.Deps == "" || env.Layout.Cache == "" { // warm-up state lives in the cache, which agents cannot read
 		return ""
 	}
 	key := "default"
@@ -62,6 +62,10 @@ func (env Env) depsFolder() string {
 	return filepath.Join(env.Layout.Deps, key)
 }
 
+// errWarmWait means a run waited out the warm-up lock and its dependencies are not warmed: the run ends as an
+// infrastructure failure, without cloning anything, so it is retried or left out and never counted against an arm.
+var errWarmWait = errors.New("dependencies not warmed")
+
 // DefaultWarmWait is how long a run waits for another warm-up of the same project before it goes on without warming.
 const DefaultWarmWait = 15 * time.Minute
 
@@ -69,9 +73,6 @@ const DefaultWarmWait = 15 * time.Minute
 // the deps folder, which they can read, an agent could hold the lock (flock works on a read-only open) and stall every
 // later warm-up, or plant stamps that make warm-ups skip.
 func (env Env) warmState(deps string) string {
-	if env.Layout.Cache == "" {
-		return filepath.Join(os.TempDir(), "agentium-warm-state", filepath.Base(deps))
-	}
 	return filepath.Join(env.Layout.Cache, "warm-state", filepath.Base(deps))
 }
 
@@ -108,9 +109,6 @@ func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile
 		return "", nil // warmed already: no checkout needed (warmTools checks again under the lock)
 	}
 	parent := filepath.Join(env.Layout.Cache, "warm")
-	if env.Layout.Cache == "" {
-		parent = os.TempDir()
-	}
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", fmt.Errorf("warm-up checkout: %w", err)
 	}
@@ -128,7 +126,7 @@ func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile
 }
 
 // warmTools runs the warm-up steps in the checkout. Runs that may overlap wait for each other here (a lock file in
-// warmState, up to Env.WarmWait, else DefaultWarmWait; a run that waits in vain goes on, with a note), so two warm-ups never write one dependency cache together; a stamp per base commit and tool set skips
+// warmState, up to Env.WarmWait, else DefaultWarmWait; a run that waits in vain ends as an infrastructure failure, errWarmWait), so two warm-ups never write one dependency cache together; a stamp per base commit and tool set skips
 // repeats. Agents of other runs may read the folder meanwhile, so a warm-up must leave what they read stable: it adds
 // files, and the Gradle profile turns the user home's cache cleanup off, which would delete them.
 func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles []buildtool.Profile, names []string, steps []buildtool.WarmStep, logPath string, running func(pid int)) (string, error) {
@@ -144,7 +142,7 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	cancel()
 	switch {
 	case err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded):
-		return fmt.Sprintf("another warm-up of the dependencies held the lock for %s: this run went on without warming", wait), nil
+		return "", fmt.Errorf("%w: another warm-up of the dependencies held the lock for %s and this base commit is not warmed", errWarmWait, wait)
 	case err != nil:
 		return "", fmt.Errorf("warm-up lock: %w", err)
 	}

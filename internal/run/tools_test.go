@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -10,12 +11,13 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 )
 
 func TestDepsFolderIsPerProjectOutsideTheDeniedFolders(t *testing.T) {
-	env := Env{Layout: home.Layout{Root: "/data", Deps: "/data/deps"}, Bare: "/data/projects/7/repo.git"}
+	env := Env{Layout: home.Layout{Root: "/data", Deps: "/data/deps", Cache: "/data/cache"}, Bare: "/data/projects/7/repo.git"}
 	got := env.depsFolder()
 	if got != "/data/deps/7" {
 		t.Errorf("deps folder %s", got)
@@ -34,7 +36,10 @@ func TestDepsFolderIsPerProjectOutsideTheDeniedFolders(t *testing.T) {
 	if (Env{Layout: home.Layout{Root: "/data"}}).depsFolder() != "" {
 		t.Error("a layout without a deps folder names one")
 	}
-	if got := (Env{Layout: home.Layout{Deps: "/data/deps"}}).depsFolder(); got != "/data/deps/default" {
+	if (Env{Layout: home.Layout{Deps: "/data/deps"}}).depsFolder() != "" {
+		t.Error("a deps folder without a cache folder for the warm-up state")
+	}
+	if got := (Env{Layout: home.Layout{Deps: "/data/deps", Cache: "/data/cache"}}).depsFolder(); got != "/data/deps/default" {
 		t.Errorf("without a bare repository: %s", got)
 	}
 }
@@ -216,7 +221,7 @@ func TestGradingKnowsMavenGradleAndCargo(t *testing.T) {
 	}
 }
 
-// A warm-up that waits for another one gives up after the bound, goes on with a note, and does not touch the stamp; one
+// A warm-up that waits for another one gives up after the bound with errWarmWait (the run ends as an infrastructure failure) and does not touch the stamp; one
 // already stamped skips even the checkout (the bare repository here does not exist, so a checkout would fail).
 func TestWarmWaitIsBoundedAndStampedSkipsTheCheckout(t *testing.T) {
 	dir := t.TempDir()
@@ -236,7 +241,7 @@ func TestWarmWaitIsBoundedAndStampedSkipsTheCheckout(t *testing.T) {
 	steps := []buildtool.WarmStep{{Command: "touch " + filepath.Join(dir, "ran")}}
 	start := time.Now()
 	note, err := env.warmTools(context.Background(), dir, deps, "c1", buildtool.Select([]string{"cargo"}), []string{"cargo"}, steps, filepath.Join(dir, "log"), func(int) {})
-	if err != nil || !strings.Contains(note, "another warm-up") || time.Since(start) > 10*time.Second {
+	if !errors.Is(err, errWarmWait) || note != "" || time.Since(start) > 10*time.Second {
 		t.Errorf("a bounded wait: %q, %v, after %v", note, err, time.Since(start))
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ran")); err == nil {
@@ -256,5 +261,34 @@ func TestWarmWaitIsBoundedAndStampedSkipsTheCheckout(t *testing.T) {
 	}
 	if note, err := env.warmInThrowaway(context.Background(), buildtool.Select([]string{"cargo"}), deps, "c1", filepath.Join(dir, "log"), func(int) {}); err != nil || note != "" {
 		t.Errorf("a stamped warm-up: %q, %v", note, err)
+	}
+}
+
+// A run whose warm-up wait timed out clones nothing and is not counted against its arm: prepareTools returns errWarmWait
+// before the Gradle home gets the wrapper distribution (Once then ends the run as an infrastructure failure).
+func TestWaitedOutWarmUpClonesNothing(t *testing.T) {
+	ctx := context.Background()
+	bare, base := bareWith(t, map[string]string{"build.gradle": ""})
+	data := t.TempDir()
+	deps, run := filepath.Join(data, "deps", "1"), filepath.Join(data, "ws", "go-build")
+	if err := os.MkdirAll(filepath.Join(deps, "gradle", "wrapper", "dists", "d"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, Bare: bare, WarmWait: 200 * time.Millisecond, VerifyTimeout: 10 * time.Second}
+	if err := os.MkdirAll(env.warmState(deps), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := lockFile(ctx, filepath.Join(env.warmState(deps), "lock"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	inv := claude.Invocation{Deps: deps, BuildCache: run}
+	_, err = env.prepareTools(ctx, buildtool.Select([]string{"gradle"}), inv, base, filepath.Join(data, "log"), func(int) {})
+	if !errors.Is(err, errWarmWait) {
+		t.Fatalf("prepareTools: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(run, "gradle")); err == nil {
+		t.Error("the run's Gradle home was made, wrapper clone included, for a run that cannot be fair")
 	}
 }

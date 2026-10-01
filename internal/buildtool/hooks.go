@@ -103,7 +103,7 @@ type Host struct {
 func SystemHost() Host {
 	return Host{
 		Daemons: func(ctx context.Context) ([]int, error) {
-			out, err := exec.CommandContext(ctx, "ps", "-u", strconv.Itoa(os.Getuid()), "-o", "pid=,command=").Output()
+			out, err := exec.CommandContext(ctx, tool("ps", "/bin/ps", "/usr/bin/ps"), "-ww", "-u", strconv.Itoa(os.Getuid()), "-o", "pid=,command=").Output()
 			if err != nil {
 				return nil, fmt.Errorf("ps: %w", err)
 			}
@@ -117,7 +117,7 @@ func SystemHost() Host {
 			return pids, nil
 		},
 		OpenFiles: func(ctx context.Context, pid int) ([]string, error) {
-			out, err := exec.CommandContext(ctx, "lsof", "-w", "-p", strconv.Itoa(pid), "-Fn").Output()
+			out, err := exec.CommandContext(ctx, tool("lsof", "/usr/sbin/lsof", "/usr/bin/lsof"), "-w", "-p", strconv.Itoa(pid), "-Fn").Output()
 			if err != nil && len(out) == 0 {
 				return nil, fmt.Errorf("lsof -p %d: %w", pid, err)
 			}
@@ -134,19 +134,36 @@ func SystemHost() Host {
 	}
 }
 
+// tool is the first of the absolute paths that exists: ps and lsof are never taken from PATH, which the user's
+// environment (or a repository's direnv) may have pointed at something else, and Agentium runs them with the user's
+// rights. When none exists, the command fails with a name that says which tool is missing.
+func tool(name string, paths ...string) string {
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil && info.Mode().IsRegular() {
+			return p
+		}
+	}
+	return "/nonexistent/" + name
+}
+
 // terminate asks a process to end, then kills it after the grace period (or at once when ctx ends).
-func (h Host) terminate(ctx context.Context, pid int) {
+func (h Host) terminate(ctx context.Context, pid int, stillTheSame func() bool) {
 	if h.Signal(pid, syscall.SIGTERM) != nil {
 		return
+	}
+	kill := func() {
+		if stillTheSame() { // the pid may belong to another process by now
+			h.Signal(pid, syscall.SIGKILL)
+		}
 	}
 	deadline := time.After(h.Grace)
 	for {
 		select {
 		case <-deadline:
-			h.Signal(pid, syscall.SIGKILL)
+			kill()
 			return
 		case <-ctx.Done():
-			h.Signal(pid, syscall.SIGKILL)
+			kill()
 			return
 		case <-time.After(50 * time.Millisecond):
 			if h.Signal(pid, 0) != nil {

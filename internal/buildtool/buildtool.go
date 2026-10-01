@@ -368,13 +368,19 @@ func ProjectCaches(root string) []string {
 }
 
 // DepsDenied are the folders under deps agents may not read: build caches, which hold compiled classes (a later task's
-// base holds earlier tasks' reference code and hidden tests). The read-only dependency cache needs only modules-2, and
-// the warm-ups run with every build cache off, so these should be empty or absent: this is the second line. Existing
-// numbered Gradle build caches are listed too.
+// base holds earlier tasks' reference code and hidden tests), and everything else in Gradle's caches folder but
+// modules-2. The warm-ups run with every build cache off, so these should be empty or absent: this is the second line.
 func DepsDenied(deps string) []string {
 	paths := []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "build-cache")}
-	found, _ := filepath.Glob(filepath.Join(deps, "gradle", "caches", "build-cache-*"))
-	return append(paths, found...)
+	// GRADLE_RO_DEP_CACHE reads only caches/modules-2: whatever else a Gradle home keeps there (transforms, generated
+	// jars, build caches) is denied, as far as it exists when the run starts.
+	found, _ := filepath.Glob(filepath.Join(deps, "gradle", "caches", "*"))
+	for _, f := range found {
+		if filepath.Base(f) != "modules-2" {
+			paths = append(paths, f)
+		}
+	}
+	return paths
 }
 
 // EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.

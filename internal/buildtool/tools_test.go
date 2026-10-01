@@ -124,7 +124,7 @@ func TestAgentEnvPerTool(t *testing.T) {
 	}
 	cargo := env(t, AgentEnv(Select([]string{"cargo"}), ctx))
 	for name, want := range map[string]string{"CARGO_HOME": "/data/deps/1/cargo", "CARGO_NET_OFFLINE": "true", "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
-		"CARGO_TARGET_DIR": "/data/workspaces/r1/repo/target"} {
+		"CARGO_TARGET_DIR": "/data/workspaces/r1/repo/target", "CARGO_BUILD_BUILD_DIR": "/data/workspaces/r1/repo/target"} {
 		if v, ok := cargo[name]; !ok || v != want {
 			t.Errorf("cargo: %s = %q (set %v), want %q", name, v, ok, want)
 		}
@@ -374,7 +374,7 @@ func TestStopGradleDaemons(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cache, "gradle", "daemon", "9.7.1", "daemon-5000.out.log"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err != nil {
 		t.Fatal(err)
 	}
 	if h.alive[4242] || !h.alive[5000] || !h.alive[6000] || !h.alive[7000] {
@@ -385,7 +385,7 @@ func TestStopGradleDaemons(t *testing.T) {
 	}
 	// A daemon that ignores SIGTERM is killed after the grace period.
 	h = &stopHost{daemons: []int{4242}, open: map[int][]string{4242: {log(4242)}}, alive: map[int]bool{4242: true}, ignores: map[int]bool{4242: true}}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err != nil {
 		t.Fatal(err)
 	}
 	if h.alive[4242] || !slices.Equal(h.signals, []string{"4242:terminated", "4242:killed"}) {
@@ -393,37 +393,80 @@ func TestStopGradleDaemons(t *testing.T) {
 	}
 	// A machine that cannot tell what a process has open (no lsof) is not trusted: nothing is signalled, and it is said.
 	h = &stopHost{daemons: []int{4242}, alive: map[int]bool{4242: true}}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err == nil || len(h.signals) != 0 {
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err == nil || len(h.signals) != 0 {
 		t.Errorf("without lsof: error %v, signals %v", err, h.signals)
 	}
-	// No Gradle home, no error.
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), t.TempDir(), h.host()); err != nil {
+	// No daemons, no error.
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), t.TempDir(), (&stopHost{}).host()); err != nil {
 		t.Errorf("a run without daemons: %v", err)
 	}
 }
 
-// The agent can replace <buildCache>/gradle with a link to the user's Gradle home, or to another run's: the stop then
-// signals nothing, even for a daemon that really holds a log in the folder the link points to.
-func TestStopGradleDaemonsIgnoresAReplacedHome(t *testing.T) {
-	userHome, userLog := gradleHome(t) // stands for ~/.gradle: <userHome>/gradle/daemon/9.7.1
-	cache := t.TempDir()
-	if err := os.Symlink(filepath.Join(userHome, "gradle"), filepath.Join(cache, "gradle")); err != nil {
+// The sandbox lets the agent write the build cache path itself, so mid-run it can move the folder away and put a link to
+// another run's folder (or the user's Gradle home) in its place. StopRun gets the path resolved BEFORE the agent started
+// and touches no file-system state, so a daemon holding a log in the linked-to folder is not signalled, and one holding
+// a log under the real path still is.
+func TestStopGradleDaemonsIgnoresAReplacedBuildCache(t *testing.T) {
+	cache, log := gradleHome(t)
+	resolved := mustReal(t, cache) // what Once resolves right after making the folder
+	otherCache, otherLog := gradleHome(t)
+	// The agent: mv <ws>/go-build into the checkout, then ln -s <another run's> <ws>/go-build.
+	moved := filepath.Join(t.TempDir(), "moved")
+	if err := os.Rename(cache, moved); err != nil {
 		t.Fatal(err)
 	}
-	h := &stopHost{daemons: []int{4242}, open: map[int][]string{4242: {userLog(4242)}}, alive: map[int]bool{4242: true}}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
+	if err := os.Symlink(otherCache, cache); err != nil {
 		t.Fatal(err)
 	}
-	if !h.alive[4242] || len(h.signals) != 0 {
-		t.Errorf("a daemon of the folder the agent linked to was signalled: %v", h.signals)
-	}
-	// A plain file in its place too.
-	other := t.TempDir()
-	if err := os.WriteFile(filepath.Join(other, "gradle"), nil, 0o600); err != nil {
+	h := &stopHost{daemons: []int{4242, 5000}, open: map[int][]string{4242: {otherLog(4242)}, 5000: {log(5000)}},
+		alive: map[int]bool{4242: true, 5000: true}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), resolved, h.host()); err != nil {
 		t.Fatal(err)
 	}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), other, h.host()); err != nil || len(h.signals) != 0 {
-		t.Errorf("a file for a Gradle home: %v %v", err, h.signals)
+	if !h.alive[4242] {
+		t.Error("a daemon of the folder the agent linked to was signalled")
+	}
+	if h.alive[5000] || !slices.Equal(h.signals, []string{"5000:terminated"}) {
+		t.Errorf("the run's own daemon (its log under the pre-resolved path): alive %v, signals %v", h.alive, h.signals)
+	}
+	// The user's own Gradle home, even named like the run's (".../gradle"), is just another path.
+	h = &stopHost{daemons: []int{6000}, open: map[int][]string{6000: {"/home/u/.gradle/daemon/9.7.1/daemon-6000.out.log"}}, alive: map[int]bool{6000: true}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), resolved, h.host()); err != nil || !h.alive[6000] {
+		t.Errorf("the user's daemon: %v, alive %v", err, h.alive)
+	}
+}
+
+// A pid reused between the first check and SIGKILL is not killed: the match is repeated before it.
+func TestStopGradleDaemonsRechecksBeforeKilling(t *testing.T) {
+	cache, log := gradleHome(t)
+	h := &stopHost{daemons: []int{4242}, open: map[int][]string{4242: {log(4242)}}, alive: map[int]bool{4242: true}, ignores: map[int]bool{4242: true}}
+	host := h.host()
+	calls := 0
+	host.OpenFiles = func(_ context.Context, pid int) ([]string, error) {
+		calls++
+		if calls == 1 {
+			return []string{log(pid)}, nil
+		}
+		return []string{"/usr/lib/other"}, nil // the pid is somebody else's now
+	}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), host); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(h.signals, []string{"4242:terminated"}) || calls != 2 {
+		t.Errorf("signals %v after %d checks: SIGKILL must wait for a second match", h.signals, calls)
+	}
+}
+
+// ps and lsof come from fixed absolute paths, never from PATH.
+func TestToolsAreAbsolute(t *testing.T) {
+	if got := tool("lsof", "/nonexistent/a", "/nonexistent/b"); got != "/nonexistent/lsof" {
+		t.Errorf("a missing tool: %s", got)
+	}
+	if got := tool("sh", "/nonexistent/a", "/bin/sh"); got != "/bin/sh" {
+		t.Errorf("an existing tool: %s", got)
+	}
+	if ps := tool("ps", "/bin/ps", "/usr/bin/ps"); !filepath.IsAbs(ps) {
+		t.Errorf("ps: %s", ps)
 	}
 }
 
@@ -436,7 +479,7 @@ func TestStopGradleDaemonsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if err := StopRun(ctx, Select([]string{"gradle"}), cache, host); err != nil || h.alive[100] || time.Since(start) > 5*time.Second {
+	if err := StopRun(ctx, Select([]string{"gradle"}), mustReal(t, cache), host); err != nil || h.alive[100] || time.Since(start) > 5*time.Second {
 		t.Errorf("a cancelled stop: %v, alive %v, after %v", err, h.alive, time.Since(start))
 	}
 }
@@ -522,6 +565,20 @@ func TestCargoTargetDirectories(t *testing.T) {
 			t.Errorf("case %d: %s is not denied: %q", i, want, got)
 		}
 	}
+	// build-dir (cargo 1.95 puts test executables there), in any of the forms, and the cache home's default build/.
+	for i, c := range []struct{ config, want string }{
+		{"[build]\nbuild-dir = \"/builds/out\"\n", "/builds/out"},
+		{"build.build-dir = '/dotted/builds' # x\n", "/dotted/builds"},
+		{"[build]\nbuild-dir = \"{cargo-cache-home}/build/{workspace-path-hash}\"\n", filepath.Join(home, "{cargo-cache-home}/build/{workspace-path-hash}")},
+	} {
+		write(filepath.Join(home, ".cargo", "config.toml"), c.config)
+		if got := UserCaches(nil, home); !slices.Contains(got, c.want) {
+			t.Errorf("build-dir case %d: %s is not denied: %q", i, c.want, got)
+		}
+	}
+	if got := UserCaches([]string{"CARGO_BUILD_BUILD_DIR=/env/builds"}, home); !slices.Contains(got, "/env/builds") || !slices.Contains(got, filepath.Join(home, ".cargo", "build")) {
+		t.Errorf("the environment's build dir and the cargo cache home's build/: %q", got)
+	}
 	// Garbage is not a reason to deny less.
 	write(filepath.Join(home, ".cargo", "config.toml"), "[build\ntarget-dir = \"/after/garbage\"\n\x00\x01")
 	if got := UserCaches(nil, home); !slices.Contains(got, "/after/garbage") {
@@ -533,7 +590,7 @@ func TestCargoTargetDirectories(t *testing.T) {
 	write(filepath.Join(cargoHome, "config"), "[build]\ntarget-dir = \"/oldname/target\"\n")
 	write(filepath.Join(filepath.Dir(home), ".cargo", "config.toml"), "[build]\ntarget-dir = \"/above/target\"\n")
 	got := UserCaches([]string{"CARGO_HOME=" + cargoHome, "CARGO_BUILD_TARGET_DIR=/env/target"}, home)
-	for _, want := range []string{"/oldname/target", "/env/target"} {
+	for _, want := range []string{"/oldname/target", "/env/target", "/above/target"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("%s is not denied: %q", want, got)
 		}
@@ -586,11 +643,14 @@ func TestBuildCachesAreOffAndDenied(t *testing.T) {
 			t.Errorf("a Maven warm-up with the build cache extension on: %q", step.Command)
 		}
 	}
-	if err := os.MkdirAll(filepath.Join(deps, "gradle", "caches", "build-cache-2"), 0o755); err != nil {
-		t.Fatal(err)
+	for _, d := range []string{"build-cache-2", "jars-9", "modules-2"} {
+		if err := os.MkdirAll(filepath.Join(deps, "gradle", "caches", d), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	denied := DepsDenied(deps)
-	for _, want := range []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "gradle", "caches", "build-cache-2"), filepath.Join(deps, "build-cache")} {
+	for _, want := range []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "gradle", "caches", "build-cache-2"), filepath.Join(deps, "build-cache"),
+		filepath.Join(deps, "gradle", "caches", "jars-9")} { // everything but modules-2, which GRADLE_RO_DEP_CACHE reads
 		if !slices.Contains(denied, want) {
 			t.Errorf("%s is not denied: %q", want, denied)
 		}
@@ -608,5 +668,57 @@ func TestMavenWarmUpNamesOnlyJavaIdentifiers(t *testing.T) {
 		if len(steps) != 1 || !strings.Contains(steps[0].Command, want) {
 			t.Errorf("%s: %q", file, steps)
 		}
+	}
+}
+
+// A Cargo config that cannot be read within bounds stops a Cargo run (fail closed: skipping it would deny too little);
+// ordinary and missing configs are fine.
+func TestCheckConfigsFailsClosed(t *testing.T) {
+	home, root := t.TempDir(), filepath.Join(t.TempDir(), "app")
+	if err := os.MkdirAll(filepath.Join(root, ".cargo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckConfigs(nil, home, root); err != nil {
+		t.Fatalf("no configs: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, ".cargo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".cargo", "config.toml"), []byte("[build]\njobs = 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckConfigs(nil, home, root); err != nil {
+		t.Fatalf("an ordinary config: %v", err)
+	}
+	// Over the bound.
+	big := filepath.Join(root, ".cargo", "config.toml")
+	if err := os.WriteFile(big, make([]byte, maxConfigBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckConfigs(nil, home, root); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an oversized config: %v", err)
+	}
+	if got := ProjectCaches(root); got != nil {
+		t.Errorf("an oversized config is read: %q", got)
+	}
+	// Not a regular file: a FIFO would block a reader forever, so it is refused without being opened.
+	if err := os.Remove(big); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(big, 0o600); err != nil {
+		t.Skipf("no FIFOs here: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- CheckConfigs(nil, home, root) }()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Errorf("a FIFO: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a FIFO config blocks")
+	}
+	if _, err := readConfig("/dev/zero"); err == nil {
+		t.Error("/dev/zero is read")
 	}
 }
