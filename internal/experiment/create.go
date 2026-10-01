@@ -151,7 +151,7 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		armB.Model, armB.Effort, armB.RunBudgetUSD = o.profB.model, o.profB.effort, o.RunBudgetB
 		model, effort = armA.Model, armA.Effort
 	}
-	d := Design{Version: DesignVersion, Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
+	d := Design{Version: Design{Template: o.Template}.WantVersion(), Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
 		Goal: o.Goal, CostMargin: DefaultCostMargin, SuccessMargin: DefaultSuccessMargin, RunBudgetUSD: o.RunBudget,
 		BudgetUSD: o.Budget, Timeout: o.Timeout, VerifyTimeout: o.VerifyTimeout, Concurrency: o.Concurrency, Seed: o.Seed}
 	if o.Judge {

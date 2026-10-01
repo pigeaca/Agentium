@@ -79,7 +79,7 @@ func TestModelABDesignIsValidated(t *testing.T) {
 		"--task", "value", "--repeats", "1"), ExitOK, "model A/B on context lean, A = claude-opus-5-5:medium, B = claude-opus-5-5:high")
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "model-ab", "base / base", "claude-sonnet-5 / claude-opus-5-5:high", "lean / lean")
 	d := loadDesign(t, f, "m")
-	if d.Arms[0].Model != sonnet || d.Arms[0].Effort != "" || d.Arms[1].Model != opus || d.Arms[1].Effort != "high" || d.Model != sonnet {
+	if d.Arms[0].Model != sonnet || d.Arms[0].Effort != "" || d.Arms[1].Model != opus || d.Arms[1].Effort != "high" || d.Model != sonnet || d.Version != 2 {
 		t.Errorf("arms %+v, model %q", d.Arms, d.Model)
 	}
 }
@@ -169,6 +169,11 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 	// A calibration on the other model is none for this one; once there, the arm is ready, and the base's other
 	// calibration is untouched.
 	calibrateOn(t, f, ctrl, opus)
+	// The newest calibration is now on Opus, but a Sonnet context A/B still finds its own.
+	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--task", "value"), ExitOK)
+	if ctxPlan := f.run(ctx, "experiment", "plan", "ctx"); strings.Contains(ctxPlan.stdout, "MISSING") || !strings.Contains(ctxPlan.stdout, "ok       context base calibrated") {
+		t.Errorf("a Sonnet experiment must keep its calibration:\n%s", ctxPlan.stdout)
+	}
 	ready := f.run(ctx, "experiment", "plan", "m")
 	expect(t, ready, ExitOK, "ok       context base calibrated on claude-opus-5-5", "ok       context base calibrated on claude-sonnet-5")
 	if strings.Contains(ready.stdout, "MISSING") {
@@ -258,4 +263,36 @@ func TestModelABRefusesToRunUncalibrated(t *testing.T) {
 	if len(experimentRuns(t, f, "m")) != 0 {
 		t.Error("an uncalibrated experiment ran")
 	}
+}
+
+// Arm caps that are equal but below --run-budget run to completion within the budget.
+func TestModelABEqualArmCapsRun(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	calibrateOn(t, f, ctrl, opus)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "2", "--seed", "5",
+		"--run-budget-a", "1", "--run-budget-b", "1", "--budget", "4"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "m"), ExitOK, "each run up to $1.00 and", "Experiment m: done", "4 of 4 runs settled")
+}
+
+// An effort-only comparison gets one estimate per effort once earlier runs record theirs; runs without an effort
+// (made before it was recorded) still estimate by model.
+func TestModelABEstimatesByEffort(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	id := taskIDs(t, f)["value"]
+	var runs []store.Run
+	for range 3 {
+		for effort, cost := range map[string]float64{"medium": 1, "high": 3} {
+			runs = append(runs, store.Run{TaskID: id, TaskName: "value", Outcome: "ok", CostUSD: cost,
+				Record: []byte(`{"model":"` + opus + `","effort":"` + effort + `","metrics":{"saw_result":true}}`)})
+		}
+	}
+	saveRuns(t, f, runs...)
+	expect(t, f.run(ctx, "experiment", "new", "e", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
+		"--budget", "40"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "plan", "e"), ExitOK, "value $1.00 (3 run(s))", "value $3.00 (3 run(s))", "$4.00",
+		"not split by model or effort")
 }

@@ -207,13 +207,15 @@ func Same(e Estimate) ArmEstimates { return ArmEstimates{e, e} }
 func (e ArmEstimates) DesignUSD(d Design) (float64, bool) {
 	total := 0.0
 	for _, t := range d.Tasks {
+		pair := 0.0 // a repeat's two runs: a shared estimate gives 2p, so the sum is p × 2R as it always was
 		for _, arm := range e {
 			perRun, ok := arm.TaskUSD(t)
 			if !ok {
 				return 0, false
 			}
-			total += perRun * float64(d.Repeats)
+			pair += perRun
 		}
+		total += pair * float64(d.Repeats)
 	}
 	return total, true
 }

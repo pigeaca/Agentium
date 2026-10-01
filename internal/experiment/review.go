@@ -79,6 +79,9 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
 		"below them a metric is exploratory.\n", MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
 	WriteUsagePreview(out, st, r.Runs, 2*len(d.Tasks)*d.Repeats, signIn, DefaultUsageLimit/100, now)
+	if d.PerArmProfiles() {
+		fmt.Fprintln(out, st.Note("The usage figures above are not split by model or effort: they are measured over all earlier runs, and a larger model\nuses more of the window per run."))
+	}
 	if !r.Readiness.Ready {
 		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}

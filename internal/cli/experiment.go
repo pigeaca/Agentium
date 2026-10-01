@@ -92,7 +92,7 @@ func runExperiment(ctx context.Context, env Env, args []string) int {
 func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment new", flag.ContinueOnError)
 	var o experiment.NewOptions
-	fs.StringVar(&o.Template, "template", experiment.TemplateContextAB, "context-ab or aa")
+	fs.StringVar(&o.Template, "template", experiment.TemplateContextAB, "context-ab, aa or model-ab")
 	var a, b, contextName string
 	fs.StringVar(&a, "a", "", "arm A's context: base (default) or a snapshot; with model-ab, its MODEL[:EFFORT]")
 	fs.StringVar(&b, "b", "", "arm B's context: a snapshot (context-ab only); with model-ab, its MODEL[:EFFORT]")

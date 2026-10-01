@@ -18,7 +18,58 @@ func modelAB() Design {
 	d.Template = TemplateModelAB
 	d.Arms = []Arm{{Name: "A", Context: BaseContext, Model: "claude-sonnet-5"}, {Name: "B", Context: BaseContext, Model: "claude-opus-5-5", Effort: "high"}}
 	d.Model = "claude-sonnet-5"
+	d.Version = DesignVersionModelAB
 	return d
+}
+
+// A model-ab design is stored as version 2, so an older Agentium refuses it; context designs stay at version 1.
+func TestModelABDesignVersion(t *testing.T) {
+	if modelAB().WantVersion() != 2 || validDesign().WantVersion() != 1 {
+		t.Error("versions")
+	}
+	d := modelAB()
+	d.Version = DesignVersion
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "design version 1 (this Agentium writes 2 for a model-ab experiment)") {
+		t.Errorf("a model-ab design at version 1: %v", err)
+	}
+	c := validDesign()
+	c.Version = DesignVersionModelAB
+	if err := c.Validate(); err == nil {
+		t.Error("a context design at version 2 validates")
+	}
+}
+
+func TestEffortsIsAFreshSlice(t *testing.T) {
+	e := Efforts()
+	e[0] = "changed"
+	if Efforts()[0] != "low" {
+		t.Error("Efforts shares its slice")
+	}
+}
+
+// Arm caps that are equal but differ from the design's run budget are what the runs reserve.
+func TestEqualArmCapsBelowTheRunBudget(t *testing.T) {
+	d := modelAB()
+	d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 1, 4
+	if d.RunCapUSD() != 1 || d.PairCapUSD() != 2 || Reserve(d) != 3 {
+		t.Errorf("run cap %v, pair %v, reserve %v; want 1, 2, 3", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
+	}
+	if err := d.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if caps := armCaps(d); caps["A"] != 1 || caps["B"] != 1 {
+		t.Errorf("armCaps = %v", caps)
+	}
+	if armCaps(validDesign()) != nil {
+		t.Error("a context design has no arm caps")
+	}
+	d.Tasks, d.Repeats = []string{"a", "b"}, 1
+	slots := Schedule(d)
+	f := &fake{}
+	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: d.RunCapUSD(), ArmCapUSD: armCaps(d), BudgetUSD: 4, MaxAttempts: 3}, f.run)
+	if err != nil || sum.Status != StatusDone || sum.Settled != 4 {
+		t.Errorf("summary %+v, %v", sum, err)
+	}
 }
 
 func TestParseProfile(t *testing.T) {

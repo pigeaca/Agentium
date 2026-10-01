@@ -359,8 +359,11 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
 	}
 	runCap := fmt.Sprintf("$%.2f", design.RunBudgetUSD)
-	if design.PerArmProfiles() && design.ArmRunBudgetUSD(design.Arms[0]) != design.ArmRunBudgetUSD(design.Arms[1]) {
-		runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), design.ArmRunBudgetUSD(design.Arms[1]))
+	if design.PerArmProfiles() {
+		runCap = fmt.Sprintf("$%.2f", design.ArmRunBudgetUSD(design.Arms[0]))
+		if capB := design.ArmRunBudgetUSD(design.Arms[1]); capB != design.ArmRunBudgetUSD(design.Arms[0]) {
+			runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), capB)
+		}
 	}
 	fmt.Fprintf(out, "Running up to %d at a time; each run up to %s%s and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
 		design.Concurrency, runCap, judging, design.Timeout, design.BudgetUSD)
@@ -698,9 +701,10 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 	return l, nil
 }
 
-// armCaps is each arm's run cap by name, or nil when the arms share one (every context experiment).
+// armCaps is each arm's run cap by name for a model-ab experiment (even equal ones: they may all differ from the
+// design's RunBudgetUSD), and nil for a context experiment, whose arms share the design's.
 func armCaps(d Design) map[string]float64 {
-	if len(d.Arms) != 2 || d.ArmRunCapUSD(d.Arms[0]) == d.ArmRunCapUSD(d.Arms[1]) {
+	if len(d.Arms) != 2 || !d.PerArmProfiles() {
 		return nil
 	}
 	return map[string]float64{d.Arms[0].Name: d.ArmRunCapUSD(d.Arms[0]), d.Arms[1].Name: d.ArmRunCapUSD(d.Arms[1])}

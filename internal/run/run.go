@@ -133,6 +133,7 @@ type Record struct {
 	Arm      string         `json:"arm"`
 	Snapshot string         `json:"snapshot,omitempty"`
 	Model    string         `json:"model"`
+	Effort   string         `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
 	SignIn   string         `json:"sign_in"`
 	Outcome  string         `json:"outcome"`          // claude.Outcome*
 	Passed   *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
@@ -210,7 +211,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
-	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)

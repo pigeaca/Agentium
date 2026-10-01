@@ -23,7 +23,8 @@ const (
 )
 
 // Efforts are the effort levels Claude Code's --effort takes; a model-ab arm names one of them or none (the CLI's own).
-var Efforts = []string{"low", "medium", "high", "xhigh", "max"}
+// A fresh slice, so callers cannot change the set.
+func Efforts() []string { return []string{"low", "medium", "high", "xhigh", "max"} }
 
 // Goals pick the primary metric.
 const (
@@ -48,8 +49,20 @@ type Arm struct {
 	RunBudgetUSD float64 `json:"run_budget_usd,omitempty"`
 }
 
-// DesignVersion is the version of Design's stored form.
-const DesignVersion = 1
+// DesignVersion is the version of a context experiment's stored form. A model-ab design is stored as
+// DesignVersionModelAB: an older Agentium, which would run both arms on arm A's model, refuses it.
+const (
+	DesignVersion        = 1
+	DesignVersionModelAB = 2
+)
+
+// WantVersion is the stored version a design of its template carries.
+func (d Design) WantVersion() int {
+	if d.Template == TemplateModelAB {
+		return DesignVersionModelAB
+	}
+	return DesignVersion
+}
 
 // MaxSeed bounds seeds to 53 bits, which JSON numbers carry exactly, even in readers that use doubles (JavaScript, jq).
 const MaxSeed = 1<<53 - 1
@@ -145,8 +158,8 @@ func ParseProfile(s string) (model, effort string, err error) {
 		return "", "", fmt.Errorf("%q names no model (write MODEL or MODEL:EFFORT)", s)
 	case strings.Contains(s, ":") && effort == "":
 		return "", "", fmt.Errorf("%q names no effort after the colon (write MODEL or MODEL:EFFORT)", s)
-	case effort != "" && !slices.Contains(Efforts, effort):
-		return "", "", fmt.Errorf("%q: unknown effort %q (use %s)", s, effort, strings.Join(Efforts, ", "))
+	case effort != "" && !slices.Contains(Efforts(), effort):
+		return "", "", fmt.Errorf("%q: unknown effort %q (use %s)", s, effort, strings.Join(Efforts(), ", "))
 	}
 	return model, effort, nil
 }
@@ -167,7 +180,10 @@ func (d Design) JudgeCapUSD() float64 {
 // RunCapUSD is what one run may spend at most: the agent's cap and its judgement's; the larger of the arms' when they
 // differ. Reserve holds it back for every run in flight, so spending never passes the budget.
 func (d Design) RunCapUSD() float64 {
-	capUSD := d.RunBudgetUSD + d.JudgeCapUSD()
+	if !d.PerArmProfiles() || len(d.Arms) == 0 { // the arms of a model-ab design may all differ from RunBudgetUSD
+		return d.RunBudgetUSD + d.JudgeCapUSD()
+	}
+	capUSD := 0.0
 	for _, a := range d.Arms {
 		capUSD = max(capUSD, d.ArmRunCapUSD(a))
 	}
@@ -194,8 +210,8 @@ func (d Design) JudgeEstimateUSD() float64 {
 // Validate checks that the design is complete and consistent.
 func (d Design) Validate() error {
 	var errs []error
-	if d.Version != DesignVersion {
-		errs = append(errs, fmt.Errorf("design version %d (this Agentium writes %d)", d.Version, DesignVersion))
+	if d.Version != d.WantVersion() {
+		errs = append(errs, fmt.Errorf("design version %d (this Agentium writes %d for a %s experiment)", d.Version, d.WantVersion(), d.Template))
 	}
 	switch d.Template {
 	case TemplateContextAB, TemplateAA, TemplateModelAB:
@@ -283,8 +299,8 @@ func (d Design) validateProfiles() []error {
 		switch {
 		case a.Model == "":
 			errs = append(errs, fmt.Errorf("arm %s: a %s experiment gives each arm a model", a.Name, TemplateModelAB))
-		case a.Effort != "" && !slices.Contains(Efforts, a.Effort):
-			errs = append(errs, fmt.Errorf("arm %s: unknown effort %q (use %s)", a.Name, a.Effort, strings.Join(Efforts, ", ")))
+		case a.Effort != "" && !slices.Contains(Efforts(), a.Effort):
+			errs = append(errs, fmt.Errorf("arm %s: unknown effort %q (use %s)", a.Name, a.Effort, strings.Join(Efforts(), ", ")))
 		case a.RunBudgetUSD < 0:
 			errs = append(errs, fmt.Errorf("arm %s: the run budget must be positive", a.Name))
 		}

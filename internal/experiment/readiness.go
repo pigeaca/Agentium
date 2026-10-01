@@ -133,6 +133,9 @@ func (c *checker) contexts(ctx context.Context, p Project, e ReadinessEnv, d Des
 // calibrated checks arm a's latest calibration; calibrate is the command that makes a new one.
 func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d Design, a Arm, version, calibrate string) {
 	stored, err := p.CalibrationFor(ctx, d, a)
+	if errors.Is(err, store.ErrNotFound) && !d.PerArmProfiles() { // a calibration on another model: say so below
+		stored, err = p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
+	}
 	if errors.Is(err, store.ErrNotFound) {
 		if d.PerArmProfiles() {
 			c.line(false, "context %s is not calibrated on %s (arm %s): %s", a.Context, a.Model, a.Name, calibrate)
