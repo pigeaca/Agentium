@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
@@ -85,22 +86,21 @@ type Env struct {
 	// Agentium process died (its project and experiment slot, say).
 	Meta json.RawMessage
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
-	// own GOCACHE.
+	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
 }
 
 // BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
 // the data folder, which agents may not read, and creates it: in the user's own folders they would leave compiled
-// hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). GOCACHEPROG is
-// cleared so hidden tests go to no cache program (one set with `go env -w` still applies). Caches it does not know
-// (sccache, Gradle's, Bazel's output base) stay where their tools keep them.
+// hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). The build tools'
+// profiles say which variables (buildtool.CommandEnv). Caches no profile knows (sccache, Gradle's, Bazel's output base)
+// stay where their tools keep them.
 func BuildEnv(layout home.Layout) ([]string, error) {
 	tmp := filepath.Join(layout.Cache, "tmp")
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return nil, fmt.Errorf("build cache: %w", err)
 	}
-	return []string{"GOCACHE=" + filepath.Join(layout.Cache, "go-build"), "GOCACHEPROG=", "TMPDIR=" + tmp, "GOTMPDIR=" + tmp,
-		"XDG_CACHE_HOME=" + filepath.Join(layout.Cache, "xdg")}, nil
+	return buildtool.CommandEnv(layout.Cache, tmp), nil
 }
 
 // Record is a finished run.
@@ -228,7 +228,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
-	inv.BuildCache = filepath.Join(workspace, "go-build") // the run's own: nothing compiled before it, nothing after
+	// The run's own build cache: nothing compiled before it, nothing after. Its name predates the build-tool profiles
+	// and stays, so a Go run's folders are unchanged.
+	inv.BuildCache = filepath.Join(workspace, "go-build")
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
 	// reason that is not the agent's.
 	for _, denied := range inv.DeniedPaths(env.Environ) {
@@ -283,7 +285,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		// Setup builds into the agent's own cache, so a warming step (`go build ./...`) spares every agent a cold
 		// build; the workspace holds no hidden tests yet.
 		setup := env
-		setup.CommandEnv = append(slices.Clone(env.CommandEnv), "GOCACHE="+inv.BuildCache)
+		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(inv.BuildCache)...)
 		var ok bool
 		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
@@ -536,10 +538,14 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 				scripts = append(scripts, p)
 			}
 		}
-		runners := map[string][]string{
+		// The build tools' runners come from their profiles; the rest are runners without one.
+		runners := buildtool.RunnerConfigs()
+		for word, files := range map[string][]string{
 			"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
 			"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
-			"go": {"go.mod"}, "cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+			"cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+		} {
+			runners[word] = append(runners[word], files...)
 		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + word + `\b`).MatchString(command) {
@@ -848,9 +854,9 @@ func measure(numstat string, b *Behavior) []string {
 	return paths
 }
 
-// testRunner matches commands that run tests.
-var testRunner = regexp.MustCompile(`\b(go test|pytest|python3? -m (pytest|unittest)|(npm|pnpm|yarn|bun) (run )?test|jest|vitest|` +
-	`cargo test|make test|mvn( -\S+)* test|gradlew? test|rspec|dotnet test|harness\.py check)\b`)
+// testRunner matches commands that run tests: the build tools' patterns from their profiles, then other runners.
+var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(), `pytest|python3? -m (pytest|unittest)|`+
+	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|cargo test|make test|mvn( -\S+)* test|gradlew? test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
 
 func ranTests(commands []string) bool {
 	for _, c := range commands {
