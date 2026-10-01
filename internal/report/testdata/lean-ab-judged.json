@@ -1,0 +1,6424 @@
+{
+  "experiment": "lean-ab-judged",
+  "template": "context-ab",
+  "status": "done",
+  "slots": 60,
+  "settled": 60,
+  "spent_usd": 33.3506,
+  "lock": {
+    "method": "phase1-v2",
+    "agentium": "test",
+    "locked_at": "2026-09-29T12:00:00Z",
+    "claude_code": "2.1.281",
+    "claude_path": "claude",
+    "sign_in": "login",
+    "host": "darwin/arm64",
+    "price_table": "2026-09-29",
+    "design": {
+      "version": 1,
+      "template": "context-ab",
+      "arms": [
+        {
+          "name": "A",
+          "context": "base"
+        },
+        {
+          "name": "B",
+          "context": "lean",
+          "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46"
+        }
+      ],
+      "tasks": [
+        "task-0",
+        "task-1",
+        "task-2",
+        "task-3",
+        "task-4",
+        "task-5",
+        "task-6",
+        "task-7",
+        "task-8",
+        "task-9"
+      ],
+      "repeats": 3,
+      "model": "claude-sonnet-5",
+      "goal": "cheaper",
+      "cost_margin": 0.1,
+      "success_margin": 0.15,
+      "run_budget_usd": 3,
+      "budget_usd": 60,
+      "timeout": 1200000000000,
+      "verify_timeout": 600000000000,
+      "concurrency": 2,
+      "seed": 42,
+      "judge": {
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "repeats": 3
+      }
+    },
+    "arms": [
+      {
+        "name": "A",
+        "context": "base",
+        "calibration": "cal-A",
+        "model": "claude-sonnet-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Read"
+        ],
+        "skills": [
+          "(1 skill)"
+        ],
+        "slash_commands": [
+          "(2 slash commands)"
+        ]
+      },
+      {
+        "name": "B",
+        "context": "lean",
+        "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
+        "calibration": "cal-B",
+        "model": "claude-sonnet-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Read"
+        ],
+        "skills": [
+          "(1 skill)"
+        ],
+        "slash_commands": [
+          "(2 slash commands)"
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "name": "task-0",
+        "instruction": "Fix task-0.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "288848979668e7bf0e7d3bd18266be0de0b5b15916c369dec232c11d7e80b9c4"
+      },
+      {
+        "name": "task-1",
+        "instruction": "Fix task-1.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "e3d695091c055d89cfd1eba3cb5685424f1822ccc0d51d713e1b1eacc7d6076e"
+      },
+      {
+        "name": "task-2",
+        "instruction": "Fix task-2.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "088359131464b331266f8644a271bf79d1cb4e88ebfb9b90a682e43892c85767"
+      },
+      {
+        "name": "task-3",
+        "instruction": "Fix task-3.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "f99af02f48237b5e36524271c4c004fc6bf1bba1664f6a3f8f15411d427046d5"
+      },
+      {
+        "name": "task-4",
+        "instruction": "Fix task-4.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "4f18b87c7b542216ae043bec6ad27c2bfd586a8c65bdc94268c572ad1d9df7e3"
+      },
+      {
+        "name": "task-5",
+        "instruction": "Fix task-5.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "277ca563de71c5b87b9577af1c915bc674b70a57a0711c8713328ed25e5a113d"
+      },
+      {
+        "name": "task-6",
+        "instruction": "Fix task-6.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "a7d326933e08906382f5be0af9b59ebffdc605c7c0eab477b806f2d8d9a87ad9"
+      },
+      {
+        "name": "task-7",
+        "instruction": "Fix task-7.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "dffd178c2e41d21928603f1fc8e73c4f5921b98017d3ac4334ad70b567aaaa1f"
+      },
+      {
+        "name": "task-8",
+        "instruction": "Fix task-8.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go",
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "7e5042a2c623038b0edeb959d22d6a6bd1e879a7108b8971a43915b56f192b7e"
+      },
+      {
+        "name": "task-9",
+        "instruction": "Fix task-9.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value_test.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "digest": "98e840601e383d959838f43fbd2f76d3ee38893d2d954d5c971c8b19e80eca65"
+      }
+    ],
+    "schedule": [
+      {
+        "position": 0,
+        "pair": 0,
+        "task": "task-3",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 1,
+        "pair": 0,
+        "task": "task-3",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 2,
+        "pair": 1,
+        "task": "task-6",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 3,
+        "pair": 1,
+        "task": "task-6",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 4,
+        "pair": 2,
+        "task": "task-9",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 5,
+        "pair": 2,
+        "task": "task-9",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 6,
+        "pair": 3,
+        "task": "task-2",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 7,
+        "pair": 3,
+        "task": "task-2",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 8,
+        "pair": 4,
+        "task": "task-7",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 9,
+        "pair": 4,
+        "task": "task-7",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 10,
+        "pair": 5,
+        "task": "task-8",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 11,
+        "pair": 5,
+        "task": "task-8",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 12,
+        "pair": 6,
+        "task": "task-4",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 13,
+        "pair": 6,
+        "task": "task-4",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 14,
+        "pair": 7,
+        "task": "task-0",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 15,
+        "pair": 7,
+        "task": "task-0",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 16,
+        "pair": 8,
+        "task": "task-5",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 17,
+        "pair": 8,
+        "task": "task-5",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 18,
+        "pair": 9,
+        "task": "task-1",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 19,
+        "pair": 9,
+        "task": "task-1",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 20,
+        "pair": 10,
+        "task": "task-6",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 21,
+        "pair": 10,
+        "task": "task-6",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 22,
+        "pair": 11,
+        "task": "task-5",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 23,
+        "pair": 11,
+        "task": "task-5",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 24,
+        "pair": 12,
+        "task": "task-8",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 25,
+        "pair": 12,
+        "task": "task-8",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 26,
+        "pair": 13,
+        "task": "task-0",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 27,
+        "pair": 13,
+        "task": "task-0",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 28,
+        "pair": 14,
+        "task": "task-4",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 29,
+        "pair": 14,
+        "task": "task-4",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 30,
+        "pair": 15,
+        "task": "task-7",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 31,
+        "pair": 15,
+        "task": "task-7",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 32,
+        "pair": 16,
+        "task": "task-2",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 33,
+        "pair": 16,
+        "task": "task-2",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 34,
+        "pair": 17,
+        "task": "task-3",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 35,
+        "pair": 17,
+        "task": "task-3",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 36,
+        "pair": 18,
+        "task": "task-9",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 37,
+        "pair": 18,
+        "task": "task-9",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 38,
+        "pair": 19,
+        "task": "task-1",
+        "arm": "A",
+        "repeat": 2
+      },
+      {
+        "position": 39,
+        "pair": 19,
+        "task": "task-1",
+        "arm": "B",
+        "repeat": 2
+      },
+      {
+        "position": 40,
+        "pair": 20,
+        "task": "task-4",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 41,
+        "pair": 20,
+        "task": "task-4",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 42,
+        "pair": 21,
+        "task": "task-0",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 43,
+        "pair": 21,
+        "task": "task-0",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 44,
+        "pair": 22,
+        "task": "task-6",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 45,
+        "pair": 22,
+        "task": "task-6",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 46,
+        "pair": 23,
+        "task": "task-5",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 47,
+        "pair": 23,
+        "task": "task-5",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 48,
+        "pair": 24,
+        "task": "task-9",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 49,
+        "pair": 24,
+        "task": "task-9",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 50,
+        "pair": 25,
+        "task": "task-7",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 51,
+        "pair": 25,
+        "task": "task-7",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 52,
+        "pair": 26,
+        "task": "task-1",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 53,
+        "pair": 26,
+        "task": "task-1",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 54,
+        "pair": 27,
+        "task": "task-2",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 55,
+        "pair": 27,
+        "task": "task-2",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 56,
+        "pair": 28,
+        "task": "task-3",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 57,
+        "pair": 28,
+        "task": "task-3",
+        "arm": "A",
+        "repeat": 3
+      },
+      {
+        "position": 58,
+        "pair": 29,
+        "task": "task-8",
+        "arm": "B",
+        "repeat": 3
+      },
+      {
+        "position": 59,
+        "pair": 29,
+        "task": "task-8",
+        "arm": "A",
+        "repeat": 3
+      }
+    ],
+    "max_attempts": 3
+  },
+  "analysis": {
+    "results": [
+      {
+        "metric": "success",
+        "role": "guard",
+        "ratio": false,
+        "tasks": 10,
+        "repeats": 3,
+        "full_tasks": 9,
+        "floor_tasks": 20,
+        "floor_repeats": 3,
+        "a": 0.7333333333333333,
+        "b": 0.7586206896551724,
+        "bootstrap_95": {
+          "estimate": 0.01666666666666667,
+          "low": -0.2,
+          "high": 0.23333333333333334
+        },
+        "t_95": {
+          "estimate": 0.01666666666666667,
+          "low": -0.07130611188659677,
+          "high": 0.10463944521993011
+        },
+        "bootstrap_90": {
+          "estimate": 0.01666666666666667,
+          "low": -0.16666666666666669,
+          "high": 0.2
+        },
+        "t_90": {
+          "estimate": 0.01666666666666667,
+          "low": -0.054621058492186965,
+          "high": 0.08795439182552031
+        },
+        "verdict": "exploratory"
+      },
+      {
+        "metric": "cost",
+        "role": "primary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 3,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 0.3910629530812869,
+        "b": 0.3152964987167776,
+        "bootstrap_95": {
+          "estimate": 0.8014927015373043,
+          "low": 0.7891140620938479,
+          "high": 0.8139910281102312
+        },
+        "t_95": {
+          "estimate": 0.8014927015373043,
+          "low": 0.7981199441562328,
+          "high": 0.804879711779033
+        },
+        "bootstrap_90": {
+          "estimate": 0.8014927015373043,
+          "low": 0.7911381887062885,
+          "high": 0.8119827354915554
+        },
+        "t_90": {
+          "estimate": 0.8014927015373043,
+          "low": 0.7987585340667351,
+          "high": 0.8042362281213457
+        },
+        "verdict": "improved"
+      },
+      {
+        "metric": "time",
+        "role": "secondary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 3,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 44.407055682015134,
+        "b": 44.35312159544821,
+        "bootstrap_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "bootstrap_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "verdict": "exploratory"
+      },
+      {
+        "metric": "output_tokens",
+        "role": "secondary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 3,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 3437.9901308667518,
+        "b": 3432.5355495217127,
+        "bootstrap_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "bootstrap_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "verdict": "exploratory"
+      }
+    ],
+    "counted": {
+      "A": 30,
+      "B": 29
+    },
+    "excluded": {
+      "cancelled": 1,
+      "infra": 1,
+      "unfair": 1
+    },
+    "pass_at_1": {
+      "A": 0.7333333333333333,
+      "B": 0.7586206896551724
+    },
+    "pass_all": {
+      "A": 0.3,
+      "B": 0.3
+    },
+    "not_discriminating": [
+      "task-8",
+      "task-4",
+      "task-0"
+    ],
+    "noise": {
+      "tasks": 10,
+      "repeats": 2.95,
+      "sigma_log_cost": {
+        "estimate": 0.03680899736591974,
+        "low": 0.030152495787036476,
+        "high": 0.047264058997626465,
+        "basis": "the pooled spread of runs within each task and arm, on 39 degrees of freedom; chi-square range; it assumes normal noise, and heavier tails make it too narrow"
+      },
+      "tau_log_cost": {
+        "estimate": 0,
+        "low": 0,
+        "high": 0,
+        "basis": "var(d) − 2σ²/R, floored at zero; the range spans both variances' chi-square ranges at 97.5%, so it holds with at least 95%; it assumes normal noise, and heavier tails make it too narrow"
+      },
+      "w_success": {
+        "estimate": 0.23504273504273507,
+        "low": 0.1324786324786325,
+        "high": 0.33333333333333326,
+        "basis": "the pooled variance of runs within each task and arm; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks",
+        "bootstrap": true
+      },
+      "tau_success": {
+        "estimate": 0,
+        "low": 0,
+        "high": 0,
+        "basis": "var(d) − 2w/R, floored at zero; range from a bootstrap over tasks (2000 draws), which runs narrow with few tasks",
+        "bootstrap": true
+      },
+      "success_varies": true
+    }
+  },
+  "arms": [
+    {
+      "name": "A",
+      "context": "base",
+      "counted": 30,
+      "first_request_tokens": 30000,
+      "cost_usd": 0.3969,
+      "cold_cost_usd": 1.9169000000000003,
+      "cache_read_share": 0.9301244041390536,
+      "behavior": {
+        "tests_changed": 30,
+        "tests_removed": 0,
+        "ran_tests": 30,
+        "ran_checks": 30,
+        "committed": 0,
+        "checks_changed": 0,
+        "config_passes": 1,
+        "denials": 0,
+        "files_changed": 2,
+        "lines_changed": 13,
+        "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 30,
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": {
+          "docs/testing.md": 15
+        },
+        "skills": {
+          "review-change": 6
+        },
+        "subagents": {
+          "Explore": 1
+        }
+      }
+    },
+    {
+      "name": "B",
+      "context": "lean",
+      "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
+      "counted": 29,
+      "first_request_tokens": 27000,
+      "cost_usd": 0.31986206896551717,
+      "cold_cost_usd": 1.839862068965518,
+      "cache_read_share": 0.9301244041390536,
+      "behavior": {
+        "tests_changed": 0,
+        "tests_removed": 0,
+        "ran_tests": 29,
+        "ran_checks": 0,
+        "committed": 0,
+        "checks_changed": 0,
+        "config_passes": 0,
+        "denials": 0,
+        "files_changed": 2,
+        "lines_changed": 13,
+        "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 28,
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": {
+          "docs/testing.md": 8
+        },
+        "subagents": {
+          "Explore": 1
+        },
+        "other_subagents": 3
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task": "task-0",
+      "arms": {
+        "A": {
+          "marks": "●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.324
+        },
+        "B": {
+          "marks": "●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.25920000000000004
+        }
+      }
+    },
+    {
+      "task": "task-1",
+      "arms": {
+        "A": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.405
+        },
+        "B": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.32400000000000007
+        }
+      }
+    },
+    {
+      "task": "task-2",
+      "arms": {
+        "A": {
+          "marks": "○○●",
+          "successes": 1,
+          "counted": 3,
+          "cost_usd": 0.486
+        },
+        "B": {
+          "marks": "●○●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.38880000000000003
+        }
+      }
+    },
+    {
+      "task": "task-3",
+      "arms": {
+        "A": {
+          "marks": "○●●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.324
+        },
+        "B": {
+          "marks": "○●●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.25920000000000004
+        }
+      }
+    },
+    {
+      "task": "task-4",
+      "arms": {
+        "A": {
+          "marks": "●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.405
+        },
+        "B": {
+          "marks": "●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.32400000000000007
+        }
+      }
+    },
+    {
+      "task": "task-5",
+      "arms": {
+        "A": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.486
+        },
+        "B": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.38880000000000003
+        }
+      }
+    },
+    {
+      "task": "task-6",
+      "arms": {
+        "A": {
+          "marks": "●○●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.324
+        },
+        "B": {
+          "marks": "×○●",
+          "successes": 1,
+          "counted": 2,
+          "cost_usd": 0.264
+        }
+      }
+    },
+    {
+      "task": "task-7",
+      "arms": {
+        "A": {
+          "marks": "○●●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.405
+        },
+        "B": {
+          "marks": "○●●",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.32400000000000007
+        }
+      }
+    },
+    {
+      "task": "task-8",
+      "arms": {
+        "A": {
+          "marks": "××●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.486
+        },
+        "B": {
+          "marks": "●●●",
+          "successes": 3,
+          "counted": 3,
+          "cost_usd": 0.38880000000000003
+        }
+      }
+    },
+    {
+      "task": "task-9",
+      "arms": {
+        "A": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.324
+        },
+        "B": {
+          "marks": "●●○",
+          "successes": 2,
+          "counted": 3,
+          "cost_usd": 0.25920000000000004
+        }
+      }
+    }
+  ],
+  "judge": {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "repeats": 3,
+    "arms": [
+      {
+        "name": "A",
+        "passing": {
+          "judged": 20,
+          "fixed": {
+            "count": 12,
+            "of": 20,
+            "share": 0.6,
+            "low": 0.3865814992347542,
+            "high": 0.7811934687282199
+          },
+          "partly": {
+            "count": 8,
+            "of": 20,
+            "share": 0.4,
+            "low": 0.2188065312717802,
+            "high": 0.6134185007652458
+          },
+          "no": {
+            "count": 0,
+            "of": 20,
+            "share": 0,
+            "low": 0,
+            "high": 0.16112516018512965
+          }
+        },
+        "failing": {
+          "judged": 6,
+          "fixed": {
+            "count": 0,
+            "of": 6,
+            "share": 0,
+            "low": 0,
+            "high": 0.39033429165637346
+          },
+          "partly": {
+            "count": 1,
+            "of": 6,
+            "share": 0.16666666666666666,
+            "low": 0.030053369411815013,
+            "high": 0.5635028250257673
+          },
+          "no": {
+            "count": 5,
+            "of": 6,
+            "share": 0.8333333333333334,
+            "low": 0.4364971749742326,
+            "high": 0.969946630588185
+          }
+        },
+        "not_judged": {
+          "empty": 0,
+          "no_answer": 1,
+          "stopped": 0,
+          "waiting": 0,
+          "no_reference": 3,
+          "not_graded": 0
+        },
+        "cost_usd": 5.94
+      },
+      {
+        "name": "B",
+        "passing": {
+          "judged": 20,
+          "fixed": {
+            "count": 11,
+            "of": 20,
+            "share": 0.55,
+            "low": 0.3420853410191274,
+            "high": 0.7418021429623598
+          },
+          "partly": {
+            "count": 2,
+            "of": 20,
+            "share": 0.1,
+            "low": 0.027866480961691444,
+            "high": 0.3010336471864123
+          },
+          "no": {
+            "count": 7,
+            "of": 20,
+            "share": 0.35,
+            "low": 0.18119182312398305,
+            "high": 0.5671457249315559
+          }
+        },
+        "failing": {
+          "judged": 5,
+          "fixed": {
+            "count": 0,
+            "of": 5,
+            "share": 0,
+            "low": 0,
+            "high": 0.43448246865939283
+          },
+          "partly": {
+            "count": 0,
+            "of": 5,
+            "share": 0,
+            "low": 0,
+            "high": 0.43448246865939283
+          },
+          "no": {
+            "count": 5,
+            "of": 5,
+            "share": 1,
+            "low": 0.5655175313406071,
+            "high": 1
+          }
+        },
+        "not_judged": {
+          "empty": 1,
+          "no_answer": 0,
+          "stopped": 0,
+          "waiting": 0,
+          "no_reference": 3,
+          "not_graded": 0
+        },
+        "cost_usd": 5.46
+      }
+    ],
+    "agreement": {
+      "count": 42,
+      "of": 51,
+      "share": 0.8235294117647058,
+      "low": 0.6974585736294797,
+      "high": 0.904275965771237
+    },
+    "cost_usd": 11.4,
+    "pending": 0,
+    "flagged": [
+      {
+        "run": "r06",
+        "task": "task-2",
+        "arm": "B",
+        "verdict": "partly",
+        "detail": "partly (2 of 3)",
+        "reason": "Handles the empty case but not a missing file; see <agentium data>/records/x/agent.diff with [REDACTED]."
+      },
+      {
+        "run": "r10",
+        "task": "task-8",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r11",
+        "task": "task-8",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r16",
+        "task": "task-5",
+        "arm": "B",
+        "verdict": "partly",
+        "detail": "partly (no majority of 3)",
+        "reason": ""
+      },
+      {
+        "run": "r17",
+        "task": "task-5",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r28",
+        "task": "task-4",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r29",
+        "task": "task-4",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r30",
+        "task": "task-7",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r31",
+        "task": "task-7",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r38",
+        "task": "task-1",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r39",
+        "task": "task-1",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r42",
+        "task": "task-0",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r43",
+        "task": "task-0",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r44",
+        "task": "task-6",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      },
+      {
+        "run": "r45",
+        "task": "task-6",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r56",
+        "task": "task-3",
+        "arm": "B",
+        "verdict": "no",
+        "detail": "no (2 of 3)",
+        "reason": "Works around the check instead of fixing the parser."
+      },
+      {
+        "run": "r57",
+        "task": "task-3",
+        "arm": "A",
+        "verdict": "partly",
+        "detail": "partly (3 of 3)",
+        "reason": "Covers only the first of the two inputs the task names."
+      }
+    ]
+  },
+  "notes": [
+    "Runs not counted: 1 unfair (the environment drifted), 1 infrastructure failure, 1 cancelled. Their spend is in the total.",
+    "Environment drift in unfair runs: tools differ (added Monitor; missing none); 1 file tool call(s) reached <agentium data>/projects.",
+    "1 run(s) ended without Claude Code's cost: it was estimated from their transcripts at list prices.",
+    "1 run(s) were cut short when Agentium stopped, and recovered with what they spent.",
+    "Arm A: 1 run(s) passed with test-runner configuration changed beyond the task's reference; they count as failures.",
+    "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.",
+    "Success is exploratory: 9 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
+    "Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%.",
+    "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29."
+  ],
+  "runs": [
+    {
+      "id": "r00",
+      "slot": 0,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.24960000000000002,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "subagents": [
+          "Explore"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:00:00Z",
+      "finished": "2026-09-29T12:00:50Z"
+    },
+    {
+      "id": "r01",
+      "slot": 1,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.312,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "subagents": [
+          "Explore"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:01:00Z",
+      "finished": "2026-09-29T12:01:50Z"
+    },
+    {
+      "id": "r02",
+      "slot": 2,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.312,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.24
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:02:00Z",
+      "finished": "2026-09-29T12:02:50Z"
+    },
+    {
+      "id": "r03",
+      "slot": 3,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "B",
+      "outcome": "unfair",
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.24960000000000002,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "drift": [
+        "tools differ (added Monitor; missing none)",
+        "1 file tool call(s) reached <agentium data>/projects"
+      ],
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:03:00Z",
+      "finished": "2026-09-29T12:03:50Z"
+    },
+    {
+      "id": "r04",
+      "slot": 4,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.312,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:04:00Z",
+      "finished": "2026-09-29T12:04:50Z"
+    },
+    {
+      "id": "r05",
+      "slot": 5,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.24960000000000002,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "notes": [
+        "the hidden tests could not be added: open <agentium data>/records/r05/verify/t: denied",
+        "Agentium could not finish the run: sign-in with [REDACTED] refused"
+      ],
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:05:00Z",
+      "finished": "2026-09-29T12:05:50Z"
+    },
+    {
+      "id": "r06",
+      "slot": 6,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3744,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Handles the empty case but\n  not a missing file; see <agentium data>/records/x/agent.diff with [REDACTED].",
+          "Handles the empty case but\n  not a missing file; see <agentium data>/records/x/agent.diff with [REDACTED].",
+          "Handles the empty case but\n  not a missing file; see <agentium data>/records/x/agent.diff with [REDACTED]."
+        ],
+        "requested": 3,
+        "reason": "Handles the empty case but\n  not a missing file; see <agentium data>/records/x/agent.diff with [REDACTED].",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:06:00Z",
+      "finished": "2026-09-29T12:06:50Z"
+    },
+    {
+      "id": "r07",
+      "slot": 7,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.46799999999999997,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "config_changed": [
+          "pytest.ini"
+        ],
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:07:00Z",
+      "finished": "2026-09-29T12:07:50Z"
+    },
+    {
+      "id": "r08",
+      "slot": 8,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.39,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:08:00Z",
+      "finished": "2026-09-29T12:08:50Z"
+    },
+    {
+      "id": "r09",
+      "slot": 9,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.31200000000000006,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "config_changed": [
+          "pytest.ini"
+        ],
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:09:00Z",
+      "finished": "2026-09-29T12:09:50Z"
+    },
+    {
+      "id": "r10-infra",
+      "slot": 10,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "infra",
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.05,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "cost_estimated": true,
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:10:00Z",
+      "finished": "2026-09-29T12:10:50Z"
+    },
+    {
+      "id": "r10-cancelled",
+      "slot": 10,
+      "attempt": 2,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "cancelled",
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.46799999999999997,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "recovered": "stopped",
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:10:00Z",
+      "finished": "2026-09-29T12:10:50Z"
+    },
+    {
+      "id": "r10",
+      "slot": 10,
+      "attempt": 2,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.46799999999999997,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:10:00Z",
+      "finished": "2026-09-29T12:10:50Z"
+    },
+    {
+      "id": "r11",
+      "slot": 11,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3744,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:11:00Z",
+      "finished": "2026-09-29T12:11:50Z"
+    },
+    {
+      "id": "r12",
+      "slot": 12,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.31200000000000006,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:12:00Z",
+      "finished": "2026-09-29T12:12:50Z"
+    },
+    {
+      "id": "r13",
+      "slot": 13,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.39,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:13:00Z",
+      "finished": "2026-09-29T12:13:50Z"
+    },
+    {
+      "id": "r14",
+      "slot": 14,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.312,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:14:00Z",
+      "finished": "2026-09-29T12:14:50Z"
+    },
+    {
+      "id": "r15",
+      "slot": 15,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.24960000000000002,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:15:00Z",
+      "finished": "2026-09-29T12:15:50Z"
+    },
+    {
+      "id": "r16",
+      "slot": 16,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3744,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "yes",
+          "partly",
+          "no"
+        ],
+        "reasons": [
+          "a",
+          "b",
+          "c"
+        ],
+        "requested": 3,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:16:00Z",
+      "finished": "2026-09-29T12:16:50Z"
+    },
+    {
+      "id": "r17",
+      "slot": 17,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.46799999999999997,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:17:00Z",
+      "finished": "2026-09-29T12:17:50Z"
+    },
+    {
+      "id": "r18",
+      "slot": 18,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.39,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:18:00Z",
+      "finished": "2026-09-29T12:18:50Z"
+    },
+    {
+      "id": "r19",
+      "slot": 19,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.31200000000000006,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:19:00Z",
+      "finished": "2026-09-29T12:19:50Z"
+    },
+    {
+      "id": "r20",
+      "slot": 20,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.25920000000000004,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "answers": [],
+        "reasons": [],
+        "requested": 3,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0,
+        "empty": true
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:20:00Z",
+      "finished": "2026-09-29T12:20:50Z"
+    },
+    {
+      "id": "r21",
+      "slot": 21,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.324,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "answers": [],
+        "reasons": [],
+        "requested": 3,
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.24,
+        "errors": [
+          "exit 1, not JSON: in <agentium data>/records/x/judge"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:21:00Z",
+      "finished": "2026-09-29T12:21:50Z"
+    },
+    {
+      "id": "r22",
+      "slot": 22,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.486,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:22:00Z",
+      "finished": "2026-09-29T12:22:50Z"
+    },
+    {
+      "id": "r23",
+      "slot": 23,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.38880000000000003,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:23:00Z",
+      "finished": "2026-09-29T12:23:50Z"
+    },
+    {
+      "id": "r24",
+      "slot": 24,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.38880000000000003,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:24:00Z",
+      "finished": "2026-09-29T12:24:50Z"
+    },
+    {
+      "id": "r25",
+      "slot": 25,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.486,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:25:00Z",
+      "finished": "2026-09-29T12:25:50Z"
+    },
+    {
+      "id": "r26",
+      "slot": 26,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.324,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:26:00Z",
+      "finished": "2026-09-29T12:26:50Z"
+    },
+    {
+      "id": "r27",
+      "slot": 27,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.25920000000000004,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:27:00Z",
+      "finished": "2026-09-29T12:27:50Z"
+    },
+    {
+      "id": "r28",
+      "slot": 28,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.32400000000000007,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:28:00Z",
+      "finished": "2026-09-29T12:28:50Z"
+    },
+    {
+      "id": "r29",
+      "slot": 29,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.405,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:29:00Z",
+      "finished": "2026-09-29T12:29:50Z"
+    },
+    {
+      "id": "r30",
+      "slot": 30,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.32400000000000007,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:30:00Z",
+      "finished": "2026-09-29T12:30:50Z"
+    },
+    {
+      "id": "r31",
+      "slot": 31,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.405,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:31:00Z",
+      "finished": "2026-09-29T12:31:50Z"
+    },
+    {
+      "id": "r32",
+      "slot": 32,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.486,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:32:00Z",
+      "finished": "2026-09-29T12:32:50Z"
+    },
+    {
+      "id": "r33",
+      "slot": 33,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.38880000000000003,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:33:00Z",
+      "finished": "2026-09-29T12:33:50Z"
+    },
+    {
+      "id": "r34",
+      "slot": 34,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.324,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:34:00Z",
+      "finished": "2026-09-29T12:34:50Z"
+    },
+    {
+      "id": "r35",
+      "slot": 35,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.25920000000000004,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:35:00Z",
+      "finished": "2026-09-29T12:35:50Z"
+    },
+    {
+      "id": "r36",
+      "slot": 36,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.25920000000000004,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:36:00Z",
+      "finished": "2026-09-29T12:36:50Z"
+    },
+    {
+      "id": "r37",
+      "slot": 37,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.324,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:37:00Z",
+      "finished": "2026-09-29T12:37:50Z"
+    },
+    {
+      "id": "r38",
+      "slot": 38,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.405,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:38:00Z",
+      "finished": "2026-09-29T12:38:50Z"
+    },
+    {
+      "id": "r39",
+      "slot": 39,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.32400000000000007,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:39:00Z",
+      "finished": "2026-09-29T12:39:50Z"
+    },
+    {
+      "id": "r40",
+      "slot": 40,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.42000000000000004,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:40:00Z",
+      "finished": "2026-09-29T12:40:50Z"
+    },
+    {
+      "id": "r41",
+      "slot": 41,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3360000000000001,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:41:00Z",
+      "finished": "2026-09-29T12:41:50Z"
+    },
+    {
+      "id": "r42",
+      "slot": 42,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26880000000000004,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:42:00Z",
+      "finished": "2026-09-29T12:42:50Z"
+    },
+    {
+      "id": "r43",
+      "slot": 43,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.336,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.18
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:43:00Z",
+      "finished": "2026-09-29T12:43:50Z"
+    },
+    {
+      "id": "r44",
+      "slot": 44,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.336,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.24
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:44:00Z",
+      "finished": "2026-09-29T12:44:50Z"
+    },
+    {
+      "id": "r45",
+      "slot": 45,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26880000000000004,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.24
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:45:00Z",
+      "finished": "2026-09-29T12:45:50Z"
+    },
+    {
+      "id": "r46",
+      "slot": 46,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.4032,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "other_subagents": 1
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:46:00Z",
+      "finished": "2026-09-29T12:46:50Z"
+    },
+    {
+      "id": "r47",
+      "slot": 47,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.504,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "skills": [
+          "review-change"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.22999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:47:00Z",
+      "finished": "2026-09-29T12:47:50Z"
+    },
+    {
+      "id": "r48",
+      "slot": 48,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26880000000000004,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:48:00Z",
+      "finished": "2026-09-29T12:48:50Z"
+    },
+    {
+      "id": "r49",
+      "slot": 49,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.336,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:49:00Z",
+      "finished": "2026-09-29T12:49:50Z"
+    },
+    {
+      "id": "r50",
+      "slot": 50,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3360000000000001,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:50:00Z",
+      "finished": "2026-09-29T12:50:50Z"
+    },
+    {
+      "id": "r51",
+      "slot": 51,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.42000000000000004,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.25
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:51:00Z",
+      "finished": "2026-09-29T12:51:50Z"
+    },
+    {
+      "id": "r52",
+      "slot": 52,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3360000000000001,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:52:00Z",
+      "finished": "2026-09-29T12:52:50Z"
+    },
+    {
+      "id": "r53",
+      "slot": 53,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.42000000000000004,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "no"
+        ],
+        "reasons": [
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path.",
+          "The change does not touch the failing path."
+        ],
+        "requested": 3,
+        "reason": "The change does not touch the failing path.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:53:00Z",
+      "finished": "2026-09-29T12:53:50Z"
+    },
+    {
+      "id": "r54",
+      "slot": 54,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.504,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:54:00Z",
+      "finished": "2026-09-29T12:54:50Z"
+    },
+    {
+      "id": "r55",
+      "slot": 55,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.4032,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.19999999999999998
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:55:00Z",
+      "finished": "2026-09-29T12:55:50Z"
+    },
+    {
+      "id": "r56",
+      "slot": 56,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26880000000000004,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "no",
+          "yes"
+        ],
+        "reasons": [
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser.",
+          "Works around the check instead of fixing the parser."
+        ],
+        "requested": 3,
+        "reason": "Works around the check instead of fixing the parser.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:56:00Z",
+      "finished": "2026-09-29T12:56:50Z"
+    },
+    {
+      "id": "r57",
+      "slot": 57,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.336,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "partly",
+        "answers": [
+          "partly",
+          "partly",
+          "partly"
+        ],
+        "reasons": [
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names.",
+          "Covers only the first of the two inputs the task names."
+        ],
+        "requested": 3,
+        "reason": "Covers only the first of the two inputs the task names.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:57:00Z",
+      "finished": "2026-09-29T12:57:50Z"
+    },
+    {
+      "id": "r58",
+      "slot": 58,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.4032,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 27000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:58:00Z",
+      "finished": "2026-09-29T12:58:50Z"
+    },
+    {
+      "id": "r59",
+      "slot": 59,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.504,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": true,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": true,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "context_use": {
+        "start": [
+          "AGENTS.md",
+          "CLAUDE.md"
+        ],
+        "files": [
+          "docs/testing.md"
+        ]
+      },
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 3,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.26
+      },
+      "verify": [
+        {
+          "command": "make test",
+          "exit_code": 0,
+          "seconds": 1.5
+        }
+      ],
+      "started": "2026-09-29T12:59:00Z",
+      "finished": "2026-09-29T12:59:50Z"
+    }
+  ]
+}
