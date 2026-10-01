@@ -23,7 +23,9 @@ import (
 // skills, slash commands), solves the fixture's task, and reads its instructions from files in ctrl, keyed by its
 // workspace ("s2-t1": slot 2, first try): "infra" lists runs that end without a result, "hang" runs that wait to be
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
-// "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
+// Called as the judge (--json-schema), it keeps its prompt and folder in ctrl ("judge-prompt-PID", "judge-dir-PID") and
+// answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), with "judge-broken" it prints
+// no JSON. "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
 // "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl.
@@ -33,6 +35,12 @@ func experimentAgent(t *testing.T, ctrl string) string {
 CTRL='` + ctrl + `'
 version=2.1.281; [ -f "$CTRL/version" ] && version=$(cat "$CTRL/version")
 [ "$1" = --version ] && { echo "$version (Claude Code)"; exit 0; }
+case " $* " in *" --json-schema "*)
+  cat > "$CTRL/judge-prompt-$$"; pwd > "$CTRL/judge-dir-$$"
+  [ -f "$CTRL/judge-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
+  [ -f "$CTRL/judge-broken" ] && { echo 'not json'; exit 1; }
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"fixed":"yes","reason":"Sets the value as the reference does."},"total_cost_usd":0.05}'; exit 0;;
+esac
 [ -f "$CTRL/init-version" ] && version=$(cat "$CTRL/init-version")
 ws=$(basename "$(dirname "$PWD")")
 key=${ws#*-}

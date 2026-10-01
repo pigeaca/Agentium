@@ -11,11 +11,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
+	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
@@ -125,6 +127,9 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		}
 		fmt.Fprintf(out, "Locked: Claude Code %s, %s, sign-in %s, %d runs in a seeded order (seed %d), prices of %s.\n",
 			lock.ClaudeCode, d.Model, lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable)
+		if d.Judge != nil {
+			fmt.Fprintf(out, "The judge: %s.\n", describeJudge(*d.Judge))
+		}
 	} else {
 		if err := json.Unmarshal(stored.Lock, &lock); err != nil {
 			return fail(env, fmt.Errorf("experiment %s: its lock cannot be read: %w", name, err))
@@ -173,12 +178,29 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	runEnv, err := newRunEnv(env, w, lock.Design.VerifyTimeout)
+	if err != nil {
+		return fail(env, err)
+	}
+	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
+	if err := w.db.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
+		return fail(env, err)
+	}
+	// The judge's pause: a verdict stopped at a usage limit or a sign-in failure, which every later call would hit too.
+	var judgePaused atomic.Bool
+	var judgeNote string
+	var judgeErr error
+	if lock.Design.Judge != nil { // first the graded runs a stopped execution left without a verdict
+		judgeNote, judgeErr = judgePending(ctx, env, w, runEnv, lock, runs)
+	}
 	var prior []experiment.Attempt
 	storedTries := map[int]int{} // runs per slot so far
 	status := runStatus{total: len(lock.Schedule), budget: lock.Design.BudgetUSD, settled: map[int]bool{}}
 	for _, r := range runs {
-		prior = append(prior, experiment.Attempt{Slot: r.Slot, Outcome: r.Outcome, CostUSD: r.CostUSD})
-		status.spent += r.CostUSD
+		// The budget counts the judge's spend too; the cost column (r.CostUSD) is the agent's alone.
+		spentOn := r.CostUSD + judgeCostUSD(r.Record)
+		prior = append(prior, experiment.Attempt{Slot: r.Slot, Outcome: r.Outcome, CostUSD: spentOn})
+		status.spent += spentOn
 		if experiment.Settles(r.Outcome) {
 			status.settled[r.Slot] = true
 		}
@@ -205,17 +227,13 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	var subagentsMu sync.Mutex
 	seenSubagents := subagentModels(runs) // per arm: the models each subagent type ran on in this experiment so far
-	runEnv, err := newRunEnv(env, w, lock.Design.VerifyTimeout)
-	if err != nil {
-		return fail(env, err)
-	}
-	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
-	if err := w.db.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
-		return fail(env, err)
-	}
 	total, design, st := len(lock.Schedule), lock.Design, env.style()
-	fmt.Fprintf(out, "Running up to %d at a time; each run up to $%.2f and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
-		design.Concurrency, design.RunBudgetUSD, design.Timeout, design.BudgetUSD)
+	judging := ""
+	if design.Judge != nil {
+		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
+	}
+	fmt.Fprintf(out, "Running up to %d at a time; each run up to $%.2f%s and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
+		design.Concurrency, design.RunBudgetUSD, judging, design.Timeout, design.BudgetUSD)
 	live.Show(func() string { return status.text(env.Now()) })
 	progress := func(e experiment.Event) {
 		status.update(e) // every event prints a line below, which redraws the status line with the new numbers
@@ -232,7 +250,11 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 				// Execute reruns such a run on resume and does not count it as an attempt.
 				outcome = st.Warn("stopped before its agent started (not counted; it runs again on resume)")
 			}
-			fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, outcome, e.Result.CostUSD, e.SpentUSD, design.BudgetUSD)
+			judged := ""
+			if e.Result.Judge != "" {
+				judged = fmt.Sprintf("; judge: %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
+			}
+			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.CostUSD-e.Result.JudgeUSD, judged, e.SpentUSD, design.BudgetUSD)
 		case "retry":
 			fmt.Fprintf(out, "%s: %s in %s\n", label, st.Warn("retrying"), e.RetryIn)
 		case "wait":
@@ -267,8 +289,17 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		}
 		rec, err := executeRun(ctx, env, w, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 			Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
-			Timeout: design.Timeout})
-		result := experiment.Result{Outcome: rec.Outcome, CostUSD: rec.Metrics.CostUSD, Usage: rec.Metrics.UsageLast}
+			Timeout: design.Timeout, Judge: design.Judge})
+		// The budget counts what the judge spent; the agent's cost stays rec.Metrics.CostUSD, the analysis's.
+		result := experiment.Result{Outcome: rec.Outcome, CostUSD: rec.Metrics.CostUSD + rec.JudgeCostUSD(), JudgeUSD: rec.JudgeCostUSD(),
+			Usage: rec.Metrics.UsageLast}
+		if v := rec.Judge; v != nil {
+			result.Judge = run.Describe(*v)
+			if v.Stopped == llmjudge.StoppedLimit {
+				result.Pause = judgeLimitNote
+				judgePaused.Store(true)
+			}
+		}
 		switch m := rec.Metrics; {
 		case m.SawInit && m.CLIVersion != lock.ClaudeCode:
 			result.Stop = fmt.Sprintf("Claude Code reported version %s, but the experiment is locked to %s: later runs would not compare", m.CLIVersion, lock.ClaudeCode)
@@ -296,8 +327,18 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if backoff == nil {
 		backoff = retryBackoff
 	}
-	sum, runErr := experiment.Execute(ctx, experiment.Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunBudgetUSD,
-		BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: progress, Usage: gate}, execute)
+	var sum experiment.Summary
+	var runErr error
+	switch {
+	case judgeErr != nil:
+		sum, runErr = experiment.Summary{Status: experiment.StatusStopped, Note: "Agentium could not store a judgement: " + judgeErr.Error()}, judgeErr
+	case judgeNote != "":
+		sum = experiment.Summary{Status: experiment.StatusUsage, Note: judgeNote}
+		judgePaused.Store(true)
+	default:
+		sum, runErr = experiment.Execute(ctx, experiment.Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(),
+			BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: progress, Usage: gate}, execute)
+	}
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = experiment.StatusStopped, "Agentium could not start the runs: "+runErr.Error()
 	}
@@ -318,6 +359,10 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	case sum.Status == experiment.StatusBudget:
 		fmt.Fprintf(out, "%s To continue: %s (a higher total)\n", st.Warn("Stopped at the budget."), st.Command("agentium experiment run "+name+" --budget USD"))
 		return ExitOK
+	case sum.Status == experiment.StatusUsage && judgePaused.Load():
+		fmt.Fprintf(out, "%s To continue: %s (its runs without a verdict are judged first)\n",
+			st.Warn("Paused: the judge hit a usage limit or a sign-in failure."), st.Command("agentium experiment run "+name))
+		return ExitOK
 	case sum.Status == experiment.StatusUsage && !sum.ResumeAt.IsZero():
 		fmt.Fprintf(out, "%s To continue: %s (--wait waits for the reset)\n",
 			st.Warn(fmt.Sprintf("Paused before the usage limit; the window resets at %s.", clock(sum.ResumeAt, env.Now()))), st.Command("agentium experiment run "+name))
@@ -329,6 +374,85 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	fmt.Fprintf(out, "%s To continue: %s\n", st.Warn("Stopped."), st.Command("agentium experiment run "+name))
 	return ExitError
+}
+
+// judgeLimitNote is the status note of an experiment paused by the judge (Verdict.Stopped is judge.StoppedLimit).
+const judgeLimitNote = "the judge hit a usage limit or a sign-in failure, which the next calls would hit too"
+
+// judgeCostUSD is what the judge spent on a stored run, from its record: it counts against the budget, but is not in
+// the run's cost column, which is the agent's alone and feeds estimates and the cost analysis.
+func judgeCostUSD(record []byte) float64 {
+	var r struct {
+		Judge *struct {
+			CostUSD float64 `json:"cost_usd"`
+		} `json:"judge"`
+	}
+	if json.Unmarshal(record, &r) != nil || r.Judge == nil {
+		return 0
+	}
+	return r.Judge.CostUSD
+}
+
+// judgePending judges, one at a time, the experiment's graded runs that still need it (run.NeedsJudging): those a
+// stopped execution left without a verdict, and those whose judgement stopped early. Each is stored with its verdict
+// in place (runs[i].Record too), so the spend that follows counts it. A judgement starts only when the spend so far and
+// its cap fit the budget; one that does not is left for a resume with a higher budget. It returns a pause note when a
+// verdict stopped at a usage limit, and an error only when a record cannot be read or stored. A cancelled ctx ends it
+// quietly: the execution that follows sees the cancellation. Judgements that leave no verdict (a missing diff, say)
+// are reported here, not stored, so resumes do not repeat their notes.
+func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lock experiment.Lock, runs []store.Run) (string, error) {
+	design, out, st := lock.Design, env.Stdout, env.style()
+	spent := 0.0
+	for _, r := range runs {
+		spent += r.CostUSD + judgeCostUSD(r.Record)
+	}
+	unfunded := 0
+	for i, r := range runs {
+		if ctx.Err() != nil {
+			return "", nil
+		}
+		t, ok := lock.Task(r.TaskName)
+		if !ok || !experiment.Fair(r.Outcome) {
+			continue
+		}
+		var rec run.Record
+		if err := json.Unmarshal(r.Record, &rec); err != nil {
+			return "", fmt.Errorf("run %s: %w", r.ID, err)
+		}
+		if !run.NeedsJudging(rec, t.Spec()) {
+			continue
+		}
+		if spent+design.JudgeCapUSD() > design.BudgetUSD+1e-9 {
+			unfunded++
+			continue
+		}
+		before := rec.JudgeCostUSD()
+		notes := len(rec.Notes)
+		runEnv.Judge(ctx, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec()}, *design.Judge, &rec)
+		label := fmt.Sprintf("Judged run %s (task %s, arm %s)", r.ID, r.TaskName, r.Arm)
+		if rec.Judge == nil {
+			fmt.Fprintf(out, "%s: %s\n", label, st.Warn(strings.Join(rec.Notes[notes:], "; ")))
+			continue
+		}
+		spent += rec.JudgeCostUSD() - before
+		encoded, err := json.Marshal(rec)
+		if err != nil {
+			return "", fmt.Errorf("encode run %s: %w", r.ID, err)
+		}
+		if err := w.db.SetRunRecord(context.WithoutCancel(ctx), r.ID, encoded); err != nil {
+			return "", err
+		}
+		runs[i].Record = encoded
+		fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, run.Describe(*rec.Judge), rec.JudgeCostUSD()-before, spent, design.BudgetUSD)
+		if rec.Judge.Stopped == llmjudge.StoppedLimit {
+			return judgeLimitNote, nil
+		}
+	}
+	if unfunded > 0 {
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("%d run(s) still need the judge, but the budget leaves no room for a judgement ($%.2f): raise it with --budget",
+			unfunded, design.JudgeCapUSD())))
+	}
+	return "", nil
 }
 
 // buildLock fixes an experiment for its first run: the machine's Claude Code, each arm's context files and calibrated
@@ -398,13 +522,15 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 		counts[a.Name] = &armCounts{}
 	}
 	settled := map[int]bool{}
-	spent := 0.0
+	spent, judgeSpent := 0.0, 0.0
 	for _, r := range runs {
 		c := counts[r.Arm]
 		if c == nil {
 			continue
 		}
-		spent += r.CostUSD
+		judged := judgeCostUSD(r.Record)
+		spent += r.CostUSD + judged // the budget's spend; the arm's cost is the agent's alone
+		judgeSpent += judged
 		c.CostUSD += r.CostUSD
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
@@ -443,7 +569,11 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 		status = "stopped (its Agentium process ended; run it again to resume)"
 	}
 	fmt.Fprintf(out, "%s %s\n", st.Heading("Experiment "+name+":"), st.Heading(st.Status(status)))
-	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD)
+	judged := ""
+	if judgeSpent > 0 {
+		judged = fmt.Sprintf(" (the judge $%.2f of it, not in the arms' costs)", judgeSpent)
+	}
+	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f%s\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD, judged)
 	table := term.NewTable(st, term.Left("ARM"), term.Left("CONTEXT"), term.Right("SETTLED"), term.Right("FAIR"), term.Right("SUCCESSES"),
 		term.Right("UNFAIR"), term.Right("INFRA"), term.Right("CANCELLED"), term.Right("COST"))
 	for _, a := range lock.Arms {
@@ -495,6 +625,9 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "%s; %d task(s) × %d run(s) per arm; %s\n", describeArms(d), len(lock.Tasks), d.Repeats, d.Model)
 	fmt.Fprintf(out, "Locked %s: Claude Code %s, sign-in %s, %s, method %s, prices of %s\n", lock.LockedAt.Format("2006-01-02 15:04"),
 		lock.ClaudeCode, lock.SignIn, lock.Host, lock.Method, lock.PriceTable)
+	if j := lock.Design.Judge; j != nil {
+		fmt.Fprintf(out, "Judge: %s (a second opinion beside the tests)\n", describeJudge(*j))
+	}
 	for _, c := range lock.BudgetChanges {
 		fmt.Fprintf(out, "Budget raised %s: $%.2f to $%.2f\n", c.At.Format("2006-01-02 15:04"), c.From, c.To)
 	}
