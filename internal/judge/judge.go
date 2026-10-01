@@ -13,7 +13,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -76,11 +78,28 @@ reason in one sentence.`
 // Schema is the answer's JSON schema, byte for byte the pilot's.
 const Schema = `{"type": "object", "properties": {"fixed": {"type": "string", "enum": ["yes", "partly", "no"]}, "reason": {"type": "string"}}, "required": ["fixed", "reason"], "additionalProperties": false}`
 
+// Version numbers the judge's protocol (prompts, schema, filters, rules) in stored verdicts. Change it with them.
+const Version = 1
+
 // Settings are an experiment's judge settings.
 type Settings struct {
 	Model   string `json:"model"`
 	Effort  string `json:"effort,omitempty"`
 	Repeats int    `json:"repeats"`
+}
+
+// WithDefaults fills what s leaves out with the pilot's settings.
+func (s Settings) WithDefaults() Settings {
+	if s.Model == "" {
+		s.Model = DefaultModel
+	}
+	if s.Effort == "" {
+		s.Effort = DefaultEffort
+	}
+	if s.Repeats < 1 {
+		s.Repeats = DefaultRepeats
+	}
+	return s
 }
 
 // Input is what one run's judgement reads.
@@ -90,18 +109,27 @@ type Input struct {
 	Candidate   string // the run's agent.diff
 }
 
-// Verdict is a run's judgement: the majority of its repeats' answers.
+// Verdict is a run's judgement: the majority of its repeats' answers. Its texts (reasons, errors) are Claude Code's
+// and may name paths: scrub them before they are shared.
 type Verdict struct {
+	Version int `json:"version"`
 	// Fixed is the majority answer, Partly when the answers have no majority, and empty when no repeat answered.
-	Fixed   string   `json:"fixed,omitempty"`
-	Answers []string `json:"answers"`
-	// Reason is the reason given with the first answer that matches Fixed (or the first answer, with no majority).
+	Fixed string `json:"fixed,omitempty"`
+	// Answers and Reasons are the repeats that answered, in order; Requested is how many repeats were asked for.
+	Answers   []string `json:"answers"`
+	Reasons   []string `json:"reasons"`
+	Requested int      `json:"requested"`
+	// Reason is the reason given with the first answer that matches Fixed; empty when none does (the answers
+	// disagreed, so Fixed is Partly by rule).
 	Reason  string  `json:"reason,omitempty"`
 	Model   string  `json:"model"`
 	Effort  string  `json:"effort,omitempty"`
-	CostUSD float64 `json:"cost_usd"` // every call's, answered or not
+	CostUSD float64 `json:"cost_usd"` // every call's that reported one, answered or not; a timed-out call may not have
 	// Errors are the calls that brought no valid answer, in order.
 	Errors []string `json:"errors,omitempty"`
+	// Stopped says why the judgement ended before its repeats did: a usage limit or a sign-in failure, which the next
+	// calls would hit too, or a call that could not be made.
+	Stopped string `json:"stopped,omitempty"`
 	// Truncated: a diff was cut at MaxDiffChars, so the judge did not see all of it.
 	Truncated bool `json:"truncated,omitempty"`
 	// Empty: the candidate changed no code (only tests or documents, or nothing); the judge was not asked.
@@ -119,17 +147,71 @@ type Reply struct {
 // Caller makes one judge call. An error means the call could not be made at all, or ctx was cancelled.
 type Caller func(ctx context.Context, prompt string) (Reply, error)
 
-var diffHeader = regexp.MustCompile(`^diff --git a/(.*) b/(.*)$`)
+// filePath reads the path a "diff --git" header names, whatever the user's diff settings: "a/X b/X", no prefixes
+// (diff.noprefix), other one-letter prefixes (diff.mnemonicPrefix), and C-quoted names (core.quotePath). Agentium's
+// diffs never detect renames, so both sides name the same file; that is what tells where an unquoted name with spaces
+// splits. ok is false when the header cannot be read.
+func filePath(header string) (string, bool) {
+	rest := strings.TrimPrefix(strings.TrimRight(header, "\r\n"), "diff --git ")
+	same := func(src, dst string) (string, bool) {
+		if src == dst {
+			return dst, true
+		}
+		if len(src) > 2 && len(dst) > 2 && src[1] == '/' && dst[1] == '/' && src[2:] == dst[2:] {
+			return dst[2:], true
+		}
+		return "", false
+	}
+	if strings.HasPrefix(rest, `"`) {
+		end := closingQuote(rest)
+		if end < 0 || end+2 >= len(rest) || rest[end+1] != ' ' {
+			return "", false
+		}
+		src, err1 := strconv.Unquote(rest[:end+1])
+		dst, err2 := strconv.Unquote(rest[end+2:])
+		if err1 != nil || err2 != nil {
+			return "", false
+		}
+		return same(src, dst)
+	}
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == ' ' {
+			if p, ok := same(rest[:i], rest[i+1:]); ok {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+// closingQuote is the index of the quote that closes the C-quoted string s starts with, or -1.
+func closingQuote(s string) int {
+	for i := 1; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case '"':
+			return i
+		}
+	}
+	return -1
+}
 
 // CodeOnly is diff without test files (task.IsTestFile) and documents (claudectx.IsDocument): what the task's behavior
 // depends on. Neither a missing nor an extra plan or README update decides a verdict, and the hidden tests stay hidden.
-// A file's path is the "b/" side of its "diff --git a/X b/Y" line; text before the first such line is dropped.
+// Every "diff --git" line starts a file; text before the first is dropped. A file whose header cannot be read is kept:
+// the reference is already filtered by path, and a candidate's own tests are the agent's work, so keeping is the safe
+// side. A diff with no header at all is kept whole.
 func CodeOnly(diff string) string {
+	if !strings.HasPrefix(diff, "diff --git ") && !strings.Contains(diff, "\ndiff --git ") {
+		return diff
+	}
 	var out strings.Builder
 	keep := false
 	for _, line := range strings.SplitAfter(diff, "\n") {
-		if m := diffHeader.FindStringSubmatch(strings.TrimRight(line, "\n")); m != nil {
-			keep = !task.IsTestFile(m[2]) && !claudectx.IsDocument(m[2])
+		if strings.HasPrefix(line, "diff --git ") {
+			p, ok := filePath(line)
+			keep = !ok || (!task.IsTestFile(p) && !claudectx.IsDocument(p))
 		}
 		if keep {
 			out.WriteString(line)
@@ -162,7 +244,7 @@ func Prompt(in Input) (string, bool) {
 
 // Error kinds of a reply without a valid answer.
 const (
-	kindInfra     = "infra"     // no answer came: not JSON, an error result (a refused model, a usage limit), a timeout
+	kindInfra     = "infra"     // no answer came: not JSON, an error result, a failed exit, a timeout
 	kindMalformed = "malformed" // an answer came, without a valid verdict
 )
 
@@ -174,18 +256,23 @@ type answer struct {
 
 var jsonObject = regexp.MustCompile(`(?s)\{.*\}`)
 
+// stopText matches errors that every next call would hit as well: usage limits, sign-in and billing, a refused model.
+// Other errors (an overload, a timeout, a transport failure) leave one repeat out and the judgement goes on.
+var stopText = regexp.MustCompile(`(?i)limit|authenticat|not logged in|/login|oauth|credit balance|api key|does not support the model|model.{0,40}not (found|available)`)
+
 // parse reads Claude Code's JSON result: the structured verdict, or one written as JSON in the text.
 func parse(r Reply) answer {
-	if r.TimedOut {
-		return answer{err: fmt.Sprintf("timed out after %s (its cost is unknown)", CallTimeout), kind: kindInfra}
-	}
 	var out struct {
 		IsError          bool            `json:"is_error"`
 		Result           json.RawMessage `json:"result"`
 		TotalCostUSD     float64         `json:"total_cost_usd"`
 		StructuredOutput json.RawMessage `json:"structured_output"`
 	}
-	if err := json.Unmarshal(r.Stdout, &out); err != nil {
+	notJSON := json.Unmarshal(r.Stdout, &out) != nil
+	if r.TimedOut { // interrupted, Claude Code may still have reported its cost
+		return answer{cost: out.TotalCostUSD, err: fmt.Sprintf("timed out after %s", CallTimeout), kind: kindInfra}
+	}
+	if notJSON {
 		text := strings.TrimSpace(string(r.Stdout))
 		if text == "" {
 			text = r.Stderr
@@ -244,43 +331,48 @@ func Majority(answers []string) string {
 	return Partly
 }
 
-// Judge asks the judge s.Repeats times and takes the majority. A reply without a valid verdict is asked once more; a
-// call that brings no answer (an error result such as a usage limit, a timeout, a failed start) ends the judgement,
-// since the next calls would most likely fail alike, and the verdict is the majority of the answers so far. Failures
-// are in Verdict.Errors; the only error returned is ctx's.
+// Judge asks the judge s.Repeats times (s.WithDefaults) and takes the majority.
+//   - A reply without a valid verdict is asked once more; if that fails too, the repeat is left out.
+//   - A call that brings no answer leaves its repeat out. When its error is one every next call would hit (stopText: a
+//     usage limit, sign-in, billing, a refused model) or the call could not be made at all, the judgement stops there
+//     (Verdict.Stopped), keeping the answers so far.
+//
+// A candidate with no code is not judged (Verdict.Empty). An input without a reference diff is an error, as is a
+// cancelled ctx; then the returned Verdict still holds what was spent, which callers must count.
 func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, error) {
-	repeats := s.Repeats
-	if repeats < 1 {
-		repeats = DefaultRepeats
+	s = s.WithDefaults()
+	v := Verdict{Version: Version, Answers: []string{}, Reasons: []string{}, Requested: s.Repeats, Model: s.Model, Effort: s.Effort}
+	if strings.TrimSpace(CodeOnly(in.Reference)) == "" {
+		return v, errors.New("judge: the reference changes no code, so there is nothing to judge against")
 	}
-	v := Verdict{Answers: []string{}, Model: s.Model, Effort: s.Effort}
 	if strings.TrimSpace(CodeOnly(in.Candidate)) == "" {
 		v.Empty = true
 		return v, nil
 	}
 	text, truncated := Prompt(in)
 	v.Truncated = truncated
-	var reasons []string
-	stop := false
-	for r := 0; r < repeats && !stop; r++ {
+	for r := 0; r < s.Repeats && v.Stopped == ""; r++ {
 		for attempt := 0; attempt < 2; attempt++ {
 			reply, err := call(ctx, text)
 			if ctx.Err() != nil {
 				return v, ctx.Err()
 			}
 			if err != nil {
-				v.Errors, stop = append(v.Errors, err.Error()), true
+				v.Errors = append(v.Errors, err.Error())
+				v.Stopped = "a judge call could not be made"
 				break
 			}
 			a := parse(reply)
 			v.CostUSD += a.cost
 			if a.kind == "" {
-				v.Answers, reasons = append(v.Answers, a.fixed), append(reasons, a.reason)
+				v.Answers, v.Reasons = append(v.Answers, a.fixed), append(v.Reasons, a.reason)
 				break
 			}
 			v.Errors = append(v.Errors, a.err)
 			if a.kind == kindInfra {
-				stop = true
+				if stopText.MatchString(a.err) {
+					v.Stopped = "a usage limit or sign-in error, which the next calls would hit too"
+				}
 				break
 			}
 		}
@@ -288,22 +380,28 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 	v.Fixed = Majority(v.Answers)
 	for i, a := range v.Answers {
 		if a == v.Fixed {
-			v.Reason = reasons[i]
+			v.Reason = v.Reasons[i]
 			break
 		}
-	}
-	if v.Reason == "" && len(reasons) > 0 { // no majority: the first answer's reason
-		v.Reason = reasons[0]
 	}
 	return v, nil
 }
 
-// ClaudeCaller makes each call through Claude Code (claude.RunJudgement) with the judge's system prompt and schema, in
-// a fresh empty folder under j.Dir, removed afterwards. j.Dir must be a folder of Agentium's own (in its data folder).
-func ClaudeCaller(j claude.Judgement, environ []string) Caller {
-	j.SystemPrompt, j.Schema = SystemPrompt, Schema
+// ClaudeCaller makes each call through Claude Code (claude.RunJudgement) with s's model and effort and the judge's
+// system prompt and schema, in a fresh empty folder under j.Dir that is removed afterwards. j.Dir must be a folder of
+// Agentium's own (in its data folder) with no instruction file above it, which Claude Code would load into the judge's
+// context. timeout bounds each call (CallTimeout when zero).
+func ClaudeCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
+	if above := instructionFilesAbove(j.Dir); len(above) > 0 {
+		return nil, fmt.Errorf("judge: Claude Code would load %s above the judge's folder", strings.Join(above, ", "))
+	}
+	s = s.WithDefaults()
+	j.Model, j.Effort, j.SystemPrompt, j.Schema = s.Model, s.Effort, SystemPrompt, Schema
 	if j.BudgetUSD == 0 {
 		j.BudgetUSD = CallCapUSD
+	}
+	if timeout <= 0 {
+		timeout = CallTimeout
 	}
 	base := j.Dir
 	return func(ctx context.Context, prompt string) (Reply, error) {
@@ -312,29 +410,47 @@ func ClaudeCaller(j claude.Judgement, environ []string) Caller {
 			return Reply{}, fmt.Errorf("judge folder: %w", err)
 		}
 		defer os.RemoveAll(dir)
-		out, err := os.CreateTemp(base, "out-*.json")
-		if err != nil {
-			return Reply{}, fmt.Errorf("judge output: %w", err)
+		files := make([]*os.File, 2) // stdout, stderr: files, not pipes (claude.RunJudgement)
+		for i, pattern := range []string{"out-*.json", "err-*.txt"} {
+			if files[i], err = os.CreateTemp(base, pattern); err != nil {
+				return Reply{}, fmt.Errorf("judge output: %w", err)
+			}
+			defer os.Remove(files[i].Name())
+			defer files[i].Close()
 		}
-		defer os.Remove(out.Name())
-		defer out.Close()
 		call := j
 		call.Dir = dir
-		stderr, result, err := claude.RunJudgement(ctx, call, prompt, environ, out, CallTimeout, CallGrace)
+		result, err := claude.RunJudgement(ctx, call, prompt, environ, files[0], files[1], timeout, CallGrace)
 		if err != nil {
 			return Reply{}, err
 		}
-		stdout, err := os.ReadFile(out.Name())
-		if err != nil {
+		stdout, err1 := os.ReadFile(files[0].Name())
+		stderr, err2 := os.ReadFile(files[1].Name())
+		if err := errors.Join(err1, err2); err != nil {
 			return Reply{}, fmt.Errorf("judge output: %w", err)
 		}
-		return Reply{Stdout: stdout, Stderr: stderr, ExitCode: result.ExitCode, TimedOut: result.TimedOut}, nil
+		return Reply{Stdout: stdout, Stderr: strings.TrimSpace(string(stderr)), ExitCode: result.ExitCode, TimedOut: result.TimedOut}, nil
+	}, nil
+}
+
+// instructionFilesAbove lists the instruction files Claude Code would load from the folders above dir (as
+// internal/run's guard for runs does).
+func instructionFilesAbove(dir string) []string {
+	var found []string
+	for d := filepath.Dir(dir); d != filepath.Dir(d); d = filepath.Dir(d) {
+		for _, name := range []string{"CLAUDE.md", "CLAUDE.local.md", "AGENTS.md"} {
+			if info, err := os.Stat(filepath.Join(d, name)); err == nil && !info.IsDir() {
+				found = append(found, filepath.Join(d, name))
+			}
+		}
 	}
+	return found
 }
 
 // ReferenceDiff is the reference solution's change to its code: git diff from base to solution in the bare repository,
-// over the task's reference files that are neither tests nor documents. Prefixes are pinned ("a/", "b/") whatever the
-// user's diff settings, so CodeOnly can split it.
+// over the task's reference files that are neither tests nor documents. The user's git settings are ignored, as in the
+// pilot (GIT_CONFIG_GLOBAL; gitx already drops the system's), and prefixes are pinned, so the diff the judge reads does
+// not depend on whose machine made it.
 func ReferenceDiff(ctx context.Context, bare, base, solution string, reference []string) (string, error) {
 	var specs []string
 	for _, p := range reference {
@@ -347,7 +463,7 @@ func ReferenceDiff(ctx context.Context, bare, base, solution string, reference [
 	}
 	args := append([]string{"--git-dir", bare, "-c", "diff.noprefix=false", "-c", "diff.mnemonicPrefix=false", "diff", "--no-ext-diff",
 		"--no-textconv", "--no-color", "--no-renames", "--src-prefix=a/", "--dst-prefix=b/", base, solution, "--"}, specs...)
-	out, err := gitx.Output(ctx, nil, args...)
+	out, err := gitx.OutputEnv(ctx, []string{"GIT_CONFIG_GLOBAL=" + os.DevNull}, nil, args...)
 	if err != nil {
 		return "", fmt.Errorf("reference diff: %w", err)
 	}

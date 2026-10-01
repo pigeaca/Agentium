@@ -16,7 +16,8 @@ func TestJudgementCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{"-p", "--model", "claude-opus-5-5", "--tools", "", "--system-prompt", "You review.", "--json-schema", `{"type": "object"}`,
-		"--output-format", "json", "--no-session-persistence", "--setting-sources", "project", "--strict-mcp-config", "--effort", "high",
+		"--output-format", "json", "--no-session-persistence", "--setting-sources", "project", "--strict-mcp-config",
+		"--settings", `{"autoMemoryEnabled":false,"disableClaudeAiConnectors":true}`, "--effort", "high",
 		"--max-budget-usd", "1"}
 	if !slices.Equal(args, want) {
 		t.Errorf("args = %q", args)
@@ -57,5 +58,10 @@ func TestJudgementSignIn(t *testing.T) {
 		if _, _, err := bad.Command(nil); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+	login := base
+	login.SignIn = SignInLogin
+	if _, _, err := login.Command([]string{"CLAUDE_CONFIG_DIR=work-claude"}); err == nil {
+		t.Error("a relative CLAUDE_CONFIG_DIR was accepted") // it would resolve in the empty call folder, signed out
 	}
 }

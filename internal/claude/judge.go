@@ -45,7 +45,8 @@ func (j Judgement) Command(environ []string) (args, env []string, err error) {
 	args = []string{"-p", "--model", j.Model, "--tools", "", "--system-prompt", j.SystemPrompt, "--json-schema", j.Schema,
 		"--output-format", "json", "--no-session-persistence",
 		"--setting-sources", "project", // no user-level skills, settings or memory
-		"--strict-mcp-config"} // only MCP servers given here (none)
+		"--strict-mcp-config",                                                        // only MCP servers given here (none)
+		"--settings", `{"autoMemoryEnabled":false,"disableClaudeAiConnectors":true}`} // as runs' settings, beside the variables below
 	if j.Effort != "" {
 		args = append(args, "--effort", j.Effort)
 	}
@@ -59,7 +60,11 @@ func (j Judgement) Command(environ []string) (args, env []string, err error) {
 		if j.Secret != "" {
 			return nil, nil, errors.New("sign-in login takes no secret")
 		}
-		if userConfig := UserConfigDir(environ, j.Home); userConfig != filepath.Join(j.Home, ".claude") {
+		userConfig := UserConfigDir(environ, j.Home)
+		if !filepath.IsAbs(userConfig) { // relative, it would resolve in the empty call folder: a fresh, signed-out config
+			return nil, nil, fmt.Errorf("CLAUDE_CONFIG_DIR %q is not absolute", userConfig)
+		}
+		if userConfig != filepath.Join(j.Home, ".claude") {
 			env = append(env, "CLAUDE_CONFIG_DIR="+userConfig)
 		}
 	case SignInAPIKey, SignInTokenFile:
@@ -77,17 +82,15 @@ func (j Judgement) Command(environ []string) (args, env []string, err error) {
 	return args, env, nil
 }
 
-// RunJudgement makes the call with prompt on stdin, writing Claude Code's stdout (one JSON result) to stdout and
-// returning what it wrote to stderr. stdout is a file, not a pipe, so a background process holding the pipe open cannot
-// hold the call past its end; keep it outside Dir, which stays empty. On timeout or cancel the process group is
-// interrupted, then killed after grace.
-func RunJudgement(ctx context.Context, j Judgement, prompt string, environ []string, stdout *os.File, timeout, grace time.Duration) (string, runner.Result, error) {
+// RunJudgement makes the call with prompt on stdin, writing Claude Code's stdout (one JSON result) and stderr to the
+// given files. They are files, not pipes, so a background process holding one open cannot hold the call past its end;
+// keep them outside Dir, which stays empty. On timeout or cancel the process group is interrupted, then killed after
+// grace.
+func RunJudgement(ctx context.Context, j Judgement, prompt string, environ []string, stdout, stderr *os.File, timeout, grace time.Duration) (runner.Result, error) {
 	args, env, err := j.Command(environ)
 	if err != nil {
-		return "", runner.Result{}, err
+		return runner.Result{}, err
 	}
-	var stderr strings.Builder
-	result, err := runner.Run(ctx, runner.Spec{Dir: j.Dir, Args: append([]string{j.CLI}, args...), Environ: env,
-		Stdin: strings.NewReader(prompt), Timeout: timeout, Grace: grace, Output: stdout, Stderr: &stderr})
-	return strings.TrimSpace(stderr.String()), result, err
+	return runner.Run(ctx, runner.Spec{Dir: j.Dir, Args: append([]string{j.CLI}, args...), Environ: env,
+		Stdin: strings.NewReader(prompt), Timeout: timeout, Grace: grace, Output: stdout, Stderr: stderr})
 }
