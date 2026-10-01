@@ -1,7 +1,7 @@
 # Automation: Agentium without anyone running it
 
 - Date: 2026-10-01
-- Status: Planned (2026-10-01), at the user's request ("How it can be automated? … introduce it in roadmap"). Phases start in the [next chapter](2026-10-01-next-chapter.md)'s waves 2–3. Paid steps (the Linux spike, real CI runs) need their own approval.
+- Status: Planned (2026-10-01): the user chose to start on their own Mac (see Decision). Requested ("How it can be automated? … introduce it in roadmap"). Phases start in the [next chapter](2026-10-01-next-chapter.md)'s waves 2–3. Paid steps (the Linux spike, real CI runs) need their own approval.
 - Scope: how Agentium runs on its own in the user's development apps: on every change to AI context, on a schedule, and as new code lands.
 
 ## Why
@@ -11,6 +11,21 @@ Today a person runs every command. The value comes from three questions:
 - Do we have enough good tasks to answer those questions?
 
 Each can run on a trigger, inside a budget, and report where the team already looks: the pull request, a weekly digest.
+
+## Decision (the user, 2026-10-01): start on the user's Mac
+- **No CI runner and no GitHub Action at first.** One local process, `agentium watch`, runs the loops on the user's machine.
+  - It polls the repository with `git fetch` and open pull requests with the user's `gh` login.
+  - It runs the supply loop when the default branch moves.
+  - It runs the fast check for each new head commit of a trusted pull request carrying the opt-in label.
+  - It spends the deep-watch budget in idle usage windows, overnight with a subscription.
+  - It posts reports as pull request comments through `gh`.
+- **Scheduling:** `agentium watch --once` for a single pass. For a schedule, a macOS LaunchAgent that the user installs: Agentium can print its definition (`agentium watch --launchd`), but never installs it. Or the user's own cron.
+- **What it needs from the user:**
+  - a `gh` login allowed to comment on pull requests (the current fine-grained token cannot read checks, so checks wait; comments are enough);
+  - the machine awake for scheduled passes;
+  - the opt-in label on pull requests.
+- **Why:** the sandbox recipes are proven on macOS, the data folder persists (so base runs and calibrations are reused across checks), and the subscription's usage windows are used rather than API prices.
+- **Hosted runners stay later.** They need the Linux spike (A3), secrets, and a cached data folder.
 
 ## Design: three loops
 
@@ -73,9 +88,9 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 |---|---|---|---|---|
 | A1 Headless foundation | 2 | `--json` and exit codes everywhere, non-interactive `start --yes`, `agentium.toml` | quick start | time ↓ |
 | A2 Supply loop | 2 | `agentium pool update` and pool health | [task mining](2026-10-01-task-mine.md) | time ↓↓ |
-| A3 Linux runs (spike, paid; approval) | 2 | a real run in Claude Code's Linux sandbox; a recipe or a list of gaps | temp isolation | reach |
-| A4 Fast check | 3 | `agentium ci check`, the policy exit codes, the PR comment, the GitHub Action (self-hosted first) | A1, A2, run reuse, early stopping | reach ↑↑, $ ↓ |
-| A5 Deep watch | 3 | `agentium watch`, drift on new Claude Code versions and models, history and digest | A1, run reuse, early stopping | trust, reach |
+| A3 Linux runs (spike, paid; approval) | Later | a real run in Claude Code's Linux sandbox; a recipe or a list of gaps (only for hosted runners) | temp isolation | reach |
+| A4 Fast check, local | 3 | `agentium ci check`, the policy exit codes; `agentium watch` polls pull requests through `gh` and posts the comment (a GitHub Action comes later, for hosted runners) | A1, A2, run reuse, early stopping | reach ↑↑, $ ↓ |
+| A5 Deep watch | 3 | the scheduled part of `agentium watch` (usage windows, overnight), drift on new Claude Code versions and models, history and digest; `--launchd` prints a LaunchAgent for the user to install | A1, run reuse, early stopping | trust, reach |
 | A6 Autopilot | Later | propose, test and open pull requests with context changes | A4, A5, the judge | time ↓, $ ↓ |
 
 ## Acceptance (per phase, refined when it starts)
