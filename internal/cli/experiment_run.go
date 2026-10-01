@@ -342,6 +342,17 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = experiment.StatusStopped, "Agentium could not start the runs: "+runErr.Error()
 	}
+	// Every slot settled is not done while a graded run still needs the judge: the last runs' judgements may have
+	// stopped at a usage limit or an interrupt.
+	if sum.Status == experiment.StatusDone && design.Judge != nil {
+		if n, err := unjudged(context.WithoutCancel(ctx), w, stored.ID, lock); err != nil {
+			runErr = errors.Join(runErr, err)
+		} else if n > 0 && judgePaused.Load() {
+			sum.Status, sum.Note = experiment.StatusUsage, judgeLimitNote
+		} else if n > 0 {
+			sum.Status, sum.Note = experiment.StatusStopped, fmt.Sprintf("%d run(s) still need the judge", n)
+		}
+	}
 	if err := w.db.SetExperimentStatus(context.WithoutCancel(ctx), stored.ID, sum.Status, sum.Note); err != nil {
 		return fail(env, errors.Join(runErr, err))
 	}
@@ -360,7 +371,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(out, "%s To continue: %s (a higher total)\n", st.Warn("Stopped at the budget."), st.Command("agentium experiment run "+name+" --budget USD"))
 		return ExitOK
 	case sum.Status == experiment.StatusUsage && judgePaused.Load():
-		fmt.Fprintf(out, "%s To continue: %s (its runs without a verdict are judged first)\n",
+		fmt.Fprintf(out, "%s To continue, once it resets: %s (runs without a verdict are judged first; --wait does not wait for the judge)\n",
 			st.Warn("Paused: the judge hit a usage limit or a sign-in failure."), st.Command("agentium experiment run "+name))
 		return ExitOK
 	case sum.Status == experiment.StatusUsage && !sum.ResumeAt.IsZero():
@@ -374,6 +385,32 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	fmt.Fprintf(out, "%s To continue: %s\n", st.Warn("Stopped."), st.Command("agentium experiment run "+name))
 	return ExitError
+}
+
+// needsJudge reports whether a stored run of the experiment still needs the judge (run.NeedsJudging): only in an
+// experiment with the judge, and only for fair runs of the lock's tasks.
+func needsJudge(lock experiment.Lock, r store.Run, rec run.Record) bool {
+	t, ok := lock.Task(r.TaskName)
+	return lock.Design.Judge != nil && ok && experiment.Fair(r.Outcome) && run.NeedsJudging(rec, t.Spec())
+}
+
+// unjudged counts the experiment's stored runs that still need the judge.
+func unjudged(ctx context.Context, w *workspace, id int64, lock experiment.Lock) (int, error) {
+	runs, err := w.db.ExperimentRuns(ctx, id)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, r := range runs {
+		var rec run.Record
+		if err := json.Unmarshal(r.Record, &rec); err != nil {
+			return 0, fmt.Errorf("run %s: %w", r.ID, err)
+		}
+		if needsJudge(lock, r, rec) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // judgeLimitNote is the status note of an experiment paused by the judge (Verdict.Stopped is judge.StoppedLimit).
@@ -523,6 +560,7 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 	}
 	settled := map[int]bool{}
 	spent, judgeSpent := 0.0, 0.0
+	unjudgedRuns := 0
 	for _, r := range runs {
 		c := counts[r.Arm]
 		if c == nil {
@@ -535,6 +573,9 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
 			return fmt.Errorf("run %s: %w", r.ID, err)
+		}
+		if needsJudge(lock, r, rec) {
+			unjudgedRuns++
 		}
 		switch {
 		case experiment.Fair(r.Outcome):
@@ -588,6 +629,9 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 		return err
 	}
 	fmt.Fprintln(out, st.Note("Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted."))
+	if unjudgedRuns > 0 {
+		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", unjudgedRuns)), st.Command("agentium experiment run "+name))
+	}
 	return nil
 }
 

@@ -24,8 +24,9 @@ import (
 // workspace ("s2-t1": slot 2, first try): "infra" lists runs that end without a result, "hang" runs that wait to be
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
 // Called as the judge (--json-schema), it keeps its prompt and folder in ctrl ("judge-prompt-PID", "judge-dir-PID") and
-// answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), with "judge-broken" it prints
-// no JSON. "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
+// answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
+// numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON. "cost" sets what a run
+// reports it cost (default 0.30). "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
 // "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl.
@@ -36,7 +37,9 @@ CTRL='` + ctrl + `'
 version=2.1.281; [ -f "$CTRL/version" ] && version=$(cat "$CTRL/version")
 [ "$1" = --version ] && { echo "$version (Claude Code)"; exit 0; }
 case " $* " in *" --json-schema "*)
+  calls=$(ls "$CTRL" | grep -c '^judge-prompt-')
   cat > "$CTRL/judge-prompt-$$"; pwd > "$CTRL/judge-dir-$$"
+  [ -f "$CTRL/judge-limit-after" ] && [ "$calls" -ge "$(cat "$CTRL/judge-limit-after")" ] && touch "$CTRL/judge-limit"
   [ -f "$CTRL/judge-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
   [ -f "$CTRL/judge-broken" ] && { echo 'not json'; exit 1; }
   echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"fixed":"yes","reason":"Sets the value as the reference does."},"total_cost_usd":0.05}'; exit 0;;
@@ -64,7 +67,8 @@ printf 'new\n' > value.txt
 if [ -f "$CTRL/usage" ]; then
   used=$(awk "BEGIN{print $used + $step}"); echo "$used $step $resets" > "$CTRL/usage"; limit "$used"
 fi
-echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.30,"num_turns":2,"duration_ms":1000,"modelUsage":{}}'
+cost=0.30; [ -f "$CTRL/cost" ] && cost=$(cat "$CTRL/cost")
+echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":'"$cost"',"num_turns":2,"duration_ms":1000,"modelUsage":{}}'
 `
 	cli := filepath.Join(t.TempDir(), "claude")
 	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {

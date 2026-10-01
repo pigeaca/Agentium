@@ -26,7 +26,8 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-const experimentUsage = `Usage:
+// experimentUsage is the help of experiment's subcommands. It is computed once from constants and never changed.
+var experimentUsage = `Usage:
   agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--tier quick|confident | --task NAME...] [--repeats N]
                      [--model MODEL] [--effort LEVEL] [--goal cheaper|better] [--run-budget USD] [--budget USD]
                      [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
@@ -53,13 +54,15 @@ const experimentUsage = `Usage:
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT). A tier
 samples them: quick is 12 tasks × 3 runs per arm, confident 23 × 5; --task picks them instead (repeatable).
 
---judge asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference
-solution does? It reads the instruction and both changes' code (never the tests), --judge-repeats times (default 3,
-up to 9; the majority wins) on --judge-model (default claude-opus-5-5) at --judge-effort (default high). Its verdict
+` + fmt.Sprintf(`--judge asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference
+solution does? It reads the instruction and both changes' code (never the tests), --judge-repeats times (default %d,
+up to %d; the majority wins) on --judge-model (default %s) at --judge-effort (default %s). Its verdict
 (fixed, partly or no, with a reason) is a second opinion beside the tests: it decides nothing. Its calls count against
-the budget, which holds back repeats × 2 × $1.00 per run for them, but never toward an arm's cost. Tasks without a
-reference solution in code are not judged.
-`
+the budget, which holds back repeats × 2 × $%.2f per run for them, but never toward an arm's cost. Tasks without a
+reference solution in code are not judged. Judging can hold a run's slot for up to repeats × %d minutes more. The usage
+limit's per-run estimate leaves out the judge's use of a subscription; a judge that hits a usage limit pauses the
+experiment, and --wait does not wait for it.
+`, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD, int(llmjudge.CallTimeout.Minutes()))
 
 func runExperiment(ctx context.Context, env Env, args []string) int {
 	if len(args) == 0 {
