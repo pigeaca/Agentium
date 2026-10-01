@@ -14,4 +14,4 @@ Time and dollars to the first decisive verdict (inconclusive doesn't count): tod
 4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, scheduled watch.
 5. Later: Codex.
 
-[Judge](plans/2026-10-01-llm-judge.md) (a second opinion): done per run and in experiments; reports and a real check next; pairs and tickets after a gate.
+[Judge](plans/archive/2026-10-01-llm-judge.md) (a second opinion): done per run, in experiments and reports, with a real check; pairs and tickets after a gate.
