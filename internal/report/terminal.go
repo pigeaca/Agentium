@@ -47,6 +47,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, st.Status(r.Status), r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, d.Model, orDefault(d.Effort), l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
+	if l.LocalBinding {
+		b.WriteString(st.Warn(localBindingNote) + "\n")
+	}
 
 	section("Metrics", "A and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.")
 	t := table(term.Left("Metric"), term.Left("Role"), term.Right("A"), term.Right("B"), term.Right("B vs A"), term.Right("95% bootstrap"), term.Right("95% t"), term.Left("Verdict"))

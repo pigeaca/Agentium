@@ -347,3 +347,28 @@ func TestSplitJavaTestClassAnywhere(t *testing.T) {
 		t.Errorf("split = %v / %v", hidden, reference)
 	}
 }
+
+// Each checkout's build tools keep their caches in Agentium's cache folder, whatever tool the task's repository uses;
+// without a cache root the environment is the caller's alone.
+func TestValidatorEnvFollowsTheCheckoutsBuildTools(t *testing.T) {
+	dir := t.TempDir()
+	v := Validator{Env: []string{"A=1"}, Cache: "/data/cache"}
+	if got := v.envFor(dir); !slices.Equal(got, []string{"A=1"}) {
+		t.Errorf("a checkout with no marker: %q", got)
+	}
+	for file, want := range map[string]string{"build.gradle.kts": "GRADLE_USER_HOME=/data/cache/gradle", "pom.xml": "MAVEN_ARGS=-Dmaven.repo.local=/data/cache/m2 -Dmaven.build.cache.enabled=false",
+		"Cargo.toml": "RUSTC_WRAPPER="} {
+		if err := os.WriteFile(filepath.Join(dir, file), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := v.envFor(dir); !slices.Contains(got, want) || got[0] != "A=1" {
+			t.Errorf("with %s: %q lacks %s", file, got, want)
+		}
+	}
+	if got := (Validator{Env: []string{"A=1"}}).envFor(dir); !slices.Equal(got, []string{"A=1"}) {
+		t.Errorf("without a cache root: %q", got)
+	}
+	if len(v.Env) != 1 {
+		t.Error("envFor changed the validator's own environment")
+	}
+}

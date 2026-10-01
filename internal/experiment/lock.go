@@ -34,19 +34,22 @@ const MaxAttempts = 3
 // Lock is what an experiment fixes before its first run. Resumes check it against the machine, and runs use it, not
 // the tasks and snapshots as they are later.
 type Lock struct {
-	Method        string         `json:"method"`
-	Agentium      string         `json:"agentium"`
-	LockedAt      time.Time      `json:"locked_at"`
-	ClaudeCode    string         `json:"claude_code"` // the version every run must report
-	ClaudePath    string         `json:"claude_path"`
-	SignIn        string         `json:"sign_in"`
-	Host          string         `json:"host"`        // operating system and architecture
-	PriceTable    string         `json:"price_table"` // the date of Agentium's price table
-	Design        Design         `json:"design"`
-	Arms          []LockedArm    `json:"arms"`
-	Tasks         []LockedTask   `json:"tasks"`
-	Schedule      []Slot         `json:"schedule"`
-	MaxAttempts   int            `json:"max_attempts"`
+	Method      string       `json:"method"`
+	Agentium    string       `json:"agentium"`
+	LockedAt    time.Time    `json:"locked_at"`
+	ClaudeCode  string       `json:"claude_code"` // the version every run must report
+	ClaudePath  string       `json:"claude_path"`
+	SignIn      string       `json:"sign_in"`
+	Host        string       `json:"host"`        // operating system and architecture
+	PriceTable  string       `json:"price_table"` // the date of Agentium's price table
+	Design      Design       `json:"design"`
+	Arms        []LockedArm  `json:"arms"`
+	Tasks       []LockedTask `json:"tasks"`
+	Schedule    []Slot       `json:"schedule"`
+	MaxAttempts int          `json:"max_attempts"`
+	// LocalBinding: the runs' sandbox allowed local binding (Gradle projects, with the user's opt-in): the agent could
+	// bind any local port and connect to localhost services. The report shows it.
+	LocalBinding  bool           `json:"local_binding,omitempty"`
 	BudgetChanges []BudgetChange `json:"budget_changes,omitempty"`
 }
 

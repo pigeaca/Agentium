@@ -195,7 +195,8 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	}
 	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), Environ: environ,
 		SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second, CommandEnv: buildEnv,
-		Progress: env.Stdout, Style: env.style(), Now: env.Now}, nil
+		AllowLocalBinding: w.project.AllowLocalBinding,
+		Progress:          env.Stdout, Style: env.style(), Now: env.Now}, nil
 }
 
 // claudePath finds Claude Code: AGENTIUM_CLAUDE, else PATH.

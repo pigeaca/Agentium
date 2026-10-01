@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
@@ -20,13 +22,27 @@ const initUsage = `Usage: agentium init [path]
 
 Registers the git repository containing path (default: the current folder) and reports what Agentium found. It only
 reads the repository; data goes to ~/.agentium (or AGENTIUM_HOME), which must be outside the repository.
+
+  --allow-local-binding     let agent runs on a Gradle project bind local ports and connect to localhost in the sandbox
+  --no-allow-local-binding  turn that off again
+
+Gradle's file-lock service binds a local socket, which the sandbox forbids by default. Allowing it lets the agent bind
+any local port and connect to any service listening on localhost (databases, dev servers) on this machine; outbound
+network to other hosts stays blocked. Without it, agent runs on a Gradle project refuse to start. Running init again
+without either flag keeps the stored choice.
 `
 
 // runInit registers a repository: discovery is read-only, and the result goes to the data folder only.
 func runInit(ctx context.Context, env Env, args []string) int {
-	paths, code, ok := parseArgs(env, flag.NewFlagSet("init", flag.ContinueOnError), args, initUsage)
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	allow, deny := fs.Bool("allow-local-binding", false, ""), fs.Bool("no-allow-local-binding", false, "")
+	paths, code, ok := parseArgs(env, fs, args, initUsage)
 	if !ok {
 		return code
+	}
+	if *allow && *deny {
+		fmt.Fprintf(env.Stderr, "agentium init: --allow-local-binding and --no-allow-local-binding exclude each other\n\n%s", initUsage)
+		return ExitUsage
 	}
 	if len(paths) > 1 {
 		fmt.Fprintf(env.Stderr, "agentium init: expected at most one path, got %d\n\n%s", len(paths), initUsage)
@@ -69,6 +85,12 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if *allow || *deny {
+		if err := db.SetLocalBinding(ctx, saved.ID, *allow); err != nil {
+			return fail(env, err)
+		}
+		saved.AllowLocalBinding = *allow
+	}
 	src, err := source.WorkingTree(ctx, info.Root)
 	if err != nil {
 		return fail(env, err)
@@ -100,10 +122,24 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	}
 	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: %s\n",
 		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup, st.Command("agentium context show"))
+	if gradle := slices.Contains(buildtool.DetectIn(info.Root), "gradle"); gradle || saved.AllowLocalBinding {
+		fmt.Fprintf(w, "  local ports  %s\n", localBindingLine(saved.AllowLocalBinding, gradle))
+	}
 	fmt.Fprintf(w, "  data         %s (your repository was not modified)\n", layout.Root)
 	for _, text := range info.Warnings {
 		fmt.Fprintln(w, warning(st, text))
 	}
+}
+
+// localBindingLine says what the project's setting means for agent runs.
+func localBindingLine(allowed, gradle bool) string {
+	switch {
+	case allowed:
+		return "agents may bind local ports and connect to localhost (--no-allow-local-binding turns it off)"
+	case gradle:
+		return "off: agent runs on this Gradle project refuse to start until you allow it with `agentium init --allow-local-binding` (it lets the agent bind any local port and reach localhost services)"
+	}
+	return "off"
 }
 
 func describeSignIn(mode string) string {

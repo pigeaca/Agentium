@@ -425,3 +425,21 @@ func TestExecuteWaitsForARetryBeforeABudgetStop(t *testing.T) {
 		}
 	}
 }
+
+// Runs that gave up waiting for another run's dependency warm-up are not an outage: they stop the experiment with their
+// own note (resume to continue), not the "infrastructure outage" one.
+func TestExecuteWarmUpWaitsHaveTheirOwnNote(t *testing.T) {
+	slots := scheduleOf(t, 4, 1)
+	f := &fake{outcome: func(s Slot, _ int) Result {
+		if s.Position == 0 {
+			return Result{Outcome: claude.OutcomeOK}
+		}
+		return Result{Outcome: claude.OutcomeInfra, WarmWait: true}
+	}}
+	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3,
+		Backoff: func(int) time.Duration { return 0 }}, f.run)
+	if err != nil || sum.Status != StatusStopped || !strings.Contains(sum.Note, "waited for another run's dependency warm-up") ||
+		strings.Contains(sum.Note, "in a row failed") {
+		t.Fatalf("summary %+v, %v; ran %v", sum, err, f.ran)
+	}
+}
