@@ -549,6 +549,10 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 	if len(unchecked) > 0 {
 		check("WARNING", "what the hidden tests require could not be checked for: "+strings.Join(unchecked, ", "))
 	}
+	if few := fewRepeats(ctx, w, d, eligible); len(few) > 0 {
+		check("WARNING", fmt.Sprintf("validated with fewer than %d repeats, so flaky checks may not show yet: %s (agentium task validate NAME --repeat %d%s)",
+			minValidateRepeats, strings.Join(few, ", "), minValidateRepeats, snapshotFlags(d.Arms)))
+	}
 	if ready {
 		check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
@@ -558,6 +562,41 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 			d.BudgetUSD, expected, reserve))
 	}
 	return ready
+}
+
+// minValidateRepeats is how many validation repeats experiment plan asks for before it stops warning.
+const minValidateRepeats = 3
+
+// fewRepeats names the design's eligible tasks whose latest validation ran each stage fewer than minValidateRepeats times.
+func fewRepeats(ctx context.Context, w *workspace, d experiment.Design, eligible []string) []string {
+	var few []string
+	for _, name := range d.Tasks {
+		if !slices.Contains(eligible, name) {
+			continue
+		}
+		t, err := w.db.TaskByName(ctx, w.project.ID, name)
+		if err != nil || t.Validation == nil {
+			continue
+		}
+		var v task.Validation
+		if json.Unmarshal(t.Validation, &v) == nil && v.RepeatCount() < minValidateRepeats {
+			few = append(few, name)
+		}
+	}
+	return few
+}
+
+// snapshotFlags is the arms' " --snapshot NAME" flags for a task validate command.
+func snapshotFlags(arms []experiment.Arm) string {
+	var flags string
+	var named []string
+	for _, a := range arms {
+		if a.Context != experiment.BaseContext && !slices.Contains(named, a.Context) {
+			named = append(named, a.Context)
+			flags += " --snapshot " + a.Context
+		}
+	}
+	return flags
 }
 
 func experimentList(ctx context.Context, env Env, args []string) int {

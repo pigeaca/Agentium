@@ -80,6 +80,22 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	expect(t, run("task", "validate", name, "--snapshot", "broken", "--snapshot", "broken"), ExitUsage, "repeated or reserved")
 	expect(t, run("task", "validate", name, "--snapshot", "base"), ExitUsage, "repeated or reserved")
 
+	expect(t, run("task", "validate", name, "--repeat", "0"), ExitUsage, "--repeat must be 1 to 20")
+	repeated := run("task", "validate", name, "--repeat", "3")
+	expect(t, repeated, ExitOK, "(1/3)", "(3/3)", "Result: valid")
+	if strings.Contains(repeated.stdout, "flaky") {
+		t.Errorf("a steady task:\n%s", repeated.stdout)
+	}
+
+	// A check that flips between pass and fail (a marker outside every fresh checkout) makes the task flaky.
+	marker := filepath.Join(t.TempDir(), "marker")
+	flip := "if [ -e " + marker + " ]; then rm " + marker + "; exit 1; else touch " + marker + "; fi"
+	expect(t, run("task", "add", "flip", "--base", "HEAD", "--instruction", "Anything.", "--verify", flip), ExitOK)
+	expect(t, run("task", "validate", "flip", "--repeat", "3"), ExitError, "flip", "(2/3)", "flaky: base/base passed 2 of 3 times",
+		"Result: flaky: base/base passed 2 of 3 times")
+	expect(t, run("task", "list"), ExitOK, "flaky: base/base passed 2 of 3 times")
+	expect(t, run("task", "show", "flip"), ExitOK, "status     flaky: base/base passed 2 of 3 times")
+
 	expect(t, run("task", "edit", name, "--reviewed"), ExitOK)
 	expect(t, run("task", "edit", name, "--verify", "sh run_tests.sh", "--verify", "true"), ExitOK)
 	list := run("task", "list")

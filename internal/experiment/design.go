@@ -158,6 +158,8 @@ func Ineligible(c Candidate, arms []Arm) string {
 		return "not validated" + validateHint(c.Name, arms)
 	case v.Status == task.StatusUnchecked:
 		return "it has no solution to check with, so its hidden tests are unproven"
+	case v.Status == task.StatusFlaky:
+		return "its validation is " + v.Summary() + " (rerun it to see if it holds: agentium task validate " + c.Name + " --repeat 3)"
 	case v.Status != task.StatusValid:
 		return "its validation failed: " + v.Summary()
 	}

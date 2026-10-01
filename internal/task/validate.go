@@ -24,6 +24,7 @@ const (
 	StatusValid     = "valid"     // in every arm: the hidden tests fail on the base and the reference passes them
 	StatusInvalid   = "invalid"   // some stage did not behave as required
 	StatusUnchecked = "unchecked" // no solution to check with: only the base's verification was run
+	StatusFlaky     = "flaky"     // some stage gave different results in repeated runs: the task cannot be trusted
 )
 
 // Stage names. With a solution, each arm runs hidden-tests then reference; the base need not pass on its own (a task
@@ -69,6 +70,14 @@ type Stage struct {
 	SetupFailed bool      `json:"setup_failed,omitempty"`
 	Commands    []Command `json:"commands"`
 	Log         string    `json:"log"`
+	// With --repeat N above 1 the stage ran N times in fresh checkouts and the fields above describe one representative
+	// run (the first that was not OK, else the first). Runs is N; the counts say how the runs went. Flaky means the runs
+	// disagreed (some passed, some did not, or only some were OK); a flaky stage is never OK. All are absent for one run.
+	Runs            int  `json:"runs,omitempty"`
+	PassedRuns      int  `json:"passed_runs,omitempty"`
+	OKRuns          int  `json:"ok_runs,omitempty"`
+	SetupFailedRuns int  `json:"setup_failed_runs,omitempty"`
+	Flaky           bool `json:"flaky,omitempty"`
 }
 
 // Validation is the outcome of validating a task.
@@ -77,10 +86,18 @@ type Validation struct {
 	Arms   []Arm     `json:"arms"`
 	Stages []Stage   `json:"stages"`
 	At     time.Time `json:"at"`
+	// Repeats is how many times each stage ran when that was more than once; absent (older validations, a single run)
+	// means once. See RepeatCount.
+	Repeats int `json:"repeats,omitempty"`
 	// HarnessChanged lists, per arm, settings, hooks and MCP files that differ from the base.
 	HarnessChanged map[string][]string `json:"harness_changed,omitempty"`
 	// ContextKept lists, per arm, context files the solution also changes: the arm keeps its own version of them.
 	ContextKept map[string][]string `json:"context_kept,omitempty"`
+}
+
+// RepeatCount is how many times each stage ran: 1 when Repeats is absent.
+func (v Validation) RepeatCount() int {
+	return max(v.Repeats, 1)
 }
 
 // Validator runs validations. Checkouts are made in WorkDir and removed afterwards unless Keep is set.
@@ -90,6 +107,7 @@ type Validator struct {
 	LogDir   string
 	Timeout  time.Duration // per command
 	Keep     bool
+	Repeats  int        // runs per stage, each in a fresh checkout; below 2 means once
 	Env      []string   // added to every setup and verification command (a build cache of Agentium's own)
 	Progress io.Writer  // one line per stage
 	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
@@ -101,6 +119,9 @@ type Validator struct {
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
 func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validation, error) {
 	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC()}
+	if v.Repeats > 1 {
+		result.Repeats = v.Repeats
+	}
 	if spec.Solution == "" || len(spec.HiddenTests) == 0 || len(spec.Reference) == 0 {
 		result.Status = StatusUnchecked
 	}
@@ -133,7 +154,10 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			return result, err
 		}
 		for _, stage := range stages {
-			if !stage.OK {
+			switch {
+			case stage.Flaky:
+				result.Status = StatusFlaky
+			case !stage.OK && result.Status != StatusFlaky:
 				result.Status = StatusInvalid
 			}
 		}
@@ -189,15 +213,11 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 		}
 	}
 	for _, s := range plan {
-		if v.Started != nil {
-			v.Started(arm.Name, s.name)
-		}
-		stage, err := v.runStage(ctx, spec, arm, s.name, s.want, snap, overlay, solution, s.files)
+		stage, err := v.runStageRepeated(ctx, spec, arm, s.name, s.want, snap, overlay, solution, s.files)
 		stages = append(stages, stage)
 		if err != nil {
 			return stages, overlay.HarnessChanged, kept, err
 		}
-		v.report(stage)
 		if !stage.OK {
 			break
 		}
@@ -206,11 +226,90 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 	return stages, overlay.HarnessChanged, kept, nil
 }
 
+// runStageRepeated runs a stage v.Repeats times (once by default), each in a fresh checkout, and folds the runs into one
+// Stage. Every repeat runs even after a failure, since disagreement between runs is what it looks for. An error (setup
+// that cannot run, cancellation) stops it at once and returns the runs so far as the stage, not OK.
+func (v Validator) runStageRepeated(ctx context.Context, spec Spec, arm Arm, name string, want bool, snap source.Source,
+	overlay snapshot.Overlay, solution source.Source, files []string) (Stage, error) {
+	n := max(v.Repeats, 1)
+	var runs []Stage
+	for i := 1; i <= n; i++ {
+		if v.Started != nil {
+			if n > 1 {
+				v.Started(arm.Name, fmt.Sprintf("%s %d/%d", name, i, n))
+			} else {
+				v.Started(arm.Name, name)
+			}
+		}
+		run, err := v.runStage(ctx, spec, arm, name, want, snap, overlay, solution, files, i, n)
+		if err != nil {
+			return fold(append(runs, run), n), err
+		}
+		runs = append(runs, run)
+		v.report(run, i, n)
+	}
+	if n == 1 {
+		return runs[0], nil
+	}
+	stage := fold(runs, n)
+	if stage.Flaky && v.Progress != nil {
+		fmt.Fprintf(v.Progress, "  %-10s %-13s %s\n", stage.Arm, stage.Stage, v.Style.Status("flaky: "+flakyText(stage)))
+	}
+	return stage, nil
+}
+
+// fold combines the runs of one stage: the first run that was not OK represents it (else the first), counts say how
+// the runs went, and disagreement makes it flaky and so not OK. With one run, or fewer than n after an error, it only
+// returns that run (an error's partial result is not OK).
+func fold(runs []Stage, n int) Stage {
+	stage := runs[0]
+	if n == 1 {
+		return stage
+	}
+	for _, r := range runs {
+		if !r.OK {
+			stage = r
+			break
+		}
+	}
+	stage.Runs = n
+	stage.PassedRuns, stage.OKRuns, stage.SetupFailedRuns = 0, 0, 0
+	for _, r := range runs {
+		if r.Passed {
+			stage.PassedRuns++
+		}
+		if r.OK {
+			stage.OKRuns++
+		}
+		if r.SetupFailed {
+			stage.SetupFailedRuns++
+		}
+	}
+	stage.Flaky = len(runs) == n && (stage.PassedRuns != 0 && stage.PassedRuns != n || stage.OKRuns != 0 && stage.OKRuns != n)
+	if stage.Flaky {
+		stage.OK = false
+	}
+	return stage
+}
+
+// flakyText says how a flaky stage's runs disagreed.
+func flakyText(s Stage) string {
+	text := fmt.Sprintf("%s/%s passed %d of %d times", s.Arm, s.Stage, s.PassedRuns, s.Runs)
+	if s.SetupFailedRuns > 0 {
+		text += fmt.Sprintf(" (its setup failed %d times)", s.SetupFailedRuns)
+	}
+	return text
+}
+
 // runStage prepares a fresh checkout for one stage and runs the verification in it.
 func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string, want bool, snap source.Source,
-	overlay snapshot.Overlay, solution source.Source, files []string) (Stage, error) {
-	stage := Stage{Arm: arm.Name, Stage: name, Want: passFail(want), Log: filepath.Join(v.LogDir, arm.Name+"-"+name+".log")}
-	dir := filepath.Join(v.WorkDir, arm.Name+"-"+name)
+	overlay snapshot.Overlay, solution source.Source, files []string, repeat, repeats int) (Stage, error) {
+	label := arm.Name + "-" + name
+	if repeats > 1 { // each repeat has its own checkout and log
+		label += fmt.Sprintf("-r%d", repeat)
+	}
+	stage := Stage{Arm: arm.Name, Stage: name, Want: passFail(want), Log: filepath.Join(v.LogDir, label+".log")}
+	dir := filepath.Join(v.WorkDir, label)
 	if err := checkout.New(ctx, v.Bare, spec.Base, dir); err != nil {
 		return stage, err
 	}
@@ -249,8 +348,8 @@ func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string
 	return stage, nil
 }
 
-// report prints one progress line for a stage.
-func (v Validator) report(stage Stage) {
+// report prints one progress line for a run of a stage; with several repeats it ends with the run's number.
+func (v Validator) report(stage Stage, repeat, repeats int) {
 	if v.Progress == nil {
 		return
 	}
@@ -263,7 +362,11 @@ func (v Validator) report(stage Stage) {
 	case !stage.OK:
 		verdict = "NOT OK"
 	}
-	fmt.Fprintf(v.Progress, "  %-10s %-13s want %-4s got %-4s %s\n", stage.Arm, stage.Stage, stage.Want, got, v.Style.Status(verdict))
+	line := fmt.Sprintf("  %-10s %-13s want %-4s got %-4s %s", stage.Arm, stage.Stage, stage.Want, got, v.Style.Status(verdict))
+	if repeats > 1 {
+		line += fmt.Sprintf(" (%d/%d)", repeat, repeats)
+	}
+	fmt.Fprintln(v.Progress, line)
 }
 
 // run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.
@@ -310,6 +413,8 @@ func (v Validation) Summary() string {
 	var failed []string
 	for _, stage := range v.Stages {
 		switch {
+		case stage.Flaky:
+			failed = append(failed, flakyText(stage))
 		case stage.SetupFailed:
 			failed = append(failed, fmt.Sprintf("%s/%s setup failed", stage.Arm, stage.Stage))
 		case !stage.OK && timedOut(stage.Commands):
