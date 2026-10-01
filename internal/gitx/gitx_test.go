@@ -120,3 +120,22 @@ func TestInheritedGitDirCannotRedirectCommands(t *testing.T) {
 		t.Errorf("git dir = %q, want %q", got, want)
 	}
 }
+
+// TestEnvironPinned pins what Environ keeps byte for byte: credentials and GIT_* dropped (AGENTIUM_* kept, unlike
+// runner.Environ), then the three variables git is always given.
+func TestEnvironPinned(t *testing.T) {
+	environ := []string{"PATH=/bin", "HOME=/h", "GIT_DIR=/x", "GIT_AUTHOR_NAME=a", "AGENTIUM_HOME=/a", "AGENTIUM_X=1", "ANTHROPIC_API_KEY=k",
+		"GITHUB_TOKEN=t", "SSH_AUTH_SOCK=/s", "MY_PASSWORD=p", "CLAUDE_CODE_TMPDIR=/t", "LC_ALL=C", "GOFLAGS=-mod=mod", "JAVA_HOME=/j",
+		"RUSTC_WRAPPER=w", "HTTPS_PROXY=http://p", "XDG_RUNTIME_DIR=/r", "FOO=bar", "NODE_OPTIONS=x", "TERM=xterm", "EMPTY=", "GOPATH=/g",
+		"MAVEN_OPTS=-X", "GRADLE_USER_HOME=/gu", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp", "AWS_PROFILE=p", "NETRC=/n", "GIT=ok", "GITHUB=ok"}
+	want := []string{"PATH=/bin", "HOME=/h", "AGENTIUM_HOME=/a", "AGENTIUM_X=1", "CLAUDE_CODE_TMPDIR=/t", "LC_ALL=C", "GOFLAGS=-mod=mod",
+		"JAVA_HOME=/j", "RUSTC_WRAPPER=w", "HTTPS_PROXY=http://p", "XDG_RUNTIME_DIR=/r", "FOO=bar", "NODE_OPTIONS=x", "TERM=xterm", "EMPTY=",
+		"GOPATH=/g", "MAVEN_OPTS=-X", "GRADLE_USER_HOME=/gu", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp", "GIT=ok", "GITHUB=ok",
+		"GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0"}
+	if got := Environ(environ); !slices.Equal(got, want) {
+		t.Errorf("Environ = %q\nwant %q", got, want)
+	}
+	if got := Environ(nil); !slices.Equal(got, want[len(want)-3:]) {
+		t.Errorf("Environ(nil) = %q", got)
+	}
+}

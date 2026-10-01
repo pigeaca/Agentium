@@ -115,7 +115,7 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 			}
 			fmt.Fprintf(out, "%s: started\n", label)
 		case "finish":
-			outcome := st.Status(orNone(e.Result.Outcome))
+			outcome := st.Status(term.OrNone(e.Result.Outcome))
 			if e.Result.Outcome == "" && e.Requeued {
 				// Execute reruns such a run on resume and does not count it as an attempt.
 				outcome = st.Warn("stopped before its agent started (not counted; it runs again on resume)")

@@ -16,6 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // mineRepo builds a repository with shell code and tests: three commits that make tasks (one of which is invalid:
@@ -517,8 +518,8 @@ func TestTaskValidateAllNotesARunningExperiment(t *testing.T) {
 // After a parallel batch, the advice names a command for each status that may come from running side by side.
 func TestBatchAdviceNamesEachStatusFound(t *testing.T) {
 	t.Parallel()
-	result := func(status string) batchResult {
-		return batchResult{validated: true, task: store.Task{Validation: []byte(`{"status":"` + status + `"}`)}}
+	result := func(status string) task.BatchResult {
+		return task.BatchResult{Validated: true, Task: store.Task{Validation: []byte(`{"status":"` + status + `"}`)}}
 	}
 	for _, c := range []struct {
 		statuses []string
@@ -531,7 +532,7 @@ func TestBatchAdviceNamesEachStatusFound(t *testing.T) {
 		{[]string{"invalid"}, 1, nil},
 	} {
 		var stdout strings.Builder
-		var results []batchResult
+		var results []task.BatchResult
 		for _, s := range c.statuses {
 			results = append(results, result(s))
 		}
@@ -545,4 +546,15 @@ func TestBatchAdviceNamesEachStatusFound(t *testing.T) {
 			}
 		}
 	}
+}
+
+// statusOf is a task's status for --status (task.StatusOf).
+func statusOf(t store.Task) string { return task.StatusOf(t) }
+
+// errAlreadyTask means a candidate became a task (in another process) while it was being imported.
+var errAlreadyTask = mine.ErrAlreadyTask
+
+// mineTask imports candidate c as the task t describes (mine.Importer.One), with a name not in names.
+func (w *workspace) mineTask(ctx context.Context, c mine.Candidate, t store.Task, names map[string]bool) (store.Task, error) {
+	return w.importer(names).One(ctx, c, t)
 }

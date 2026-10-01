@@ -38,7 +38,7 @@ Shape:
 | `internal/claudectx` | Which files Claude Code loads, as experiments run it: instructions, `@` imports (5 hops, also from rules and nested files), rules, skill/subagent/command descriptions, harness files, linked documents, warnings, lint and its hook |
 | `internal/snapshot` | Context versions as parentless commits in `projects/<id>/repo.git` in the data folder; diffs; overlay planning that refuses to change code or configuration and reports harness changes |
 | `internal/checkout` | Isolated working copies: a fresh repository holding only the base commit (depth 1), so hidden tests and solutions are unreachable; safe file writes |
-| `internal/runner` | Commands (shell or arguments) in their own process group with a timeout and no credentials; a gentle stop (SIGINT, then SIGKILL); the group is killed at the end and reported at the start |
+| `internal/runner` | Commands (shell or arguments) in their own process group with a timeout and no credentials (the shared `EnvPolicy`); a gentle stop (SIGINT, then SIGKILL); the group killed at the end, reported at start |
 | `internal/buildtool` | Build-tool profiles (Go, Maven, Gradle, Cargo): commands, caches, offline deps, warm-up, daemons, local binding |
 | `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths, credentials and shared temp folders, its own build cache and temp root, an allowlisted environment); stream-json metrics, outcomes and drift |
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), validation (per arm, batch; flaky, weak-test checks), and unstated-requirement gaps |
