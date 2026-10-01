@@ -153,6 +153,30 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		return err
 	}
 
+	if r.Judge != nil {
+		v := r.judgeView()
+		section("Judge", v.intro)
+		t = table(term.Left(judgeColumns[0]), term.Left(judgeColumns[1]), term.Right(judgeColumns[2]), term.Right(judgeColumns[3]),
+			term.Right(judgeColumns[4]), term.Right(judgeColumns[5]))
+		for _, row := range v.rows {
+			t.Row(row...)
+		}
+		if err := t.Write(&b); err != nil {
+			return err
+		}
+		b.WriteString("\n")
+		for _, line := range v.lines {
+			b.WriteString(line + "\n")
+		}
+		b.WriteString("\n" + v.flaggedTitle + "\n")
+		for _, f := range v.flagged {
+			fmt.Fprintf(&b, "- %s: %s\n  %s\n", f[0], st.Warn(f[1]), st.Note(sentence(f[2])))
+		}
+		if v.more > 0 {
+			fmt.Fprintf(&b, "- and %d more (agentium experiment report %s --json lists them all)\n", v.more, r.Experiment)
+		}
+	}
+
 	section("Notes", "")
 	for _, n := range r.Notes {
 		b.WriteString(st.Note("- "+n) + "\n")

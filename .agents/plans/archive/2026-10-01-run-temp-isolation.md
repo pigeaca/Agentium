@@ -1,7 +1,7 @@
 # Runs isolated from Claude Code's shared temp folder
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): steps 1–3 done; the fix is [#58](https://github.com/pigeaca/Agentium/pull/58) (two review rounds, approved, probe passed). Archive when it merges.
+- Status: Complete (2026-10-01): merged as #58 after two review rounds; the real probe passed ($0.14 for two findings sessions, $0.13 for the probe).
 - Scope: a sandbox gap that affects every project and every run, found on 2026-10-01.
 
 ## Why

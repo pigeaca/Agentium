@@ -16,6 +16,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
@@ -55,6 +56,7 @@ type Report struct {
 	Analysis   experiment.Analysis `json:"analysis"`
 	Arms       []Arm               `json:"arms"`
 	Tasks      []TaskRow           `json:"tasks"`
+	Judge      *Judge              `json:"judge,omitempty"` // only with the judge
 	Notes      []string            `json:"notes"`
 	Runs       []RunRow            `json:"runs"`
 }
@@ -138,6 +140,7 @@ type RunRow struct {
 	Notes          []string        `json:"notes,omitempty"`
 	ContextCommit  string          `json:"context_commit,omitempty"`
 	ContextUse     *run.ContextUse `json:"context_use,omitempty"`
+	Judge          *judge.Verdict  `json:"judge,omitempty"` // the judge's verdict, its texts scrubbed
 	Verify         []taskCommand   `json:"verify,omitempty"`
 	Started        string          `json:"started"`
 	Finished       string          `json:"finished"`
@@ -178,7 +181,7 @@ func Build(in Input) (Report, error) {
 		row := RunRow{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
 			CostEstimated: rec.CostEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
-			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
+			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Judge: in.shareVerdict(rec.Judge), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
 			Finished: rec.Finished.UTC().Format("2006-01-02T15:04:05Z")}
 		for _, c := range rec.Verify {
 			row.Verify = append(row.Verify, taskCommand{Command: c.Command, ExitCode: c.ExitCode, Seconds: c.Seconds})
@@ -190,6 +193,7 @@ func Build(in Input) (Report, error) {
 		rep.Arms = append(rep.Arms, armSummary(a, in.Runs))
 	}
 	rep.Tasks = taskRows(l, in.Runs)
+	rep.Judge = judgeSummary(in)
 	rep.Notes = notes(rep, in)
 	return rep, nil
 }
@@ -367,15 +371,14 @@ func mean(values []float64) *float64 {
 }
 
 func taskRows(l experiment.Lock, runs []Run) []TaskRow {
-	bySlot := slices.Clone(runs)
-	slices.SortStableFunc(bySlot, func(x, y Run) int { return x.Slot - y.Slot })
+	ordered := bySlot(runs)
 	var rows []TaskRow
 	for _, t := range l.Tasks {
 		row := TaskRow{Task: t.Name, Arms: map[string]TaskCell{}}
 		for _, a := range l.Arms {
 			var cell TaskCell
 			var costs []float64
-			for _, r := range bySlot {
+			for _, r := range ordered {
 				rec := r.Record
 				if rec.Task != t.Name || rec.Arm != a.Name {
 					continue
@@ -401,11 +404,20 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 	return rows
 }
 
+// bySlot is runs in schedule order; a slot's tries keep their stored order.
+func bySlot(runs []Run) []Run {
+	out := slices.Clone(runs)
+	slices.SortStableFunc(out, func(x, y Run) int { return x.Slot - y.Slot })
+	return out
+}
+
 // notes are the honesty notes: what the verdicts leave out or rest on.
 func notes(rep Report, in Input) []string {
 	var out []string
 	a := rep.Analysis
-	if rep.Status != experiment.StatusDone {
+	if note, ok := pendingNote(rep, in); ok && rep.Status != experiment.StatusDone {
+		out = append(out, note)
+	} else if rep.Status != experiment.StatusDone {
 		status := rep.Status
 		if rep.StatusNote != "" {
 			status += ": " + in.scrub(rep.StatusNote)

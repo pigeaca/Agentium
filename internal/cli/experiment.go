@@ -20,6 +20,7 @@ import (
 	"github.com/pigeaca/agentium/internal/gitx"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -45,9 +46,9 @@ var experimentUsage = `Usage:
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json | --markdown] [--out FILE]
-                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes: styled for
-                     a terminal; as Markdown (for a pull request) when piped, with --out or --markdown; or JSON (with
-                     the lock and every run)
+                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes (with
+                     --judge, its verdicts too): styled for a terminal; as Markdown (for a pull request) when piped,
+                     with --out or --markdown; or JSON (with the lock and every run)
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
 
@@ -61,8 +62,11 @@ up to %d; the majority wins) on --judge-model (default %s) at --judge-effort (de
 the budget, which holds back repeats × 2 × $%.2f per run for them, but never toward an arm's cost. Tasks without a
 reference solution in code are not judged. Judging can hold a run's slot for up to repeats × %d minutes more. The usage
 limit's per-run estimate leaves out the judge's use of a subscription; a judge that hits a usage limit pauses the
-experiment, and --wait does not wait for it.
-`, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD, int(llmjudge.CallTimeout.Minutes()))
+experiment, and --wait does not wait for it. The report's Judge section shows each arm's verdicts among passing and
+failing runs with 95%% intervals, the runs not judged and why, how often the repeats agreed, the judge's cost, and the
+passing runs it did not call fixed, with its reasons (the first %d; --json lists them all).
+`, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD,
+	int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged)
 
 func runExperiment(ctx context.Context, env Env, args []string) int {
 	if len(args) == 0 {
