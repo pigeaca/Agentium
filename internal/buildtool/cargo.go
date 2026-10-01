@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"syscall"
 )
 
 // cargoProfile holds Cargo's special cases.
@@ -76,12 +78,15 @@ func cargoCaches(environ []string, home string) []string {
 			filepath.Join(ch, "credentials"), filepath.Join(ch, "build"))
 	}
 	paths = append(paths, filepath.Join(home, "Library", "Caches", "Mozilla.sccache"), filepath.Join(home, ".cache", "sccache"))
-	for _, v := range []string{env["SCCACHE_DIR"], env["CARGO_TARGET_DIR"], env["CARGO_BUILD_TARGET_DIR"], env["CARGO_BUILD_BUILD_DIR"]} {
+	paths = append(paths, resolveBuildDir(env["CARGO_BUILD_BUILD_DIR"], "", nil, cargoHomes(environ, home))...)
+	for _, v := range []string{env["SCCACHE_DIR"], env["CARGO_TARGET_DIR"], env["CARGO_BUILD_TARGET_DIR"]} {
 		if filepath.IsAbs(v) {
 			paths = append(paths, v)
 		}
 	}
-	paths = append(paths, configDirs(userConfigFiles(environ, home))...)
+	// Best effort here (no error path); ProjectCaches reads the same files and fails closed, and a run needs it first.
+	userDirs, _ := configDirs(userConfigFiles(environ, home), nil, cargoHomes(environ, home))
+	paths = append(paths, userDirs...)
 	if xdg := env["XDG_CACHE_HOME"]; filepath.IsAbs(xdg) {
 		paths = append(paths, filepath.Join(xdg, "sccache"))
 	}
@@ -111,12 +116,20 @@ const maxConfigBytes = 1 << 20
 // configFile is a Cargo config; relative paths in it start at base.
 type configFile struct{ path, base string }
 
-// readConfig reads a config file within bounds; a missing file is nil, nil.
+// readConfig reads a config file within bounds; a missing file is nil, nil. The file is opened without blocking and
+// checked once opened (a FIFO swapped in after a Stat would block a plain open forever, and a link could change under
+// a Stat before the Open): it must be a regular file under the limit.
 func readConfig(path string) ([]byte, error) {
-	info, err := os.Stat(path)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return nil, nil
+	case err != nil:
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	switch {
 	case err != nil:
 		return nil, err
 	case !info.Mode().IsRegular():
@@ -124,11 +137,6 @@ func readConfig(path string) ([]byte, error) {
 	case info.Size() > maxConfigBytes:
 		return nil, fmt.Errorf("%s is larger than %d bytes", path, maxConfigBytes)
 	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
 	if err == nil && len(data) > maxConfigBytes {
 		err = fmt.Errorf("%s grew past %d bytes", path, maxConfigBytes)
@@ -136,22 +144,63 @@ func readConfig(path string) ([]byte, error) {
 	return data, err
 }
 
-// configDirs lists the target and build directories the config files name. A file that cannot be read is skipped here;
-// CheckConfigs refuses the run before it gets this far.
-func configDirs(files []configFile) []string {
-	var dirs []string
-	for _, f := range files {
-		data, _ := readConfig(f.path)
-		for _, m := range buildDirSetting.FindAllStringSubmatch(string(data), -1) {
-			if d := m[1] + m[2]; d != "" {
-				if !filepath.IsAbs(d) {
-					d = filepath.Join(f.base, d)
-				}
-				dirs = append(dirs, d)
+// resolveBuildDir turns a build-dir or target-dir value into the folder to deny. Cargo expands {workspace-root} (each
+// of roots: the user's repository and its worktrees) and {cargo-cache-home} (each Cargo home); {workspace-path-hash}
+// and any other template names a folder that does not exist beforehand, so the value is cut at the first `{` that is
+// left and the folder before it is denied (the parent of every such folder, which holds them all). Relative values start
+// at base.
+func resolveBuildDir(value, base string, roots, homes []string) []string {
+	candidates := []string{value}
+	expand := func(name string, with []string) {
+		var next []string
+		for _, c := range candidates {
+			if !strings.Contains(c, name) || len(with) == 0 {
+				next = append(next, c) // unknown here: cut at it below
+				continue
+			}
+			for _, w := range with {
+				next = append(next, strings.ReplaceAll(c, name, w))
 			}
 		}
+		candidates = next
 	}
-	return dirs
+	expand("{workspace-root}", roots)
+	expand("{cargo-cache-home}", homes)
+	var out []string
+	for _, c := range candidates {
+		if i := strings.Index(c, "{"); i >= 0 {
+			c = c[:i]
+		}
+		if c == "" {
+			continue
+		}
+		if !filepath.IsAbs(c) {
+			if base == "" {
+				continue // a relative environment value means nothing without a folder to start from
+			}
+			c = filepath.Join(base, c)
+		}
+		out = append(out, filepath.Clean(c))
+	}
+	return out
+}
+
+// configDirs lists the target and build directories the config files name, with templates resolved (resolveBuildDir). A
+// file that cannot be read within bounds is an error, not skipped: skipping would deny too little.
+func configDirs(files []configFile, roots, homes []string) ([]string, error) {
+	var dirs []string
+	var errs []error
+	for _, f := range files {
+		data, err := readConfig(f.path)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("Cargo config %s cannot be read safely (%w): make it a regular file under 1 MiB, or move it away; Agentium cannot tell which build folders it names, so it will not run agents until then", f.path, err))
+			continue
+		}
+		for _, m := range buildDirSetting.FindAllStringSubmatch(string(data), -1) {
+			dirs = append(dirs, resolveBuildDir(m[1]+m[2], f.base, roots, homes)...)
+		}
+	}
+	return dirs, errors.Join(errs...)
 }
 
 // chainConfigFiles are the Cargo configs in dir and every folder above it, as Cargo reads them
@@ -179,27 +228,23 @@ func userConfigFiles(environ []string, home string) []configFile {
 	return append(files, chainConfigFiles(home)...)
 }
 
-// cargoProjectCaches are the target and build directories configured for the user's repository (its own
-// .cargo/config.toml and those of the folders above it): earlier builds there may have left compiled hidden tests.
-func cargoProjectCaches(root string) []string {
-	if !filepath.IsAbs(root) {
-		return nil
-	}
-	return configDirs(chainConfigFiles(root))
-}
-
-// CheckConfigs refuses a run on a Cargo project when a Cargo config that decides where builds put their output cannot
-// be read within bounds (not a regular file, or over 1 MiB): without reading it Agentium cannot tell which folders to
-// deny, and denying less would be unsafe, so it fails closed. root is the user's repository.
-func CheckConfigs(environ []string, home, root string) error {
+// cargoProjectCaches are the target and build directories that the user's Cargo configs (the Cargo homes', those above
+// the home folder, and those of the repository and the folders above it) and CARGO_BUILD_BUILD_DIR name for the user's
+// repository and its worktrees (roots): earlier builds there may have left compiled hidden tests. It fails closed on a
+// config it cannot read within bounds.
+func cargoProjectCaches(environ []string, home string, roots []string) ([]string, error) {
 	files := userConfigFiles(environ, home)
-	if filepath.IsAbs(root) {
-		files = append(files, chainConfigFiles(root)...)
-	}
-	for _, f := range files {
-		if _, err := readConfig(f.path); err != nil {
-			return fmt.Errorf("Cargo config %s cannot be read safely (%w): Agentium cannot tell which build folders it names, so it will not run agents until it is fixed", f.path, err)
+	var abs []string
+	for _, root := range roots {
+		if filepath.IsAbs(root) {
+			abs = append(abs, root)
+			files = append(files, chainConfigFiles(root)...)
 		}
 	}
-	return nil
+	homes := cargoHomes(environ, home)
+	dirs, err := configDirs(files, abs, homes)
+	if v := vars(environ)["CARGO_BUILD_BUILD_DIR"]; v != "" { // a templated value too, not skipped
+		dirs = append(dirs, resolveBuildDir(v, "", abs, homes)...)
+	}
+	return dirs, err
 }

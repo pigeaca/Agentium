@@ -151,15 +151,19 @@ func stopGradleDaemons(ctx context.Context, buildCache string, host Host) error 
 		return err
 	}
 	var errs []error
+	handled := map[int]bool{}
 	for _, pid := range pids {
 		holds := func(ctx context.Context) (bool, error) {
 			open, err := host.OpenFiles(ctx, pid)
 			wanted := "daemon-" + strconv.Itoa(pid) + ".out.log"
-			return slices.ContainsFunc(open, func(f string) bool { return daemonLog(root, f, wanted) }), err
+			// A log with other hard links is not the daemon's own (belt and braces: the sandbox already stops the agent
+			// linking files outside its folders); an unknown count (0) is accepted.
+			return slices.ContainsFunc(open, func(f OpenFile) bool { return f.Links <= 1 && daemonLog(root, f.Name, wanted) }), err
 		}
 		if ok, err := holds(ctx); err != nil {
 			errs = append(errs, err)
 		} else if ok {
+			handled[pid] = true
 			// The match is repeated just before SIGKILL, with a context of its own: the pid may have been reused.
 			host.terminate(ctx, pid, func() bool {
 				again, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -169,7 +173,25 @@ func stopGradleDaemons(ctx context.Context, buildCache string, host Host) error 
 			})
 		}
 	}
+	if left := unmatchedDaemons(root, handled, host); len(left) > 0 {
+		errs = append(errs, fmt.Errorf("the run's Gradle home names running process(es) %v as daemons that could not be matched to an open log (a renamed or deleted log, a case mismatch): a Gradle daemon may have been left running", left))
+	}
 	return errors.Join(errs...)
+}
+
+// unmatchedDaemons lists pids named by daemon logs in the run's Gradle home that are still running but were not
+// handled: only a note for the record, nothing is signalled on this evidence (the logs are the agent's to write).
+func unmatchedDaemons(root string, handled map[int]bool, host Host) []int {
+	logs, _ := filepath.Glob(filepath.Join(root, "daemon", "*", "daemon-*.out.log"))
+	slices.Sort(logs)
+	var left []int
+	for _, log := range logs[:min(len(logs), 64)] {
+		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(log), "daemon-"), ".out.log")
+		if pid, err := strconv.Atoi(name); err == nil && pid > 1 && !handled[pid] && host.Signal(pid, 0) == nil && !slices.Contains(left, pid) {
+			left = append(left, pid)
+		}
+	}
+	return left
 }
 
 // daemonLog reports whether file is <root>/daemon/<version>/<name>.

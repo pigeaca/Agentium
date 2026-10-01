@@ -91,12 +91,19 @@ func StopRun(ctx context.Context, selected []Profile, buildCache string, host Ho
 type Host struct {
 	// Daemons lists the process IDs of this user's Gradle daemons (command lines naming GradleDaemon).
 	Daemons func(ctx context.Context) ([]int, error)
-	// OpenFiles lists the files a process has open (by real path); an error means it could not be told (no lsof).
-	OpenFiles func(ctx context.Context, pid int) ([]string, error)
+	// OpenFiles lists the files a process has open (by real path, with link counts when the machine reports them); an
+	// error means it could not be told (no lsof).
+	OpenFiles func(ctx context.Context, pid int) ([]OpenFile, error)
 	// Signal sends a signal (0 only tests that the process exists).
 	Signal func(pid int, sig syscall.Signal) error
 	// Grace is how long a process gets to end after SIGTERM before SIGKILL.
 	Grace time.Duration
+}
+
+// OpenFile is a file a process holds open. Links is its link count, or 0 when unknown.
+type OpenFile struct {
+	Name  string
+	Links int
 }
 
 // SystemHost is the real machine: ps for command lines, lsof for open files.
@@ -116,15 +123,21 @@ func SystemHost() Host {
 			}
 			return pids, nil
 		},
-		OpenFiles: func(ctx context.Context, pid int) ([]string, error) {
-			out, err := exec.CommandContext(ctx, tool("lsof", "/usr/sbin/lsof", "/usr/bin/lsof"), "-w", "-p", strconv.Itoa(pid), "-Fn").Output()
+		OpenFiles: func(ctx context.Context, pid int) ([]OpenFile, error) {
+			out, err := exec.CommandContext(ctx, tool("lsof", "/usr/sbin/lsof", "/usr/bin/lsof"), "-w", "+L", "-p", strconv.Itoa(pid), "-Fkn").Output()
 			if err != nil && len(out) == 0 {
 				return nil, fmt.Errorf("lsof -p %d: %w", pid, err)
 			}
-			var files []string
+			var files []OpenFile
+			links := 0
 			for _, line := range strings.Split(string(out), "\n") {
-				if name, ok := strings.CutPrefix(line, "n"); ok {
-					files = append(files, name)
+				switch {
+				case strings.HasPrefix(line, "f"): // a new file: its link count is unknown until a k line says
+					links = 0
+				case strings.HasPrefix(line, "k"):
+					links, _ = strconv.Atoi(line[1:])
+				case strings.HasPrefix(line, "n"):
+					files = append(files, OpenFile{Name: line[1:], Links: links})
 				}
 			}
 			return files, nil

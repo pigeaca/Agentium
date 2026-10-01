@@ -142,6 +142,9 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	cancel()
 	switch {
 	case err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded):
+		if _, statErr := os.Stat(env.stampPath(deps, base, names)); statErr == nil {
+			return "", nil // the other warm-up finished meanwhile, and warmed this base too
+		}
 		return "", fmt.Errorf("%w: another warm-up of the dependencies held the lock for %s and this base commit is not warmed", errWarmWait, wait)
 	case err != nil:
 		return "", fmt.Errorf("warm-up lock: %w", err)

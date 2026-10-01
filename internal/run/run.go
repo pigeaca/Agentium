@@ -102,6 +102,12 @@ type Env struct {
 	judgeSpent func(usd float64)
 }
 
+// CheckBuildConfigs reports whether the user's build configuration can be read safely (see buildtool.ProjectCaches): an
+// experiment asks before it locks, since every run would refuse to start otherwise.
+func (env Env) CheckBuildConfigs(ctx context.Context) error {
+	return buildtool.CheckConfigs(env.Environ, env.Home, env.repositoryPaths(ctx))
+}
+
 // BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
 // the data folder, which agents may not read, and creates it: in the user's own folders they would leave compiled
 // hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). The build tools'
@@ -122,26 +128,29 @@ func BuildEnv(layout home.Layout) ([]string, error) {
 
 // Record is a finished run.
 type Record struct {
-	ID          string         `json:"id"`
-	Task        string         `json:"task"`
-	Arm         string         `json:"arm"`
-	Snapshot    string         `json:"snapshot,omitempty"`
-	Model       string         `json:"model"`
-	SignIn      string         `json:"sign_in"`
-	Outcome     string         `json:"outcome"`          // claude.Outcome*
-	Passed      *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
-	Drift       []string       `json:"drift,omitempty"`
-	Notes       []string       `json:"notes,omitempty"`
-	Metrics     claude.Metrics `json:"metrics"`
-	Behavior    Behavior       `json:"behavior"`
-	Setup       []task.Command `json:"setup,omitempty"`
-	Verify      []task.Command `json:"verify,omitempty"`
-	ExitCode    int            `json:"exit_code"`
-	Started     time.Time      `json:"started"`
-	Finished    time.Time      `json:"finished"`
-	RecordsDir  string         `json:"records"`
-	ContextHead string         `json:"context_commit,omitempty"`
-	ProbeFile   string         `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
+	ID       string         `json:"id"`
+	Task     string         `json:"task"`
+	Arm      string         `json:"arm"`
+	Snapshot string         `json:"snapshot,omitempty"`
+	Model    string         `json:"model"`
+	SignIn   string         `json:"sign_in"`
+	Outcome  string         `json:"outcome"`          // claude.Outcome*
+	Passed   *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
+	Drift    []string       `json:"drift,omitempty"`
+	Notes    []string       `json:"notes,omitempty"`
+	Metrics  claude.Metrics `json:"metrics"`
+	Behavior Behavior       `json:"behavior"`
+	Setup    []task.Command `json:"setup,omitempty"`
+	Verify   []task.Command `json:"verify,omitempty"`
+	ExitCode int            `json:"exit_code"`
+	// WarmWait: the run ended as an infrastructure failure because it waited out another run's dependency warm-up
+	// (Once); an experiment does not count it toward an outage.
+	WarmWait    bool      `json:"warm_wait,omitempty"`
+	Started     time.Time `json:"started"`
+	Finished    time.Time `json:"finished"`
+	RecordsDir  string    `json:"records"`
+	ContextHead string    `json:"context_commit,omitempty"`
+	ProbeFile   string    `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
 	// ContextUse is what the run used of its arm's context; nil in records made before Agentium kept it, and in runs
 	// that ended before their transcript could be read.
 	ContextUse *ContextUse `json:"context_use,omitempty"`
@@ -265,11 +274,6 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
 		return rec, err
 	}
-	if slices.Contains(tools, "cargo") { // what the user's Cargo configs name must be readable by Agentium, or the run waits
-		if err := buildtool.CheckConfigs(env.Environ, env.Home, env.ProjectRoot); err != nil {
-			return rec, err
-		}
-	}
 	prompt := spec.Instruction + suffix
 	if spec.PlainPrompt {
 		prompt = spec.Instruction
@@ -384,7 +388,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
 		// not counted against it (an infrastructure failure is retried or left out).
-		rec.Outcome = claude.OutcomeInfra
+		rec.Outcome, rec.WarmWait = claude.OutcomeInfra, true
 		rec.Notes = append(rec.Notes, err.Error())
 		return rec, nil
 	}
@@ -766,7 +770,13 @@ func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	db := env.Layout.Database
 	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
-	paths = append(paths, buildtool.ProjectCaches(env.ProjectRoot)...) // e.g. a Cargo target-dir the repository's config names
+	// What the user's build configuration names (a Cargo target-dir or build-dir), for the repository and its worktrees;
+	// a configuration that cannot be read safely stops the run here, before anything starts.
+	configured, err := buildtool.ProjectCaches(env.Environ, env.Home, env.repositoryPaths(ctx))
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, configured...)
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {
 			if other := filepath.Join(env.Layout.Workspaces, e.Name()); other != workspace {

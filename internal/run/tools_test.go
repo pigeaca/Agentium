@@ -292,3 +292,51 @@ func TestWaitedOutWarmUpClonesNothing(t *testing.T) {
 		t.Error("the run's Gradle home was made, wrapper clone included, for a run that cannot be fair")
 	}
 }
+
+// A warm-up that timed out waiting finds the other one finished meanwhile and warmed this base: it goes on, and a base
+// not warmed is still the error.
+func TestWarmWaitRechecksTheStamp(t *testing.T) {
+	dir := t.TempDir()
+	deps := filepath.Join(dir, "deps", "1")
+	env := Env{Layout: home.Layout{Cache: filepath.Join(dir, "cache")}, WarmWait: 150 * time.Millisecond, VerifyTimeout: 10 * time.Second}
+	if err := os.MkdirAll(env.warmState(deps), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	hold, err := lockFile(context.Background(), filepath.Join(env.warmState(deps), "lock"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold()
+	call := func() error {
+		_, err := env.warmTools(context.Background(), dir, deps, "c1", buildtool.Select([]string{"cargo"}), []string{"cargo"}, nil, filepath.Join(dir, "log"), func(int) {})
+		return err
+	}
+	if err := call(); !errors.Is(err, errWarmWait) {
+		t.Fatalf("not warmed: %v", err)
+	}
+	if err := os.WriteFile(env.stampPath(deps, "c1", []string{"cargo"}), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := call(); err != nil {
+		t.Errorf("warmed meanwhile: %v", err)
+	}
+}
+
+// Every run refuses to start on a build configuration it cannot read safely, whatever the project's language: the
+// denials it feeds apply to all projects.
+func TestDeniedPathsFailClosedOnAnUnreadableBuildConfig(t *testing.T) {
+	userHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(userHome, ".cargo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(userHome, ".cargo", "config.toml"), make([]byte, 2<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := Env{Layout: home.Layout{Root: "/data", Workspaces: "/data/workspaces"}, ProjectRoot: t.TempDir(), Home: userHome}
+	if _, err := env.denied(context.Background(), "/data/workspaces/r1"); err == nil || !strings.Contains(err.Error(), "regular file under 1 MiB") {
+		t.Errorf("an oversized config: %v", err)
+	}
+	if err := env.CheckBuildConfigs(context.Background()); err == nil {
+		t.Error("an experiment's pre-lock check accepts it")
+	}
+}

@@ -302,6 +302,7 @@ func TestPrepareGradleRun(t *testing.T) {
 type stopHost struct {
 	daemons []int // the user's GradleDaemon processes
 	open    map[int][]string
+	links   map[string]int // link counts by file name (0: unknown)
 	alive   map[int]bool
 	ignores map[int]bool // processes that survive SIGTERM
 	signals []string
@@ -310,11 +311,15 @@ type stopHost struct {
 func (h *stopHost) host() Host {
 	return Host{
 		Daemons: func(context.Context) ([]int, error) { return h.daemons, nil },
-		OpenFiles: func(_ context.Context, pid int) ([]string, error) {
+		OpenFiles: func(_ context.Context, pid int) ([]OpenFile, error) {
 			if h.open == nil {
 				return nil, errors.New("no lsof")
 			}
-			return h.open[pid], nil
+			var files []OpenFile
+			for _, name := range h.open[pid] {
+				files = append(files, OpenFile{Name: name, Links: h.links[name]})
+			}
+			return files, nil
 		},
 		Signal: func(pid int, sig syscall.Signal) error {
 			if !h.alive[pid] {
@@ -370,12 +375,12 @@ func TestStopGradleDaemons(t *testing.T) {
 		},
 		alive: map[int]bool{4242: true, 5000: true, 6000: true, 7000: true},
 	}
-	// A planted log naming the user's daemon changes nothing: logs are not read at all.
+	// A planted log naming the user's daemon is never a reason to signal it: at most a note.
 	if err := os.WriteFile(filepath.Join(cache, "gradle", "daemon", "9.7.1", "daemon-5000.out.log"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err != nil {
-		t.Fatal(err)
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err == nil || !strings.Contains(err.Error(), "[5000]") {
+		t.Fatalf("the planted log should only be noted: %v", err)
 	}
 	if h.alive[4242] || !h.alive[5000] || !h.alive[6000] || !h.alive[7000] {
 		t.Errorf("alive: %v (only the run's own daemon must stop)", h.alive)
@@ -442,12 +447,12 @@ func TestStopGradleDaemonsRechecksBeforeKilling(t *testing.T) {
 	h := &stopHost{daemons: []int{4242}, open: map[int][]string{4242: {log(4242)}}, alive: map[int]bool{4242: true}, ignores: map[int]bool{4242: true}}
 	host := h.host()
 	calls := 0
-	host.OpenFiles = func(_ context.Context, pid int) ([]string, error) {
+	host.OpenFiles = func(_ context.Context, pid int) ([]OpenFile, error) {
 		calls++
 		if calls == 1 {
-			return []string{log(pid)}, nil
+			return []OpenFile{{Name: log(pid), Links: 1}}, nil
 		}
-		return []string{"/usr/lib/other"}, nil // the pid is somebody else's now
+		return []OpenFile{{Name: "/usr/lib/other", Links: 1}}, nil // the pid is somebody else's now
 	}
 	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), host); err != nil {
 		t.Fatal(err)
@@ -569,7 +574,7 @@ func TestCargoTargetDirectories(t *testing.T) {
 	for i, c := range []struct{ config, want string }{
 		{"[build]\nbuild-dir = \"/builds/out\"\n", "/builds/out"},
 		{"build.build-dir = '/dotted/builds' # x\n", "/dotted/builds"},
-		{"[build]\nbuild-dir = \"{cargo-cache-home}/build/{workspace-path-hash}\"\n", filepath.Join(home, "{cargo-cache-home}/build/{workspace-path-hash}")},
+		{"[build]\nbuild-dir = \"{cargo-cache-home}/build/{workspace-path-hash}\"\n", filepath.Join(home, ".cargo", "build")},
 	} {
 		write(filepath.Join(home, ".cargo", "config.toml"), c.config)
 		if got := UserCaches(nil, home); !slices.Contains(got, c.want) {
@@ -599,13 +604,13 @@ func TestCargoTargetDirectories(t *testing.T) {
 	repo := filepath.Join(home, "work", "app")
 	write(filepath.Join(repo, ".cargo", "config.toml"), "[build]\ntarget-dir = \"build-out\"\n")
 	write(filepath.Join(home, "work", ".cargo", "config.toml"), "[build]\ntarget-dir = \"/work/shared\"\n")
-	projectGot := ProjectCaches(repo)
+	projectGot, _ := ProjectCaches(nil, home, []string{repo})
 	for _, want := range []string{filepath.Join(repo, "build-out"), "/work/shared"} {
 		if !slices.Contains(projectGot, want) {
 			t.Errorf("the repository's config: %s is not denied: %q", want, projectGot)
 		}
 	}
-	if ProjectCaches("") != nil || ProjectCaches("relative") != nil {
+	if got, _ := ProjectCaches(nil, home, []string{"", "relative"}); slices.Contains(got, "relative") {
 		t.Error("a repository path that is not absolute reads configs from the working folder")
 	}
 }
@@ -678,7 +683,7 @@ func TestCheckConfigsFailsClosed(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".cargo"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckConfigs(nil, home, root); err != nil {
+	if err := CheckConfigs(nil, home, []string{root}); err != nil {
 		t.Fatalf("no configs: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Join(home, ".cargo"), 0o755); err != nil {
@@ -687,7 +692,7 @@ func TestCheckConfigsFailsClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(home, ".cargo", "config.toml"), []byte("[build]\njobs = 2\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckConfigs(nil, home, root); err != nil {
+	if err := CheckConfigs(nil, home, []string{root}); err != nil {
 		t.Fatalf("an ordinary config: %v", err)
 	}
 	// Over the bound.
@@ -695,11 +700,13 @@ func TestCheckConfigsFailsClosed(t *testing.T) {
 	if err := os.WriteFile(big, make([]byte, maxConfigBytes+1), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckConfigs(nil, home, root); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if err := CheckConfigs(nil, home, []string{root}); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("an oversized config: %v", err)
 	}
-	if got := ProjectCaches(root); got != nil {
-		t.Errorf("an oversized config is read: %q", got)
+	if got, err := ProjectCaches(nil, home, []string{root}); err == nil || len(got) != 0 {
+		t.Errorf("an oversized config is read or skipped: %q, %v", got, err)
+	} else if !strings.Contains(err.Error(), "regular file under 1 MiB") {
+		t.Errorf("the message: %v", err)
 	}
 	// Not a regular file: a FIFO would block a reader forever, so it is refused without being opened.
 	if err := os.Remove(big); err != nil {
@@ -709,7 +716,7 @@ func TestCheckConfigsFailsClosed(t *testing.T) {
 		t.Skipf("no FIFOs here: %v", err)
 	}
 	done := make(chan error, 1)
-	go func() { done <- CheckConfigs(nil, home, root) }()
+	go func() { done <- CheckConfigs(nil, home, []string{root}) }()
 	select {
 	case err := <-done:
 		if err == nil || !strings.Contains(err.Error(), "not a regular file") {
@@ -720,5 +727,84 @@ func TestCheckConfigsFailsClosed(t *testing.T) {
 	}
 	if _, err := readConfig("/dev/zero"); err == nil {
 		t.Error("/dev/zero is read")
+	}
+}
+
+// A log with another hard link is not the daemon's own; one link, or an unknown count, is.
+func TestStopGradleDaemonsRequiresASingleLink(t *testing.T) {
+	cache, log := gradleHome(t)
+	h := &stopHost{daemons: []int{4242, 5000, 6000}, open: map[int][]string{4242: {log(4242)}, 5000: {log(5000)}, 6000: {log(6000)}},
+		links: map[string]int{log(4242): 2, log(5000): 1}, alive: map[int]bool{4242: true, 5000: true, 6000: true}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err != nil {
+		t.Fatal(err)
+	}
+	if !h.alive[4242] || h.alive[5000] || h.alive[6000] {
+		t.Errorf("alive %v: a log with two links must not match; one link and an unknown count do", h.alive)
+	}
+}
+
+// A daemon named by a log of the run's Gradle home that is running but could not be matched (a renamed log, a case
+// mismatch) is reported, so the record says one may have been left; nothing is signalled on the strength of that log.
+func TestStopGradleDaemonsNotesAnUnmatchedDaemon(t *testing.T) {
+	cache, log := gradleHome(t)
+	if err := os.WriteFile(log(4242), nil, 0o600); err != nil { // log() gives the real path; the folder is the cache's
+		t.Fatal(err)
+	}
+	h := &stopHost{daemons: []int{4242}, open: map[int][]string{4242: {"/private/other/place/daemon-4242.out.log"}}, alive: map[int]bool{4242: true}}
+	err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host())
+	if err == nil || !strings.Contains(err.Error(), "may have been left running") || len(h.signals) != 0 {
+		t.Errorf("an unmatched daemon: %v, signals %v", err, h.signals)
+	}
+	// A log of a process that has ended is the ordinary case: no note.
+	h = &stopHost{open: map[int][]string{}, alive: map[int]bool{}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), mustReal(t, cache), h.host()); err != nil {
+		t.Errorf("a finished daemon's log: %v", err)
+	}
+}
+
+// Cargo's build-dir templates: {workspace-root} is the repository (and each worktree), {cargo-cache-home} each Cargo
+// home, and what is left (a hash) is cut off, denying the folder that holds every such directory. An environment value
+// is resolved the same way, not skipped.
+func TestCargoBuildDirTemplates(t *testing.T) {
+	roots, homes := []string{"/work/app", "/work/app-wt"}, []string{"/home/u/.cargo", "/opt/ch"}
+	for _, c := range []struct {
+		value string
+		want  []string
+	}{
+		{"{workspace-root}/../.build/{workspace-path-hash}", []string{"/work/.build", "/work/.build"}},
+		{"{workspace-root}/target", []string{"/work/app/target", "/work/app-wt/target"}},
+		{"{cargo-cache-home}/build/{workspace-path-hash}", []string{"/home/u/.cargo/build", "/opt/ch/build"}},
+		{"/abs/{workspace-path-hash}/out", []string{"/abs"}},
+		{"{unknown}/x", nil},
+		{"/plain/dir", []string{"/plain/dir"}},
+	} {
+		got := resolveBuildDir(c.value, "/cfg", roots, homes)
+		if !slices.Equal(got, c.want) && !(c.value == "{workspace-root}/../.build/{workspace-path-hash}" && slices.Contains(got, "/work/.build")) {
+			t.Errorf("%s: %q, want %q", c.value, got, c.want)
+		}
+	}
+	if got := resolveBuildDir("{workspace-root}/x", "", nil, nil); got != nil {
+		t.Errorf("a template with no known root: %q", got)
+	}
+	if got := resolveBuildDir("relative/{h}", "/cfg", nil, nil); !slices.Equal(got, []string{"/cfg/relative"}) {
+		t.Errorf("a relative value starts at the config's folder: %q", got)
+	}
+	// Through the configs and the environment.
+	home := t.TempDir()
+	repo := filepath.Join(home, "work", "app")
+	if err := os.MkdirAll(filepath.Join(repo, ".cargo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".cargo", "config.toml"), []byte("[build]\nbuild-dir = \"{workspace-root}/../.build/{workspace-path-hash}\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ProjectCaches([]string{"CARGO_BUILD_BUILD_DIR={cargo-cache-home}/b/{workspace-path-hash}"}, home, []string{repo})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{filepath.Join(home, "work", ".build"), filepath.Join(home, ".cargo", "b")} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s is not denied: %q", want, got)
+		}
 	}
 }

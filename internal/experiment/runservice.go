@@ -182,6 +182,13 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if lock.LocalBinding, err = r.checkLocalBinding(ctx, lock); err != nil {
 		return Lock{}, err
 	}
+	if r.NewRunEnv != nil {
+		if runEnv, envErr := r.NewRunEnv(d.VerifyTimeout); envErr == nil { // its own errors surface when the runs start
+			if err := runEnv.CheckBuildConfigs(ctx); err != nil { // every run would refuse: stop before locking
+				return Lock{}, err
+			}
+		}
+	}
 	encoded, err := json.Marshal(lock)
 	if err != nil {
 		return Lock{}, fmt.Errorf("encode lock: %w", err)
@@ -461,7 +468,7 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
 		Timeout: design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
-	result.Outcome, result.Usage = rec.Outcome, rec.Metrics.UsageLast
+	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
 	if v := rec.Judge; v != nil {
 		result.Judge = run.Describe(*v)
 		if v.Stopped == llmjudge.StoppedLimit {

@@ -29,6 +29,7 @@ package buildtool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -99,7 +100,7 @@ type Profile struct {
 	UserCaches func(environ []string, home string) []string
 	// ProjectCaches are folders configured in the user's repository (or above it) that earlier builds there may have
 	// filled with compiled hidden tests (a Cargo target-dir): denied to agents like UserCaches, for every project.
-	ProjectCaches func(root string) []string
+	ProjectCaches func(environ []string, home string, roots []string) ([]string, error)
 }
 
 // CacheVar is an environment variable that points a cache at a folder (Dir, relative to the cache root; "" is the root
@@ -356,15 +357,25 @@ func UserCaches(environ []string, home string) []string {
 	return paths
 }
 
-// ProjectCaches is every profile's ProjectCaches for the user's repository at root.
-func ProjectCaches(root string) []string {
+// ProjectCaches is every profile's ProjectCaches for the user's repository and its worktrees (roots). It fails closed:
+// a configuration it cannot read safely is an error, which stops a run before it starts (CheckConfigs).
+func ProjectCaches(environ []string, home string, roots []string) ([]string, error) {
 	var paths []string
+	var errs []error
 	for _, p := range Profiles() {
 		if p.ProjectCaches != nil {
-			paths = append(paths, p.ProjectCaches(root)...)
+			found, err := p.ProjectCaches(environ, home, roots)
+			paths = append(paths, found...)
+			errs = append(errs, err)
 		}
 	}
-	return paths
+	return paths, errors.Join(errs...)
+}
+
+// CheckConfigs reports what ProjectCaches would refuse, for callers that only check (an experiment, before it locks).
+func CheckConfigs(environ []string, home string, roots []string) error {
+	_, err := ProjectCaches(environ, home, roots)
+	return err
 }
 
 // DepsDenied are the folders under deps agents may not read: build caches, which hold compiled classes (a later task's
