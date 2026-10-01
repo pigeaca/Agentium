@@ -1,7 +1,7 @@
 # Task checks and context use
 
 - Date: 2026-09-30
-- Status: Planned, not started. No paid runs.
+- Status: In Progress (2026-10-01): steps 1 and 3 run in parallel; step 2 follows step 1. No paid runs.
 - Scope: from the user's questions on 2026-09-30: "who writes test scenarios, and how do we know what is good?" and "what changed in context usage?". Two task checks make weak tasks visible before paid runs. Reports then show which parts of each arm's context the agent actually used.
 
 ## Why
@@ -52,6 +52,17 @@ Three PRs, each with green CI and a review.
 
 ## Verification
 `harness.py check changed`, fake-`claude` end-to-end tests, golden reports, CI, and a reviewer per PR.
+
+## Parallel ownership
+All steps start from `origin/main` at `c0414eb`, except step 2, which starts from step 1's reviewed head. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`. A separate session owns `claude/fix/run-estimates` (the preview's usage and cost estimates): `internal/experiment/usage.go`, `plan.go`, and the preview lines of `internal/cli/experiment.go`.
+
+| Step | Owner | Branch / worktree | Editable scope | Must not touch |
+|---|---|---|---|---|
+| 1 | `implementer` (Sonnet, medium) | `claude/feat/flaky-tasks` / `claude-feat-flaky-tasks` | `internal/task/validate.go`; `internal/cli/task.go`; one warning line in `experiment plan`'s "Before it runs" (`internal/cli/experiment.go`); `internal/experiment/design.go` (`Ineligible`'s message only); README's task section; tests | `internal/claude`, `internal/run`, `internal/report`, `internal/stats`; `internal/experiment` apart from `Ineligible`; the store's schema |
+| 2 | the same `implementer` | `claude/feat/weak-tests` / `claude-feat-weak-tests` | `internal/task`; `internal/cli/task.go`; README's task section; tests | as step 1 |
+| 3 | coordinator (Opus) | `claude/feat/context-use` / `claude-feat-context-use` | `internal/claude` (transcript parsing); `internal/run` (records); `internal/experiment` (a new counting file and the analysis it feeds); `internal/report` and its golden files; `internal/cli` (report wiring only); architecture and README | `internal/task`, `internal/cli/task.go`, `internal/experiment/usage.go`, `plan.go` |
+
+Each implementer pushes its branch and returns a handoff; the coordinator runs the reviewer, opens one PR per step and integrates.
 
 ## Metrics
 - Agent: <client> / <exact model id> / <effort>
