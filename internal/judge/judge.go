@@ -3,6 +3,8 @@
 // the agent's code diff, never the tests or their result. Its verdict is a second opinion shown next to the tests; it
 // decides nothing (.agents/decisions/2026-10-01-llm-judge-alongside-tests.md).
 //
+// JudgePair, the pair judge, asks which of two changes is the better fix, in both orders (pair.go).
+//
 // The prompts, the schema, the code-only filter, the cut and the majority rule are the judge pilot's, unchanged
 // (docs/research/judge-pilot/protocol.md), so the pilot's figures on noise and cost apply.
 package judge

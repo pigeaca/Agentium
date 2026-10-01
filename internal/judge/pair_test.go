@@ -84,11 +84,11 @@ func TestJudgePairFailures(t *testing.T) {
 		errs     int
 	}{
 		{"malformed is asked once more", []Reply{malformed, pairResult("first", "", 0.1), pairResult("second", "", 0.1)}, 3, true, "", true, true, 1},
-		{"malformed twice leaves the order out", []Reply{malformed, malformed, pairResult("second", "", 0.1)}, 3, false, "", false, true, 2},
-		{"an overload leaves one order out and goes on", []Reply{overload, pairResult("second", "", 0.1)}, 2, false, "", false, true, 1},
+		{"malformed twice leaves the order out", []Reply{malformed, malformed, pairResult("second", "", 0.1)}, 2, false, "", false, false, 2},
+		{"a lost AB means BA is not asked", []Reply{overload, pairResult("second", "", 0.1)}, 1, false, "", false, false, 1},
 		{"a usage limit stops before the next order", []Reply{limit}, 1, false, StoppedLimit, false, false, 1},
 		{"a usage limit in the second order", []Reply{pairResult("first", "", 0.1), limit}, 2, false, StoppedLimit, true, false, 1},
-		{"a single-schema reply is malformed", []Reply{result("yes", "", 0), result("yes", "", 0), result("yes", "", 0), result("yes", "", 0)}, 4, false, "", false, false, 4},
+		{"a single-schema reply is malformed", []Reply{result("yes", "", 0), result("yes", "", 0)}, 2, false, "", false, false, 2},
 	}
 	for _, c := range cases {
 		call, prompts := pairFake(c.replies...)
@@ -150,7 +150,7 @@ func TestPreference(t *testing.T) {
 	vs = append(vs, mk(PreferA, false), mk(PreferA, false), mk(PreferTie, true), mk(PreferTie, false), PairVerdict{}, PairVerdict{Empty: true})
 	got := Preference(vs)
 	// The pilot's figures: 4 of 6 gives p = 0.6875 and Wilson 30%-90%.
-	if got.Complete != 8 || got.Ties != 2 || got.Flips != 1 || got.A != 2 || got.B != 4 || !got.Enough ||
+	if got.Complete != 8 || got.Incomplete != 1 || got.Empty != 1 || got.Ties != 2 || got.Flips != 1 || got.A != 2 || got.B != 4 || !got.Enough ||
 		math.Abs(got.P-0.6875) > 1e-9 || math.Abs(got.BShare-2.0/3) > 1e-9 || math.Abs(got.Low-0.3) > 0.005 || math.Abs(got.High-0.9) > 0.005 {
 		t.Errorf("%+v", got)
 	}
@@ -211,5 +211,38 @@ echo '{"structured_output": {"prefer": "second", "reason": "B is narrower"}, "to
 	stdin, _ := os.ReadFile(filepath.Join(home, "stdin"))
 	if !strings.Contains(string(stdin), "<first>") {
 		t.Errorf("stdin = %q", stdin)
+	}
+}
+
+func TestJudgePairCancelledInBAKeepsAB(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	n := 0
+	v, err := JudgePair(ctx, pairIn, Settings{}, func(context.Context, string) (Reply, error) {
+		n++
+		if n == 1 {
+			return pairResult("first", "r", 0.1), nil
+		}
+		cancel()
+		return Reply{}, context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) || !v.AB.Answered || v.CostUSD != 0.1 || v.Complete() {
+		t.Errorf("%+v, %v", v, err)
+	}
+}
+
+func TestJudgePairTruncated(t *testing.T) {
+	long := "diff --git a/a.go b/a.go\n+" + strings.Repeat("x", MaxDiffChars+5) + "\n"
+	call, _ := pairFake(pairResult("first", "", 0), pairResult("second", "", 0))
+	v, err := JudgePair(context.Background(), PairInput{Reference: codeDiff, A: long, B: diffB}, Settings{}, call)
+	if err != nil || !v.Truncated || v.Version != PairVersion {
+		t.Errorf("%+v, %v", v, err)
+	}
+}
+
+// Keys match exactly, as the pilot's verdict.get does: "Fixed" is not "fixed".
+func TestParseFieldMatchesKeysExactly(t *testing.T) {
+	r := Reply{Stdout: []byte(`{"result": "{\"Fixed\": \"yes\"}", "structured_output": {"Fixed": "yes"}}`)}
+	if a := parse(r); a.kind != kindMalformed {
+		t.Errorf("%+v", a)
 	}
 }

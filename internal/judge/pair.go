@@ -56,6 +56,9 @@ const (
 // MinPreferences is the plan's floor: with fewer pairs that prefer an arm, a summary says too little (Enough).
 const MinPreferences = 5
 
+// PairVersion numbers the pair judge's protocol (prompt, schema, rules) in stored pair verdicts, apart from Version.
+const PairVersion = 1
+
 // PairInput is what one pair's judgement reads: the changes of arm A and arm B on the same task.
 type PairInput struct {
 	Instruction string
@@ -63,7 +66,8 @@ type PairInput struct {
 	A, B        string // the arms' agent.diff
 }
 
-// PairOrder is one of the two asks. Order "AB" shows A first; "BA" shows B first.
+// PairOrder is one of the two asks. Order "AB" shows A first; "BA" shows B first. An order never asked (judging stopped
+// or AB was lost first) is {Answered: false} with no errors; an order asked and failed always has errors.
 type PairOrder struct {
 	// Answered is false when no valid answer came; Answer is then empty.
 	Answered bool `json:"answered"`
@@ -101,7 +105,8 @@ type PairVerdict struct {
 	Effort  string    `json:"effort,omitempty"`
 	CostUSD float64   `json:"cost_usd"` // both orders'
 	Errors  []string  `json:"errors,omitempty"`
-	// Stopped: StoppedLimit or StoppedCall, as in Verdict; the later order was not asked.
+	// Stopped: StoppedLimit or StoppedCall, as in Verdict. It happened in the last order asked; when that was AB, BA was not
+	// asked.
 	Stopped string `json:"stopped,omitempty"`
 	// Truncated: a diff was cut at MaxDiffChars. Empty: a change had no code, so the judge was not asked.
 	Truncated bool `json:"truncated,omitempty"`
@@ -125,13 +130,14 @@ func PairPrompt(instruction, reference, firstChange, secondChange string) (strin
 //   - A reply without a valid answer is asked once more; if that fails too, that order is unanswered.
 //   - A call with no answer leaves its order unanswered. When its error is one every next call would hit (stopText) or the
 //     call could not be made at all, judging stops there (PairVerdict.Stopped) and the other order is not asked.
-//   - With an order unanswered there is no Prefer: the pair is incomplete.
+//   - With an order unanswered there is no Prefer: the pair is incomplete. When AB ends unanswered, BA is not asked, as the
+//     pair could not be completed.
 //
 // A change with no code is not judged (Empty). A reference without code is an error, as is a cancelled ctx; then the
 // returned verdict still holds what was spent, which callers must count.
 func JudgePair(ctx context.Context, in PairInput, s Settings, call Caller) (PairVerdict, error) {
 	s = s.WithDefaults()
-	v := PairVerdict{Version: Version, Model: s.Model, Effort: s.Effort}
+	v := PairVerdict{Version: PairVersion, Model: s.Model, Effort: s.Effort}
 	if strings.TrimSpace(CodeOnly(in.Reference)) == "" {
 		return v, errors.New("judge: the reference changes no code, so there is nothing to judge against")
 	}
@@ -146,7 +152,7 @@ func JudgePair(ctx context.Context, in PairInput, s Settings, call Caller) (Pair
 	if v.AB, err = v.ask(ctx, ab, call); err != nil {
 		return v, err
 	}
-	if v.Stopped == "" {
+	if v.Stopped == "" && v.AB.Answered { // a pair needs both orders: asking BA after a lost AB only spends money
 		if v.BA, err = v.ask(ctx, ba, call); err != nil {
 			return v, err
 		}
@@ -198,11 +204,13 @@ func (v *PairVerdict) ask(ctx context.Context, prompt string, call Caller) (Pair
 
 // PreferenceSummary counts an experiment's pair verdicts.
 type PreferenceSummary struct {
-	Complete int `json:"complete"` // pairs with both orders answered
-	Ties     int `json:"ties"`     // complete pairs that came out a tie, flips included
-	Flips    int `json:"flips"`    // complete pairs whose orders disagreed
-	A        int `json:"a"`        // pairs that preferred arm A
-	B        int `json:"b"`        // pairs that preferred arm B
+	Complete   int `json:"complete"`   // pairs with both orders answered
+	Incomplete int `json:"incomplete"` // pairs not Empty with an order unanswered
+	Empty      int `json:"empty"`      // pairs not asked because a change had no code
+	Ties       int `json:"ties"`       // complete pairs that came out a tie, flips included
+	Flips      int `json:"flips"`      // complete pairs whose orders disagreed
+	A          int `json:"a"`          // pairs that preferred arm A
+	B          int `json:"b"`          // pairs that preferred arm B
 	// BShare is B's share of the pairs with a preference (A + B), with its 95% Wilson interval; P is the exact two-sided
 	// binomial p-value against an even split. With no preference, BShare and P are 0 and 1, and the interval is 0 to 1.
 	BShare float64 `json:"b_share"`
@@ -217,7 +225,12 @@ type PreferenceSummary struct {
 func Preference(verdicts []PairVerdict) PreferenceSummary {
 	var p PreferenceSummary
 	for _, v := range verdicts {
+		if v.Empty {
+			p.Empty++
+			continue
+		}
 		if !v.Complete() {
+			p.Incomplete++
 			continue
 		}
 		p.Complete++
