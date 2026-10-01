@@ -41,7 +41,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 		t.Fatalf("%d runs stored, want the first pair's 2", len(runs))
 	}
 	expect(t, f.run(ctx, "experiment", "plan", "limits"), ExitOK,
-		"Usage: about 6% of the five-hour window per run (a default until runs measure it), so 6 runs need about 0.4 window(s) at the 85% limit.",
+		"Usage: about 6% of the five-hour window per run (a default until 3 task runs in one window measure it), so 6 runs need about 0.4 window(s) at the 85% limit.",
 		"The window was 82% used at the last reading", "about 0 more run(s) fit before the limit", "add --wait")
 	expect(t, f.run(ctx, "experiment", "show", "limits"), ExitOK, "paused at the usage limit: the five-hour usage window is at 82%")
 
@@ -123,6 +123,39 @@ func TestUsageFromStoredRecords(t *testing.T) {
 	if got := clock(resets.Add(24*time.Hour), now); !strings.Contains(got, " ") {
 		t.Errorf("clock on another day = %q, want the weekday too", got)
 	}
+}
+
+// Calibration runs are a few short turns (about 1% of the window against a task run's 6–10% in the 16-run A/B): the
+// usage per run comes from task runs only, from an older window when the latest holds only calibrations, or else the
+// default. The latest reading still comes from every run.
+func TestUsagePreviewLeavesOutCalibrationRuns(t *testing.T) {
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "ab", "--b", "lean", "--task", "value", "--repeats", "2"), ExitOK)
+	now := time.Now()
+	older, latest := now.Add(-2*time.Hour).Truncate(time.Second), now.Add(2*time.Hour).Truncate(time.Second)
+	read := func(kind string, first, last float64, resets time.Time) store.Run {
+		var rec struct {
+			Metrics claude.Metrics `json:"metrics"`
+		}
+		rec.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
+		rec.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store.Run{TaskName: "value", Kind: kind, Outcome: "ok", Record: data}
+	}
+	saveRuns(t, f, read("calibration", 0.40, 0.41, latest), read("calibration", 0.41, 0.42, latest),
+		read("calibration", 0.42, 0.43, latest), read("calibration", 0.43, 0.44, latest))
+	expect(t, f.run(ctx, "experiment", "plan", "ab"), ExitOK,
+		"Usage: about 6% of the five-hour window per run (a default until 3 task runs in one window measure it), so 4 runs need about 0.3 window(s)",
+		"The window was 44% used at the last reading", "about 6 more run(s) fit before the limit")
+
+	saveRuns(t, f, read("task", 0.50, 0.60, older), read("task", 0.60, 0.70, older), read("task", 0.70, 0.80, older))
+	expect(t, f.run(ctx, "experiment", "plan", "ab"), ExitOK,
+		"Usage: about 10% of the five-hour window per run (measured over 3 task runs in one window), so 4 runs need about 0.5 window(s)",
+		"The window was 44% used at the last reading", "about 4 more run(s) fit before the limit")
 }
 
 // Arms may give a role different models on purpose: that is a context difference, not a change mid-experiment.

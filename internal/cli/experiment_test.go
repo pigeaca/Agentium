@@ -53,7 +53,8 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 		"ok       Claude Code 2.1.281", "MISSING  context base is not calibrated: agentium run calibrate --model claude-sonnet-5",
 		"MISSING  context lean is not calibrated: agentium run calibrate --model claude-sonnet-5 --snapshot lean",
 		"Not ready to run", "Quick", "Confident", "This experiment", "$9.67", "$18.00", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
-		"* only 1 task(s) can be in this experiment", "a default task run's tokens at claude-sonnet-5's list prices of 2026-09-29",
+		"* only 1 task(s) can be in this experiment", "Estimated cost per run on claude-sonnet-5:",
+		"value, without runs of their own: $1.61, a default task run's tokens at claude-sonnet-5's list prices of 2026-09-29",
 		"τ = 0.10–0.25", "the study assumed 0.05 for success",
 		"note: at this size the no-loss guard certifies only about 94–100+ pp, wider than the 15 pp success margin")
 	if strings.Contains(notReady.stdout, "WARNING") {
@@ -109,36 +110,23 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "context base was calibrated with sign-in login, and runs would now use api-key")
 	delete(f.vars, "ANTHROPIC_API_KEY")
 
-	// Earlier fair task runs on the model replace the default profile (the fake agent reports $0.02 a run); an unfair
-	// run (another tool set than the calibration's), a run stopped before its result, and calibration runs are not
-	// counted.
+	// The task's own earlier fair runs on the model replace the default profile (the fake agent reports $0.02 a run);
+	// an unfair run (another tool set than the calibration's), a run stopped before its result, a run without a cost and
+	// calibration runs are not counted.
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "")
 	expect(t, f.run(ctx, "run", "once", "value"), ExitOK, "outcome      unfair")
-	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	projects, err := db.Projects(ctx)
-	if err != nil || len(projects) != 1 {
-		t.Fatalf("projects %v, %v", projects, err)
-	}
-	proj := projects[0]
-	now := time.Now()
-	for i, r := range []store.Run{
-		{Outcome: "timeout", CostUSD: 5, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false}}`)},
-		{Outcome: "ok", CostUSD: 0, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":true}}`)},
-	} {
-		r.ID, r.ProjectID, r.TaskName, r.Arm, r.Started, r.Finished = fmt.Sprintf("20260929T00000%dZ-000000", i), proj.ID, "value", "base", now, now
-		if err := db.SaveRun(ctx, r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	db.Close()
+	saveRuns(t, f,
+		store.Run{TaskName: "value", Outcome: "timeout", CostUSD: 5, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false}}`)},
+		store.Run{TaskName: "value", Outcome: "ok", CostUSD: 0, Record: sonnetRecord})
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
 	for range 3 {
 		expect(t, f.run(ctx, "run", "once", "value"), ExitOK, "outcome      ok")
 	}
-	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "the median of this project's 3 earlier task runs on claude-sonnet-5", "$0.12")
+	estimated := f.run(ctx, "experiment", "plan", "lean-ab")
+	expect(t, estimated, ExitOK, "from each task's own earlier runs (their median): value $0.02 (3 run(s))", "$0.12")
+	if strings.Contains(estimated.stdout, "without runs of their own") {
+		t.Errorf("every task has runs of its own:\n%s", estimated.stdout)
+	}
 
 	// An alias has no list price: a budget must be given.
 	expect(t, f.run(ctx, "experiment", "new", "alias", "--b", "lean", "--model", "sonnet"), ExitError, "set --budget")
@@ -158,6 +146,122 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 		"Quick               0*         3     0", "-  no tasks")
 	expect(t, f.run(ctx, "task", "rm", "value"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "task(s) removed since the experiment was made: value")
+}
+
+// sonnetRecord is a stored run's record as cost estimates read it: a fair run on claude-sonnet-5 that reported its cost.
+var sonnetRecord = []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":true}}`)
+
+// taskIDs maps the fixture's tasks to their IDs, which link a stored run to its task.
+func taskIDs(t *testing.T, f runFixture) map[string]int64 {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tasks, err := db.Tasks(ctx, projects[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	for _, task := range tasks {
+		ids[task.Name] = task.ID
+	}
+	return ids
+}
+
+// saveRuns stores earlier runs in the fixture's project, as estimates find them: an arm, IDs and times are filled in.
+func saveRuns(t *testing.T, f runFixture, runs ...store.Run) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	stored, err := db.Runs(ctx, projects[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for i, r := range runs {
+		r.ID, r.ProjectID, r.Started, r.Finished = fmt.Sprintf("20260929T000000Z-%06d", len(stored)+i), projects[0].ID, now, now
+		if r.Arm == "" {
+			r.Arm = "base"
+		}
+		if err := db.SaveRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Each task is estimated from its own earlier runs on the model when it has some, and the others from the project's
+// median: the 16-run A/B's new tasks cost twice that median. The default budget and the warning follow the tasks'
+// estimates, and the preview says which basis each task used.
+func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", "costly", "--verify", "sh run_tests.sh"), ExitOK)
+	expect(t, f.run(ctx, "task", "edit", "costly", "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "costly"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "costly", "--snapshot", "lean"), ExitOK)
+	ids := taskIDs(t, f)
+	var runs []store.Run
+	for _, r := range []struct {
+		task string
+		id   int64
+		cost float64
+	}{
+		{"costly", ids["costly"], 1.6}, {"costly", ids["costly"], 2.0},
+		{"gone", 0, 0.2}, {"gone", 0, 0.3}, {"gone", 0, 0.4}, // a removed task's runs
+		{"value", 0, 0.4}, // a removed task's run under value's name: not value's own
+	} { // the project's median: $0.40
+		runs = append(runs, store.Run{TaskID: r.id, TaskName: r.task, Outcome: "ok", CostUSD: r.cost, Record: sonnetRecord})
+	}
+	// value's own run on another model: no use on claude-sonnet-5.
+	runs = append(runs, store.Run{TaskID: ids["value"], TaskName: "value", Outcome: "ok", CostUSD: 5,
+		Record: []byte(`{"model":"claude-opus-5-5","metrics":{"saw_result":true}}`)})
+	saveRuns(t, f, runs...)
+
+	// value $0.40 and costly $1.80 a run, 2 runs each: $4.40, so 1.25 × $4.40 + 3 caps of $3 held for runs in flight,
+	// rounded up. The project's median alone gave $1.60 and a budget of $11.
+	expect(t, f.run(ctx, "experiment", "new", "mixed", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1"), ExitOK,
+		"2 task(s) × 1 run(s) per arm = 4 runs, budget $15.00")
+	plan := f.run(ctx, "experiment", "plan", "mixed")
+	expect(t, plan, ExitOK, "Estimated cost per run on claude-sonnet-5:",
+		"from each task's own earlier runs (their median): costly $1.80 (2 run(s))",
+		"value, without runs of their own: $0.40, the median of this project's 6 earlier task runs on claude-sonnet-5",
+		"The tiers' estimates average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
+	// The experiment sums its tasks' estimates; Quick would draw 2 tasks × 3 runs per arm at their average, $1.10 a run.
+	if row := armRow(plan.stdout, "Quick"); len(row) < 6 || row[4] != "$13.20" || row[5] != "$36.00" {
+		t.Errorf("Quick row = %v, want $13.20 and the worst case $36.00:\n%s", row, plan.stdout)
+	}
+	if !strings.Contains(plan.stdout, "This experiment     2          1     4      $4.40      $12.00") {
+		t.Errorf("this experiment's row, want $4.40 and the worst case $12.00:\n%s", plan.stdout)
+	}
+	if strings.Contains(plan.stdout, "WARNING") {
+		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
+	}
+	// The tiers draw from every eligible task, also those outside the experiment: the note shows the average they use.
+	expect(t, f.run(ctx, "experiment", "new", "solo", "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	solo := f.run(ctx, "experiment", "plan", "solo")
+	expect(t, solo, ExitOK, "value, without runs of their own: $0.40", "average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
+	if strings.Contains(solo.stdout, "costly $1.80") {
+		t.Errorf("only the experiment's own tasks are listed:\n%s", solo.stdout)
+	}
+	// A budget set by hand below the tasks' estimates plus the reserve is flagged.
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1", "--budget", "12"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
+		"WARNING  the budget $12.00 is below the estimated $4.40 plus $9.00 held for runs in flight")
 }
 
 func TestExperimentNewUsage(t *testing.T) {

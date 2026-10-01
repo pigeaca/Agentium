@@ -11,23 +11,27 @@ import (
 // resumes with a later `experiment run`.
 const StatusUsage = "usage"
 
-// DefaultUsagePerRun is the share of a five-hour window one run is assumed to use until a project's runs measure it:
-// step 7's runs on claude-sonnet-5 used about 5–6.7% each, the coordinating session's own use included.
+// DefaultUsagePerRun is the share of a five-hour window one run is assumed to use until a project's task runs measure
+// it: step 7's runs on claude-sonnet-5 used about 5–6.7% each, the coordinating session's own use included.
 const DefaultUsagePerRun = 0.06
 
-// MinUsageRuns is how many runs in one window UsagePerRun needs before it trusts their rise over the default.
+// MinUsageRuns is how many task runs in one window UsagePerRun needs before it trusts their rise over the default.
 const MinUsageRuns = 3
 
 // UsageSample is one run's first and last usage readings.
 type UsageSample struct {
 	First, Last claude.UsageReading
+	// Calibration marks a calibration run (agentium run calibrate): a few short turns, which use far less of the window
+	// than a task run (1% against 6–10% in the 16-run A/B), so UsagePerRun leaves it out. Its readings still count as
+	// the latest.
+	Calibration bool
 }
 
-// UsagePerRun estimates the share of a five-hour window one run uses. It takes the latest window that at least
-// MinUsageRuns runs read from start to end, and divides the rise from their lowest first reading to their highest last
-// reading by those runs. Runs that overlapped share that rise, so each counts once. Anything else using the
-// subscription meanwhile (the user's own sessions) is included, which errs high. Without such a window it returns
-// DefaultUsagePerRun and 0 runs.
+// UsagePerRun estimates the share of a five-hour window one task run uses. It takes the latest window that at least
+// MinUsageRuns task runs read from start to end, and divides the rise from their lowest first reading to their highest
+// last reading by those runs. Runs that overlapped share that rise, so each counts once. Calibration runs are left
+// out; anything else using the subscription meanwhile (calibrations between task runs, the user's own sessions) is
+// included, which errs high. Without such a window it returns DefaultUsagePerRun and 0 runs.
 func UsagePerRun(samples []UsageSample) (perRun float64, runs int) {
 	type window struct {
 		low, high float64
@@ -37,8 +41,8 @@ func UsagePerRun(samples []UsageSample) (perRun float64, runs int) {
 	var latest time.Time
 	for _, s := range samples {
 		resets := s.Last.FiveHourResets
-		if resets.IsZero() || !s.First.FiveHourResets.Equal(resets) {
-			continue // no readings, or the run crossed a reset
+		if s.Calibration || resets.IsZero() || !s.First.FiveHourResets.Equal(resets) {
+			continue // a calibration run, no readings, or the run crossed a reset
 		}
 		w := windows[resets]
 		if w == nil {
