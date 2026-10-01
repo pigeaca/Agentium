@@ -1,8 +1,8 @@
 # LLM judge pilot
 
 - Date: 2026-09-30
-- Status: In Progress (2026-10-01): step 2 is under way; the [protocol](../../docs/research/judge-pilot/protocol.md) is fixed. Step 4 makes paid judge calls and needs its own approval of cost and timing.
-- Scope: on 2026-09-30 the user asked whether tests alone should decide results, and proposed an LLM judge "since we know results": each task has a reference solution to compare with. The [study](../../docs/research/2026-09-27-ai-development-lab.md) puts rubric judges in Phase 3, never as the primary metric (§5.5). This pilot measures whether a reference-guided judge adds anything, before any product code is written.
+- Status: Complete (2026-10-01): **no-go for now; tests stay the only grader** ([results](../../../docs/research/2026-10-01-judge-pilot-results.md)). False passes and tasks without tests are INCONCLUSIVE, because the labels mark every change fixed. Quality is NO-GO. The judge misses both reliability bars on its own. PRs: #46 (protocol and script), #47 (browser label form), and the results PR with this archive. Judge calls: $12.07.
+- Scope: on 2026-09-30 the user asked whether tests alone should decide results, and proposed an LLM judge "since we know results": each task has a reference solution to compare with. The [study](../../../docs/research/2026-09-27-ai-development-lab.md) puts rubric judges in Phase 3, never as the primary metric (§5.5). This pilot measures whether a reference-guided judge adds anything, before any product code is written.
 
 ## Why
 - Today a run counts as fixed when the task's verification passes with the hidden tests restored. Nothing else looks at the fix.
@@ -41,7 +41,7 @@ Fixed before any labels or judge calls are seen.
 - **Code:** a standard-library Python script with unit tests in `docs/research/judge-pilot/`. It builds the prompts, calls the judge, parses the verdicts and computes every number. Protocol, labels and verdicts are committed; transcripts stay in the data folder, as in Phase 0.
 
 ## Go/no-go
-*Changed on 2026-10-01 after an independent review, before any label, pending the user's agreement:* the rules below could be met by a judge that answers yes to every change. The [protocol](../../docs/research/judge-pilot/protocol.md#verdicts) replaces them with three verdicts (false passes, quality, tasks without tests), each GO, NO-GO or INCONCLUSIVE. It adds trivial baselines, a requirement to catch the false passes found, and documents left out of both diffs. The first version:
+*Changed on 2026-10-01 after an independent review, before any label. The user accepted the change by labelling without objection, as offered:* the rules below could be met by a judge that answers yes to every change. The [protocol](../../../docs/research/judge-pilot/protocol.md#verdicts) replaces them with three verdicts (false passes, quality, tasks without tests), each GO, NO-GO or INCONCLUSIVE. It adds trivial baselines, a requirement to catch the false passes found, and documents left out of both diffs. The first version:
 
 Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an 80% agreement spans roughly 65–89%, so a "go" means "worth building", not "proven".
 - **Go for a secondary judge score** (false passes and quality) when all of these hold:
@@ -64,15 +64,23 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 
 ## Work
 - [x] **1. Preserve the data.** Checked on 2026-09-30: `~/.agentium-acceptance` already held it. Its runs table matches the `/private/tmp` snapshot row for row (35 task runs and 5 calibrations; 24 passed, 6 failed, 5 cancelled), its 35 `agent.diff` files are byte-identical, and it keeps 40 `stream.jsonl` transcripts. No copy was needed.
-- [x] **2. Protocol and script** ([protocol](../../docs/research/judge-pilot/protocol.md), committed before any label or judge call).
+- [x] **2. Protocol and script** ([protocol](../../../docs/research/judge-pilot/protocol.md), committed before any label or judge call).
   - **Checks:** `judge_pilot.py` passes its 14 unit tests. A fake-judge dry run on the real items went from 176 judgements through to the go/no-go table.
   - **The judge's Claude Code:** the installed 2.1.274 refuses Opus 5.5, so the judge runs on the desktop app's bundled 2.1.284. This is recorded in the protocol.
   - **Three priced calls:** $0.038–0.042 each, mostly output (high effort). That puts the full run at about $9, and $13.50 with a 50% margin.
   - **S01:** its pricing verdicts were shown in the session, so it is left out of the comparisons with your labels.
   - **Pairs:** 19 rather than 20–25; 8 of them are A/A.
-- [ ] **3. Human labels** (the user); the A/B's diffs are in. Paging long diffs in the terminal form was clumsy, so a browser form was added before any label (`label --web`; see the protocol's Changes).
-- [ ] **4. Judge calls (paid; separate approval).** 138 single and 38 pair judgements, priced in step 2 at about $9 (list prices, or a share of the usage windows with a subscription). A budget cap of $15 is proposed.
-- [ ] **5. Analysis:** results doc, go/no-go, roadmap update; then archive this plan.
+- [x] **3. Human labels** (the user), on 2026-10-01; the A/B's diffs are in.
+  - **Form:** paging long diffs in the terminal form was clumsy, so a browser form was added before any label (`label --web`, #47).
+  - **Frozen** before the judge run, with SHA-256 `7590b875…`.
+  - **Label quality:** all 46 singles are "yes", including the two empty changes, and the pairs have no tie and no note. Told that this leaves two verdicts without data, the user chose to run the judge anyway.
+- [x] **4. Judge calls (paid; approved by the user, $15 cap).**
+  - 176 judgements in about 31 minutes, for $12.07 (estimate $9).
+  - One pair call hit the usage limit and succeeded on its retry.
+  - The run had to stay inside the sandbox: a sandbox-bypassing launch was refused, and the sandboxed one worked.
+- [x] **5. Analysis:** [results](../../../docs/research/2026-10-01-judge-pilot-results.md), go/no-go, roadmap update.
+  - The script changed only in presentation after the results (protocol, Changes item 6).
+  - Follow-ups are proposed in the results, not planned: check the judge's claims by running them, careful labels, and a steadier judge.
 
 ## Boundaries
 - No product code and no new dependencies. The judge is called only through the installed Claude Code.
@@ -83,8 +91,9 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 Unit tests for the script, the fake-judge dry run, `harness.py check changed`, CI, and a reviewer read of the protocol before step 3.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code desktop / claude-opus-5-5 / default (coordinator); `reviewer` subagents on Opus / high
+- Elapsed: about 6h over 2026-09-30 to 2026-10-01, including the user's labelling and a 31-minute judge run
+- Check-fix loops: 5 (protocol review: changes requested, then approved with notes; label form; results presentation; results review notes)
+- User corrections: 1 (the terminal label form did not work for the user, so a browser form was built)
+- Paid calls: 4 pricing and verification calls (about $0.16) and the judge run ($12.07)
+- Review: protocol and script reviewed before labelling (#46). The results review re-derived every number and approved with notes: one overstated exploratory claim, paraphrases, a stale link, the user's timezone in an error string, and a thin test. All were fixed; no verdict or number changed.
