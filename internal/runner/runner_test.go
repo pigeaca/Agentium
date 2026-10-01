@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -170,5 +171,28 @@ func TestStartedReportsTheProcessGroup(t *testing.T) {
 	}
 	if got := strings.TrimSpace(read()); started == 0 || got != strconv.Itoa(started) {
 		t.Errorf("Started got %d; the command's process group is %q", started, got)
+	}
+}
+
+// pinnedEnviron is one environment that every allowlist's pin test filters: credentials, GIT_*, AGENTIUM_*, CLAUDE_*,
+// toolchain and system settings, and names that only look like their neighbours (GIT, GITHUB).
+func pinnedEnviron() []string {
+	return []string{"PATH=/bin", "HOME=/h", "GIT_DIR=/x", "GIT_AUTHOR_NAME=a", "AGENTIUM_HOME=/a", "AGENTIUM_X=1", "ANTHROPIC_API_KEY=k",
+		"GITHUB_TOKEN=t", "SSH_AUTH_SOCK=/s", "MY_PASSWORD=p", "CLAUDE_CODE_TMPDIR=/t", "LC_ALL=C", "GOFLAGS=-mod=mod", "JAVA_HOME=/j",
+		"RUSTC_WRAPPER=w", "HTTPS_PROXY=http://p", "XDG_RUNTIME_DIR=/r", "FOO=bar", "NODE_OPTIONS=x", "TERM=xterm", "EMPTY=", "GOPATH=/g",
+		"MAVEN_OPTS=-X", "GRADLE_USER_HOME=/gu", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp", "AWS_PROFILE=p", "NETRC=/n", "GIT=ok", "GITHUB=ok"}
+}
+
+// TestEnvironPinned pins what Environ keeps byte for byte: everything but credentials, GIT_* and AGENTIUM_*, in order.
+// An empty result is an empty slice, not nil: Spec.Environ nil means "use the default".
+func TestEnvironPinned(t *testing.T) {
+	want := []string{"PATH=/bin", "HOME=/h", "CLAUDE_CODE_TMPDIR=/t", "LC_ALL=C", "GOFLAGS=-mod=mod", "JAVA_HOME=/j", "RUSTC_WRAPPER=w",
+		"HTTPS_PROXY=http://p", "XDG_RUNTIME_DIR=/r", "FOO=bar", "NODE_OPTIONS=x", "TERM=xterm", "EMPTY=", "GOPATH=/g", "MAVEN_OPTS=-X",
+		"GRADLE_USER_HOME=/gu", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp", "GIT=ok", "GITHUB=ok"}
+	if got := Environ(pinnedEnviron()); !slices.Equal(got, want) {
+		t.Errorf("Environ = %q\nwant %q", got, want)
+	}
+	if got := Environ(nil); got == nil || len(got) != 0 {
+		t.Errorf("Environ(nil) = %#v, want an empty non-nil slice", got)
 	}
 }

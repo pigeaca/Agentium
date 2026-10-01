@@ -54,31 +54,15 @@ func (j Judgement) Command(environ []string) (args, env []string, err error) {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(j.BudgetUSD, 'f', -1, 64))
 	}
 	env = append(Environ(environ), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
-	// The sign-in as Invocation.Command sets it for runs: a fresh config folder cannot use a subscription login.
-	switch j.SignIn {
-	case SignInLogin:
-		if j.Secret != "" {
-			return nil, nil, errors.New("sign-in login takes no secret")
-		}
-		userConfig := UserConfigDir(environ, j.Home)
-		if !filepath.IsAbs(userConfig) { // relative, it would resolve in the empty call folder: a fresh, signed-out config
-			return nil, nil, fmt.Errorf("CLAUDE_CONFIG_DIR %q is not absolute", userConfig)
-		}
-		if userConfig != filepath.Join(j.Home, ".claude") {
-			env = append(env, "CLAUDE_CONFIG_DIR="+userConfig)
-		}
-	case SignInAPIKey, SignInTokenFile:
-		if j.Secret == "" || j.ConfigDir == "" {
-			return nil, nil, fmt.Errorf("sign-in %s needs a secret and a fresh config folder", j.SignIn)
-		}
-		name := "ANTHROPIC_API_KEY"
-		if j.SignIn == SignInTokenFile {
-			name = "CLAUDE_CODE_OAUTH_TOKEN"
-		}
-		env = append(env, "CLAUDE_CONFIG_DIR="+j.ConfigDir, name+"="+j.Secret)
-	default:
-		return nil, nil, fmt.Errorf("unknown sign-in mode %q", j.SignIn)
+	// The sign-in as Invocation.Command sets it for runs.
+	if err := checkSignIn(j.SignIn, j.Secret, j.ConfigDir); err != nil {
+		return nil, nil, err
 	}
+	userConfig := UserConfigDir(environ, j.Home)
+	if j.SignIn == SignInLogin && !filepath.IsAbs(userConfig) { // relative, it would resolve in the empty call folder: a fresh, signed-out config
+		return nil, nil, fmt.Errorf("CLAUDE_CONFIG_DIR %q is not absolute", userConfig)
+	}
+	env = append(env, signInEnv(j.SignIn, j.Secret, j.ConfigDir, j.Home, userConfig)...)
 	return args, env, nil
 }
 
