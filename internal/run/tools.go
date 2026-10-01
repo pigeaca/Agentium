@@ -1,7 +1,9 @@
 package run
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -45,8 +47,9 @@ func NeedsLocalBinding(ctx context.Context, bare string, commits []string) (bool
 // Agents read it and cannot write it: the sandbox lets them write only their checkout and their run's build cache,
 // and Invocation.Deps is denied for writing besides. It lies in the data folder but outside the folders runs may not
 // read (projects, records, artifacts, cache, the database), because offline builds must read it. So it must never hold
-// anything compiled from hidden tests, and only a run's setup writes it (warmTools), in a checkout of the task's base
-// and the arm's context: the hidden tests are added to a separate copy at grading. One folder per project (the bare
+// anything compiled from hidden tests, and only a run's setup writes it (warmTools), in a checkout
+// of the task's base: the hidden tests are added to a separate copy at grading. Build caches are off in every warm-up
+// and denied to agents besides (buildtool.DepsDenied). One folder per project (the bare
 // repository's folder name), shared by its tasks and runs; it only grows.
 func (env Env) depsFolder() string {
 	if env.Layout.Deps == "" {
@@ -57,6 +60,24 @@ func (env Env) depsFolder() string {
 		key = filepath.Base(filepath.Dir(env.Bare))
 	}
 	return filepath.Join(env.Layout.Deps, key)
+}
+
+// DefaultWarmWait is how long a run waits for another warm-up of the same project before it goes on without warming.
+const DefaultWarmWait = 15 * time.Minute
+
+// warmState is where warm-ups keep their lock and stamps: in the data folder's cache, which agents may not read. In
+// the deps folder, which they can read, an agent could hold the lock (flock works on a read-only open) and stall every
+// later warm-up, or plant stamps that make warm-ups skip.
+func (env Env) warmState(deps string) string {
+	if env.Layout.Cache == "" {
+		return filepath.Join(os.TempDir(), "agentium-warm-state", filepath.Base(deps))
+	}
+	return filepath.Join(env.Layout.Cache, "warm-state", filepath.Base(deps))
+}
+
+// stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set.
+func (env Env) stampPath(deps, base string, names []string) string {
+	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+filepath.Base(base))
 }
 
 // prepareTools is the build tools' part of a run's setup, before the task's own setup commands: it warms the project's
@@ -83,6 +104,9 @@ func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, i
 
 // warmInThrowaway checks the base commit out in the data folder's cache (agents may not read it), warms, and removes it.
 func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile, deps, base, logPath string, running func(pid int)) (string, error) {
+	if _, err := os.Stat(env.stampPath(deps, base, buildtool.NeedsWarming(profiles))); err == nil {
+		return "", nil // warmed already: no checkout needed (warmTools checks again under the lock)
+	}
 	parent := filepath.Join(env.Layout.Cache, "warm")
 	if env.Layout.Cache == "" {
 		parent = os.TempDir()
@@ -103,22 +127,34 @@ func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile
 	return env.warmTools(ctx, checkoutDir, deps, base, profiles, buildtool.NeedsWarming(profiles), steps, logPath, running)
 }
 
-// warmTools runs the warm-up steps in the checkout. Runs that may overlap wait for each other here (a lock file in the
-// deps folder), so two warm-ups never write one dependency cache together; a stamp per base commit and tool set skips
+// warmTools runs the warm-up steps in the checkout. Runs that may overlap wait for each other here (a lock file in
+// warmState, up to Env.WarmWait, else DefaultWarmWait; a run that waits in vain goes on, with a note), so two warm-ups never write one dependency cache together; a stamp per base commit and tool set skips
 // repeats. Agents of other runs may read the folder meanwhile, so a warm-up must leave what they read stable: it adds
 // files, and the Gradle profile turns the user home's cache cleanup off, which would delete them.
 func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles []buildtool.Profile, names []string, steps []buildtool.WarmStep, logPath string, running func(pid int)) (string, error) {
-	if err := os.MkdirAll(filepath.Join(deps, "stamps"), 0o700); err != nil {
-		return "", fmt.Errorf("deps folder: %w", err)
+	state := env.warmState(deps)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		return "", fmt.Errorf("warm-up state: %w", err)
 	}
-	unlock, err := lockFile(ctx, filepath.Join(deps, ".lock"))
-	if err != nil {
-		return "", fmt.Errorf("deps folder: %w", err)
+	wait := cmp.Or(env.WarmWait, DefaultWarmWait)
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	unlock, err := lockFile(waitCtx, filepath.Join(state, "lock"), func() {
+		env.progress("  waiting for another warm-up of the dependencies (up to %s)", wait)
+	})
+	cancel()
+	switch {
+	case err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("another warm-up of the dependencies held the lock for %s: this run went on without warming", wait), nil
+	case err != nil:
+		return "", fmt.Errorf("warm-up lock: %w", err)
 	}
 	defer unlock()
-	stamp := filepath.Join(deps, "stamps", strings.Join(names, "+")+"-"+filepath.Base(base))
+	stamp := env.stampPath(deps, base, names)
 	if _, err := os.Stat(stamp); err == nil {
 		return "", nil
+	}
+	if err := os.MkdirAll(deps, 0o700); err != nil {
+		return "", fmt.Errorf("deps folder: %w", err)
 	}
 	if err := buildtool.PrepareDeps(profiles, deps); err != nil {
 		return "", err
@@ -139,13 +175,13 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 		return "dependency warm-up failed (" + failed + "): the agent may not be able to build offline; see setup.log", nil
 	}
 	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
-		return "", fmt.Errorf("deps folder: %w", err)
+		return "", fmt.Errorf("warm-up state: %w", err)
 	}
 	return "", nil
 }
 
-// lockFile takes an exclusive lock on path, waiting for it until ctx ends; the lock goes with its holder's process.
-func lockFile(ctx context.Context, path string) (unlock func(), err error) {
+// lockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait); the lock goes with its holder's process.
+func lockFile(ctx context.Context, path string, onWait func()) (unlock func(), err error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -158,6 +194,10 @@ func lockFile(ctx context.Context, path string) (unlock func(), err error) {
 		if err != syscall.EWOULDBLOCK {
 			f.Close()
 			return nil, err
+		}
+		if onWait != nil {
+			onWait()
+			onWait = nil // once
 		}
 		select {
 		case <-ctx.Done():

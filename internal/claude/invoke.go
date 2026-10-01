@@ -86,7 +86,7 @@ func LocalBindingRefusal(tools []string, allowed bool) error {
 		return nil
 	}
 	return errors.New("this project builds with Gradle, whose file-lock service needs the sandbox to let the agent bind local ports and connect to localhost. " +
-		"That also lets the agent reach any service listening on this machine (a database, a dev server); outbound network to other hosts stays blocked. " +
+		"That also lets the agent reach any service listening on this machine (a database, a dev server, and the other agents' runs, which can reach each other when they run side by side); outbound network to other hosts stays blocked. " +
 		"Agent runs on this project do not start until you allow it: agentium init --allow-local-binding")
 }
 
@@ -350,6 +350,9 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
+	if inv.Deps != "" {
+		paths = append(paths, buildtool.DepsDenied(inv.Deps)...)
+	}
 	if inv.TempRoot != "" {
 		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
 	}

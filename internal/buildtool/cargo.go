@@ -3,7 +3,7 @@ package buildtool
 import (
 	"os"
 	"path/filepath"
-	"strings"
+	"regexp"
 )
 
 // cargoProfile holds Cargo's special cases.
@@ -52,7 +52,8 @@ func cargoProfile() Profile {
 		Warm: func(_, deps string, _ func(string) bool) []WarmStep {
 			return []WarmStep{{Command: "cargo fetch", Env: []string{"CARGO_HOME=" + filepath.Join(deps, "cargo")}}}
 		},
-		UserCaches: cargoCaches,
+		UserCaches:    cargoCaches,
+		ProjectCaches: cargoProjectCaches,
 	}
 }
 
@@ -75,41 +76,69 @@ func cargoCaches(environ []string, home string) []string {
 			paths = append(paths, v)
 		}
 	}
-	for _, ch := range cargoHomes { // `[build] target-dir` in the user's config; relative paths start above the config's folder
+	for _, ch := range cargoHomes { // the config in CARGO_HOME (relative paths start above it), then those above the home folder
 		for _, name := range []string{"config.toml", "config"} {
-			if dir := configTargetDir(filepath.Join(ch, name)); dir != "" {
-				if !filepath.IsAbs(dir) {
-					dir = filepath.Join(filepath.Dir(ch), dir)
+			for _, t := range configTargetDirs(filepath.Join(ch, name)) {
+				if !filepath.IsAbs(t) {
+					t = filepath.Join(filepath.Dir(ch), t)
 				}
-				paths = append(paths, dir)
+				paths = append(paths, t)
 			}
 		}
 	}
+	paths = append(paths, configCaches(home)...)
 	if xdg := env["XDG_CACHE_HOME"]; filepath.IsAbs(xdg) {
 		paths = append(paths, filepath.Join(xdg, "sccache"))
 	}
 	return paths
 }
 
-// configTargetDir reads `target-dir` from the [build] table of a Cargo config file, or "" when there is none. It reads
-// the plain `key = "value"` form, which is how the setting is written; an inline table or a dotted key is not seen.
-func configTargetDir(file string) string {
+// targetDirSetting finds every `target-dir = "…"` in a Cargo config, however it is written: under [build] (with or
+// without a comment after the header), as a dotted key (build.target-dir), with quoted keys, in an inline table, with
+// a trailing comment. It does not parse TOML: any line that sets a quoted value to a key ending in target-dir counts,
+// wherever it is, so it can only deny too much (a target-dir in another table, a commented-out line), never too little.
+// Not seen: a value in a multi-line string, and settings given on a command line (--config).
+var targetDirSetting = regexp.MustCompile(`target-dir["']?\s*=\s*(?:"([^"\n]*)"|'([^'\n]*)')`)
+
+// configTargetDirs lists the target directories a Cargo config file names, or nil when there is no such file.
+func configTargetDirs(file string) []string {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return ""
+		return nil
 	}
-	inBuild := false
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "["):
-			inBuild = line == "[build]"
-		case inBuild:
-			if key, v, ok := strings.Cut(line, "="); ok && strings.TrimSpace(key) == "target-dir" {
-				v, _, _ = strings.Cut(strings.TrimSpace(v), " #")
-				return strings.Trim(strings.TrimSpace(v), `"'`)
-			}
+	var dirs []string
+	for _, m := range targetDirSetting.FindAllStringSubmatch(string(data), -1) {
+		if dir := m[1] + m[2]; dir != "" {
+			dirs = append(dirs, dir)
 		}
 	}
-	return ""
+	return dirs
+}
+
+// configCaches are the target directories named by the Cargo configs in dir and every folder above it, as Cargo reads
+// them (<folder>/.cargo/config.toml, and the older .cargo/config). Relative paths start at <folder>.
+func configCaches(dir string) []string {
+	var paths []string
+	for d := filepath.Clean(dir); ; d = filepath.Dir(d) {
+		for _, name := range []string{"config.toml", "config"} {
+			for _, t := range configTargetDirs(filepath.Join(d, ".cargo", name)) {
+				if !filepath.IsAbs(t) {
+					t = filepath.Join(d, t)
+				}
+				paths = append(paths, t)
+			}
+		}
+		if filepath.Dir(d) == d {
+			return paths
+		}
+	}
+}
+
+// cargoProjectCaches are the target directories configured for the user's repository (its own .cargo/config.toml and
+// those of the folders above it): earlier builds there may have left compiled hidden tests in them.
+func cargoProjectCaches(root string) []string {
+	if !filepath.IsAbs(root) {
+		return nil
+	}
+	return configCaches(root)
 }

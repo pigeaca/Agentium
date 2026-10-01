@@ -70,8 +70,8 @@ func gradleProfile() Profile {
 			}
 			env := []string{"GRADLE_USER_HOME=" + filepath.Join(deps, "gradle")}
 			return []WarmStep{
-				{Command: gradle + " --no-daemon --console=plain -q testClasses", Env: env},
-				{Command: gradle + " --no-daemon --console=plain -q test --tests AgentiumWarmNoSuchTest || true", Env: env},
+				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q testClasses", Env: env},
+				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q test --tests AgentiumWarmNoSuchTest || true", Env: env},
 			}
 		},
 		PrepareRun:      prepareGradleRun,
@@ -81,6 +81,16 @@ func gradleProfile() Profile {
 	}
 }
 
+// gradleHomeProps are the settings of every Gradle user home Agentium writes (the run's, the deps folder's, the one for
+// its own commands):
+//   - no daemon: a daemon outlives its command with a heap of gigabytes;
+//   - no build cache: compiled classes would land in a place later runs share (the deps folder, or the data folder's
+//     cache), and a later task's base holds an earlier task's reference code and hidden tests. Turning it off changes no
+//     test result, only speed, and it beats a project's own org.gradle.caching=true;
+//   - Kotlin compiles in the Gradle process: a Kotlin compile daemon would outlive Agentium's own, unsandboxed commands,
+//     listen on localhost, and (with local binding allowed) could compile an agent's code outside the sandbox.
+const gradleHomeProps = "org.gradle.daemon=false\norg.gradle.caching=false\nkotlin.compiler.execution.strategy=in-process\n"
+
 // prepareGradleRun makes the run's GRADLE_USER_HOME: no daemon, and the wrapper's distributions cloned from the deps
 // folder when setup fetched them.
 func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
@@ -88,7 +98,7 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 	if err := os.MkdirAll(guh, 0o700); err != nil {
 		return err
 	}
-	props := "org.gradle.daemon=false\n"
+	props := gradleHomeProps
 	if deps != "" {
 		// Toolchain JDKs the warm-up downloaded live in the deps folder's Gradle home, not in this run's: point Gradle
 		// there, and never let it download one (the sandbox has no network anyway).
@@ -121,51 +131,53 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 	return nil
 }
 
-// maxDaemonLogs caps how many daemon logs a stop reads: a run has a few daemons, and the agent can write more.
-const maxDaemonLogs = 16
-
-// stopGradleDaemons ends the Gradle daemons the run started. They are found through their logs in the run's own
-// user home (daemon/<version>/daemon-<pid>.out.log), which the agent can write: so a log counts only when it is a
-// plain file that really lies inside the run's Gradle home (no link out of it), and a process is signalled only when
-// its command line is a Gradle daemon AND it has that very log open (a daemon keeps its log open while it runs). A
-// planted log naming the user's own daemon, another run's, or any other process therefore kills nothing. When the
-// machine cannot tell (no lsof), nothing is signalled and the error says so. Nothing in the checkout is run: the agent
-// may have changed gradlew.
+// stopGradleDaemons ends the Gradle daemons the run started. It starts from the machine's own process list (the user's
+// GradleDaemon processes), never from files the agent can write, and signals a process only when it holds open the log
+// that daemon would keep in the run's own Gradle home: <buildCache>/gradle/daemon/<version>/daemon-<pid>.out.log, with
+// its pid. So an agent cannot make Agentium kill the user's daemon, another run's, or a process it names, and planted
+// logs cannot hide the real daemon.
+//
+// The root is the run's build cache resolved once, plus "gradle": the build cache is a folder Agentium made before the
+// agent started, and the agent cannot replace it (the sandbox lets it write inside the folder, not in its parent), but
+// it can replace <buildCache>/gradle, so that is checked not to be a link. When the machine cannot tell
+// what a process has open (no lsof), nothing is signalled and the error says so. Nothing in the checkout is run: the
+// agent may have changed gradlew.
 func stopGradleDaemons(ctx context.Context, buildCache string, host Host) error {
-	root, err := filepath.EvalSymlinks(filepath.Join(buildCache, "gradle"))
+	resolved, err := filepath.EvalSymlinks(buildCache)
 	if err != nil {
-		return nil // no Gradle home: no daemon
+		return nil // no build cache: nothing ran
 	}
-	logs, err := filepath.Glob(filepath.Join(root, "daemon", "*", "daemon-*.out.log"))
+	root := filepath.Join(resolved, "gradle")
+	if info, err := os.Lstat(root); err != nil || !info.IsDir() {
+		return nil // no Gradle home, or one the agent replaced with a link or a file: no daemon of this run's is there
+	}
+	pids, err := host.Daemons(ctx)
 	if err != nil {
 		return err
 	}
-	slices.Sort(logs)
 	var errs []error
-	for _, log := range logs[:min(len(logs), maxDaemonLogs)] {
-		name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(log), "daemon-"), ".out.log")
-		pid, err := strconv.Atoi(name)
-		if err != nil || pid <= 1 {
-			continue
-		}
-		real, err := filepath.EvalSymlinks(log)
-		info, lerr := os.Lstat(log)
-		if err != nil || lerr != nil || !info.Mode().IsRegular() || !strings.HasPrefix(real, root+string(filepath.Separator)) {
-			continue
-		}
-		if !strings.Contains(host.Command(ctx, pid), "GradleDaemon") {
-			continue
-		}
+	for _, pid := range pids {
 		open, err := host.OpenFiles(ctx, pid)
 		if err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if slices.Contains(open, real) {
+		wanted := "daemon-" + strconv.Itoa(pid) + ".out.log"
+		if slices.ContainsFunc(open, func(f string) bool { return daemonLog(root, f, wanted) }) {
 			host.terminate(ctx, pid)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// daemonLog reports whether file is <root>/daemon/<version>/<name>.
+func daemonLog(root, file, name string) bool {
+	rel, err := filepath.Rel(root, file)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	return len(parts) == 3 && parts[0] == "daemon" && parts[1] != ".." && parts[2] == name
 }
 
 // prepareGradleDeps turns the cache cleanup of the deps folder's Gradle home off, both as a property and as an init
@@ -176,7 +188,7 @@ func prepareGradleDeps(deps string) error {
 	if err := os.MkdirAll(filepath.Join(guh, "init.d"), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte("org.gradle.daemon=false\norg.gradle.cache.cleanup=false\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(gradleHomeProps+"org.gradle.cache.cleanup=false\n"), 0o600); err != nil {
 		return err
 	}
 	script := "beforeSettings { settings ->\n    settings.caches { cleanup = Cleanup.DISABLED }\n}\n"
@@ -190,7 +202,7 @@ func prepareGradleCommands(cache string) error {
 	if err := os.MkdirAll(guh, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte("org.gradle.daemon=false\n"), 0o600)
+	return os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(gradleHomeProps), 0o600)
 }
 
 // gradleCaches are the user's Gradle folders that hold compiled outputs (caches, with the build cache), daemon state,

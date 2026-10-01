@@ -92,6 +92,8 @@ type Env struct {
 	// AllowLocalBinding is the project's opt-in for the sandbox's local binding (store.Project): a run on a Gradle
 	// project does not start without it (claude.LocalBindingRefusal).
 	AllowLocalBinding bool
+	// WarmWait bounds the wait for another warm-up of the project's dependencies; zero: DefaultWarmWait.
+	WarmWait time.Duration
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
@@ -745,6 +747,7 @@ func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	db := env.Layout.Database
 	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
+	paths = append(paths, buildtool.ProjectCaches(env.ProjectRoot)...) // e.g. a Cargo target-dir the repository's config names
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {
 			if other := filepath.Join(env.Layout.Workspaces, e.Name()); other != workspace {

@@ -97,6 +97,9 @@ type Profile struct {
 	// UserCaches are the user's own caches of this tool, which the agent may not read: they hold what earlier builds
 	// compiled, the hidden tests of validations and gradings included. Only absolute paths count.
 	UserCaches func(environ []string, home string) []string
+	// ProjectCaches are folders configured in the user's repository (or above it) that earlier builds there may have
+	// filled with compiled hidden tests (a Cargo target-dir): denied to agents like UserCaches, for every project.
+	ProjectCaches func(root string) []string
 }
 
 // CacheVar is an environment variable that points a cache at a folder (Dir, relative to the cache root; "" is the root
@@ -351,6 +354,27 @@ func UserCaches(environ []string, home string) []string {
 		}
 	}
 	return paths
+}
+
+// ProjectCaches is every profile's ProjectCaches for the user's repository at root.
+func ProjectCaches(root string) []string {
+	var paths []string
+	for _, p := range Profiles() {
+		if p.ProjectCaches != nil {
+			paths = append(paths, p.ProjectCaches(root)...)
+		}
+	}
+	return paths
+}
+
+// DepsDenied are the folders under deps agents may not read: build caches, which hold compiled classes (a later task's
+// base holds earlier tasks' reference code and hidden tests). The read-only dependency cache needs only modules-2, and
+// the warm-ups run with every build cache off, so these should be empty or absent: this is the second line. Existing
+// numbered Gradle build caches are listed too.
+func DepsDenied(deps string) []string {
+	paths := []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "build-cache")}
+	found, _ := filepath.Glob(filepath.Join(deps, "gradle", "caches", "build-cache-*"))
+	return append(paths, found...)
 }
 
 // EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.

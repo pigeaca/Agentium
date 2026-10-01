@@ -78,8 +78,12 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 	if warm("c3", failing) == "" {
 		t.Error("a failed warm-up was stamped as done")
 	}
-	if _, err := os.Stat(filepath.Join(deps, "stamps", "cargo-c1")); err != nil {
+	// Lock and stamps live where agents cannot read (the data folder's cache), not in the deps folder they read.
+	if _, err := os.Stat(env.stampPath(deps, "c1", []string{"cargo"})); err != nil || !strings.HasPrefix(env.stampPath(deps, "c1", []string{"cargo"}), os.TempDir()) {
 		t.Errorf("stamp: %v", err)
+	}
+	if entries, _ := os.ReadDir(deps); len(entries) != 0 {
+		t.Errorf("warm-up state in the deps folder agents read: %v", entries)
 	}
 	if info, err := os.Stat(deps); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("deps folder: %v %v", info, err)
@@ -162,17 +166,17 @@ func TestWarmRunsInAThrowawayCheckoutOfTheBase(t *testing.T) {
 // Two warm-ups never write one dependency cache together, and waiting ends with the run's context.
 func TestDepsLockIsExclusiveAndCancellable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".lock")
-	unlock, err := lockFile(context.Background(), path)
+	unlock, err := lockFile(context.Background(), path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	if _, err := lockFile(ctx, path); err == nil {
+	if _, err := lockFile(ctx, path, nil); err == nil {
 		t.Fatal("a second holder got the lock")
 	}
 	unlock()
-	again, err := lockFile(context.Background(), path)
+	again, err := lockFile(context.Background(), path, nil)
 	if err != nil {
 		t.Fatalf("after release: %v", err)
 	}
@@ -209,5 +213,48 @@ func TestGradingKnowsMavenGradleAndCargo(t *testing.T) {
 		if !ranTests([]string{c}) {
 			t.Errorf("%q is not seen as running tests", c)
 		}
+	}
+}
+
+// A warm-up that waits for another one gives up after the bound, goes on with a note, and does not touch the stamp; one
+// already stamped skips even the checkout (the bare repository here does not exist, so a checkout would fail).
+func TestWarmWaitIsBoundedAndStampedSkipsTheCheckout(t *testing.T) {
+	dir := t.TempDir()
+	deps := filepath.Join(dir, "deps", "1")
+	env := Env{Layout: home.Layout{Cache: filepath.Join(dir, "cache")}, Bare: filepath.Join(dir, "missing.git"), WarmWait: 300 * time.Millisecond, VerifyTimeout: 10 * time.Second}
+	state := env.warmState(deps)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(state, filepath.Dir(deps)) {
+		t.Fatalf("the warm-up state %s lies in the folder agents read", state)
+	}
+	hold, err := lockFile(context.Background(), filepath.Join(state, "lock"), nil) // another warm-up
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := []buildtool.WarmStep{{Command: "touch " + filepath.Join(dir, "ran")}}
+	start := time.Now()
+	note, err := env.warmTools(context.Background(), dir, deps, "c1", buildtool.Select([]string{"cargo"}), []string{"cargo"}, steps, filepath.Join(dir, "log"), func(int) {})
+	if err != nil || !strings.Contains(note, "another warm-up") || time.Since(start) > 10*time.Second {
+		t.Errorf("a bounded wait: %q, %v, after %v", note, err, time.Since(start))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ran")); err == nil {
+		t.Error("the warm-up ran without the lock")
+	}
+	hold()
+	// A cancelled run is an error, not a note.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	hold, _ = lockFile(context.Background(), filepath.Join(state, "lock"), nil)
+	if _, err := env.warmTools(ctx, dir, deps, "c1", buildtool.Select([]string{"cargo"}), []string{"cargo"}, steps, filepath.Join(dir, "log"), func(int) {}); err == nil {
+		t.Error("a cancelled wait is not an error")
+	}
+	hold()
+	if err := os.WriteFile(env.stampPath(deps, "c1", []string{"cargo"}), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if note, err := env.warmInThrowaway(context.Background(), buildtool.Select([]string{"cargo"}), deps, "c1", filepath.Join(dir, "log"), func(int) {}); err != nil || note != "" {
+		t.Errorf("a stamped warm-up: %q, %v", note, err)
 	}
 }

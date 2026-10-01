@@ -52,7 +52,7 @@ func TestMavenRunEnvironmentAndSandbox(t *testing.T) {
 	inv := toolInvocation(t, "maven")
 	env, settings := toolCommand(t, inv, userTools)
 	want := map[string]string{"JAVA_HOME": "/host/jdk", "MAVEN_USER_HOME": "/data/deps/1/mvnw-home",
-		"MAVEN_ARGS": "-o -Dmaven.repo.local=/work/runs/r1/go-build/m2 -Dmaven.repo.local.tail=/data/deps/1/m2"}
+		"MAVEN_ARGS": "-o -Dmaven.repo.local=/work/runs/r1/go-build/m2 -Dmaven.repo.local.tail=/data/deps/1/m2 -Dmaven.build.cache.enabled=false"}
 	for name, v := range want {
 		if env[name] != v {
 			t.Errorf("%s = %q, want %q", name, env[name], v)
@@ -75,6 +75,16 @@ func TestMavenRunEnvironmentAndSandbox(t *testing.T) {
 		t.Error("the deps folder is denied: offline builds could not read it")
 	}
 	denied := inv.DeniedPaths(userTools)
+	// Build caches under the deps folder are denied (the dependency cache itself is not): compiled classes of earlier
+	// tasks' reference code and hidden tests must not be readable.
+	for _, p := range []string{"/data/deps/1/gradle/caches/build-cache-1", "/data/deps/1/build-cache"} {
+		if !slices.Contains(denied, p) {
+			t.Errorf("%s is not denied", p)
+		}
+	}
+	if slices.Contains(denied, "/data/deps/1/m2") || slices.Contains(denied, "/data/deps/1/gradle/caches") {
+		t.Error("the read-only dependency caches are denied")
+	}
 	for _, p := range []string{"/home/u/.m2"} {
 		if !slices.Contains(denied, p) {
 			t.Errorf("%s is not denied", p)

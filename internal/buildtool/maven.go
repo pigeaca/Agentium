@@ -3,8 +3,15 @@ package buildtool
 import (
 	"io/fs"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var javaIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// noMavenBuildCache turns Maven's build-cache extension off wherever Agentium runs Maven: its cache would hold compiled
+// classes (a later task's base holds earlier tasks' reference code and hidden tests) in a folder later runs share.
+const noMavenBuildCache = "-Dmaven.build.cache.enabled=false"
 
 // mavenProfile holds Maven's special cases; the repository's own wrapper (mvnw) is preferred, as the user decided.
 //
@@ -36,7 +43,7 @@ func mavenProfile() Profile {
 		EnvNames:      []string{"M2_HOME", "MAVEN_HOME"},
 		CommandCaches: []CacheVar{{Name: "MAVEN_USER_HOME", Dir: "maven"}},
 		CommandVars: func(cache string) []string {
-			return []string{"MAVEN_ARGS=-Dmaven.repo.local=" + filepath.Join(cache, "m2")}
+			return []string{"MAVEN_ARGS=-Dmaven.repo.local=" + filepath.Join(cache, "m2") + " " + noMavenBuildCache}
 		},
 		AgentEnv: func(c AgentContext) []string {
 			var env []string
@@ -45,7 +52,7 @@ func mavenProfile() Profile {
 			}
 			if c.Deps != "" && c.BuildCache != "" {
 				env = append(env, "MAVEN_USER_HOME="+filepath.Join(c.Deps, "mvnw-home"),
-					"MAVEN_ARGS=-o -Dmaven.repo.local="+filepath.Join(c.BuildCache, "m2")+" -Dmaven.repo.local.tail="+filepath.Join(c.Deps, "m2"))
+					"MAVEN_ARGS=-o -Dmaven.repo.local="+filepath.Join(c.BuildCache, "m2")+" -Dmaven.repo.local.tail="+filepath.Join(c.Deps, "m2")+" "+noMavenBuildCache)
 			}
 			return env
 		},
@@ -58,11 +65,11 @@ func mavenProfile() Profile {
 				mvn = "./mvnw"
 			}
 			selector := "AgentiumWarmNoSuchTest"
-			if class := firstTestClass(filepath.Join(dir, "src", "test", "java")); class != "" {
-				selector = class
+			if class := firstTestClass(filepath.Join(dir, "src", "test", "java")); javaIdentifier.MatchString(class) {
+				selector = class // only a plain name goes into a shell command line
 			}
 			return []WarmStep{{
-				Command: mvn + " -B -q test -Dtest=" + selector + " -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false",
+				Command: mvn + " -B -q test -Dtest=" + selector + " -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dmaven.build.cache.enabled=false",
 				Env:     []string{"MAVEN_USER_HOME=" + filepath.Join(deps, "mvnw-home"), "MAVEN_ARGS=-Dmaven.repo.local=" + filepath.Join(deps, "m2")},
 			}}
 		},

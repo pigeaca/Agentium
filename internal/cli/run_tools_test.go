@@ -24,7 +24,7 @@ func TestRunsFollowTheRepositorysBuildTool(t *testing.T) {
 		{tool: "gradle", marker: "build.gradle", agent: []string{"GRADLE_USER_HOME=<ws>/go-build/gradle", "GRADLE_RO_DEP_CACHE=<deps>/gradle/caches"},
 			warmVar: "GRADLE_USER_HOME", warmWant: "<deps>/gradle", verifyWant: "<cache>/gradle", calls: 2, binding: true},
 		{tool: "mvn", marker: "pom.xml", agent: []string{"MAVEN_USER_HOME=<deps>/mvnw-home",
-			"MAVEN_ARGS=-o -Dmaven.repo.local=<ws>/go-build/m2 -Dmaven.repo.local.tail=<deps>/m2"},
+			"MAVEN_ARGS=-o -Dmaven.repo.local=<ws>/go-build/m2 -Dmaven.repo.local.tail=<deps>/m2 -Dmaven.build.cache.enabled=false"},
 			warmVar: "MAVEN_ARGS", warmWant: "-Dmaven.repo.local=<deps>/m2", verifyWant: "-Dmaven.repo.local=<cache>/m2", calls: 1},
 		{tool: "cargo", marker: "Cargo.toml", agent: []string{"CARGO_HOME=<deps>/cargo", "CARGO_NET_OFFLINE=true"},
 			warmVar: "CARGO_HOME", warmWant: "<deps>/cargo", verifyWant: "", calls: 1},

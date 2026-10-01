@@ -89,8 +89,8 @@ func StopRun(ctx context.Context, selected []Profile, buildCache string, host Ho
 
 // Host is how a StopRun hook sees the machine's processes; tests replace it.
 type Host struct {
-	// Command is a process's command line, or "" when it does not exist.
-	Command func(ctx context.Context, pid int) string
+	// Daemons lists the process IDs of this user's Gradle daemons (command lines naming GradleDaemon).
+	Daemons func(ctx context.Context) ([]int, error)
 	// OpenFiles lists the files a process has open (by real path); an error means it could not be told (no lsof).
 	OpenFiles func(ctx context.Context, pid int) ([]string, error)
 	// Signal sends a signal (0 only tests that the process exists).
@@ -102,12 +102,19 @@ type Host struct {
 // SystemHost is the real machine: ps for command lines, lsof for open files.
 func SystemHost() Host {
 	return Host{
-		Command: func(ctx context.Context, pid int) string {
-			out, err := exec.CommandContext(ctx, "ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+		Daemons: func(ctx context.Context) ([]int, error) {
+			out, err := exec.CommandContext(ctx, "ps", "-u", strconv.Itoa(os.Getuid()), "-o", "pid=,command=").Output()
 			if err != nil {
-				return ""
+				return nil, fmt.Errorf("ps: %w", err)
 			}
-			return strings.TrimSpace(string(out))
+			var pids []int
+			for _, line := range strings.Split(string(out), "\n") {
+				id, command, _ := strings.Cut(strings.TrimSpace(line), " ")
+				if pid, err := strconv.Atoi(id); err == nil && pid > 1 && strings.Contains(command, "GradleDaemon") {
+					pids = append(pids, pid)
+				}
+			}
+			return pids, nil
 		},
 		OpenFiles: func(ctx context.Context, pid int) ([]string, error) {
 			out, err := exec.CommandContext(ctx, "lsof", "-w", "-p", strconv.Itoa(pid), "-Fn").Output()

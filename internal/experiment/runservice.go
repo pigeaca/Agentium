@@ -220,6 +220,26 @@ func (r Runner) checkLocalBinding(ctx context.Context, lock Lock) (bool, error) 
 	return needed && allowed, nil
 }
 
+// checkResumeLocalBinding stops a resume whose runs need the sandbox's local binding that the lock does not record: it
+// was locked before Gradle projects needed it, so it holds no opt-in and cannot be given one (every run would refuse).
+func (r Runner) checkResumeLocalBinding(ctx context.Context, name string, lock Lock) error {
+	if r.NeedsLocalBinding == nil || lock.LocalBinding {
+		return nil
+	}
+	bases := make([]string, len(lock.Tasks))
+	for i, t := range lock.Tasks {
+		bases[i] = t.Base
+	}
+	needed, _, err := r.NeedsLocalBinding(ctx, bases)
+	if err != nil {
+		return err
+	}
+	if needed {
+		return fmt.Errorf("experiment %s cannot continue: it was locked before agent runs on Gradle projects needed the sandbox's local binding, so its lock records no opt-in and its runs would all refuse to start; start a new experiment (agentium init --allow-local-binding, then agentium experiment new)", name)
+	}
+	return nil
+}
+
 // resume reads a locked experiment's lock and checks that it can go on: the same Claude Code, sign-in and host, and
 // every commit it needs still in Agentium's repository.
 func (r Runner) resume(ctx context.Context, stored store.Experiment, name, version string) (Lock, error) {
@@ -232,6 +252,9 @@ func (r Runner) resume(ctx context.Context, stored store.Experiment, name, versi
 	}
 	if host := runtime.GOOS + "/" + runtime.GOARCH; host != lock.Host {
 		return Lock{}, fmt.Errorf("experiment %s cannot continue: its runs ran on %s, this is %s", name, lock.Host, host)
+	}
+	if err := r.checkResumeLocalBinding(ctx, name, lock); err != nil {
+		return Lock{}, err
 	}
 	var commits []string
 	for _, a := range lock.Arms {
