@@ -1,7 +1,7 @@
 # LLM judge pilot
 
 - Date: 2026-09-30
-- Status: Planned; step 1 done. Step 4 makes paid judge calls and needs its own approval of cost and timing.
+- Status: In Progress (2026-10-01): step 2 is under way; the [protocol](../../docs/research/judge-pilot/protocol.md) is fixed. Step 4 makes paid judge calls and needs its own approval of cost and timing.
 - Scope: on 2026-09-30 the user asked whether tests alone should decide results, and proposed an LLM judge "since we know results": each task has a reference solution to compare with. The [study](../../docs/research/2026-09-27-ai-development-lab.md) puts rubric judges in Phase 3, never as the primary metric (§5.5). This pilot measures whether a reference-guided judge adds anything, before any product code is written.
 
 ## Why
