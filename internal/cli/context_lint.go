@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/gitx"
@@ -26,14 +27,14 @@ import (
 // Only a usage error or an unreadable repository fails.
 func contextLint(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("context lint", flag.ContinueOnError)
-	workingTree := fs.Bool("working-tree", false, "lint the working tree, including uncommitted edits (default: HEAD)")
+	ref := fs.String("ref", "", "lint the context at this commit instead of the working tree")
 	hook := fs.Bool("hook", false, "read a Claude Code PostToolUse payload on stdin; check only when it edits a context file")
 	printHook := fs.Bool("print-hook", false, "print the settings snippet that runs --hook after edits")
 	rest, code, ok := parseArgs(env, fs, args, contextUsage)
 	if !ok {
 		return code
 	}
-	if len(rest) != 0 || (*hook && *printHook) || ((*hook || *printHook) && *workingTree) {
+	if len(rest) != 0 || (*hook && *printHook) || ((*hook || *printHook) && *ref != "") {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
@@ -47,10 +48,11 @@ func contextLint(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	result, err := lintRepo(ctx, env, root, *workingTree)
+	result, err := lintTree(ctx, root, *ref)
 	if err != nil {
 		return fail(env, err)
 	}
+	result.compare(ctx, env, root)
 	result.print(env.Stdout, env.style(), "Context lint of "+filepath.Base(root)+" ("+result.where+")")
 	return ExitOK
 }
@@ -64,17 +66,20 @@ type lintResult struct {
 	noBase    string // why there is no comparison
 }
 
-// lintRepo lints the context at HEAD or in the working tree of the repository at root. The snapshot comparison needs
-// the repository to be registered; without that, or without a snapshot, it is skipped with a reason, never an error.
-func lintRepo(ctx context.Context, env Env, root string, working bool) (lintResult, error) {
+// lintTree lints the context in the working tree of the repository at root, or at ref when it is not empty.
+func lintTree(ctx context.Context, root, ref string) (lintResult, error) {
 	var src source.Source
 	var err error
-	if working {
+	if ref == "" {
 		src, err = source.WorkingTree(ctx, root)
 	} else {
 		var commit string
-		if commit, err = gitx.Run(ctx, "-C", root, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"); err != nil || commit == "" {
-			return lintResult{}, fmt.Errorf("%s has no commit yet: commit, or use --working-tree", root)
+		// --end-of-options: a ref such as "--output=x" is a name to look up, never an option.
+		if commit, err = gitx.Run(ctx, "-C", root, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}"); err != nil || commit == "" {
+			if ctx.Err() != nil {
+				return lintResult{}, ctx.Err()
+			}
+			return lintResult{}, fmt.Errorf("%q is not a commit in %s", ref, root)
 		}
 		src, err = source.Commit(ctx, commit, "-C", root)
 	}
@@ -85,13 +90,16 @@ func lintRepo(ctx context.Context, env Env, root string, working bool) (lintResu
 	if err != nil {
 		return lintResult{}, err
 	}
-	r := lintResult{Lint: lint, where: src.Describe()}
-	r.base, r.baseBytes, r.noBase = lastSnapshot(ctx, env, root)
-	return r, nil
+	return lintResult{Lint: lint, where: src.Describe()}, nil
 }
 
-// lastSnapshot finds the registered project's most recent snapshot. It only reads Agentium's database: a hook must
-// not create the data folder or register anything.
+// compare sets the comparison with the project's most recent snapshot, or why there is none. The repository need not
+// be registered, and nothing here is an error. It only reads Agentium's database (OpenReadOnly): a hook must not
+// create the data folder, migrate, register anything or wait on a lock.
+func (r *lintResult) compare(ctx context.Context, env Env, root string) {
+	r.base, r.baseBytes, r.noBase = lastSnapshot(ctx, env, root)
+}
+
 func lastSnapshot(ctx context.Context, env Env, root string) (name string, startupBytes int, why string) {
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
@@ -100,16 +108,18 @@ func lastSnapshot(ctx context.Context, env Env, root string) (name string, start
 	if _, err := os.Stat(layout.Database); err != nil {
 		return "", 0, "not registered with Agentium (agentium init), so no snapshot comparison"
 	}
-	db, err := store.Open(ctx, layout.Database)
-	if err != nil {
-		return "", 0, "no snapshot comparison: " + err.Error()
+	db, err := store.OpenReadOnly(ctx, layout.Database)
+	if errors.Is(err, store.ErrSchema) {
+		return "", 0, "no snapshot comparison: the database was made by another Agentium version; run any other agentium command first"
+	} else if err != nil {
+		return "", 0, "no snapshot comparison: the database is busy or unreadable"
 	}
 	defer db.Close()
 	project, err := db.ProjectByRoot(ctx, root)
 	if errors.Is(err, store.ErrNotFound) {
 		return "", 0, "not registered with Agentium (agentium init), so no snapshot comparison"
 	} else if err != nil {
-		return "", 0, "no snapshot comparison: " + err.Error()
+		return "", 0, "no snapshot comparison: the database is busy or unreadable"
 	}
 	snaps, err := db.Snapshots(ctx, project.ID)
 	if err != nil || len(snaps) == 0 {
@@ -160,13 +170,22 @@ func repoRoot(ctx context.Context, dir string) (string, error) {
 	return root, nil
 }
 
+// hookTimeout bounds the whole hook: Claude Code waits for it after every edit, so a slow check stays silent.
+const hookTimeout = 2 * time.Second
+
 // lintHook is the PostToolUse hook: it never fails and prints only when the edited file is a context file.
 func lintHook(ctx context.Context, env Env) int {
+	ctx, cancel := context.WithTimeout(ctx, hookTimeout)
+	defer cancel()
 	var data []byte
 	if env.Stdin != nil {
-		data, _ = io.ReadAll(io.LimitReader(env.Stdin, 17<<20))
+		data, _ = io.ReadAll(io.LimitReader(env.Stdin, claudectx.MaxHookPayload+1))
+		_, _ = io.Copy(io.Discard, env.Stdin) // an oversize payload: drain it so Claude Code never gets EPIPE
 	}
-	if msg := hookMessage(ctx, env, data); msg != "" {
+	if len(data) > claudectx.MaxHookPayload {
+		return ExitOK // a huge Write is not worth parsing
+	}
+	if msg := hookMessage(ctx, env, data); msg != "" && ctx.Err() == nil {
 		fmt.Fprintln(env.Stdout, claudectx.HookOutput(msg))
 	}
 	return ExitOK
@@ -174,6 +193,8 @@ func lintHook(ctx context.Context, env Env) int {
 
 // hookMessage is the text to show the user for payload data, or "" to stay silent. The repository comes from the
 // edited file's path (then the payload's cwd), not from the process's folder: Claude Code may run the hook elsewhere.
+// It decides relevance before the costly steps: the path alone rules out most edits (source files), then the context
+// is resolved, and only for a context file does it read the database.
 func hookMessage(ctx context.Context, env Env, data []byte) string {
 	payload, relevant, err := claudectx.ParseHookPayload(data)
 	if err != nil {
@@ -186,50 +207,70 @@ func hookMessage(ctx context.Context, env Env, data []byte) string {
 	if !filepath.IsAbs(file) {
 		file = filepath.Join(payload.Cwd, file)
 	}
-	folder := nearestFolder(file)
+	if _, err := os.Stat(file); err != nil {
+		return "" // an edit leaves the file in place; a path that is gone is not something to lint
+	}
+	folder := filepath.Dir(file)
 	realFolder, err := filepath.EvalSymlinks(folder)
 	if err != nil {
 		return ""
 	}
 	root, err := repoRoot(ctx, realFolder)
 	if err != nil {
-		return "" // not in a git repository: not ours
+		return "" // not in a git repository (or out of time): not ours
 	}
 	below, _ := filepath.Rel(folder, file)
 	rel, err := filepath.Rel(root, filepath.Join(realFolder, below))
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return ""
 	}
-	result, err := lintRepo(ctx, env, root, true)
+	rel = filepath.ToSlash(rel)
+	if !claudectx.LoadsByPresence(rel) && !claudectx.IsDocument(rel) {
+		return "" // only documents can be imported or linked as context
+	}
+	result, err := lintTree(ctx, root, "")
+	if ctx.Err() != nil {
+		return ""
+	}
 	if err != nil {
 		return "Agentium context lint skipped: " + err.Error()
 	}
-	if !result.Contains(rel) {
+	if !result.Reaches(root, rel) {
 		return ""
 	}
+	result.compare(ctx, env, root)
 	var out bytes.Buffer
-	result.print(&out, term.Detect(false, env.Getenv), "Agentium context lint: "+filepath.ToSlash(rel)+" changed")
+	result.print(&out, term.Style{}, "Agentium context lint: "+rel+" changed") // plain: Claude Code shows the text as is
 	return out.String()
 }
 
-// nearestFolder is the closest existing folder of file's path.
-func nearestFolder(file string) string {
-	dir := filepath.Dir(file)
-	for dir != filepath.Dir(dir) {
-		if info, err := os.Stat(dir); err == nil && info.IsDir() {
-			break
+// hookCommand is the hook's command line: the absolute path of this binary, so a non-interactive shell without the
+// user's PATH still finds it, quoted for the shell.
+func hookCommand() string {
+	exe, err := os.Executable()
+	if err == nil {
+		if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = resolved
 		}
-		dir = filepath.Dir(dir)
+	} else {
+		exe = "agentium"
 	}
-	return dir
+	return shellQuote(exe) + " context lint --hook"
+}
+
+func shellQuote(s string) string {
+	if strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+=:@,") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func printHookSettings(env Env) int {
-	snippet, err := claudectx.HookSettings()
+	snippet, err := claudectx.HookSettings(hookCommand())
 	if err != nil {
 		return fail(env, err)
 	}
-	fmt.Fprintln(env.Stderr, "Add this to the \"hooks\" of your own ~/.claude/settings.json (merge it with any hooks you have).")
+	fmt.Fprintln(env.Stderr, "Merge this object into your own ~/.claude/settings.json (add the PostToolUse entry to any \"hooks\" you already have).")
 	fmt.Fprintln(env.Stderr, "After each Edit, Write or MultiEdit of a context file, Claude Code then shows its size change and warnings.")
 	fmt.Fprintln(env.Stderr, "Agentium never writes your settings. Its own runs load project settings only, so the hook never fires inside them.")
 	fmt.Fprint(env.Stdout, string(snippet))

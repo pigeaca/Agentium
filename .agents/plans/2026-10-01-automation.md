@@ -25,7 +25,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 
 ### 0. Context lint (free; wave 2, with quick start)
 - **Trigger:** a Claude Code `PostToolUse` hook in the user's own settings, on edits to context files. Agentium's runs load project settings only, so the hook cannot fire inside them.
-- **Does:** a quick context check with no agent runs: the size change against the last snapshot, broken imports, the 32 KiB cap, and the warnings `context show` already gives.
+- **Does:** a quick context check with no agent runs: the size change against the last snapshot, broken imports, an `AGENTS.md` over Codex's 32 KiB limit, and the warnings `context show` already gives.
 - **Cost:** none. It shows its result in the session.
 
 ### 1. Supply: a task pool that keeps itself fresh (wave 4)

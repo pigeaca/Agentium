@@ -16,7 +16,7 @@
 - **`agentium context lint`:** a free check of the committed or working-tree context, with no agent runs. It reports:
   - the size change against the last snapshot;
   - broken `@` imports;
-  - the 32 KiB cap;
+  - an `AGENTS.md` over Codex's 32 KiB limit;
   - the warnings `context show` gives.
 
   With `--hook`, it reads a Claude Code `PostToolUse` payload on stdin and checks only when the edited file is a context file. It always exits 0, so it never blocks the session. `--print-hook` prints the settings snippet to add to the user's own `~/.claude/settings.json`; Agentium never writes it. Runs load project settings only, so the hook cannot fire inside them.
@@ -69,23 +69,25 @@
 Each step is one PR with green CI and a review.
 - [x] **1. Context lint:** `context lint`, `--hook` and `--print-hook` (`internal/claudectx`, `internal/cli/context.go`). Done 2026-10-02.
   - **How it works:**
-    - `claudectx.LintContext` resolves the context and separates problems (broken `@` imports, now also listed in `Context.Broken`; startup bytes over `MaxStartupBytes`, 32 KiB, which is Agentium's own cap, not a Claude Code limit) from the other warnings. The size change is against the project's most recent snapshot. Without a registered project or a snapshot, a one-line note replaces the comparison. The lookup only reads the database, so a hook never creates the data folder.
-    - Problems print as `warning:` lines and the exit code stays 0, as `context show` and `context snapshot` do with the same warnings. The check is advisory, so there is no `--strict`.
-    - `--hook` reads the payload from stdin, finds the repository from the edited file's path (then the payload's `cwd`) and lints the working tree. It prints nothing unless `tool_name` is Edit, Write or MultiEdit (or absent) and the file is a context file. Bad input gives a one-line note. It always exits 0.
+    - `claudectx.LintContext` resolves the context and separates problems from the other warnings. Problems are broken `@` imports (now also listed in `Context.Broken`) and any `AGENTS.md` over 32 KiB, which is Codex's `project_doc_max_bytes` (Codex reads only the first 32 KiB and follows no imports; read from the files, whether or not Claude Code loads them). The size loaded at session start is information only: the change against the project's most recent snapshot. Claude Code documents no per-file size warning for `CLAUDE.md` (it loads files up to 4 MiB in full), so none is added.
+    - Plain `context lint` checks the working tree, like `context show`; `--ref REF` checks a commit. Problems print as `warning:` lines and the exit code stays 0, as `context show` and `context snapshot` do with the same warnings. The check is advisory, so there is no `--strict`. Without a registered project or a snapshot, a one-line note replaces the comparison.
+    - **The database is read-only** (`store.OpenReadOnly`): no creation, migration or write lock, a 200 ms busy timeout and no retry. A schema this binary does not know gives "no comparison". With no `-wal` file (no other process has the database open) it reads the file as immutable, so no side files appear; with one, a normal read-only connection finds them in place.
+    - `--hook` reads the payload from stdin (an oversize one is drained and ignored), finds the repository from the edited file's path (it must exist) and lints the working tree. It decides relevance in steps. The path alone rules out most edits: only files that load by presence (`CLAUDE.md`, `AGENTS.md`, `.claude/...`, `.mcp.json`) and documents can be context. For a document, the context is resolved and the file must be in it, or be the target of a symlinked context file (`CLAUDE.md -> AGENTS.md`). Only then is the database read. The hook stops after 2 s, silently. It prints nothing unless `tool_name` is Edit, Write or MultiEdit (or absent) and the file is relevant. Bad input gives a one-line note. It always exits 0, and its text has no colors even under `FORCE_COLOR`.
     - **Output form:** one JSON object, `{"systemMessage": "..."}`. Claude Code documents `systemMessage` as a universal hook output field, a "warning message shown to the user", and its PostToolUse section does not list it among the discarded fields (checked 2026-10-02 against https://code.claude.com/docs/en/hooks, JSON output and PostToolUse). Plain stdout of a hook that exits 0 is not shown in the normal view, so it is not used.
-    - `--print-hook` prints the settings snippet on stdout and its explanation on stderr, so the snippet can be piped.
-  - **Measured:** the hook takes about 0.02 s on this repository (270 tracked files), three runs.
+    - `--print-hook` prints the settings object on stdout and its explanation on stderr, so the snippet can be piped. Its command is the absolute path of the running binary (a non-interactive shell may lack the user's `PATH`), with `"timeout": 5`.
+  - **Known limit:** imports of non-document files (for example `@notes.txt`) are not detected as context by the hook.
+  - **Measured:** the hook takes about 0.02 s on this repository (270 tracked files), three runs, and also 0.02 s while another process holds the database's write lock.
   - **Real hook sample** (this repository, after a one-line edit of `AGENTS.md`, with a snapshot `start` taken before it):
 
     ```text
-    {"systemMessage":"Agentium context lint: AGENTS.md changed\nAt session start: about 3616 tokens (14.1 KB, estimated); +6 tokens against snapshot start (about 3610)\nNo problems found."}
+    {"systemMessage":"Agentium context lint: AGENTS.md changed\nAt session start: about 3612 tokens (14.1 KB, estimated); +2 tokens against snapshot start (about 3610)\nNo problems found."}
     ```
 
-    And `agentium context lint --working-tree`:
+    And `agentium context lint`:
 
     ```text
     Context lint of claude-feat-context-lint (working tree)
-    At session start: about 3616 tokens (14.1 KB, estimated); +6 tokens against snapshot start (about 3610)
+    At session start: about 3612 tokens (14.1 KB, estimated); +2 tokens against snapshot start (about 3610)
     No problems found.
     ```
 - [ ] **2. Calibration inside `experiment run`:** after the model A/B experiment step, since both change `internal/experiment` and `experiment_run.go`.

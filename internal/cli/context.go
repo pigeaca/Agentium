@@ -28,8 +28,9 @@ const contextUsage = `Usage:
                                                  save a version (default: --ref HEAD); --include adds a
                                                  document (Markdown, rst, AsciiDoc), --include-linked every
                                                  document the context links to
-  agentium context lint [--working-tree]         free check, no agent runs: size change since the last snapshot,
-                                                 broken @imports, the 32 KiB cap and show's warnings; always exit 0
+  agentium context lint [--ref REF]              free check, no agent runs: size change since the last snapshot,
+                                                 broken @imports, AGENTS.md over Codex's 32 KiB limit and show's
+                                                 warnings (default: the working tree); always exit 0
   agentium context lint --print-hook             the Claude Code hook that runs it after you edit context files
                                                  (you add it to ~/.claude/settings.json; Agentium never does)
   agentium context list                          saved versions

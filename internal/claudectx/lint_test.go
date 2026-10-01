@@ -1,6 +1,8 @@
 package claudectx
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -8,7 +10,9 @@ import (
 func TestLintContextSeparatesProblemsFromWarnings(t *testing.T) {
 	t.Parallel()
 	l, err := LintContext(memSource{
-		"CLAUDE.md":              "@docs/missing.md\n" + strings.Repeat("x", MaxStartupBytes),
+		"CLAUDE.md":              "@docs/missing.md\n" + strings.Repeat("x", 3*CodexDocMaxBytes),
+		"AGENTS.md":              strings.Repeat("x", CodexDocMaxBytes+1),
+		"pkg/AGENTS.md":          "small",
 		"CLAUDE.local.md":        "personal",
 		".claude/settings.json":  "{}",
 		".claude/rules/style.md": "Be brief.\n",
@@ -16,11 +20,16 @@ func TestLintContextSeparatesProblemsFromWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(l.Problems) != 2 || !strings.Contains(l.Problems[0], "docs/missing.md") || !strings.Contains(l.Problems[1], "32 KiB cap") {
+	// A large CLAUDE.md is information (the size change), not a problem; only AGENTS.md has Codex's limit.
+	if len(l.Problems) != 2 || !strings.Contains(l.Problems[0], "docs/missing.md") ||
+		!strings.Contains(l.Problems[1], "AGENTS.md is 32.0 KiB: Codex reads only its first 32 KiB") || strings.Contains(l.Problems[1], "pkg/") {
 		t.Errorf("problems: %q", l.Problems)
 	}
-	if len(l.Warnings) != 1 || !strings.Contains(l.Warnings[0], "CLAUDE.local.md") {
+	if len(l.Warnings) != 2 || !strings.Contains(strings.Join(l.Warnings, "\n"), "CLAUDE.local.md") || strings.Contains(strings.Join(l.Warnings, "\n"), "missing.md") {
 		t.Errorf("a broken import must not repeat in warnings: %q", l.Warnings)
+	}
+	if l.Contains("AGENTS.md") || !l.Reaches(t.TempDir(), "AGENTS.md") {
+		t.Errorf("an AGENTS.md that is not loaded is not in Files, but an edit of it is still worth a lint")
 	}
 	if !l.Contains(".claude/rules/style.md") || !l.Contains("./CLAUDE.md") || l.Contains(".claude/settings.json") || l.Contains("main.go") {
 		t.Errorf("context files: %q", l.Files)
@@ -38,5 +47,31 @@ func TestParseHookPayload(t *testing.T) {
 	}
 	if _, _, err := ParseHookPayload([]byte(`{`)); err == nil {
 		t.Error("malformed JSON must be an error")
+	}
+}
+
+func TestReachesFollowsASymlinkedContextFile(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for p, body := range map[string]string{"docs/rules.md": "Be brief.\n", "src/main.go": "package main\n"} {
+		if err := os.MkdirAll(filepath.Join(root, filepath.Dir(p)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, p), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".claude/rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../../docs/rules.md", filepath.Join(root, ".claude/rules/style.md")); err != nil {
+		t.Fatal(err)
+	}
+	l := Lint{Files: []string{".claude/rules/style.md"}}
+	if !l.Reaches(root, "docs/rules.md") {
+		t.Error("editing the target of a symlinked rule changes the context")
+	}
+	if l.Reaches(root, "src/main.go") {
+		t.Error("an unrelated file is not context")
 	}
 }
