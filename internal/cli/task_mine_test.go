@@ -74,6 +74,7 @@ func storedTasks(t *testing.T, data string) []store.Task {
 }
 
 func TestTaskMine(t *testing.T) {
+	t.Parallel()
 	repo, hashes := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
 	run := cliIn(t, repo, data)
@@ -232,6 +233,7 @@ func maxCount(t *testing.T, file string) int {
 }
 
 func TestTaskValidateAll(t *testing.T) {
+	t.Parallel()
 	_, _, run := validateRepo(t)
 	// The probe counts the validations running at once: each holds a folder for a second.
 	probeDir := t.TempDir()
@@ -275,6 +277,7 @@ func TestTaskValidateAll(t *testing.T) {
 
 // Ctrl-C during a batch keeps the validations that finished; the one it stopped and those not started keep none.
 func TestTaskValidateAllInterrupted(t *testing.T) {
+	t.Parallel()
 	repo, data, run := validateRepo(t)
 	marks := t.TempDir()
 	for _, task := range [][2]string{{"a-fast", "touch " + marks + "/a"}, {"b-fast", "touch " + marks + "/b"},
@@ -338,6 +341,7 @@ func mapsEqual(a, b map[string]string) bool {
 
 // Mined tasks verify with the build tools' test commands, not every command init found; task import keeps those all.
 func TestTaskMineVerifiesWithBuildTools(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	commit := func(message string, files map[string]string) string {
@@ -370,6 +374,7 @@ func TestTaskMineVerifiesWithBuildTools(t *testing.T) {
 
 // A batch stores each validation without undoing edits made while it ran, and drops one whose commands changed.
 func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
+	t.Parallel()
 	repo, data, run := validateRepo(t)
 	gate := t.TempDir()
 	wait := "touch " + gate + "/$TASK; while [ ! -e " + gate + "/go ]; do sleep 0.05; done"
@@ -425,6 +430,7 @@ func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
 
 // When no candidate can be imported, task mine says why per commit and fails, without a review reminder.
 func TestTaskMineNothingImported(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("read-only folders do not stop root")
 	}
@@ -463,6 +469,7 @@ func TestTaskMineNothingImported(t *testing.T) {
 
 // A commit another process made a task of while it was being imported is skipped, not imported twice.
 func TestMineTaskSkipsACommitImportedMeanwhile(t *testing.T) {
+	t.Parallel()
 	repo, _ := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
 	run := cliIn(t, repo, data)
@@ -495,6 +502,7 @@ func TestMineTaskSkipsACommitImportedMeanwhile(t *testing.T) {
 
 // A batch says when an experiment holds the run lock: validations slow its runs.
 func TestTaskValidateAllNotesARunningExperiment(t *testing.T) {
+	t.Parallel()
 	_, data, run := validateRepo(t)
 	expect(t, run("task", "add", "one", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
 	expect(t, run("task", "validate", "--all"), ExitOK)
