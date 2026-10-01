@@ -5,8 +5,8 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 ## Foundation — 2026-09-27
 - The agent process and a stack-neutral harness came from Orchid ([decision](decisions/2026-09-27-agent-process-from-orchid.md)).
 - Product research: tools, UX, method, architecture, MVP and strategy.
-- Phase 0 spike: 60 real Claude Code runs, full context against minimal. It gave a go for Phase 1, a noise level and an isolation recipe ([results](../docs/research/2026-09-27-phase0-spike-results.md)).
-- 2026-09-28 — Stack: Go + React + SQLite accepted ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)); Go module, `check go`/`check vuln` and CI in place.
+- Phase 0 spike: 60 real runs gave a go for Phase 1, a noise level and an isolation recipe ([results](../docs/research/2026-09-27-phase0-spike-results.md)).
+- 2026-09-28 — Stack: Go + SQLite ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)), with CI.
 
 - 2026-09-29 — MVP Phase 1 done: context A/B from the CLI, for Claude Code, with real A/A and A/B runs ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)).
 - 2026-09-30 — Clearer console output, no web UI ([plan](plans/archive/2026-09-30-clearer-console.md), [decision](decisions/2026-09-30-console-instead-of-web-ui.md)).
