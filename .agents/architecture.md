@@ -41,7 +41,7 @@ Shape:
 | `internal/runner` | Commands (shell or arguments) in their own process group with a timeout and no credentials; a gentle stop (SIGINT, then SIGKILL); the group is killed at the end and reported at the start |
 | `internal/buildtool` | Build-tool profiles (Go so far): test commands, environment, caches; pinned by a golden test |
 | `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths, credentials and shared temp folders, its own build cache and temp root, an allowlisted environment); stream-json metrics, outcomes and drift |
-| `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file), per-arm and batch validation (flaky and weak-test checks), and unstated-requirement gaps |
+| `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), validation (per arm, batch; flaky, weak-test checks), and unstated-requirement gaps |
 | `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed), services for `new`, `plan`, readiness, `run` (window, budget, usage pauses, retries, stop rules, resume); the lock and schedule; counting and analysis (roles, floors, verdicts, noise) |
 | `internal/judge` | The opt-in LLM judge, which decides nothing: the pilot's prompts, code-only diffs, majority of repeats, pairs in both orders |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |

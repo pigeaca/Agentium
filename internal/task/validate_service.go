@@ -21,7 +21,9 @@ import (
 // a time (Validating.Batch). They keep no state; I/O goes to the writers and callbacks given.
 
 // BatchStatuses are the values task validate --all --status takes.
-var BatchStatuses = []string{"unvalidated", StatusValid, StatusInvalid, StatusFlaky, StatusUnchecked}
+func BatchStatuses() []string {
+	return []string{"unvalidated", StatusValid, StatusInvalid, StatusFlaky, StatusUnchecked}
+}
 
 // ValidateOptions are the validation settings task validate takes from its flags, for one task or many.
 type ValidateOptions struct {
@@ -183,7 +185,7 @@ func (r BatchResult) Problem() string {
 type BatchOutput struct {
 	Out   io.Writer
 	Style term.Style
-	Show  func(text func() string)
+	Show  func(text func() string) // required: Batch calls it before the first task starts
 	// RunsBusy says an experiment is running on this machine, whose runs these validations slow.
 	RunsBusy bool
 }
@@ -274,7 +276,7 @@ type outcome struct {
 func (v Validating) startWorkers(ctx context.Context, tasks []store.Task, o ValidateOptions, jobs int, mu *sync.Mutex, current map[string]string) <-chan outcome {
 	next, done := make(chan int), make(chan outcome)
 	var wg sync.WaitGroup
-	for range min(jobs, len(tasks)) {
+	for range max(1, min(jobs, len(tasks))) { // at least one worker, or no task would start and the feeder would wait forever
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

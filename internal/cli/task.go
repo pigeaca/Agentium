@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/pigeaca/agentium/internal/experiment"
 	"io"
 	"os"
 	"os/exec"
@@ -18,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/mine"
@@ -861,7 +861,7 @@ type validateArgs struct {
 func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("task validate", flag.ContinueOnError)
 	all := fs.Bool("all", false, "validate every task of the project, --jobs at a time")
-	status := fs.String("status", "", "with --all: only tasks with this status ("+strings.Join(task.BatchStatuses, ", ")+")")
+	status := fs.String("status", "", "with --all: only tasks with this status ("+strings.Join(task.BatchStatuses(), ", ")+")")
 	jobs := fs.Int("jobs", 2, "with --all: how many tasks to validate at once")
 	fs.Var(&a.snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
 	repeat := fs.Int("repeat", 1, "run every stage this many times; a stage whose runs disagree makes the task flaky")
@@ -891,8 +891,8 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 		return usage("--weak-tests checks one task at a time: give its NAME instead of --all")
 	case *all && *jobs < 1:
 		return usage("--jobs must be at least 1")
-	case *all && given["status"] && !slices.Contains(task.BatchStatuses, *status):
-		return usage("--status must be one of %s", strings.Join(task.BatchStatuses, ", "))
+	case *all && given["status"] && !slices.Contains(task.BatchStatuses(), *status):
+		return usage("--status must be one of %s", strings.Join(task.BatchStatuses(), ", "))
 	case !*all && (given["status"] || given["jobs"]):
 		return usage("--status and --jobs need --all")
 	case !*all && len(rest) != 1:
@@ -1007,7 +1007,7 @@ func (w *workspace) validating(buildEnv []string, now func() time.Time) task.Val
 		}}
 }
 
-// validateJudged checks a judge-graded task (judgedValidation), stores the result and reports it. notApplied lists the
+// validateJudged checks a judge-graded task (task.Validating.Judged), stores the result and reports it. notApplied lists the
 // flags given that only apply to running checks.
 func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, notApplied []string) int {
 	out, st := env.Stdout, env.style()
