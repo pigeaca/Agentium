@@ -8,3 +8,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Go stack foundation](2026-09-28-go-stack-foundation.md) — 2026-09-28
 - [Phase 1: context A/B from the command line](2026-09-28-phase1-context-ab-cli.md) — 2026-09-28 to 2026-09-29
 - [Clearer console output](2026-09-30-clearer-console.md) — 2026-09-30
+- [Experiment hardening, then a 16-run context A/B](2026-09-29-experiment-hardening.md) — 2026-09-29 to 2026-10-01

@@ -27,7 +27,7 @@ Fixed before any labels or judge calls are seen.
 
 ## Data
 - **The Phase 1 acceptance data:** 30 graded runs (24 passed, 6 failed) on 6 tasks, from the A/A and A/B.
-- **The 20-run A/B's runs,** once that experiment has run (hardening step 6). Together that is about 50 diffs and 20–25 same-task pairs.
+- **The 16-run A/B's runs** (hardening step 6, done on 2026-10-01): 16 graded runs, all passed, on 8 tasks. Together that is 46 diffs (40 passed) and about 20 same-task pairs.
 - **Only Agentium's own repository,** which is public. Diffs and instructions reach Anthropic through Claude Code, as the runs already do.
 - **Where it lives:** the acceptance data folder, `~/.agentium-acceptance` (owner-only, outside every repository). An older snapshot in a session scratchpad under `/private/tmp` holds the same runs and is not needed.
 
@@ -63,7 +63,7 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 ## Work
 - [x] **1. Preserve the data.** Checked on 2026-09-30: `~/.agentium-acceptance` already held it. Its runs table matches the `/private/tmp` snapshot row for row (35 task runs and 5 calibrations; 24 passed, 6 failed, 5 cancelled), its 35 `agent.diff` files are byte-identical, and it keeps 40 `stream.jsonl` transcripts. No copy was needed.
 - [ ] **2. Protocol and script,** with a fake-judge dry run and three real calls to price the judgement (free apart from those three calls).
-- [ ] **3. Human labels,** after the 20-run A/B has run (the user).
+- [ ] **3. Human labels** (the user); the A/B's diffs are in.
 - [ ] **4. Judge calls (paid; separate approval).** About 150 single and 50 pair judgements, estimated at $20–60 at Opus 5.5 list prices, or a share of the usage windows with a subscription. Step 2's priced calls refine the estimate before approval.
 - [ ] **5. Analysis:** results doc, go/no-go, roadmap update; then archive this plan.
 
