@@ -78,6 +78,12 @@ reason in one sentence.`
 // Schema is the answer's JSON schema, byte for byte the pilot's.
 const Schema = `{"type": "object", "properties": {"fixed": {"type": "string", "enum": ["yes", "partly", "no"]}, "reason": {"type": "string"}}, "required": ["fixed", "reason"], "additionalProperties": false}`
 
+// Why a judgement stopped early (Verdict.Stopped). StoppedLimit should pause what is judging: the next calls would fail.
+const (
+	StoppedLimit = "limit" // a usage limit, sign-in, billing or a refused model: every next call would hit it too
+	StoppedCall  = "call"  // a call could not be made at all (the CLI did not start, a folder could not be created)
+)
+
 // Version numbers the judge's protocol (prompts, schema, filters, rules) in stored verdicts. Change it with them.
 const Version = 1
 
@@ -129,7 +135,7 @@ type Verdict struct {
 	Errors []string `json:"errors,omitempty"`
 	// Stopped says why the judgement ended before its repeats did: a usage limit or a sign-in failure, which the next
 	// calls would hit too, or a call that could not be made.
-	Stopped string `json:"stopped,omitempty"`
+	Stopped string `json:"stopped,omitempty"` // StoppedLimit or StoppedCall
 	// Truncated: a diff was cut at MaxDiffChars, so the judge did not see all of it.
 	Truncated bool `json:"truncated,omitempty"`
 	// Empty: the candidate changed no code (only tests or documents, or nothing); the judge was not asked.
@@ -148,9 +154,9 @@ type Reply struct {
 type Caller func(ctx context.Context, prompt string) (Reply, error)
 
 // filePath reads the path a "diff --git" header names, whatever the user's diff settings: "a/X b/X", no prefixes
-// (diff.noprefix), other one-letter prefixes (diff.mnemonicPrefix), and C-quoted names (core.quotePath). Agentium's
-// diffs never detect renames, so both sides name the same file; that is what tells where an unquoted name with spaces
-// splits. ok is false when the header cannot be read.
+// (diff.noprefix), other one-letter prefixes (diff.mnemonicPrefix), and C-quoted names (core.quotePath). Both sides
+// must name the same file, which is what tells where an unquoted name with spaces splits. A rename ("a/old b/new", which
+// a user's diff.renames can put in agent.diff) cannot be read: ok is false, and CodeOnly keeps the file.
 func filePath(header string) (string, bool) {
 	rest := strings.TrimPrefix(strings.TrimRight(header, "\r\n"), "diff --git ")
 	same := func(src, dst string) (string, bool) {
@@ -258,7 +264,7 @@ var jsonObject = regexp.MustCompile(`(?s)\{.*\}`)
 
 // stopText matches errors that every next call would hit as well: usage limits, sign-in and billing, a refused model.
 // Other errors (an overload, a timeout, a transport failure) leave one repeat out and the judgement goes on.
-var stopText = regexp.MustCompile(`(?i)limit|authenticat|not logged in|/login|oauth|credit balance|api key|does not support the model|model.{0,40}not (found|available)`)
+var stopText = regexp.MustCompile(`(?i)usage limit|session limit|weekly limit|limit reached|hit your .{0,20}limit|rate limit|authenticat|not logged in|/login|oauth|credit balance|api key|does not support the model|model.{0,40}not (found|available)`)
 
 // parse reads Claude Code's JSON result: the structured verdict, or one written as JSON in the text.
 func parse(r Reply) answer {
@@ -270,7 +276,7 @@ func parse(r Reply) answer {
 	}
 	notJSON := json.Unmarshal(r.Stdout, &out) != nil
 	if r.TimedOut { // interrupted, Claude Code may still have reported its cost
-		return answer{cost: out.TotalCostUSD, err: fmt.Sprintf("timed out after %s", CallTimeout), kind: kindInfra}
+		return answer{cost: out.TotalCostUSD, err: "timed out", kind: kindInfra}
 	}
 	if notJSON {
 		text := strings.TrimSpace(string(r.Stdout))
@@ -359,7 +365,7 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 			}
 			if err != nil {
 				v.Errors = append(v.Errors, err.Error())
-				v.Stopped = "a judge call could not be made"
+				v.Stopped = StoppedCall
 				break
 			}
 			a := parse(reply)
@@ -371,7 +377,7 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 			v.Errors = append(v.Errors, a.err)
 			if a.kind == kindInfra {
 				if stopText.MatchString(a.err) {
-					v.Stopped = "a usage limit or sign-in error, which the next calls would hit too"
+					v.Stopped = StoppedLimit
 				}
 				break
 			}
@@ -392,7 +398,7 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 // Agentium's own (in its data folder) with no instruction file above it, which Claude Code would load into the judge's
 // context. timeout bounds each call (CallTimeout when zero).
 func ClaudeCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
-	if above := instructionFilesAbove(j.Dir); len(above) > 0 {
+	if above := instructionFilesAbove(filepath.Join(j.Dir, "call")); len(above) > 0 { // the calls start one level below
 		return nil, fmt.Errorf("judge: Claude Code would load %s above the judge's folder", strings.Join(above, ", "))
 	}
 	s = s.WithDefaults()
@@ -449,7 +455,7 @@ func instructionFilesAbove(dir string) []string {
 
 // ReferenceDiff is the reference solution's change to its code: git diff from base to solution in the bare repository,
 // over the task's reference files that are neither tests nor documents. The user's git settings are ignored, as in the
-// pilot (GIT_CONFIG_GLOBAL; gitx already drops the system's), and prefixes are pinned, so the diff the judge reads does
+// pilot (GIT_CONFIG_GLOBAL, which git 2.32 and newer read; gitx already drops the system's), and prefixes are pinned, so the diff the judge reads does
 // not depend on whose machine made it.
 func ReferenceDiff(ctx context.Context, bare, base, solution string, reference []string) (string, error) {
 	var specs []string
