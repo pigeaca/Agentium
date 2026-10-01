@@ -44,6 +44,9 @@ func (r Report) Markdown(w io.Writer) error {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
 	if l.LocalBinding {
+		if r.NorthStar != nil {
+			b.WriteString("\n") // a blank line keeps the two notes apart
+		}
 		b.WriteString(localBindingNote + "\n")
 	}
 

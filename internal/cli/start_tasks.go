@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -95,6 +96,9 @@ func (s *starter) reachable(c taskCounts) int {
 func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 	floor := experiment.FloorsFor(experiment.MethodVersion).CostTasks
 	out, started := s.env.Stdout, s.env.Now()
+	if err := s.loadMined(ctx); err != nil { // only this stage needs it: a corrupt file must not block resuming
+		return false, err
+	}
 	attempted, exhausted, worked := map[string]bool{}, false, false
 	for {
 		if s.args.acceptMined {
@@ -170,23 +174,23 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 	var bad []string
 	mined, minedValid := 0, 0 // of the tasks this run's mining imported
 	for _, r := range results {
-		attempted[r.task.Name] = true
+		attempted[r.Task.Name] = true
 		status := "not validated"
-		if r.validated {
-			status = task.ValidationOf(r.task).Status
+		if r.Validated {
+			status = task.ValidationOf(r.Task).Status
 		}
 		counts[status]++
-		if s.importedNow[r.task.Name] {
+		if s.importedNow[r.Task.Name] {
 			mined++
 			if status == task.StatusValid {
 				minedValid++
 			}
 		}
 		if status != task.StatusValid {
-			if p := r.problem(); p != "" {
+			if p := r.Problem(); p != "" {
 				status = p
 			}
-			bad = append(bad, r.task.Name+": "+status)
+			bad = append(bad, r.Task.Name+": "+status)
 		}
 	}
 	line := fmt.Sprintf("  %d valid of %d, in %s", counts[task.StatusValid], len(results), s.env.Now().Sub(began).Round(time.Second))
@@ -222,9 +226,23 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 		}})
 	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned,
 		len(imp.Tasks), imp.Tried, strings.Join(prep.Verify, "; "))
+	for _, f := range imp.Failed {
+		fmt.Fprintf(out, "  not imported: %s (%s): %v\n", cut(f.Candidate.Subject, maxSubject), experiment.ShortCommit(f.Candidate.Hash), f.Err)
+	}
 	s.imported += len(imp.Tasks)
-	if err := s.recordMined(ctx, imp.Tasks); err != nil {
+	// What was imported is recorded even after Ctrl-C: the records are what keeps a task the user removes from being
+	// mined again and accepted unread.
+	if err := s.recordMined(context.WithoutCancel(ctx), imp.Tasks); err != nil {
 		return false, err
+	}
+	if imp.Interrupted {
+		fmt.Fprintf(out, "Interrupted: %d task(s) imported are kept; %s resumes\n", len(imp.Tasks), s.env.style().Command("agentium start"))
+		return false, errReported
+	}
+	if len(imp.Failed) > 0 && len(imp.Tasks) < want {
+		// Every candidate was tried, but some failed to import: that is not an exhausted history, and the user should see why.
+		s.stopped = fmt.Sprintf("%d candidate(s) could not be imported (listed above)", len(imp.Failed))
+		return false, nil
 	}
 	return len(imp.Tasks) < want, nil // fewer imported than asked: every candidate was tried
 }
@@ -322,15 +340,9 @@ func (s *starter) minedFile() string {
 // loadMined reads the state and checks every record against the project's tasks. An unreadable file costs only the
 // --accept-mined shortcut: it is an error with that flag (nothing is accepted on a guess), and a warning without it.
 func (s *starter) loadMined(ctx context.Context) error {
-	s.mined, s.dismissed = map[string]bool{}, map[string]bool{}
-	data, err := os.ReadFile(s.minedFile())
-	var state minedState
-	if err == nil {
-		err = json.Unmarshal(data, &state)
-	}
+	s.mined, s.dismissed, s.records = map[string]bool{}, map[string]bool{}, nil
+	state, err := s.readMined()
 	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return nil
 	case err != nil && s.args.acceptMined:
 		return fmt.Errorf("%s is unreadable, so --accept-mined cannot tell which tasks start mined: %w (delete it to start over)", s.minedFile(), err)
 	case err != nil:
@@ -358,6 +370,18 @@ func (s *starter) loadMined(ctx context.Context) error {
 	return nil
 }
 
+// readMined reads the state file; a missing file is an empty state.
+func (s *starter) readMined() (minedState, error) {
+	var state minedState
+	data, err := os.ReadFile(s.minedFile())
+	if errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	} else if err != nil {
+		return state, err
+	}
+	return state, json.Unmarshal(data, &state)
+}
+
 // recordMined adds the tasks just imported (as stored, so their creation time matches) and writes the state.
 func (s *starter) recordMined(ctx context.Context, imported []store.Task) error {
 	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
@@ -374,9 +398,27 @@ func (s *starter) recordMined(ctx context.Context, imported []store.Task) error 
 	return s.saveMined()
 }
 
-// saveMined writes the state through a temporary file of its own in the same folder, then renames it into place.
+// saveMined merges this run's records into the file under a lock, so two starts at once keep each other's records,
+// then writes it through a temporary file of its own in the same folder and renames it into place. A file that cannot
+// be read is replaced by this run's state.
 func (s *starter) saveMined() error {
+	lock, err := os.OpenFile(s.minedFile()+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close() // closing releases the flock
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock %s: %w", s.minedFile(), err)
+	}
 	state := minedState{Mined: s.records, Dismissed: slices.Sorted(maps.Keys(s.dismissed))}
+	if disk, err := s.readMined(); err == nil {
+		for _, rec := range disk.Mined {
+			if !slices.Contains(state.Mined, rec) {
+				state.Mined = append(state.Mined, rec)
+			}
+		}
+		state.Dismissed = slices.Compact(slices.Sorted(slices.Values(append(state.Dismissed, disk.Dismissed...))))
+	}
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err

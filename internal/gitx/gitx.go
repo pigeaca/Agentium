@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
 )
@@ -31,6 +33,10 @@ func Output(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error
 func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Env = append(Environ(os.Environ()), env...)
+	// A cancelled git is asked to stop (SIGINT) so it can remove its lock files (shallow.lock, index.lock); it is killed
+	// only if it has not exited after the delay.
+	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGINT) }
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

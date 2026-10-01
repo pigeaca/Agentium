@@ -125,9 +125,6 @@ func (s *starter) prepare(ctx context.Context) (string, error) {
 	if err := s.chooseContexts(ctx); err != nil {
 		return "", err
 	}
-	if err := s.loadMined(ctx); err != nil {
-		return "", err
-	}
 	name := s.experimentName()
 	if _, err := s.w.db.ExperimentByName(ctx, s.w.project.ID, name); err == nil {
 		fmt.Fprintf(s.env.Stdout, "Tasks: skipped (the experiment exists)\nExperiment %s: exists (skipped)\n", name)
@@ -220,8 +217,7 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 	if err := json.Unmarshal(snap.Manifest, &saved); err != nil {
 		return fmt.Errorf("snapshot %s: %w", snap.Name, err)
 	}
-	// Read only: hash what HEAD's context loads and compare it with the snapshot's own files. Documents added with
-	// --include are not context files and are left out of the comparison.
+	// Read only: hash what HEAD's context loads and compare it with the snapshot's own files.
 	var now, was []string
 	for _, e := range resolved.Entries {
 		data, err := src.ReadFile(e.Path)
@@ -237,7 +233,18 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 	}
 	slices.Sort(now)
 	slices.Sort(was)
-	if !slices.Equal(now, was) {
+	// Documents added with --include are not context files, but they are part of the version: compare them too, and a
+	// document missing at HEAD counts as drift.
+	drift := !slices.Equal(now, was)
+	for _, f := range saved.Files {
+		if f.Kind != snapshot.KindIncluded {
+			continue
+		}
+		if data, err := src.ReadFile(f.Path); err != nil || fmt.Sprintf("%x", sha256.Sum256(data)) != f.SHA256 {
+			drift = true
+		}
+	}
+	if drift {
 		fmt.Fprintln(s.env.Stdout, note(s.env.style(), fmt.Sprintf("the context committed at HEAD differs from snapshot %s: save it with agentium context snapshot NAME, "+
 			"then agentium start --b NAME compares it with %s", snap.Name, snap.Name)))
 	}
@@ -336,7 +343,7 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if !s.args.yes && !s.confirm(ctx, budget.total) {
 		if ctx.Err() != nil {
 			fmt.Fprintln(env.Stdout, "\nInterrupted: nothing was run.")
-			return ExitInterrupted
+			return ExitError
 		}
 		fmt.Fprintf(env.Stdout, "\nNothing was run%s. To run it (real Claude Code runs, up to $%.2f): %s\n", s.spentBefore(ctx, stored.ID), budget.total, st.Command(runCommand))
 		return ExitOK
@@ -360,13 +367,13 @@ func (s *starter) failStart(err error) int {
 	return fail(s.env, err)
 }
 
-// ExitInterrupted is the exit code after Ctrl-C at the prompt (128 + SIGINT).
-const ExitInterrupted = 130
-
 // spentBefore is what "Nothing was run" adds: in this command only, when the experiment has runs from earlier ones.
 func (s *starter) spentBefore(ctx context.Context, experimentID int64) string {
 	runs, err := s.w.db.ExperimentRuns(ctx, experimentID)
-	if err != nil || len(runs) == 0 {
+	if err != nil {
+		return " in this command" // what the experiment spent before is not known: claim nothing about it
+	}
+	if len(runs) == 0 {
 		return " and nothing was spent"
 	}
 	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs))

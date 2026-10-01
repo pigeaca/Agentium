@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -468,4 +470,233 @@ func TestStartWithACorruptStateFile(t *testing.T) {
 	expect(t, f.run(ctx, "start", "--accept-mined"), ExitError, "start-mined.json is unreadable", "cannot tell which tasks start mined")
 	plain := f.run(ctx, "start")
 	expect(t, plain, ExitError, "is unreadable and ignored", "8 valid")
+}
+
+// tryTasks counts the project's tasks while another command runs; any failure counts as none.
+func tryTasks(data string) int {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(data, "agentium.db"))
+	if err != nil {
+		return 0
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		return 0
+	}
+	tasks, _ := db.Tasks(ctx, projects[0].ID)
+	return len(tasks)
+}
+
+// Ctrl-C while start imports keeps the records of what was imported, so a task removed afterwards is dismissed, not
+// mined again and accepted unread.
+func TestStartInterruptedMiningKeepsItsRecords(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		for ctx.Err() == nil {
+			if tryTasks(f.data) >= 2 {
+				cancel()
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+	}()
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitError, "Interrupted: ")
+	tasks := storedTasks(t, f.data)
+	if len(tasks) < 2 {
+		t.Fatalf("%d task(s) imported before the interrupt", len(tasks))
+	}
+	var state minedState
+	data, err := os.ReadFile(projectFile(f, "start-mined.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &state); err != nil || len(state.Mined) != len(tasks) {
+		t.Fatalf("state %s (%v): want a record for each of the %d imported task(s)", data, err, len(tasks))
+	}
+	gone := tasks[0]
+	expect(t, f.run(context.Background(), "task", "rm", gone.Name), ExitOK)
+	expect(t, f.run(context.Background(), "start", "--accept-mined"), ExitOK, "Experiment quick-aa-baseline: created")
+	for _, task := range storedTasks(t, f.data) {
+		if task.SolutionCommit == gone.SolutionCommit {
+			t.Errorf("the removed commit came back as %s", task.Name)
+		}
+	}
+}
+
+// Two starts at once keep each other's records.
+func TestStartStateFileMergesConcurrentWriters(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 1)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	w, err := openProject(ctx, Env{Dir: f.repo, Getenv: func(k string) string { return f.vars[k] }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	a := &starter{w: w, records: []minedRecord{{Name: "a", SolutionCommit: "1"}}, dismissed: map[string]bool{"x": true}}
+	b := &starter{w: w, records: []minedRecord{{Name: "b", SolutionCommit: "2"}}, dismissed: map[string]bool{"y": true}}
+	for _, s := range []*starter{a, b} {
+		if err := s.saveMined(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, err := a.readMined()
+	if err != nil || len(state.Mined) != 2 || len(state.Dismissed) != 2 {
+		t.Errorf("state %+v, %v: want both writers' records and dismissals", state, err)
+	}
+	if left, _ := filepath.Glob(filepath.Join(filepath.Dir(w.bare), "*.tmp")); len(left) != 0 {
+		t.Errorf("temporary files left: %v", left)
+	}
+}
+
+// The budget line after an earlier raise, and what the "nothing was run" line says about earlier runs.
+func TestStartQuotesAnEarlierRaiseAndEarlierRuns(t *testing.T) {
+	t.Parallel()
+	f, _ := readyFixture(t)
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	stored, err := db.ExperimentByName(ctx, 1, "quick-aa-baseline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var design experiment.Design
+	if err := json.Unmarshal(stored.Design, &design); err != nil {
+		t.Fatal(err)
+	}
+	design.BudgetUSD = 60 // raised by an earlier `experiment run --budget`
+	lock, _ := json.Marshal(experiment.Lock{Design: design})
+	if err := db.LockExperiment(ctx, stored.ID, lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveRun(ctx, store.Run{ID: "r1", ProjectID: 1, TaskName: "x", Arm: "A", Outcome: "ok", ExperimentID: stored.ID, Slot: 0, Attempt: 1,
+		Record: []byte("{}"), Started: time.Now(), Finished: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	got := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
+	expect(t, got, ExitOK, "Budget for this run: $60.00 (the design's $42.00, raised earlier)", "spends up to $60.00. [y/N]",
+		"Nothing was run in this command (the experiment has 1 run(s) from before)")
+	if strings.Contains(got.stdout, "nothing was spent") {
+		t.Errorf("claims nothing was spent:\n%s", got.stdout)
+	}
+}
+
+// A project whose north star cannot be computed still previews and runs: the line is left out with a warning.
+func TestStartLeavesOutANorthStarItCannotCompute(t *testing.T) {
+	t.Parallel()
+	f, _ := readyFixture(t)
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	bad, err := db.SaveExperiment(ctx, store.Experiment{ProjectID: 1, Name: "broken", Template: "aa", Design: []byte("{}"), CreatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LockExperiment(ctx, bad.ID, []byte("{bad")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetExperimentStatus(ctx, bad.ID, store.StatusDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	got := f.run(ctx, "start")
+	expect(t, got, ExitOK, "Before it runs:", "the first-decisive-verdict line is left out", "Nothing was run and nothing was spent")
+	if strings.Contains(got.stdout, "First decisive verdict") {
+		t.Errorf("a line was shown:\n%s", got.stdout)
+	}
+}
+
+// promptCanceller cancels the command when the prompt is shown, as Ctrl-C at it would.
+type promptCanceller struct {
+	bytes.Buffer
+	cancel func()
+}
+
+func (p *promptCanceller) Write(b []byte) (int, error) {
+	n, err := p.Buffer.Write(b)
+	if strings.Contains(p.String(), "[y/N]") {
+		p.cancel()
+	}
+	return n, err
+}
+
+// Ctrl-C at the prompt exits 1, as every other interrupt does, and runs nothing.
+func TestStartCtrlCAtThePromptExitsOne(t *testing.T) {
+	t.Parallel()
+	f, ctrl := readyFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	out, errOut := &promptCanceller{cancel: cancel}, &bytes.Buffer{}
+	code := Run(ctx, Env{Args: []string{"start"}, Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: out, Stderr: errOut, Dir: f.repo,
+		Getenv: func(key string) string {
+			if key == "NO_COLOR" {
+				return "1"
+			}
+			return f.vars[key]
+		},
+		Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+	if code != ExitError || !strings.Contains(out.String(), "Interrupted: nothing was run.") {
+		t.Errorf("exit %d, want 1\nstdout %s\nstderr %s", code, out.String(), errOut.String())
+	}
+	if stored, started := paidRuns(t, f, ctrl); started != 0 {
+		t.Errorf("a run started (%d stored)", stored)
+	}
+}
+
+// The drift note compares the context files and the documents the snapshot included, and says nothing when they match.
+func TestStartDriftChecksIncludedDocuments(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 1)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	writeFile(t, f.repo, "docs/guide.md", "Guide v1\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Add a guide")
+	expect(t, f.run(ctx, "context", "snapshot", "baseline", "--include", "docs/guide.md"), ExitOK)
+	var out strings.Builder
+	env := Env{Dir: f.repo, Stdout: &out, Stderr: &out, Getenv: func(k string) string { return f.vars[k] }}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	snap, err := w.db.SnapshotByName(ctx, w.project.ID, "baseline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &starter{env: env, w: w}
+	drifts := func() bool {
+		out.Reset()
+		if err := s.noteDrift(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+		return strings.Contains(out.String(), "differs from snapshot baseline")
+	}
+	if drifts() {
+		t.Errorf("false drift with an included document:\n%s", out.String())
+	}
+	writeFile(t, f.repo, "docs/guide.md", "Guide v2\n")
+	gitIn(t, f.repo, "commit", "-q", "-am", "Change the guide")
+	if !drifts() {
+		t.Error("a changed included document is not drift")
+	}
+	gitIn(t, f.repo, "rm", "-q", "docs/guide.md")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Remove the guide")
+	if !drifts() {
+		t.Error("a missing included document is not drift")
+	}
 }

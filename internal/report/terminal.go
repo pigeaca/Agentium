@@ -51,6 +51,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
 	if l.LocalBinding {
+		if r.NorthStar != nil {
+			b.WriteString("\n")
+		}
 		b.WriteString(st.Warn(localBindingNote) + "\n")
 	}
 

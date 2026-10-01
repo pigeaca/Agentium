@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -137,5 +138,27 @@ func TestEnvironPinned(t *testing.T) {
 	}
 	if got := Environ(nil); !slices.Equal(got, want[len(want)-3:]) {
 		t.Errorf("Environ(nil) = %q", got)
+	}
+}
+
+// A cancelled git is asked to stop with SIGINT (so it can remove its lock files) and the call returns at once, well
+// before the kill delay.
+func TestCancelStopsGitGently(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := Run(ctx, "-c", "alias.slow=!sleep 30", "slow") // a git that would run for 30 seconds
+		done <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("a cancelled git succeeded")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a cancelled git kept running")
 	}
 }
