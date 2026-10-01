@@ -145,6 +145,14 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			return orphans, fmt.Errorf("remove the grading copy of %s: %w", e.Name(), err)
 		}
 		if s.Finished && s.Record.Outcome != "" {
+			// Its judge may have been cut short: the judge's folder (a config folder with the sign-in, for an API key or
+			// a token) goes, and the records are redacted again, as for a stopped run.
+			if err := os.RemoveAll(filepath.Join(dir, "judge")); err != nil {
+				return orphans, fmt.Errorf("remove the judge folder of %s: %w", e.Name(), err)
+			}
+			if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
+				return orphans, err
+			}
 			rec := s.Record
 			rec.Recovered = RecoveredFinished
 			rec.Notes = append(rec.Notes, "stored on recovery: Agentium stopped after the run finished, before storing it")

@@ -167,7 +167,7 @@ func Build(in Input) (Report, error) {
 		Lock: redactLock(l), Analysis: analysis}
 	settled := map[int]bool{}
 	for _, r := range in.Runs {
-		rep.SpentUSD += r.Record.Metrics.CostUSD
+		rep.SpentUSD += r.Record.Metrics.CostUSD + r.Record.JudgeCostUSD() // all the budget counts; the arms' cost is the agent's
 		if experiment.Settles(r.Record.Outcome) {
 			settled[r.Slot] = true
 		}

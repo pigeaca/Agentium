@@ -466,15 +466,13 @@ func instructionFilesAbove(dir string) []string {
 }
 
 // ReferenceDiff is the reference solution's change to its code: git diff from base to solution in the bare repository,
-// over the task's reference files that are neither tests nor documents. The user's git settings are ignored, as in the
+// over the task's reference files that are neither tests nor documents (task.JudgedFiles). The user's git settings are ignored, as in the
 // pilot (GIT_CONFIG_GLOBAL, which git 2.32 and newer read; gitx already drops the system's), and prefixes are pinned, so the diff the judge reads does
 // not depend on whose machine made it.
 func ReferenceDiff(ctx context.Context, bare, base, solution string, reference []string) (string, error) {
 	var specs []string
-	for _, p := range reference {
-		if !task.IsTestFile(p) && !claudectx.IsDocument(p) {
-			specs = append(specs, ":(literal)"+p)
-		}
+	for _, p := range task.JudgedFiles(reference) {
+		specs = append(specs, ":(literal)"+p)
 	}
 	if len(specs) == 0 {
 		return "", errors.New("the task's reference changes no code: nothing to judge against")

@@ -96,6 +96,8 @@ type Validation struct {
 	ContextKept map[string][]string `json:"context_kept,omitempty"`
 	// WeakTests is the weak-tests check (--weak-tests); nil means it was not run. It is a warning, not a status.
 	WeakTests *WeakTests `json:"weak_tests,omitempty"`
+	// Judge is the check of a judge-graded task (ValidateJudged), which runs nothing; nil for test-graded tasks.
+	Judge *JudgeCheck `json:"judge,omitempty"`
 }
 
 // RepeatCount is how many times each stage ran: 1 when Repeats is absent.
@@ -474,6 +476,9 @@ func (v Validation) Summary() string {
 		case !stage.OK:
 			failed = append(failed, fmt.Sprintf("%s/%s wanted %s", stage.Arm, stage.Stage, stage.Want))
 		}
+	}
+	if v.Judge != nil {
+		failed = append(failed, v.Judge.Problems...)
 	}
 	if len(failed) == 0 {
 		return v.Status
