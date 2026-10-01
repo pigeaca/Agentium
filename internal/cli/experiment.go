@@ -18,6 +18,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
+	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
@@ -25,10 +26,12 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-const experimentUsage = `Usage:
+// experimentUsage is the help of experiment's subcommands. It is computed once from constants and never changed.
+var experimentUsage = `Usage:
   agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--tier quick|confident | --task NAME...] [--repeats N]
                      [--model MODEL] [--effort LEVEL] [--goal cheaper|better] [--run-budget USD] [--budget USD]
                      [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
+                     [--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]
                      a context A/B: arm A (default: base, each task's own context) against snapshot B
   agentium experiment new NAME --template aa [--a CONTEXT] [...]
                      an A/A calibration: one context in both arms, which must find no difference
@@ -50,7 +53,16 @@ const experimentUsage = `Usage:
 
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT). A tier
 samples them: quick is 12 tasks × 3 runs per arm, confident 23 × 5; --task picks them instead (repeatable).
-`
+
+` + fmt.Sprintf(`--judge asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference
+solution does? It reads the instruction and both changes' code (never the tests), --judge-repeats times (default %d,
+up to %d; the majority wins) on --judge-model (default %s) at --judge-effort (default %s). Its verdict
+(fixed, partly or no, with a reason) is a second opinion beside the tests: it decides nothing. Its calls count against
+the budget, which holds back repeats × 2 × $%.2f per run for them, but never toward an arm's cost. Tasks without a
+reference solution in code are not judged. Judging can hold a run's slot for up to repeats × %d minutes more. The usage
+limit's per-run estimate leaves out the judge's use of a subscription; a judge that hits a usage limit pauses the
+experiment, and --wait does not wait for it.
+`, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD, int(llmjudge.CallTimeout.Minutes()))
 
 func runExperiment(ctx context.Context, env Env, args []string) int {
 	if len(args) == 0 {
@@ -98,6 +110,10 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop each run after this long")
 	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
 	seed := fs.Uint64("seed", 0, "the seed for the task sample and the run order (default: random)")
+	judgeOn := fs.Bool("judge", false, "ask the LLM judge about every graded run (a second opinion; it decides nothing)")
+	judgeModel := fs.String("judge-model", "", "the judge's model (default "+llmjudge.DefaultModel+")")
+	judgeEffort := fs.String("judge-effort", "", "the judge's effort level (default "+llmjudge.DefaultEffort+")")
+	judgeRepeats := fs.Int("judge-repeats", 0, fmt.Sprintf("the judge's calls per run, the majority wins (default %d, at most %d)", llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats))
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
@@ -123,6 +139,10 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 		return usage("--tier and --task both choose the tasks: use one")
 	case *repeats < 0:
 		return usage("--repeats must be positive")
+	case !*judgeOn && (*judgeModel != "" || *judgeEffort != "" || *judgeRepeats != 0):
+		return usage("--judge-model, --judge-effort and --judge-repeats set the judge: add --judge")
+	case *judgeRepeats < 0:
+		return usage("--judge-repeats must be positive")
 	}
 	tier := experiment.Tiers()[0]
 	if *tierName != "" {
@@ -164,6 +184,10 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	d := experiment.Design{Version: experiment.DesignVersion, Template: *template, Arms: []experiment.Arm{armA, armB}, Repeats: *repeats, Model: *model, Effort: *effort,
 		Goal: *goal, CostMargin: experiment.DefaultCostMargin, SuccessMargin: experiment.DefaultSuccessMargin, RunBudgetUSD: *runBudget,
 		BudgetUSD: *budget, Timeout: *timeout, VerifyTimeout: *verifyTimeout, Concurrency: *concurrency, Seed: *seed}
+	if *judgeOn {
+		s := llmjudge.Settings{Model: *judgeModel, Effort: *judgeEffort, Repeats: *judgeRepeats}.WithDefaults()
+		d.Judge = &s
+	}
 
 	eligible, reasons, err := eligibleTasks(ctx, w, d.Arms)
 	if err != nil {
@@ -209,6 +233,9 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "Created experiment %s: %s, %d task(s) × %d run(s) per arm = %d runs, budget $%.2f.\n", name,
 		describeArms(d), len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
+	if d.Judge != nil {
+		fmt.Fprintf(env.Stdout, "The judge: %s, its verdicts a second opinion beside the tests.\n", describeJudge(*d.Judge))
+	}
 	if len(tasks) == 0 && len(eligible) < tier.Tasks {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("the %s tier asks for %d tasks; only %d can be in it", tier.Name, tier.Tasks, len(eligible))))
 	}
@@ -293,6 +320,11 @@ func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Es
 	return experiment.EstimateRun(model, past), nil
 }
 
+// describeJudge is the judge's settings in words.
+func describeJudge(s llmjudge.Settings) string {
+	return fmt.Sprintf("%s at effort %s, %d call(s) per run", s.Model, s.Effort, s.Repeats)
+}
+
 func describeArms(d experiment.Design) string {
 	if d.Template == experiment.TemplateAA {
 		return "A/A calibration of context " + d.Arms[0].Context
@@ -362,6 +394,9 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  model %s, effort %s; each run up to $%.2f and %s; %d at a time\n", d.Model, effort, d.RunBudgetUSD, d.Timeout, d.Concurrency)
 	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
 	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
+	if d.Judge != nil {
+		fmt.Fprintf(out, "  judge: %s; each run's judgement up to $%.2f; a second opinion, it decides nothing\n", describeJudge(*d.Judge), d.JudgeCapUSD())
+	}
 
 	fmt.Fprintln(out, "\n"+st.Heading("Before it runs:"))
 	ready := printReadiness(ctx, env, w, d, eligible, reasons, est)
@@ -386,7 +421,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		}
 		cost := "unknown"
 		if r.CostKnown {
-			cost = fmt.Sprintf("$%.2f", r.CostUSD)
+			cost = fmt.Sprintf("$%.2f", r.CostUSD+r.JudgeUSD) // the judge's share is stated below the table
 		}
 		effects := []string{percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp")}
 		exploratory := strings.Join(r.Exploratory, ", ")
@@ -412,8 +447,25 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("* only %d task(s) can be in this experiment; a tier asking for more uses them all", len(eligible))))
 	}
 	printCostBasis(out, st, d, eligible, est)
-	fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
-		"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
+	if d.Judge != nil {
+		j := d.Judge
+		own := rows[len(rows)-1]
+		agent := "unknown"
+		if own.CostKnown {
+			agent = fmt.Sprintf("$%.2f", own.CostUSD)
+		}
+		fmt.Fprintf(out, "The judge: about $%.2f for this experiment's %d runs × %d call(s) at $%.3f a call (EST. COST includes it; the agent's\n"+
+			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
+			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
+	}
+	if d.Judge == nil {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
+			"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
+	} else {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap, and its judgement $%.2f (%d call(s) at $%.2f, each asked twice at\n"+
+			"most). A run starts only when the spend so far and the caps of the runs in flight leave room for its own cap, so\n"+
+			"spending never passes the $%.2f budget.", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, llmjudge.CallCapUSD, d.BudgetUSD)))
+	}
 	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
 		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
 		"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
@@ -603,6 +655,7 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 		check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
 	expected, known := est.DesignUSD(d)
+	expected += d.JudgeEstimateUSD()
 	if reserve := experiment.Reserve(d); known && d.BudgetUSD < expected+reserve {
 		check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early",
 			d.BudgetUSD, expected, reserve))

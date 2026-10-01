@@ -519,6 +519,19 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	return nil
 }
 
+// SetRunRecord replaces a stored run's record and nothing else: a resume adds the judge's verdict this way. Its
+// columns (outcome, passed, cost) stay as they were stored.
+func (s *Store) SetRunRecord(ctx context.Context, id string, record []byte) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET record = ? WHERE id = ?`, string(record), id)
+	if err != nil {
+		return fmt.Errorf("update run %s: %w", id, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("run %s: %w", id, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
 // RunByID returns a project's run, or ErrNotFound.
 func (s *Store) RunByID(ctx context.Context, projectID int64, id string) (Run, error) {
 	runs, err := s.queryRuns(ctx, `WHERE project_id = ? AND id = ?`, projectID, id)

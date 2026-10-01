@@ -290,6 +290,17 @@ func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
 	if _, err := s.RunByID(ctx, app.ID, "nope"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing run: %v", err)
 	}
+	// A record replaced (a verdict added on resume) leaves the columns as they were.
+	if err := s.SetRunRecord(ctx, "20260928T100000Z-aaaaaa", []byte(`{"id":"a","judge":{}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.RunByID(ctx, app.ID, "20260928T100000Z-aaaaaa"); err != nil || string(got.Record) != `{"id":"a","judge":{}}` || got.CostUSD != 0.31 ||
+		got.Outcome != "ok" || got.Passed == nil || !*got.Passed {
+		t.Errorf("after SetRunRecord = %+v, %v", got, err)
+	}
+	if err := s.SetRunRecord(ctx, "nope", []byte(`{}`)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRunRecord of a missing run: %v", err)
+	}
 }
 
 func TestLatestCalibrationPerArmAndSnapshot(t *testing.T) {
