@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/pigeaca/agentium/internal/stats"
 )
 
 // The pair judge asks which of two changes is the better fix, in both orders, so the judge's liking for whichever comes
@@ -257,17 +259,7 @@ func Preference(verdicts []PairVerdict) PreferenceSummary {
 }
 
 // wilson is the 95% Wilson interval of k in n, clamped to 0..1, as the pilot's.
-func wilson(k, n int) (float64, float64) {
-	if n == 0 {
-		return 0, 1
-	}
-	const z = 1.959964
-	nf, p := float64(n), float64(k)/float64(n)
-	d := 1 + z*z/nf
-	c := p + z*z/(2*nf)
-	r := z * math.Sqrt(p*(1-p)/nf+z*z/(4*nf*nf))
-	return math.Max(0, (c-r)/d), math.Min(1, (c+r)/d)
-}
+func wilson(k, n int) (float64, float64) { return stats.Wilson(k, n) }
 
 // binomialTwoSided is the exact two-sided p-value of k successes in n at p = 0.5: the total probability of outcomes no
 // likelier than k's (within the pilot's 1e-12), as the pilot's.

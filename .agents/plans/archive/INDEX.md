@@ -15,3 +15,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Judge: which arm fixed it better](2026-10-01-judge-pairs.md) — 2026-10-01, parked after step 1a (waits for the judge gate)
 - [Tasks from tickets, graded without tests](2026-10-01-ticket-tasks.md) — 2026-10-01, parked after step 1 (waits for the judge gate)
 - [Phase 2: agent comparison and Codex](2026-10-01-phase2-agents-codex.md) — 2026-10-01, deferred by the user
+- [Runs isolated from Claude Code's shared temp folders](2026-10-01-run-temp-isolation.md) — 2026-10-01 (#58)

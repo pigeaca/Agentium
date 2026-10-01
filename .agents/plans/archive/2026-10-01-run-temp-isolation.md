@@ -1,7 +1,7 @@
 # Runs isolated from Claude Code's shared temp folder
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 1 done (two probe sessions, $0.14, approved with the [next chapter](2026-10-01-next-chapter.md)); step 2 under way with an implementer on `claude/fix/run-temp-isolation`.
+- Status: Complete (2026-10-01): merged as #58 after two review rounds; the real probe passed ($0.14 for two findings sessions, $0.13 for the probe).
 - Scope: a sandbox gap that affects every project and every run, found on 2026-10-01.
 
 ## Why
@@ -47,8 +47,16 @@
 
 ## Work
 - [x] **1. Investigation** (read-only, and two probe sessions with approval).
-- [ ] **2. Fix and tests.**
-- [ ] **3. Real probe (paid; approval),** then archive.
+- [x] **2. Fix and tests** ([#58](https://github.com/pigeaca/Agentium/pull/58)).
+  - **The design changed in review:** the root is `/tmp/ag-<10 hex>`, a hash of the data folder and the workspace, not random, so overlapping runs can predict and deny each other's roots. It is removed even with `--keep`.
+  - **More shared folders than planned:** the review found `/tmp/claude` (writable by every sandboxed shell), the socket and daemon folders, and the npm and debug log folders, all now denied.
+  - **The real length limit** is 44 bytes for `<root>/claude-<uid>`.
+  - **Links:** no link is followed out of `/tmp`.
+- [x] **3. Real probe** ($0.13, approved), through Agentium's own `run once`, with a fake other run's root in `/tmp`.
+  - The agent's `TMPDIR` was its own root, mode 700, readable and writable.
+  - Denied: `/tmp/claude-501`, `/tmp/claude` (both forms), `~/.npm/_logs`, `/tmp/cc-socks`, the macOS user temp folder (by the permission layer), and the other run's root (by Bash, the Read tool and the Write tool).
+  - `go test` passed, and the root was removed with `--keep`.
+  - Then archive.
 
 ## Boundaries
 No new Go modules. Only Claude Code's settings and the run's environment change.

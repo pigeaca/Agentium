@@ -3,11 +3,14 @@
 package home
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -24,6 +27,55 @@ type Layout struct {
 	// Cache holds the build caches of the commands Agentium runs itself (setup, validation, grading). Agents may not
 	// read it: it holds compiled hidden tests.
 	Cache string
+	// Temp holds the runs' own Claude Code temp roots (RunTemp): /tmp, outside the data folder, because the root's
+	// path must stay short (claude.TempRootFits). Empty in a Layout not made by Resolve: runs refuse to start then.
+	Temp string
+}
+
+// RunTempPrefix starts the name of every run's temp root in Layout.Temp.
+const RunTempPrefix = "ag-"
+
+// runTempHex is how many hex characters follow RunTempPrefix in a run's temp root name (40 bits of a hash).
+const runTempHex = 10
+
+// RunTemp is the temp root (CLAUDE_CODE_TMPDIR) of the run in the named workspace, or "" when l.Temp is unset. The
+// name is derived from the data folder and the workspace's name, not random, so a run can deny the roots of runs that
+// may overlap it before they exist, as it denies their workspaces (run.Env.Predicted), and recovery finds a dead run's
+// root from its start file's workspace alone. On macOS and Windows the data folder's path is lower-cased first: their
+// file systems ignore case, so ~/.Agentium and ~/.agentium are one data folder and get the same roots.
+//
+// Since the name can be guessed and Temp is shared with other users, whoever creates it must refuse a folder someone
+// else made (run's makeRunTemp): another local user who creates a predicted root first stops that run, with an error
+// naming the folder, but cannot get into it.
+//
+// Roots are removed when their run ends, and by recovery for runs whose Agentium process died. One is left in Temp
+// only when its data folder, or that run's records, are deleted before recovery: a small, owner-only folder, which
+// later runs are denied and which the system's /tmp cleaning removes. Agentium does not sweep such roots, since a
+// root's name does not say which data folder it belongs to.
+func (l Layout) RunTemp(workspace string) string {
+	if l.Temp == "" {
+		return ""
+	}
+	root := realPath(l.Root)
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	sum := sha256.Sum256([]byte(root + "\x00" + workspace))
+	return filepath.Join(l.Temp, RunTempPrefix+hex.EncodeToString(sum[:])[:runTempHex])
+}
+
+// IsRunTempName reports whether name has the form of a run's temp root name (whatever its data folder).
+func IsRunTempName(name string) bool {
+	hexPart, ok := strings.CutPrefix(name, RunTempPrefix)
+	if !ok || len(hexPart) != runTempHex {
+		return false
+	}
+	for _, c := range hexPart {
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
 }
 
 // Resolve returns the layout under $AGENTIUM_HOME, or ~/.agentium when that is unset. getenv is os.Getenv outside tests.
@@ -41,7 +93,8 @@ func Resolve(getenv func(string) string) (Layout, error) {
 		return Layout{}, fmt.Errorf("resolve data folder %q: %w", root, err)
 	}
 	return Layout{Root: root, Database: filepath.Join(root, "agentium.db"), Artifacts: filepath.Join(root, "artifacts"),
-		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records"), Cache: filepath.Join(root, "cache")}, nil
+		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records"), Cache: filepath.Join(root, "cache"),
+		Temp: "/tmp"}, nil
 }
 
 // Ensure creates missing folders readable only by the owner: transcripts and checkouts contain source code. It never

@@ -55,6 +55,7 @@ func repoState(t *testing.T, dir string) string {
 }
 
 func TestInitRegistersWithoutTouchingTheRepository(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	for name, body := range map[string]string{"go.mod": "module x\n", "CLAUDE.md": "# Rules\n"} {
@@ -112,6 +113,7 @@ func TestInitRegistersWithoutTouchingTheRepository(t *testing.T) {
 }
 
 func TestInitRefusesADataFolderInsideTheRepository(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	gitIn(t, repo, "commit", "-q", "--allow-empty", "-m", "initial")
@@ -133,6 +135,7 @@ func TestInitRefusesADataFolderInsideTheRepository(t *testing.T) {
 }
 
 func TestInitErrors(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	env := Env{Stdout: &stdout, Stderr: &stderr, Dir: t.TempDir(), Getenv: func(string) string { return "" },
 		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now}

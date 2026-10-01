@@ -69,6 +69,20 @@ agentium experiment show lean                 # the lock and the progress per ar
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
+**Judge (second opinion).** Tests decide pass and fail. `experiment new ... --judge` also asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference solution does? The judge reads the instruction and both changes' code, never the tests; tasks whose reference solution has no code are skipped. It answers fixed, partly or no, with a one-line reason, and takes the majority of a few repeats. `--judge-model`, `--judge-effort` and `--judge-repeats` set it.
+
+The report's Judge section shows, for each arm:
+- the judge's verdicts among passing runs and among failing runs, with 95% intervals;
+- the runs it did not judge, and why;
+- how often its repeats agreed, and what it cost.
+
+It then lists the passing runs the judge did not call fixed, each with its reason, for you to check.
+
+Its limits:
+- **It decides nothing.** Success, cost and every verdict stay the tests'.
+- **Its accuracy is unmeasured.** In the [pilot](docs/research/2026-10-01-judge-pilot-results.md), it judged 18 of 40 passing runs not fully fixed.
+- **It costs extra.** Each call costs a few cents: about $0.065 a call (the preview's estimate; $0.063 per single judgement in the pilot). The calls count against the budget, but not toward an arm's cost.
+
 Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off, and `FORCE_COLOR=1` keeps it through a pipe (for `less -R`).
 
 ## Example results

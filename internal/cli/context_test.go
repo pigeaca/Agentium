@@ -54,6 +54,7 @@ func expect(t *testing.T, r cliResult, code int, fragments ...string) {
 }
 
 func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
+	t.Parallel()
 	outer := t.TempDir()
 	writeFile(t, outer, "CLAUDE.md", "personal notes above the repository\n")
 	repo := filepath.Join(outer, "repo")

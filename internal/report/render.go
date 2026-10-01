@@ -116,6 +116,28 @@ func (r Report) Markdown(w io.Writer) error {
 			cb.Successes, cb.Counted, num(ca.CostUSD, "$%.3f"), num(cb.CostUSD, "$%.3f"))
 	}
 
+	if r.Judge != nil {
+		v := r.judgeView()
+		fmt.Fprintf(&b, "\n## Judge\n\n%s\n\n| %s |\n|---%s|\n", v.intro, strings.Join(judgeColumns, " | "), strings.Repeat("|---", len(judgeColumns)-1))
+		for _, row := range v.rows {
+			fmt.Fprintf(&b, "| %s |\n", strings.Join(row, " | "))
+		}
+		b.WriteString("\n")
+		for _, line := range v.lines {
+			fmt.Fprintf(&b, "%s\n", line)
+		}
+		fmt.Fprintf(&b, "\n%s\n", v.flaggedTitle)
+		if len(v.flagged) > 0 {
+			b.WriteString("\n")
+		}
+		for _, f := range v.flagged {
+			fmt.Fprintf(&b, "- %s: %s. %s\n", f[0], f[1], sentence(f[2]))
+		}
+		if v.more > 0 {
+			fmt.Fprintf(&b, "- and %d more (the JSON report lists them all).\n", v.more)
+		}
+	}
+
 	b.WriteString("\n## Notes\n\n")
 	for _, n := range r.Notes {
 		fmt.Fprintf(&b, "- %s\n", n)
@@ -424,4 +446,12 @@ func compare(low, high float64, c *experiment.Component) string {
 		return "within the range"
 	}
 	return "overlaps the range"
+}
+
+// sentence ends text with a full stop unless it already ends a sentence.
+func sentence(text string) string {
+	if text == "" || strings.HasSuffix(text, ".") || strings.HasSuffix(text, "!") || strings.HasSuffix(text, "?") {
+		return text
+	}
+	return text + "."
 }

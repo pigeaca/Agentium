@@ -46,6 +46,7 @@ func records(t *testing.T, runs []store.Run) []run.Record {
 }
 
 func TestExperimentNewJudgeFlags(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -109,6 +110,7 @@ func storedDesign(t *testing.T, f runFixture, name string) experiment.Design {
 // With --judge, the preview states the judge's estimate apart from the agent's, every graded run gets a verdict, the
 // budget counts the judge's spend, and the agent's cost (the run's cost column and its record's metrics) stays its own.
 func TestExperimentJudgesEveryGradedRun(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "judged", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--judge-repeats", "2",
@@ -162,7 +164,8 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 	emptyWorkspaces(t, f)
 	expect(t, f.run(ctx, "experiment", "show", "judged"), ExitOK, "Judge: claude-opus-5-5 at effort high, 2 call(s) per run")
 	// The report's spend is the budget's, the judge's included; the arms' costs stay the agent's.
-	expect(t, f.run(ctx, "experiment", "report", "judged"), ExitOK, "2 of 2 runs settled (done); spent $0.80", "$0.300 → $0.300")
+	expect(t, f.run(ctx, "experiment", "report", "judged"), ExitOK, "2 of 2 runs settled (done); spent $0.80", "$0.300 → $0.300",
+		"## Judge", "| A | passed | 1 | 1 (100%; 21–100%) |", "Judge cost: A $0.10, B $0.10; $0.20 in total", "The judge called every passing run it judged fixed.")
 	if d := storedDesign(t, f, "judged"); d.Judge == nil || d.Judge.Repeats != 2 {
 		t.Errorf("design judge %+v", d.Judge)
 	}
@@ -186,6 +189,7 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 // A judge at its usage limit pauses the experiment; the resume judges the runs left without a verdict (stopped, or
 // never judged), keeps what the stopped judgement spent, then runs the rest.
 func TestExperimentJudgePausesAndResumes(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1", "--judge",
@@ -267,6 +271,7 @@ func TestAgentDiffFormIsPinned(t *testing.T) {
 // The judge hitting its limit on the last run leaves the experiment paused, not done. A resume judges it when the budget
 // leaves room for a judgement, and says so when it does not.
 func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	// Runs at $5, each with up to 2 × 2 × $1 of judgement: the $14 budget fits one pair.
@@ -288,10 +293,22 @@ func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
 	os.Remove(filepath.Join(ctrl, "judge-limit-after"))
 	os.Remove(filepath.Join(ctrl, "judge-limit"))
 	unfunded := f.run(ctx, "experiment", "run", "last")
-	expect(t, unfunded, ExitError, "1 run(s) still need the judge, but the budget leaves no room for a judgement ($4.00): raise it with --budget",
-		"Experiment last: stopped: 1 run(s) still need the judge", "Stopped. To continue: agentium experiment run last")
-	if strings.Contains(unfunded.stdout, "Judged run") {
-		t.Errorf("a judgement past the budget:\n%s", unfunded.stdout)
+	// Every slot settled, and only the judge is waiting for a budget: a budget stop (exit 0), not a failure.
+	expect(t, unfunded, ExitOK, "1 run(s) still need the judge, but the budget leaves no room for a judgement ($4.00): raise it with --budget",
+		"1 graded run(s) still need the judge: agentium experiment run last --budget USD",
+		"Stopped at the budget. To continue: agentium experiment run last --budget USD")
+	if strings.Contains(unfunded.stdout, "Judged run") || strings.Contains(unfunded.stdout, "Stopped. To continue") {
+		t.Errorf("a judgement past the budget, or a stop:\n%s", unfunded.stdout)
+	}
+	expect(t, f.run(ctx, "experiment", "show", "last"), ExitOK, "1 run(s) still need the judge, but the budget leaves no room for a judgement")
+	// The report says the success and cost verdicts are complete, not that the experiment is unfinished.
+	report := f.run(ctx, "experiment", "report", "last")
+	expect(t, report, ExitOK, "2 of 2 runs settled (budget)", "## Judge",
+		"Every run settled, so the success and cost verdicts are complete; 1 run(s) lack a judge verdict, which the budget leaves no room for: "+
+			"agentium experiment run last --budget USD judges them.", "1 stopped early",
+		"1 run(s) still need the judge: agentium experiment run last --budget USD judges them.")
+	if strings.Contains(report.stdout, "not finished") {
+		t.Errorf("the report calls the experiment unfinished:\n%s", report.stdout)
 	}
 	expect(t, f.run(ctx, "experiment", "run", "last", "--budget", "20"), ExitOK, "Judged run ", "fixed (2 of 2), $0.10 (spent $10.21 of $20.00)",
 		"Experiment last: done", "Every run is done.")
