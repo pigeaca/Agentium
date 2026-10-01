@@ -30,6 +30,8 @@ func TestRustTestItems(t *testing.T) {
 		"test_case":                           {"#[test_case(1)]\nfn a(x: i32) {}\n#[wasm_bindgen_test]\nfn b() {}\n#[rstest]\nfn c() {}\n", []string{"#[test_case(1)]", "#[wasm_bindgen_test]", "#[rstest]"}},
 		"cfg test with not":                   {"#[cfg(all(test, not(miri)))]\nmod a {}\n#[cfg(all(test, not(feature = \"x\")))]\nmod b {}\n", []string{"#[cfg(all(test, not(miri)))]", "#[cfg(all(test, not(feature = \"x\")))]"}},
 		"cfg strings are not test":            {"#[cfg(feature = \"test-util\")]\nmod a {}\n#[cfg(feature=\"test\")]\nmod b {}\n#[cfg(target_os = \"test\")]\nmod c {}\n", nil},
+		"default fn":                          {"#[test]\ndefault fn h<A, B>() { body }\nfn later() {}\n", []string{"#[test]"}},
+		"pub crate split":                     {"#[test]\npub\n(crate) fn h<A, B>() {}\nfn later() {}\n", []string{"#[test]"}},
 		"signature with array":                {"#[test]\nfn a() -> [u8; 2] { [0; 2] }\nfn b() {}\n", []string{"#[test]"}},
 		"attribute text in string or comment": {"// #[test]\nconst S: &str = \"#[cfg(test)]\";\nconst R: &str = r#\"#[test]\"#;\n", nil},
 	} {
@@ -88,9 +90,9 @@ func TestInlineRustTests(t *testing.T) {
 		"tests in tests dir": {
 			map[string]string{"src/lib.rs": "pub fn f() {}\n", "tests/t.rs": "#[test]\nfn a() {}\n"},
 			map[string]string{"src/lib.rs": "pub fn f() { }\n", "tests/t.rs": "#[test]\nfn a() { }\n"}, nil},
-		"tests.rs declared": {
+		"mod tests declared": {
 			map[string]string{"src/lib.rs": "pub fn f() {}\n"},
-			map[string]string{"src/lib.rs": "pub fn f() {}\n#[cfg(test)]\nmod tests;\n", "src/tests.rs": "#[test]\nfn a() {}\n"}, []string{"src/lib.rs"}},
+			map[string]string{"src/lib.rs": "pub fn f() {}\n#[cfg(test)]\nmod tests;\n", "src/tests.rs": "#[test]\nfn a() {}\n"}, []string{"src/lib.rs", "src/tests.rs"}},
 		"not rust": {
 			map[string]string{"a.py": "x = 1\n"}, map[string]string{"a.py": "#[test]\nx = 2\n"}, nil},
 		"unbalanced": {
@@ -119,5 +121,15 @@ func TestInlineRustTests(t *testing.T) {
 				t.Errorf("refusal = %v", refused)
 			}
 		})
+	}
+}
+
+// A generic head with commas must not end the item early: the body belongs to it.
+func TestRustTestItemsKeepGenericHeadAndBody(t *testing.T) {
+	for _, src := range []string{"#[test]\ndefault fn h<A, B>() { body }", "#[test]\npub\n(crate) fn h<A, B>() { body }"} {
+		got, err := rustTestItems(src + "\nfn later() {}\n")
+		if err != nil || len(got) != 1 || got[0] != src {
+			t.Errorf("items = %q, %v; want %q", got, err, src)
+		}
 	}
 }

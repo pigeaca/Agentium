@@ -176,7 +176,8 @@ func isTestAttr(attr string) bool {
 
 // itemKeywords start an item whose head may contain commas (generics, where clauses) before its body.
 var itemKeywords = map[string]bool{"fn": true, "mod": true, "impl": true, "struct": true, "enum": true, "trait": true, "use": true,
-	"const": true, "static": true, "type": true, "async": true, "unsafe": true, "extern": true, "union": true, "macro_rules": true}
+	"const": true, "static": true, "type": true, "async": true, "unsafe": true, "extern": true, "union": true, "macro_rules": true,
+	"default": true, "safe": true, "crate": true}
 
 // headIsItem reports whether the thing starting at from (after its test attribute) is an item rather than a struct
 // field, an enum variant or a match arm, which a comma ends: further attributes and a visibility are skipped, then
@@ -204,7 +205,7 @@ func headIsItem(src string, from int) bool {
 			word := src[i:j]
 			if word == "pub" {
 				i = j
-				for i < len(src) && src[i] == ' ' {
+				for i < len(src) && strings.IndexByte(" \t\r\n", src[i]) >= 0 {
 					i++
 				}
 				if i < len(src) && src[i] == '(' {
@@ -225,7 +226,8 @@ func headIsItem(src string, from int) bool {
 // itemEnd finds where the item that starts at from (after its test attribute) ends: further attributes and the item's
 // head are scanned until a { (matched to its }) or a ; outside parentheses and brackets. A field, variant or match
 // arm (not an item) also ends at its comma, and anything ends where the enclosing block closes, so a #[cfg(test)]
-// field or arm does not swallow the code after it.
+// field or arm does not swallow the code after it. A } of a const generic ends an item early too: `impl Tr for
+// Arr<{ 3 }>` ends there, so that impl's body is not compared.
 func itemEnd(src string, from int) (int, error) {
 	depth := 0
 	item := headIsItem(src, from)

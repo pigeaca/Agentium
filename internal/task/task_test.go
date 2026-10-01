@@ -326,7 +326,6 @@ func TestIsTestFileJavaAndKotlinClasses(t *testing.T) {
 		"src/main/java/com/x/ABTest.java": false, "app/LoadTest.kt": true, "src/GIT.java": false, "src/AUDIT.kt": false,
 		"src/main/java/Test.java": false, "x/IT.java": false, "src/main/java/RetryingTest.java": false,
 		"mod/src/main/kotlin/CartesianTest.kt": false, "src/test/java/RetryingTest.java": true, "src/Web3Test.java": true,
-		"src/tests.rs": true, "src/contests.rs": false,
 	} {
 		if got := IsTestFile(p); got != want {
 			t.Errorf("IsTestFile(%q) = %v, want %v", p, got, want)

@@ -23,10 +23,11 @@ var jsTest = regexp.MustCompile(`\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$
 // conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*), Java and Kotlin test classes
 // (a name like ParserTest, ParserTests or ParserIT outside a src/main folder: Maven and Gradle keep tests in src/test,
 // and a production class that is merely named like a test, such as RetryingTest.java, must stay in the reference or the
-// hidden tests would hand it to agents), Rust's tests.rs, and anything in a test, tests, spec,
+// hidden tests would hand it to agents), and anything in a test, tests, spec,
 // __tests__, __mocks__, testdata, fixtures, __fixtures__, __snapshots__ or e2e folder. Other test inputs (a golden file
 // beside the code, say) land in the reference, which validation cannot notice because the reference supplies them.
-// Rust's inline #[cfg(test)] code sits in ordinary source files and cannot be told apart by name: InlineRustTests
+// Kotlin Multiplatform source sets are not handled: src/<name>Main is not excluded from the class-name rule, and
+// src/<name>Test folders are not test folders. Rust's inline #[cfg(test)] code sits in ordinary source files and cannot be told apart by name: InlineRustTests
 // finds it, and the task commands refuse such solutions.
 func IsTestFile(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
@@ -37,8 +38,6 @@ func IsTestFile(p string) bool {
 	}
 	base := path.Base(p)
 	switch {
-	case base == "tests.rs": // the file of a `#[cfg(test)] mod tests;` declaration; InlineRustTests refuses the declaration's change
-		return true
 	case strings.HasSuffix(base, "_test.go"), strings.HasSuffix(base, "_spec.rb"):
 		return true
 	case strings.HasSuffix(base, ".py"):
