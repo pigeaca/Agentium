@@ -27,6 +27,10 @@ type Layout struct {
 	// Cache holds the build caches of the commands Agentium runs itself (setup, validation, grading). Agents may not
 	// read it: it holds compiled hidden tests.
 	Cache string
+	// Deps holds each project's warmed dependencies (Maven, Gradle and Cargo caches) in a folder per project. Runs' agents
+	// read it for offline builds and cannot write it; only a run's setup does, before hidden tests exist in its
+	// checkout. It is outside the folders runs may not read.
+	Deps string
 	// Temp holds the runs' own Claude Code temp roots (RunTemp): /tmp, outside the data folder, because the root's
 	// path must stay short (claude.TempRootFits). Empty in a Layout not made by Resolve: runs refuse to start then.
 	Temp string
@@ -93,7 +97,7 @@ func Resolve(getenv func(string) string) (Layout, error) {
 		return Layout{}, fmt.Errorf("resolve data folder %q: %w", root, err)
 	}
 	return Layout{Root: root, Database: filepath.Join(root, "agentium.db"), Artifacts: filepath.Join(root, "artifacts"),
-		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records"), Cache: filepath.Join(root, "cache"),
+		Workspaces: filepath.Join(root, "workspaces"), Records: filepath.Join(root, "records"), Cache: filepath.Join(root, "cache"), Deps: filepath.Join(root, "deps"),
 		Temp: "/tmp"}, nil
 }
 

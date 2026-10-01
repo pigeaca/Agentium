@@ -42,6 +42,7 @@ type Validating struct {
 	Bare      string // Agentium's bare repository for the project
 	Artifacts string // the data folder's artifacts folder
 	Env       []string
+	Cache     string // the data folder's cache root: Validator.Cache
 	Now       func() time.Time
 	// ReferenceDiff returns the reference diff a judge-graded task's judge would read (judge.ReferenceDiff, which this
 	// package cannot import).
@@ -102,7 +103,7 @@ func (v Validating) Arms(ctx context.Context, projectID int64, snapshots []strin
 func (v Validating) Validator(t store.Task, o ValidateOptions) Validator {
 	folder := filepath.Join(v.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), v.Now().UTC().Format("20060102T150405Z"))
 	return Validator{Bare: v.Bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Now: v.Now}
+		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Cache: v.Cache, Now: v.Now}
 }
 
 // StoreValidation records result as t's validation, if t still has the verify and setup commands it was validated

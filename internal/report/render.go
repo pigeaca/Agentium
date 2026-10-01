@@ -43,6 +43,9 @@ func (r Report) Markdown(w io.Writer) error {
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
+	if l.LocalBinding {
+		b.WriteString(localBindingNote + "\n")
+	}
 
 	b.WriteString("\n## Metrics\n\nA and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.\n\n")
 	b.WriteString("| Metric | Role | A | B | B vs A | 95% bootstrap | 95% t | Verdict |\n|---|---|---|---|---|---|---|---|\n")

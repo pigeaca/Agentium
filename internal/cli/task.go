@@ -1001,7 +1001,7 @@ func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating
 
 // validating is what validating w's tasks needs; buildEnv is the environment commands run in (run.BuildEnv).
 func (w *workspace) validating(buildEnv []string, now func() time.Time) task.Validating {
-	return task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Now: now,
+	return task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Cache: w.layout.Cache, Now: now,
 		ReferenceDiff: func(ctx context.Context, base, solution string, reference []string) (string, error) {
 			return llmjudge.ReferenceDiff(ctx, w.bare, base, solution, reference)
 		}}

@@ -50,6 +50,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
+	if l.LocalBinding {
+		b.WriteString(st.Warn(localBindingNote) + "\n")
+	}
 
 	section("Metrics", "A and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.")
 	t := table(term.Left("Metric"), term.Left("Role"), term.Right("A"), term.Right("B"), term.Right("B vs A"), term.Right("95% bootstrap"), term.Right("95% t"), term.Left("Verdict"))

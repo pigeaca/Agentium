@@ -89,6 +89,11 @@ type Env struct {
 	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
 	// Agentium process died (its project and experiment slot, say).
 	Meta json.RawMessage
+	// AllowLocalBinding is the project's opt-in for the sandbox's local binding (store.Project): a run on a Gradle
+	// project does not start without it (claude.LocalBindingRefusal).
+	AllowLocalBinding bool
+	// WarmWait bounds the wait for another warm-up of the project's dependencies; zero: DefaultWarmWait.
+	WarmWait time.Duration
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
@@ -97,14 +102,25 @@ type Env struct {
 	judgeSpent func(usd float64)
 }
 
+// CheckBuildConfigs reports whether the user's build configuration can be read safely (see buildtool.ProjectCaches): an
+// experiment asks before it locks, since every run would refuse to start otherwise.
+func (env Env) CheckBuildConfigs(ctx context.Context) error {
+	return buildtool.CheckConfigs(env.Environ, env.Home, env.repositoryPaths(ctx))
+}
+
 // BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
 // the data folder, which agents may not read, and creates it: in the user's own folders they would leave compiled
 // hidden tests for agents to read (Go's build cache and its temporary builds, Jest's cache in TMPDIR). The build tools'
-// profiles say which variables (buildtool.CommandEnv). Caches no profile knows (sccache, Gradle's, Bazel's output base)
-// stay where their tools keep them.
+// profiles say which variables (buildtool.CommandEnv: Go's, for every project). Once a run or validation knows its
+// repository's build tools, their caches are added (buildtool.CommandEnvFor: Maven's and Gradle's under the cache
+// folder, rustc wrappers such as sccache cleared). Caches no profile knows (Bazel's output base) stay where their tools
+// keep them.
 func BuildEnv(layout home.Layout) ([]string, error) {
 	tmp := filepath.Join(layout.Cache, "tmp")
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return nil, fmt.Errorf("build cache: %w", err)
+	}
+	if err := buildtool.PrepareCommands(layout.Cache); err != nil {
 		return nil, fmt.Errorf("build cache: %w", err)
 	}
 	return buildtool.CommandEnv(layout.Cache, tmp), nil
@@ -112,26 +128,29 @@ func BuildEnv(layout home.Layout) ([]string, error) {
 
 // Record is a finished run.
 type Record struct {
-	ID          string         `json:"id"`
-	Task        string         `json:"task"`
-	Arm         string         `json:"arm"`
-	Snapshot    string         `json:"snapshot,omitempty"`
-	Model       string         `json:"model"`
-	SignIn      string         `json:"sign_in"`
-	Outcome     string         `json:"outcome"`          // claude.Outcome*
-	Passed      *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
-	Drift       []string       `json:"drift,omitempty"`
-	Notes       []string       `json:"notes,omitempty"`
-	Metrics     claude.Metrics `json:"metrics"`
-	Behavior    Behavior       `json:"behavior"`
-	Setup       []task.Command `json:"setup,omitempty"`
-	Verify      []task.Command `json:"verify,omitempty"`
-	ExitCode    int            `json:"exit_code"`
-	Started     time.Time      `json:"started"`
-	Finished    time.Time      `json:"finished"`
-	RecordsDir  string         `json:"records"`
-	ContextHead string         `json:"context_commit,omitempty"`
-	ProbeFile   string         `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
+	ID       string         `json:"id"`
+	Task     string         `json:"task"`
+	Arm      string         `json:"arm"`
+	Snapshot string         `json:"snapshot,omitempty"`
+	Model    string         `json:"model"`
+	SignIn   string         `json:"sign_in"`
+	Outcome  string         `json:"outcome"`          // claude.Outcome*
+	Passed   *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
+	Drift    []string       `json:"drift,omitempty"`
+	Notes    []string       `json:"notes,omitempty"`
+	Metrics  claude.Metrics `json:"metrics"`
+	Behavior Behavior       `json:"behavior"`
+	Setup    []task.Command `json:"setup,omitempty"`
+	Verify   []task.Command `json:"verify,omitempty"`
+	ExitCode int            `json:"exit_code"`
+	// WarmWait: the run ended as an infrastructure failure because it waited out another run's dependency warm-up
+	// (Once); an experiment does not count it toward an outage.
+	WarmWait    bool      `json:"warm_wait,omitempty"`
+	Started     time.Time `json:"started"`
+	Finished    time.Time `json:"finished"`
+	RecordsDir  string    `json:"records"`
+	ContextHead string    `json:"context_commit,omitempty"`
+	ProbeFile   string    `json:"probe_file,omitempty"` // the instruction file Spec.Probe was added to
 	// ContextUse is what the run used of its arm's context; nil in records made before Agentium kept it, and in runs
 	// that ended before their transcript could be read.
 	ContextUse *ContextUse `json:"context_use,omitempty"`
@@ -201,6 +220,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// (setup, the agent, verification), and at the end the finished record, so a runner killed before storing it
 	// loses nothing.
 	var agentStarted, recordsReady bool
+	// stopTools ends what the build tools left running (Gradle daemons) once the agent is done; set when the run's tools
+	// are known, called when the agent ends and again, harmlessly, at the very end.
+	var stopTools func()
 	var pgid int
 	var startErr error
 	writeStart := func(finished bool) error {
@@ -222,6 +244,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
 			err = redactErr
 		}
+		if stopTools != nil {
+			stopTools()
+		}
 		if !spec.Keep {
 			os.RemoveAll(workspace)
 			os.RemoveAll(graded)
@@ -238,6 +263,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if found := instructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
+	}
+	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so
+	// change one arm's sandbox, warm-up or environment. A run that needs the user's opt-in for local binding stops here,
+	// before it costs anything.
+	tools, err := toolsAtBase(ctx, env.Bare, spec.Task.Base)
+	if err != nil {
+		return rec, err
+	}
+	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
+		return rec, err
 	}
 	prompt := spec.Instruction + suffix
 	if spec.PlainPrompt {
@@ -290,6 +325,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
 	}
+	// Resolved once, before the agent starts, and only this string goes to the stop hook: the sandbox lets the agent
+	// write the build cache path itself, so later it could replace the folder with a link to another run's, and
+	// anything resolved at stop time would follow it.
+	buildCacheReal, err := filepath.EvalSymlinks(inv.BuildCache)
+	if err != nil {
+		return rec, fmt.Errorf("run folder go-build: %w", err)
+	}
 	// After the start file, so a dead process's root is found and removed (Recover); before the agent's settings are
 	// made, so the root's resolved form (/private/tmp) is known.
 	if err := makeRunTemp(tempRoot); err != nil {
@@ -323,11 +365,46 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			rec.Notes = append(rec.Notes, "the arm changes what runs: "+strings.Join(overlay.HarnessChanged, ", "))
 		}
 	}
+	// The repository's build tools (profiles) choose the agent's environment and sandbox, add their caches to the
+	// environment of Agentium's own commands, and warm the dependencies the agent will read.
+	inv.Tools, inv.Deps, inv.AllowLocalBinding = tools, env.depsFolder(), env.AllowLocalBinding
+	profiles := buildtool.Select(inv.Tools)
+	if slices.Contains(inv.Tools, "maven") || slices.Contains(inv.Tools, "gradle") {
+		inv.JavaHome = buildtool.ResolveJavaHome(ctx, env.Environ, buildtool.CommandOutput)
+	}
+	if env.Layout.Cache != "" {
+		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, env.Layout.Cache)...)
+	}
+	stopped := false
+	stopTools = func() {
+		if stopped {
+			return
+		}
+		stopped = true
+		// Even a cancelled run stops what it started, within half a minute.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if stopErr := buildtool.StopRun(stopCtx, profiles, buildCacheReal, buildtool.SystemHost()); stopErr != nil {
+			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
+		}
+	}
+	notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
+	rec.Notes = append(rec.Notes, notes...)
+	if errors.Is(err, errWarmWait) {
+		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
+		// not counted against it (an infrastructure failure is retried or left out).
+		rec.Outcome, rec.WarmWait = claude.OutcomeInfra, true
+		rec.Notes = append(rec.Notes, err.Error())
+		return rec, nil
+	}
+	if err != nil {
+		return rec, err
+	}
 	if len(spec.Task.Setup) > 0 {
 		// Setup builds into the agent's own cache, so a warming step (`go build ./...`) spares every agent a cold
 		// build; the workspace holds no hidden tests yet.
 		setup := env
-		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(inv.BuildCache)...)
+		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 		var ok bool
 		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
@@ -397,6 +474,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	transcript.Close()
 	stderr.Close()
+	stopTools() // before grading: a daemon would sit on its heap meanwhile
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
 	unfinished := func(err error) (Record, error) {
@@ -605,7 +683,7 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	for word, files := range map[string][]string{
 		"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
 		"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
-		"cargo": {"Cargo.toml"}, "jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
+		"jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
 	} {
 		runners[word] = append(runners[word], files...)
 	}
@@ -697,6 +775,13 @@ func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	db := env.Layout.Database
 	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
+	// What the user's build configuration names (a Cargo target-dir or build-dir), for the repository and its worktrees;
+	// a configuration that cannot be read safely stops the run here, before anything starts.
+	configured, err := buildtool.ProjectCaches(env.Environ, env.Home, env.repositoryPaths(ctx))
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, configured...)
 	if entries, err := os.ReadDir(env.Layout.Workspaces); err == nil {
 		for _, e := range entries {
 			if other := filepath.Join(env.Layout.Workspaces, e.Name()); other != workspace {
@@ -927,9 +1012,10 @@ func measure(numstat string, b *Behavior) []string {
 	return paths
 }
 
-// testRunner matches commands that run tests: the build tools' patterns from their profiles, then other runners.
+// testRunner matches commands that run tests: the build tools' patterns from their profiles (Go, Maven, Gradle, Cargo),
+// then other runners.
 var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(), `pytest|python3? -m (pytest|unittest)|`+
-	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|cargo test|make test|mvn( -\S+)* test|gradlew? test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
+	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
 
 func ranTests(commands []string) bool {
 	for _, c := range commands {

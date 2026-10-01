@@ -41,6 +41,8 @@ type Result struct {
 	Pause string
 	// Stop, when set, says why no later run can be fair (Claude Code's version changed, say): the experiment stops.
 	Stop string
+	// WarmWait: the attempt ended, as an infrastructure failure, waiting for another run's dependency warm-up.
+	WarmWait bool
 	// Usage is the run's last subscription usage reading, if it reported one: the gate's latest reading.
 	Usage *claude.UsageReading
 }
@@ -193,6 +195,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	var stopNote, pauseNote string
 	var runErr error
 	var streak []int // slots of the infrastructure failures in a row
+	warmWaits := 0   // attempts that waited out another run's dependency warm-up (not part of the streak)
 	done := ctx.Done()
 	for {
 		now := time.Now()
@@ -350,7 +353,14 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				// run again later; not an attempt
 			default: // infrastructure, or no outcome at all
 				s.attempts++
-				streak = append(streak, f.pos)
+				if f.result.WarmWait { // not an outage: its own note, and no part in the outage streak
+					warmWaits++
+					if warmWaits >= InfraStreak && stopNote == "" {
+						stopNote = fmt.Sprintf("%d runs waited for another run's dependency warm-up and gave up: resume to continue (a slow or stuck warm-up is the likely cause)", warmWaits)
+					}
+				} else {
+					streak = append(streak, f.pos)
+				}
 				if s.attempts >= p.MaxAttempts {
 					s.failed = true
 				} else if p.Backoff != nil {

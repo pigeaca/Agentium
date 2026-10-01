@@ -590,3 +590,6 @@ func wider(t, boot stats.Interval) string {
 	}
 	return "the wider of the t-interval and the bootstrap on each side"
 }
+
+// localBindingNote is shown when the experiment's lock records the sandbox's local binding.
+const localBindingNote = "The agents' sandbox allowed local binding (a Gradle project, with the user's opt-in): an agent could bind any local port and connect to services listening on localhost, and concurrent runs could reach each other."
