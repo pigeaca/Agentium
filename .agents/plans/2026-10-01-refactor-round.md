@@ -1,0 +1,47 @@
+# Refactor round
+
+- Date: 2026-10-01
+- Status: In Progress (2026-10-01): step 4 (faster tests) started first, because it touches only test code. Steps 1–2 start when the judge's step 3 (reports) merges, since they change the same report and experiment code. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
+- Scope: the code findings of the 2026-10-01 review. No change in behavior.
+
+## Why
+- **Business logic in the CLI:** `internal/cli` holds about a quarter of the code, and command handlers run 120–290 lines (`experimentRun` 289, `experimentNew` 134, `printReadiness` 126, `experimentPlan` 120, `runCalibrate` 118). Every feature (judge, pairs, model A/B, run reuse) adds to them.
+- **Spend in five places:** `Metrics.CostUSD`, the runs table's `cost_usd`, `Record.Judge.CostUSD`, `Result.CostUSD` and `Result.JudgeUSD`, and estimates. Each new cost source must be added up correctly everywhere.
+- **Duplicated helpers:**
+  - three environment allowlists (`gitx`, `runner`, `claude`);
+  - `instructionFilesAbove` twice;
+  - the sign-in environment built in both `Invocation` and `Judgement`;
+  - Wilson and binomial helpers in `judge`, apart from `stats`.
+- **Slow tests:** the CLI tests take about 120 s of every check under `-race`.
+
+## Outcome
+- **Command handlers** parse, call one service function, and print. None is over 80 lines.
+- **One spending record per run** (agent, judge, estimated or not), and one function that totals it. The budget, status, `show`, `report` and the estimates use it. The cost metric stays the agent's alone.
+- **Helpers live once:** environment allowlists are built in one place, with their documented differences, and the sign-in environment, instruction-file guard and interval helpers are shared.
+- **The CLI tests run in under 60 s** under `-race`.
+
+## Acceptance
+1. **No behavior change:** every existing test passes unmodified (apart from moved test files), the Go golden test and report golden files are unchanged, and console samples are identical.
+2. **One spend total:** a test fails if a cost source is added without the total including it, for example a table test over every spend field.
+3. **Size limits:** no command handler over 80 lines, checked by a test or a harness check.
+4. **Test time:** the CLI package finishes in under 60 s with `-race` on this machine, recorded before and after.
+
+## Work
+Each step is one PR with a review.
+- [ ] **1. Spending record** (`run`, `experiment`, `cli`, `report`).
+- [ ] **2. Command handlers into services** (`experiment`, `cli`): `new`, `plan`, `run`, `report` and `calibrate`.
+- [ ] **3. Shared helpers** (`claude`, `run`, `gitx`, `runner`, `stats`, `judge`), after Java and Rust step 3.
+- [ ] **4. Faster tests** (`cli` tests).
+
+## Boundaries
+Refactors only: no new features, no new Go modules, no change to output.
+
+## Verification
+Unchanged tests and golden files, `harness.py check changed`, CI, and a reviewer per step.
+
+## Metrics
+- Agent: <client> / <exact model id> / <effort>
+- Elapsed: <minutes>m
+- Check-fix loops: <n>
+- User corrections: <n>
+- Review: <verdict>

@@ -1,20 +1,17 @@
 # Roadmap
 
-Product direction: an AI development lab for coding agents. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) is accepted as a hybrid strategy ([decision](decisions/2026-09-27-hybrid-strategy.md)).
+Product direction: an AI development lab for coding agents. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) is accepted as a hybrid strategy ([decision](decisions/2026-09-27-hybrid-strategy.md)). Vision: a clear answer on what your AI setup changes, within a day, for tens of dollars.
 
-## Foundation — 2026-09-27
-- Agent process and harness from Orchid ([decision](decisions/2026-09-27-agent-process-from-orchid.md)).
-- Product research: tools, UX, method, architecture, MVP and strategy.
-- Phase 0 spike: 60 real runs gave a go for Phase 1, a noise level and an isolation recipe ([results](../docs/research/2026-09-27-phase0-spike-results.md)).
-- 2026-09-28 — Stack: Go + SQLite ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)), with CI.
+History: [completed plans](plans/archive/INDEX.md) and [decisions](decisions/README.md).
 
-- 2026-09-29 — MVP Phase 1 done: context A/B from the CLI, for Claude Code, with real A/A and A/B runs ([plan](plans/archive/2026-09-28-phase1-context-ab-cli.md)).
-- 2026-09-30 — Clearer console output, no web UI ([plan](plans/archive/2026-09-30-clearer-console.md), [decision](decisions/2026-09-30-console-instead-of-web-ui.md)).
-- 2026-10-01 — Experiment hardening; 16-run A/B inconclusive ([plan](plans/archive/2026-09-29-experiment-hardening.md)).
-- 2026-10-01 — Run estimates ([plan](plans/archive/2026-10-01-run-estimates.md)); task checks and context use ([plan](plans/archive/2026-09-30-task-checks-context-use.md)).
-- 2026-10-01 — Judge pilot: no GO ([results](../docs/research/2026-10-01-judge-pilot-results.md)); built anyway ([decision](decisions/2026-10-01-llm-judge-alongside-tests.md)).
+## North star
+Time and dollars to the first decisive verdict (inconclusive doesn't count): today none; target within a day, $40 or less. Guard: A/A false verdicts at most 5%.
 
-## Next, in order
-1. [Judge per run](plans/2026-10-01-llm-judge.md), alongside [Java and Rust](plans/2026-09-30-java-rust.md); [temp isolation](plans/2026-10-01-run-temp-isolation.md).
-2. Judge: [which arm is better](plans/2026-10-01-judge-pairs.md), [ticket tasks](plans/2026-10-01-ticket-tasks.md); [model and effort A/B](plans/2026-10-01-model-ab.md).
-3. [Codex](plans/2026-10-01-phase2-agents-codex.md), deferred.
+## Next, in waves ([coordinating plan](plans/2026-10-01-next-chapter.md))
+1. Finish: [task mining](plans/2026-10-01-task-mine.md), judge reports; [temp isolation](plans/2026-10-01-run-temp-isolation.md), [refactor](plans/2026-10-01-refactor-round.md).
+2. First decisive verdict: quick start, [model A/B](plans/2026-10-01-model-ab.md); [Java and Rust](plans/2026-09-30-java-rust.md).
+3. Cheaper verdicts: a statistics note, then run reuse and sequential stopping.
+4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, scheduled watch.
+5. Later: Codex.
+
+[Judge](plans/2026-10-01-llm-judge.md) (a second opinion): done per run and in experiments; reports and a real check next; pairs and tickets after a gate.

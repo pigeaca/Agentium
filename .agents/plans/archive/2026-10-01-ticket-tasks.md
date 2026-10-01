@@ -1,8 +1,8 @@
 # Tasks from tickets, graded without tests
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 1 in its PR. Step 2 needs the [per-run judge](2026-10-01-llm-judge.md)'s step 2 (#54). Live Jira needs its own approval (credentials and a live integration). The real check is paid and needs approval.
-- Scope: the user's question on 2026-09-30 about using "some specific Jira task" in an A/B, and the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) that lists grading tasks without tests as a later use.
+- Status: Parked (2026-10-01): step 1 merged (#55: tickets and judge-graded tasks, which experiments refuse for now). Step 2 (the judge as grader) and the rest wait for the judge gate in the [next chapter](../2026-10-01-next-chapter.md). Resume from this file.
+- Scope: the user's question on 2026-09-30 about using "some specific Jira task" in an A/B, and the [decision](../../decisions/2026-10-01-llm-judge-alongside-tests.md) that lists grading tasks without tests as a later use.
 
 ## Why
 - **Today:** a task needs hidden tests. `task add --instruction-file` can already take a ticket's text, but a fix whose pull request added no tests cannot be graded.
@@ -18,7 +18,7 @@
   - success is reported in two separate metrics: tests' success and the judge's success;
   - a verdict is never computed over the two together;
   - floors apply to each metric separately.
-- **Later step (approval): live Jira.** `task import --jira KEY` fetches the ticket and finds its linked pull request. It needs a Jira URL and an API token, under the [secrets](../rules/secrets.md) rules.
+- **Later step (approval): live Jira.** `task import --jira KEY` fetches the ticket and finds its linked pull request. It needs a Jira URL and an API token, under the [secrets](../../rules/secrets.md) rules.
 
 ## Acceptance
 1. **Ticket files:** the Jira JSON and Markdown parsers have fixtures; the instruction is built from title, description and acceptance criteria; HTML and Jira markup are converted to plain text.
