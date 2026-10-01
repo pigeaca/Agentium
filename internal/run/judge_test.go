@@ -11,6 +11,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -176,11 +177,22 @@ func TestJudgeFailuresNeverChangeTheRun(t *testing.T) {
 	if rec.Judge != nil || len(rec.Notes) != 1 {
 		t.Errorf("a reference without code: verdict %+v, notes %v", rec.Judge, rec.Notes)
 	}
-	env, spec, rec = judgeFixture(t, "exit 0\n")
-	os.Remove(filepath.Join(rec.RecordsDir, "agent.diff"))
-	env.Judge(context.Background(), spec, judge.Settings{}, &rec)
-	if rec.Judge != nil || len(rec.Notes) != 1 || !strings.Contains(rec.Notes[0], "the run's diff") {
-		t.Errorf("a run without its diff: verdict %+v, notes %v", rec.Judge, rec.Notes)
+	// What can never be judged gets a final verdict without cost, so resumes leave it: a missing diff, a reference diff
+	// that fails or changes no code. An earlier "not judged:" note goes once a verdict is stored.
+	for name, change := range map[string]func(*Spec, *Record){
+		"no diff":         func(_ *Spec, r *Record) { os.Remove(filepath.Join(r.RecordsDir, "agent.diff")) },
+		"bad reference":   func(s *Spec, _ *Record) { s.Task.Solution = strings.Repeat("0", 40) },
+		"no code changed": func(s *Spec, _ *Record) { s.Task.Reference = []string{"tests/value_test.sh", "other.txt"} },
+	} {
+		env, spec, rec = judgeFixture(t, "exit 0\n")
+		rec.Notes = []string{"not judged: an earlier attempt", "kept"}
+		change(&spec, &rec)
+		env.Judge(context.Background(), spec, judge.Settings{}, &rec)
+		v := rec.Judge
+		if v == nil || v.Fixed != "" || v.Stopped != "" || len(v.Errors) != 1 || v.CostUSD != 0 || NeedsJudging(rec, spec.Task) ||
+			len(rec.Notes) != 1 || rec.Notes[0] != "kept" || !strings.HasPrefix(Describe(*v), "no answer: ") {
+			t.Errorf("%s: verdict %+v, notes %v", name, v, rec.Notes)
+		}
 	}
 	env, spec, rec = judgeFixture(t, "exit 0\n")
 	rec.Passed = nil
@@ -210,5 +222,61 @@ func TestJudgeInterrupted(t *testing.T) {
 	}
 	if rec.Outcome != claude.OutcomeOK || !*rec.Passed {
 		t.Errorf("the run changed: %+v", rec)
+	}
+}
+
+// Each call's cost reaches the spend hook as it lands, added to an earlier verdict's: what Once keeps in the start file.
+func TestJudgeReportsItsSpendAsItGoes(t *testing.T) {
+	env, spec, rec := judgeFixture(t, "cat > /dev/null\necho '{\"type\":\"result\",\"is_error\":false,\"structured_output\":{\"fixed\":\"yes\",\"reason\":\"r\"},\"total_cost_usd\":0.05}'\n")
+	var seen []float64
+	env.judgeSpent = func(usd float64) { seen = append(seen, usd) }
+	rec.Judge = &judge.Verdict{Stopped: judge.StoppedLimit, CostUSD: 0.01}
+	env.Judge(context.Background(), spec, judge.Settings{Repeats: 3}, &rec)
+	if len(seen) != 3 || seen[0] < 0.0599 || seen[0] > 0.0601 || seen[2] < 0.1599 || seen[2] > 0.1601 {
+		t.Errorf("spend as it went: %v, want $0.06, $0.11, $0.16", seen)
+	}
+}
+
+// A run graded and marked finished, whose Agentium died while judging, is stored as finished: its records are redacted
+// and the judge's folder (with its config and sign-in) removed.
+func TestRecoverAJudgementCutShort(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir := filepath.Join(layout.Records, "r1")
+	for p, body := range map[string]string{
+		"stream.jsonl":              `{"type":"result","result":"token tok-secret-1234567890"}` + "\n",
+		"agent.diff":                "+tok-secret-1234567890\n",
+		"judge/config/.claude.json": `{"token":"tok-secret-1234567890"}`,
+		"judge/call-1/placeholder":  "",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	passed := true
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Outcome: claude.OutcomeOK, Passed: &passed, RecordsDir: dir,
+		Judge: &judge.Verdict{Stopped: judge.StoppedCall, CostUSD: 0.05, Errors: []string{"Agentium stopped while judging"}}}
+	if err := (Env{}).writeStart(start{Record: rec, Workspace: filepath.Join(layout.Workspaces, "r1"), AgentStarted: true, Finished: true}); err != nil {
+		t.Fatal(err)
+	}
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "tok-secret-1234567890", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	got := orphans[0].Record
+	if got.Recovered != RecoveredFinished || got.Judge == nil || got.Judge.CostUSD != 0.05 || !NeedsJudging(got, task.Spec{Solution: "s", Reference: []string{"a.go"}}) {
+		t.Errorf("recovered %+v, verdict %+v: the judge's spend so far, judged again on resume", got, got.Judge)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "judge")); err == nil {
+		t.Error("the judge's folder was left behind")
+	}
+	for _, name := range []string{"stream.jsonl", "agent.diff"} {
+		if data, err := os.ReadFile(filepath.Join(dir, name)); err != nil || strings.Contains(string(data), "tok-secret") || !strings.Contains(string(data), "[REDACTED]") {
+			t.Errorf("%s not redacted: %s %v", name, data, err)
+		}
 	}
 }

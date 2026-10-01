@@ -92,6 +92,9 @@ type Env struct {
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
+	// judgeSpent, when set, learns what a judgement has spent so far (its earlier verdict's included) after each call
+	// that reported a cost: Once keeps it in the start file, so a crash while judging loses none of it.
+	judgeSpent func(usd float64)
 }
 
 // BuildEnv points the caches and temporary files of the commands Agentium runs itself (setup, validation, grading) into
@@ -425,14 +428,28 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return unfinished(err)
 		}
 		if spec.Judge != nil {
-			// The graded run is complete: if Agentium dies while judging, recovery stores it as finished, without a
-			// verdict, and a resume judges it.
+			// The graded run is complete. Judging can take repeats × judge.CallTimeout, so the records are redacted and
+			// the start file marked finished first: if Agentium dies while judging, recovery stores the graded run (not a
+			// cancelled one) with what the judge spent so far, as a verdict stopped early that a resume judges again.
+			if err := env.redactRecords(rec.RecordsDir); err != nil {
+				return unfinished(err)
+			}
 			rec.Finished = env.Now().UTC() // the deferred write sets it again once judged
 			if err := writeStart(true); err != nil {
 				return unfinished(err)
 			}
+			settings := spec.Judge.WithDefaults()
+			judging := env
+			judging.judgeSpent = func(usd float64) {
+				partial := rec
+				partial.Judge = &judge.Verdict{Version: judge.Version, Answers: []string{}, Reasons: []string{}, Requested: settings.Repeats,
+					Model: settings.Model, Effort: settings.Effort, CostUSD: usd, Stopped: judge.StoppedCall,
+					Errors: []string{"Agentium stopped while judging"}}
+				// Best effort: the final write follows, and a failure here only risks this spend if Agentium also dies.
+				_ = env.writeStart(start{Record: partial, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: true, Meta: env.Meta})
+			}
 			env.step("judging")
-			env.Judge(ctx, spec, *spec.Judge, &rec)
+			judging.Judge(ctx, spec, *spec.Judge, &rec)
 		}
 	}
 	return rec, nil

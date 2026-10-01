@@ -2,9 +2,11 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/claude"
@@ -50,13 +52,15 @@ func (r Record) JudgeCostUSD() float64 {
 
 // Judge asks the judge s about a graded run (rec.Passed set) and stores its verdict in rec.Judge. It reads the task's
 // instruction, the reference solution's code diff and the run's agent.diff from its records. The judge never decides
-// anything: whatever happens here leaves the run's outcome, Passed and Metrics as they were, and a judge that cannot
-// judge leaves a note instead of a verdict (a task without a reference in code, a missing diff, a judge that could not
-// start).
+// anything: whatever happens here leaves the run's outcome, Passed and Metrics as they were.
+//   - A task without a reference in code (HasReferenceCode) gets a note and no verdict: NeedsJudging is false for it.
+//   - A run that can never be judged (its diff is missing, the reference diff fails or changes no code) gets a final,
+//     cost-free verdict with the reason in Errors, so resumes do not try it again.
+//   - What may pass (an interrupt, a judge folder that cannot be made, an instruction file above it) gets a verdict
+//     stopped with judge.StoppedCall, which a resume judges again; an interrupt keeps what was spent.
 //
 // A run judged before (a verdict that stopped early, judged again on resume) keeps its earlier spend: the new verdict's
-// CostUSD adds it, since it was spent all the same. An interrupt keeps what was spent too, as a verdict stopped with
-// judge.StoppedCall, so a resume judges the run again.
+// CostUSD adds it, since it was spent all the same. A stored verdict replaces the run's earlier "not judged:" notes.
 //
 // The calls start in an empty folder in the run's records, which agents may not read, and which is removed afterwards;
 // with an API key or a token, Claude Code gets a fresh config folder there too.
@@ -64,26 +68,60 @@ func (env Env) Judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 	if rec.Passed == nil {
 		return
 	}
-	note := func(format string, a ...any) {
-		rec.Notes = append(rec.Notes, "not judged: "+fmt.Sprintf(format, a...))
-	}
 	if !HasReferenceCode(spec.Task) {
-		note("the task has no reference solution in code to judge against")
+		rec.Notes = append(rec.Notes, "not judged: the task has no reference solution in code to judge against")
 		return
+	}
+	s = s.WithDefaults()
+	priorCost := rec.JudgeCostUSD()
+	blank := func() judge.Verdict {
+		return judge.Verdict{Version: judge.Version, Answers: []string{}, Reasons: []string{}, Requested: s.Repeats, Model: s.Model,
+			Effort: s.Effort, CostUSD: priorCost}
+	}
+	keep := func(v judge.Verdict) {
+		// Claude Code's texts may quote what it was given or its environment: redacted like every record.
+		redact := func(text string) string { return string(Redact([]byte(text), env.Secret)) }
+		v.Reason = redact(v.Reason)
+		for i := range v.Reasons {
+			v.Reasons[i] = redact(v.Reasons[i])
+		}
+		for i := range v.Errors {
+			v.Errors[i] = redact(v.Errors[i])
+		}
+		rec.Notes = slices.DeleteFunc(rec.Notes, func(n string) bool { return strings.HasPrefix(n, "not judged: ") })
+		rec.Judge = &v
+		env.progress("  judge: %s, $%.2f", Describe(v), v.CostUSD)
+	}
+	final := func(err error) { // never judged again
+		v := blank()
+		v.Errors = []string{err.Error()}
+		keep(v)
+	}
+	again := func(err error) { // judged again on resume
+		v := blank()
+		v.Stopped, v.Errors = judge.StoppedCall, []string{err.Error()}
+		if ctx.Err() != nil {
+			v.Errors = []string{"interrupted: " + err.Error()}
+		}
+		keep(v)
 	}
 	reference, err := judge.ReferenceDiff(ctx, env.Bare, spec.Task.Base, spec.Task.Solution, spec.Task.Reference)
 	if err != nil {
-		note("%v", err)
+		if ctx.Err() != nil {
+			again(err)
+		} else {
+			final(err)
+		}
 		return
 	}
 	candidate, err := os.ReadFile(filepath.Join(rec.RecordsDir, "agent.diff"))
 	if err != nil {
-		note("the run's diff: %v", err)
+		final(fmt.Errorf("the run's diff: %w", err))
 		return
 	}
 	dir := filepath.Join(rec.RecordsDir, "judge")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		note("judge folder: %v", err)
+		again(fmt.Errorf("judge folder: %w", err))
 		return
 	}
 	defer os.RemoveAll(dir)
@@ -91,40 +129,41 @@ func (env Env) Judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 	if env.SignIn != claude.SignInLogin {
 		j.ConfigDir = filepath.Join(dir, "config")
 		if err := os.MkdirAll(j.ConfigDir, 0o700); err != nil {
-			note("judge folder: %v", err)
+			again(fmt.Errorf("judge folder: %w", err))
 			return
 		}
 	}
 	// The same settings to both: Judge counts the repeats, the caller sets the model and effort of each call.
 	call, err := judge.ClaudeCaller(s, j, env.Environ, 0)
 	if err != nil {
-		note("%v", err)
+		again(err)
 		return
 	}
-	prior := rec.Judge
+	if env.judgeSpent != nil { // each call's reported cost as it lands, so a crash loses none of it
+		inner, spent := call, 0.0
+		call = func(ctx context.Context, prompt string) (judge.Reply, error) {
+			reply, err := inner(ctx, prompt)
+			var out struct {
+				CostUSD float64 `json:"total_cost_usd"`
+			}
+			if err == nil && json.Unmarshal(reply.Stdout, &out) == nil && out.CostUSD > 0 {
+				spent += out.CostUSD
+				env.judgeSpent(priorCost + spent)
+			}
+			return reply, err
+		}
+	}
 	v, err := judge.Judge(ctx, judge.Input{Instruction: spec.Instruction, Reference: reference, Candidate: string(candidate)}, s, call)
+	v.CostUSD += priorCost
 	if err != nil {
 		if ctx.Err() == nil { // the reference changes no code: nothing was spent
-			note("%v", err)
+			final(err)
 			return
 		}
 		v.Stopped = judge.StoppedCall
 		v.Errors = append(v.Errors, "interrupted: "+err.Error())
 	}
-	if prior != nil {
-		v.CostUSD += prior.CostUSD
-	}
-	// Claude Code's texts may quote what it was given or its environment: redacted like every record.
-	redact := func(text string) string { return string(Redact([]byte(text), env.Secret)) }
-	v.Reason = redact(v.Reason)
-	for i := range v.Reasons {
-		v.Reasons[i] = redact(v.Reasons[i])
-	}
-	for i := range v.Errors {
-		v.Errors[i] = redact(v.Errors[i])
-	}
-	rec.Judge = &v
-	env.progress("  judge: %s, $%.2f", Describe(v), v.CostUSD)
+	keep(v)
 }
 
 // Describe is a verdict in a few words: the answer and how many repeats agreed, or why there is none.
@@ -139,6 +178,8 @@ func Describe(v judge.Verdict) string {
 	switch {
 	case v.Empty:
 		text = "not asked (the run changed no code)"
+	case v.Fixed == "" && v.Stopped == "" && len(v.Errors) > 0:
+		text = "no answer: " + lastOf(v.Errors)
 	case v.Fixed == "":
 		text = "no answer"
 	case v.Fixed == judge.Yes:
