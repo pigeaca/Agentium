@@ -15,8 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/gitx"
+	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -26,9 +28,14 @@ import (
 )
 
 const taskUsage = `Usage:
-  agentium task add NAME --base REF (--instruction TEXT | --instruction-file FILE) [--solution REF] [--accept-gaps]
-                         [--setup CMD]... [--verify CMD]...
-                         a task by hand; with --solution, its test-file changes are the hidden tests
+  agentium task add NAME --base REF (--instruction TEXT | --instruction-file FILE | --ticket-file FILE)
+                         [--solution REF [--judge-graded]] [--accept-gaps] [--setup CMD]... [--verify CMD]...
+                         a task by hand; with --solution, its test-file changes are the hidden tests.
+                         --ticket-file reads an exported ticket (Jira's JSON export of one issue, or Markdown: a
+                         title, a description and an "Acceptance criteria" section) into the instruction, keeps its key
+                         as the source (ticket ABC-123) and asks for a review of the result; its --solution may change
+                         no test files, and the task is then judge-graded. --judge-graded asks the same of a solution
+                         without a ticket (without it, such a solution is refused)
   agentium task import (--commit REF | --pr N) [--name NAME] [--setup CMD]... [--verify CMD]...
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh)
@@ -47,6 +54,10 @@ const taskUsage = `Usage:
                          hidden tests", a warning that leaves the task valid; a later task validate without
                          --weak-tests replaces the stored result, so rerun with it to keep the list
   agentium task rm NAME
+
+Judge-graded tasks have no hidden tests: their runs are to be graded by the judge against the reference solution.
+task validate checks that the reference changes code and the instruction says something, and runs nothing.
+Experiments and run once do not take them yet.
 
 task show and task validate list what the hidden tests require that neither the instruction nor the base code states
 (exact texts; for Go also new names); task list counts them. A task that becomes reviewed (task add --solution, task edit --instruction or --reviewed)
@@ -137,6 +148,8 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	base := fs.String("base", "", "the commit the agent starts from")
 	solution := fs.String("solution", "", "a commit that solves the task: its test-file changes become the hidden tests")
 	instruction := addInstructionFlags(fs)
+	ticketFile := fs.String("ticket-file", "", "read the instruction from an exported ticket (Jira JSON or Markdown)")
+	judgeGraded := fs.Bool("judge-graded", false, "with --solution that changes no test files: grade runs with the judge")
 	acceptGaps := fs.Bool("accept-gaps", false, "accept the requirements the hidden tests have that nothing states")
 	var verify, setup stringList
 	fs.Var(&verify, "verify", "a verification command (repeatable)")
@@ -149,17 +162,43 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, taskUsage)
 		return ExitUsage
 	}
-	text, err := instruction.value(env)
-	if err != nil || text == "" {
-		fmt.Fprintf(env.Stderr, "agentium task add: an instruction is required (--instruction or --instruction-file)%s\n", errSuffix(err))
+	if *judgeGraded && *solution == "" {
+		fmt.Fprintln(env.Stderr, "agentium task add: --judge-graded needs --solution: the judge compares runs with the reference solution")
 		return ExitUsage
+	}
+	t := store.Task{Name: rest[0], Source: "manual", Verify: verify, Setup: setup, CreatedAt: env.Now()}
+	judging := judgeNever
+	switch {
+	case *judgeGraded:
+		judging = judgeRequired
+	case *ticketFile != "":
+		judging = judgeAllowed
+	}
+	if *ticketFile != "" {
+		if *instruction.text != "" || *instruction.file != "" {
+			fmt.Fprintln(env.Stderr, "agentium task add: give --ticket-file or --instruction/--instruction-file, not both")
+			return ExitUsage
+		}
+		ticket, err := readTicket(env, *ticketFile)
+		if err != nil {
+			return fail(env, err)
+		}
+		// The text was converted, not written by the user: it is reviewed like an imported one before experiments.
+		t.Instruction, t.Source, t.NeedsReview = ticket.Instruction(), strings.TrimSpace("ticket "+ticket.Key), true
+	} else {
+		text, err := instruction.value(env)
+		if err != nil || text == "" {
+			fmt.Fprintf(env.Stderr, "agentium task add: an instruction is required (--instruction, --instruction-file or --ticket-file)%s\n", errSuffix(err))
+			return ExitUsage
+		}
+		t.Instruction = text
 	}
 	w, err := openProject(ctx, env)
 	if err != nil {
 		return fail(env, err)
 	}
 	defer w.Close()
-	t := store.Task{ProjectID: w.project.ID, Name: rest[0], Instruction: text, Source: "manual", Verify: verify, Setup: setup, CreatedAt: env.Now()}
+	t.ProjectID = w.project.ID
 	if t.BaseCommit, err = w.keepCommit(ctx, *base); err != nil {
 		return fail(env, err)
 	}
@@ -168,8 +207,44 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	return saveTask(ctx, env, w, t, *acceptGaps)
+	return saveTask(ctx, env, w, t, *acceptGaps, judging)
 }
+
+// maxTicketBytes bounds a ticket file: one exported issue is far smaller.
+const maxTicketBytes = 1 << 20
+
+// readTicket reads and parses an exported ticket file (relative to the working directory).
+func readTicket(env Env, file string) (task.Ticket, error) {
+	if !filepath.IsAbs(file) {
+		file = filepath.Join(env.Dir, file)
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return task.Ticket{}, fmt.Errorf("read ticket: %w", err)
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxTicketBytes+1))
+	if err != nil {
+		return task.Ticket{}, fmt.Errorf("read ticket: %w", err)
+	}
+	if len(data) > maxTicketBytes {
+		return task.Ticket{}, fmt.Errorf("ticket %s is larger than %d KiB: export one issue, without attachments", filepath.Base(file), maxTicketBytes>>10)
+	}
+	ticket, err := task.ParseTicket(file, data)
+	if err != nil {
+		return task.Ticket{}, fmt.Errorf("ticket %s: %w", filepath.Base(file), err)
+	}
+	return ticket, nil
+}
+
+// judging says whether a task may, or must, be judge-graded.
+type judging int
+
+const (
+	judgeNever    judging = iota // a solution without test changes is refused (task import, task add without a ticket)
+	judgeAllowed                 // a solution without test changes makes the task judge-graded (task add --ticket-file)
+	judgeRequired                // the solution must change no test files (task add --judge-graded)
+)
 
 func taskImport(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("task import", flag.ContinueOnError)
@@ -226,11 +301,11 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 		subject, _, _ := strings.Cut(t.Instruction, "\n")
 		t.Name = taskName(subject, t.SolutionCommit)
 	}
-	return saveTask(ctx, env, w, t, false)
+	return saveTask(ctx, env, w, t, false, judgeNever)
 }
 
-// saveTask splits the solution, fills in defaults, stores the task and reports it.
-func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGaps bool) int {
+// saveTask splits the solution, sets the grading mode, fills in defaults, stores the task and reports it.
+func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGaps bool, judging judging) int {
 	if !snapshot.ValidName(t.Name) {
 		fmt.Fprintf(env.Stderr, "agentium task: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63)\n", t.Name)
 		return ExitUsage
@@ -249,8 +324,16 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 			return fail(env, err)
 		}
 		switch {
+		case len(t.HiddenTests) == 0 && len(t.Reference) == 0:
+			return fail(env, fmt.Errorf("%s changes no files against the base, so there is nothing to implement", shortCommit(t.SolutionCommit)))
+		case len(t.HiddenTests) == 0 && judging != judgeNever:
+			t.Grading = task.GradingJudge
 		case len(t.HiddenTests) == 0:
-			return fail(env, fmt.Errorf("%s changes no test files, so there are no hidden tests to check a solution with", shortCommit(t.SolutionCommit)))
+			return fail(env, fmt.Errorf("%s changes no test files, so there are no hidden tests to check a solution with (to grade it with the judge instead: task add --judge-graded)",
+				shortCommit(t.SolutionCommit)))
+		case judging == judgeRequired:
+			return fail(env, fmt.Errorf("--judge-graded is for solutions without tests, but %s changes %d test file(s): leave the flag out to grade by them",
+				shortCommit(t.SolutionCommit), len(t.HiddenTests)))
 		case len(t.Reference) == 0:
 			return fail(env, fmt.Errorf("%s changes only test files, so there is nothing for an agent to implement", shortCommit(t.SolutionCommit)))
 		}
@@ -268,19 +351,54 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	} else if err != nil {
 		return fail(env, err)
 	}
-	fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, %d hidden test file(s), %d reference file(s)\n",
-		saved.Name, saved.Source, shortCommit(saved.BaseCommit), len(saved.HiddenTests), len(saved.Reference))
+	if saved.Grading == task.GradingJudge {
+		fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, judge-graded (no hidden tests), %d reference file(s)\n",
+			saved.Name, saved.Source, shortCommit(saved.BaseCommit), len(saved.Reference))
+	} else {
+		fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, %d hidden test file(s), %d reference file(s)\n",
+			saved.Name, saved.Source, shortCommit(saved.BaseCommit), len(saved.HiddenTests), len(saved.Reference))
+	}
 	if len(saved.Setup) > 0 {
 		fmt.Fprintf(env.Stdout, "  setup:  %s\n", strings.Join(saved.Setup, "; "))
 	}
 	fmt.Fprintf(env.Stdout, "  verify: %s\n", strings.Join(saved.Verify, "; "))
 	st := env.style()
+	if saved.Grading == task.GradingJudge {
+		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote))
+	}
+	if sections := task.SolutionSections(saved.Instruction); saved.NeedsReview && len(sections) > 0 {
+		fmt.Fprintln(env.Stdout, st.Warn("The instruction has sections that may give the solution away: "+strings.Join(sections, ", ")))
+	}
 	if saved.NeedsReview {
-		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review the instruction for solution leaks (it came from history)"),
+		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review the instruction "+reviewReason(saved)),
 			st.Command("agentium task show "+saved.Name), st.Command("task edit "+saved.Name+" --instruction-file FILE")+" or "+st.Command("--reviewed"))
 	}
 	fmt.Fprintf(env.Stdout, "Next: %s\n", st.Command("agentium task validate "+saved.Name))
 	return ExitOK
+}
+
+// judgeGradedNote says what judge grading means for a task today.
+const judgeGradedNote = "runs of this task are graded by the judge, which compares each run's change with the reference solution " +
+	"(there are no hidden tests); experiments and run once take judge-graded tasks in a later version"
+
+// reviewReason says why a task's instruction needs a review: a ticket's was converted, history's may leak the solution.
+func reviewReason(t store.Task) string {
+	if isTicket(t) {
+		return "(converted from a ticket: check it reads right and does not leak the solution)"
+	}
+	return "for solution leaks (it came from history)"
+}
+
+func isTicket(t store.Task) bool {
+	return t.Source == "ticket" || strings.HasPrefix(t.Source, "ticket ")
+}
+
+// grading is a task's grading mode as shown (tasks stored before judge grading have none set by the store's default).
+func grading(t store.Task) string {
+	if t.Grading == "" {
+		return task.GradingTests
+	}
+	return t.Grading
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
@@ -447,7 +565,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	fair := task.NewFairness("--git-dir", w.bare)
 	st := env.style()
-	table := term.NewTable(st, term.Left("NAME"), term.Left("SOURCE"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS"))
+	table := term.NewTable(st, term.Left("NAME"), term.Left("SOURCE"), term.Left("GRADED BY"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS"))
 	for _, t := range tasks {
 		status := st.Status(validationStatus(t))
 		if t.NeedsReview {
@@ -461,7 +579,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		} else if len(gaps) > 0 {
 			status += st.Warn(fmt.Sprintf(" (%d unstated requirement(s))", len(gaps)))
 		}
-		table.Row(t.Name, t.Source, strconv.Itoa(len(t.HiddenTests)), strconv.Itoa(len(t.Reference)), status)
+		table.Row(t.Name, t.Source, grading(t), strconv.Itoa(len(t.HiddenTests)), strconv.Itoa(len(t.Reference)), status)
 	}
 	if err := table.Write(env.Stdout); err != nil {
 		return fail(env, err)
@@ -577,15 +695,25 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(out, "  setup      %s\n", strings.Join(t.Setup, "; "))
 	}
 	fmt.Fprintf(out, "  verify     %s\n", strings.Join(t.Verify, "; "))
-	fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
+	fmt.Fprintf(out, "  graded by  %s\n", grading(t))
+	if t.Grading == task.GradingJudge {
+		fmt.Fprintln(out, "  hidden     none (judge-graded)")
+	} else {
+		fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
+	}
 	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
 	fmt.Fprintf(out, "  status     %s\n", st.Status(validationStatus(t)))
 	var stored task.Validation
 	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
 		printWeakTests(out, st, stored.WeakTests)
 	}
+	if t.Grading == task.GradingJudge {
+		fmt.Fprintln(out, note(st, judgeGradedNote))
+	}
 	gaps, gapErr := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
-	if t.NeedsReview {
+	if t.NeedsReview && isTicket(t) {
+		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(converted from a ticket; review it, then task edit)")+st.Heading(":"))
+	} else if t.NeedsReview {
 		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(from history; review it for solution leaks, then task edit)")+st.Heading(":"))
 	} else {
 		fmt.Fprintln(out, st.Heading("Instruction:"))
@@ -697,6 +825,19 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if t.Grading == task.GradingJudge {
+		var notApplied []string
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name != "weak-tests" && f.Name != "max-hunks" {
+				notApplied = append(notApplied, "--"+f.Name)
+			}
+		})
+		if *weak {
+			fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs hidden tests; %s is judge-graded and has none\n", t.Name)
+			return ExitUsage
+		}
+		return validateJudged(ctx, env, w, t, notApplied)
+	}
 	if *weak && (t.SolutionCommit == "" || len(t.Reference) == 0 || len(t.HiddenTests) == 0) {
 		fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs a task with a solution (hidden tests and a reference); %s has none\n", t.Name)
 		return ExitUsage
@@ -753,6 +894,53 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	printWeakTests(env.Stdout, st, result.WeakTests)
 	fmt.Fprintf(env.Stdout, "Result: %s %s\n", st.Status(result.Summary()), st.Note("(logs: "+v.LogDir+")"))
 	if result.Status == task.StatusInvalid || result.Status == task.StatusFlaky {
+		return ExitError
+	}
+	return ExitOK
+}
+
+// validateJudged checks a judge-graded task without running anything (task.ValidateJudged) and stores the result.
+// notApplied lists the flags given that only apply to running checks.
+func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, notApplied []string) int {
+	out, st := env.Stdout, env.style()
+	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Checking judge-graded task %s", t.Name)))
+	if len(notApplied) > 0 {
+		fmt.Fprintln(out, note(st, strings.Join(notApplied, ", ")+" do(es) not apply: nothing runs for a judge-graded task"))
+	}
+	var diff string
+	if len(task.JudgedFiles(t.Reference)) > 0 && t.SolutionCommit != "" {
+		var err error
+		if diff, err = llmjudge.ReferenceDiff(ctx, w.bare, t.BaseCommit, t.SolutionCommit, t.Reference); err != nil {
+			return fail(env, err)
+		}
+	}
+	result := task.ValidateJudged(t.Instruction, t.Reference, diff, env.Now())
+	var err error
+	if t.Validation, err = json.Marshal(result); err != nil {
+		return fail(env, fmt.Errorf("encode validation: %w", err))
+	}
+	if err := w.db.UpdateTask(ctx, t, env.Now()); err != nil {
+		return fail(env, err)
+	}
+	words := len(strings.Fields(t.Instruction))
+	fmt.Fprintf(out, "  instruction  %d word(s)\n", words)
+	fmt.Fprintf(out, "  reference    %d code file(s), %d changed line(s): %s\n", len(result.Judge.CodeFiles), result.Judge.ChangedLines,
+		orNone(strings.Join(result.Judge.CodeFiles, ", ")))
+	if skipped := len(t.Reference) - len(result.Judge.CodeFiles); skipped > 0 {
+		fmt.Fprintln(out, note(st, fmt.Sprintf("%d reference file(s) are documents the judge does not compare", skipped)))
+	}
+	if chars := utf8.RuneCountInString(diff); chars > llmjudge.MaxDiffChars {
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The reference diff has %d characters; the judge reads the first %d, so it will see a cut copy "+
+			"(the task stays valid)", chars, llmjudge.MaxDiffChars)))
+	}
+	fmt.Fprintln(out, note(st, "hidden-test checks are skipped: there are no hidden tests"))
+	fmt.Fprintln(out, note(st, judgeGradedNote))
+	if t.NeedsReview {
+		fmt.Fprintf(out, "%s: %s\n", st.Warn("The instruction is not reviewed yet"), st.Command("agentium task show "+t.Name)+", then "+
+			st.Command("task edit "+t.Name+" --reviewed"))
+	}
+	fmt.Fprintf(out, "Result: %s\n", st.Status(result.Summary()))
+	if result.Status == task.StatusInvalid {
 		return ExitError
 	}
 	return ExitOK

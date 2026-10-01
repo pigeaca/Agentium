@@ -333,6 +333,7 @@ type Task struct {
 	Setup          []string // run in a fresh checkout before anything else
 	Verify         []string
 	NeedsReview    bool
+	Grading        string // "tests" or "judge" (task.GradingTests, task.GradingJudge); SaveTask stores "" as "tests"
 	Validation     []byte // JSON; nil until validated
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
@@ -340,16 +341,19 @@ type Task struct {
 
 // SaveTask records a new task; names are unique per project (ErrExists).
 func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
+	if task.Grading == "" {
+		task.Grading = "tests" // the column's default, and every task's mode before judge grading
+	}
 	lists, err := encodeLists(task.HiddenTests, task.Reference, task.Verify, task.Setup)
 	if err != nil {
 		return Task{}, fmt.Errorf("save task %q: %w", task.Name, err)
 	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO tasks (project_id, name, instruction, source, base_commit, solution_commit, hidden_tests,
-		                   reference_files, verify, setup, needs_review, validation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   reference_files, verify, setup, needs_review, grading, validation, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ProjectID, task.Name, task.Instruction, task.Source, task.BaseCommit, task.SolutionCommit, lists[0], lists[1],
-		lists[2], lists[3], task.NeedsReview, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt))
+		lists[2], lists[3], task.NeedsReview, task.Grading, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt))
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return Task{}, fmt.Errorf("task %q: %w", task.Name, ErrExists)
@@ -365,6 +369,7 @@ func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
 }
 
 // UpdateTask stores a task's editable fields: instruction, setup and verification commands, review flag and validation.
+// The grading mode is fixed when the task is saved.
 func (s *Store) UpdateTask(ctx context.Context, task Task, now time.Time) error {
 	lists, err := encodeLists(task.Verify, task.Setup)
 	if err != nil {
@@ -415,7 +420,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) er
 func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
-		       verify, setup, needs_review, validation, created_at, updated_at
+		       verify, setup, needs_review, grading, validation, created_at, updated_at
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -426,7 +431,7 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		var task Task
 		var hidden, reference, verify, setup, validation, created, updated string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
-			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &validation, &created, &updated); err != nil {
+			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {

@@ -181,13 +181,18 @@ func (d Design) Validate() error {
 type Candidate struct {
 	Name        string
 	NeedsReview bool
+	Grading     string           // task.GradingTests (or "") or task.GradingJudge
 	Validation  *task.Validation // nil when never validated
 }
 
 // Ineligible says why a task cannot be in an experiment with these arms, or returns "" when it can: it must be
 // reviewed for solution leaks, and its hidden tests must fail on the base and pass with the reference in every arm's
-// context (the last `task validate`).
+// context (the last `task validate`). Judge-graded tasks are refused: experiments grade by tests only, and must not
+// count such a task's runs as if its verification commands decided them.
 func Ineligible(c Candidate, arms []Arm) string {
+	if c.Grading == task.GradingJudge {
+		return "it is judge-graded (its solution has no tests); experiments take judge-graded tasks in a later version"
+	}
 	if c.NeedsReview {
 		return fmt.Sprintf("its instruction needs a review for solution leaks (then: agentium task edit %s --reviewed)", c.Name)
 	}

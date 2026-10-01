@@ -1,0 +1,17 @@
+{
+  "expand": "renderedFields,names,schema",
+  "id": "10042",
+  "key": "SHOP-42",
+  "fields": {
+    "summary": "Reject empty cart checkout",
+    "description": "Checking out an empty cart creates an order with no items.\n\nCheckout should refuse it with a clear error instead.",
+    "customfield_10037": "* Checkout of an empty cart returns the error \"cart is empty\"\n* No order is stored\n** not even a draft",
+    "status": {"name": "Done"},
+    "comment": {"comments": [{"body": "Fixed in the checkout service: check len(items) first."}]}
+  },
+  "names": {
+    "summary": "Summary",
+    "description": "Description",
+    "customfield_10037": "Acceptance Criteria"
+  }
+}

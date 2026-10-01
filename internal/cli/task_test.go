@@ -313,3 +313,115 @@ func TestTaskRefusesInlineRustTests(t *testing.T) {
 	}
 	expect(t, run("task", "validate", "old"), ExitError, reason)
 }
+
+func TestTaskTicketsAndJudgeGrading(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, repo, "cart.txt", "allow empty\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	base := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, repo, "cart.txt", "refuse empty\n")
+	gitIn(t, repo, "commit", "-q", "-am", "Refuse empty carts")
+	noTests := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	writeFile(t, repo, "tests/cart_test.sh", "grep -q refuse cart.txt\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Test it")
+	withTests := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	gitIn(t, repo, "checkout", "-q", "-b", "docs", base)
+	writeFile(t, repo, "README.md", "Carts.\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Docs")
+	docsOnly := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	gitIn(t, repo, "checkout", "-q", "-b", "big", base)
+	writeFile(t, repo, "big.txt", strings.Repeat("a line of generated data, 40 chars...\n", 1200))
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Big")
+	big := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	gitIn(t, repo, "checkout", "-q", "main")
+
+	tickets := t.TempDir() // outside the repository, which the commands must leave alone
+	jira, err := os.ReadFile(filepath.Join("..", "task", "testdata", "tickets", "jira-plain.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, tickets, "SHOP-42.json", string(jira))
+	writeFile(t, tickets, "web.md", "# WEB-9: Refuse empty carts\n\nCarts may be empty.\n\n## Acceptance criteria\n- the file says refuse\n")
+	writeFile(t, tickets, "untitled.json", `{"fields":{"description":"no summary"}}`)
+	writeFile(t, tickets, "leaky.md", "# Refuse empty carts\n\nCarts may be empty.\n\n## Root cause\nNo length check.\n")
+	writeFile(t, tickets, "huge.json", `{"fields":{"summary":"x","description":"`+strings.Repeat("x", 1<<20)+`"}}`)
+
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv:   func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now:      func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) },
+		})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	writeFile(t, repo, "CLAUDE.md", "# Rules\n")
+	expect(t, run("context", "snapshot", "lean", "--working-tree"), ExitOK)
+	if err := os.Remove(filepath.Join(repo, "CLAUDE.md")); err != nil {
+		t.Fatal(err)
+	}
+	before := repoState(t, repo)
+	jiraFile, mdFile := filepath.Join(tickets, "SHOP-42.json"), filepath.Join(tickets, "web.md")
+	add := func(name, solution string, extra ...string) cliResult {
+		return run(append([]string{"task", "add", name, "--base", base, "--solution", solution, "--verify", "sh run_tests.sh"}, extra...)...)
+	}
+
+	// Without a ticket or the flag, a solution without tests is refused as before; the error names the way out.
+	expect(t, add("plain", noTests, "--instruction", "Refuse empty carts."), ExitError, "changes no test files", "--judge-graded")
+	expect(t, add("both", noTests, "--ticket-file", jiraFile, "--instruction", "x"), ExitUsage, "--ticket-file or --instruction/--instruction-file, not both")
+	expect(t, run("task", "add", "nosol", "--base", base, "--instruction", "x", "--judge-graded", "--verify", "true"), ExitUsage, "--judge-graded needs --solution")
+	expect(t, add("flagged-tests", withTests, "--instruction", "Refuse empty carts.", "--judge-graded"), ExitError, "is for solutions without tests")
+	expect(t, add("missing", noTests, "--ticket-file", filepath.Join(tickets, "nope.json")), ExitError, "read ticket")
+	expect(t, add("untitled", noTests, "--ticket-file", filepath.Join(tickets, "untitled.json")), ExitError, "ticket untitled.json", "no fields.summary")
+	expect(t, add("nothing", base, "--ticket-file", jiraFile), ExitError, "changes no files")
+	expect(t, add("huge", noTests, "--ticket-file", filepath.Join(tickets, "huge.json")), ExitError, "ticket huge.json is larger than 1024 KiB")
+	expect(t, add("leaky", noTests, "--ticket-file", filepath.Join(tickets, "leaky.md")), ExitOK, "sections that may give the solution away: ## Root cause")
+	expect(t, add("big", big, "--instruction", "Add the data.", "--judge-graded"), ExitOK)
+	expect(t, run("task", "validate", "big"), ExitOK, "the judge reads the first 40000, so it will see a cut copy", "Result: valid")
+
+	// A ticket with a solution without tests makes a judge-graded task, to be reviewed.
+	expect(t, add("shop", noTests, "--ticket-file", jiraFile), ExitOK, "Added task shop (ticket SHOP-42)", "judge-graded (no hidden tests), 1 reference file(s)",
+		"graded by the judge", "Review the instruction (converted from a ticket")
+	// The flag does the same for an instruction the user wrote, which needs no review.
+	flagged := add("flagged", noTests, "--instruction", "Refuse empty carts.", "--judge-graded")
+	expect(t, flagged, ExitOK, "judge-graded (no hidden tests)")
+	if strings.Contains(flagged.stdout, "Review the instruction") {
+		t.Errorf("a hand-written instruction needs no review:\n%s", flagged.stdout)
+	}
+	// A ticket with tests in its solution is graded by them.
+	expect(t, add("web", withTests, "--ticket-file", mdFile), ExitOK, "Added task web (ticket WEB-9)", "1 hidden test file(s)", "converted from a ticket")
+	expect(t, add("docs", docsOnly, "--ticket-file", mdFile), ExitOK, "judge-graded")
+
+	expect(t, run("task", "list"), ExitOK, "GRADED BY", "ticket SHOP-42", "judge", "ticket WEB-9", "tests", "instruction not reviewed")
+	expect(t, run("task", "show", "shop"), ExitOK, "graded by  judge", "hidden     none (judge-graded)", "reference  cart.txt",
+		"converted from a ticket; review it", "Reject empty cart checkout\n", "  Acceptance criteria:\n  - Checkout of an empty cart returns", "graded by the judge")
+	expect(t, run("task", "show", "web"), ExitOK, "graded by  tests", "hidden     tests/cart_test.sh")
+
+	// Validation checks the reference and the instruction, and runs nothing.
+	expect(t, run("task", "validate", "shop", "--repeat", "2", "--snapshot", "lean"), ExitOK, "Checking judge-graded task shop",
+		"--repeat, --snapshot do(es) not apply", "1 code file(s), 2 changed line(s): cart.txt", "hidden-test checks are skipped",
+		"graded by the judge", "The instruction is not reviewed yet", "Result: valid")
+	expect(t, run("task", "validate", "shop", "--weak-tests"), ExitUsage, "is judge-graded and has none")
+	expect(t, run("task", "validate", "docs"), ExitError, "Result: invalid: the reference changes no code")
+	expect(t, run("task", "list"), ExitOK, "invalid: the reference changes no code")
+	expect(t, run("task", "show", "shop"), ExitOK, "status     valid")
+
+	// Experiments and single runs refuse judge-graded tasks until they can grade them.
+	expect(t, run("task", "edit", "shop", "--reviewed"), ExitOK)
+	expect(t, run("experiment", "new", "judged-ab", "--b", "lean", "--task", "shop"), ExitError, "judge-graded")
+	expect(t, run("run", "once", "shop"), ExitError, "is judge-graded")
+	expect(t, run("task", "validate", "web"), ExitOK, "Result: valid") // a ticket's test-graded task validates as before
+
+	if after := repoState(t, repo); after != before {
+		t.Errorf("task commands modified the repository:\nbefore %s\nafter  %s", before, after)
+	}
+}

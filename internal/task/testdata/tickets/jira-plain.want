@@ -1,0 +1,13 @@
+key: SHOP-42
+format: jira
+
+Reject empty cart checkout
+
+Checking out an empty cart creates an order with no items.
+
+Checkout should refuse it with a clear error instead.
+
+Acceptance criteria:
+- Checkout of an empty cart returns the error "cart is empty"
+- No order is stored
+  - not even a draft
