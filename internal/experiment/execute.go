@@ -24,13 +24,21 @@ const InfraStreak = 3
 type Attempt struct {
 	Slot    int
 	Outcome string
-	CostUSD float64
+	CostUSD float64 // everything it spent: the agent's run and its judgement (Result.CostUSD)
 }
 
 // Result is what running one attempt found.
 type Result struct {
 	Outcome string
-	CostUSD float64
+	// CostUSD is everything the attempt spent, what the budget counts: the agent's run and its judgement. The agent's
+	// own cost (the analysis's cost metric) is the run record's; JudgeUSD is the judgement's share of CostUSD.
+	CostUSD  float64
+	JudgeUSD float64
+	// Judge is the judge's verdict in words, for progress lines; empty when the run was not judged.
+	Judge string
+	// Pause, when set, says why no new run should start for now (the judge hit a usage limit or a sign-in failure, which
+	// later calls would hit too): runs in flight finish, then the execution pauses with StatusUsage.
+	Pause string
 	// Stop, when set, says why no later run can be fair (Claude Code's version changed, say): the experiment stops.
 	Stop string
 	// Usage is the run's last subscription usage reading, if it reported one: the gate's latest reading.
@@ -59,7 +67,7 @@ type Event struct {
 type Plan struct {
 	Schedule    []Slot
 	Concurrency int
-	RunCapUSD   float64
+	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD)
 	BudgetUSD   float64
 	MaxAttempts int
 	Prior       []Attempt                       // the experiment's stored runs
@@ -118,7 +126,9 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 //     flight and of the pair, stays within the limit; runs in flight finish, then the execution waits for the window
 //     to reset (Usage.Wait) or pauses with StatusUsage;
 //   - a Result with Stop, an executor error, or ctx's cancellation stop it; runs in flight finish first (a cancelled
-//     ctx interrupts them, and they come back cancelled).
+//     ctx interrupts them, and they come back cancelled);
+//   - a Result with Pause pauses it as a usage pause does (StatusUsage, with Pause as the note), without waiting: runs
+//     in flight finish first.
 //
 // An executor error while ctx is live is Agentium's own failure: it is returned.
 func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
@@ -177,7 +187,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	}
 	results := make(chan finished)
 	running := 0
-	var stopNote string
+	var stopNote, pauseNote string
 	var runErr error
 	var streak []int // slots of the infrastructure failures in a row
 	done := ctx.Done()
@@ -185,7 +195,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		now := time.Now()
 		blocked, usageBlocked := false, false
 		var wake time.Time
-		if stopNote == "" && runErr == nil && ctx.Err() == nil {
+		if stopNote == "" && pauseNote == "" && runErr == nil && ctx.Err() == nil {
 			low := len(state)
 			for i := range state {
 				if !state[i].finished() {
@@ -283,6 +293,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			case stopNote != "":
 				sum.Status, sum.Note = StatusStopped, stopNote
 				return sum, nil
+			case pauseNote != "":
+				sum.Status, sum.Note = StatusUsage, pauseNote
+				return sum, nil
 			case usageBlocked && wake.IsZero(): // a retry that is due first goes before any pause
 				until := gate.Latest.FiveHourResets
 				if gate.Wait == nil || until.IsZero() || gate.PerRun*2 > gate.Limit {
@@ -309,7 +322,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		}
 		var timer *time.Timer
 		var tick <-chan time.Time
-		if !wake.IsZero() && running < p.Concurrency && stopNote == "" && runErr == nil {
+		if !wake.IsZero() && running < p.Concurrency && stopNote == "" && pauseNote == "" && runErr == nil {
 			timer = time.NewTimer(time.Until(wake))
 			tick = timer.C
 		}
@@ -348,6 +361,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			}
 			if f.result.Stop != "" && stopNote == "" {
 				stopNote = f.result.Stop
+			}
+			if f.result.Pause != "" && pauseNote == "" {
+				pauseNote = f.result.Pause
 			}
 		case <-tick:
 		case <-done:

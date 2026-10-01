@@ -225,16 +225,18 @@ func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
 
 // Reserve is what the budget must hold back for runs that may be in flight: a run (or a pair's two runs) starts only
 // when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it.
-// With concurrency c, at most c−1 runs are in flight when a pair's first run starts, so c+1 caps are reserved.
-func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunBudgetUSD }
+// With concurrency c, at most c−1 runs are in flight when a pair's first run starts, so c+1 caps are reserved. A run's
+// cap includes its judgement's (Design.RunCapUSD).
+func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunCapUSD() }
 
-// DefaultBudget is a quarter above the estimate plus the reserve, in whole dollars; zero when the estimate is unknown.
+// DefaultBudget is a quarter above the estimate (the judge's included) plus the reserve, in whole dollars; zero when
+// the estimate is unknown.
 func DefaultBudget(d Design, est Estimate) float64 {
 	expected, ok := est.DesignUSD(d)
 	if !ok {
 		return 0
 	}
-	return math.Ceil(1.25*expected + Reserve(d))
+	return math.Ceil(1.25*(expected+d.JudgeEstimateUSD()) + Reserve(d))
 }
 
 // Row is one line of a preview.
@@ -244,20 +246,24 @@ type Row struct {
 	Repeats     int
 	Runs        int
 	Short       bool    // fewer tasks are eligible than the tier asks for
-	CostUSD     float64 // expected; zero when the estimate is unknown
+	CostUSD     float64 // the agent's expected cost; zero when the estimate is unknown
 	CostKnown   bool    // every task the row may hold has an estimate
-	WorstUSD    float64 // every run at its cap
+	JudgeUSD    float64 // the judge's expected cost at the pilot's figure (Design.JudgeEstimateUSD); zero without it
+	WorstUSD    float64 // every run, and its judgement, at its cap
 	Detect      Detectable
 	Exploratory []string
 }
 
 // Preview sizes each tier, limited to the eligible tasks, and the design itself. The design's cost is its own tasks'
-// estimates; a tier, which would draw its tasks from the eligible ones, costs their average run.
+// estimates; a tier, which would draw its tasks from the eligible ones, costs their average run. The judge's estimate
+// is kept apart from the agent's (Row.JudgeUSD).
 func Preview(d Design, eligible []string, est Estimate) []Row {
 	row := func(name string, tasks, repeats int, perRun float64, known bool) Row {
 		runs := tasks * repeats * len(d.Arms)
-		r := Row{Name: name, Tasks: tasks, Repeats: repeats, Runs: runs, WorstUSD: float64(runs) * d.RunBudgetUSD,
-			Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
+		sized := d
+		sized.Tasks, sized.Repeats = make([]string, tasks), repeats
+		r := Row{Name: name, Tasks: tasks, Repeats: repeats, Runs: runs, WorstUSD: float64(runs) * d.RunCapUSD(),
+			JudgeUSD: sized.JudgeEstimateUSD(), Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
 		if known {
 			r.CostUSD = float64(runs) * perRun
 		}
