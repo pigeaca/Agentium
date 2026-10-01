@@ -66,10 +66,10 @@ The note must fix these before any code:
 - **Only if it passes:** pairs step 1b and ticket step 2 start. Until then the judge stays a per-run second opinion.
 
 ## Assignments (wave 1)
-- **Temp isolation:** step 2 done after two review rounds (`e27a899`, `f1e7630`); a re-review is running.
+- **Temp isolation:** done (#58).
 - **Task mining:** done (#57 and #62); mining this repository gave 10 valid tasks.
 - **Judge:** done (#61 and a real check: every run got a verdict; it flagged one passing run).
-- **Refactor:** step 4 (faster CLI tests, test code only) started first with an implementer on `claude/refactor/faster-tests`. Steps 1–2 start after judge step 3 merges, since they share the report and CLI code.
+- **Refactor:** step 4 (faster CLI tests) done in #59; step 1 (spending record) in #64; step 2 (handlers into services) in #65, stacked on #64.
 - **Temp isolation:** the real probe passed on 2026-10-01 ($0.13), through Agentium's own `run once`: the shared Claude temp folders, `/tmp/claude`, the socket folders, npm logs and another run's root were all denied (Bash, Read and Write); the run's own temp folder worked; `go test` passed; the root was removed even with `--keep`.
 
 ## Acceptance
