@@ -26,6 +26,15 @@ Each can run on a trigger, inside a budget, and report where the team already lo
   - the opt-in label on pull requests.
 - **Why:** the sandbox recipes are proven on macOS, the data folder persists (so base runs and calibrations are reused across checks), and the subscription's usage windows are used rather than API prices.
 - **Hosted runners stay later.** They need the Linux spike (A3), secrets, and a cached data folder.
+- **Credentials on hosted runners** (asked by the user on 2026-10-01):
+  - **A Claude Code sign-in, chosen per team:**
+    - `ANTHROPIC_API_KEY` (billed per token at API prices, bounded by the per-pull-request and monthly budgets);
+    - or a `claude setup-token` token as `CLAUDE_CODE_OAUTH_TOKEN` (the subscription's usage windows, shared with the user's own sessions; the usage gate pauses near the limit; check the plan's terms for automated use).
+
+    Agentium's `api-key` and `token-file` sign-in modes already support both. The secret reaches Claude Code only, and the sandbox denies those variables to the agent's shell.
+  - **A GitHub token:** the workflow's own `GITHUB_TOKEN` with `pull-requests: write`, for comments; no extra secret.
+  - **Forks:** GitHub gives no secrets to workflows from fork pull requests, which matches "trusted pull requests only".
+  - **On the user's Mac:** none of these. `watch` uses the existing Claude Code login and the `gh` login.
 
 ## Design: three loops
 
