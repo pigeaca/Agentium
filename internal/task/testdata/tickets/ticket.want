@@ -1,0 +1,21 @@
+key: WEB-9
+format: markdown
+
+Show a friendly 404 page
+
+Unknown URLs show the server's default page.
+Render templates/404.html instead — with the site header.
+
+```html
+<p>Keep this <b>as is</b></p>
+```
+
+## Notes
+
+Design: see the mockups.
+
+Acceptance criteria:
+- Unknown URLs answer 404 with the template
+- The header shows the current user
+  - signed out: a sign-in link
+- Static files still 404 plainly

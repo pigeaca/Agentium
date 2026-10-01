@@ -1,0 +1,9 @@
+{"issues": [{
+  "key": "CORE-123",
+  "fields": {
+    "summary": "Trim spaces in user names",
+    "description": "h2. Problem\nUser names keep *leading and trailing* spaces, so _\"bob \"_ and \"bob\" are two users.<br/>See [the report|https://example.com/r/1] and [https://example.com/r/2].\n\n# Sign up as {{\" bob\"}}\n# Sign in as {{\"bob\"}}\n\n{code:java}\nString name = input; // List<String> stays\n{code}\n\n||Input||Stored||\n|\" bob \"|\" bob \"|\n\nh3. Acceptance Criteria\n* Names are trimmed on sign-up and sign-in\n* Existing names are left alone\n\nh3. Notes\nAsk [~accountid:5b10ac8d82e05b22cc7d4ef5] before releasing.!screen.png|thumbnail!",
+    "customfield_10100": null
+  },
+  "names": {"customfield_10100": "Acceptance criteria"}
+}]}

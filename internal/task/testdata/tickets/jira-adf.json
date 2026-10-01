@@ -1,0 +1,52 @@
+{
+  "key": "API-7",
+  "fields": {
+    "summary": "Paginate the <b>orders</b> endpoint",
+    "description": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {"type": "paragraph", "content": [
+          {"type": "text", "text": "GET /orders returns every order at once. See "},
+          {"type": "text", "text": "the API guide", "marks": [{"type": "link", "attrs": {"href": "https://example.com/api"}}]},
+          {"type": "text", "text": "."},
+          {"type": "hardBreak"},
+          {"type": "text", "text": "Reported by "},
+          {"type": "mention", "attrs": {"id": "abc", "text": "@Dana"}}
+        ]},
+        {"type": "heading", "attrs": {"level": 3}, "content": [{"type": "text", "text": "Current behaviour"}]},
+        {"type": "bulletList", "content": [
+          {"type": "listItem", "content": [
+            {"type": "paragraph", "content": [{"type": "text", "text": "No ", "marks": [{"type": "strong"}]}, {"type": "text", "text": "limit", "marks": [{"type": "code"}]}, {"type": "text", "text": " parameter"}]},
+            {"type": "bulletList", "content": [
+              {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "large shops time out"}]}]}
+            ]}
+          ]},
+          {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "No cursor"}]}]}
+        ]},
+        {"type": "codeBlock", "attrs": {"language": "go"}, "content": [{"type": "text", "text": "func List(ctx context.Context) ([]Order, error)\n// returns all"}]},
+        {"type": "mediaSingle", "content": [{"type": "media", "attrs": {"id": "img"}}]},
+        {"type": "table", "content": [
+          {"type": "tableRow", "content": [
+            {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Param"}]}]},
+            {"type": "tableHeader", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "Default"}]}]}
+          ]},
+          {"type": "tableRow", "content": [
+            {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "limit"}]}]},
+            {"type": "tableCell", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "50"}]}]}
+          ]}
+        ]}
+      ]
+    },
+    "Acceptance Criteria": {
+      "type": "doc",
+      "version": 1,
+      "content": [
+        {"type": "orderedList", "attrs": {"order": 1}, "content": [
+          {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "limit defaults to 50 and is capped at 200"}]}]},
+          {"type": "listItem", "content": [{"type": "paragraph", "content": [{"type": "text", "text": "the response has a next cursor"}]}]}
+        ]}
+      ]
+    }
+  }
+}
