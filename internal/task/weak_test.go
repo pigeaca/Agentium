@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/gitx"
 )
 
 // A reference with one tested hunk (value.txt), one untested edit (a comment in notes.txt) and one new file nothing
@@ -136,5 +138,104 @@ func TestHunkWithoutRestoresOnlyItsLines(t *testing.T) {
 	deleted := Hunk{newStart: 1, newCount: 0, baseStart: 2, baseCount: 2} // the solution dropped b and c after line 1
 	if got := deleted.without("a\nd\ne\n", base); got != "a\nb\nc\nd\ne\n" {
 		t.Errorf("deletion undone: %q", got)
+	}
+}
+
+// weakRepo builds a base commit and a solution commit by running edit in a user repository, and fetches both.
+// edit makes the solution commit. prepare, when set, edits the working tree first and its result is part of the base.
+func weakRepo(t *testing.T, baseFiles map[string]string, prepare, edit func(t *testing.T, user string)) (bare, base, solution string) {
+	t.Helper()
+	ctx := context.Background()
+	user := t.TempDir()
+	git(t, user, "init", "-q", "-b", "main")
+	base = commit(t, user, baseFiles, "base")
+	if prepare != nil {
+		prepare(t, user)
+		git(t, user, "add", "-A")
+		git(t, user, "commit", "-q", "-m", "prepared base")
+		base = git(t, user, "rev-parse", "HEAD")
+	}
+	edit(t, user) // commits the solution itself
+	solution = git(t, user, "rev-parse", "HEAD")
+	bare = filepath.Join(t.TempDir(), "repo.git")
+	if err := gitx.InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{base, solution} {
+		if err := gitx.FetchCommit(ctx, user, c, gitx.SourceRef(c), "--git-dir", bare); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return bare, base, solution
+}
+
+func weakValidator(t *testing.T, bare string) Validator {
+	v, _ := validator(t, bare)
+	v.WeakTests = true
+	return v
+}
+
+var runTests = "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n"
+
+// A deleted executable file comes back executable, so a verification that runs it still passes: the hunk is untested.
+func TestWeakTestsRestoresDeletedExecutable(t *testing.T) {
+	bare, base, solution := weakRepo(t, map[string]string{"run_tests.sh": runTests, "value.txt": "old\n", "tool.sh": "#!/bin/sh\nexit 0\n"},
+		func(t *testing.T, user string) {
+			if err := os.Chmod(filepath.Join(user, "tool.sh"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		},
+		func(t *testing.T, user string) {
+			os.Remove(filepath.Join(user, "tool.sh"))
+			commit(t, user, map[string]string{"tests/value_test.sh": "grep -q new value.txt\n", "value.txt": "new\n"}, "tests")
+		})
+	v := weakValidator(t, bare)
+	spec := Spec{Base: base, Solution: solution, HiddenTests: []string{"tests/value_test.sh"}, Reference: []string{"tool.sh", "value.txt"},
+		Verify: []string{"sh run_tests.sh && { [ ! -e tool.sh ] || ./tool.sh; }"}}
+	got, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+	if err != nil || got.Status != StatusValid || got.WeakTests == nil || got.WeakTests.Checked != 2 {
+		t.Fatalf("%s, %+v, %v", got.Status, got.WeakTests, err)
+	}
+	if u := got.WeakTests.Untested; len(u) != 1 || u[0].File != "tool.sh" || !u[0].Deleted {
+		t.Errorf("untested = %+v (a restored executable must still run)", u)
+	}
+}
+
+func TestWeakTestsReasonWhenNoTextHunks(t *testing.T) {
+	bare, base, solution := weakRepo(t, map[string]string{"run_tests.sh": runTests, "value.txt": "old\n"}, nil, func(t *testing.T, user string) {
+		commit(t, user, map[string]string{"tests/blob_test.sh": "test -f blob.bin\n", "blob.bin": "\x00\x01\x02binary"}, "binary")
+	})
+	v := weakValidator(t, bare)
+	got, err := v.Validate(context.Background(), Spec{Base: base, Solution: solution, HiddenTests: []string{"tests/blob_test.sh"},
+		Reference: []string{"blob.bin"}, Verify: []string{"sh run_tests.sh"}}, []Arm{{Name: "base"}})
+	if err != nil || got.Status != StatusValid || got.WeakTests == nil || !strings.Contains(got.WeakTests.Reason, "no text hunks") || got.WeakTests.Checked != 0 {
+		t.Errorf("%+v, %v", got.WeakTests, err)
+	}
+}
+
+func TestHunksSkipSymlinksAndDoNotMerge(t *testing.T) {
+	bare, base, solution := weakRepo(t, map[string]string{"value.txt": "1\n2\n3\n4\n5\n", "other.txt": "x\n"}, nil, func(t *testing.T, user string) {
+		if err := os.Symlink("value.txt", filepath.Join(user, "link")); err != nil {
+			t.Fatal(err)
+		}
+		commit(t, user, map[string]string{"value.txt": "1\nTWO\n3\nFOUR\n5\n"}, "edit") // two hunks two lines apart
+	})
+	hunks, err := Hunks(context.Background(), base, solution, []string{"link", "value.txt"}, "--git-dir", bare)
+	if err != nil || len(hunks) != 2 || hunks[0].File != "value.txt" || hunks[0].Start != 2 || hunks[1].Start != 4 {
+		t.Errorf("%v, %v", hunks, err)
+	}
+}
+
+func TestWeakTestsSkipReasonNamesTheStage(t *testing.T) {
+	spec, v, _ := weakFixture(t)
+	spec.Verify = []string{"true"} // the hidden tests pass on the base: that stage fails and the reference never runs
+	got, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+	if err != nil || got.WeakTests == nil || !strings.Contains(got.WeakTests.Reason, "hidden-tests stage") {
+		t.Errorf("%+v, %v", got.WeakTests, err)
+	}
+	spec.Verify = []string{"false"}
+	got, _ = v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+	if got.WeakTests == nil || !strings.Contains(got.WeakTests.Reason, "reference stage") {
+		t.Errorf("%+v", got.WeakTests)
 	}
 }

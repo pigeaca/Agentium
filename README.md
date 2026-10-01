@@ -49,7 +49,7 @@ agentium task import --commit <sha>                # base: its parent; hidden te
 agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away (--accept-gaps: hidden tests need texts or names nothing states)
 agentium task validate <name> --snapshot trimmed   # tests fail on the base and pass with the reference, in each arm
 agentium task validate <name> --repeat 3           # run every stage 3 times: a task whose runs disagree is flaky, and experiments reject it
-agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate)
+agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
 
 **3. Run and compare**

@@ -260,6 +260,7 @@ func TestTaskValidateWeakTests(t *testing.T) {
 	expect(t, run("task", "show", "value"), ExitOK, "status     valid", "Not tested by the hidden tests", "  notes.txt:2")
 	expect(t, run("task", "validate", "value", "--weak-tests", "--max-hunks", "1", "--repeat", "2"), ExitOK, "1 more hunk(s) were skipped", "(1/2)")
 	expect(t, run("task", "validate", "value", "--weak-tests", "--max-hunks", "0"), ExitUsage, "--max-hunks must be at least 1")
+	expect(t, run("task", "validate", "value", "--max-hunks", "5"), ExitUsage, "--max-hunks needs --weak-tests")
 
 	// A task without a solution has no hunks to take out.
 	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)

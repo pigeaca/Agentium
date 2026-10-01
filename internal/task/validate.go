@@ -171,9 +171,9 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		if solution == nil {
 			return result, ErrNoSolution
 		}
-		switch {
-		case !slices.ContainsFunc(result.Stages, func(s Stage) bool { return s.Arm == "base" && s.Stage == StageReference && s.OK }):
-			result.WeakTests = &WeakTests{Reason: "the reference did not pass in the base context, so there is nothing to take hunks out of"}
+		switch reason := weakSkipReason(result.Stages); {
+		case reason != "":
+			result.WeakTests = &WeakTests{Reason: reason}
 		default:
 			weak, err := v.weakTests(ctx, spec, solution)
 			result.WeakTests = weak
@@ -183,6 +183,27 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		}
 	}
 	return result, nil
+}
+
+// weakSkipReason says why the weak-tests check cannot run: the base context's reference stage must have run and been OK.
+// It is "" when it can.
+func weakSkipReason(stages []Stage) string {
+	reference := false
+	for _, s := range stages {
+		switch {
+		case s.Arm != "base":
+		case s.Flaky:
+			return fmt.Sprintf("the base context's %s stage is flaky, so it cannot be trusted to compare against", s.Stage)
+		case !s.OK:
+			return fmt.Sprintf("the base context's %s stage did not behave as required, so the reference was not proven to pass", s.Stage)
+		case s.Stage == StageReference:
+			reference = true
+		}
+	}
+	if !reference {
+		return "the reference stage did not run in the base context"
+	}
+	return ""
 }
 
 // validateArm runs an arm's stages. Each stage gets a fresh checkout, prepared as a run would be: the base, the arm's

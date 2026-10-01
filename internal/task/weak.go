@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -57,18 +58,35 @@ type WeakTests struct {
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
+// symlinkLine matches the extended header lines of a diff that involve a symbolic link (mode 120000).
+var symlinkLine = regexp.MustCompile(`^((old|new) mode|new file mode|deleted file mode) 120000$|^index \S+ 120000$`)
+
+// headerLines is the diff's lines before its first hunk.
+func headerLines(lines []string) []string {
+	for i, l := range lines {
+		if strings.HasPrefix(l, "@@ ") {
+			return lines[:i]
+		}
+	}
+	return lines
+}
+
 // Hunks lists the hunks of each reference file's change between base and solution, in file then line order. Binary
-// files have none, and are not checked.
+// files, symbolic links and mode-only changes have none, and are not checked.
 func Hunks(ctx context.Context, base, solution string, files []string, where ...string) ([]Hunk, error) {
 	var hunks []Hunk
 	for _, file := range files {
 		args := append(append([]string{}, where...), "--literal-pathspecs", "diff", "-U0", "--no-color", "--no-ext-diff",
-			"--no-textconv", "--no-renames", base, solution, "--", file)
+			"--no-textconv", "--no-renames", "--inter-hunk-context=0", base, solution, "--", file)
 		out, err := gitx.Output(ctx, nil, args...)
 		if err != nil {
 			return nil, err
 		}
-		for _, line := range strings.Split(string(out), "\n") {
+		lines := strings.Split(string(out), "\n")
+		if slices.ContainsFunc(headerLines(lines), symlinkLine.MatchString) {
+			continue // a link's diff is its target text, but a checkout would follow it: not checked, like binary files
+		}
+		for _, line := range lines {
 			m := hunkHeader.FindStringSubmatch(line)
 			if m == nil {
 				continue
@@ -136,6 +154,9 @@ func (v Validator) weakTests(ctx context.Context, spec Spec, solution source.Sou
 	base, err := source.Commit(ctx, spec.Base, "--git-dir", v.Bare)
 	if err != nil {
 		return nil, err
+	}
+	if len(hunks) == 0 {
+		return &WeakTests{Reason: "the reference has no text hunks (binary, symbolic link or mode-only changes)"}, nil
 	}
 	result := &WeakTests{}
 	limit := v.MaxHunks
@@ -239,6 +260,8 @@ func (h Hunk) undo(dir string, base, solution source.Source) error {
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(full); err == nil {
 		mode = info.Mode().Perm()
+	} else if base.Executable(h.File) { // the solution deleted the file: it comes back as the base had it
+		mode = 0o755
 	}
 	if err := os.WriteFile(full, []byte(h.without(solText, baseText)), mode); err != nil {
 		return fmt.Errorf("weak tests, %s: %w", h, err)

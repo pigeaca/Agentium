@@ -44,7 +44,8 @@ const taskUsage = `Usage:
                          task flaky, which experiments reject (experiment plan asks for at least 3);
                          --weak-tests removes one hunk of the reference at a time (the first --max-hunks, default 20)
                          and reruns the checks in the base context: hunks that still pass are "not tested by the
-                         hidden tests", a warning that leaves the task valid
+                         hidden tests", a warning that leaves the task valid; a later task validate without
+                         --weak-tests replaces the stored result, so rerun with it to keep the list
   agentium task rm NAME
 
 task show and task validate list what the hidden tests require that neither the instruction nor the base code states
@@ -449,7 +450,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		if t.NeedsReview {
 			status += st.Warn(" (instruction not reviewed)")
 		}
-		if n, _ := untestedCount(t); n > 0 {
+		if n := untestedCount(t); n > 0 {
 			status += st.Warn(fmt.Sprintf(" (%d untested hunk(s))", n))
 		}
 		if gaps, err := taskGaps(ctx, fair, t); err != nil {
@@ -526,13 +527,13 @@ func printWeakTests(out io.Writer, st term.Style, w *task.WeakTests) {
 	}
 }
 
-// untestedCount is how many hunks the stored validation found untested, and whether that check was run.
-func untestedCount(t store.Task) (n int, checked bool) {
+// untestedCount is how many hunks the stored validation found untested (0 when that check was not run).
+func untestedCount(t store.Task) int {
 	var v task.Validation
 	if t.Validation == nil || json.Unmarshal(t.Validation, &v) != nil || v.WeakTests == nil || v.WeakTests.Reason != "" {
-		return 0, false
+		return 0
 	}
-	return len(v.WeakTests.Untested), true
+	return len(v.WeakTests.Untested)
 }
 
 func validationStatus(t store.Task) string {
@@ -672,6 +673,12 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	}
 	if *repeat < 1 || *repeat > 20 {
 		fmt.Fprintln(env.Stderr, "agentium task validate: --repeat must be 1 to 20")
+		return ExitUsage
+	}
+	maxGiven := false
+	fs.Visit(func(f *flag.Flag) { maxGiven = maxGiven || f.Name == "max-hunks" })
+	if maxGiven && !*weak {
+		fmt.Fprintln(env.Stderr, "agentium task validate: --max-hunks needs --weak-tests")
 		return ExitUsage
 	}
 	if *maxHunks < 1 {
