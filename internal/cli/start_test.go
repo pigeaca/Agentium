@@ -16,7 +16,10 @@ import (
 
 // startRepo is a repository for start: `make test` runs the shell tests, and features commits each add a function with
 // its test, so each is a task candidate.
-func startRepo(t *testing.T, features int) string {
+func startRepo(t *testing.T, features int) string { return startRepoNaming(t, features, 0) }
+
+// startRepoNaming is startRepo where the first named commit messages name lib.sh, a file of the reference solution.
+func startRepoNaming(t *testing.T, features, named int) string {
 	t.Helper()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
@@ -34,7 +37,7 @@ func startRepo(t *testing.T, features int) string {
 		writeFile(t, repo, "lib.sh", string(lib)+fmt.Sprintf("f%d() { echo v%d; }\n", i, i))
 		writeFile(t, repo, fmt.Sprintf("tests/f%d_test.sh", i), fmt.Sprintf(". ./lib.sh\n[ \"$(f%d)\" = v%d ]\n", i, i))
 		gitIn(t, repo, "add", "-A")
-		gitIn(t, repo, "commit", "-q", "-m", fmt.Sprintf("Add f%d to the library\n\nThe f%d function prints v%d for the welcome screen.", i, i, i))
+		gitIn(t, repo, "commit", "-q", "-m", fmt.Sprintf("Add f%d to the library\n\nThe f%d function prints v%d for the welcome screen.%s", i, i, i, map[bool]string{true: " It lives in lib.sh.", false: ""}[i <= named]))
 	}
 	return repo
 }
@@ -261,7 +264,7 @@ func TestStartPromptQuotesTheEffectiveBudget(t *testing.T) {
 	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $42.00. [y/N]", "Nothing was run and nothing was spent",
 		"up to $42.00): agentium experiment run quick-aa-baseline\n")
 	raised := terminalRun(f, ctx, strings.NewReader("n\n"), "start", "--budget", "100")
-	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the experiment's $42.00, raised by --budget)", "spends up to $100.00. [y/N]",
+	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the design's $42.00, raised by --budget)", "spends up to $100.00. [y/N]",
 		"up to $100.00): agentium experiment run quick-aa-baseline --budget 100")
 	lower := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "10")
 	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $42.00")
@@ -343,7 +346,7 @@ func TestStartAcceptMinedLeavesOtherTasksAlone(t *testing.T) {
 func TestNamesReferenceFile(t *testing.T) {
 	t.Parallel()
 	for instruction, want := range map[string]bool{"Add Reverse to strutil.go.": true, "Add Reverse to the library.": false, "Edit pkg/strutil.go": true} {
-		got := namesReferenceFile(store.Task{Instruction: instruction, Reference: []string{"pkg/strutil.go"}})
+		got := namedReferenceFile(store.Task{Instruction: instruction, Reference: []string{"pkg/strutil.go"}}) != ""
 		if got != want {
 			t.Errorf("%q: names a reference file = %v, want %v", instruction, got, want)
 		}
@@ -370,11 +373,99 @@ func TestStartStopsWhenNothingValidates(t *testing.T) {
 	f := runFixtureAt(repo, filepath.Join(t.TempDir(), "data"), t.TempDir())
 	got := f.run(context.Background(), "start", "--accept-mined")
 	expect(t, got, ExitError, "imported 8 of 8 tried", "0 valid of 8", "set aside: ", "only 0 of the 8 an experiment needs are ready",
-		"none of the 8 tasks just validated is valid")
+		"none of the 8 tasks just mined is valid")
 	if n := strings.Count(got.stdout, "Mining:"); n != 1 {
 		t.Errorf("start mined %d times, want once:\n%s", n, got.stdout)
 	}
 	if tasks := storedTasks(t, f.data); len(tasks) != 8 {
 		t.Errorf("%d tasks imported, want 8", len(tasks))
 	}
+}
+
+func projectFile(f runFixture, name string) string {
+	return filepath.Join(f.data, "projects", "1", name)
+}
+
+// A broken task someone added by hand says nothing about mining: start still mines.
+func TestStartMiningIgnoresABrokenHandAddedTask(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 10)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	head := strings.TrimSpace(gitIn(t, f.repo, "rev-parse", "HEAD"))
+	expect(t, f.run(ctx, "task", "import", "--commit", head, "--name", "broken", "--verify", "false"), ExitOK)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Mining: ", "Experiment quick-aa-baseline: created")
+	if strings.Contains(got.stdout, "mining more would likely repeat") {
+		t.Errorf("the broken task stopped mining:\n%s", got.stdout)
+	}
+}
+
+// A task removed and imported by hand under the same name is not what start mined: --accept-mined leaves it, and the
+// removed commit is never mined again.
+func TestStartAcceptMinedIgnoresRemovedAndReimportedTasks(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "start"), ExitError, "8 valid")
+	first := storedTasks(t, f.data)[0]
+	expect(t, f.run(ctx, "task", "rm", first.Name), ExitOK)
+	expect(t, f.run(ctx, "task", "import", "--commit", first.SolutionCommit, "--name", first.Name, "--verify", "make test"), ExitOK)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Experiment quick-aa-baseline: created")
+	byName := map[string]bool{}
+	for _, task := range storedTasks(t, f.data) {
+		byName[task.Name] = task.NeedsReview
+	}
+	if !byName[first.Name] {
+		t.Errorf("the hand-imported task %s was accepted unread", first.Name)
+	}
+}
+
+func TestStartNeverMinesARemovedTaskAgain(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "start"), ExitError, "8 valid")
+	first := storedTasks(t, f.data)[0]
+	expect(t, f.run(ctx, "task", "rm", first.Name), ExitOK)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Experiment quick-aa-baseline: created")
+	for _, task := range storedTasks(t, f.data) {
+		if task.SolutionCommit == first.SolutionCommit {
+			t.Errorf("start mined the removed commit again as %s", task.Name)
+		}
+	}
+}
+
+// Tasks the checks hold back do not count toward the 8, so mining goes on; what stays held back is listed with its
+// reason instead of suggesting the flag again.
+func TestStartHeldBackTasksDoNotCount(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	enough := runFixtureAt(startRepoNaming(t, 10, 2), filepath.Join(t.TempDir(), "data"), t.TempDir())
+	expect(t, enough.run(ctx, "start", "--accept-mined"), ExitOK, "Experiment quick-aa-baseline: created")
+	short := runFixtureAt(startRepoNaming(t, 9, 2), filepath.Join(t.TempDir(), "data"), t.TempDir())
+	got := short.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitError, "held back from --accept-mined: ", "the instruction names reference file lib.sh")
+	if strings.Contains(got.stdout, "(or agentium start --accept-mined") {
+		t.Errorf("the flag was suggested again:\n%s", got.stdout)
+	}
+}
+
+// A corrupt state file costs only the --accept-mined shortcut.
+func TestStartWithACorruptStateFile(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	if err := os.MkdirAll(filepath.Dir(projectFile(f, "x")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectFile(f, "start-mined.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitError, "start-mined.json is unreadable", "cannot tell which tasks start mined")
+	plain := f.run(ctx, "start")
+	expect(t, plain, ExitError, "is unreadable and ignored", "8 valid")
 }

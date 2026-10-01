@@ -79,11 +79,11 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 }
 
 // reachable counts the tasks that are ready or can become so without a person: the waiting ones too, unless
-// --accept-mined is the way they are accepted, when only those start mined count.
+// --accept-mined is the way they are accepted, when only those start mined and the checks did not hold back count.
 func (s *starter) reachable(c taskCounts) int {
 	n := len(c.ready)
 	for _, name := range c.waiting {
-		if !s.args.acceptMined || s.mined[name] {
+		if !s.args.acceptMined || (s.mined[name] && s.held[name] == "") {
 			n++
 		}
 	}
@@ -131,11 +131,12 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 			}
 		case s.reachable(c) < floor && !exhausted && s.stopped == "":
 			worked = true
-			if s.imported >= maxMineFactor*floor {
+			room := maxMineFactor*floor - s.imported
+			if room <= 0 {
 				s.stopped = fmt.Sprintf("stopped mining after %d imported task(s), %d times the floor", s.imported, maxMineFactor)
 				continue
 			}
-			if exhausted, err = s.mineMore(ctx, floor-s.reachable(c)); err != nil {
+			if exhausted, err = s.mineMore(ctx, min(floor-s.reachable(c), room)); err != nil {
 				return false, err
 			}
 		default:
@@ -167,6 +168,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 	}
 	counts := map[string]int{}
 	var bad []string
+	mined, minedValid := 0, 0 // of the tasks this run's mining imported
 	for _, r := range results {
 		attempted[r.task.Name] = true
 		status := "not validated"
@@ -174,6 +176,12 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			status = task.ValidationOf(r.task).Status
 		}
 		counts[status]++
+		if s.importedNow[r.task.Name] {
+			mined++
+			if status == task.StatusValid {
+				minedValid++
+			}
+		}
 		if status != task.StatusValid {
 			if p := r.problem(); p != "" {
 				status = p
@@ -186,8 +194,9 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 		line += "; set aside: " + strings.Join(bad, ", ")
 	}
 	fmt.Fprintln(s.env.Stdout, line)
-	if counts[task.StatusValid] == 0 && len(results) > 0 {
-		s.stopped = "none of the " + fmt.Sprint(len(results)) + " tasks just validated is valid, so mining more would likely repeat that"
+	// Only tasks this run mined say anything about mining: a broken task someone added by hand does not stop it.
+	if mined > 0 && minedValid == 0 {
+		s.stopped = fmt.Sprintf("none of the %d tasks just mined is valid, so mining more would likely repeat that", mined)
 	}
 	return nil
 }
@@ -201,22 +210,20 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 	if err != nil {
 		return false, err
 	}
-	found := len(prep.Result.Candidates)
+	candidates := slices.DeleteFunc(slices.Clone(prep.Result.Candidates), func(c mine.Candidate) bool { return s.dismissed[c.Hash] })
+	found := len(candidates)
 	if found == 0 {
 		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read\n", prep.Result.Scanned)
 		return true, nil
 	}
-	imp := mine.Import(ctx, mine.ImportInput{Importer: w.importer(prep.Names), Candidates: prep.Result.Candidates, Limit: want,
+	imp := mine.Import(ctx, mine.ImportInput{Importer: w.importer(prep.Names), Candidates: candidates, Limit: want,
 		NewTask: func() store.Task {
 			return store.Task{ProjectID: w.project.ID, Verify: prep.Verify, CreatedAt: s.env.Now()}
 		}})
 	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned,
 		len(imp.Tasks), imp.Tried, strings.Join(prep.Verify, "; "))
 	s.imported += len(imp.Tasks)
-	for _, t := range imp.Tasks {
-		s.mined[t.Name] = true
-	}
-	if err := s.saveMined(); err != nil {
+	if err := s.recordMined(ctx, imp.Tasks); err != nil {
 		return false, err
 	}
 	return len(imp.Tasks) < want, nil // fewer imported than asked: every candidate was tried
@@ -228,24 +235,24 @@ const maxMineFactor = 3
 // acceptMined marks waiting tasks that start itself mined (now or in an earlier run: minedFile) as reviewed when the
 // automatic checks find nothing: no section that may give the solution away, no reference-file name in the
 // instruction, and no requirement of the hidden tests that nothing states. A task from a pull request, a ticket or
-// `task import` is never accepted. It returns the accepted names; a mined instruction that explains the fix in plain
-// words passes these checks, which is why the flag is opt-in and says so.
+// `task import` is never accepted. It returns the accepted names and leaves the reasons it held back others in s.held;
+// a mined instruction that explains the fix in plain words passes these checks, which is why the flag is opt-in.
 func (s *starter) acceptMined(ctx context.Context) ([]string, error) {
 	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
 	if err != nil {
 		return nil, err
 	}
-	quiet := s.env
-	quiet.Stderr = io.Discard
+	fair := task.NewFairness("--git-dir", s.w.bare)
+	s.held = map[string]string{}
 	var accepted []string
 	for _, t := range tasks {
-		if !s.mined[t.Name] || !t.NeedsReview || !strings.HasPrefix(t.Source, "commit ") || t.SolutionCommit == "" ||
-			t.Grading == task.GradingJudge || len(task.SolutionSections(t.Instruction)) > 0 || namesReferenceFile(t) {
+		if !s.mined[t.Name] || !t.NeedsReview || t.SolutionCommit == "" || t.Grading == task.GradingJudge || t.Validation == nil {
 			continue
 		}
-		if ok, err := gapGate(ctx, quiet, s.w, t, false); err != nil {
+		if reason, err := heldBack(ctx, fair, t); err != nil {
 			return accepted, err
-		} else if !ok {
+		} else if reason != "" {
+			s.held[t.Name] = reason
 			continue
 		}
 		t.NeedsReview = false
@@ -257,47 +264,136 @@ func (s *starter) acceptMined(ctx context.Context) ([]string, error) {
 	return accepted, nil
 }
 
-// namesReferenceFile is whether the instruction names a file of the reference solution, which tells the agent where
-// the fix goes (the check `task show` makes).
-func namesReferenceFile(t store.Task) bool {
-	return slices.ContainsFunc(t.Reference, func(p string) bool {
-		return strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p))
-	})
+// heldBack is why a mined task's instruction is not accepted without a person: "" when the checks find nothing.
+func heldBack(ctx context.Context, fair *task.Fairness, t store.Task) (string, error) {
+	if sections := task.SolutionSections(t.Instruction); len(sections) > 0 {
+		return "the instruction has sections that may give the solution away: " + strings.Join(sections, ", "), nil
+	}
+	if p := namedReferenceFile(t); p != "" {
+		return "the instruction names reference file " + p, nil
+	}
+	gaps, err := task.Gaps(ctx, fair, t)
+	if err != nil {
+		return "", err
+	}
+	if len(gaps) > 0 {
+		texts := make([]string, len(gaps))
+		for i, g := range gaps {
+			texts[i] = g.String()
+		}
+		return fmt.Sprintf("%d requirement(s) of the hidden tests that nothing states: %s", len(gaps), strings.Join(texts, "; ")), nil
+	}
+	return "", nil
 }
 
-// minedFile records, beside the project's repository, which tasks start mined, so --accept-mined in a later run still
-// knows them. It is not task data and needs no migration.
+// namedReferenceFile is a file of the reference solution that the instruction names, which tells the agent where the
+// fix goes (the check `task show` makes); "" when it names none.
+func namedReferenceFile(t store.Task) string {
+	for _, p := range t.Reference {
+		if strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p)) {
+			return p
+		}
+	}
+	return ""
+}
+
+// minedRecord is one task start mined, with enough to tell it from a task someone made later under the same name:
+// the commit it solves and when it was created.
+type minedRecord struct {
+	Name           string    `json:"name"`
+	SolutionCommit string    `json:"solution_commit"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+// minedState is the file start keeps beside the project's repository (not task data, so no migration).
+//
+// Rule for removed tasks: a record whose task is gone, or whose name now belongs to a different task (another commit or
+// creation time), is dropped, and its commit is dismissed for good: start never mines it again, so it can neither
+// return to be accepted unread after the user removed it, nor be accepted when the user imported it by hand.
+type minedState struct {
+	Mined     []minedRecord `json:"mined"`
+	Dismissed []string      `json:"dismissed"`
+}
+
 func (s *starter) minedFile() string {
 	return filepath.Join(filepath.Dir(s.w.bare), "start-mined.json")
 }
 
-func (s *starter) loadMined() error {
+// loadMined reads the state and checks every record against the project's tasks. An unreadable file costs only the
+// --accept-mined shortcut: it is an error with that flag (nothing is accepted on a guess), and a warning without it.
+func (s *starter) loadMined(ctx context.Context) error {
+	s.mined, s.dismissed = map[string]bool{}, map[string]bool{}
 	data, err := os.ReadFile(s.minedFile())
-	if errors.Is(err, os.ErrNotExist) {
+	var state minedState
+	if err == nil {
+		err = json.Unmarshal(data, &state)
+	}
+	switch {
+	case errors.Is(err, os.ErrNotExist):
 		return nil
-	} else if err != nil {
+	case err != nil && s.args.acceptMined:
+		return fmt.Errorf("%s is unreadable, so --accept-mined cannot tell which tasks start mined: %w (delete it to start over)", s.minedFile(), err)
+	case err != nil:
+		fmt.Fprintf(s.env.Stderr, "agentium: %s is unreadable and ignored: %v\n", s.minedFile(), err)
+		return nil
+	}
+	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
+	if err != nil {
 		return err
 	}
-	var names []string
-	if err := json.Unmarshal(data, &names); err != nil {
-		return fmt.Errorf("%s: %w", s.minedFile(), err)
+	for _, c := range state.Dismissed {
+		s.dismissed[c] = true
 	}
-	for _, n := range names {
-		s.mined[n] = true
+	for _, rec := range state.Mined {
+		i := slices.IndexFunc(tasks, func(t store.Task) bool {
+			return t.Name == rec.Name && t.SolutionCommit == rec.SolutionCommit && t.CreatedAt.Equal(rec.CreatedAt)
+		})
+		if i < 0 {
+			s.dismissed[rec.SolutionCommit] = true
+			continue
+		}
+		s.mined[rec.Name] = true
+		s.records = append(s.records, rec)
 	}
 	return nil
 }
 
-func (s *starter) saveMined() error {
-	data, err := json.Marshal(slices.Sorted(maps.Keys(s.mined)))
+// recordMined adds the tasks just imported (as stored, so their creation time matches) and writes the state.
+func (s *starter) recordMined(ctx context.Context, imported []store.Task) error {
+	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
 	if err != nil {
 		return err
 	}
-	tmp := s.minedFile() + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	for _, imp := range imported {
+		if i := slices.IndexFunc(tasks, func(t store.Task) bool { return t.Name == imp.Name }); i >= 0 {
+			s.records = append(s.records, minedRecord{Name: imp.Name, SolutionCommit: tasks[i].SolutionCommit, CreatedAt: tasks[i].CreatedAt.UTC()})
+			s.mined[imp.Name] = true
+			s.importedNow[imp.Name] = true
+		}
+	}
+	return s.saveMined()
+}
+
+// saveMined writes the state through a temporary file of its own in the same folder, then renames it into place.
+func (s *starter) saveMined() error {
+	state := minedState{Mined: s.records, Dismissed: slices.Sorted(maps.Keys(s.dismissed))}
+	data, err := json.Marshal(state)
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.minedFile())
+	f, err := os.CreateTemp(filepath.Dir(s.minedFile()), "start-mined-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // after a successful rename it is gone already
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), s.minedFile())
 }
 
 // explainShortage says how many tasks start found and what to do next.
@@ -305,10 +401,20 @@ func (s *starter) explainShortage(c taskCounts, floor int, exhausted bool) {
 	out, st := s.env.Stdout, s.env.style()
 	if len(c.waiting) > 0 {
 		fmt.Fprintf(out, "Tasks: %s\n", st.Warn(fmt.Sprintf("%d valid, %d ready of the %d an experiment needs: the others wait for your review", len(c.ready)+len(c.waiting), len(c.ready), floor)))
-		fmt.Fprintf(out, "  Read each instruction for solution leaks: %s, then %s\n"+
-			"  (or %s accepts the ones start mined without your review, after automatic checks that miss an instruction explaining the fix)\n", st.Command("agentium task show NAME"),
-			st.Command("agentium task edit NAME --reviewed"), st.Command("agentium start --accept-mined"))
-		fmt.Fprintf(out, "  waiting: %s\n", strings.Join(c.waiting, ", "))
+		fmt.Fprintf(out, "  Read each instruction for solution leaks: %s, then %s\n", st.Command("agentium task show NAME"), st.Command("agentium task edit NAME --reviewed"))
+		if !s.args.acceptMined {
+			fmt.Fprintf(out, "  (or %s accepts the ones start mined without your review, after automatic checks that miss an instruction explaining the fix)\n", st.Command("agentium start --accept-mined"))
+			fmt.Fprintf(out, "  waiting: %s\n", strings.Join(c.waiting, ", "))
+		}
+		for _, name := range c.waiting {
+			switch {
+			case !s.args.acceptMined:
+			case s.held[name] != "":
+				fmt.Fprintf(out, "  held back from --accept-mined: %s: %s\n", name, s.held[name])
+			default:
+				fmt.Fprintf(out, "  not accepted by --accept-mined, which takes only what start mined: %s\n", name)
+			}
+		}
 	} else {
 		fmt.Fprintf(out, "Tasks: %s\n", st.Bad(fmt.Sprintf("only %d of the %d an experiment needs are ready", len(c.ready), floor)))
 	}

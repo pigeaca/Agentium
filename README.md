@@ -35,7 +35,7 @@ agentium start                     # registers, snapshots, mines and validates 8
 
 `agentium start` never writes to your repository and makes no paid run on its own. It does the steps below for you, skipping those already done, so run it again to resume:
 
-- registers the repository (`init`) and saves the committed context as the snapshot `baseline`;
+- registers the repository (`init`) and, if the project has no snapshot, saves the committed context as `baseline` (arm A);
 - mines and validates tasks until 8 are ready, the cost floor;
 - creates the experiment `quick-...` at the floor, 8 tasks × 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
 - prints the preview: runs, estimated cost, detectable effect, and what is missing;

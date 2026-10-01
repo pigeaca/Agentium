@@ -262,6 +262,14 @@ func TestNorthStarIgnoresUnfinishedExperiments(t *testing.T) {
 	if got, _ := LoadNorthStar(context.Background(), p); got.Decisive {
 		t.Errorf("an experiment stopped for its budget counts: %+v", got)
 	}
+	for _, status := range []string{store.StatusUsage, store.StatusStopped} {
+		if err := p.DB.SetExperimentStatus(context.Background(), 1, status, ""); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := LoadNorthStar(context.Background(), p); got.Decisive {
+			t.Errorf("an experiment with status %s counts: %+v", status, got)
+		}
+	}
 	if err := p.DB.SetExperimentStatus(context.Background(), 1, store.StatusDone, ""); err != nil {
 		t.Fatal(err)
 	}

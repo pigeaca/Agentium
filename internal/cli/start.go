@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -12,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -22,8 +24,8 @@ const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] 
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
-  2. saves the committed context as the snapshot "baseline", if the project has no snapshot (else it uses the newest
-     one that --b does not name);
+  2. saves the committed context as the snapshot "baseline", if the project has none; arm A is "baseline" when it
+     exists, else the newest snapshot that --b does not name;
   3. mines and validates tasks until 8 are ready, the experiment's cost floor, or the candidates run out;
   4. creates the experiment "quick-..." at the cost floor: 8 tasks × 1 run per arm. With --b it compares the context
      with that snapshot; without it, it is an A/A calibration of the context (both arms the same, which must find no
@@ -63,7 +65,7 @@ func runStart(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, startUsage)
 		return ExitUsage
 	}
-	s := &starter{env: env, args: a, mined: map[string]bool{}}
+	s := &starter{env: env, args: a, importedNow: map[string]bool{}, held: map[string]string{}}
 	defer s.close()
 	name, err := s.prepare(ctx)
 	switch {
@@ -89,11 +91,16 @@ type starter struct {
 	w    *workspace
 	// a and b are the snapshots the experiment compares: a always, b with --b.
 	a, b string
-	// mined holds the tasks start mined (now or earlier), imported counts those of this run; stopped says why mining
-	// ended with too few tasks.
-	mined    map[string]bool
-	imported int
-	stopped  string
+	// mined holds the tasks start mined (now or earlier, checked against the project's tasks), records and dismissed are
+	// the state file's content (see minedState), importedNow the tasks this run imported, held why --accept-mined held a
+	// task back, and stopped why mining ended with too few tasks.
+	mined       map[string]bool
+	records     []minedRecord
+	dismissed   map[string]bool
+	importedNow map[string]bool
+	held        map[string]string
+	imported    int
+	stopped     string
 }
 
 // notRegisteredError is openProject's failure for a repository that was not registered with init.
@@ -118,7 +125,7 @@ func (s *starter) prepare(ctx context.Context) (string, error) {
 	if err := s.chooseContexts(ctx); err != nil {
 		return "", err
 	}
-	if err := s.loadMined(); err != nil {
+	if err := s.loadMined(ctx); err != nil {
 		return "", err
 	}
 	name := s.experimentName()
@@ -201,11 +208,11 @@ func (s *starter) chooseContexts(ctx context.Context) error {
 // noteDrift says when the context committed at HEAD is no longer the snapshot's, which an experiment of that snapshot
 // would not reflect.
 func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
-	src, commit, err := s.w.read(ctx, "HEAD")
+	src, _, err := s.w.read(ctx, "HEAD")
 	if err != nil {
 		return err
 	}
-	_, now, err := snapshot.Build(ctx, s.w.bare, src, "drift check at "+commit, nil)
+	resolved, err := claudectx.Resolve(src)
 	if err != nil {
 		return err
 	}
@@ -213,15 +220,24 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 	if err := json.Unmarshal(snap.Manifest, &saved); err != nil {
 		return fmt.Errorf("snapshot %s: %w", snap.Name, err)
 	}
-	same := func(m snapshot.Manifest) []string {
-		var out []string
-		for _, f := range m.Files {
-			out = append(out, f.Path+" "+f.SHA256)
+	// Read only: hash what HEAD's context loads and compare it with the snapshot's own files. Documents added with
+	// --include are not context files and are left out of the comparison.
+	var now, was []string
+	for _, e := range resolved.Entries {
+		data, err := src.ReadFile(e.Path)
+		if err != nil {
+			return err
 		}
-		slices.Sort(out)
-		return out
+		now = append(now, fmt.Sprintf("%s %x", e.Path, sha256.Sum256(data)))
 	}
-	if !slices.Equal(same(now), same(saved)) {
+	for _, f := range saved.Files {
+		if f.Kind != snapshot.KindIncluded {
+			was = append(was, f.Path+" "+f.SHA256)
+		}
+	}
+	slices.Sort(now)
+	slices.Sort(was)
+	if !slices.Equal(now, was) {
 		fmt.Fprintln(s.env.Stdout, note(s.env.style(), fmt.Sprintf("the context committed at HEAD differs from snapshot %s: save it with agentium context snapshot NAME, "+
 			"then agentium start --b NAME compares it with %s", snap.Name, snap.Name)))
 	}
@@ -296,8 +312,12 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if err := review.Write(ctx, env.Stdout, st, name, mode, env.Now()); err != nil {
 		return fail(env, err)
 	}
-	if budget.raised {
-		fmt.Fprintf(env.Stdout, "Budget for this run: $%.2f (the experiment's $%.2f, raised by --budget)\n", budget.total, budget.current)
+	if budget.total != review.Design.BudgetUSD { // the preview above quotes the design's budget
+		why := "raised earlier"
+		if budget.raised {
+			why = "raised by --budget"
+		}
+		fmt.Fprintf(env.Stdout, "Budget for this run: $%.2f (the design's $%.2f, %s)\n", budget.total, review.Design.BudgetUSD, why)
 	}
 	if code := s.northStar(ctx); code != ExitOK {
 		return code
@@ -314,7 +334,11 @@ func (s *starter) finish(ctx context.Context, name string) int {
 		return ExitOK
 	}
 	if !s.args.yes && !s.confirm(ctx, budget.total) {
-		fmt.Fprintf(env.Stdout, "\nNothing was run and nothing was spent. To run it (real Claude Code runs, up to $%.2f): %s\n", budget.total, st.Command(runCommand))
+		if ctx.Err() != nil {
+			fmt.Fprintln(env.Stdout, "\nInterrupted: nothing was run.")
+			return ExitInterrupted
+		}
+		fmt.Fprintf(env.Stdout, "\nNothing was run%s. To run it (real Claude Code runs, up to $%.2f): %s\n", s.spentBefore(ctx, stored.ID), budget.total, st.Command(runCommand))
 		return ExitOK
 	}
 	runArgs := []string{name}
@@ -334,6 +358,18 @@ func (s *starter) failStart(err error) int {
 		return ExitUsage
 	}
 	return fail(s.env, err)
+}
+
+// ExitInterrupted is the exit code after Ctrl-C at the prompt (128 + SIGINT).
+const ExitInterrupted = 130
+
+// spentBefore is what "Nothing was run" adds: in this command only, when the experiment has runs from earlier ones.
+func (s *starter) spentBefore(ctx context.Context, experimentID int64) string {
+	runs, err := s.w.db.ExperimentRuns(ctx, experimentID)
+	if err != nil || len(runs) == 0 {
+		return " and nothing was spent"
+	}
+	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs))
 }
 
 // budgetPlan is what a run of the experiment may spend in total.
@@ -399,8 +435,11 @@ func (s *starter) confirm(ctx context.Context, budget float64) bool {
 // northStar prints the project's time and spend to its first decisive verdict.
 func (s *starter) northStar(ctx context.Context) int {
 	star, err := report.LoadNorthStar(ctx, s.w.service())
-	if err != nil {
-		return fail(s.env, err)
+	if ctx.Err() != nil {
+		return fail(s.env, ctx.Err())
+	} else if err != nil { // a line must not stop the run the user asked for, as the report leaves it out
+		fmt.Fprintf(s.env.Stderr, "agentium: the first-decisive-verdict line is left out: %v\n", err)
+		return ExitOK
 	}
 	fmt.Fprintf(s.env.Stdout, "\n%s\n", star.Line())
 	return ExitOK
