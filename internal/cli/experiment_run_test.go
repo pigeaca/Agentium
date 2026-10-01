@@ -81,15 +81,21 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","tot
 // both calibrated, and experimentAgent as Claude Code.
 func experimentFixture(t *testing.T) (runFixture, string) {
 	t.Helper()
-	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	ctx := context.Background()
-	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
-	expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
-	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
-	expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
-	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
-	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
-	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
+	dirs := templates["experiment"].build(t, "experiment", []string{"repo", "data", "home"}, func(d []string) {
+		f := runFixtureAt(d[0], d[1], d[2])
+		// The run fixture's steps, repeated here on the template's own folders.
+		cloneDirs(t, runTemplate(t), d)
+		ctx := context.Background()
+		writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
+		expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
+		gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+		expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
+		expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+		f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+		expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "lean"), ExitOK)
+	})
+	f := runFixtureAt(t.TempDir(), filepath.Join(t.TempDir(), "data"), t.TempDir())
+	cloneDirs(t, dirs, []string{f.repo, f.data, f.home})
 	ctrl := t.TempDir()
 	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, ctrl)
 	return f, ctrl

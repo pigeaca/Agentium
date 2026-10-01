@@ -201,19 +201,38 @@ type runFixture struct {
 	terminal *bool
 }
 
+// newRunFixture is a project with one commit that adds a hidden test and the task "value" imported from it, initialized
+// in data. The repository, data folder and home are copies of a template built once per test run (see fixtures_test.go).
 func newRunFixture(t *testing.T, data string) runFixture {
 	t.Helper()
-	f := runFixture{repo: t.TempDir(), data: data, home: t.TempDir()}
-	gitIn(t, f.repo, "init", "-q", "-b", "main")
-	writeFile(t, f.repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
-	writeFile(t, f.repo, "CLAUDE.md", "# Rules\n")
-	writeFile(t, f.repo, "value.txt", "old\n")
-	gitIn(t, f.repo, "add", "-A")
-	gitIn(t, f.repo, "commit", "-q", "-m", "base")
-	writeFile(t, f.repo, "tests/value_test.sh", "grep -q new value.txt\n")
-	writeFile(t, f.repo, "value.txt", "new\n")
-	gitIn(t, f.repo, "add", "-A")
-	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
+	f := runFixtureAt(t.TempDir(), data, t.TempDir())
+	cloneDirs(t, runTemplate(t), []string{f.repo, f.data, f.home})
+	return f
+}
+
+// runTemplate is the folders (repository, data, home) of newRunFixture's project, built on first use.
+func runTemplate(t *testing.T) []string {
+	t.Helper()
+	return templates["run"].build(t, "run", []string{"repo", "data", "home"}, func(d []string) {
+		f := runFixtureAt(d[0], d[1], d[2])
+		gitIn(t, f.repo, "init", "-q", "-b", "main")
+		writeFile(t, f.repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+		writeFile(t, f.repo, "CLAUDE.md", "# Rules\n")
+		writeFile(t, f.repo, "value.txt", "old\n")
+		gitIn(t, f.repo, "add", "-A")
+		gitIn(t, f.repo, "commit", "-q", "-m", "base")
+		writeFile(t, f.repo, "tests/value_test.sh", "grep -q new value.txt\n")
+		writeFile(t, f.repo, "value.txt", "new\n")
+		gitIn(t, f.repo, "add", "-A")
+		gitIn(t, f.repo, "commit", "-q", "-m", "Make the value new")
+		expect(t, f.run(context.Background(), "init"), ExitOK)
+		expect(t, f.run(context.Background(), "task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
+	})
+}
+
+// runFixtureAt is the fixture's runner over the given folders; it creates nothing.
+func runFixtureAt(repo, data, home string) runFixture {
+	f := runFixture{repo: repo, data: data, home: home}
 	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
 	f.sleep = new(func(ctx context.Context, d time.Duration) error)
 	f.terminal = new(bool)
@@ -238,8 +257,6 @@ func newRunFixture(t *testing.T, data string) runFixture {
 			}})
 		return cliResult{code, stdout.String(), stderr.String()}
 	}
-	expect(t, f.run(context.Background(), "init"), ExitOK)
-	expect(t, f.run(context.Background(), "task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
 	return f
 }
 
