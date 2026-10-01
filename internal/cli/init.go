@@ -130,7 +130,3 @@ func orNone(value string) string {
 	}
 	return value
 }
-
-// shortCommit is experiment.ShortCommit; task.go still calls this name and waits for the task-mining PR (#62) to merge
-// before it moves to the shared one.
-func shortCommit(commit string) string { return experiment.ShortCommit(commit) }

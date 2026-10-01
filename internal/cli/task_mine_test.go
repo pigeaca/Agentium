@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"os"
 	"path/filepath"
 	"slices"
@@ -91,7 +92,7 @@ func TestTaskMine(t *testing.T) {
 		"+3 the message has a subject and a body", "Set aside: 4 commit(s)", "no parent commit", "documentation only", "no test changes",
 		"tests only", "Next: agentium task mine --limit 3")
 	for _, h := range hashes {
-		if !strings.Contains(dry.stdout, shortCommit(h)) {
+		if !strings.Contains(dry.stdout, experiment.ShortCommit(h)) {
 			t.Errorf("dry run lacks candidate %s:\n%s", h, dry.stdout)
 		}
 	}

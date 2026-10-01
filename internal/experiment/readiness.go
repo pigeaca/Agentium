@@ -42,8 +42,6 @@ type ReadinessEnv struct {
 	Claude func() (string, error) // where Claude Code is
 	SignIn string                 // how runs would sign in now (claude.SignInAPIKey, ...)
 	Style  term.Style             // styles the commands the checks suggest
-	// TaskGaps lists what a task's hidden tests require that nothing states; f caches searches across tasks.
-	TaskGaps func(ctx context.Context, f *task.Fairness, t store.Task) ([]task.Gap, error)
 }
 
 // checker collects a readiness report's lines.
@@ -176,7 +174,7 @@ func (c *checker) fairness(ctx context.Context, p Project, e ReadinessEnv, d Des
 		if err != nil {
 			continue // reported above as removed
 		}
-		if gaps, err := e.TaskGaps(ctx, fair, t); err != nil {
+		if gaps, err := task.Gaps(ctx, fair, t); err != nil {
 			unchecked = append(unchecked, name)
 		} else if len(gaps) > 0 {
 			unfair = append(unfair, fmt.Sprintf("%s (%d)", name, len(gaps)))

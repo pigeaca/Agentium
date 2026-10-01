@@ -13,13 +13,9 @@ import (
 // owns the logic, and print. Longer ones hold business logic that belongs in a service (the refactor round, step 2).
 const maxHandlerLines = 80
 
-// tooLongHandlers are handlers over the limit that wait for another change to land first. Do not add to it: shorten
-// the handler instead.
-var tooLongHandlers = map[string]bool{
-	// task.go and task_mine.go are being changed by the task-mining PR (#62); taskValidate moves to a service when it
-	// merges.
-	"taskValidate": true,
-}
+// tooLongHandlers are handlers over the limit that wait for another change to land first. It is empty: do not add to
+// it, shorten the handler instead.
+var tooLongHandlers = map[string]bool{}
 
 // A command handler is a function of the shape func(ctx context.Context, env Env, args []string) int.
 func TestCommandHandlersStayShort(t *testing.T) {

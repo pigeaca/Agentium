@@ -177,7 +177,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 // how to style the commands they suggest.
 func readinessEnv(env Env) experiment.ReadinessEnv {
 	mode, _ := signInMode(env)
-	return experiment.ReadinessEnv{Claude: func() (string, error) { return claudePath(env) }, SignIn: mode, Style: env.style(), TaskGaps: taskGaps}
+	return experiment.ReadinessEnv{Claude: func() (string, error) { return claudePath(env) }, SignIn: mode, Style: env.style()}
 }
 
 func experimentList(ctx context.Context, env Env, args []string) int {
