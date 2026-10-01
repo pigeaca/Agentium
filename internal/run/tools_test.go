@@ -45,7 +45,7 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 	dir := t.TempDir()
 	deps, log := filepath.Join(dir, "deps"), filepath.Join(dir, "calls")
 	checkout := t.TempDir()
-	env := Env{CommandEnv: []string{"BASE=1"}, VerifyTimeout: 20 * time.Second}
+	env := Env{CommandEnv: []string{"BASE=1"}, VerifyTimeout: 20 * time.Second, Layout: home.Layout{Cache: filepath.Join(dir, "cache")}}
 	steps := []buildtool.WarmStep{{Command: `echo "$BASE $MARK" >> ` + log, Env: []string{"MARK=a", "BASE=2"}}}
 	ctx := context.Background()
 	warm := func(base string, steps []buildtool.WarmStep) string {
@@ -79,7 +79,7 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 		t.Error("a failed warm-up was stamped as done")
 	}
 	// Lock and stamps live where agents cannot read (the data folder's cache), not in the deps folder they read.
-	if _, err := os.Stat(env.stampPath(deps, "c1", []string{"cargo"})); err != nil || !strings.HasPrefix(env.stampPath(deps, "c1", []string{"cargo"}), os.TempDir()) {
+	if _, err := os.Stat(env.stampPath(deps, "c1", []string{"cargo"})); err != nil || !strings.HasPrefix(env.stampPath(deps, "c1", []string{"cargo"}), filepath.Join(dir, "cache")) {
 		t.Errorf("stamp: %v", err)
 	}
 	if entries, _ := os.ReadDir(deps); len(entries) != 0 {
