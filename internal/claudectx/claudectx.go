@@ -12,6 +12,7 @@
 package claudectx
 
 import (
+	"bytes"
 	"fmt"
 	"path"
 	"regexp"
@@ -169,13 +170,21 @@ func (r *resolver) resolve() error {
 	if len(roots) == 0 {
 		r.warn("No CLAUDE.md, .claude/CLAUDE.md or AGENTS.md at the repository root: Claude Code loads no project instructions.")
 	}
+	agentsViaLink := false
 	for _, name := range roots {
 		if data, ok := r.read(name); ok {
 			r.add(name, KindInstructions, data, len(data), "")
 			r.imports([]string{name}, data, true)
+			// Source follows symbolic links, so a CLAUDE.md that links to AGENTS.md reads as AGENTS.md's own bytes:
+			// Claude Code loads that content through the link, though only CLAUDE.md is recorded.
+			if name != "AGENTS.md" && source.Has(r.src, "AGENTS.md") {
+				if agents, ok := r.read("AGENTS.md"); ok && bytes.Equal(agents, data) {
+					agentsViaLink = true
+				}
+			}
 		}
 	}
-	if source.Has(r.src, "AGENTS.md") && !agentsLoaded && !r.seen["AGENTS.md"] {
+	if source.Has(r.src, "AGENTS.md") && !agentsLoaded && !agentsViaLink && !r.seen["AGENTS.md"] {
 		r.warn("AGENTS.md is not loaded by Claude Code: a CLAUDE.md exists and does not import it (@AGENTS.md).")
 	}
 	if source.Has(r.src, "CLAUDE.local.md") {
