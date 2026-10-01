@@ -201,6 +201,14 @@ func TestScanCandidatesAndReasons(t *testing.T) {
 	if got := best.Instruction(); got != "Add Parse for durations\n\nParse reads 1h30m-style strings and returns a time.Duration.\nCloses #12." {
 		t.Fatalf("instruction %q", got)
 	}
+	for _, c := range res.Candidates { // task import --commit reads the same instruction from the commit alone
+		if got, err := CommitInstruction(context.Background(), c.Hash, "-C", f.root); err != nil || got != c.Instruction() {
+			t.Fatalf("CommitInstruction(%s) = %q, %v; want %q", c.Hash, got, err, c.Instruction())
+		}
+	}
+	if _, err := CommitInstruction(context.Background(), "0000000000000000000000000000000000000000", "-C", f.root); err == nil {
+		t.Fatal("CommitInstruction of a missing commit: no error")
+	}
 	if best.Score != 10 || !slices.Equal(texts(best.Reasons), []string{
 		"+3 the message has a subject and a body", "+2 references an issue", "+3 a moderate size (50 lines)",
 		"+2 tests in proportion to code (20 test lines, 30 code lines)", "+0 in the oldest third of the scanned history",
