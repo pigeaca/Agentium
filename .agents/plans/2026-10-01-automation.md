@@ -1,7 +1,7 @@
 # Automation: Agentium without anyone running it
 
 - Date: 2026-10-01
-- Status: Planned (2026-10-01): the user chose to start on their own Mac (see Decision). Requested ("How it can be automated? … introduce it in roadmap"). Phases start in the [next chapter](2026-10-01-next-chapter.md)'s waves 2–3. Paid steps (the Linux spike, real CI runs) need their own approval.
+- Status: Planned (2026-10-01): on the user's Mac, driven by hooks with no daemon (see Decision). Requested ("How it can be automated? … introduce it in roadmap"). Phases start in the [next chapter](2026-10-01-next-chapter.md)'s waves 2–3. Paid steps (the Linux spike, real CI runs) need their own approval.
 - Scope: how Agentium runs on its own in the user's development apps: on every change to AI context, on a schedule, and as new code lands.
 
 ## Why
@@ -12,19 +12,24 @@ Today a person runs every command. The value comes from three questions:
 
 Each can run on a trigger, inside a budget, and report where the team already looks: the pull request, a weekly digest.
 
-## Decision (the user, 2026-10-01): start on the user's Mac
-- **No CI runner and no GitHub Action at first.** One local process, `agentium watch`, runs the loops on the user's machine.
-  - It polls the repository with `git fetch` and open pull requests with the user's `gh` login.
-  - It runs the supply loop when the default branch moves.
-  - It runs the fast check for each new head commit of a trusted pull request carrying the opt-in label.
-  - It spends the deep-watch budget in idle usage windows, overnight with a subscription.
-  - It posts reports as pull request comments through `gh`.
-- **Scheduling:** `agentium watch --once` for a single pass. For a schedule, a macOS LaunchAgent that the user installs: Agentium can print its definition (`agentium watch --launchd`), but never installs it. Or the user's own cron.
-- **What it needs from the user:**
-  - a `gh` login allowed to comment on pull requests (the current fine-grained token cannot read checks, so checks wait; comments are enough);
-  - the machine awake for scheduled passes;
-  - the opt-in label on pull requests.
-- **Why:** the sandbox recipes are proven on macOS, the data folder persists (so base runs and calibrations are reused across checks), and the subscription's usage windows are used rather than API prices.
+## Decision (the user, 2026-10-01): on the user's Mac, driven by hooks, no daemon
+Nothing stays running. An event triggers one job, and the job exits.
+- **Supply:** a git `post-merge` hook (after `git pull`), or a launchd job watching `.git/FETCH_HEAD` (any fetch), runs `agentium pool update --background`.
+- **Fast check:** a git `pre-push` hook. When the pushed commits touch context paths (`CLAUDE.md`, `AGENTS.md`, `.claude/**`, rules, `.mcp.json`, settings), it runs `agentium ci check --background --comment`, which finds the pull request through `gh` and comments when the check ends. The push is never blocked.
+- **Instant feedback:** a Claude Code `PostToolUse` hook, in the user's own settings (Agentium's runs load project settings only, so it cannot fire inside them). On edits to context files it runs a quick context check: size change, broken imports, warnings. No agent runs and no cost.
+- **Deep watch:** a launchd calendar entry (nightly, or hourly) runs `agentium watch --once`. That is one budgeted pass in an idle usage window, and it picks up teammates' labelled pull requests that no local hook saw.
+- **Background jobs:**
+  - they are detached, logged to the data folder, and serialized by Agentium's run lock;
+  - each head commit is checked once;
+  - a pending job is queued, never run twice.
+- **Installing:** `agentium hooks print git|claude|launchd` prints the snippets, chained with existing hooks such as this repository's `.githooks`. The user installs them; Agentium never writes the repository or the user's settings.
+- **What it needs from the user:** a `gh` login allowed to comment on pull requests (the current fine-grained token cannot read checks, so comments carry the result), and the opt-in label for pull requests that hooks don't see.
+- **Why:**
+  - Hooks run only on events, so nothing polls.
+  - The macOS sandbox recipes are proven.
+  - The data folder persists, so base runs and calibrations are reused.
+  - The subscription's usage windows are used rather than API prices.
+- **Limit:** hooks see only this machine's pulls and pushes; the scheduled pass covers the rest.
 - **Hosted runners stay later.** They need the Linux spike (A3), secrets, and a cached data folder.
 - **Credentials on hosted runners** (asked by the user on 2026-10-01):
   - **A Claude Code sign-in, chosen per team:**
@@ -96,10 +101,10 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 | Phase | Wave | What | Needs | Moves |
 |---|---|---|---|---|
 | A1 Headless foundation | 2 | `--json` and exit codes everywhere, non-interactive `start --yes`, `agentium.toml` | quick start | time ↓ |
-| A2 Supply loop | 2 | `agentium pool update` and pool health | [task mining](2026-10-01-task-mine.md) | time ↓↓ |
+| A2 Supply loop | 2 | `agentium pool update --background` and pool health; the `post-merge` hook | [task mining](2026-10-01-task-mine.md) | time ↓↓ |
 | A3 Linux runs (spike, paid; approval) | Later | a real run in Claude Code's Linux sandbox; a recipe or a list of gaps (only for hosted runners) | temp isolation | reach |
-| A4 Fast check, local | 3 | `agentium ci check`, the policy exit codes; `agentium watch` polls pull requests through `gh` and posts the comment (a GitHub Action comes later, for hosted runners) | A1, A2, run reuse, early stopping | reach ↑↑, $ ↓ |
-| A5 Deep watch | 3 | the scheduled part of `agentium watch` (usage windows, overnight), drift on new Claude Code versions and models, history and digest; `--launchd` prints a LaunchAgent for the user to install | A1, run reuse, early stopping | trust, reach |
+| A4 Fast check, local | 3 | `agentium ci check` with `--background` and `--comment`, the policy exit codes, `agentium hooks print git`, the Claude Code context hook (a GitHub Action comes later, for hosted runners) | A1, A2, run reuse, early stopping | reach ↑↑, $ ↓ |
+| A5 Deep watch | 3 | `agentium watch --once` from a launchd calendar entry (usage windows, overnight), drift on new Claude Code versions and models, history and digest; `hooks print launchd` | A1, run reuse, early stopping | trust, reach |
 | A6 Autopilot | Later | propose, test and open pull requests with context changes | A4, A5, the judge | time ↓, $ ↓ |
 
 ## Acceptance (per phase, refined when it starts)
