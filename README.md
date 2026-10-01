@@ -95,7 +95,7 @@ The minimal docs cut Claude Code's first request by about 4.6k tokens, but cost 
 
 The [A/A report](docs/examples/aa-report.md) is the sanity check: the same context in both arms. It reported no difference (cost −6%, 95%: −31% to +26%), and every run passed.
 
-A larger A/B, 10 tasks × 1 run per arm, is planned in the [hardening plan](.agents/plans/2026-09-29-experiment-hardening.md).
+A larger A/B, 8 tasks × 1 run per arm ([report](docs/examples/context-ab-16-report.md)), found the same: every run passed in both arms, and cost was inconclusive (+5%, 95%: −11% to +25%), with about 55 tasks needed to settle it.
 
 ## Development
 
