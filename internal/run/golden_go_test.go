@@ -52,7 +52,9 @@ func TestGoProfileGolden(t *testing.T) {
 		"SSH_AUTH_SOCK=/golden/agent.sock", "GOPROXY_TOKEN=parent-proxy"}
 	base := claude.Invocation{CLI: "/golden/bin/claude", Dir: "/golden/data/workspaces/r1/repo", Prompt: "Fix the parser.",
 		Model: "claude-sonnet-5", Effort: "medium", BudgetUSD: 3, Home: "/golden/home",
-		Deny: []string{"/golden/data/projects", "/golden/data/records", "/golden/repo"}}
+		Deny: []string{"/golden/data/projects", "/golden/data/records", "/golden/repo"},
+		// Every run has a temp root of its own (Once). The user id is fixed so no machine's /tmp/claude-<uid> resolves.
+		TempRoot: "/golden/t/ag-0123456789", UID: 4242}
 	cases := []struct {
 		name    string
 		inv     func(claude.Invocation) claude.Invocation

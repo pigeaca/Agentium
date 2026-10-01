@@ -807,3 +807,167 @@ func TestParseContextUseInputs(t *testing.T) {
 		}
 	}
 }
+
+// A run's own temp root keeps the agent out of the user's shared Claude Code temp folder, in every sign-in mode: the
+// root is CLAUDE_CODE_TMPDIR, and the shared folder (both forms, and under the user's own CLAUDE_CODE_TMPDIR) is denied
+// to the shell for reading and writing, and to the Read tool.
+func TestReq5RunsOwnTempRootAndTheSharedTempFolder(t *testing.T) {
+	environ := append(slices.Clone(parentEnv), "CLAUDE_CODE_TMPDIR=/users/tmp", "TMPDIR=/var/folders/u/T/", "XDG_RUNTIME_DIR=/run/user/501")
+	shared := []string{"/users/tmp/claude-501", "/users/tmp/cc-socks", "/run/user/501/cc-socks", "/home/u/.npm/_logs", "/home/u/.claude/debug"}
+	for _, tmp := range []string{"/tmp", "/private/tmp"} {
+		for _, name := range []string{"claude-501", "claude", "cc-socks", "cc-socks-501", "cc-daemon-501"} {
+			shared = append(shared, tmp+"/"+name)
+		}
+	}
+	for _, mode := range []string{SignInLogin, SignInTokenFile, SignInAPIKey} {
+		secret := ""
+		if mode != SignInLogin {
+			secret = "s3cret"
+		}
+		inv := invocation(t, mode, secret)
+		inv.TempRoot, inv.UID = "/tmp/ag-0123456789", 501
+		args, list, err := inv.Command(environ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tmpdirs []string
+		for _, kv := range list {
+			if strings.HasPrefix(kv, "CLAUDE_") && !strings.HasPrefix(kv, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=") && !strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") &&
+				!strings.HasPrefix(kv, "CLAUDE_CODE_OAUTH_TOKEN=") {
+				tmpdirs = append(tmpdirs, kv)
+			}
+		}
+		if !slices.Equal(tmpdirs, []string{"CLAUDE_CODE_TMPDIR=/tmp/ag-0123456789"}) {
+			t.Errorf("%s: the run's CLAUDE_* temp variables = %q, want only its own root (the parent's dropped)", mode, tmpdirs)
+		}
+		var settings struct {
+			Permissions struct{ Deny []string }
+			Sandbox     struct {
+				Filesystem struct{ DenyRead, DenyWrite, AllowWrite []string }
+			}
+		}
+		if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil {
+			t.Fatal(err)
+		}
+		fs := settings.Sandbox.Filesystem
+		mine := shared
+		if mode == SignInLogin { // the user's own config folder (parentEnv's CLAUDE_CONFIG_DIR) keeps a debug folder too
+			mine = append(slices.Clone(shared), "/home/u/.claude-work/debug")
+		}
+		for _, dir := range mine {
+			if !slices.Contains(fs.DenyRead, dir) || !slices.Contains(fs.DenyWrite, dir) || !slices.Contains(settings.Permissions.Deny, "Read(/"+dir+"/**)") {
+				t.Errorf("%s: the shared temp folder %s is not denied: %+v, %q", mode, dir, fs, settings.Permissions.Deny)
+			}
+		}
+		for _, p := range inv.Deny { // what belongs to Agentium, the user and other runs is not the agent's to write
+			if !slices.Contains(fs.DenyWrite, p) {
+				t.Errorf("%s: %s is not denied for writing: %q", mode, p, fs.DenyWrite)
+			}
+		}
+		for _, list := range [][]string{fs.DenyRead, fs.DenyWrite} {
+			for _, p := range list {
+				if strings.HasPrefix(p, "/tmp/ag-") || strings.HasPrefix(p, "/private/tmp/ag-") {
+					t.Errorf("%s: the run's own temp root is denied: %s", mode, p)
+				}
+			}
+		}
+	}
+
+	// Without a temp root of its own, Claude Code needs the shared folder: it is left alone, and no variable is set.
+	inv := invocation(t, SignInLogin, "")
+	_, env, settings := command(t, inv)
+	if _, ok := env["CLAUDE_CODE_TMPDIR"]; ok {
+		t.Error("CLAUDE_CODE_TMPDIR set without a temp root")
+	}
+	if strings.Contains(fmt.Sprint(settings), "tmp/claude") || strings.Contains(fmt.Sprint(settings), "cc-socks") {
+		t.Errorf("the shared temp folder is denied without a temp root: %v", settings)
+	}
+	if fs := settings["sandbox"].(map[string]any)["filesystem"].(map[string]any); !strings.Contains(fmt.Sprint(fs["denyWrite"]), "/home/u/.npm/_logs") {
+		t.Errorf("the shared log folders are writable without a temp root: %v", fs)
+	}
+	inv.TempRoot = "tmp/ag-x"
+	if _, _, err := inv.Command(parentEnv); err == nil {
+		t.Error("a relative temp root must be refused")
+	}
+}
+
+// A temp root Claude Code would not use makes it fall back to the shared folders: a root too long is refused.
+func TestTempRootFits(t *testing.T) {
+	const maxUID = 4294967294 // the longest user id: 10 digits
+	for _, root := range []string{"/tmp/ag-0123456789", "/private/tmp/ag-0123456789"} {
+		if err := TempRootFits(root, maxUID); err != nil {
+			t.Errorf("%s: %v", root, err)
+		}
+	}
+	// The shells' TMPDIR, <root>/claude-<uid>, may have 44 bytes: 33 for the root with uid 501, 26 with 10 digits.
+	for uid, limit := range map[int]int{501: 33, maxUID: 26} {
+		if err := TempRootFits("/"+strings.Repeat("a", limit-1), uid); err != nil {
+			t.Errorf("uid %d, %d bytes: %v", uid, limit, err)
+		}
+		if err := TempRootFits("/"+strings.Repeat("a", limit), uid); err == nil || !strings.Contains(err.Error(), "too long") {
+			t.Errorf("uid %d, %d bytes: %v", uid, limit+1, err)
+		}
+	}
+	// The resolved form counts too: a short link to a long folder does not fit.
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 40))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join("/tmp", fmt.Sprintf("ag-test-%d", os.Getpid()))
+	if err := os.Symlink(long, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	if err := TempRootFits(link, 501); err == nil {
+		t.Errorf("a link to %s fits", long)
+	}
+	inv := invocation(t, SignInLogin, "")
+	inv.TempRoot, inv.UID = "/"+strings.Repeat("a", 33), 501
+	if _, _, err := inv.Command(parentEnv); err == nil {
+		t.Error("Command took a temp root too long")
+	}
+}
+
+// A name in the world-writable /tmp may be another user's link: only the system's own /tmp → /private/tmp link is
+// followed, so a planted link cannot make a run deny (and refuse to start over) a folder of the other user's choosing.
+func TestFormsNeverFollowALinkOutOfTmp(t *testing.T) {
+	target := t.TempDir()
+	link := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-test-%d", os.Getpid()))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create %s: %v", link, err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	got := forms(link)
+	want := []string{link, filepath.Join("/private/tmp", filepath.Base(link))}
+	if !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q (never the link's target %s)", link, got, want, target)
+	}
+	real := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-dir-%d", os.Getpid()))
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(real) })
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []string{real}
+	if resolved != real { // macOS: /tmp is the system's link to /private/tmp, which is followed
+		want = append(want, resolved)
+	}
+	if got := forms(real); !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q", real, got, want)
+	}
+	if outside := t.TempDir(); !slices.Equal(forms(outside), formsResolved(outside)) {
+		t.Errorf("a path outside /tmp is not resolved as before")
+	}
+}
+
+// formsResolved is the plain rule outside /tmp: the path and, when different, its resolved form.
+func formsResolved(p string) []string {
+	out := []string{filepath.Clean(p)}
+	if r, err := filepath.EvalSymlinks(p); err == nil && r != out[0] {
+		out = append(out, r)
+	}
+	return out
+}
