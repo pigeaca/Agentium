@@ -45,7 +45,16 @@ func Load(ctx context.Context, p experiment.Project, name, home string, warn io.
 	if in.Runs, err = loadRuns(ctx, p, lock, runs, warn); err != nil {
 		return Report{}, err
 	}
-	return Build(in)
+	rep, err := Build(in)
+	if err != nil {
+		return Report{}, err
+	}
+	star, err := LoadNorthStar(ctx, p)
+	if err != nil {
+		return Report{}, err
+	}
+	rep.NorthStar = &star
+	return rep, nil
 }
 
 // loadRuns decodes the stored runs. Runs recorded before Agentium kept their context use get it from their

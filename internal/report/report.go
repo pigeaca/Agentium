@@ -59,8 +59,11 @@ type Report struct {
 	Arms       []Arm               `json:"arms"`
 	Tasks      []TaskRow           `json:"tasks"`
 	Judge      *Judge              `json:"judge,omitempty"` // only with the judge
-	Notes      []string            `json:"notes"`
-	Runs       []RunRow            `json:"runs"`
+	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
+	// project's other experiments).
+	NorthStar *NorthStar `json:"north_star,omitempty"`
+	Notes     []string   `json:"notes"`
+	Runs      []RunRow   `json:"runs"`
 }
 
 // Arm summarizes one arm's counted runs. Means are nil when there is nothing to average.

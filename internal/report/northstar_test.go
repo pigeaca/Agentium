@@ -1,0 +1,227 @@
+package report
+
+import (
+	"context"
+	"encoding/json"
+	"math"
+	"math/rand/v2"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/stats"
+	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
+)
+
+// starProject is a registered project, 2 hours before the fixtures' runs, in a fresh database.
+func starProject(t *testing.T) (experiment.Project, time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	registered := fixture().Lock.LockedAt.Add(-2 * time.Hour)
+	saved, err := db.SaveProject(ctx, "/work/repo", "repo", []byte("{}"), registered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return experiment.Project{DB: db, ID: saved.ID}, registered
+}
+
+// storeExperiment saves an experiment of in as stored data: its lock and every run.
+func storeExperiment(t *testing.T, p experiment.Project, in Input) {
+	t.Helper()
+	ctx := context.Background()
+	design, _ := json.Marshal(in.Lock.Design)
+	e, err := p.DB.SaveExperiment(ctx, store.Experiment{ProjectID: p.ID, Name: in.Name, Template: in.Lock.Design.Template, Design: design, CreatedAt: in.Lock.LockedAt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, _ := json.Marshal(in.Lock)
+	if err := p.DB.LockExperiment(ctx, e.ID, lock); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range in.Runs {
+		rec, _ := json.Marshal(r.Record)
+		err := p.DB.SaveRun(ctx, store.Run{ID: in.Name + "-" + r.ID, ProjectID: p.ID, TaskName: r.Record.Task, Arm: r.Record.Arm, Outcome: r.Record.Outcome,
+			Passed: r.Record.Passed, CostUSD: r.Record.Metrics.CostUSD, Record: rec, Started: r.Record.Started, Finished: r.Record.Finished,
+			ExperimentID: e.ID, Slot: r.Slot, Attempt: r.Attempt})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// total is what in's runs spent, agent and judge.
+func total(in Input) float64 {
+	sum := 0.0
+	for _, r := range in.Runs {
+		sum += r.Record.Spend().TotalUSD()
+	}
+	return sum
+}
+
+// verdictOf is the verdict of in's metric with the given role in its own analysis.
+func verdictOf(t *testing.T, in Input, role string) string {
+	t.Helper()
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rep.Analysis.Results {
+		if r.Role == role {
+			return r.Verdict
+		}
+	}
+	t.Fatalf("no %s result", role)
+	return ""
+}
+
+// noisyTie is a 10 × 1 experiment whose arms differ by noise only: its verdicts are inconclusive.
+func noisyTie(t *testing.T) Input {
+	t.Helper()
+	in := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	r := rand.New(rand.NewPCG(9, 9))
+	for i := range in.Runs {
+		in.Runs[i].Record.Metrics.CostUSD = 0.30 * math.Exp(0.45*r.NormFloat64())
+		in.Runs[i].Record.Passed = &[]bool{r.Float64() < 0.5}[0]
+	}
+	in.Name = "noisy-tie"
+	return in
+}
+
+func TestNorthStarNoneYet(t *testing.T) {
+	t.Parallel()
+	p, _ := starProject(t)
+	ctx := context.Background()
+	got, err := LoadNorthStar(ctx, p)
+	if err != nil || got.Decisive || got.Line() != "First decisive verdict: none yet ($0.00 spent since init)" {
+		t.Fatalf("no experiments: %+v, %q, %v", got, got.Line(), err)
+	}
+
+	// Inconclusive and exploratory verdicts do not count, and an A/A never does: only the spend shows.
+	tie := noisyTie(t)
+	if v := verdictOf(t, tie, experiment.RolePrimary); v != stats.Inconclusive {
+		t.Fatalf("premise: the noisy tie's cost verdict is %q, want inconclusive", v)
+	}
+	small := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	small.Name = "small"
+	small.Lock.Design.Tasks = small.Lock.Design.Tasks[:4]
+	small.Lock.Schedule = experiment.Schedule(small.Lock.Design)
+	small.Runs = small.Runs[:0]
+	for _, r := range oneRun(experiment.MethodVersion, experiment.TemplateContextAB).Runs {
+		if strings.Contains(" task-0 task-1 task-2 task-3 ", " "+r.Record.Task+" ") {
+			small.Runs = append(small.Runs, r)
+		}
+	}
+	if v := verdictOf(t, small, experiment.RolePrimary); v != stats.Exploratory {
+		t.Fatalf("premise: the 4-task cost verdict is %q, want exploratory", v)
+	}
+	aa := oneRun(experiment.MethodVersion, experiment.TemplateAA)
+	aa.Name = "aa"
+	for _, in := range []Input{tie, small, aa} {
+		storeExperiment(t, p, in)
+	}
+	got, err = LoadNorthStar(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := total(tie) + total(small) + total(aa)
+	if got.Decisive || math.Abs(got.SpentUSD-want) > 1e-6 || !strings.HasPrefix(got.Line(), "First decisive verdict: none yet ($") {
+		t.Errorf("only inconclusive, exploratory and A/A experiments: %+v, %q (spent want %.4f)", got, got.Line(), want)
+	}
+}
+
+func TestNorthStarDecisive(t *testing.T) {
+	t.Parallel()
+	p, registered := starProject(t)
+	ctx := context.Background()
+	tie := noisyTie(t)
+	tie.Lock.LockedAt = tie.Lock.LockedAt.Add(-time.Hour) // before the decisive one
+	for i := range tie.Runs {
+		tie.Runs[i].Record.Started, tie.Runs[i].Record.Finished = tie.Runs[i].Record.Started.Add(-time.Hour), tie.Runs[i].Record.Finished.Add(-time.Hour)
+	}
+	decisive := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	decisive.Name = "lean-ab"
+	if v := verdictOf(t, decisive, experiment.RolePrimary); !Decisive(v) {
+		t.Fatalf("premise: the 20%% cheaper arm's cost verdict is %q, want decisive", v)
+	}
+	// A later experiment's spend is not counted, and a judged run counts its judge's spend.
+	later := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	later.Name = "later"
+	for i := range later.Runs {
+		later.Runs[i].Record.Started, later.Runs[i].Record.Finished = later.Runs[i].Record.Started.Add(5*time.Hour), later.Runs[i].Record.Finished.Add(5*time.Hour)
+	}
+	decisive.Runs[0].Record.Judge = &judge.Verdict{CostUSD: 0.07}
+	for _, in := range []Input{tie, decisive, later} {
+		storeExperiment(t, p, in)
+	}
+	got, err := LoadNorthStar(ctx, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := decisive.Runs[len(decisive.Runs)-1].Record
+	if !got.Decisive || got.Experiment != "lean-ab" || got.Metric != experiment.MetricCost || !Decisive(got.Verdict) {
+		t.Errorf("first decisive verdict %+v, want lean-ab on cost", got)
+	}
+	if want := last.Finished.Sub(registered).Seconds(); math.Abs(got.Seconds-want) > 1 {
+		t.Errorf("seconds %.0f, want %.0f from registration to the last run's end", got.Seconds, want)
+	}
+	if want := total(tie) + total(decisive); math.Abs(got.SpentUSD-want) > 1e-6 {
+		t.Errorf("spent $%.4f, want $%.4f: every run up to the decisive experiment's last, its judge included", got.SpentUSD, want)
+	}
+	line := got.Line()
+	for _, s := range []string{"First decisive verdict: ", " on cost in lean-ab, 2h ", " after init, $"} {
+		if !strings.Contains(line, s) {
+			t.Errorf("line %q lacks %q", line, s)
+		}
+	}
+}
+
+// The report shows the line in the terminal and Markdown renderings and in JSON, only when Load set it.
+func TestReportShowsTheNorthStar(t *testing.T) {
+	t.Parallel()
+	rep, err := Build(oneRun(experiment.MethodVersion, experiment.TemplateContextAB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plain strings.Builder
+	if err := rep.Markdown(&plain); err != nil || strings.Contains(plain.String(), "First decisive verdict") {
+		t.Fatalf("a report built without a north star shows one (%v)", err)
+	}
+	rep.NorthStar = &NorthStar{SpentUSD: 12.5}
+	var md, txt, js strings.Builder
+	if err := rep.Markdown(&md); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.Terminal(&txt, term.Style{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.JSON(&js); err != nil {
+		t.Fatal(err)
+	}
+	const line = "First decisive verdict: none yet ($12.50 spent since init)."
+	for name, out := range map[string]string{"markdown": md.String(), "terminal": txt.String()} {
+		if !strings.Contains(out, line) {
+			t.Errorf("%s lacks %q", name, line)
+		}
+	}
+	if !strings.Contains(js.String(), `"north_star": {`) || !strings.Contains(js.String(), `"spent_usd": 12.5`) {
+		t.Errorf("JSON lacks the north star:\n%.300s", js.String())
+	}
+}
+
+func TestSpanFormat(t *testing.T) {
+	t.Parallel()
+	for d, want := range map[time.Duration]string{40 * time.Second: "40s", 7 * time.Minute: "7m", 3*time.Hour + 12*time.Minute: "3h 12m", 51 * time.Hour: "2d 3h"} {
+		if got := formatSpan(d); got != want {
+			t.Errorf("formatSpan(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
