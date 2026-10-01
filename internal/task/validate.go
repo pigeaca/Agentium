@@ -94,6 +94,8 @@ type Validation struct {
 	HarnessChanged map[string][]string `json:"harness_changed,omitempty"`
 	// ContextKept lists, per arm, context files the solution also changes: the arm keeps its own version of them.
 	ContextKept map[string][]string `json:"context_kept,omitempty"`
+	// WeakTests is the weak-tests check (--weak-tests); nil means it was not run. It is a warning, not a status.
+	WeakTests *WeakTests `json:"weak_tests,omitempty"`
 }
 
 // RepeatCount is how many times each stage ran: 1 when Repeats is absent.
@@ -103,15 +105,17 @@ func (v Validation) RepeatCount() int {
 
 // Validator runs validations. Checkouts are made in WorkDir and removed afterwards unless Keep is set.
 type Validator struct {
-	Bare     string
-	WorkDir  string
-	LogDir   string
-	Timeout  time.Duration // per command
-	Keep     bool
-	Repeats  int        // runs per stage, each in a fresh checkout; below 2 means once
-	Env      []string   // added to every setup and verification command (a build cache of Agentium's own)
-	Progress io.Writer  // one line per stage
-	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
+	Bare      string
+	WorkDir   string
+	LogDir    string
+	Timeout   time.Duration // per command
+	Keep      bool
+	WeakTests bool       // also try the reference solution without each of its hunks (see weakTests)
+	MaxHunks  int        // how many hunks that tries; 0 means DefaultMaxHunks
+	Repeats   int        // runs per stage, each in a fresh checkout; below 2 means once
+	Env       []string   // added to every setup and verification command (a build cache of Agentium's own)
+	Progress  io.Writer  // one line per stage
+	Style     term.Style // styles each progress line's verdict; the zero Style prints plain text
 	// Started, when set, is called before each stage: it only feeds a status display and must not print.
 	Started func(arm, stage string)
 	Now     func() time.Time
@@ -163,7 +167,43 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			}
 		}
 	}
+	if v.WeakTests {
+		if solution == nil {
+			return result, ErrNoSolution
+		}
+		switch reason := weakSkipReason(result.Stages); {
+		case reason != "":
+			result.WeakTests = &WeakTests{Reason: reason}
+		default:
+			weak, err := v.weakTests(ctx, spec, solution)
+			result.WeakTests = weak
+			if err != nil {
+				return result, err
+			}
+		}
+	}
 	return result, nil
+}
+
+// weakSkipReason says why the weak-tests check cannot run: the base context's reference stage must have run and been OK.
+// It is "" when it can.
+func weakSkipReason(stages []Stage) string {
+	reference := false
+	for _, s := range stages {
+		switch {
+		case s.Arm != "base":
+		case s.Flaky:
+			return fmt.Sprintf("the base context's %s stage is flaky, so it cannot be trusted to compare against", s.Stage)
+		case !s.OK:
+			return fmt.Sprintf("the base context's %s stage did not behave as required, so the reference was not proven to pass", s.Stage)
+		case s.Stage == StageReference:
+			reference = true
+		}
+	}
+	if !reference {
+		return "the reference stage did not run in the base context"
+	}
+	return ""
 }
 
 // validateArm runs an arm's stages. Each stage gets a fresh checkout, prepared as a run would be: the base, the arm's
