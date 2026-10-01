@@ -47,7 +47,7 @@ Shape:
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
-| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, what it used of its context, redacted records; a start file to recover dead runs; its temp root; folders predicted for overlapping runs |
+| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`: agent and judge costs, one total); a start file recovering dead runs; its temp root; folders for overlapping runs |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |

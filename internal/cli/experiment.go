@@ -313,12 +313,16 @@ func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Es
 				SawResult bool `json:"saw_result"`
 			} `json:"metrics"`
 		}
-		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model && rec.Metrics.SawResult && r.CostUSD > 0 {
+		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.Metrics.SawResult {
+			continue
+		}
+		// The agent's cost alone: what the judge spends is estimated apart (Design.JudgeEstimateUSD).
+		if agent := storedSpend(r).AgentUSD; agent > 0 {
 			own := ""
 			if r.TaskID != 0 {
 				own = r.TaskName
 			}
-			past = append(past, experiment.PastRun{Task: own, CostUSD: r.CostUSD})
+			past = append(past, experiment.PastRun{Task: own, CostUSD: agent})
 		}
 	}
 	return experiment.EstimateRun(model, past), nil

@@ -250,7 +250,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 			return nil, err
 		}
 		fmt.Fprintf(env.Stdout, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
-			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Metrics.CostUSD)
+			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Spend().AgentUSD)
 	}
 	if recoverErr != nil {
 		release()
@@ -270,7 +270,7 @@ func saveRun(ctx context.Context, w *workspace, rec run.Record, meta runMeta) er
 		return fmt.Errorf("encode run: %w", err)
 	}
 	return w.db.SaveRun(context.WithoutCancel(ctx), store.Run{ID: rec.ID, ProjectID: meta.ProjectID, TaskID: meta.TaskID, TaskName: rec.Task,
-		Kind: meta.Kind, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Metrics.CostUSD, Record: encoded,
+		Kind: meta.Kind, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed, CostUSD: rec.Spend().AgentUSD, Record: encoded,
 		Started: rec.Started, Finished: rec.Finished, ExperimentID: meta.ExperimentID, Slot: meta.Slot, Attempt: meta.Attempt})
 }
 
@@ -312,7 +312,7 @@ func printRun(env Env, rec run.Record) {
 	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Run %s: task %s, arm %s", rec.ID, rec.Task, rec.Arm)))
 	fmt.Fprintf(out, "  outcome      %s; verification %s\n", st.Status(rec.Outcome), passed)
 	m, b := rec.Metrics, rec.Behavior
-	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", m.CostUSD, m.Turns,
+	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", rec.Spend().AgentUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
 	fmt.Fprintf(out, "  changes      %d file(s), +%d -%d, %d commit(s); tests changed: %v, test files removed: %d\n", b.FilesChanged, b.LinesAdded,
 		b.LinesRemoved, b.Commits, b.TestsChanged, b.TestsRemoved)
@@ -638,7 +638,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
 			EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion, Model: m.Model,
 			RequestedModel: *model, SignIn: runEnv.SignIn, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
-			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: m.CostUSD}
+			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: rec.Spend().AgentUSD}
 		c.Sandbox, c.LargeOutput, c.Instructions = judge(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
 		results = append(results, c)
 		if !c.healthy() { // only a calibration that passed every check becomes what later runs are checked against

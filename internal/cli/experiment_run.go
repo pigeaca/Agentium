@@ -198,8 +198,8 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	storedTries := map[int]int{} // runs per slot so far
 	status := runStatus{total: len(lock.Schedule), budget: lock.Design.BudgetUSD, settled: map[int]bool{}}
 	for _, r := range runs {
-		// The budget counts the judge's spend too; the cost column (r.CostUSD) is the agent's alone.
-		spentOn := r.CostUSD + judgeCostUSD(r.Record)
+		// The budget counts the judge's spend too; the cost column is the agent's alone.
+		spentOn := storedSpend(r).TotalUSD()
 		prior = append(prior, experiment.Attempt{Slot: r.Slot, Outcome: r.Outcome, CostUSD: spentOn})
 		status.spent += spentOn
 		if experiment.Settles(r.Outcome) {
@@ -255,7 +255,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 			if e.Result.Judge != "" {
 				judged = fmt.Sprintf("; judge: %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
 			}
-			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.CostUSD-e.Result.JudgeUSD, judged, e.SpentUSD, design.BudgetUSD)
+			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.AgentUSD(), judged, e.SpentUSD, design.BudgetUSD)
 		case "retry":
 			fmt.Fprintf(out, "%s: %s in %s\n", label, st.Warn("retrying"), e.RetryIn)
 		case "wait":
@@ -291,9 +291,8 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		rec, err := executeRun(ctx, env, w, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 			Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
 			Timeout: design.Timeout, Judge: design.Judge})
-		// The budget counts what the judge spent; the agent's cost stays rec.Metrics.CostUSD, the analysis's.
-		result := experiment.Result{Outcome: rec.Outcome, CostUSD: rec.Metrics.CostUSD + rec.JudgeCostUSD(), JudgeUSD: rec.JudgeCostUSD(),
-			Usage: rec.Metrics.UsageLast}
+		result := spentResult(rec.Spend())
+		result.Outcome, result.Usage = rec.Outcome, rec.Metrics.UsageLast
 		if v := rec.Judge; v != nil {
 			result.Judge = run.Describe(*v)
 			if v.Stopped == llmjudge.StoppedLimit {
@@ -421,18 +420,15 @@ func unjudged(ctx context.Context, w *workspace, id int64, lock experiment.Lock)
 // judgeLimitNote is the status note of an experiment paused by the judge (Verdict.Stopped is judge.StoppedLimit).
 const judgeLimitNote = "the judge hit a usage limit or a sign-in failure, which the next calls would hit too"
 
-// judgeCostUSD is what the judge spent on a stored run, from its record: it counts against the budget, but is not in
-// the run's cost column, which is the agent's alone and feeds estimates and the cost analysis.
-func judgeCostUSD(record []byte) float64 {
-	var r struct {
-		Judge *struct {
-			CostUSD float64 `json:"cost_usd"`
-		} `json:"judge"`
-	}
-	if json.Unmarshal(record, &r) != nil || r.Judge == nil {
-		return 0
-	}
-	return r.Judge.CostUSD
+// storedSpend is what a stored run spent (run.StoredSpend): its cost column is the agent's alone, and feeds estimates
+// and the arms' costs; the judge's spend, from its record, counts against the budget with it.
+func storedSpend(r store.Run) run.Spend { return run.StoredSpend(r.CostUSD, r.Record) }
+
+// spentResult is an attempt's result for the scheduler as far as spend goes: the budget counts all it spent
+// (Result.CostUSD), and the progress line tells the agent's part from the judge's. The analysis's cost metric stays the
+// record's agent's cost.
+func spentResult(s run.Spend) experiment.Result {
+	return experiment.Result{CostUSD: s.TotalUSD(), JudgeUSD: s.JudgeUSD}
 }
 
 // judgePending judges, one at a time, the experiment's graded runs that still need it (run.NeedsJudging): those a
@@ -446,7 +442,7 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 	design, out, st := lock.Design, env.Stdout, env.style()
 	spent := 0.0
 	for _, r := range runs {
-		spent += r.CostUSD + judgeCostUSD(r.Record)
+		spent += storedSpend(r).TotalUSD()
 	}
 	for i, r := range runs {
 		if ctx.Err() != nil {
@@ -467,7 +463,7 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 			unfunded++
 			continue
 		}
-		before := rec.JudgeCostUSD()
+		before := rec.Spend().JudgeUSD
 		notes := len(rec.Notes)
 		runEnv.Judge(ctx, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec()}, *design.Judge, &rec)
 		label := fmt.Sprintf("Judged run %s (task %s, arm %s)", r.ID, r.TaskName, r.Arm)
@@ -475,7 +471,7 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 			fmt.Fprintf(out, "%s: %s\n", label, st.Warn(strings.Join(rec.Notes[notes:], "; ")))
 			continue
 		}
-		spent += rec.JudgeCostUSD() - before
+		spent += rec.Spend().JudgeUSD - before
 		encoded, err := json.Marshal(rec)
 		if err != nil {
 			return "", 0, fmt.Errorf("encode run %s: %w", r.ID, err)
@@ -484,7 +480,7 @@ func judgePending(ctx context.Context, env Env, w *workspace, runEnv run.Env, lo
 			return "", 0, err
 		}
 		runs[i].Record = encoded
-		fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, run.Describe(*rec.Judge), rec.JudgeCostUSD()-before, spent, design.BudgetUSD)
+		fmt.Fprintf(out, "%s: %s, $%.2f (spent $%.2f of $%.2f)\n", label, run.Describe(*rec.Judge), rec.Spend().JudgeUSD-before, spent, design.BudgetUSD)
 		if rec.Judge.Stopped == llmjudge.StoppedLimit {
 			return judgeLimitNote, unfunded, nil
 		}
@@ -570,10 +566,10 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 		if c == nil {
 			continue
 		}
-		judged := judgeCostUSD(r.Record)
-		spent += r.CostUSD + judged // the budget's spend; the arm's cost is the agent's alone
-		judgeSpent += judged
-		c.CostUSD += r.CostUSD
+		s := storedSpend(r)
+		spent += s.TotalUSD() // the budget's spend; the arm's cost is the agent's alone
+		judgeSpent += s.JudgeUSD
+		c.CostUSD += s.AgentUSD
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
 			return fmt.Errorf("run %s: %w", r.ID, err)
