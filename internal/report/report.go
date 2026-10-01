@@ -174,6 +174,7 @@ func Build(in Input) (Report, error) {
 		rec := r.Record
 		metrics := rec.Metrics
 		metrics.ResultExcerpt = "" // what the agent said can hold anything
+		metrics.SubagentModels = shareableModels(rec)
 		row := RunRow{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
 			CostEstimated: rec.CostEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
@@ -306,6 +307,29 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		arm.CacheReadShare = &share
 	}
 	return arm
+}
+
+// shareableModels keeps the models of the subagent types a report may name, which are those the run's context use
+// names (the project's and Claude Code's own); every other type, and every type of a run without context use, shares one
+// "other" entry. The database keeps them all, for the check that a subagent's model did not change.
+func shareableModels(rec run.Record) map[string][]string {
+	if rec.Metrics.SubagentModels == nil {
+		return nil
+	}
+	out := map[string][]string{}
+	for kind, models := range rec.Metrics.SubagentModels {
+		key := "other"
+		if rec.ContextUse != nil && slices.Contains(rec.ContextUse.Subagents, kind) {
+			key = kind
+		}
+		for _, m := range models {
+			if !slices.Contains(out[key], m) {
+				out[key] = append(out[key], m)
+			}
+		}
+		slices.Sort(out[key])
+	}
+	return out
 }
 
 // tally adds one to counts for each name, creating counts when there are names.

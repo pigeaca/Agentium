@@ -23,7 +23,7 @@ func RuleGlobs(data []byte) []string {
 		value = strings.TrimSpace(value)
 		switch {
 		case strings.HasPrefix(value, "[") && strings.HasSuffix(value, "]"):
-			for _, item := range strings.Split(strings.Trim(value, "[]"), ",") {
+			for _, item := range splitOutsideBraces(strings.TrimSuffix(strings.TrimPrefix(value, "["), "]")) {
 				globs = appendGlob(globs, item)
 			}
 		case value != "":
@@ -40,6 +40,24 @@ func RuleGlobs(data []byte) []string {
 		break
 	}
 	return globs
+}
+
+// splitOutsideBraces splits a list at commas that are not inside {...}, which glob choices use.
+func splitOutsideBraces(list string) []string {
+	var items []string
+	depth, start := 0, 0
+	for i, c := range list {
+		switch {
+		case c == '{':
+			depth++
+		case c == '}' && depth > 0:
+			depth--
+		case c == ',' && depth == 0:
+			items = append(items, list[start:i])
+			start = i + 1
+		}
+	}
+	return append(items, list[start:])
 }
 
 func appendGlob(globs []string, item string) []string {

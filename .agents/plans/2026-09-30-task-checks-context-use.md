@@ -41,7 +41,7 @@
 Three PRs, each with green CI and a review.
 - [ ] **1. Flaky tasks** (`internal/task`, `internal/cli/task.go`, the warning in `internal/cli/experiment.go`).
 - [ ] **2. Weak tests** (the same files, after step 1).
-- [ ] **3. Context use** (`internal/claude` parsing, `internal/run` records, `internal/experiment` counting, `internal/report`). It runs in parallel with steps 1–2 in its own worktree.
+- [x] **3. Context use**, done by the coordinator. The reviewer requested changes twice and then approved: shell reads only as reading commands' file arguments; path-scoped rules and folder instructions counted for the files the agent worked with; only the project's and Claude Code's subagents named; recovery that survives a moved data folder and cancellation; `subagent_models` filtered in shared reports. On the real 16-run A/B, both arms load the same 6 files at start, no run opened a linked document, and one minimal-arm run started the `investigator` subagent.
 - [ ] Archive this plan.
 
 ## Boundaries
@@ -60,7 +60,7 @@ All steps start from `origin/main` at `c0414eb`, except step 2, which starts fro
 |---|---|---|---|---|
 | 1 | `implementer` (Sonnet, medium) | `claude/feat/flaky-tasks` / `claude-feat-flaky-tasks` | `internal/task/validate.go`; `internal/cli/task.go`; one warning line in `experiment plan`'s "Before it runs" (`internal/cli/experiment.go`); `internal/experiment/design.go` (`Ineligible`'s message only); README's task section; tests | `internal/claude`, `internal/run`, `internal/report`, `internal/stats`; `internal/experiment` apart from `Ineligible`; the store's schema |
 | 2 | the same `implementer` | `claude/feat/weak-tests` / `claude-feat-weak-tests` | `internal/task`; `internal/cli/task.go`; README's task section; tests | as step 1 |
-| 3 | coordinator (Opus) | `claude/feat/context-use` / `claude-feat-context-use` | `internal/claude` (transcript parsing); `internal/run` (records); `internal/experiment` (a new counting file and the analysis it feeds); `internal/report` and its golden files; `internal/cli` (report wiring only); architecture and README | `internal/task`, `internal/cli/task.go`, `internal/experiment/usage.go`, `plan.go` |
+| 3 | coordinator (Opus) | `claude/feat/context-use` / `claude-feat-context-use` | `internal/claude` (transcript parsing); `internal/run` (records); `internal/report` and its golden files; `internal/cli` (report wiring only); added while implementing: `internal/claudectx` (rule patterns, subagent names) and `internal/snapshot` (`Apply`), with counting in `internal/report` instead of `internal/experiment`; architecture and README | `internal/task`, `internal/cli/task.go`, `internal/experiment/usage.go`, `plan.go` |
 
 Each implementer pushes its branch and returns a handoff; the coordinator runs the reviewer, opens one PR per step and integrates.
 

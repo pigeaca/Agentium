@@ -124,6 +124,16 @@ func TestNamedByReader(t *testing.T) {
 		{"grep -r y . 2> docs/a.md", false},
 		{"git add docs/a.md", false},
 		{"ls docs", false},
+		{"(cat docs/a.md)", true},
+		{"cat docs/a.md>out.txt", true},
+		{`grep "a|b" docs/a.md`, true},
+		{"grep -rn docs/a.md .", false}, // the pattern, not a file
+		{"rg docs/a.md", false},
+		{"grep -e x -f docs/a.md src", true},   // -f reads the patterns from it: a read
+		{"grep -n -e x docs/a.md", true},       // -e gave the pattern, so docs/a.md is a file
+		{"sed -i 's/a/b/' docs/a.md", false},   // a write
+		{"sort -o docs/a.md docs/b.md", false}, // sort writes -o's file
+		{"sort --output=x.txt docs/a.md", true},
 	} {
 		if got := namedByReader("docs/a.md", []string{c.command}, []string{"/work/repo"}); got != c.want {
 			t.Errorf("%q: %v, want %v", c.command, got, c.want)

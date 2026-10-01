@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -539,5 +540,26 @@ func TestWiderNamesTheDecidingInterval(t *testing.T) {
 		if got := wider(c.t, c.boot); !strings.Contains(got, c.want) {
 			t.Errorf("wider(%v, %v) = %q, want %q", c.t, c.boot, got, c.want)
 		}
+	}
+}
+
+// The shared report names only the subagent types the run's context use names; the rest share "other".
+func TestReportSubagentModelsAreShareable(t *testing.T) {
+	in := fixture()
+	rec := &in.Runs[0].Record
+	rec.Metrics.SubagentModels = map[string][]string{"Explore": {"claude-haiku-4-5"}, "my-personal-agent": {"claude-sonnet-5"},
+		"unknown": {"claude-sonnet-5"}}
+	rec.ContextUse = &run.ContextUse{Start: []string{"CLAUDE.md"}, Subagents: []string{"Explore"}, OtherSubagents: 1}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rep.Runs[0].Metrics.SubagentModels
+	want := map[string][]string{"Explore": {"claude-haiku-4-5"}, "other": {"claude-sonnet-5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("subagent models = %v, want %v", got, want)
+	}
+	if in.Runs[0].Record.Metrics.SubagentModels["my-personal-agent"] == nil {
+		t.Error("the input's record was changed")
 	}
 }

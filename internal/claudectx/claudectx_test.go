@@ -244,6 +244,7 @@ func TestRuleGlobs(t *testing.T) {
 	}{
 		{"---\npaths: \"src/**/*.ts\"\n---\nx\n", []string{"src/**/*.ts"}},
 		{"---\npaths: [\"*.go\", 'db/*.sql']\n---\n", []string{"*.go", "db/*.sql"}},
+		{"---\npaths: [\"src/*.{ts,tsx}\", db/*.sql]\n---\n", []string{"src/*.{ts,tsx}", "db/*.sql"}},
 		{"---\nname: x\npaths:\n  - \"a/**\"\n  - b/*.md\ndescription: y\n---\n", []string{"a/**", "b/*.md"}},
 		{"---\nname: x\n---\n", nil},
 		{"no frontmatter\n", nil},

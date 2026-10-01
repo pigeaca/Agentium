@@ -8,10 +8,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
@@ -213,16 +213,16 @@ func relativeTo(p string, dirs []string) (string, bool) {
 	return "", false
 }
 
-// readers are commands that read the files they are given.
-var readers = []string{"cat", "head", "tail", "less", "more", "sed", "awk", "grep", "egrep", "fgrep", "rg", "nl", "bat", "wc", "cut",
-	"sort", "uniq", "diff", "cmp", "jq", "view"}
+// readers are commands that read the files they are given; searchers among them take a pattern first.
+var (
+	readers = []string{"cat", "head", "tail", "less", "more", "sed", "awk", "grep", "egrep", "fgrep", "rg", "nl", "bat", "wc", "cut",
+		"sort", "uniq", "diff", "cmp", "jq", "view"}
+	searchers = []string{"grep", "egrep", "fgrep", "rg"}
+)
 
-// commandBreak splits a shell command line into simple commands.
-var commandBreak = regexp.MustCompile(`\|\||&&|[|;\n]`)
-
-// namedByReader reports whether a shell command reads p: p is an argument of a reading command (cat, sed, grep...),
-// written as p, ./p or under one of dirs. A redirection's target is written, not read, and environment assignments
-// before the command are skipped. Quotes are handled around whole arguments only.
+// namedByReader reports whether a shell command reads p: p is a file argument of a reading command (cat, sed, grep...),
+// written as p, ./p or under one of dirs. Not counted: a search pattern (grep's first operand, unless -e or -f gave
+// the pattern), a redirection's target, sed -i (which writes) and sort -o's output.
 func namedByReader(p string, commands, dirs []string) bool {
 	names := []string{p, "./" + p}
 	for _, dir := range dirs {
@@ -231,27 +231,94 @@ func namedByReader(p string, commands, dirs []string) bool {
 		}
 	}
 	for _, line := range commands {
-		for _, simple := range commandBreak.Split(line, -1) {
-			args := strings.Fields(simple)
+		for _, args := range simpleCommands(line) {
 			for len(args) > 0 && strings.Contains(args[0], "=") && !strings.HasPrefix(args[0], "-") {
-				args = args[1:]
+				args = args[1:] // VAR=value before the command
 			}
 			if len(args) == 0 || !slices.Contains(readers, path.Base(args[0])) {
 				continue
 			}
+			name := path.Base(args[0])
+			if name == "sed" && slices.ContainsFunc(args, func(a string) bool { return strings.HasPrefix(a, "-i") || strings.HasPrefix(a, "--in-place") }) {
+				continue
+			}
+			patternPending := slices.Contains(searchers, name) && !slices.ContainsFunc(args, func(a string) bool {
+				return a == "-e" || a == "-f" || strings.HasPrefix(a, "--regexp") || strings.HasPrefix(a, "--file")
+			})
 			for i := 1; i < len(args); i++ {
 				arg := args[i]
-				if before, _, found := strings.Cut(arg, ">"); found { // >, >>, 2>, >file, 2>>file: a write
-					if rest := arg[len(before):]; rest == ">" || rest == ">>" {
+				if before, _, found := strings.Cut(arg, ">"); found { // a redirection: its target is written
+					if strings.HasSuffix(arg, ">") {
 						i++ // the target is the next argument
+					}
+					if before != "" && strings.Trim(before, "0123456789") != "" && slices.Contains(names, before) {
+						return true // cat docs/a.md>out reads docs/a.md
 					}
 					continue
 				}
-				if slices.Contains(names, strings.Trim(arg, `"'`)) {
+				switch {
+				case name == "sort" && arg == "-o":
+					i++
+					continue
+				case name == "sort" && (strings.HasPrefix(arg, "-o") || strings.HasPrefix(arg, "--output")):
+					continue
+				case strings.HasPrefix(arg, "-"):
+					continue
+				case patternPending:
+					patternPending = false
+					continue
+				}
+				if slices.Contains(names, arg) {
 					return true
 				}
 			}
 		}
 	}
 	return false
+}
+
+// simpleCommands splits a shell command line into simple commands and their arguments. Single and double quotes group
+// and are removed; unquoted |, ;, &, newlines and parentheses end a command. It is not a shell parser, just enough to
+// see which files a reading command was given.
+func simpleCommands(line string) [][]string {
+	var commands [][]string
+	var args []string
+	var word strings.Builder
+	inWord := false
+	var quote rune
+	endWord := func() {
+		if inWord {
+			args = append(args, word.String())
+			word.Reset()
+			inWord = false
+		}
+	}
+	endCommand := func() {
+		endWord()
+		if len(args) > 0 {
+			commands = append(commands, args)
+			args = nil
+		}
+	}
+	for _, c := range line {
+		switch {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			} else {
+				word.WriteRune(c)
+			}
+		case c == '\'' || c == '"':
+			quote, inWord = c, true
+		case strings.ContainsRune("|;&\n()", c):
+			endCommand()
+		case unicode.IsSpace(c):
+			endWord()
+		default:
+			word.WriteRune(c)
+			inWord = true
+		}
+	}
+	endCommand()
+	return commands
 }
