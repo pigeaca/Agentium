@@ -266,3 +266,35 @@ func TestTaskValidateWeakTests(t *testing.T) {
 	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
 	expect(t, run("task", "validate", "manual", "--weak-tests"), ExitUsage, "--weak-tests needs a task with a solution")
 }
+
+func TestTaskRefusesInlineRustTests(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "src/lib.rs", "pub fn double(x: i32) -> i32 { x }\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "src/lib.rs", "pub fn double(x: i32) -> i32 { x * 2 }\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn doubles() { assert_eq!(super::double(2), 4); }\n}\n")
+	writeFile(t, repo, "tests/api.rs", "#[test]\nfn api() {}\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Double\n\nDouble the value.")
+
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{
+			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv:   func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now:      func() time.Time { return time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC) },
+		})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	const reason = "the solution changes Rust tests inside source files (src/lib.rs)"
+	expect(t, run("task", "import", "--commit", "HEAD", "--verify", "true"), ExitError, reason, "move them to a file under tests/")
+	base := strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD~1"))
+	expect(t, run("task", "add", "inline", "--base", base, "--solution", "HEAD", "--instruction", "Double it.", "--verify", "true"), ExitError, reason)
+	if list := run("task", "list"); strings.Contains(list.stdout, "inline") {
+		t.Errorf("a refused task was saved:\n%s", list.stdout)
+	}
+}

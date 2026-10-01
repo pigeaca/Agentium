@@ -16,9 +16,12 @@ import (
 var jsTest = regexp.MustCompile(`\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$`)
 
 // IsTestFile reports whether p holds tests or test data: Go (_test.go), Python (test_*.py, *_test.py, tests.py,
-// conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*), and anything in a test, tests, spec,
+// conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*), Java and Kotlin test classes
+// (*Test, *Tests and *IT with a .java or .kt extension, wherever they sit), and anything in a test, tests, spec,
 // __tests__, __mocks__, testdata, fixtures, __fixtures__, __snapshots__ or e2e folder. Other test inputs (a golden file
 // beside the code, say) land in the reference, which validation cannot notice because the reference supplies them.
+// Rust's inline #[cfg(test)] code sits in ordinary source files and cannot be told apart by name: InlineRustTests
+// finds it, and the task commands refuse such solutions.
 func IsTestFile(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
@@ -32,6 +35,9 @@ func IsTestFile(p string) bool {
 		return true
 	case strings.HasSuffix(base, ".py"):
 		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "tests.py" || base == "conftest.py"
+	case strings.HasSuffix(base, ".java"), strings.HasSuffix(base, ".kt"):
+		name := strings.TrimSuffix(strings.TrimSuffix(base, ".java"), ".kt")
+		return strings.HasSuffix(name, "Test") || strings.HasSuffix(name, "Tests") || strings.HasSuffix(name, "IT")
 	default:
 		return jsTest.MatchString(base)
 	}

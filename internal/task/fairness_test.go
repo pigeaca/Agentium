@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -275,4 +276,79 @@ func TestFairnessUnresolvedTypedKeysFallBackToWordSearch(t *testing.T) {
 	named := "package t\n\nimport (\n\t\"testing\"\n\n\t\"example.com/m/foo-bar\"\n)\n\nfunc TestNew(t *testing.T) { _ = foobar.Item{Extra2: 1} }\n"
 	solution["t/t_test.go"] = named // package foobar lives in foo-bar/: the import's last element does not name it
 	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Extra2")
+}
+
+// Each language has one literal the reference produces and nothing states (flagged), a stated one, and a literal the
+// base already had (neither is flagged).
+func TestFairnessJavaKotlinAndRustLiterals(t *testing.T) {
+	const instruction = "Check returns the message \"stated message here\" for an empty value."
+	cases := map[string]struct {
+		base, solution map[string]string
+		want           string
+	}{
+		"java": {
+			map[string]string{"src/main/java/Check.java": "class Check { static String old() { return \"the base message\"; } }\n"},
+			map[string]string{
+				"src/main/java/Check.java": "class Check {\n  static String old() { return \"the base message\"; }\n  static String a() { return \"unstated java message\"; }\n  static String b() { return \"stated message here\"; }\n}\n",
+				"src/CheckTest.java":       "class CheckTest {\n  void t() {\n    assertEquals(\"unstated java message\", Check.a());\n    assertEquals(\"stated message here\", Check.b());\n    assertEquals(\"the base message\", Check.old());\n    char q = '\"'; // \"in a comment only\"\n  }\n}\n"},
+			"unstated java message",
+		},
+		"java text block": {
+			map[string]string{"src/main/java/Check.java": "class Check {}\n"},
+			map[string]string{
+				"src/main/java/Check.java": "class Check {\n  static String a() { return \"first line of the block\\nsecond unstated line\"; }\n}\n",
+				"src/CheckTest.java":       "class CheckTest {\n  void t() {\n    String want = \"\"\"\n        first line of the block\n        second unstated line\n        \"\"\";\n  }\n}\n"},
+			"first line of the block\n        second unstated line",
+		},
+		"kotlin": {
+			map[string]string{"src/main/kotlin/Check.kt": "fun old() = \"the base message\"\n"},
+			map[string]string{
+				"src/main/kotlin/Check.kt": "fun old() = \"the base message\"\nfun a() = \"unstated kotlin message\"\nfun b() = \"stated message here\"\n",
+				"src/CheckTest.kt":         "class CheckTest {\n  fun t() {\n    assertEquals(\"unstated kotlin message\", a())\n    assertEquals(\"stated message here\", b())\n    assertEquals(\"\"\"the base message\"\"\", old())\n    val n = 3; println(\"count $n and ${n + 1} items\")\n  }\n}\n"},
+			"unstated kotlin message",
+		},
+		"rust": {
+			map[string]string{"src/lib.rs": "pub fn old() -> &'static str { \"the base message\" }\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn old() -> &'static str { \"the base message\" }\npub fn a() -> &'static str { \"unstated rust message\" }\npub fn b() -> &'static str { \"stated message here\" }\n",
+				"tests/t.rs": "#[test]\nfn t() {\n    assert_eq!(\"unstated rust message\", m::a());\n    assert_eq!(r#\"stated message here\"#, m::b());\n    assert_eq!(b\"the base message\", m::old().as_bytes());\n    let _c = '\"'; let _l: &'static str = \"x\"; // \"in a comment only\"\n}\n"},
+			"unstated rust message",
+		},
+		"rust raw string": {
+			map[string]string{"src/lib.rs": "pub fn old() {}\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn a() -> &'static str { r#\"raw \"quoted\" unstated text\"# }\n",
+				"tests/t.rs": "#[test]\nfn t() {\n    assert_eq!(r#\"raw \"quoted\" unstated text\"#, m::a());\n}\n"},
+			"raw \"quoted\" unstated text",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gaps := fairnessGaps(t, tc.base, tc.solution, instruction)
+			wantGaps(t, gaps, "literal:"+tc.want)
+		})
+	}
+}
+
+func TestStringLiteralsLexer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		l    lang
+		src  string
+		want []string
+	}{
+		"java escapes and char":   {langJava, `a("x\"y\n", '"', '\'', "z"); // "no"` + "\n/* \"no\" */", []string{"x\"y\n", "z"}},
+		"java stray quote":        {langJava, "a(\"open\nb(\"next\")", []string{"open", "next"}},
+		"kotlin raw and template": {langKotlin, `"a $b c" """r ${d + 1} \n""" "\$x"`, []string{"a \n c", "r \n \\n", "$x"}},
+		"rust byte and raw":       {langRust, `b"by" r"a\b" r##"x"#y"## br#"z"# c"cs" r#type "end"`, []string{"by", `a\b`, `x"#y`, "z", "cs", "end"}},
+		"rust lifetimes":          {langRust, `fn f<'a>(x: &'a str) -> &'static str { "ok" } 'x' '\u{1F600}'`, []string{"ok"}},
+		"rust continuation":       {langRust, "\"one \\\n    two\"", []string{"one two"}},
+		"rust nested comment":     {langRust, `/* a /* "no" */ "no" */ "yes"`, []string{"yes"}},
+		"rust identifier ends r":  {langRust, `bar"x" for"y"`, []string{"x", "y"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := stringLiterals(tc.src, tc.l); !slices.Equal(got, tc.want) {
+				t.Errorf("literals = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

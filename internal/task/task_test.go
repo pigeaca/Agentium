@@ -316,3 +316,31 @@ func TestSolutionFilesKeepTheArmsContext(t *testing.T) {
 		t.Errorf("context kept = %v", result.ContextKept)
 	}
 }
+
+func TestIsTestFileJavaAndKotlinClasses(t *testing.T) {
+	for p, want := range map[string]bool{
+		"src/main/java/app/ParserTest.java": true, "app/ParserTests.java": true, "app/ParserIT.java": true,
+		"core/UserServiceTest.kt": true, "core/UserServiceIT.kt": true, "src/test/java/app/Helper.java": true,
+		"src/main/java/app/Parser.java": false, "app/Contest.java": false, "app/Test.txt": false, "app/ParserTest.xml": false,
+		"app/ParserTester.java": false, "app/Wait.kt": false, "app/ParserTest.scala": false,
+	} {
+		if got := IsTestFile(p); got != want {
+			t.Errorf("IsTestFile(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// A Java test class outside a test folder is a hidden test, not part of the reference.
+func TestSplitJavaTestClassAnywhere(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init", "-q", "-b", "main")
+	b := commit(t, repo, map[string]string{"app/Parser.java": "class Parser {}\n"}, "base")
+	s := commit(t, repo, map[string]string{"app/Parser.java": "class Parser { int x; }\n", "app/ParserTest.java": "class ParserTest {}\n", "app/Run.kt": "fun x() {}\n"}, "solution")
+	hidden, reference, err := Split(context.Background(), b, s, "-C", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(hidden, []string{"app/ParserTest.java"}) || !slices.Equal(reference, []string{"app/Parser.java", "app/Run.kt"}) {
+		t.Errorf("split = %v / %v", hidden, reference)
+	}
+}
