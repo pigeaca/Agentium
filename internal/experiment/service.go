@@ -16,7 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/task"
 )
 
-// The services in this package (Create, LoadPlan, Execute's caller Run, Progress) hold what the experiment commands
+// The services in this package (`Create`, `LoadReview`, `Runner.Run`, `WriteProgress`) hold what the experiment commands
 // do; the command handlers in internal/cli parse flags, call one, and print. They keep no state: everything comes in
 // as parameters, output goes to the writers given, and errors are wrapped with context.
 

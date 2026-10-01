@@ -68,8 +68,9 @@ type Runner struct {
 	Claude    func() (string, error)
 	SignIn    string
 	Readiness ReadinessEnv
-	// StartRuns takes the data folder's run lock (and stores runs a dead process left behind); release gives it back.
-	StartRuns func(ctx context.Context) (release func(), err error)
+	// StartRuns takes the data folder's run lock (and stores runs a dead process left behind). The caller keeps the
+	// release function and calls it when it is done with the experiment, summary included.
+	StartRuns func(ctx context.Context) error
 	// NewRunEnv resolves what every run needs.
 	NewRunEnv func(verifyTimeout time.Duration) (run.Env, error)
 	// ExecuteRun runs and stores one run; the caller of Execute holds the run lock.
@@ -126,11 +127,10 @@ func (r Runner) Run(ctx context.Context, name string, o RunOptions) (RunOutcome,
 	if err != nil {
 		return RunOutcome{}, fmt.Errorf("Claude Code at %s: its version could not be read: %w", cli, err)
 	}
-	release, err := r.StartRuns(ctx)
-	if err != nil {
+	// The run lock stays held after Run returns: the caller releases it once it has printed the summary.
+	if err := r.StartRuns(ctx); err != nil {
 		return RunOutcome{}, err
 	}
-	defer release()
 
 	var lock Lock
 	if stored.Lock == nil {

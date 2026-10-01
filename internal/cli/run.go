@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"os"
 	"path/filepath"
 	"slices"
@@ -469,7 +470,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	defer w.Close()
 	head, snaps, err := calibrationTargets(ctx, w, snapshots)
-	var bad usageError
+	var bad experiment.UsageError
 	if errors.As(err, &bad) {
 		fmt.Fprintf(env.Stderr, "agentium run calibrate: %s\n", bad)
 		return ExitUsage
@@ -492,7 +493,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	defer release()
 	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real Claude Code runs (%s, sign-in %s): up to $%.2f each.\n",
-		len(arms), shortCommit(head), *model, runEnv.SignIn, *budget)
+		len(arms), experiment.ShortCommit(head), *model, runEnv.SignIn, *budget)
 	results, err := run.Calibrator{Head: head, Arms: arms, Model: *model, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn, Now: env.Now,
 		Execute: func(ctx context.Context, arm task.Arm, spec run.Spec) (run.Record, error) {
 			runEnv.Step = func(step string) { live.Step("calibrating arm " + arm.Name + ": " + step) }
@@ -522,7 +523,7 @@ func calibrationTargets(ctx context.Context, w *workspace, names []string) (head
 	}
 	for i, name := range names {
 		if name == "base" || slices.Contains(names[:i], name) {
-			return "", nil, usageError(fmt.Sprintf("--snapshot %q is repeated or reserved", name))
+			return "", nil, experiment.UsageError(fmt.Sprintf("--snapshot %q is repeated or reserved", name))
 		}
 		snap, err := w.db.SnapshotByName(ctx, w.project.ID, name)
 		if err != nil {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/pigeaca/agentium/internal/experiment"
 	"path/filepath"
 	"strings"
 
@@ -83,7 +84,7 @@ func runInit(ctx context.Context, env Env, args []string) int {
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
 	w, st := env.Stdout, env.style()
 	fmt.Fprintln(w, st.Heading(fmt.Sprintf("Registered %s (project %d)", saved.Name, saved.ID)))
-	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, shortCommit(info.Head))
+	fmt.Fprintf(w, "  repository   %s @ %s\n", info.Root, experiment.ShortCommit(info.Head))
 	claude := st.Bad("not found")
 	if info.Claude.Path != "" {
 		claude = strings.TrimSpace(info.Claude.Path + " " + info.Claude.Version)
@@ -116,13 +117,6 @@ func describeSignIn(mode string) string {
 	}
 }
 
-func shortCommit(commit string) string {
-	if len(commit) > 12 {
-		return commit[:12]
-	}
-	return commit
-}
-
 func sizeLabel(bytes int64) string {
 	if bytes < 1024 {
 		return fmt.Sprintf("%d B", bytes)
@@ -136,3 +130,7 @@ func orNone(value string) string {
 	}
 	return value
 }
+
+// shortCommit is experiment.ShortCommit; task.go still calls this name and waits for the task-mining PR (#62) to merge
+// before it moves to the shared one.
+func shortCommit(commit string) string { return experiment.ShortCommit(commit) }

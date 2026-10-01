@@ -33,9 +33,3 @@ func parseArgs(env Env, fs *flag.FlagSet, args []string, usage string) (position
 		args = rest[1:]
 	}
 }
-
-// usageError is a mistake in how a command was called that only the services behind it could find: the handler reports
-// it as a usage error (exit 2) under the command's name.
-type usageError string
-
-func (e usageError) Error() string { return string(e) }

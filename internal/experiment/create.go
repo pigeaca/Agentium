@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -31,7 +32,8 @@ type NewOptions struct {
 	JudgeModel, JudgeEffort      string
 	JudgeRepeats                 int
 
-	tier Tier
+	tier     Tier
+	prepared bool // Prepare ran: the tier and the seed are set
 }
 
 // Prepare checks the options before anything is read: the name, flag combinations, the tier, repeats and a seed (random
@@ -73,6 +75,7 @@ func (o *NewOptions) Prepare(name string) error {
 		}
 		o.Seed = binary.LittleEndian.Uint64(b[:])&MaxSeed | 1 // never 0, which means "random"
 	}
+	o.prepared = true
 	return nil
 }
 
@@ -87,6 +90,9 @@ type Created struct {
 // Create designs the experiment from prepared options and stores it under name: the arms, the tasks (named, or a
 // seeded sample of the eligible ones), the budget (a quarter above the estimate unless set) and the design's checks.
 func Create(ctx context.Context, p Project, name string, o NewOptions, now time.Time) (Created, error) {
+	if !o.prepared {
+		return Created{}, errors.New("experiment: Create needs options that Prepare has checked")
+	}
 	armA, err := p.ResolveArm(ctx, "A", o.ContextA)
 	if err != nil {
 		return Created{}, err

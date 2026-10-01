@@ -37,7 +37,9 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer w.Close()
-	outcome, err := experimentRunner(env, w, live, o).Run(ctx, name, o)
+	runner, release := experimentRunner(env, w, live)
+	defer release() // the run lock is held until the summary is printed
+	outcome, err := runner.Run(ctx, name, o)
 	var usage experiment.UsageError
 	if errors.As(err, &usage) {
 		fmt.Fprintf(env.Stderr, "agentium experiment run: %s\n", usage)
@@ -56,14 +58,23 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 
 // experimentRunner is what an experiment's execution needs from the command line, with its live status line and its
 // one line per run wired to the scheduler's events.
-func experimentRunner(env Env, w *workspace, live *term.StatusLine, o experiment.RunOptions) experiment.Runner {
+func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experiment.Runner, release func()) {
+	var held func() // set when the run lock is taken
+	release = func() {
+		if held != nil {
+			held()
+		}
+	}
 	mode, _ := signInMode(env)
 	var status *runStatus
 	var report func(experiment.Event)
-	r := experiment.Runner{Project: w.service(), Out: env.Stdout, Style: env.style(), Now: env.Now, Version: env.Version, SignIn: mode,
+	r = experiment.Runner{Project: w.service(), Out: env.Stdout, Style: env.style(), Now: env.Now, Version: env.Version, SignIn: mode,
 		Claude:    func() (string, error) { return claudePath(env) },
 		Readiness: readinessEnv(env),
-		StartRuns: func(ctx context.Context) (func(), error) { return startRuns(ctx, env, w) },
+		StartRuns: func(ctx context.Context) (err error) {
+			held, err = startRuns(ctx, env, w)
+			return err
+		},
 		NewRunEnv: func(verifyTimeout time.Duration) (run.Env, error) { return newRunEnv(env, w, verifyTimeout) },
 		ExecuteRun: func(ctx context.Context, e run.Env, meta experiment.RunMeta, spec run.Spec) (run.Record, error) {
 			return executeRun(ctx, env, w, e, runMeta{Kind: "task", TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
@@ -84,7 +95,7 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine, o experiment
 		},
 		Finish: live.Stop,
 	}
-	return r
+	return r, release
 }
 
 // progressLines prints one line per scheduler event: a run started, finished, to be retried, or waiting for the usage

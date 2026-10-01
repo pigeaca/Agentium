@@ -305,7 +305,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
-		name, label, shortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
+		name, label, experiment.ShortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
 	if *workingTree {
 		changes, err := snapshot.UncapturedChanges(ctx, w.root, manifest.Paths())
 		if err != nil {
@@ -395,7 +395,7 @@ func contextList(ctx context.Context, env Env, args []string) int {
 		if err := json.Unmarshal(snap.Manifest, &manifest); err != nil {
 			return fail(env, fmt.Errorf("snapshot %s: %w", snap.Name, err))
 		}
-		table.Row(snap.Name, snap.Source, shortCommit(snap.SourceCommit), strconv.Itoa(len(manifest.Files)),
+		table.Row(snap.Name, snap.Source, experiment.ShortCommit(snap.SourceCommit), strconv.Itoa(len(manifest.Files)),
 			fmt.Sprintf("~%d", claudectx.EstimateTokens(manifest.StartupBytes)))
 	}
 	if err := table.Write(env.Stdout); err != nil {
