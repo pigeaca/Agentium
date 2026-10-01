@@ -3,7 +3,7 @@
 Product direction: an AI development lab for coding agents. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) is accepted as a hybrid strategy ([decision](decisions/2026-09-27-hybrid-strategy.md)).
 
 ## Foundation — 2026-09-27
-- The agent process and a stack-neutral harness came from Orchid ([decision](decisions/2026-09-27-agent-process-from-orchid.md)).
+- Agent process and harness from Orchid ([decision](decisions/2026-09-27-agent-process-from-orchid.md)).
 - Product research: tools, UX, method, architecture, MVP and strategy.
 - Phase 0 spike: 60 real runs gave a go for Phase 1, a noise level and an isolation recipe ([results](../docs/research/2026-09-27-phase0-spike-results.md)).
 - 2026-09-28 — Stack: Go + SQLite ([decision](decisions/2026-09-28-stack-go-react-sqlite.md)), with CI.
@@ -16,5 +16,5 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 
 ## Next, in order
 1. [Judge per run](plans/2026-10-01-llm-judge.md), alongside [Java and Rust](plans/2026-09-30-java-rust.md).
-2. Judge: [which arm is better](plans/2026-10-01-judge-pairs.md); [ticket tasks](plans/2026-10-01-ticket-tasks.md).
-3. [Phase 2: agents and Codex](plans/2026-10-01-phase2-agents-codex.md).
+2. Judge: [which arm is better](plans/2026-10-01-judge-pairs.md), [ticket tasks](plans/2026-10-01-ticket-tasks.md); [model and effort A/B](plans/2026-10-01-model-ab.md).
+3. [Codex](plans/2026-10-01-phase2-agents-codex.md), deferred.
