@@ -40,7 +40,7 @@
 | Wave | Features (at most 2) | Maintenance (1) | Exit gate |
 |---|---|---|---|
 | 0 (done) | The judge in experiments (#54); tasks from tickets (#55) | — | merged |
-| 1 Finish | [Task mining](2026-10-01-task-mine.md); [judge](2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](2026-10-01-run-temp-isolation.md), then [refactor](2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
+| 1 Finish | [Task mining](2026-10-01-task-mine.md); [judge](2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](archive/2026-10-01-run-temp-isolation.md), then [refactor](2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
 | 2 First decisive verdict | Quick start (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
 | 3 Cheaper verdicts | The statistics note, then run reuse with a pinned Claude Code; group-sequential stopping | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The simulation shows at most 5% false verdicts, and a reused-against-fresh A/A passes |
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) | A Python or TypeScript smoke test; the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
