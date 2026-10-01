@@ -41,6 +41,8 @@ Fixed before any labels or judge calls are seen.
 - **Code:** a standard-library Python script with unit tests in `docs/research/judge-pilot/`. It builds the prompts, calls the judge, parses the verdicts and computes every number. Protocol, labels and verdicts are committed; transcripts stay in the data folder, as in Phase 0.
 
 ## Go/no-go
+*Changed on 2026-10-01 after an independent review, before any label, pending the user's agreement:* the rules below could be met by a judge that answers yes to every change. The [protocol](../../docs/research/judge-pilot/protocol.md#verdicts) replaces them with three verdicts (false passes, quality, tasks without tests), each GO, NO-GO or INCONCLUSIVE. It adds trivial baselines, a requirement to catch the false passes found, and documents left out of both diffs. The first version:
+
 Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an 80% agreement spans roughly 65–89%, so a "go" means "worth building", not "proven".
 - **Go for a secondary judge score** (false passes and quality) when all of these hold:
   - it agrees with the human on "fixed" in at least 80% of passing runs;

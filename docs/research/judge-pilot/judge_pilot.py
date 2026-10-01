@@ -127,8 +127,21 @@ def split_diff(diff: str) -> List[Tuple[str, str]]:
     return sections
 
 
-def without_tests(diff: str) -> str:
-    return "".join(section for path, section in split_diff(diff) if not is_test_file(path))
+DOC_EXTS = (".md", ".mdx", ".markdown", ".rst", ".adoc")
+DOC_SKIP_DIRS = {"test", "tests", "testdata", "fixtures", "__fixtures__", "__snapshots__", "golden", "node_modules", "vendor"}
+
+
+def is_document(p: str) -> bool:
+    """Agentium's rule for documents (internal/claudectx.IsDocument): Markdown, reStructuredText and AsciiDoc files."""
+    if not p.lower().endswith(DOC_EXTS):
+        return False
+    return not any(d.lower() in DOC_SKIP_DIRS for d in p.split("/")[:-1])
+
+
+def code_only(diff: str) -> str:
+    """The diff without test files and documents: what the task's behavior depends on. Plans, READMEs and notes are left
+    out of both sides, so neither a missing doc update nor an extra one decides a verdict."""
+    return "".join(section for path, section in split_diff(diff) if not is_test_file(path) and not is_document(path))
 
 
 def changed_lines(diff: str) -> int:
@@ -154,7 +167,7 @@ def copy_database(data: Path, into: Path) -> Path:
 
 def git(bare: Path, *args: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0"})
+    env.update({"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0"})  # no user diff settings
     out = subprocess.run(["git", "--git-dir", str(bare), "-c", "core.hooksPath=/dev/null", *args], capture_output=True, text=True, env=env)
     if out.returncode != 0:
         raise RuntimeError("git %s: %s" % (" ".join(args), out.stderr.strip()))
@@ -177,7 +190,7 @@ def prepare(data: Path, work: Path) -> Dict[str, int]:
         task = next(t for t in e["lock"]["tasks"] if t["name"] == task_name)
         if (exp_id, task_name) not in references:
             bare = data / "projects" / str(e["project"]) / "repo.git"
-            files = [f for f in task.get("reference", []) if not is_test_file(f)]
+            files = [f for f in task.get("reference", []) if not is_test_file(f) and not is_document(f)]
             ref = git(bare, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", task["base"], task["solution"], "--", *files)
             references[(exp_id, task_name)] = (task["instruction"], ref)
         instruction, ref = references[(exp_id, task_name)]
@@ -187,7 +200,7 @@ def prepare(data: Path, work: Path) -> Dict[str, int]:
         if not diff_path.exists():
             print("no diff for run %s: left out" % run_id, file=sys.stderr)
             continue
-        candidate = without_tests(diff_path.read_text(errors="replace"))
+        candidate = code_only(diff_path.read_text(errors="replace"))
         single = {"run": run_id, "experiment": e["name"], "template": e["lock"]["design"]["template"], "task": task_name, "arm": arm,
                   "passed": bool(passed), "instruction": instruction, "reference": ref, "candidate": candidate}
         singles.append(single)
@@ -256,7 +269,8 @@ def label(work: Path, ask=input, show=show) -> int:
     queue = [("singles", i) for i in items["singles"] if i["id"] not in labels["singles"]] + \
             [("pairs", i) for i in items["pairs"] if i["id"] not in labels["pairs"]]
     for done, (kind, item) in enumerate(queue):
-        show("%s (%d left)\n\n%s" % (item["id"], len(queue) - done, single_text(item) if kind == "singles" else pair_text(item)))
+        show("%s (%d left)\n\nRubric (the judge's system prompt): %s\n\n%s" % (item["id"], len(queue) - done, SYSTEM_PROMPT,
+                                                                              single_text(item) if kind == "singles" else pair_text(item)))
         choices = "y/p/n" if kind == "singles" else "1/2/t"
         while True:
             reply = ask("%s %s [%s, then an optional note; q quits]: " % (item["id"], "fixed?" if kind == "singles" else "better?", choices)).strip()
@@ -280,13 +294,17 @@ def judge_command(cmd: str, schema: dict) -> List[str]:
             "--setting-sources", "project", "--strict-mcp-config"]
 
 
-def parse_reply(stdout: str, field: str, allowed) -> Tuple[Optional[dict], float, str]:
-    """Reads Claude Code's JSON result: the structured verdict (or one written as JSON in the text), and the cost."""
+def parse_reply(stdout: str, field: str, allowed) -> Tuple[Optional[dict], float, str, str]:
+    """Reads Claude Code's JSON result: the structured verdict (or one written as JSON in the text), the cost, and an
+    error with its kind: "infra" when no answer came (not JSON, or an error result such as a refused model), "malformed"
+    when an answer came without a valid verdict."""
     try:
         out = json.loads(stdout)
     except ValueError:
-        return None, 0.0, "not JSON: %s" % stdout[:200]
+        return None, 0.0, "not JSON: %s" % stdout[:200], "infra"
     cost = float(out.get("total_cost_usd") or 0)
+    if out.get("is_error"):
+        return None, cost, "error result: %s" % str(out.get("result", ""))[:200], "infra"
     verdict = out.get("structured_output")
     if not isinstance(verdict, dict):
         m = re.search(r"\{.*\}", str(out.get("result", "")), re.S)
@@ -295,8 +313,8 @@ def parse_reply(stdout: str, field: str, allowed) -> Tuple[Optional[dict], float
         except ValueError:
             verdict = None
     if not isinstance(verdict, dict) or verdict.get(field) not in allowed:
-        return None, cost, "no valid %s in: %s" % (field, str(out.get("result", ""))[:200])
-    return {field: verdict[field], "reason": str(verdict.get("reason", ""))}, cost, ""
+        return None, cost, "no valid %s in: %s" % (field, str(out.get("result", ""))[:200]), "malformed"
+    return {field: verdict[field], "reason": str(verdict.get("reason", ""))}, cost, "", ""
 
 
 def jobs(items: dict) -> List[Tuple[str, str, dict, str]]:
@@ -311,16 +329,37 @@ def jobs(items: dict) -> List[Tuple[str, str, dict, str]]:
     return out
 
 
+# JUDGE_ENV are the variables the judge keeps from the caller, as runs keep an allowlist (internal/claude.Environ): no
+# credentials, no ANTHROPIC_* or CLAUDE_* settings of an enclosing session, except the user's Claude Code folder.
+JUDGE_ENV = {"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "LANG", "TERM", "TZ", "CLAUDE_CONFIG_DIR", "HTTP_PROXY", "HTTPS_PROXY",
+             "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS"}
+MAX_TRIES = 3  # rows per job: a job is tried again after an infrastructure error, at most this many times in all
+
+
+def judge_env(environ) -> Dict[str, str]:
+    env = {k: v for k, v in environ.items() if k in JUDGE_ENV or k.startswith("LC_")}
+    env.update(CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", ENABLE_CLAUDEAI_MCP_SERVERS="false", DISABLE_AUTOUPDATER="1")
+    return env
+
+
+def finished(job_rows: List[dict]) -> bool:
+    """A job is finished with an answer, with a malformed one (asked twice already), or after MAX_TRIES rows."""
+    last = job_rows[-1]
+    return "error" not in last or last.get("error_kind") == "malformed" or len(job_rows) >= MAX_TRIES
+
+
 def judge(work: Path, cmd: str = "claude", limit: Optional[int] = None, budget: Optional[float] = None, log=print) -> Dict[str, float]:
     items = read_json(work / "items.json")
     path = work / "verdicts.jsonl"
     rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
-    done = {r["job"] for r in latest(rows).values() if "error" not in r}  # a job that ended in an error is tried again
+    by_job = collections.defaultdict(list)
+    for r in rows:
+        by_job[r["job"]].append(r)
     spent = sum(r.get("cost_usd", 0) for r in rows)
-    env = dict(os.environ, CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", ENABLE_CLAUDEAI_MCP_SERVERS="false", DISABLE_AUTOUPDATER="1")
+    env = judge_env(os.environ)
     calls = 0
     for job, kind, item, prompt in jobs(items):
-        if job in done:
+        if by_job.get(job) and finished(by_job[job]):
             continue
         if limit is not None and calls >= limit:
             break
@@ -328,18 +367,24 @@ def judge(work: Path, cmd: str = "claude", limit: Optional[int] = None, budget: 
             log("budget reached: $%.2f of $%.2f" % (spent, budget))
             break
         field, allowed, schema = ("fixed", FIXED, SINGLE_SCHEMA) if kind == "single" else ("prefer", PREFER, PAIR_SCHEMA)
-        verdict, cost, error = None, 0.0, ""
-        for attempt in (1, 2):  # a malformed reply is asked once more
+        verdict, cost, error, error_kind = None, 0.0, "", ""
+        started = time.time()
+        for attempt in (1, 2):  # a reply without a valid verdict is asked once more in the same row
             with tempfile.TemporaryDirectory() as empty:
-                started = time.time()
-                proc = subprocess.run(judge_command(cmd, schema), input=prompt, capture_output=True, text=True, cwd=empty, env=env,
-                                      timeout=CALL_TIMEOUT_S)
-            verdict, c, error = parse_reply(proc.stdout, field, allowed)
+                try:
+                    proc = subprocess.run(judge_command(cmd, schema), input=prompt, capture_output=True, text=True, cwd=empty, env=env,
+                                          timeout=CALL_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    verdict, error, error_kind = None, "timed out after %d s (its cost is unknown)" % CALL_TIMEOUT_S, "infra"
+                    break
+            verdict, c, error, error_kind = parse_reply(proc.stdout, field, allowed)
             cost += c
             if proc.returncode != 0 and not error:
-                error = "exit %d: %s" % (proc.returncode, proc.stderr.strip()[:200])
+                error, error_kind = "exit %d: %s" % (proc.returncode, proc.stderr.strip()[:200]), "infra"
             if verdict and not error:
                 break
+            if error_kind == "infra":
+                break  # no answer came: the next judge run tries again, up to MAX_TRIES
         calls += 1
         spent += cost
         row = {"job": job, "item": item["id"], "kind": kind, "cost_usd": round(cost, 6), "seconds": round(time.time() - started, 1),
@@ -347,7 +392,8 @@ def judge(work: Path, cmd: str = "claude", limit: Optional[int] = None, budget: 
         if verdict and not error:
             row.update(verdict)
         else:
-            row["error"] = error
+            row.update(error=error, error_kind=error_kind)
+        by_job[job].append(row)
         with path.open("a") as f:
             f.write(json.dumps(row, sort_keys=True) + "\n")
         os.chmod(path, 0o600)
@@ -434,6 +480,10 @@ def pct(k: int, n: int) -> str:
     return "%d of %d, %.0f%% (95%%: %.0f–%.0f%%)" % (k, n, 100 * k / n, 100 * lo, 100 * hi)
 
 
+def rate(k: int, n: int) -> Optional[float]:
+    return k / n if n else None
+
+
 def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
     items = read_json(work / "items.json")
     key = read_json(work / "key.json")
@@ -446,83 +496,127 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
         by_item[v["item"]].append(v)
     singles = {i["id"]: i for i in items["singles"]}
     pairs = {i["id"]: i for i in items["pairs"]}
+    # A pair that holds an unblinded single's diff is left out of the comparisons with your labels too.
+    unblinded_runs = {key["singles"][s]["run"] for s in unblinded if s in key["singles"]}
+    unblinded_pairs = {p for p, k in key["pairs"].items() if {k["first"]["run"], k["second"]["run"]} & unblinded_runs}
     out = []
     w = out.append
+    fixed = lambda v: v == "yes"  # partly and no are not fixed
 
-    # Singles: the judge's majority of its repeats, and whether all repeats agreed.
-    judge_fixed, consistent, errors = {}, [], 0
+    # The judge's verdict on a single: the majority of the answers it gave; on a pair: its preference when both orders
+    # agree once mapped back, else a tie (a flip).
+    judge_fixed, consistent, errors = {}, [], sum(1 for v in verdicts if "error" in v)
     for sid in singles:
         vs = [v["fixed"] for v in by_item.get(sid, []) if "fixed" in v]
-        errors += sum(1 for v in by_item.get(sid, []) if "error" in v)
         if vs:
             judge_fixed[sid] = majority(vs)
             if len(vs) == SINGLE_REPEATS:
                 consistent.append(len(set(vs)) == 1)
-    # Pairs: each order's preference mapped to the item's own order; a flip between the orders counts as a tie.
     judge_prefer, flips = {}, []
     for pid in pairs:
         fs = [v["prefer"] for v in by_item.get(pid, []) if v["job"].endswith("#fs") and "prefer" in v]
         sf = [v["prefer"] for v in by_item.get(pid, []) if v["job"].endswith("#sf") and "prefer" in v]
-        errors += sum(1 for v in by_item.get(pid, []) if "error" in v)
         if fs and sf:
             back = {"first": "second", "second": "first", "tie": "tie"}[sf[0]]
             flips.append(fs[0] != back)
             judge_prefer[pid] = fs[0] if fs[0] == back else "tie"
 
-    binary = lambda v: "fixed" if v == "yes" else "not fixed"
     w("## Q1. False passes: on runs that passed their tests, does the judge agree with you on \"fixed\"?\n")
     passing = [s for s in singles if key["singles"][s]["passed"] and s in labels["singles"] and s in judge_fixed and s not in unblinded]
-    agree = sum(binary(judge_fixed[s]) == binary(labels["singles"][s]["fixed"]) for s in passing)
-    base_agree = sum(binary(baseline_fixed(singles[s])) == binary(labels["singles"][s]["fixed"]) for s in passing)
-    exact = sum(judge_fixed[s] == labels["singles"][s]["fixed"] for s in passing)
-    kappa = cohen_kappa([(binary(judge_fixed[s]), binary(labels["singles"][s]["fixed"])) for s in passing])
-    human_not = sum(binary(labels["singles"][s]["fixed"]) == "not fixed" for s in passing)
-    w("- Judge agrees with you (fixed or not): %s; Cohen's kappa %s." % (pct(agree, len(passing)), "n/a" if kappa is None else "%.2f" % kappa))
-    w("- Same three-way answer (yes, partly, no): %s." % pct(exact, len(passing)))
-    w("- Baseline (touches at least half of the reference's files) agrees with you: %s." % pct(base_agree, len(passing)))
-    w("- Passing runs you judged not fixed (false passes): %s.\n" % pct(human_not, len(passing)))
+    human = {s: fixed(labels["singles"][s]["fixed"]) for s in passing}
+    false_passes = [s for s in passing if not human[s]]
+    agree = sum(fixed(judge_fixed[s]) == human[s] for s in passing)
+    caught = sum(not fixed(judge_fixed[s]) for s in false_passes)
+    always = sum(human[s] for s in passing)  # "always fixed" agrees on every run you judged fixed
+    base = sum(fixed(baseline_fixed(singles[s])) == human[s] for s in passing)
+    kappa = cohen_kappa([(fixed(judge_fixed[s]), human[s]) for s in passing])
+    w("- Passing runs you judged not fixed (false passes): %s." % pct(len(false_passes), len(passing)))
+    w("- The judge caught (judged not fixed): %s of them." % pct(caught, len(false_passes)))
+    w("- The judge agrees with you, fixed or not: %s; Cohen's kappa %s." % (pct(agree, len(passing)), "n/a" if kappa is None else "%.2f" % kappa))
+    w("- Same three-way answer (yes, partly, no): %s." % pct(sum(judge_fixed[s] == labels["singles"][s]["fixed"] for s in passing), len(passing)))
+    w("- Baseline \"always fixed\" agrees with you: %s." % pct(always, len(passing)))
+    w("- Baseline \"touches at least half of the reference's files\" agrees with you: %s.\n" % pct(base, len(passing)))
 
     w("## Q2. Quality: when both arms passed, does the judge prefer the same change as you?\n")
-    rated = [p for p in pairs if p in labels["pairs"] and p in judge_prefer]
+    rated = [p for p in pairs if p in labels["pairs"] and p in judge_prefer and p not in unblinded_pairs]
+    preferences = [p for p in rated if labels["pairs"][p]["prefer"] != "tie"]
     agree2 = sum(judge_prefer[p] == labels["pairs"][p]["prefer"] for p in rated)
+    ties = sum(labels["pairs"][p]["prefer"] == "tie" for p in rated)  # "always tie" agrees on every pair you called a tie
     base2 = sum(baseline_prefer(pairs[p]) == labels["pairs"][p]["prefer"] for p in rated)
-    w("- Judge agrees with you (first, second or tie): %s." % pct(agree2, len(rated)))
-    w("- Baseline (file overlap, then size closest to the reference) agrees with you: %s.\n" % pct(base2, len(rated)))
+    w("- Pairs where you preferred one change: %d of %d." % (len(preferences), len(rated)))
+    w("- The judge agrees with you (first, second or tie): %s." % pct(agree2, len(rated)))
+    w("- Baseline \"always tie\" agrees with you: %s." % pct(ties, len(rated)))
+    w("- Baseline \"more file overlap, then size closer to the reference\" agrees with you: %s.\n" % pct(base2, len(rated)))
 
     w("## Q3. Tasks without tests: without seeing results, does the judge's verdict match the tests?\n")
     judged = [s for s in singles if s in judge_fixed]
-    match = sum((binary(judge_fixed[s]) == "fixed") == key["singles"][s]["passed"] for s in judged)
-    on_pass = [s for s in judged if key["singles"][s]["passed"]]
-    on_fail = [s for s in judged if not key["singles"][s]["passed"]]
-    w("- All runs: %s." % pct(match, len(judged)))
-    w("- Runs that passed, judged fixed: %s." % pct(sum(binary(judge_fixed[s]) == "fixed" for s in on_pass), len(on_pass)))
-    w("- Runs that failed, judged not fixed: %s.\n" % pct(sum(binary(judge_fixed[s]) != "fixed" for s in on_fail), len(on_fail)))
+    # The rate leaves out empty changes (obvious failures) and passing runs you judged not fixed (there the tests
+    # themselves are in doubt, and a judge that catches the false pass would be counted wrong).
+    doubted = {s for s in judged if key["singles"][s]["passed"] and s in labels["singles"] and not fixed(labels["singles"][s]["fixed"])}
+    nonempty = [s for s in judged if singles[s]["candidate"].strip() and s not in doubted]
+    match = sum(fixed(judge_fixed[s]) == key["singles"][s]["passed"] for s in nonempty)
+    trivial = sum(key["singles"][s]["passed"] for s in nonempty)  # "every change is fixed"
+    failing = [s for s in nonempty if not key["singles"][s]["passed"]]
+    flagged = sum(not fixed(judge_fixed[s]) for s in failing)
+    w("- Runs with a change, without the %d false passes you found: %s match their tests; all runs: %s." %
+      (len(doubted), pct(match, len(nonempty)), pct(sum(fixed(judge_fixed[s]) == key["singles"][s]["passed"] for s in judged), len(judged))))
+    w("- Failing runs with a change, judged not fixed: %s." % pct(flagged, len(failing)))
+    w("- Passing runs, judged fixed: %s." % pct(sum(fixed(judge_fixed[s]) for s in nonempty if key["singles"][s]["passed"]),
+                                             sum(key["singles"][s]["passed"] for s in nonempty)))
+    w("- Baseline \"every change is fixed\" matches: %s.\n" % pct(trivial, len(nonempty)))
 
-    w("## Q4–Q5. Reliability and cost\n")
+    w("## Q5. Reliability and cost\n")
+    aa = [p for p in judge_prefer if key["pairs"][p]["template"] == "aa"]
+    aa_pref = [p for p in aa if judge_prefer[p] != "tie"]
+    arm_a = sum(key["pairs"][p][judge_prefer[p]]["arm"] == "A" for p in aa_pref)
+    aa_p = binomial_two_sided(arm_a, len(aa_pref))
     w("- Same verdict on all %d repeats: %s." % (SINGLE_REPEATS, pct(sum(consistent), len(consistent))))
     w("- Pair order flips the preference: %s." % pct(sum(flips), len(flips)))
-    aa = [p for p in judge_prefer if key["pairs"][p]["template"] == "aa" and judge_prefer[p] != "tie"]
-    arm_a = sum(key["pairs"][p][judge_prefer[p]]["arm"] == "A" for p in aa)
-    w("- A/A pairs (same context in both arms) with a preference: arm A preferred in %d of %d (two-sided p = %.2f; no "
-      "difference expected)." % (arm_a, len(aa), binomial_two_sided(arm_a, len(aa))))
-    costs = [r["cost_usd"] for r in rows]  # retried calls cost too
-    w("- Judgements: %d (%d errors); cost $%.2f in all, $%.3f each on average (%s, effort %s).\n" %
+    w("- A/A pairs (the same context in both arms): %d judged; arm A preferred in %d of the %d with a preference (two-sided "
+      "p = %.2f; no difference is expected, and with so few pairs this is a sanity check)." % (len(aa), arm_a, len(aa_pref), aa_p))
+    costs = [r["cost_usd"] for r in rows]
+    w("- Judgements: %d (%d ended in an error); calls cost $%.2f in all, $%.3f on average (%s, effort %s).\n" %
       (len(verdicts), errors, sum(costs), sum(costs) / len(costs) if costs else 0, JUDGE_MODEL, JUDGE_EFFORT))
 
-    w("## Go/no-go (thresholds fixed in protocol.md)\n")
-    checks = [
-        ("agrees with you on fixed, passing runs >= 80%", len(passing) > 0 and agree / len(passing) >= 0.80),
-        ("same verdict on all repeats >= 90%", len(consistent) > 0 and sum(consistent) / len(consistent) >= 0.90),
-        ("order flips <= 10% of pairs", len(flips) > 0 and sum(flips) / len(flips) <= 0.10),
-        ("no significant arm preference on A/A pairs (p >= 0.05)", binomial_two_sided(arm_a, len(aa)) >= 0.05),
-        ("agrees with you more often than the baseline", agree > base_agree),
-    ]
-    for name, ok in checks:
-        w("- %s: %s" % ("met" if ok else "NOT met", name))
-    secondary = all(ok for _, ok in checks)
-    w("\nSecondary judge score (false passes and quality): %s." % ("GO: worth building" if secondary else "NO-GO"))
-    no_tests = len(judged) > 0 and match / len(judged) >= 0.90
-    w("Grading tasks without tests: %s." % ("promising (at least 90%% of runs match their tests)" if no_tests else "NO-GO"))
+    w("## Verdicts (rules fixed in protocol.md)\n")
+
+    def at_least(value: Optional[float], bound: float) -> str:
+        return "n/a" if value is None else ("met" if value >= bound - 1e-12 else "NOT met")
+
+    def above(k: int, other: int, n: int) -> str:
+        return "n/a" if n == 0 else ("met" if k > other else "NOT met")
+
+    def verdict(name: str, enough: bool, reason: str, checks: List[Tuple[str, str]]) -> None:
+        if not enough:
+            w("**%s: INCONCLUSIVE** (%s)." % (name, reason))
+            return
+        for label_, state in checks:
+            w("- %s: %s" % (state, label_))
+        w("**%s: %s**\n" % (name, "GO" if all(state == "met" for _, state in checks) else "NO-GO"))
+
+    reliable = [("same verdict on all repeats in >= 90% of singles", at_least(rate(sum(consistent), len(consistent)), 0.90))]
+    verdict("Secondary score for false passes", len(false_passes) >= 3, "you found %d false passes; at least 3 are needed to tell "
+            "whether the judge catches them" % len(false_passes), [
+                ("agrees with you on fixed or not in >= 80% of passing runs", at_least(rate(agree, len(passing)), 0.80)),
+                ("catches >= 2/3 of the false passes you found", at_least(rate(caught, len(false_passes)), 2 / 3)),
+                ("agrees with you more often than \"always fixed\"", above(agree, always, len(passing))),
+                ("agrees with you more often than the file baseline", above(agree, base, len(passing))),
+            ] + reliable)
+    aa_state = "n/a" if not aa else ("met" if aa_p >= 0.05 else "NOT met")
+    verdict("Secondary score for quality", len(preferences) >= 5, "you preferred one change in %d pairs; at least 5 are needed" %
+            len(preferences), [
+                ("agrees with you in >= 70% of pairs", at_least(rate(agree2, len(rated)), 0.70)),
+                ("agrees with you more often than \"always tie\"", above(agree2, ties, len(rated))),
+                ("agrees with you more often than the file baseline", above(agree2, base2, len(rated))),
+                ("pair order flips its preference in <= 10% of pairs", "n/a" if not flips else ("met" if sum(flips) / len(flips) <= 0.10 + 1e-12 else "NOT met")),
+                ("no significant arm preference on A/A pairs (p >= 0.05)", aa_state),
+            ])
+    verdict("Grading tasks without tests (promising, not proven)", len(failing) >= 3, "only %d failing runs have a change; at least 3 "
+            "are needed" % len(failing), [
+                ("matches the tests in >= 90% of runs with a change (false passes you found left out)", at_least(rate(match, len(nonempty)), 0.90)),
+                ("judges >= 3 of the failing runs with a change not fixed", "met" if flagged >= 3 else "NOT met"),
+                ("matches more often than \"every change is fixed\"", above(match, trivial, len(nonempty))),
+            ])
     return "\n".join(out) + "\n"
 
 
