@@ -36,11 +36,15 @@ const taskUsage = `Usage:
   agentium task show NAME
   agentium task edit NAME [--instruction TEXT | --instruction-file FILE] [--setup CMD... | --no-setup]
                          [--verify CMD]... [--reviewed] [--accept-gaps]
-  agentium task validate NAME [--snapshot NAME]... [--repeat N] [--timeout DURATION] [--keep]
+  agentium task validate NAME [--snapshot NAME]... [--repeat N] [--weak-tests [--max-hunks N]]
+                         [--timeout DURATION] [--keep]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes);
                          --repeat N (1 to 20) runs every stage N times, and a stage whose runs disagree makes the
-                         task flaky, which experiments reject (experiment plan asks for at least 3)
+                         task flaky, which experiments reject (experiment plan asks for at least 3);
+                         --weak-tests removes one hunk of the reference at a time (the first --max-hunks, default 20)
+                         and reruns the checks in the base context: hunks that still pass are "not tested by the
+                         hidden tests", a warning that leaves the task valid
   agentium task rm NAME
 
 task show and task validate list what the hidden tests require that neither the instruction nor the base code states
@@ -445,6 +449,9 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		if t.NeedsReview {
 			status += st.Warn(" (instruction not reviewed)")
 		}
+		if n, _ := untestedCount(t); n > 0 {
+			status += st.Warn(fmt.Sprintf(" (%d untested hunk(s))", n))
+		}
 		if gaps, err := taskGaps(ctx, fair, t); err != nil {
 			status += st.Warn(" (unstated requirements unknown)")
 		} else if len(gaps) > 0 {
@@ -495,6 +502,39 @@ func printGaps(out io.Writer, st term.Style, gaps []task.Gap) {
 	}
 }
 
+// printWeakTests lists the reference hunks no hidden test needs, or says why the check did not run.
+func printWeakTests(out io.Writer, st term.Style, w *task.WeakTests) {
+	switch {
+	case w == nil:
+		return
+	case w.Reason != "":
+		fmt.Fprintln(out, note(st, "weak-tests check skipped: "+w.Reason))
+		return
+	}
+	var skipped string
+	if w.Skipped > 0 {
+		skipped = fmt.Sprintf("; %d more hunk(s) were skipped (--max-hunks)", w.Skipped)
+	}
+	if len(w.Untested) == 0 {
+		fmt.Fprintln(out, note(st, fmt.Sprintf("weak tests: every one of %d hunk(s) checked is needed by the hidden tests%s", w.Checked, skipped)))
+		return
+	}
+	fmt.Fprintln(out, st.Warn(fmt.Sprintf("Not tested by the hidden tests (%d of %d hunk(s) checked%s): removing each still passes.\n"+
+		"Fine for logging, comments and docs; otherwise the tests may miss part of the fix:", len(w.Untested), w.Checked, skipped)))
+	for _, h := range w.Untested {
+		fmt.Fprintf(out, "  %s\n", h)
+	}
+}
+
+// untestedCount is how many hunks the stored validation found untested, and whether that check was run.
+func untestedCount(t store.Task) (n int, checked bool) {
+	var v task.Validation
+	if t.Validation == nil || json.Unmarshal(t.Validation, &v) != nil || v.WeakTests == nil || v.WeakTests.Reason != "" {
+		return 0, false
+	}
+	return len(v.WeakTests.Untested), true
+}
+
 func validationStatus(t store.Task) string {
 	if t.Validation == nil {
 		return "not validated"
@@ -536,6 +576,10 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  hidden     %s\n", orNone(strings.Join(t.HiddenTests, ", ")))
 	fmt.Fprintf(out, "  reference  %s\n", orNone(strings.Join(t.Reference, ", ")))
 	fmt.Fprintf(out, "  status     %s\n", st.Status(validationStatus(t)))
+	var stored task.Validation
+	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
+		printWeakTests(out, st, stored.WeakTests)
+	}
 	gaps, gapErr := taskGaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview {
 		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(from history; review it for solution leaks, then task edit)")+st.Heading(":"))
@@ -614,6 +658,8 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	var snapshots stringList
 	fs.Var(&snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
 	repeat := fs.Int("repeat", 1, "run every stage this many times; a stage whose runs disagree makes the task flaky")
+	weak := fs.Bool("weak-tests", false, "also remove each hunk of the reference solution and list those no hidden test needs")
+	maxHunks := fs.Int("max-hunks", task.DefaultMaxHunks, "with --weak-tests: how many hunks to try, in file and line order")
 	timeout := fs.Duration("timeout", 10*time.Minute, "time limit for each verification command")
 	keep := fs.Bool("keep", false, "keep the checkouts for inspection")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
@@ -628,6 +674,10 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "agentium task validate: --repeat must be 1 to 20")
 		return ExitUsage
 	}
+	if *maxHunks < 1 {
+		fmt.Fprintln(env.Stderr, "agentium task validate: --max-hunks must be at least 1")
+		return ExitUsage
+	}
 	w, err := openProject(ctx, env)
 	if err != nil {
 		return fail(env, err)
@@ -636,6 +686,10 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	t, err := w.db.TaskByName(ctx, w.project.ID, rest[0])
 	if err != nil {
 		return fail(env, err)
+	}
+	if *weak && (t.SolutionCommit == "" || len(t.Reference) == 0 || len(t.HiddenTests) == 0) {
+		fmt.Fprintf(env.Stderr, "agentium task validate: --weak-tests needs a task with a solution (hidden tests and a reference); %s has none\n", t.Name)
+		return ExitUsage
 	}
 	arms := []task.Arm{{Name: "base"}}
 	for i, name := range snapshots {
@@ -657,7 +711,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	defer live.Stop()
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
 	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: *timeout, Keep: *keep, Repeats: *repeat, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now,
+		Timeout: *timeout, Keep: *keep, Repeats: *repeat, WeakTests: *weak, MaxHunks: *maxHunks, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now,
 		Started: func(arm, stage string) { live.Step("validating " + t.Name + ": " + arm + ", " + stage) }}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(arms))), strings.Join(t.Verify, "; "))
@@ -681,6 +735,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	for arm, files := range result.HarnessChanged {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("arm %s changes what runs, not only what the model reads: %s", arm, strings.Join(files, ", "))))
 	}
+	printWeakTests(env.Stdout, st, result.WeakTests)
 	fmt.Fprintf(env.Stdout, "Result: %s %s\n", st.Status(result.Summary()), st.Note("(logs: "+v.LogDir+")"))
 	if result.Status == task.StatusInvalid || result.Status == task.StatusFlaky {
 		return ExitError

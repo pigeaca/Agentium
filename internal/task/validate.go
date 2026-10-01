@@ -94,6 +94,8 @@ type Validation struct {
 	HarnessChanged map[string][]string `json:"harness_changed,omitempty"`
 	// ContextKept lists, per arm, context files the solution also changes: the arm keeps its own version of them.
 	ContextKept map[string][]string `json:"context_kept,omitempty"`
+	// WeakTests is the weak-tests check (--weak-tests); nil means it was not run. It is a warning, not a status.
+	WeakTests *WeakTests `json:"weak_tests,omitempty"`
 }
 
 // RepeatCount is how many times each stage ran: 1 when Repeats is absent.
@@ -103,15 +105,17 @@ func (v Validation) RepeatCount() int {
 
 // Validator runs validations. Checkouts are made in WorkDir and removed afterwards unless Keep is set.
 type Validator struct {
-	Bare     string
-	WorkDir  string
-	LogDir   string
-	Timeout  time.Duration // per command
-	Keep     bool
-	Repeats  int        // runs per stage, each in a fresh checkout; below 2 means once
-	Env      []string   // added to every setup and verification command (a build cache of Agentium's own)
-	Progress io.Writer  // one line per stage
-	Style    term.Style // styles each progress line's verdict; the zero Style prints plain text
+	Bare      string
+	WorkDir   string
+	LogDir    string
+	Timeout   time.Duration // per command
+	Keep      bool
+	WeakTests bool       // also try the reference solution without each of its hunks (see weakTests)
+	MaxHunks  int        // how many hunks that tries; 0 means DefaultMaxHunks
+	Repeats   int        // runs per stage, each in a fresh checkout; below 2 means once
+	Env       []string   // added to every setup and verification command (a build cache of Agentium's own)
+	Progress  io.Writer  // one line per stage
+	Style     term.Style // styles each progress line's verdict; the zero Style prints plain text
 	// Started, when set, is called before each stage: it only feeds a status display and must not print.
 	Started func(arm, stage string)
 	Now     func() time.Time
@@ -160,6 +164,21 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 				result.Status = StatusFlaky
 			case !stage.OK && result.Status != StatusFlaky:
 				result.Status = StatusInvalid
+			}
+		}
+	}
+	if v.WeakTests {
+		if solution == nil {
+			return result, ErrNoSolution
+		}
+		switch {
+		case !slices.ContainsFunc(result.Stages, func(s Stage) bool { return s.Arm == "base" && s.Stage == StageReference && s.OK }):
+			result.WeakTests = &WeakTests{Reason: "the reference did not pass in the base context, so there is nothing to take hunks out of"}
+		default:
+			weak, err := v.weakTests(ctx, spec, solution)
+			result.WeakTests = weak
+			if err != nil {
+				return result, err
 			}
 		}
 	}

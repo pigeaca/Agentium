@@ -224,3 +224,44 @@ func TestTaskFairnessGaps(t *testing.T) {
 	expect(t, run("task", "add", "stated", "--base", base, "--solution", solution, "--verify", verify,
 		"--instruction", `Check returns the error "value must not be empty" for an empty string.`), ExitOK)
 }
+
+func TestTaskValidateWeakTests(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
+	writeFile(t, repo, "value.txt", "old\n")
+	writeFile(t, repo, "notes.txt", "a\nb\nc\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "base")
+	writeFile(t, repo, "tests/value_test.sh", "grep -q new value.txt\n")
+	writeFile(t, repo, "value.txt", "new\n")
+	writeFile(t, repo, "notes.txt", "a\nB\nc\n") // a change no test needs
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "Make value new")
+	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir()}
+	run := func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv:   func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run("init"), ExitOK)
+	expect(t, run("task", "import", "--commit", "HEAD", "--name", "value", "--verify", "sh run_tests.sh"), ExitOK)
+	expect(t, run("task", "validate", "value"), ExitOK, "Result: valid")
+	expect(t, run("task", "list"), ExitOK, "valid")
+	if list := run("task", "list"); strings.Contains(list.stdout, "untested") {
+		t.Errorf("not checked yet:\n%s", list.stdout)
+	}
+
+	expect(t, run("task", "validate", "value", "--weak-tests"), ExitOK, "hunk 1/2", "notes.txt:2", "NOT TESTED", "hunk 2/2", "value.txt:1",
+		"Not tested by the hidden tests (1 of 2 hunk(s) checked", "Result: valid")
+	expect(t, run("task", "list"), ExitOK, "(1 untested hunk(s))")
+	expect(t, run("task", "show", "value"), ExitOK, "status     valid", "Not tested by the hidden tests", "  notes.txt:2")
+	expect(t, run("task", "validate", "value", "--weak-tests", "--max-hunks", "1", "--repeat", "2"), ExitOK, "1 more hunk(s) were skipped", "(1/2)")
+	expect(t, run("task", "validate", "value", "--weak-tests", "--max-hunks", "0"), ExitUsage, "--max-hunks must be at least 1")
+
+	// A task without a solution has no hunks to take out.
+	expect(t, run("task", "add", "manual", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
+	expect(t, run("task", "validate", "manual", "--weak-tests"), ExitUsage, "--weak-tests needs a task with a solution")
+}
