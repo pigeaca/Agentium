@@ -1,7 +1,7 @@
 # Task checks and context use
 
 - Date: 2026-09-30
-- Status: In Progress (2026-10-01): steps 1 and 3 run in parallel; step 2 follows step 1. No paid runs.
+- Status: Complete (2026-10-01). PRs: #43 (step 1), #45 (step 2, built on step 1), #44 (step 3, with this archive); merge them in that order. No paid runs.
 - Scope: from the user's questions on 2026-09-30: "who writes test scenarios, and how do we know what is good?" and "what changed in context usage?". Two task checks make weak tasks visible before paid runs. Reports then show which parts of each arm's context the agent actually used.
 
 ## Why
@@ -39,19 +39,32 @@
 
 ## Work
 Three PRs, each with green CI and a review.
-- [ ] **1. Flaky tasks** (`internal/task`, `internal/cli/task.go`, the warning in `internal/cli/experiment.go`).
-- [ ] **2. Weak tests** (the same files, after step 1).
-- [x] **3. Context use**, done by the coordinator. The reviewer requested changes twice and then approved: shell reads only as reading commands' file arguments; path-scoped rules and folder instructions counted for the files the agent worked with; only the project's and Claude Code's subagents named; recovery that survives a moved data folder and cancellation; `subagent_models` filtered in shared reports. On the real 16-run A/B, both arms load the same 6 files at start, no run opened a linked document, and one minimal-arm run started the `investigator` subagent.
-- [ ] Archive this plan.
+- [x] **1. Flaky tasks**, done by the `implementer` in #43.
+  - **Review:** the reviewer requested six changes, then approved: the hint keeps every arm's `--snapshot`, "flaky" is styled as a failure, a timeout is described as one, partial runs are counted as run, and the `--repeat` ceiling (20) is documented.
+  - **Integration:** with #42 merged, its estimates test asserted that no warning appears, but this step's repeats warning appears too. That test now checks only the budget's warning.
+- [x] **2. Weak tests**, done by the `implementer` in #45.
+  - **Review:** approved with five low findings, all fixed: a restored file keeps its executable bit; there is a reason when there are no text hunks; the skip names the stage; docs say a plain revalidation replaces the result. Symbolic links and file/link type changes are skipped.
+  - **Evidence:** the reviewer's randomized round trip (400 cases) found the hunk rebuild exact.
+- [x] **3. Context use**, done by the coordinator in #44. The reviewer requested nine changes, then approved, and confirmed four low follow-ups: shell reads only as reading commands' file arguments; path-scoped rules and folder instructions counted for the files the agent worked with; only the project's and Claude Code's subagents named; recovery that survives a moved data folder and cancellation; `subagent_models` filtered in shared reports. On the real 16-run A/B, both arms load the same 6 files at start, no run opened a linked document, and one minimal-arm run started the `investigator` subagent.
+- [x] Archive this plan (in #44).
 
 ## Boundaries
 - No paid runs and no new dependencies.
 - Stored forms change only by adding fields, and older records and validations still load.
 - No absolute paths, personal names or user-level skill names in records or reports.
-- Neither check judges code quality; that is the [judge pilot](2026-09-30-judge-pilot.md)'s question.
+- Neither check judges code quality; that is the [judge pilot](../2026-09-30-judge-pilot.md)'s question.
 
 ## Verification
 `harness.py check changed`, fake-`claude` end-to-end tests, golden reports, CI, and a reviewer per PR.
+
+Actual:
+- `check changed` exited 0 on each branch with `main` merged in (18 packages; docs within 1800 words).
+- An independent reviewer approved each step (see Work).
+- Real sample: the 16-run A/B's report recovers context use from 16 old transcripts.
+- **Limitations:**
+  - shell reads are a heuristic (a grep option's value can be miscounted), and `GlobMatch` approximates Claude Code's matcher;
+  - the weak-tests check runs in the base context only, and is biased toward "tested";
+  - the repeats warning shows until tasks are revalidated with `--repeat 3`.
 
 ## Parallel ownership
 All steps start from `origin/main` at `c0414eb`, except step 2, which starts from step 1's reviewed head. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`. A separate session owns `claude/fix/run-estimates` (the preview's usage and cost estimates): `internal/experiment/usage.go`, `plan.go`, and the preview lines of `internal/cli/experiment.go`.
@@ -65,8 +78,9 @@ All steps start from `origin/main` at `c0414eb`, except step 2, which starts fro
 Each implementer pushes its branch and returns a handoff; the coordinator runs the reviewer, opens one PR per step and integrates.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code desktop / claude-opus-5-5 / default (coordinator, step 3); `implementer` on claude-sonnet-5-5 / medium (steps 1–2); `reviewer` subagents on Opus / high
+- Elapsed: about 55m (2026-10-01 08:55 to 09:50 +04), steps in parallel
+- Check-fix loops: 6 (review rounds: step 1 one, step 2 two, step 3 two; one integration fix after #42 merged)
+- User corrections: 0
+- Real runs: none
+- Review: steps 1–3 approved after fixes; a second review from Codex is recommended for all three (persisted records, public report JSON, a new CLI flag)

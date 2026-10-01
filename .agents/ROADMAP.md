@@ -12,9 +12,9 @@ Product direction: an AI development lab for coding agents. The [feasibility stu
 - 2026-09-30 — Clearer console output, no web UI ([plan](plans/archive/2026-09-30-clearer-console.md), [decision](decisions/2026-09-30-console-instead-of-web-ui.md)).
 - 2026-10-01 — Experiment hardening done; a 16-run full vs minimal A/B was inconclusive ([plan](plans/archive/2026-09-29-experiment-hardening.md)).
 - 2026-10-01 — Usage and cost estimates from task runs ([plan](plans/archive/2026-10-01-run-estimates.md)).
+- 2026-10-01 — Task checks and context use ([plan](plans/archive/2026-09-30-task-checks-context-use.md)).
 
 ## Next, in order
-1. [Task checks and context use](plans/2026-09-30-task-checks-context-use.md).
-2. [LLM judge pilot](plans/2026-09-30-judge-pilot.md).
-3. [Java and Rust](plans/2026-09-30-java-rust.md).
-4. Phase 2: agent comparison and Codex.
+1. [LLM judge pilot](plans/2026-09-30-judge-pilot.md).
+2. [Java and Rust](plans/2026-09-30-java-rust.md).
+3. Phase 2: agent comparison and Codex.
