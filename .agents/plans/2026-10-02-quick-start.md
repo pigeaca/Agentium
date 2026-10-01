@@ -70,7 +70,22 @@ Each step is one PR with green CI and a review.
 - [ ] **1. Context lint:** `context lint`, `--hook` and `--print-hook` (`internal/claudectx`, `internal/cli/context.go`).
 - [ ] **2. Calibration inside `experiment run`:** after the model A/B experiment step, since both change `internal/experiment` and `experiment_run.go`.
 - [ ] **3. `agentium start` and north-star tracking.**
-- [ ] **4. Real check (free up to the preview)** on a public repository, then docs, then archive.
+- [ ] **4. Real check (free up to the preview)** on a public repository, then docs.
+- [ ] **5. README pictures** (the user's decision on 2026-10-02: refresh them once, after quick start, not before). The pictures date from 2026-09-30. Since then `plan`, `report` and the status line have changed, and the README's claim that they show today's output no longer holds.
+  - **Redo from stored data with today's binary:** `experiment plan`, the run summary, `experiment report` and `run show`. Re-record the live status-line animation with the stand-in agent.
+  - **Add:**
+    - `agentium start`, as the first picture;
+    - `task mine --dry-run`;
+    - the report's Judge section from the `judge-check` experiment, whose judge called a passing run "partly" fixed.
+  - **Caption:** state the date and the Claude Code version of the data.
+  - **Tools:** `scripts/readme_images/`, saved from the 2026-09-30 session, standard library only:
+    - `ptyrun.py` captures a command's styled output on a pseudo-terminal;
+    - `ansi2svg.py` renders it as a terminal window;
+    - `cast2svg.py` animates a timed recording given as JSON `[[seconds, text], …]`.
+
+    A timed recorder for the animation is still to write, and a short usage note goes beside the tools.
+  - **Cost:** free; no new agent runs.
+  - Then archive this plan.
 
 ## Verification and handoff
 Hermetic CLI tests with a fake Claude Code, `harness.py check changed`, CI, and a reviewer per step. The wave-2 exit gate (a decisive verdict on an external repository, about $60) is run separately, with the user's approval.
