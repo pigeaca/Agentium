@@ -261,14 +261,17 @@ func printIneligible(w io.Writer, reasons map[string]string) {
 	}
 }
 
-// estimateRun estimates one run's cost on model from the project's earlier fair task runs on it that reported their
-// cost (a run stopped before Claude Code's result has none).
+// estimateRun estimates runs on model from the project's earlier fair task runs on it that reported their cost (a run
+// stopped before Claude Code's result has none): each task from its own runs, when it has some. A run is a task's own
+// only while it is linked to it: a removed task's runs, and an experiment's runs of a task changed after the lock, are
+// not, so a task imported again under the same name starts without history. A task edited in place keeps its ID, and
+// so its earlier runs.
 func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Estimate, error) {
 	runs, err := w.db.Runs(ctx, w.project.ID)
 	if err != nil {
 		return experiment.Estimate{}, err
 	}
-	var past []float64
+	var past []experiment.PastRun
 	for _, r := range runs {
 		if r.Kind != "task" || !slices.Contains([]string{claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout}, r.Outcome) {
 			continue
@@ -280,7 +283,11 @@ func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Es
 			} `json:"metrics"`
 		}
 		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model && rec.Metrics.SawResult && r.CostUSD > 0 {
-			past = append(past, r.CostUSD)
+			own := ""
+			if r.TaskID != 0 {
+				own = r.TaskName
+			}
+			past = append(past, experiment.PastRun{Task: own, CostUSD: r.CostUSD})
 		}
 	}
 	return experiment.EstimateRun(model, past), nil
@@ -365,7 +372,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintln(out, "\n"+st.Heading("Sizes (runs count both arms):"))
 	sizes := term.NewTable(st, term.Left("SIZE"), term.Right("TASKS"), term.Right("RUNS/ARM"), term.Right("RUNS"), term.Right("EST. COST"),
 		term.Right("WORST CASE"), term.Right("COST CHANGE"), term.Right("SUCCESS CHANGE"), term.Right("NO-LOSS GUARD"), term.Left("EXPLORATORY"))
-	rows := experiment.Preview(d, len(eligible), est)
+	rows := experiment.Preview(d, eligible, est)
 	marked := false // a row's task count carries a footnote mark; the others get a space so the digits line up
 	for _, r := range rows {
 		marked = marked || r.Short
@@ -378,7 +385,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 			tasks += " "
 		}
 		cost := "unknown"
-		if est.Known {
+		if r.CostKnown {
 			cost = fmt.Sprintf("$%.2f", r.CostUSD)
 		}
 		effects := []string{percentRange(r.Detect.Cost, "%"), percentRange(r.Detect.Success, " pp"), percentRange(r.Detect.Guard, " pp")}
@@ -404,7 +411,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if len(eligible) < tiers[len(tiers)-1].Tasks {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("* only %d task(s) can be in this experiment; a tier asking for more uses them all", len(eligible))))
 	}
-	fmt.Fprintf(out, "Estimated cost: %s.\n", est.Basis)
+	printCostBasis(out, st, d, eligible, est)
 	fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
 		"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
 	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
@@ -429,6 +436,34 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}
 	return ExitOK
+}
+
+// printCostBasis says how each of the experiment's tasks is estimated: from its own earlier runs, or from the fallback
+// for tasks without any. The tiers draw from the eligible tasks, so they average those tasks' estimates, which may
+// include tasks outside the experiment: the note shows that average.
+func printCostBasis(out io.Writer, st term.Style, d experiment.Design, eligible []string, est experiment.Estimate) {
+	var own, other []string
+	for _, t := range d.Tasks {
+		if c, ok := est.Tasks[t]; ok {
+			own = append(own, fmt.Sprintf("%s $%.2f (%d run(s))", t, c.PerRunUSD, c.Runs))
+		} else {
+			other = append(other, t)
+		}
+	}
+	fmt.Fprintf(out, "Estimated cost per run on %s:\n", d.Model)
+	if len(own) > 0 {
+		fmt.Fprintf(out, "  from each task's own earlier runs (their median): %s\n", strings.Join(own, ", "))
+	}
+	if len(other) > 0 {
+		fallback := "no estimate (" + est.Basis + ")"
+		if est.Known {
+			fallback = fmt.Sprintf("$%.2f, %s", est.PerRunUSD, est.Basis)
+		}
+		fmt.Fprintf(out, "  %s, without runs of their own: %s\n", strings.Join(other, ", "), fallback)
+	}
+	if mean, known := est.MeanUSD(eligible); known && slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("The tiers' estimates average the %d eligible task(s), each estimated the same way: $%.2f a run.", len(eligible), mean)))
+	}
 }
 
 // percentRange shows a detectable effect's range; success effects of 100 pp or more cannot be detected at all.
@@ -552,8 +587,8 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 	if ready {
 		check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
-	expected, reserve := float64(d.Runs())*est.PerRunUSD, experiment.Reserve(d)
-	if est.Known && d.BudgetUSD < expected+reserve {
+	expected, known := est.DesignUSD(d)
+	if reserve := experiment.Reserve(d); known && d.BudgetUSD < expected+reserve {
 		check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early",
 			d.BudgetUSD, expected, reserve))
 	}

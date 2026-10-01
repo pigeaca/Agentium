@@ -160,6 +160,30 @@ func TestUsagePerRunAndLatest(t *testing.T) {
 	if !ok || latest.FiveHour != 0.23 || !latest.FiveHourResets.Equal(w2) {
 		t.Errorf("latest = %+v, %v", latest, ok)
 	}
+
+	// Calibration runs are a few short turns: a window of them alone measures nothing, so an older window of task runs
+	// counts, or the default. Their readings are still the latest.
+	w3 := w2.Add(5 * time.Hour)
+	calibration := func(first, last float64, resets time.Time) UsageSample {
+		s := sample(first, last, resets, resets)
+		s.Calibration = true
+		return s
+	}
+	calibrations := []UsageSample{calibration(0.10, 0.11, w3), calibration(0.11, 0.12, w3), calibration(0.12, 0.13, w3), calibration(0.13, 0.14, w3)}
+	if per, runs := UsagePerRun(calibrations); per != DefaultUsagePerRun || runs != 0 {
+		t.Errorf("only calibration runs: %v, %d; want the default", per, runs)
+	}
+	if per, runs := UsagePerRun(append(later[:7:7], calibrations...)); runs != 3 || abs(per-0.06) > 1e-9 {
+		t.Errorf("a later window of calibration runs: %v, %d; want w2's task runs", per, runs)
+	}
+	if latest, ok := LatestUsage(append(later[:7:7], calibrations...)); !ok || latest.FiveHour != 0.14 || !latest.FiveHourResets.Equal(w3) {
+		t.Errorf("latest with calibration runs = %+v, %v", latest, ok)
+	}
+	// Calibrations in a window with task runs neither count as runs nor widen the rise past the task runs' readings.
+	mixed := append(calibrations[:2:2], sample(0.20, 0.26, w3, w3), sample(0.26, 0.32, w3, w3), sample(0.32, 0.38, w3, w3), calibration(0.38, 0.39, w3))
+	if per, runs := UsagePerRun(mixed); runs != 3 || abs(per-0.06) > 1e-9 { // (0.38 − 0.20) / 3
+		t.Errorf("task and calibration runs in one window: %v, %d", per, runs)
+	}
 	if _, ok := LatestUsage([]UsageSample{{}}); ok {
 		t.Error("no readings, no latest")
 	}
