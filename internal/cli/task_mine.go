@@ -80,9 +80,6 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer w.Close()
-	if !*dryRun && len(verify) == 0 && len(w.defaultVerify()) == 0 {
-		return fail(env, errors.New("no test commands were detected for this project: pass --verify CMD"))
-	}
 	existing, err := w.db.Tasks(ctx, w.project.ID)
 	if err != nil {
 		return fail(env, err)
@@ -94,7 +91,20 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 			opts.Exclude[t.SolutionCommit] = true
 		}
 	}
-	opts.Languages, opts.TestCommand = testLanguages(w.root)
+	var toolCommands []string
+	opts.Languages, toolCommands = testLanguages(w.root)
+	opts.TestCommand = strings.Join(toolCommands, ", ")
+	// Mined tasks verify with the build tools' own test commands: the tests mining picked commits by. Other commands the
+	// project runs (linters, documentation checks) would fail at old commits for reasons no agent can fix, and are saved
+	// with the task for every later grading. Without a detected tool, the project's default commands are all there is.
+	if len(verify) == 0 {
+		if verify = toolCommands; len(verify) == 0 {
+			verify = w.defaultVerify()
+		}
+	}
+	if !*dryRun && len(verify) == 0 {
+		return fail(env, errors.New("no test commands were detected for this project: pass --verify CMD"))
+	}
 
 	st := env.style()
 	res, err := mine.Scan(ctx, w.root, opts)
@@ -109,8 +119,11 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 	if len(opts.Languages) > 0 {
 		fmt.Fprintln(env.Stdout, note(st, "only commits with "+strings.Join(opts.Languages, " or ")+" tests count, as "+opts.TestCommand+" runs them"))
 	}
-	top := res.Candidates[:min(*limit, len(res.Candidates))]
 	if *dryRun {
+		top := res.Candidates[:min(*limit, len(res.Candidates))]
+		if len(verify) > 0 {
+			fmt.Fprintln(env.Stdout, note(st, "mined tasks will verify with: "+strings.Join(verify, "; ")+" (--verify to change)"))
+		}
 		if err := printCandidates(env, top, len(res.Candidates)); err != nil {
 			return fail(env, err)
 		}
@@ -122,31 +135,47 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 		}
 		return ExitOK
 	}
-	if len(top) == 0 {
+	if len(res.Candidates) == 0 {
 		fmt.Fprintf(env.Stdout, "Nothing to import: %s shows why the commits were set aside\n", st.Command("agentium task mine --dry-run"))
 		return ExitOK
 	}
 
+	// Candidates are imported best first until --limit of them succeed; those that fail stay in the table.
 	_, live := liveEnv(env) // nothing prints while it shows
 	var rows []batchRow
 	var imported []store.Task
-	for i, c := range top {
-		live.Step(fmt.Sprintf("importing %d of %d: %s", i+1, len(top), shortCommit(c.Hash)))
+	tried := 0
+	for _, c := range res.Candidates {
+		if len(imported) == *limit {
+			break
+		}
+		tried++
+		live.Step(fmt.Sprintf("importing %d of %d: %s", len(imported)+1, *limit, shortCommit(c.Hash)))
 		t, err := w.mineTask(ctx, c, store.Task{ProjectID: w.project.ID, Verify: verify, Setup: setup, CreatedAt: env.Now()}, names)
+		switch {
+		case err == nil:
+			imported = append(imported, t)
+		case errors.Is(err, errAlreadyTask):
+		case ctx.Err() == nil:
+			rows = append(rows, batchRow{name: taskName(c.Subject, c.Hash), commit: c.Hash, problem: "not imported: " + err.Error()})
+		}
 		if ctx.Err() != nil {
 			live.Stop()
 			fmt.Fprintf(env.Stdout, "Interrupted: %d task(s) imported, not validated; %s validates them\n", len(imported),
 				st.Command("agentium task validate --all --status unvalidated"))
 			return ExitError
 		}
-		if err != nil {
-			rows = append(rows, batchRow{name: taskName(c.Subject, c.Hash), commit: c.Hash, problem: "not imported: " + err.Error()})
-			continue
-		}
-		imported = append(imported, t)
 	}
 	live.Stop()
-	fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Imported %d of %d candidate(s); validating them", len(imported), len(top))), *jobs)
+	if len(imported) == 0 {
+		fmt.Fprintln(env.Stdout, st.Heading(fmt.Sprintf("Imported none of %d candidate(s)", tried)))
+		if err := printBatchTable(ctx, env, w, rows); err != nil {
+			return fail(env, err)
+		}
+		return ExitError
+	}
+	fmt.Fprintf(env.Stdout, "%s (verify: %s); validating them, %d at a time\n",
+		st.Heading(fmt.Sprintf("Imported %d of %d candidate(s) tried", len(imported), tried)), strings.Join(verify, "; "), *jobs)
 	results, err := validateBatch(ctx, env, w, imported, validateOptions{arms: []task.Arm{{Name: "base"}}, repeat: 1, timeout: *timeout}, *jobs)
 	if err != nil {
 		return fail(env, err)
@@ -162,58 +191,80 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 		}
 	}
 	fmt.Fprintf(env.Stdout, "%d of %d imported task(s) are valid.\n", valid, len(imported))
-	fmt.Fprintf(env.Stdout, "%s: %s, then %s; mining again skips these commits (%s removes a task you do not want)\n",
-		st.Warn("Review each mined instruction for solution leaks"), st.Command("agentium task show NAME"),
-		st.Command("task edit NAME --reviewed"), st.Command("task rm NAME"))
 	if ctx.Err() != nil {
 		return interrupted(env, results)
 	}
+	batchAdvice(env, results, *jobs)
+	if valid < *limit && tried < len(res.Candidates) {
+		fmt.Fprintf(env.Stdout, "%d candidate(s) are left: %s mines more\n", len(res.Candidates)-tried,
+			st.Command(fmt.Sprintf("agentium task mine --limit %d", *limit-valid)))
+	}
+	fmt.Fprintf(env.Stdout, "%s: %s, then %s.\n"+
+		"Keep the invalid ones: experiments use only valid tasks, and mining skips every commit that is a task (a removed task's commit is mined again).\n",
+		st.Warn("Review each mined instruction for solution leaks"), st.Command("agentium task show NAME"), st.Command("task edit NAME --reviewed"))
 	return ExitOK
 }
 
+// errAlreadyTask means a candidate became a task (in another process) while it was being imported.
+var errAlreadyTask = errors.New("already a task")
+
 // mineTask imports candidate c as a task, through the path task import --commit takes (commitTask, completeTask),
-// with c's instruction and a name not in names, which it then adds there.
+// with c's instruction and a name not in names, which it then adds there. When another process made a task of the
+// same commit meanwhile (a name clash shows it), it returns errAlreadyTask, so no commit is imported twice.
 func (w *workspace) mineTask(ctx context.Context, c mine.Candidate, t store.Task, names map[string]bool) (store.Task, error) {
 	t, err := w.commitTask(ctx, c.Hash, c.Instruction(), t)
 	if err != nil {
 		return t, err
 	}
 	base := t.Name
-	for n := 2; names[t.Name]; n++ {
-		t.Name = fmt.Sprintf("%s-%d", base, n)
+	unique := func() {
+		t.Name = base
+		for n := 2; names[t.Name]; n++ {
+			t.Name = fmt.Sprintf("%s-%d", base, n)
+		}
 	}
+	unique()
 	if t, err = w.completeTask(ctx, t, judgeNever); err != nil {
 		return t, err
 	}
-	for n := 2; ; n++ {
+	for {
 		saved, err := w.db.SaveTask(ctx, t)
-		if errors.Is(err, store.ErrExists) { // made by another process since the list was read
-			names[t.Name], t.Name = true, fmt.Sprintf("%s-%d", base, n)
-			continue
+		if !errors.Is(err, store.ErrExists) {
+			if err != nil {
+				return t, err
+			}
+			names[saved.Name] = true
+			return saved, nil
 		}
+		// Another process saved a task since the list was read: read it again.
+		tasks, err := w.db.Tasks(ctx, w.project.ID)
 		if err != nil {
 			return t, err
 		}
-		names[saved.Name] = true
-		return saved, nil
+		for _, other := range tasks {
+			names[other.Name] = true
+			if other.SolutionCommit == t.SolutionCommit {
+				return t, errAlreadyTask
+			}
+		}
+		unique()
 	}
 }
 
 // testLanguages names the languages of the tests the project's detected build tools run (mine.Options.Languages),
-// and their test commands.
-func testLanguages(root string) (languages []string, commands string) {
+// and those tools' test commands.
+func testLanguages(root string) (languages, commands []string) {
 	has := func(name string) bool {
 		_, err := os.Stat(filepath.Join(root, name))
 		return err == nil
 	}
-	var tests []string
 	for _, p := range buildtool.Detected(has) {
 		languages = append(languages, p.Languages...)
 		if c := p.TestCommand(has); c != "" {
-			tests = append(tests, c)
+			commands = append(commands, c)
 		}
 	}
-	return languages, strings.Join(tests, ", ")
+	return languages, commands
 }
 
 // maxSubject is how many characters of a subject the candidates table shows.
@@ -304,6 +355,7 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o va
 	if ctx.Err() != nil {
 		return interrupted(env, results)
 	}
+	batchAdvice(env, results, jobs)
 	for _, r := range results {
 		if !r.validated {
 			return ExitError
@@ -313,6 +365,21 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o va
 		}
 	}
 	return ExitOK
+}
+
+// batchAdvice suggests validating invalid or flaky tasks again one at a time after a batch that ran several at once:
+// tests that share ports, temporary paths or databases can fail only side by side.
+func batchAdvice(env Env, results []batchResult, jobs int) {
+	if jobs < 2 {
+		return
+	}
+	for _, r := range results {
+		if s := validationOf(r.task).Status; r.validated && (s == task.StatusInvalid || s == task.StatusFlaky) {
+			fmt.Fprintf(env.Stdout, "%s: %s\n", note(env.style(), "some tasks failed while others ran beside them; if their tests share ports, temporary paths or databases, check them alone"),
+				env.style().Command("agentium task validate --all --status invalid --jobs 1"))
+			return
+		}
+	}
 }
 
 // interrupted reports how far an interrupted batch got and returns ExitError.
@@ -378,6 +445,20 @@ func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Tas
 	env, live := liveEnv(env)
 	defer live.Stop()
 	st := env.style()
+	if w.layout.RunsBusy() {
+		fmt.Fprintln(env.Stdout, note(st, "an experiment is running: these validations build and test on the same machine, and will slow its runs"))
+	}
+	if len(o.arms) > 1 || o.repeat > 1 {
+		var judged []string
+		for _, t := range tasks {
+			if t.Grading == task.GradingJudge {
+				judged = append(judged, t.Name)
+			}
+		}
+		if len(judged) > 0 {
+			fmt.Fprintln(env.Stdout, note(st, "--snapshot and --repeat do not apply to judge-graded tasks, for which nothing runs: "+strings.Join(judged, ", ")))
+		}
+	}
 
 	var mu sync.Mutex // guards current and finished, which the live line reads
 	current, finished := map[string]string{}, 0
@@ -453,7 +534,7 @@ func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Tas
 		if !out.started {
 			continue
 		}
-		r.err, r.stopped = out.err, out.err != nil && ctx.Err() != nil
+		r.err, r.stopped = out.err, out.err != nil && ctx.Err() != nil && !errors.Is(out.err, errTaskChanged)
 		mu.Lock()
 		finished++
 		mu.Unlock()
@@ -475,6 +556,8 @@ func (r batchResult) problem() string {
 		return "not started (interrupted)"
 	case r.stopped:
 		return "interrupted"
+	case errors.Is(r.err, errTaskChanged):
+		return r.err.Error()
 	case r.err != nil:
 		return "not validated: " + r.err.Error()
 	}

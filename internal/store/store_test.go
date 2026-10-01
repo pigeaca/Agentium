@@ -267,6 +267,26 @@ func TestTasksRoundTripUpdateAndCascade(t *testing.T) {
 		!again.UpdatedAt.Equal(now.Add(time.Hour)) || again.Instruction != "Make the parser accept empty input." {
 		t.Errorf("after update: %+v", again)
 	}
+	// A validation is stored only while the commands it ran are the task's, and writes nothing else.
+	got.Instruction, got.NeedsReview = "Edited meanwhile.", true
+	if err := s.UpdateTask(ctx, got, now.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := s.SetTaskValidation(ctx, got.ID, []string{"go test ./..."}, nil, []byte(`{"status":"invalid"}`), now.Add(3*time.Hour)); err != nil || !ok {
+		t.Fatalf("SetTaskValidation = %v, %v", ok, err)
+	}
+	if again, _ := s.TaskByName(ctx, app.ID, "fix-parser"); string(again.Validation) != `{"status":"invalid"}` || again.Instruction != "Edited meanwhile." ||
+		!again.NeedsReview || !again.UpdatedAt.Equal(now.Add(3*time.Hour)) {
+		t.Errorf("after SetTaskValidation: %+v", again)
+	}
+	for _, commands := range [][2][]string{{{"go test ./pkg"}, nil}, {{"go test ./..."}, {"make assets"}}} {
+		if ok, err := s.SetTaskValidation(ctx, got.ID, commands[0], commands[1], []byte(`{"status":"valid"}`), now); err != nil || ok {
+			t.Errorf("SetTaskValidation with other commands %v = %v, %v; want false", commands, ok, err)
+		}
+	}
+	if again, _ := s.TaskByName(ctx, app.ID, "fix-parser"); string(again.Validation) != `{"status":"invalid"}` {
+		t.Errorf("a validation of other commands was stored: %s", again.Validation)
+	}
 	list, err := s.Tasks(ctx, app.ID)
 	if err != nil || len(list) != 2 || list[1].Name != "manual" || list[1].HiddenTests == nil || len(list[1].HiddenTests) != 0 ||
 		list[0].Grading != "tests" || list[1].Grading != "tests" {

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -38,8 +41,8 @@ func mineRepo(t *testing.T) (string, []string) {
 			"tests/greet_test.sh": ". ./lib.sh\n[ \"$(greet)\" = hello ]\n"})
 	commit("Document greet in the README", map[string]string{"README.md": "# lib\n\ngreet prints hello.\n"})
 	commit("Cover base in the tests", map[string]string{"tests/base_test.sh": ". ./lib.sh\n[ \"$(base)\" = base ]\n"})
-	// Invalid as a task: its test of base passes before the change too.
-	invalid := commit("Explain base in a comment and check it again\n\nA comment says what base prints, and a second test pins it.",
+	// Invalid as a task: its test of base passes before the change too. It ranks second (an issue reference).
+	invalid := commit("Explain base in a comment and check it again\n\nA comment says what base prints, and a second test pins it. Refs #5.",
 		map[string]string{"lib.sh": "# base prints base.\nbase() { echo base; }\ngreet() { echo hello; }\n",
 			"tests/base2_test.sh": ". ./lib.sh\n[ \"$(base)\" = base ]\n"})
 	commit("Speed up base without tests", map[string]string{"lib.sh": "# base prints base.\nbase() { printf 'base\\n'; }\ngreet() { echo hello; }\n"})
@@ -105,8 +108,10 @@ func TestTaskMine(t *testing.T) {
 	expect(t, run("task", "mine", "--dry-run", "--since", "2099-01-01"), ExitOK, "0 commit(s) read, 0 candidate(s)", "No candidates.")
 
 	first := run("task", "mine", "--limit", "2", "--verify", "sh run_tests.sh", "--jobs", "2")
-	expect(t, first, ExitOK, "Imported 2 of 2 candidate(s); validating them, 2 at a time", "NAME", "COMMIT", "TESTS", "FILES", "STATUS",
-		"(instruction not reviewed)", "Review each mined instruction for solution leaks")
+	expect(t, first, ExitOK, "Imported 2 of 2 candidate(s) tried (verify: sh run_tests.sh); validating them, 2 at a time", "NAME", "COMMIT",
+		"TESTS", "FILES", "STATUS", "(instruction not reviewed)", "Review each mined instruction for solution leaks",
+		"Keep the invalid ones", "a removed task's commit is mined again", "1 of 2 imported task(s) are valid",
+		"1 candidate(s) are left: agentium task mine --limit 1 mines more", "agentium task validate --all --status invalid --jobs 1")
 	tasks := storedTasks(t, data)
 	if len(tasks) != 2 {
 		t.Fatalf("--limit 2 stored %d task(s)", len(tasks))
@@ -130,7 +135,7 @@ func TestTaskMine(t *testing.T) {
 	}
 
 	second := run("task", "mine", "--verify", "sh run_tests.sh")
-	expect(t, second, ExitOK, "1 candidate(s)", "Imported 1 of 1 candidate(s)")
+	expect(t, second, ExitOK, "1 candidate(s)", "Imported 1 of 1 candidate(s) tried")
 	tasks = storedTasks(t, data)
 	if len(tasks) != 3 {
 		t.Fatalf("mining again stored %d task(s), want 3", len(tasks))
@@ -328,4 +333,171 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// Mined tasks verify with the build tools' test commands, not every command init found; task import keeps those all.
+func TestTaskMineVerifiesWithBuildTools(t *testing.T) {
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	commit := func(message string, files map[string]string) string {
+		for p, body := range files {
+			writeFile(t, repo, p, body)
+		}
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", message)
+		return strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	}
+	commit("Initial commit", map[string]string{"go.mod": "module example.com/m\n\ngo 1.22\n", "m.go": "package m\n",
+		"Makefile": "test:\n\tfalse\n", "lint.sh": "exit 1\n"})
+	add := commit("Add Double to the package\n\nDouble returns twice its argument, for the totals.",
+		map[string]string{"m.go": "package m\n\nfunc Double(n int) int { return 2 * n }\n",
+			"m_test.go": "package m\n\nimport \"testing\"\n\nfunc TestDouble(t *testing.T) {\n\tif Double(2) != 4 {\n\t\tt.Fatal(Double(2))\n\t}\n}\n"})
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK, "go test ./...; make test")
+
+	expect(t, run("task", "mine", "--dry-run"), ExitOK, "note: mined tasks will verify with: go test ./... (--verify to change)")
+	mined := run("task", "mine")
+	expect(t, mined, ExitOK, "Imported 1 of 1 candidate(s) tried (verify: go test ./...)", "valid")
+	tasks := storedTasks(t, data)
+	if len(tasks) != 1 || !slices.Equal(tasks[0].Verify, []string{"go test ./..."}) || statusOf(tasks[0]) != "valid" {
+		t.Fatalf("mined %+v", tasks)
+	}
+	expect(t, run("task", "rm", tasks[0].Name), ExitOK)
+	expect(t, run("task", "import", "--commit", add), ExitOK, "verify: go test ./...; make test")
+}
+
+// A batch stores each validation without undoing edits made while it ran, and drops one whose commands changed.
+func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
+	repo, data, run := validateRepo(t)
+	gate := t.TempDir()
+	wait := "touch " + gate + "/$TASK; while [ ! -e " + gate + "/go ]; do sleep 0.05; done"
+	for _, name := range []string{"edited", "changed"} {
+		expect(t, run("task", "add", name, "--base", "HEAD", "--instruction", "Anything.", "--verify", strings.ReplaceAll(wait, "$TASK", name)), ExitOK)
+	}
+	var stdout, stderr bytes.Buffer
+	done := make(chan int, 1)
+	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir()}
+	go func() {
+		done <- Run(context.Background(), Env{Args: []string{"task", "validate", "--all", "--jobs", "2"}, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+			Getenv: func(key string) string { return vars[key] }, LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }})
+	}()
+	waitFor(t, "both validations", func() bool {
+		_, a := os.Stat(filepath.Join(gate, "edited"))
+		_, b := os.Stat(filepath.Join(gate, "changed"))
+		return a == nil && b == nil
+	})
+	expect(t, run("task", "edit", "edited", "--instruction", "Edited while it ran."), ExitOK)
+	expect(t, run("task", "edit", "changed", "--verify", "true"), ExitOK)
+	writeFile(t, gate, "go", "")
+	r := cliResult{<-done, stdout.String(), stderr.String()}
+	expect(t, r, ExitError, "not stored: the task changed during validation")
+	byName := map[string]store.Task{}
+	for _, task := range storedTasks(t, data) {
+		byName[task.Name] = task
+	}
+	if e := byName["edited"]; e.Instruction != "Edited while it ran." || statusOf(e) != "unchecked" {
+		t.Errorf("edited: instruction %q, status %s", e.Instruction, statusOf(e))
+	}
+	if c := byName["changed"]; c.Validation != nil || !slices.Equal(c.Verify, []string{"true"}) {
+		t.Errorf("changed: verify %v, validation %s", c.Verify, c.Validation)
+	}
+
+	// Single validation stores the same way.
+	expect(t, run("task", "add", "single", "--base", "HEAD", "--instruction", "Anything.",
+		"--verify", "touch "+gate+"/single; while [ ! -e "+gate+"/go2 ]; do sleep 0.05; done"), ExitOK)
+	var out, errOut bytes.Buffer
+	go func() {
+		done <- Run(context.Background(), Env{Args: []string{"task", "validate", "single"}, Stdout: &out, Stderr: &errOut, Dir: repo,
+			Getenv: func(key string) string { return vars[key] }, LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+			Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }})
+	}()
+	waitFor(t, "the single validation", func() bool {
+		_, err := os.Stat(filepath.Join(gate, "single"))
+		return err == nil
+	})
+	expect(t, run("task", "edit", "single", "--verify", "true"), ExitOK)
+	writeFile(t, gate, "go2", "")
+	expect(t, cliResult{<-done, out.String(), errOut.String()}, ExitError, "not stored: the task changed during validation")
+}
+
+// When no candidate can be imported, task mine says why per commit and fails, without a review reminder.
+func TestTaskMineNothingImported(t *testing.T) {
+	repo, _ := mineRepo(t)
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK)
+	expect(t, run("task", "mine", "--dry-run"), ExitOK) // opens Agentium's repository of the project
+	// Agentium's repository refuses new objects, so no commit can be kept there.
+	objects := filepath.Join(data, "projects", "1", "repo.git", "objects")
+	var dirs []string
+	if err := filepath.WalkDir(objects, func(p string, d os.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			dirs = append(dirs, p)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range dirs {
+		if err := os.Chmod(d, 0o500); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		for _, d := range dirs {
+			os.Chmod(d, 0o700)
+		}
+	})
+	r := run("task", "mine", "--verify", "sh run_tests.sh")
+	expect(t, r, ExitError, "Imported none of 3 candidate(s)", "not imported: ")
+	if strings.Contains(r.stdout, "Review each mined instruction") || len(storedTasks(t, data)) != 0 {
+		t.Errorf("nothing imported, yet:\n%s", r.stdout)
+	}
+}
+
+// A commit another process made a task of while it was being imported is skipped, not imported twice.
+func TestMineTaskSkipsACommitImportedMeanwhile(t *testing.T) {
+	repo, _ := mineRepo(t)
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK)
+	ctx := context.Background()
+	vars := map[string]string{"AGENTIUM_HOME": data}
+	w, err := openProject(ctx, Env{Dir: repo, Getenv: func(key string) string { return vars[key] }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	res, err := mine.Scan(ctx, repo, mine.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expect(t, run("task", "import", "--commit", res.Candidates[0].Hash, "--verify", "true"), ExitOK) // the other process
+	names := map[string]bool{}                                                                       // as read before it
+	_, err = w.mineTask(ctx, res.Candidates[0], store.Task{ProjectID: w.project.ID, Verify: []string{"true"}}, names)
+	if !errors.Is(err, errAlreadyTask) || len(storedTasks(t, data)) != 1 {
+		t.Fatalf("mineTask of %s: %v, %d task(s)", res.Candidates[0].Hash, err, len(storedTasks(t, data)))
+	}
+	// Another commit whose name is taken gets the next free one.
+	second := res.Candidates[1]
+	expect(t, run("task", "add", taskName(second.Subject, second.Hash), "--base", "HEAD", "--instruction", "Other.", "--verify", "true"), ExitOK)
+	saved, err := w.mineTask(ctx, second, store.Task{ProjectID: w.project.ID, Verify: []string{"true"}}, names)
+	if err != nil || saved.Name != taskName(second.Subject, second.Hash)+"-2" {
+		t.Fatalf("mineTask = %q, %v", saved.Name, err)
+	}
+}
+
+// A batch says when an experiment holds the run lock: validations slow its runs.
+func TestTaskValidateAllNotesARunningExperiment(t *testing.T) {
+	_, data, run := validateRepo(t)
+	expect(t, run("task", "add", "one", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
+	expect(t, run("task", "validate", "--all"), ExitOK)
+	release, err := home.Layout{Root: data}.LockRuns()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	expect(t, run("task", "validate", "--all"), ExitOK, "note: an experiment is running")
 }

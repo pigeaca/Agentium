@@ -43,7 +43,9 @@ const taskUsage = `Usage:
                          code, small and with a clear message, imports the best --limit (default 10) as task import
                          --commit does, and validates them --jobs at a time (default 2), ending with one table;
                          --dry-run lists the candidates with their scores, and why other commits were set aside,
-                         and saves nothing. Commits that are already tasks are skipped
+                         and saves nothing. Commits that are already tasks are skipped. Mined tasks verify with
+                         the detected build tools' test commands (go test ./... for Go), not every command init
+                         found (linters and docs checks fail at old commits); without a build tool, with those
   agentium task import (--commit REF | --pr N) [--name NAME] [--setup CMD]... [--verify CMD]...
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh); a commit's
@@ -64,7 +66,8 @@ const taskUsage = `Usage:
                          --weak-tests replaces the stored result, so rerun with it to keep the list;
                          --all validates every task (--status: only the unvalidated, valid, invalid, flaky or
                          unchecked ones), --jobs at a time (default 2), and ends with one table; an interrupt keeps
-                         the validations that finished
+                         the validations that finished. --jobs above 1 (here and in task mine) assumes the project's
+                         tests can run side by side: no fixed ports, shared /tmp paths or databases
   agentium task rm NAME
 
 Judge-graded tasks have no hidden tests: their runs are to be graded by the judge against the reference solution.
@@ -75,7 +78,8 @@ task show and task validate list what the hidden tests require that neither the 
 (exact texts; for Go also new names); task list counts them. A task that becomes reviewed (task add --solution, task edit --instruction or --reviewed)
 with such a list needs --accept-gaps.
 
---verify defaults to the test commands found by agentium init. --setup commands run first in every fresh
+--verify defaults to the test commands found by agentium init (task add and task import; task mine uses the build
+tools' own). --setup commands run first in every fresh
 checkout (for example, building assets the code embeds); they must pass.
 `
 
@@ -1010,18 +1014,27 @@ func taskSpec(t store.Task) task.Spec {
 		Setup: t.Setup, Verify: t.Verify}
 }
 
-// storeValidation records result as t's validation. It stores even when ctx is cancelled: a validation that finished
-// is kept through an interrupt.
+// errTaskChanged means a validation was not stored: the task's commands changed, or it was removed, while it ran.
+var errTaskChanged = errors.New("not stored: the task changed during validation")
+
+// storeValidation records result as t's validation, if t still has the verify and setup commands it was validated
+// with (errTaskChanged otherwise), and returns the task as stored now: edits made meanwhile (an instruction, the review
+// flag) are kept, not overwritten from t. It stores even when ctx is cancelled: a validation that finished is kept
+// through an interrupt.
 func (w *workspace) storeValidation(ctx context.Context, t store.Task, result task.Validation, now time.Time) (store.Task, error) {
+	ctx = context.WithoutCancel(ctx)
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return t, fmt.Errorf("encode validation: %w", err)
 	}
-	t.Validation = encoded
-	if err := w.db.UpdateTask(context.WithoutCancel(ctx), t, now); err != nil {
+	stored, err := w.db.SetTaskValidation(ctx, t.ID, t.Verify, t.Setup, encoded, now)
+	if err != nil {
 		return t, err
 	}
-	return t, nil
+	if !stored {
+		return t, errTaskChanged
+	}
+	return w.db.TaskByName(ctx, t.ProjectID, t.Name)
 }
 
 // judgedValidation checks a judge-graded task without running anything (task.ValidateJudged) and returns the

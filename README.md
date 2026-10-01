@@ -54,6 +54,8 @@ agentium task validate <name> --repeat 3           # run every stage 3 times: a 
 agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
 
+Mined tasks verify with your build tool's test command (`go test ./...` for Go); `--verify` changes it. Validation builds and runs tests on your machine, two tasks at a time by default: `--jobs` above 1 assumes your tests can run side by side (no fixed ports, shared `/tmp` paths or databases), so use `--jobs 1` if they cannot.
+
 **3. Run and compare**
 
 > [!WARNING]
