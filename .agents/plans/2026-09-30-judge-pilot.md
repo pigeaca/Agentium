@@ -62,9 +62,14 @@ Every agreement is reported with its 95% Wilson interval. With 40–50 diffs, an
 
 ## Work
 - [x] **1. Preserve the data.** Checked on 2026-09-30: `~/.agentium-acceptance` already held it. Its runs table matches the `/private/tmp` snapshot row for row (35 task runs and 5 calibrations; 24 passed, 6 failed, 5 cancelled), its 35 `agent.diff` files are byte-identical, and it keeps 40 `stream.jsonl` transcripts. No copy was needed.
-- [ ] **2. Protocol and script,** with a fake-judge dry run and three real calls to price the judgement (free apart from those three calls).
+- [x] **2. Protocol and script** ([protocol](../../docs/research/judge-pilot/protocol.md), committed before any label or judge call).
+  - **Checks:** `judge_pilot.py` passes its 14 unit tests. A fake-judge dry run on the real items went from 176 judgements through to the go/no-go table.
+  - **The judge's Claude Code:** the installed 2.1.274 refuses Opus 5.5, so the judge runs on the desktop app's bundled 2.1.284. This is recorded in the protocol.
+  - **Three priced calls:** $0.038–0.042 each, mostly output (high effort). That puts the full run at about $9, and $13.50 with a 50% margin.
+  - **S01:** its pricing verdicts were shown in the session, so it is left out of the comparisons with your labels.
+  - **Pairs:** 19 rather than 20–25; 8 of them are A/A.
 - [ ] **3. Human labels** (the user); the A/B's diffs are in.
-- [ ] **4. Judge calls (paid; separate approval).** About 150 single and 50 pair judgements, estimated at $20–60 at Opus 5.5 list prices, or a share of the usage windows with a subscription. Step 2's priced calls refine the estimate before approval.
+- [ ] **4. Judge calls (paid; separate approval).** 138 single and 38 pair judgements, priced in step 2 at about $9 (list prices, or a share of the usage windows with a subscription). A budget cap of $15 is proposed.
 - [ ] **5. Analysis:** results doc, go/no-go, roadmap update; then archive this plan.
 
 ## Boundaries

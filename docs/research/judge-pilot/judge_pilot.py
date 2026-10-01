@@ -34,6 +34,9 @@ SINGLE_REPEATS = 3
 MAX_DIFF_CHARS = 40000
 CALL_TIMEOUT_S = 600
 FIXED = ("yes", "partly", "no")
+# UNBLINDED singles had judge verdicts shown before labeling (the pricing calls); comparisons with your labels leave
+# them out. Fixed before any label (protocol.md, Changes).
+UNBLINDED = {"S01"}
 PREFER = ("first", "second", "tie")
 
 SYSTEM_PROMPT = (
@@ -431,7 +434,7 @@ def pct(k: int, n: int) -> str:
     return "%d of %d, %.0f%% (95%%: %.0f–%.0f%%)" % (k, n, 100 * k / n, 100 * lo, 100 * hi)
 
 
-def analyze(work: Path) -> str:
+def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
     items = read_json(work / "items.json")
     key = read_json(work / "key.json")
     labels = read_json(work / "labels.json", {"singles": {}, "pairs": {}})
@@ -468,7 +471,7 @@ def analyze(work: Path) -> str:
 
     binary = lambda v: "fixed" if v == "yes" else "not fixed"
     w("## Q1. False passes: on runs that passed their tests, does the judge agree with you on \"fixed\"?\n")
-    passing = [s for s in singles if key["singles"][s]["passed"] and s in labels["singles"] and s in judge_fixed]
+    passing = [s for s in singles if key["singles"][s]["passed"] and s in labels["singles"] and s in judge_fixed and s not in unblinded]
     agree = sum(binary(judge_fixed[s]) == binary(labels["singles"][s]["fixed"]) for s in passing)
     base_agree = sum(binary(baseline_fixed(singles[s])) == binary(labels["singles"][s]["fixed"]) for s in passing)
     exact = sum(judge_fixed[s] == labels["singles"][s]["fixed"] for s in passing)

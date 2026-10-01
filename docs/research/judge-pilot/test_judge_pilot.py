@@ -231,7 +231,8 @@ class Pipeline(unittest.TestCase):
         key = json.loads((self.work / "key.json").read_text())
         labels = {"singles": {s: {"fixed": "yes", "note": ""} for s in key["singles"]}, "pairs": {p: {"prefer": "first", "note": ""} for p in key["pairs"]}}
         jp.write_json(self.work / "labels.json", labels)
-        text = jp.analyze(self.work)
+        text = jp.analyze(self.work, unblinded=set())
+        self.assertIn("4 of 4", jp.analyze(self.work, unblinded={next(s for s in key["singles"] if key["singles"][s]["passed"])}))
         self.assertIn("Judge agrees with you (fixed or not): 5 of 5, 100%", text)  # five passing runs
         self.assertIn("Runs that failed, judged not fixed: 0 of 1", text)
         self.assertIn("Same verdict on all 3 repeats: 6 of 6", text)
