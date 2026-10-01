@@ -25,7 +25,7 @@ func main() {
 	// Interrupts cancel the context so long-running commands can stop agent processes cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
-		Args: os.Args[1:], Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
+		Args: os.Args[1:], Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
 		Columns: func() int { return term.Columns(os.Stdout) },
 		Dir:     dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
 	})

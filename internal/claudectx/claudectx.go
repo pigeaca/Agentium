@@ -52,6 +52,9 @@ type Entry struct {
 type Context struct {
 	Entries  []Entry  `json:"entries"`
 	Warnings []string `json:"warnings"`
+	// Broken are the Warnings that name an @import of a file that does not exist (also in Warnings; lint reports them
+	// as problems of their own).
+	Broken []string `json:"broken_imports,omitempty"`
 	// Linked are documents (see IsDocument) that context files link to ([text](path)) but do not load: the agent reads
 	// them only if it opens them, so they are not context unless a snapshot includes them explicitly.
 	Linked []string `json:"linked,omitempty"`
@@ -88,7 +91,7 @@ func Resolve(src source.Source) (Context, error) {
 		return Context{}, err
 	}
 	sort.SliceStable(r.entries, func(i, j int) bool { return kindOrder(r.entries[i].Kind) < kindOrder(r.entries[j].Kind) })
-	return Context{Entries: r.entries, Warnings: r.warnings, Linked: r.linked()}, nil
+	return Context{Entries: r.entries, Warnings: r.warnings, Broken: r.broken, Linked: r.linked()}, nil
 }
 
 // kindOrder sorts entries for display: startup instructions in load order first, then the rest by kind.
@@ -120,6 +123,7 @@ type resolver struct {
 	seen      map[string]bool
 	entries   []Entry
 	warnings  []string
+	broken    []string
 	importers []importer
 }
 
@@ -283,6 +287,7 @@ func (r *resolver) imports(chain []string, data []byte, startup bool) {
 		if !source.Has(r.src, resolved) {
 			if pathLike {
 				r.warn("%s imports %s, which does not exist.", from, resolved)
+				r.broken = append(r.broken, r.warnings[len(r.warnings)-1])
 			}
 			continue
 		}

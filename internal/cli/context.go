@@ -28,6 +28,10 @@ const contextUsage = `Usage:
                                                  save a version (default: --ref HEAD); --include adds a
                                                  document (Markdown, rst, AsciiDoc), --include-linked every
                                                  document the context links to
+  agentium context lint [--working-tree]         free check, no agent runs: size change since the last snapshot,
+                                                 broken @imports, the 32 KiB cap and show's warnings; always exit 0
+  agentium context lint --print-hook             the Claude Code hook that runs it after you edit context files
+                                                 (you add it to ~/.claude/settings.json; Agentium never does)
   agentium context list                          saved versions
   agentium context diff A B [--patch]            compare two saved versions
 `
@@ -42,6 +46,8 @@ func runContext(ctx context.Context, env Env, args []string) int {
 		return contextShow(ctx, env, args[1:])
 	case "snapshot":
 		return contextSnapshot(ctx, env, args[1:])
+	case "lint":
+		return contextLint(ctx, env, args[1:])
 	case "list":
 		return contextList(ctx, env, args[1:])
 	case "diff":

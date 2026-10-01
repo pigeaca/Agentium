@@ -42,6 +42,8 @@ agentium context snapshot trimmed --working-tree   # --include-linked adds linke
 agentium context diff baseline trimmed --patch
 ```
 
+**Context lint (free):** `agentium context lint [--working-tree]` reports the size change against your latest snapshot, broken `@` imports, the 32 KiB cap on what loads at start, and the warnings `show` gives. It runs no agent and exits 0 even when it finds problems. To see it after every edit of a context file in Claude Code, run `agentium context lint --print-hook` and add the printed `PostToolUse` hook to your own `~/.claude/settings.json` (Agentium never writes your settings, and its runs load project settings only, so the hook never fires inside them).
+
 **2. Turn past commits into tasks**
 
 ```sh

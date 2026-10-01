@@ -1,0 +1,198 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+// lintRepoFixture is a committed repository whose context has a broken import.
+func lintRepoFixture(t *testing.T) string {
+	t.Helper()
+	repo := filepath.Join(t.TempDir(), "repo")
+	if err := os.Mkdir(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	writeFile(t, repo, "CLAUDE.md", "# Project\n@docs/missing.md\nRun the tests.\n")
+	writeFile(t, repo, ".claude/rules/go.md", "Always gofmt.\n")
+	writeFile(t, repo, "main.go", "package main\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "initial")
+	return repo
+}
+
+// hookIn runs `context lint --hook` with payload on stdin from dir.
+func hookIn(t *testing.T, dir, data, payload string) cliResult {
+	t.Helper()
+	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir()}
+	var stdout, stderr bytes.Buffer
+	code := Run(context.Background(), Env{
+		Args: []string{"context", "lint", "--hook"}, Stdin: strings.NewReader(payload), Stdout: &stdout, Stderr: &stderr, Dir: dir,
+		Getenv: func(key string) string { return vars[key] },
+		Now:    func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) },
+	})
+	return cliResult{code, stdout.String(), stderr.String()}
+}
+
+func editPayload(tool, cwd, file string) string {
+	payload, _ := json.Marshal(map[string]any{"session_id": "s1", "cwd": cwd, "hook_event_name": "PostToolUse", "tool_name": tool,
+		"tool_input": map[string]any{"file_path": file}, "tool_response": map[string]any{"filePath": file}, "tool_use_id": "toolu_1"})
+	return string(payload)
+}
+
+// message decodes a hook's stdout, which must be one JSON object with a systemMessage.
+func message(t *testing.T, r cliResult) string {
+	t.Helper()
+	var out struct {
+		SystemMessage string `json:"systemMessage"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.SystemMessage == "" {
+		t.Fatalf("hook output is not a systemMessage object: %q (%v)", r.stdout, err)
+	}
+	return out.SystemMessage
+}
+
+func TestContextLintReportsBrokenImportsAndTheCap(t *testing.T) {
+	t.Parallel()
+	repo := lintRepoFixture(t)
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+
+	r := run("context", "lint")
+	expect(t, r, ExitOK, "(commit ", "warning: CLAUDE.md imports docs/missing.md, which does not exist.",
+		"not registered with Agentium")
+	if strings.Contains(r.stdout, "cap") {
+		t.Errorf("a small context is under the cap:\n%s", r.stdout)
+	}
+	if _, err := os.Stat(data); err == nil {
+		t.Error("lint on an unregistered repository must not create the data folder")
+	}
+
+	expect(t, run("init"), ExitOK)
+	expect(t, run("context", "lint"), ExitOK, "no snapshot yet")
+	expect(t, run("context", "snapshot", "first"), ExitOK)
+	writeFile(t, repo, ".claude/rules/big.md", strings.Repeat("A long rule line that grows the context.\n", 1000))
+	r = run("context", "lint")
+	expect(t, r, ExitOK, "+0 tokens against snapshot first") // HEAD still equals the snapshot
+	r = run("context", "lint", "--working-tree")
+	expect(t, r, ExitOK, "(working tree)", "tokens against snapshot first", "over the 32 KiB cap", "does not exist")
+	if strings.Count(r.stdout, "docs/missing.md") != 1 {
+		t.Errorf("a broken import is reported once:\n%s", r.stdout)
+	}
+	if strings.Contains(r.stdout, "+0 tokens") {
+		t.Errorf("the growth is not shown:\n%s", r.stdout)
+	}
+	expect(t, run("context", "lint", "--hook", "--print-hook"), ExitUsage)
+	expect(t, run("context", "lint", "--hook", "--working-tree"), ExitUsage)
+	expect(t, run("context", "lint", "extra"), ExitUsage)
+}
+
+func TestContextLintHook(t *testing.T) {
+	t.Parallel()
+	repo := lintRepoFixture(t)
+	data := filepath.Join(t.TempDir(), "data")
+	elsewhere := t.TempDir() // the hook runs in another folder than the repository
+	claude := filepath.Join(repo, "CLAUDE.md")
+
+	// An unregistered repository: lint without the comparison, and say so in one note.
+	got := message(t, hookIn(t, elsewhere, data, editPayload("Edit", repo, claude)))
+	for _, want := range []string{"CLAUDE.md changed", "At session start", "docs/missing.md", "not registered with Agentium"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("unregistered: message lacks %q:\n%s", want, got)
+		}
+	}
+	if _, err := os.Stat(data); err == nil {
+		t.Error("the hook must not create the data folder")
+	}
+
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK)
+	got = message(t, hookIn(t, elsewhere, data, editPayload("Write", repo, claude)))
+	if !strings.Contains(got, "no snapshot yet") {
+		t.Errorf("no snapshot: message lacks the note:\n%s", got)
+	}
+
+	expect(t, run("context", "snapshot", "first"), ExitOK)
+	writeFile(t, repo, "CLAUDE.md", "# Project\n"+strings.Repeat("More guidance for the agent.\n", 100))
+	got = message(t, hookIn(t, elsewhere, data, editPayload("MultiEdit", repo, claude)))
+	if !strings.Contains(got, "against snapshot first") || strings.Contains(got, "+0 tokens") {
+		t.Errorf("message lacks the size change:\n%s", got)
+	}
+	// A relative path resolves against the payload's cwd; a rule and an unsaved new rule are context too.
+	got = message(t, hookIn(t, elsewhere, data, editPayload("Edit", repo, "CLAUDE.md")))
+	if !strings.Contains(got, "CLAUDE.md changed") {
+		t.Errorf("relative path:\n%s", got)
+	}
+	writeFile(t, repo, ".claude/rules/new.md", "A new rule.\n")
+	message(t, hookIn(t, repo, data, editPayload("Write", repo, filepath.Join(repo, ".claude/rules/new.md"))))
+
+	silent := map[string]string{
+		"not a context file":            editPayload("Edit", repo, filepath.Join(repo, "main.go")),
+		"a tool that is not an edit":    editPayload("Bash", repo, claude),
+		"a file outside any repository": editPayload("Write", elsewhere, filepath.Join(elsewhere, "CLAUDE.md")),
+		"a file that no longer exists":  editPayload("Write", repo, filepath.Join(repo, "gone", "CLAUDE.md")),
+		"no file":                       `{"tool_name":"Edit","tool_input":{}}`,
+	}
+	for name, payload := range silent {
+		if r := hookIn(t, repo, data, payload); r.code != ExitOK || r.stdout != "" || r.stderr != "" {
+			t.Errorf("%s: want silence and exit 0, got %+v", name, r)
+		}
+	}
+
+	for _, bad := range []string{"", "not json", `{"tool_name":`, "[1,2]"} {
+		r := hookIn(t, repo, data, bad)
+		if r.code != ExitOK {
+			t.Errorf("malformed input %q must exit 0, got %d", bad, r.code)
+		}
+		if note := message(t, r); strings.Contains(note, "\n") || !strings.Contains(note, "skipped") {
+			t.Errorf("malformed input %q: want a one-line note, got %q", bad, note)
+		}
+	}
+}
+
+func TestContextLintHookIsFast(t *testing.T) {
+	t.Parallel()
+	repo := lintRepoFixture(t)
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK)
+	expect(t, run("context", "snapshot", "first"), ExitOK)
+	payload := editPayload("Edit", repo, filepath.Join(repo, "CLAUDE.md"))
+	start := time.Now()
+	message(t, hookIn(t, t.TempDir(), data, payload))
+	// The goal is under a second; the margin is generous so a loaded CI machine does not flake.
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("the hook took %v", elapsed)
+	}
+}
+
+func TestContextLintPrintHook(t *testing.T) {
+	t.Parallel()
+	r := cliIn(t, t.TempDir(), t.TempDir())("context", "lint", "--print-hook")
+	expect(t, r, ExitOK, "never writes your settings", "project settings only", "never fires inside them")
+	var settings struct {
+		Hooks struct {
+			PostToolUse []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"PostToolUse"`
+		} `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &settings); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, r.stdout)
+	}
+	entries := settings.Hooks.PostToolUse
+	if len(entries) != 1 || entries[0].Matcher != "Edit|Write|MultiEdit" || len(entries[0].Hooks) != 1 ||
+		entries[0].Hooks[0].Type != "command" || entries[0].Hooks[0].Command != "agentium context lint --hook" {
+		t.Errorf("unexpected hook settings: %+v", entries)
+	}
+}

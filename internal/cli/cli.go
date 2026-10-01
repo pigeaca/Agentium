@@ -21,6 +21,7 @@ const (
 // Env is everything a command needs from the process, so tests can supply their own.
 type Env struct {
 	Args    []string
+	Stdin   io.Reader // only `context lint --hook` reads it; nil means empty
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Version string
