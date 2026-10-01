@@ -212,6 +212,8 @@ class ChangedCheckSelection(unittest.TestCase):
         self.assertEqual(commands, [["check", "go"], ["check", "vuln"]])
         commands, suggestions = self.commands("internal/store/migrations/0002_tasks.sql")
         self.assertEqual((commands, suggestions), ([["check", "go"]], []))
+        commands, _ = self.commands("docs/research/judge-pilot/judge_pilot.py")  # internal/judge's tests read it
+        self.assertEqual(commands, [["check", "docs"], ["check", "go"]])
 
 
 class RemoteUrls(unittest.TestCase):

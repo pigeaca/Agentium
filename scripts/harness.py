@@ -205,8 +205,11 @@ def offline_go_env() -> dict[str, str]:
 def go_test_targets(go: Path, paths: list[str]) -> list[str] | None:
     """The packages whose tests a change to `paths` can affect: each changed file's package (embedded files and
     testdata belong to the nearest package folder above them) and every package whose test binary depends on one of
-    them. None means every package: the module files changed, `go list` failed, or a Go file's folder is no longer a
-    package (a deleted one)."""
+    them. None means every package: the module files changed, `go list` failed, or a path maps to no package (a
+    deleted one, or a file outside cmd/ and internal/ that tests read).
+
+    It assumes a test that reads another package's files also imports that package, as every such test here does
+    (experiment reads ../stats/testdata, cli reads ../task/testdata); CI tests every package regardless."""
     if any(path in {"go.mod", "go.sum"} for path in paths):
         return None
     listing = subprocess.run([str(go), "list", "-test", "-f", "{{.ImportPath}}\t{{.Dir}}\t{{join .Deps \" \"}}", "./..."],
@@ -367,8 +370,10 @@ def remote_default() -> str:
 
 
 def go_path(path: str) -> bool:
-    """Go code plus everything embedded or read by Go tests (migrations, testdata) under cmd/ and internal/."""
-    return path.endswith(".go") or path in {"go.mod", "go.sum"} or path.startswith(("cmd/", "internal/"))
+    """Go code plus everything embedded or read by Go tests: migrations and testdata under cmd/ and internal/, and the
+    judge pilot's script, whose prompts internal/judge's tests compare word for word."""
+    return (path.endswith(".go") or path in {"go.mod", "go.sum"} or path.startswith(("cmd/", "internal/"))
+            or path.startswith("docs/research/judge-pilot/"))
 
 
 def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str]]:
@@ -425,6 +430,12 @@ def check_changed(args: list[str]) -> None:
     if not planned:
         print("  nothing to run.")
     if dry_run:
+        if ["check", "go"] in [command for command, _ in planned]:
+            try:
+                targets = go_test_targets(go_binary(), [path for path in paths if go_path(path)])
+            except ValueError:  # no Go toolchain: the selection itself still printed above
+                return
+            print("  go tests: " + ("every package" if targets is None else ", ".join(t.rsplit("/", 1)[-1] for t in targets) or "none"))
         return
     for command, _ in planned:
         if command == ["check", "go"]:

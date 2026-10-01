@@ -54,7 +54,7 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 `check changed` diffs the working tree against the merge base with the remote default branch: committed, staged, unstaged and untracked files, with both sides of renames. It maps:
 - Markdown, `.agents/`, `.claude/` or `docs/` → `check docs`,
 - harness scripts or `.githooks/` → `check harness`,
-- `*.go`, `go.mod`, `go.sum`, or any file under `cmd/` or `internal/` (embedded migrations, test data) → `check go`, and `go.mod`/`go.sum` also → `check vuln`,
+- `*.go`, `go.mod`, `go.sum`, any file under `cmd/` or `internal/` (embedded migrations, test data), or the judge pilot's script → `check go`, and `go.mod`/`go.sum` also → `check vuln`,
 - CI files → listed as a suggestion (verified by the PR's CI run),
 - any other file → a suggestion that it has no mapped check yet.
 
@@ -64,7 +64,7 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 - each changed file's package (embedded files and test data count for the nearest package folder above them);
 - every package whose test binary depends on one of those, according to `go list -test`.
 
-It tests every package when `go.mod` or `go.sum` changed, when `go list` fails, or when a changed Go file's folder is no longer a package. `check go` on its own, `check ci` and CI always test every package.
+It tests every package when `go.mod` or `go.sum` changed, when `go list` fails, or when a changed path maps to no package: a deleted package, or a file outside `cmd/` and `internal/` that tests read, such as the judge pilot's script. It assumes a test that reads another package's files also imports that package, as every such test here does. `--dry-run` also prints the packages it would test. `check go` on its own, `check ci` and CI always test every package.
 
 ## Adding stack checks
 
