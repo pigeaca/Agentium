@@ -1,7 +1,7 @@
 # Refactor round
 
 - Date: 2026-10-01
-- Status: Planned (2026-10-01): steps 1–2 start when the judge's step 2 merges, since they change the same code. Approved with the [next chapter](2026-10-01-next-chapter.md).
+- Status: In Progress (2026-10-01): step 4 (faster tests) started first, because it touches only test code. Steps 1–2 start when the judge's step 3 (reports) merges, since they change the same report and experiment code. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
 - Scope: the code findings of the 2026-10-01 review. No change in behavior.
 
 ## Why

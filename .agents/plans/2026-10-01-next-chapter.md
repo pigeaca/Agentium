@@ -66,10 +66,11 @@ The note must fix these before any code:
 - **Only if it passes:** pairs step 1b and ticket step 2 start. Until then the judge stays a per-run second opinion.
 
 ## Assignments (wave 1)
-- **Temp isolation:** step 2 done (`e27a899`) and in security review; then the coordinator runs one real probe.
+- **Temp isolation:** step 2 done after two review rounds (`e27a899`, `f1e7630`); a re-review is running.
 - **Task mining:** step 1 done (`4e1395e`) and in re-review. Step 2 (the CLI) builds `RunsTest` from the build-tool profiles.
 - **Judge step 3:** reports, then the real check; starts when an agent slot is free.
-- **Refactor steps 1–2:** start after judge step 3, which shares the report and CLI code.
+- **Refactor:** step 4 (faster CLI tests, test code only) started first with an implementer on `claude/refactor/faster-tests`. Steps 1–2 start after judge step 3 merges, since they share the report and CLI code.
+- **Temp isolation:** the real probe passed on 2026-10-01 ($0.13), through Agentium's own `run once`: the shared Claude temp folders, `/tmp/claude`, the socket folders, npm logs and another run's root were all denied (Bash, Read and Write); the run's own temp folder worked; `go test` passed; the root was removed even with `--keep`.
 
 ## Acceptance
 1. Each wave's items meet their own plans' acceptance, and each wave passes its exit gate.
