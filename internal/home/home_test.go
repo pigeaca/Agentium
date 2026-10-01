@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -170,6 +171,11 @@ func TestRunTemp(t *testing.T) {
 	other, _ := Resolve(env(map[string]string{"AGENTIUM_HOME": "/elsewhere"}))
 	if layout.RunTemp("e1-s2-t1") != root || layout.RunTemp("e1-s2-t2") == root || other.RunTemp("e1-s2-t1") == root {
 		t.Error("RunTemp must depend on the data folder and the workspace only")
+	}
+	// Case-insensitive file systems (macOS, Windows): one data folder, however its path is cased.
+	upper, lower := Layout{Root: "/Golden/Data", Temp: "/tmp"}, Layout{Root: "/golden/data", Temp: "/tmp"}
+	if same := upper.RunTemp("r1") == lower.RunTemp("r1"); same != (runtime.GOOS == "darwin" || runtime.GOOS == "windows") {
+		t.Errorf("on %s, data folders differing in case share temp roots: %v", runtime.GOOS, same)
 	}
 	if (Layout{Root: "/data"}).RunTemp("r1") != "" {
 		t.Error("a layout without Temp has no temp roots")

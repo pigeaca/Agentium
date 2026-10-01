@@ -16,7 +16,8 @@ import (
 // is predictable, so it is created only fresh, owner-only, and never trusted when someone else made it.
 
 // makeRunTemp creates root, owner-only. A folder of the user's own already there (left by a run whose Agentium process
-// died) is removed first; anything else there (another user's folder, a link, a file) is refused.
+// died) is removed first; anything else there (another user's folder, a link, a file) is refused, and the run stops:
+// another local user can block a run that way, by creating its predictable root first, but never see into it.
 func makeRunTemp(root string) error {
 	if err := removeRunTemp(root); err != nil {
 		return err
@@ -59,17 +60,21 @@ func ownFolder(p string) bool {
 }
 
 // runTemps lists the temp roots in layout.Temp other than own: those of runs that started earlier, of any data folder
-// (concurrent ones, or ones a dead process left), which the run's agent may not read or write.
-func runTemps(layout home.Layout, own string) []string {
+// (concurrent ones, or ones a dead process left), which the run's agent may not read or write. A folder that cannot be
+// listed is an error: the run would otherwise start without denying them.
+func runTemps(layout home.Layout, own string) ([]string, error) {
 	if layout.Temp == "" {
-		return nil
+		return nil, nil
 	}
-	entries, _ := os.ReadDir(layout.Temp) // what could be read; Agentium's own roots there are readable
+	entries, err := os.ReadDir(layout.Temp)
+	if err != nil {
+		return nil, fmt.Errorf("list the runs' temp roots: %w", err)
+	}
 	var roots []string
 	for _, e := range entries {
 		if p := filepath.Join(layout.Temp, e.Name()); home.IsRunTempName(e.Name()) && p != own {
 			roots = append(roots, p)
 		}
 	}
-	return roots
+	return roots, nil
 }

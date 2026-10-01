@@ -244,7 +244,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		Deny: append(env.denied(ctx, workspace), env.DenyExtra...), TempRoot: tempRoot, UID: os.Getuid()}
+		TempRoot: tempRoot, UID: os.Getuid()}
+	deny, err := env.denied(ctx, workspace)
+	if err != nil {
+		return rec, err
+	}
+	inv.Deny = append(deny, env.DenyExtra...)
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
@@ -682,7 +687,7 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 // worktree of it, which can sit at a later commit holding the solution, and its git data. Workspaces and temp roots
 // created after this run starts are not listed unless predicted (Env.DenyExtra): a known gap for concurrent runs,
 // whose workspaces hold no hidden tests.
-func (env Env) denied(ctx context.Context, workspace string) []string {
+func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	db := env.Layout.Database
 	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
 	paths = append(paths, env.repositoryPaths(ctx)...)
@@ -693,7 +698,11 @@ func (env Env) denied(ctx context.Context, workspace string) []string {
 			}
 		}
 	}
-	return append(paths, runTemps(env.Layout, env.Layout.RunTemp(filepath.Base(workspace)))...)
+	temps, err := runTemps(env.Layout, env.Layout.RunTemp(filepath.Base(workspace)))
+	if err != nil {
+		return nil, err
+	}
+	return append(paths, temps...), nil
 }
 
 // repositoryPaths are the user's repository, all its worktrees, and its shared git data.

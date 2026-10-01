@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -40,13 +41,26 @@ const runTempHex = 10
 // RunTemp is the temp root (CLAUDE_CODE_TMPDIR) of the run in the named workspace, or "" when l.Temp is unset. The
 // name is derived from the data folder and the workspace's name, not random, so a run can deny the roots of runs that
 // may overlap it before they exist, as it denies their workspaces (run.Env.Predicted), and recovery finds a dead run's
-// root from its start file's workspace alone. Since the name can be guessed and Temp is shared with other users,
-// whoever creates it must refuse a folder someone else made (run's makeRunTemp).
+// root from its start file's workspace alone. On macOS and Windows the data folder's path is lower-cased first: their
+// file systems ignore case, so ~/.Agentium and ~/.agentium are one data folder and get the same roots.
+//
+// Since the name can be guessed and Temp is shared with other users, whoever creates it must refuse a folder someone
+// else made (run's makeRunTemp): another local user who creates a predicted root first stops that run, with an error
+// naming the folder, but cannot get into it.
+//
+// Roots are removed when their run ends, and by recovery for runs whose Agentium process died. One is left in Temp
+// only when its data folder, or that run's records, are deleted before recovery: a small, owner-only folder, which
+// later runs are denied and which the system's /tmp cleaning removes. Agentium does not sweep such roots, since a
+// root's name does not say which data folder it belongs to.
 func (l Layout) RunTemp(workspace string) string {
 	if l.Temp == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte(realPath(l.Root) + "\x00" + workspace))
+	root := realPath(l.Root)
+	if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
+		root = strings.ToLower(root)
+	}
+	sum := sha256.Sum256([]byte(root + "\x00" + workspace))
 	return filepath.Join(l.Temp, RunTempPrefix+hex.EncodeToString(sum[:])[:runTempHex])
 }
 

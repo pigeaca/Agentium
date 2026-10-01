@@ -141,7 +141,11 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	linked := filepath.Join(t.TempDir(), "linked")
 	git(main, "worktree", "add", "-q", linked)
 	env := Env{Layout: layout, ProjectRoot: linked, Now: time.Now}
-	denied := strings.Join(env.denied(context.Background(), filepath.Join(data, "workspaces", "r1")), "\n")
+	list, err := env.denied(context.Background(), filepath.Join(data, "workspaces", "r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied := strings.Join(list, "\n")
 	mainGit, _ := filepath.EvalSymlinks(filepath.Join(main, ".git"))
 	mainCheckout, _ := filepath.EvalSymlinks(main) // another worktree: it can sit at a commit holding the solution
 	for _, want := range []string{filepath.Join(data, "projects"), layout.Records, layout.Artifacts, layout.Cache, layout.Database + "-wal",
@@ -152,6 +156,12 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	}
 	if strings.Contains(denied, layout.RunTemp("r1")) || strings.Contains(denied, notARun) {
 		t.Errorf("the run's own temp root, or a folder that is no run's, is denied:\n%s", denied)
+	}
+	// A temp folder that cannot be listed stops the run instead of leaving other runs' roots open to it.
+	unlisted := env
+	unlisted.Layout.Temp = filepath.Join(t.TempDir(), "missing")
+	if _, err := unlisted.denied(context.Background(), filepath.Join(data, "workspaces", "r1")); err == nil {
+		t.Error("an unlisted temp folder must be an error")
 	}
 	if strings.Contains(denied, filepath.Join(data, "workspaces", "r1")+"\n") || strings.HasSuffix(denied, filepath.Join(data, "workspaces", "r1")) {
 		t.Errorf("the run's own workspace is denied:\n%s", denied)
