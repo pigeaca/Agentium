@@ -41,11 +41,42 @@ func (env Env) writeStart(s start) error {
 	if err != nil {
 		return fmt.Errorf("run start file: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Record.RecordsDir, startFile), data, 0o600); err != nil {
+	if err := writeFileAtomic(filepath.Join(s.Record.RecordsDir, startFile), data, 0o600); err != nil {
 		return fmt.Errorf("run start file: %w", err)
 	}
 	return nil
 }
+
+// writeFileAtomic replaces path with data so that a reader, or a process killed mid-write, sees the old file or the
+// new one, never a truncated mix: it writes a temp file in the same folder, syncs it and renames it over path.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = tmp.Close() // already closed on the late paths; the error is then irrelevant
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+	if err = tmp.Chmod(perm); err != nil {
+		return err
+	}
+	if _, err = tmp.Write(data); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+// corruptSuffix names a start file that could not be read, moved aside by Recover.
+const corruptSuffix = ".corrupt"
 
 func (env Env) workspaceName() string {
 	if env.Workspace != "" {
@@ -78,6 +109,10 @@ func (env Env) Predicted(name string) []string {
 type Orphan struct {
 	Record Record
 	Meta   json.RawMessage
+	// Unreadable is set when the run's start file could not be parsed (an old truncated write, a damaged disk): it holds
+	// the path the file was moved to. The run's task, arm and experiment slot are unknown, so Record holds only its ID,
+	// records folder and what the transcript shows it spent; the caller must report it and not store it as a run.
+	Unreadable string
 }
 
 // AliveError reports runs whose agents may still be working: their process groups exist.
@@ -126,6 +161,9 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		dir := filepath.Join(layout.Records, e.Name())
 		data, err := os.ReadFile(filepath.Join(dir, startFile))
 		if errors.Is(err, os.ErrNotExist) { // before the start file: nothing was prepared yet
+			if _, err := os.Stat(filepath.Join(dir, startFile+corruptSuffix)); err == nil {
+				continue // set aside by an earlier recovery and reported then: keep it for the user
+			}
 			if err := os.RemoveAll(dir); err != nil {
 				return orphans, fmt.Errorf("remove %s: %w", dir, err)
 			}
@@ -135,8 +173,23 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			return orphans, fmt.Errorf("run %s: %w", e.Name(), err)
 		}
 		var s start
-		if err := json.Unmarshal(data, &s); err != nil {
-			return orphans, fmt.Errorf("run %s: start file: %w", e.Name(), err)
+		if parseErr := json.Unmarshal(data, &s); parseErr != nil {
+			// Losing the least: a start file that cannot be read must not block every later start, but the run's
+			// task, arm, slot and workspace are unknown, so it cannot be stored as a run or cleaned safely. Its
+			// folder is kept, the file is moved aside (not retried, not deleted) and the transcript's spend is
+			// reported to the caller. The judge's per-call cost lives only in the start file and may be missing.
+			aside := filepath.Join(dir, startFile+corruptSuffix)
+			if err := os.Rename(filepath.Join(dir, startFile), aside); err != nil {
+				return orphans, fmt.Errorf("run %s: start file unreadable (%v) and not moved aside: %w", e.Name(), parseErr, err)
+			}
+			rec := Record{ID: e.Name(), RecordsDir: dir, Outcome: claude.OutcomeCancelled, Recovered: RecoveredStopped, Finished: now.UTC()}
+			rec.Metrics, _ = parseFile(filepath.Join(dir, "stream.jsonl"))
+			if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {
+				rec.Metrics.CostUSD, rec.CostEstimated = rec.Metrics.EstimatedCostUSD, true
+			}
+			rec.Notes = append(rec.Notes, fmt.Sprintf("start file unreadable (%v): moved to %s; judge spend, if any, is not included", parseErr, aside))
+			orphans = append(orphans, Orphan{Record: rec, Unreadable: aside})
+			continue
 		}
 		if s.PGID > 0 && !s.Finished && groupExists(s.PGID) {
 			alive.Runs = append(alive.Runs, fmt.Sprintf("the agent or a command of run %s (process group %d)", e.Name(), s.PGID))
