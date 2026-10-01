@@ -10,3 +10,4 @@ Format: `# ADR: <Title>`, then `## Status` (Accepted | Superseded by <file> | De
 - [2026-09-27-hybrid-strategy.md](2026-09-27-hybrid-strategy.md) — hybrid strategy for the lab: own experiments, context and statistics; local runs first; Harbor later
 - [2026-09-28-stack-go-react-sqlite.md](2026-09-28-stack-go-react-sqlite.md) — Go 1.27.1 core, React UI (superseded), SQLite via mattn/go-sqlite3, pinned toolchain and CI
 - [2026-09-30-console-instead-of-web-ui.md](2026-09-30-console-instead-of-web-ui.md) — no web UI; Phase 2 makes the console output clearer instead
+- [2026-10-01-llm-judge-alongside-tests.md](2026-10-01-llm-judge-alongside-tests.md) — an opt-in, per-run LLM judge shown alongside tests, never deciding; built despite the pilot's no GO

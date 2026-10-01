@@ -11,11 +11,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/runner"
 )
 
@@ -47,9 +47,9 @@ type Invocation struct {
 	Deny []string
 	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
 	Started func(pid int)
-	// BuildCache, when set, is a folder of the run's own for build caches: Go's (GOCACHE) points there, and the sandbox
-	// lets the agent write it. The user's own Go caches are denied: they hold what earlier builds compiled, the hidden
-	// tests of validations and gradings included.
+	// BuildCache, when set, is a folder of the run's own for build caches: the build tools' agent caches point there
+	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied
+	// (buildtool.UserCaches): they hold what earlier builds compiled, the hidden tests of validations and gradings included.
 	BuildCache string
 }
 
@@ -120,36 +120,30 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(inv.BudgetUSD, 'f', -1, 64))
 	}
-	goflags, userSet := "-buildvcs=false", false
-	for _, kv := range Environ(environ) {
-		switch {
-		case inv.BuildCache != "" && strings.HasPrefix(kv, "GOCACHE="):
-		case strings.HasPrefix(kv, "GOFLAGS="): // the user's flags stay; ours are appended below
-			goflags, userSet = strings.TrimSpace(strings.TrimPrefix(kv, "GOFLAGS=")+" "+goflags), true
-		default:
+	// The build tools' own variables (Go's GOFLAGS) replace any of the same name the allowlist kept, and come right
+	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
+	allowed := Environ(environ)
+	toolEnv := buildtool.AgentEnv(allowed, environ, inv.Home)
+	replaced := map[string]bool{}
+	for _, kv := range toolEnv {
+		name, _, _ := strings.Cut(kv, "=")
+		replaced[name] = true
+	}
+	if inv.BuildCache != "" {
+		for _, name := range buildtool.AgentCacheNames() {
+			replaced[name] = true
+		}
+	}
+	for _, kv := range allowed {
+		if name, _, _ := strings.Cut(kv, "="); !replaced[name] {
 			env = append(env, kv)
 		}
 	}
-	// Go stamps the main module's version from VCS and writes a stat-cache entry into the module cache, which the
-	// sandbox rightly denies: every `go build` would print "writing stat cache ... operation not permitted" and
-	// agents would spend turns on it. Only the agent's environment gets the flag, not setup or grading commands.
-	// Go reads GOFLAGS from `go env -w` only while the environment leaves it unset, so setting it here would hide the
-	// user's saved flags from the agent: start from them.
-	if !userSet {
-		vars := map[string]string{}
-		for _, kv := range environ {
-			name, v, _ := strings.Cut(kv, "=")
-			vars[name] = v
-		}
-		if saved := strings.TrimSpace(goEnvFile(vars, inv.Home)["GOFLAGS"]); saved != "" {
-			goflags = saved + " " + goflags
-		}
-	}
-	env = append(env, "GOFLAGS="+goflags)
+	env = append(env, toolEnv...)
 	env = append(env, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1",
 		"ENABLE_CLAUDEAI_MCP_SERVERS=false") // requirement 2: no claude.ai connectors
 	if inv.BuildCache != "" {
-		env = append(env, "GOCACHE="+inv.BuildCache)
+		env = append(env, buildtool.AgentCacheEnv(inv.BuildCache)...)
 	}
 	switch inv.SignIn { // requirement 4: a fresh config folder cannot use a subscription login
 	case SignInLogin:
@@ -194,7 +188,8 @@ func SessionFolders(configDir string) []string {
 //     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
 //   - credential stores and the token file's folder;
-//   - the user's Go build caches (goCaches), which hold hidden tests compiled before Agentium kept its own.
+//   - the build tools' caches of the user (buildtool.UserCaches: Go's build caches), which hold hidden tests compiled
+//     before Agentium kept its own.
 //
 // Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
 func (inv Invocation) deniedPaths(userConfig string, environ []string) []string {
@@ -219,7 +214,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	for _, name := range credentialFiles() {
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
-	paths = append(paths, goCaches(environ, inv.Home)...)
+	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
@@ -245,52 +240,6 @@ func forms(p string) []string {
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
 func (inv Invocation) DeniedPaths(environ []string) []string {
 	return inv.deniedPaths(UserConfigDir(environ, inv.Home), environ)
-}
-
-// goCaches are the user's Go build caches: GOCACHE when set (in the environment or with `go env -w`), and the defaults
-// under the home folder (macOS, Linux and XDG_CACHE_HOME). Each holds what earlier builds compiled, hidden tests
-// included. Values Go ignores (relative, "off") are skipped.
-func goCaches(environ []string, home string) []string {
-	vars := map[string]string{}
-	for _, kv := range environ {
-		name, v, _ := strings.Cut(kv, "=")
-		vars[name] = v
-	}
-	paths := []string{filepath.Join(home, "Library", "Caches", "go-build"), filepath.Join(home, ".cache", "go-build")}
-	for _, v := range []string{vars["GOCACHE"], goEnvFile(vars, home)["GOCACHE"], filepath.Join(vars["XDG_CACHE_HOME"], "go-build")} {
-		if filepath.IsAbs(v) {
-			paths = append(paths, v)
-		}
-	}
-	return paths
-}
-
-// goEnvFile reads the settings `go env -w` keeps: $GOENV, else go/env in the user's config folder. A missing file, or
-// GOENV=off, gives none.
-func goEnvFile(vars map[string]string, home string) map[string]string {
-	path := vars["GOENV"]
-	switch {
-	case path == "off":
-		return nil
-	case path != "":
-	case runtime.GOOS == "darwin":
-		path = filepath.Join(home, "Library", "Application Support", "go", "env")
-	case filepath.IsAbs(vars["XDG_CONFIG_HOME"]):
-		path = filepath.Join(vars["XDG_CONFIG_HOME"], "go", "env")
-	default:
-		path = filepath.Join(home, ".config", "go", "env")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	settings := map[string]string{}
-	for _, line := range strings.Split(string(data), "\n") {
-		if name, v, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
-			settings[name] = v
-		}
-	}
-	return settings
 }
 
 // settings are the per-run Claude Code settings (--settings).
@@ -328,9 +277,9 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 }
 
 // Environ keeps what a coding agent's tools need from environ (system settings, proxies and certificates, toolchain
-// variables) and nothing else: no credentials, no GIT_*, no AGENTIUM_*, no CLAUDE_* (in particular not
-// CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default permission mode: requirement 3). Values are
-// passed as given: a proxy URL with a password in it would pass too.
+// variables, the build tools' among them: buildtool.EnvAllowlist) and nothing else: no credentials, no GIT_*, no
+// AGENTIUM_*, no CLAUDE_* (in particular not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default
+// permission mode: requirement 3). Values are passed as given: a proxy URL with a password in it would pass too.
 //
 // SHELL is kept on purpose: runs should behave like the user's own Claude Code sessions, so a user's zsh stays zsh
 // (an unquoted glob such as --include=*.go then fails with "no matches found" there, as it would for them), and
@@ -340,12 +289,13 @@ func Environ(environ []string) []string {
 		"LANG": true, "TERM": true, "TZ": true, "VIRTUAL_ENV": true, "JAVA_HOME": true, "CARGO_HOME": true,
 		"RUSTUP_HOME": true, "PNPM_HOME": true, "BUN_INSTALL": true, "DENO_DIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "no_proxy": true,
-		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true,
-		"GOPATH": true, "GOROOT": true, "GOBIN": true, "GOCACHE": true, "GOMODCACHE": true, "GOENV": true, "GOFLAGS": true,
-		"GOTOOLCHAIN": true, "GOPROXY": true, "GOPRIVATE": true, "GONOPROXY": true, "GONOSUMDB": true, "GOSUMDB": true,
-		"GOINSECURE": true, "GOWORK": true, "GO111MODULE": true, "GOTMPDIR": true, "GOEXPERIMENT": true, "GODEBUG": true,
-		"GOMAXPROCS": true, "GOGC": true, "GOMEMLIMIT": true, "GOOS": true, "GOARCH": true, "GOAMD64": true, "GOARM64": true}
-	prefixes := []string{"LC_", "CGO_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
+		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "REQUESTS_CA_BUNDLE": true, "CURL_CA_BUNDLE": true}
+	prefixes := []string{"LC_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
+	toolNames, toolPrefixes := buildtool.EnvAllowlist() // Go's GO* variables and CGO_
+	for _, name := range toolNames {
+		exact[name] = true
+	}
+	prefixes = append(prefixes, toolPrefixes...)
 	var out []string
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")

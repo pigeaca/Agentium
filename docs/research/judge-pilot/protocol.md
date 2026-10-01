@@ -1,6 +1,6 @@
 # LLM judge pilot: protocol
 
-Fixed on 2026-10-01, before any label, for the [judge pilot plan](../../../.agents/plans/2026-09-30-judge-pilot.md). The first version (`31e5365`) predates every judge call. Every change since is listed under Changes, with its reason; all were made before any label and before any judge verdict counted toward the results. The numbers come from [judge_pilot.py](judge_pilot.py), which [its tests](test_judge_pilot.py) check: `python3 -m unittest discover -s docs/research/judge-pilot`.
+Fixed on 2026-10-01, before any label, for the [judge pilot plan](../../../.agents/plans/archive/2026-09-30-judge-pilot.md). The first version (`31e5365`) predates every judge call. Every change since is listed under Changes, with its reason. All but the last were made before any label and before any judge verdict counted toward the results; the last only changes how the results are printed. [Results](../2026-10-01-judge-pilot-results.md). The numbers come from [judge_pilot.py](judge_pilot.py), which [its tests](test_judge_pilot.py) check: `python3 -m unittest discover -s docs/research/judge-pilot`.
 
 ## Questions
 1. **False passes.** On runs whose tests passed, does the judge agree with you on "real fix or not", and does it catch the false passes you find?
@@ -111,18 +111,18 @@ A GO adds a decision record and a product plan. A NO-GO or INCONCLUSIVE records 
 
 ## Cost
 - **Pricing:** three pricing calls and one verification call cost $0.036–0.042 each, most of it output at high effort. All four judged S01, whose verdicts do not count. The pricing calls ran on a copy of the first items; the verification call ran on S01 as rebuilt, with documents dropped, and its verdict was not shown.
-- **Size of the judge run:** 46 × 3 single and 19 × 2 pair judgements, 176 in all, at about $9. A $15 cap is proposed.
+- **Size of the judge run:** 46 × 3 single and 19 × 2 pair judgements, 176 in all, at about $9, with a $15 cap. It cost $12.07 (see the results).
 
 ## What is committed
 Committed:
 - this protocol, the script and its tests;
-- `labels.json`, `key.json` and `verdicts.jsonl`, once they exist;
+- `labels.json`, `key.json` and `verdicts.jsonl`, in this folder;
 - the results document.
 
 Not committed: `items.json`, which `prepare` rebuilds, and the judge's transcripts.
 
 ## Changes after the first judge call
-All on 2026-10-01, before any label and before any verdict that counts.
+All on 2026-10-01. Items 1–5 came before any label and before any verdict that counts; item 6 came after the results.
 
 1. **Claude Code version.** The first three pricing calls failed at no cost: the installed Claude Code 2.1.274 (Homebrew's newest is 2.1.277) refuses `claude-opus-5-5` and needs 2.1.280 or newer. The judge runs on the desktop app's bundled 2.1.284, passed with `--judge-cmd "$HOME/Library/Application Support/Claude/claude-code/2.1.284/claude.app/Contents/MacOS/claude"`.
 2. **S01 left out of the label comparisons.** Its pricing verdicts were shown in the coordinator's session (see Blinding).
@@ -136,3 +136,8 @@ All on 2026-10-01, before any label and before any verdict that counts.
    - Question 3 drops runs where you and the tests disagree in both directions (it first dropped only your false passes), and S01's label never moves it.
    - The protocol records that the verification call judged S01, that error results count as no answer, and that all-tie A/A sets meet the check.
 5. **A browser label form.** Paging long diffs in the terminal form was clumsy, and an interrupt lost the item in view. `label --web` shows the same items, rubric and questions in a browser and lets you change an answer; it was added before any label. Neither the questions nor what is hidden changed.
+6. **After the results** ([results](../2026-10-01-judge-pilot-results.md)), presentation only; no rule, threshold or number changed.
+   - Each verdict is printed before its checks (they came after it).
+   - Intervals are clamped to 0–100% (0 of n printed "-0%").
+   - The tasks-without-tests reason says that failing runs were left out where you and the tests disagree; it said they had no change.
+   - An "Exploratory, outside the verdict rules" section reports what the judge did whatever the labels: failing runs with a change judged not fixed, and passing runs judged not fixed, by task.

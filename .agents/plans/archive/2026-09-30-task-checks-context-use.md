@@ -52,7 +52,7 @@ Three PRs, each with green CI and a review.
 - No paid runs and no new dependencies.
 - Stored forms change only by adding fields, and older records and validations still load.
 - No absolute paths, personal names or user-level skill names in records or reports.
-- Neither check judges code quality; that is the [judge pilot](../2026-09-30-judge-pilot.md)'s question.
+- Neither check judges code quality; that is the [judge pilot](2026-09-30-judge-pilot.md)'s question.
 
 ## Verification
 `harness.py check changed`, fake-`claude` end-to-end tests, golden reports, CI, and a reviewer per PR.

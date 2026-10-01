@@ -1,0 +1,266 @@
+{
+ "pairs": {
+  "P01": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P02": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P03": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P04": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P05": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P06": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P07": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P08": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P09": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P10": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P11": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P12": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P13": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P14": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P15": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P16": {
+   "note": "",
+   "prefer": "second"
+  },
+  "P17": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P18": {
+   "note": "",
+   "prefer": "first"
+  },
+  "P19": {
+   "note": "",
+   "prefer": "second"
+  }
+ },
+ "singles": {
+  "S01": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S02": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S03": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S04": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S05": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S06": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S07": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S08": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S09": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S10": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S11": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S12": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S13": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S14": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S15": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S16": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S17": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S18": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S19": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S20": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S21": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S22": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S23": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S24": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S25": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S26": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S27": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S28": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S29": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S30": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S31": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S32": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S33": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S34": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S35": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S36": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S37": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S38": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S39": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S40": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S41": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S42": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S43": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S44": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S45": {
+   "fixed": "yes",
+   "note": ""
+  },
+  "S46": {
+   "fixed": "yes",
+   "note": ""
+  }
+ }
+}

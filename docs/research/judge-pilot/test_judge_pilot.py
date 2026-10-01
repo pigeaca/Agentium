@@ -70,6 +70,8 @@ class Statistics(unittest.TestCase):
         self.assertAlmostEqual(lo, 0.6696, places=3)
         self.assertAlmostEqual(hi, 0.8876, places=3)
         self.assertEqual(jp.wilson(0, 0), (0.0, 1.0))
+        self.assertEqual((jp.wilson(0, 17)[0], jp.wilson(17, 17)[1]), (0.0, 1.0))  # never -0% or above 100%
+        self.assertEqual(jp.pct(0, 17), "0 of 17, 0% (95%: 0–18%)")
 
     def test_binomial(self):
         self.assertAlmostEqual(jp.binomial_two_sided(0, 8), 2 / 256)
@@ -394,6 +396,11 @@ class Verdicts(unittest.TestCase):
         self.assertIn("**Secondary score for quality: NO-GO**", text)
         self.assertIn("- NOT met: judges >= 3 of the failing runs with a change not fixed", text)
         self.assertIn("**Grading tasks without tests (promising, not proven): NO-GO**", text)
+        # Each verdict comes before its own checks.
+        self.assertLess(text.index("**Secondary score for false passes: NO-GO**"), text.index("- NOT met: catches >= 2/3"))
+        self.assertLess(text.index("**Secondary score for quality: NO-GO**"), text.index("agrees with you in >= 70% of pairs"))
+        self.assertIn("- Failing runs with a change, judged not fixed, whatever your label: 0 of 4", text)
+        self.assertIn("- Passing runs judged not fixed, by task: t 0 of 20.", text)
 
     def test_a_judge_that_matches_your_labels_gets_go(self):
         singles = [(True, "yes", ["yes"] * 3, False)] * 16 + [(True, "no", ["no"] * 3, False)] * 4 + \
@@ -423,6 +430,19 @@ class Verdicts(unittest.TestCase):
         text = jp.analyze(self.work, unblinded=set())
         self.assertIn("arm A preferred in 7 of the 7 with a preference", text)
         self.assertIn("- NOT met: no significant arm preference on A/A pairs (p >= 0.05)", text)
+
+    def test_the_exploratory_section_ignores_labels_and_lists_flagged_tasks_first(self):
+        singles = [(True, "yes", ["yes"] * 3, False)] * 2 + [(True, "yes", ["partly"] * 3, False)] * 3 + \
+                  [(False, "yes", ["partly"] * 3, False), (False, "yes", ["yes"] * 3, False), (False, "no", ["no"] * 3, True)]
+        synthetic(self.work, singles, [])
+        key = json.loads((self.work / "key.json").read_text())
+        for sid, task in zip(sorted(key["singles"]), ["a", "a", "b", "b", "b", "b", "a", "a"]):
+            key["singles"][sid]["task"] = task
+        jp.write_json(self.work / "key.json", key)
+        text = jp.analyze(self.work, unblinded=set())
+        # S06 and S07 fail and are labelled fixed, so the rules leave them out; this section counts them. The empty S08 is not.
+        self.assertIn("- Failing runs with a change, judged not fixed, whatever your label: 1 of 2", text)
+        self.assertIn("- Passing runs judged not fixed, by task: b 3 of 3, a 0 of 2.", text)
 
 
 if __name__ == "__main__":

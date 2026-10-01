@@ -509,7 +509,7 @@ def wilson(k: int, n: int, z: float = 1.959964) -> Tuple[float, float]:
     d = 1 + z * z / n
     c = p + z * z / (2 * n)
     r = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
-    return ((c - r) / d, (c + r) / d)
+    return (max(0.0, (c - r) / d), min(1.0, (c + r) / d))  # clamped: rounding put 0 of n at -0%
 
 
 def binomial_two_sided(k: int, n: int) -> float:
@@ -658,6 +658,19 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
                                              sum(key["singles"][s]["passed"] for s in nonempty)))
     w("- Baseline \"every change is fixed\" matches: %s.\n" % pct(trivial, len(nonempty)))
 
+    # Added after the results, outside the verdict rules: what the judge did whatever your labels say.
+    w("## Exploratory, outside the verdict rules\n")
+    changed_failing = [s for s in judged if singles[s]["candidate"].strip() and not key["singles"][s]["passed"]]
+    w("- Failing runs with a change, judged not fixed, whatever your label: %s." %
+      pct(sum(not fixed(judge_fixed[s]) for s in changed_failing), len(changed_failing)))
+    per_task = collections.defaultdict(lambda: [0, 0])
+    for s in judged:
+        if key["singles"][s]["passed"]:
+            per_task[key["singles"][s]["task"]][1] += 1
+            per_task[key["singles"][s]["task"]][0] += not fixed(judge_fixed[s])
+    w("- Passing runs judged not fixed, by task: %s.\n" % ", ".join(
+        "%s %d of %d" % (t, k, n) for t, (k, n) in sorted(per_task.items(), key=lambda kv: (-kv[1][0], kv[0]))))
+
     w("## Q5. Reliability and cost\n")
     aa = [p for p in judge_prefer if key["pairs"][p]["template"] == "aa"]
     aa_pref = [p for p in aa if judge_prefer[p] != "tie"]
@@ -683,9 +696,10 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
         if not enough:
             w("**%s: INCONCLUSIVE** (%s).\n" % (name, reason))
             return
+        w("**%s: %s**\n" % (name, "GO" if all(state == "met" for _, state in checks) else "NO-GO"))
         for label_, state in checks:
             w("- %s: %s" % (state, label_))
-        w("**%s: %s**\n" % (name, "GO" if all(state == "met" for _, state in checks) else "NO-GO"))
+        w("")
 
     reliable = [("same verdict on all repeats in >= 90% of singles", at_least(rate(sum(consistent), len(consistent)), 0.90))]
     verdict("Secondary score for false passes", len(false_passes) >= 3, "you found %d false passes; at least 3 are needed to tell "
@@ -704,8 +718,8 @@ def analyze(work: Path, unblinded=frozenset(UNBLINDED)) -> str:
                 ("pair order flips its preference in <= 10% of pairs", "n/a" if not flips else ("met" if sum(flips) / len(flips) <= 0.10 + 1e-12 else "NOT met")),
                 ("no significant arm preference on A/A pairs (p >= 0.05)", aa_state),
             ])
-    verdict("Grading tasks without tests (promising, not proven)", len(failing) >= 3, "only %d failing runs have a change; at least 3 "
-            "are needed" % len(failing), [
+    verdict("Grading tasks without tests (promising, not proven)", len(failing) >= 3, "%d failing runs with a change remain once runs "
+            "where you and the tests disagree are left out; at least 3 are needed" % len(failing), [
                 ("matches the tests in >= 90% of runs with a change (runs where you and the tests disagree left out)", at_least(rate(match, len(nonempty)), 0.90)),
                 ("judges >= 3 of the failing runs with a change not fixed", "met" if flagged >= 3 else "NOT met"),
                 ("matches more often than \"every change is fixed\"", above(match, trivial, len(nonempty))),
