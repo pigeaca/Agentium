@@ -60,13 +60,25 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 	}
 }
 
-// Each run records what it used of its arm's context, and the report counts it per arm. Runs recorded before that get
-// it from their transcripts; a run whose transcript is gone is reported as not recorded.
+// Each run records what it used of its arm's context, and the report counts it per arm: here arm B's rule for *.txt,
+// which loads when the agent reads value.txt. Runs recorded before that get it from their transcripts; a run whose
+// transcript is gone is reported as not recorded.
 func TestExperimentReportContextUse(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	writeFile(t, ctrl, "subagent", "s1-t1 claude-sonnet-5\n") // slot 1's run starts the investigator
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
+	writeFile(t, f.repo, ".claude/rules/values.md", "---\npaths: [\"*.txt\"]\n---\nValues are lowercase.\n")
+	expect(t, f.run(ctx, "context", "snapshot", "rules", "--working-tree"), ExitOK)
+	if err := os.RemoveAll(filepath.Join(f.repo, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "rules"), ExitOK)
+	agent := f.vars["AGENTIUM_CLAUDE"]
+	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
+	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "rules"), ExitOK)
+	f.vars["AGENTIUM_CLAUDE"] = agent
+	writeFile(t, ctrl, "subagent", "s1-t1 claude-sonnet-5\n") // slot 1's run starts an investigator, which the project lacks
+	writeFile(t, ctrl, "read-value", "")
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "rules", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30"), ExitOK)
 
 	runs := experimentRuns(t, f, "lean-ab")
@@ -79,18 +91,24 @@ func TestExperimentReportContextUse(t *testing.T) {
 		if rec.ContextUse == nil || !slices.Equal(rec.ContextUse.Start, []string{"CLAUDE.md"}) {
 			t.Fatalf("run %s (slot %d): context use %+v", r.ID, r.Slot, rec.ContextUse)
 		}
-		if slices.Equal(rec.ContextUse.Subagents, []string{"investigator"}) {
+		if wantFiles := map[string][]string{"B": {".claude/rules/values.md"}}[rec.Arm]; !slices.Equal(rec.ContextUse.Files, wantFiles) {
+			t.Errorf("run %s, arm %s: files %v, want %v", r.ID, rec.Arm, rec.ContextUse.Files, wantFiles)
+		}
+		if rec.ContextUse.Subagents != nil {
+			t.Errorf("run %s names a subagent the project does not define: %v", r.ID, rec.ContextUse.Subagents)
+		}
+		if rec.ContextUse.OtherSubagents == 1 {
 			withSubagent = append(withSubagent, rec)
 		} else {
 			without = append(without, rec)
 		}
 	}
 	if len(withSubagent) != 1 || len(without) != 3 {
-		t.Fatalf("runs that started the investigator: %d of %d", len(withSubagent), len(runs))
+		t.Fatalf("runs that started another subagent: %d of %d", len(withSubagent), len(runs))
 	}
-	want := []string{"## Context use", "| files loaded at start | 1 | 1 |", "| subagent `investigator` |", "Loaded at start: A, `CLAUDE.md`; B, `CLAUDE.md`."}
+	want := []string{"## Context use", "| files loaded at start | 1 | 1 |", "| other subagents |", "Loaded at start: A, `CLAUDE.md`; B, `CLAUDE.md`."}
 	first := f.run(ctx, "experiment", "report", "lean-ab")
-	expect(t, first, ExitOK, want...)
+	expect(t, first, ExitOK, append(want, "| `.claude/rules/values.md` | 0 of 2 | 2 of 2 |")...)
 
 	// As if recorded before context use was kept: the report works it out from the transcripts, and says which run had none.
 	db, err := sql.Open("sqlite3", filepath.Join(f.data, "agentium.db"))
@@ -105,7 +123,7 @@ func TestExperimentReportContextUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	again := f.run(ctx, "experiment", "report", "lean-ab")
-	expect(t, again, ExitOK, append(want, "Not recorded, for lack of a transcript, for 1 of "+without[0].Arm+"'s 2 counted runs.")...)
+	expect(t, again, ExitOK, append(want, "Not recorded or not recoverable for 1 of "+without[0].Arm+"'s 2 counted runs.")...)
 	if again.stderr != "" {
 		t.Errorf("recovering context use warned: %s", again.stderr)
 	}

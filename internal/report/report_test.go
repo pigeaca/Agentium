@@ -80,6 +80,9 @@ func fixture() Input {
 		if ti == 3 && s.Repeat == 1 {
 			use.Subagents = []string{"Explore"}
 		}
+		if ti == 5 && s.Arm == "B" { // a subagent type that is neither the project's nor Claude Code's: counted, not named
+			use.OtherSubagents = 1
+		}
 		if s.Position != 12 {
 			rec.ContextUse = use
 		}

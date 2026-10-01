@@ -2,6 +2,7 @@ package claudectx
 
 import (
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -233,5 +234,46 @@ func TestSkillNames(t *testing.T) {
 	got := SkillNames(resolve(t, src), src)
 	if want := []string{"code-review", "deploy", "deploy2", "review"}; strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("skill names = %v, want %v", got, want)
+	}
+}
+
+func TestRuleGlobs(t *testing.T) {
+	for _, c := range []struct {
+		data string
+		want []string
+	}{
+		{"---\npaths: \"src/**/*.ts\"\n---\nx\n", []string{"src/**/*.ts"}},
+		{"---\npaths: [\"*.go\", 'db/*.sql']\n---\n", []string{"*.go", "db/*.sql"}},
+		{"---\nname: x\npaths:\n  - \"a/**\"\n  - b/*.md\ndescription: y\n---\n", []string{"a/**", "b/*.md"}},
+		{"---\nname: x\n---\n", nil},
+		{"no frontmatter\n", nil},
+	} {
+		if got := RuleGlobs([]byte(c.data)); !slices.Equal(got, c.want) {
+			t.Errorf("%q: %v, want %v", c.data, got, c.want)
+		}
+	}
+}
+
+func TestGlobMatch(t *testing.T) {
+	for _, c := range []struct {
+		pattern, path string
+		want          bool
+	}{
+		{"**/*.go", "main.go", true},
+		{"**/*.go", "pkg/sub/x.go", true},
+		{"src/**/*.ts", "src/a/b.ts", true},
+		{"src/**/*.ts", "src/b.ts", true},
+		{"src/**/*.ts", "lib/b.ts", false},
+		{"*.go", "pkg/x.go", true}, // no slash: a name in any folder
+		{"db/*.sql", "db/a.sql", true},
+		{"db/*.sql", "db/old/a.sql", false},
+		{"src/{api,web}/*.ts", "src/web/x.ts", true},
+		{"src/{api,web}/*.ts", "src/cli/x.ts", false},
+		{"doc?.md", "docs.md", true},
+		{"a/**", "a/b/c", true},
+	} {
+		if got := GlobMatch(c.pattern, c.path); got != c.want {
+			t.Errorf("%q vs %q: %v, want %v", c.pattern, c.path, got, c.want)
+		}
 	}
 }

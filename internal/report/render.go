@@ -143,10 +143,12 @@ func contextUse(r Report) (desc string, rows []useRow, ok bool) {
 	if !ok {
 		return "", nil, false
 	}
-	desc = "What the counted runs used of their context beyond what loads at start: context files and linked documents they " +
-		"read (with the Read tool, or named in a shell command), the project's skills they invoked, and the subagents they started."
+	desc = "What the counted runs used of their context beyond what loads at start: path-scoped rules and folder instructions " +
+		"that loaded for the files the agent worked with; context files and linked documents the agent or its subagents read " +
+		"(with the Read tool, or given to cat, sed, grep and the like); the project's skills and commands they invoked; and the " +
+		"subagents they started (the project's and Claude Code's by name, any other only counted)."
 	if len(missing) > 0 {
-		desc += " Not recorded, for lack of a transcript, for " + strings.Join(missing, " and ") + "."
+		desc += " Not recorded or not recoverable for " + strings.Join(missing, " and ") + "."
 	}
 	first := useRow{label: "files loaded at start"}
 	for _, a := range r.Arms {
@@ -180,8 +182,19 @@ func contextUse(r Report) (desc string, rows []useRow, ok bool) {
 			rows = append(rows, row)
 		}
 	}
+	if slices.ContainsFunc(r.Arms, func(a Arm) bool { return a.ContextUse.OtherSubagents > 0 }) {
+		row := useRow{label: "other subagents"}
+		for _, a := range r.Arms {
+			cell := "-"
+			if a.ContextUse.Recorded > 0 {
+				cell = fmt.Sprintf("%d of %d", a.ContextUse.OtherSubagents, a.ContextUse.Recorded)
+			}
+			row.cells = append(row.cells, cell)
+		}
+		rows = append(rows, row)
+	}
 	if len(rows) == 1 {
-		desc += " No counted run read such a file, invoked a project skill or started a subagent."
+		desc += " No counted run used such a file, invoked a project skill or started a subagent."
 	}
 	return desc, rows, true
 }

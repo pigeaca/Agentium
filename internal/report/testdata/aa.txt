@@ -39,13 +39,14 @@ B    base               29           27000 (-3000)        $0.320           $1.84
 
 Context use
 
-What the counted runs used of their context beyond what loads at start: context files and linked documents they read (with the Read tool, or named in a shell command), the project's skills they invoked, and the subagents they started. Not recorded, for lack of a transcript, for 1 of B's 29 counted runs.
+What the counted runs used of their context beyond what loads at start: path-scoped rules and folder instructions that loaded for the files the agent worked with; context files and linked documents the agent or its subagents read (with the Read tool, or given to cat, sed, grep and the like); the project's skills and commands they invoked; and the subagents they started (the project's and Claude Code's by name, any other only counted). Not recorded or not recoverable for 1 of B's 29 counted runs.
 
                               A        B
 files loaded at start         2        1
 docs/testing.md        15 of 30  8 of 28
 skill review-change     6 of 30  0 of 28
 subagent Explore        1 of 30  1 of 28
+other subagents         0 of 30  3 of 28
 Loaded at start in A: AGENTS.md, CLAUDE.md
 Loaded at start in B: CLAUDE.md
 

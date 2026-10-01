@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/report"
@@ -65,7 +67,8 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	for _, a := range lock.Arms {
 		snapshots[a.Name] = a.Snapshot
 	}
-	recovery := run.Recovery{Bare: w.bare}
+	recovery := run.Recovery{Bare: w.bare, Records: w.layout.Records}
+	unrecovered := map[string]int{} // by reason: every run of an arm shares one
 	for _, r := range runs {
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
@@ -76,10 +79,16 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 				if ctx.Err() != nil {
 					return fail(env, ctx.Err())
 				}
-				fmt.Fprintf(env.Stderr, "agentium: context use not recovered: %v\n", err)
+				unrecovered[err.Error()]++
 			}
 		}
 		in.Runs = append(in.Runs, report.Run{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Record: rec})
+	}
+	if ctx.Err() != nil { // a cancelled recovery may have read less than there is: write no report
+		return fail(env, ctx.Err())
+	}
+	for _, reason := range slices.Sorted(maps.Keys(unrecovered)) {
+		fmt.Fprintf(env.Stderr, "agentium: context use not recovered for %d run(s): %s\n", unrecovered[reason], reason)
 	}
 	rep, err := report.Build(in)
 	if err != nil {

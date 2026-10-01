@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -17,131 +19,184 @@ import (
 	"github.com/pigeaca/agentium/internal/source"
 )
 
-// ContextUse is what a run used of its arm's context. Records keep only what the repository itself defines: paths
-// relative to it and the project's own skill names. Local paths, other skill names and what the agent said stay out.
-// Subagent types are kept, as Metrics.SubagentModels keeps them.
+// ContextUse is what a run used of its arm's context. Records keep only what the repository itself defines, and
+// Claude Code's own subagent types: paths relative to the repository and the project's skill, command and subagent
+// names. Local paths, personal names and what the agent said stay out.
 type ContextUse struct {
 	// Start are the files Claude Code loads whole at session start: the instruction file, its imports and unscoped
 	// rules. Skill, subagent and command descriptions load at start too, but not their bodies, so they are not here.
 	Start []string `json:"start"`
-	// Files are the context files that load on demand, and the documents the context links to, that the agent read:
-	// with the Read tool, or by naming them in a shell command (cat, sed, head...).
+	// Files are the context files the run used after it started: path-scoped rules and folder instruction files that
+	// loaded because the agent worked with matching files, and any on-demand context file or linked document the
+	// agent or its subagents read (with the Read tool, or as an argument to cat, sed, grep and similar).
 	Files     []string `json:"files,omitempty"`
-	Skills    []string `json:"skills,omitempty"`    // the project's own skills it invoked with the Skill tool
-	Subagents []string `json:"subagents,omitempty"` // the subagent types it started
+	Skills    []string `json:"skills,omitempty"`    // the project's skills and commands it invoked with the Skill tool
+	Subagents []string `json:"subagents,omitempty"` // the project's and Claude Code's subagent types it started
+	// OtherSubagents counts the other subagent types it started, which may be personal: not named.
+	OtherSubagents int `json:"other_subagents,omitempty"`
 }
 
+// builtinSubagents are Claude Code's own subagent types, which records may name.
+var builtinSubagents = []string{"general-purpose", "Explore", "Plan"}
+
 // UseOf works out a run's context use from its transcript's metrics and the context its arm started with (resolved
-// from src). dirs are the folders the agent's file tools name paths under: its checkout, and the working folder its
-// transcript reports.
+// from src). dirs are the folders the agent's file tools name paths under: its checkout (as written and resolved),
+// and the working folder its transcript reports.
 func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs ...string) ContextUse {
 	use := ContextUse{Start: []string{}}
-	onDemand := map[string]bool{}
+	touched := relativeAll(m.FilePaths, dirs) // files the agent worked with, through any file tool
+	read := relativeAll(m.ReadPaths, dirs)
+	used := map[string]bool{}
+	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, m.Commands, dirs) }
 	for _, e := range resolved.Entries {
 		switch e.Kind {
 		case claudectx.KindInstructions, claudectx.KindImport, claudectx.KindRule:
 			use.Start = append(use.Start, e.Path)
 		case claudectx.KindHarness: // changes what runs, not what the model reads
+		case claudectx.KindScopedRule:
+			data, _ := src.ReadFile(e.Path)
+			globs := claudectx.RuleGlobs(data)
+			used[e.Path] = byReading(e.Path) || slices.ContainsFunc(touched, func(p string) bool {
+				return slices.ContainsFunc(globs, func(g string) bool { return claudectx.GlobMatch(g, p) })
+			})
+		case claudectx.KindNested: // loads when the agent works with a file in its folder
+			dir := path.Dir(e.Path) + "/"
+			used[e.Path] = byReading(e.Path) || slices.ContainsFunc(touched, func(p string) bool { return strings.HasPrefix(p, dir) })
 		default:
-			onDemand[e.Path] = true
+			used[e.Path] = byReading(e.Path)
 		}
 	}
 	for _, p := range resolved.Linked {
-		onDemand[p] = true
+		used[p] = byReading(p)
 	}
-	read := map[string]bool{}
-	for _, p := range m.ReadPaths {
-		if rel, ok := relativeTo(p, dirs); ok && onDemand[rel] {
-			read[rel] = true
+	for p, ok := range used {
+		if ok {
+			use.Files = append(use.Files, p)
 		}
 	}
-	for p := range onDemand {
-		if !read[p] && namedIn(p, m.Commands) {
-			read[p] = true
-		}
-	}
-	for p := range read {
-		use.Files = append(use.Files, p)
-	}
-	project := claudectx.SkillNames(resolved, src)
+	project := append(claudectx.SkillNames(resolved, src), claudectx.CommandNames(resolved)...)
 	for _, name := range m.SkillCalls {
 		if slices.Contains(project, name) && !slices.Contains(use.Skills, name) {
 			use.Skills = append(use.Skills, name)
 		}
 	}
-	use.Subagents = slices.Clone(m.SubagentTypes)
+	agents := append(claudectx.SubagentNames(resolved, src), builtinSubagents...)
+	for _, kind := range m.SubagentTypes {
+		if slices.Contains(agents, kind) {
+			use.Subagents = append(use.Subagents, kind)
+		} else {
+			use.OtherSubagents++
+		}
+	}
 	sort.Strings(use.Start)
 	sort.Strings(use.Files)
 	sort.Strings(use.Skills)
+	sort.Strings(use.Subagents)
 	return use
 }
 
 // Recovery works out the context use of runs recorded before records kept it, from each run's transcript and its arm's
 // starting context: the task's base commit, with the arm's snapshot applied when it has one, both in the bare
-// repository Bare. One value serves one command: it keeps each base and snapshot's resolved context, which every run of
-// a task in that arm shares.
+// repository Bare. Records is the data folder's records folder, where transcripts are looked for first (a record's own
+// folder may name a data folder that has since moved). One value serves one command: it keeps each base and snapshot's
+// resolved context, or why it could not be resolved, which every run of a task in that arm shares.
 type Recovery struct {
-	Bare     string
-	contexts map[[2]string]armStart
+	Bare, Records string
+	contexts      map[[2]string]armStart
 }
 
 type armStart struct {
 	src      source.Source
 	resolved claudectx.Context
+	err      error
 }
 
 // Recover returns rec's context use: the record's own when it has one, else one worked out from its transcript. A run
-// whose transcript is gone gets nil and no error.
+// whose transcript is gone gets nil and no error. Errors name the arm, not the run, so a caller can report each once.
 func (r *Recovery) Recover(ctx context.Context, rec Record, base, snapshotCommit string) (*ContextUse, error) {
 	if rec.ContextUse != nil {
 		return rec.ContextUse, nil
 	}
-	if rec.RecordsDir == "" {
+	var dirs []string
+	if r.Records != "" && rec.ID != "" {
+		dirs = append(dirs, filepath.Join(r.Records, rec.ID))
+	}
+	if rec.RecordsDir != "" {
+		dirs = append(dirs, rec.RecordsDir)
+	}
+	transcript := ""
+	for _, dir := range dirs {
+		if _, err := os.Stat(filepath.Join(dir, "stream.jsonl")); err == nil {
+			transcript = filepath.Join(dir, "stream.jsonl")
+			break
+		}
+	}
+	if transcript == "" {
 		return nil, nil
 	}
-	m, err := parseFile(filepath.Join(rec.RecordsDir, "stream.jsonl"))
+	m, err := parseFile(transcript)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("run %s: %w", rec.ID, err)
+		return nil, fmt.Errorf("a transcript of arm %s: %w", rec.Arm, err)
 	}
 	start, err := r.start(ctx, base, snapshotCommit)
 	if err != nil {
-		return nil, fmt.Errorf("run %s, arm %s: %w", rec.ID, rec.Arm, err)
+		return nil, fmt.Errorf("arm %s: %w", rec.Arm, err)
 	}
 	use := UseOf(start.resolved, start.src, m, m.CWD)
 	return &use, nil
 }
 
-// start resolves the context a run started with: base with snapshotCommit applied (none: base's own).
+// start resolves the context a run started with: base with snapshotCommit applied (none: base's own). Failures are kept
+// too, except cancellation, which leaves nothing behind (a cancelled read can make a context look smaller than it is).
 func (r *Recovery) start(ctx context.Context, base, snapshotCommit string) (armStart, error) {
 	key := [2]string{base, snapshotCommit}
 	if s, ok := r.contexts[key]; ok {
-		return s, nil
+		return s, s.err
 	}
-	src, err := source.Commit(ctx, base, "--git-dir", r.Bare)
-	if err != nil {
-		return armStart{}, err
-	}
-	if snapshotCommit != "" {
-		snap, err := source.Commit(ctx, snapshotCommit, "--git-dir", r.Bare)
-		if err != nil {
-			return armStart{}, err
-		}
-		if src, err = snapshot.Apply(src, snap); err != nil {
-			return armStart{}, err
-		}
-	}
-	resolved, err := claudectx.Resolve(src)
-	if err != nil {
+	s := r.resolve(ctx, base, snapshotCommit)
+	if err := ctx.Err(); err != nil {
 		return armStart{}, err
 	}
 	if r.contexts == nil {
 		r.contexts = map[[2]string]armStart{}
 	}
-	r.contexts[key] = armStart{src: src, resolved: resolved}
-	return r.contexts[key], nil
+	r.contexts[key] = s
+	return s, s.err
+}
+
+func (r *Recovery) resolve(ctx context.Context, base, snapshotCommit string) armStart {
+	src, err := source.Commit(ctx, base, "--git-dir", r.Bare)
+	if err != nil {
+		return armStart{err: err}
+	}
+	if snapshotCommit != "" {
+		snap, err := source.Commit(ctx, snapshotCommit, "--git-dir", r.Bare)
+		if err != nil {
+			return armStart{err: err}
+		}
+		if src, err = snapshot.Apply(src, snap); err != nil {
+			return armStart{err: err}
+		}
+	}
+	resolved, err := claudectx.Resolve(src)
+	if err != nil {
+		return armStart{err: err}
+	}
+	return armStart{src: src, resolved: resolved}
+}
+
+// relativeAll returns the paths under dirs, relative to them with forward slashes, each once.
+func relativeAll(paths, dirs []string) []string {
+	var out []string
+	for _, p := range paths {
+		if rel, ok := relativeTo(p, dirs); ok && !slices.Contains(out, rel) {
+			out = append(out, rel)
+		}
+	}
+	return out
 }
 
 // relativeTo returns p relative to the first of dirs that holds it, with forward slashes.
@@ -158,13 +213,44 @@ func relativeTo(p string, dirs []string) (string, bool) {
 	return "", false
 }
 
-// namedIn reports whether a shell command names p as a whole path: docs/a.md, ./docs/a.md or /any/folder/docs/a.md.
-// A longer name that only contains it (docs/a.mdx, my-docs/a.md) does not count.
-func namedIn(p string, commands []string) bool {
-	pattern := regexp.MustCompile(`(^|[^A-Za-z0-9_.-])` + regexp.QuoteMeta(p) + `($|[^A-Za-z0-9_./-])`)
-	for _, c := range commands {
-		if pattern.MatchString(c) {
-			return true
+// readers are commands that read the files they are given.
+var readers = []string{"cat", "head", "tail", "less", "more", "sed", "awk", "grep", "egrep", "fgrep", "rg", "nl", "bat", "wc", "cut",
+	"sort", "uniq", "diff", "cmp", "jq", "view"}
+
+// commandBreak splits a shell command line into simple commands.
+var commandBreak = regexp.MustCompile(`\|\||&&|[|;\n]`)
+
+// namedByReader reports whether a shell command reads p: p is an argument of a reading command (cat, sed, grep...),
+// written as p, ./p or under one of dirs. A redirection's target is written, not read, and environment assignments
+// before the command are skipped. Quotes are handled around whole arguments only.
+func namedByReader(p string, commands, dirs []string) bool {
+	names := []string{p, "./" + p}
+	for _, dir := range dirs {
+		if dir != "" {
+			names = append(names, filepath.ToSlash(filepath.Clean(dir))+"/"+p)
+		}
+	}
+	for _, line := range commands {
+		for _, simple := range commandBreak.Split(line, -1) {
+			args := strings.Fields(simple)
+			for len(args) > 0 && strings.Contains(args[0], "=") && !strings.HasPrefix(args[0], "-") {
+				args = args[1:]
+			}
+			if len(args) == 0 || !slices.Contains(readers, path.Base(args[0])) {
+				continue
+			}
+			for i := 1; i < len(args); i++ {
+				arg := args[i]
+				if before, _, found := strings.Cut(arg, ">"); found { // >, >>, 2>, >file, 2>>file: a write
+					if rest := arg[len(before):]; rest == ">" || rest == ">>" {
+						i++ // the target is the next argument
+					}
+					continue
+				}
+				if slices.Contains(names, strings.Trim(arg, `"'`)) {
+					return true
+				}
+			}
 		}
 	}
 	return false

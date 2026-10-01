@@ -42,7 +42,7 @@ Means over counted runs. The first request is what Claude Code sent first: the c
 
 ## Context use
 
-What the counted runs used of their context beyond what loads at start: context files and linked documents they read (with the Read tool, or named in a shell command), the project's skills they invoked, and the subagents they started.
+What the counted runs used of their context beyond what loads at start: path-scoped rules and folder instructions that loaded for the files the agent worked with; context files and linked documents the agent or its subagents read (with the Read tool, or given to cat, sed, grep and the like); the project's skills and commands they invoked; and the subagents they started (the project's and Claude Code's by name, any other only counted).
 
 | | A | B |
 |---|---|---|

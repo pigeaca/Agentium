@@ -1,9 +1,9 @@
 // Package report turns an experiment's lock and runs into its report: verdicts in plain words, the metrics with both
 // intervals, a per-task table, behavior counts per arm, the context overhead and what the runs used of it, costs, and
 // honesty notes. It renders Markdown (for a pull request) and JSON (with the lock and every run). Both are meant to be
-// shared: Claude Code's and personal skill and command names, local paths and what the agents said are left out, and
-// credential-shaped text is redacted. The project's own context files and skills are named, as its repository names
-// them.
+// shared: Claude Code's and personal skill and command names, personal subagent types, local paths and what the agents
+// said are left out, and credential-shaped text is redacted. The project's own context files, skills, commands and
+// subagents are named, as its repository names them, and so are Claude Code's own subagent types.
 package report
 
 import (
@@ -83,6 +83,8 @@ type ArmContextUse struct {
 	Files     map[string]int `json:"files,omitempty"`
 	Skills    map[string]int `json:"skills,omitempty"`
 	Subagents map[string]int `json:"subagents,omitempty"`
+	// OtherSubagents counts runs that started subagents of other types, which are not named.
+	OtherSubagents int `json:"other_subagents,omitempty"`
 }
 
 // Behavior counts what the agents did, over an arm's counted runs. (Runs that read outside their checkout are unfair,
@@ -285,6 +287,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 				}
 			}
 			use.Files, use.Skills, use.Subagents = tally(use.Files, u.Files), tally(use.Skills, u.Skills), tally(use.Subagents, u.Subagents)
+			if u.OtherSubagents > 0 {
+				use.OtherSubagents++
+			}
 		}
 	}
 	slices.Sort(arm.ContextUse.Start)

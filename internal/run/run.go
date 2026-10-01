@@ -385,7 +385,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return unfinished(err)
 	}
 	rec.ProjectSkills, rec.ProjectCommands = claudectx.SkillNames(armContext, armSource), claudectx.CommandNames(armContext)
-	use := UseOf(armContext, armSource, rec.Metrics, repo, rec.Metrics.CWD)
+	realRepo, _ := filepath.EvalSymlinks(repo) // Claude Code may name files under the resolved path (/private/var)
+	use := UseOf(armContext, armSource, rec.Metrics, repo, realRepo, rec.Metrics.CWD)
 	rec.ContextUse = &use
 	expect := env.Expect
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills

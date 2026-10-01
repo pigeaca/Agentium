@@ -38,17 +38,21 @@ func (m memSource) Executable(string) bool { return false }
 func (m memSource) Describe() string       { return "memory" }
 
 // project has every kind of context: an instruction file with an import and a linked document, an unscoped and a
-// scoped rule, a skill, a subagent, and files that are not context.
+// scoped rule, a folder's instructions, a skill, a command, a subagent, and files that are not context.
 var project = memSource{
 	"CLAUDE.md":                      "# Project\n@AGENTS.md\nSee [testing](docs/testing.md).\n",
 	"AGENTS.md":                      "Rules\n",
 	".claude/rules/always.md":        "Always.\n",
 	".claude/rules/go.md":            "---\npaths:\n  - \"**/*.go\"\n---\ngofmt\n",
+	".claude/rules/sql.md":           "---\npaths: [\"db/*.sql\"]\n---\nNo SELECT *.\n",
 	".claude/skills/review/SKILL.md": "---\nname: review\ndescription: Review a change.\n---\nSteps.\n",
+	".claude/commands/ship.md":       "---\ndescription: Ship it.\n---\nSteps.\n",
 	".claude/agents/investigator.md": "---\nname: investigator\ndescription: Look around.\n---\nRead.\n",
+	"pkg/CLAUDE.md":                  "Package rules.\n",
 	"docs/testing.md":                "Run the tests.\n",
 	"docs/other.md":                  "Not linked.\n",
 	"main.go":                        "package main\n",
+	"pkg/x.go":                       "package pkg\n",
 }
 
 func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
@@ -57,21 +61,22 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := claude.Metrics{
-		CWD: "/work/repo",
+		CWD:       "/work/repo",
+		FilePaths: []string{"/work/repo/pkg/x.go", "/work/repo/docs/testing.md"}, // pkg/x.go loads go.md and pkg/CLAUDE.md
 		ReadPaths: []string{
 			"/work/repo/docs/testing.md", // a linked document: used
 			"/work/repo/AGENTS.md",       // loaded at start anyway
-			"/work/repo/main.go",         // not context
 			"/work/repo/docs/other.md",   // a document nothing links to
 			"/elsewhere/docs/testing.md", // another folder
 		},
-		Commands:      []string{"sed -n 1,20p ./.claude/rules/go.md", "cat docs/testing.mdx", "ls .claude/agents"},
-		SkillCalls:    []string{"review", "personal-skill", "review"},
-		SubagentTypes: []string{"investigator"},
+		Commands:      []string{"cat docs/other.md", "echo note >> .claude/rules/sql.md", "ls .claude/agents"},
+		SkillCalls:    []string{"review", "personal-skill", "ship", "review"},
+		SubagentTypes: []string{"Explore", "investigator", "my-personal-agent"},
 	}
 	got := UseOf(resolved, project, m, "/checkout", m.CWD)
-	want := ContextUse{Start: []string{".claude/rules/always.md", "AGENTS.md", "CLAUDE.md"}, Files: []string{".claude/rules/go.md", "docs/testing.md"},
-		Skills: []string{"review"}, Subagents: []string{"investigator"}}
+	want := ContextUse{Start: []string{".claude/rules/always.md", "AGENTS.md", "CLAUDE.md"},
+		Files:  []string{".claude/rules/go.md", "docs/testing.md", "pkg/CLAUDE.md"},
+		Skills: []string{"review", "ship"}, Subagents: []string{"Explore", "investigator"}, OtherSubagents: 1}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("context use = %+v\nwant %+v", got, want)
 	}
@@ -79,35 +84,48 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, private := range []string{"/work", "personal-skill"} {
+	for _, private := range []string{"/work", "personal-skill", "my-personal-agent"} {
 		if strings.Contains(string(data), private) {
 			t.Errorf("the record holds %q: %s", private, data)
 		}
 	}
 
+	// A rule's file read directly counts too; one whose patterns nothing matched does not.
+	direct := UseOf(resolved, project, claude.Metrics{Commands: []string{"sed -n 1,20p ./.claude/rules/sql.md"}})
+	if !reflect.DeepEqual(direct.Files, []string{".claude/rules/sql.md"}) {
+		t.Errorf("a rule read with sed: %v", direct.Files)
+	}
 	// Without any use, Start is still an empty list (not null) and nothing else is set.
 	none := UseOf(resolved, project, claude.Metrics{})
-	if none.Start == nil || none.Files != nil || none.Skills != nil || none.Subagents != nil {
+	if none.Start == nil || none.Files != nil || none.Skills != nil || none.Subagents != nil || none.OtherSubagents != 0 {
 		t.Errorf("no use: %+v", none)
 	}
 }
 
-func TestNamedInMatchesWholePaths(t *testing.T) {
+func TestNamedByReader(t *testing.T) {
 	for _, c := range []struct {
 		command string
 		want    bool
 	}{
 		{"cat docs/a.md", true},
 		{"sed -n 1,40p ./docs/a.md", true},
-		{"head /work/repo/docs/a.md", true},
-		{`grep -n x "docs/a.md"`, true},
-		{"grep -n x docs/a.md:12", true},
+		{"head -50 /work/repo/docs/a.md", true},
+		{`grep -n "x y" "docs/a.md"`, true},
+		{"cd /work/repo && cat docs/a.md | head", true},
+		{"LC_ALL=C sort docs/a.md", true},
+		{"/usr/bin/cat docs/a.md", true},
 		{"cat docs/a.mdx", false},
 		{"cat my-docs/a.md", false},
-		{"cat docs/a.md.bak", false},
+		{"cat sub/docs/a.md", false},
+		{"cat /other/docs/a.md", false},
+		{"echo hi >> docs/a.md", false},
+		{"cat x.md > docs/a.md", false},
+		{"cat x.md >docs/a.md", false},
+		{"grep -r y . 2> docs/a.md", false},
+		{"git add docs/a.md", false},
 		{"ls docs", false},
 	} {
-		if got := namedIn("docs/a.md", []string{c.command}); got != c.want {
+		if got := namedByReader("docs/a.md", []string{c.command}, []string{"/work/repo"}); got != c.want {
 			t.Errorf("%q: %v, want %v", c.command, got, c.want)
 		}
 	}
@@ -195,7 +213,25 @@ func TestRecoveryFromTranscripts(t *testing.T) {
 	if got, err := recovery.Recover(ctx, gone, base, ""); err != nil || got != nil {
 		t.Errorf("no transcript: %+v, %v", got, err)
 	}
-	if _, err := recovery.Recover(ctx, rec, strings.Repeat("0", 40), ""); err == nil || !strings.Contains(err.Error(), "run r1, arm A") {
+	unknown := strings.Repeat("0", 40)
+	if _, err := recovery.Recover(ctx, rec, unknown, ""); err == nil || !strings.HasPrefix(err.Error(), "arm A: ") {
 		t.Errorf("unknown base: %v", err)
+	}
+
+	// A data folder that moved: the transcript is found under the current records folder by run ID.
+	moved := Record{ID: "r1", Arm: "A", RecordsDir: "/gone/records/r1"}
+	if got, err := (&Recovery{Bare: bare, Records: filepath.Dir(records)}).Recover(ctx, moved, base, ""); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("moved data folder: %+v, %v", got, err)
+	}
+
+	// Cancelled while resolving: an error, and nothing kept, so a later call resolves afresh.
+	fresh := &Recovery{Bare: bare}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := fresh.Recover(cancelled, rec, base, ""); err == nil {
+		t.Error("a cancelled recovery succeeded")
+	}
+	if got, err := fresh.Recover(ctx, rec, base, ""); err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("after a cancelled one: %+v, %v", got, err)
 	}
 }

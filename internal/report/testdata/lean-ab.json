@@ -865,7 +865,8 @@
         },
         "subagents": {
           "Explore": 1
-        }
+        },
+        "other_subagents": 3
       }
     }
   ],
@@ -2292,7 +2293,8 @@
       "context_use": {
         "start": [
           "CLAUDE.md"
-        ]
+        ],
+        "other_subagents": 1
       },
       "verify": [
         {
@@ -2746,7 +2748,8 @@
       "context_use": {
         "start": [
           "CLAUDE.md"
-        ]
+        ],
+        "other_subagents": 1
       },
       "verify": [
         {
@@ -4248,7 +4251,8 @@
       "context_use": {
         "start": [
           "CLAUDE.md"
-        ]
+        ],
+        "other_subagents": 1
       },
       "verify": [
         {
