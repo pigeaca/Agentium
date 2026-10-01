@@ -449,3 +449,40 @@ func TestExperimentRunInterruptedBeforeAgent(t *testing.T) {
 	}
 	emptyWorkspaces(t, f)
 }
+
+// A run whose start file cannot be read (the file of a killed write, damaged) does not block the next start: it is
+// reported with what its transcript spent, not stored as a run, and its file is moved aside.
+func TestStartReportsAnUnreadableStartFile(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "unreadable", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	dir := filepath.Join(f.data, "records", "r-old")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5"}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000},"content":[]}}
+`
+	for name, body := range map[string]string{"started.json": `{"record":{"id":"r-old"`, "stream.jsonl": transcript} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		past := time.Now().Add(-2 * time.Hour)
+		if err := os.Chtimes(p, past, past); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := f.run(ctx, "experiment", "run", "unreadable")
+	expect(t, out, ExitOK, "Run r-old left behind by a stopped Agentium has an unreadable start file, so it is not stored.",
+		"$0.08 spent", "neither experiment budgets nor `agentium experiment show` count", "started.json.corrupt")
+	for _, r := range experimentRuns(t, f, "unreadable") {
+		if r.ID == "r-old" {
+			t.Errorf("the unreadable run was stored: %+v", r)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "started.json.corrupt")); err != nil {
+		t.Error(err)
+	}
+}

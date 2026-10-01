@@ -21,15 +21,15 @@ const (
 // Env is everything a command needs from the process, so tests can supply their own.
 type Env struct {
 	Args    []string
+	Stdin   io.Reader // only `context lint --hook` reads it; nil means empty
 	Stdout  io.Writer
 	Stderr  io.Writer
 	Version string
 	// Terminal is whether Stdout is a terminal. With NO_COLOR, FORCE_COLOR and TERM it decides whether output is
 	// styled (term.Detect); tests leave it false and get plain text.
 	Terminal bool
-	// Stdin and StdinTerminal are where a prompt reads from and whether that is a terminal. Commands that ask a question
-	// ask only when both stdin and Stdout are terminals; tests leave them unset and are never asked.
-	Stdin         io.Reader
+	// StdinTerminal is whether Stdin is a terminal. A command that asks a question asks only when both Stdin and Stdout
+	// are terminals; tests leave it false and are never asked.
 	StdinTerminal bool
 	// Columns is the terminal's width in columns, for the live status line; nil or 0 means unknown.
 	Columns  func() int

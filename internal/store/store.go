@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -90,6 +91,106 @@ func openOnce(ctx context.Context, file string) (*Store, error) {
 	return s, nil
 }
 
+// ErrSchema is returned by OpenReadOnly when the database's schema is not the one this binary knows (older, newer, or
+// not initialized); ErrSchemaNewer is also wrapped when it is newer. Other failures (busy, corrupt) are not ErrSchema.
+var (
+	ErrSchema      = errors.New("database schema differs from this Agentium's")
+	ErrSchemaNewer = errors.New("database schema is newer than this Agentium's")
+)
+
+// FileState is what OpenReadOnly callers compare before and after reading, to detect a writer that started
+// meanwhile: the database file's size and modification time, and whether its -wal file exists.
+type FileState struct {
+	Size   int64
+	ModNs  int64
+	HasWAL bool
+}
+
+// StateOf reads the FileState of the database at file; a missing file is the zero state.
+func StateOf(file string) FileState {
+	var st FileState
+	if info, err := os.Stat(file); err == nil {
+		st.Size, st.ModNs = info.Size(), info.ModTime().UnixNano()
+	}
+	_, err := os.Stat(file + "-wal")
+	st.HasWAL = err == nil
+	return st
+}
+
+// readOnlyBusy is how long OpenReadOnly waits on a lock before giving up: it is for callers (editor hooks) that must
+// answer in well under a second.
+const readOnlyBusy = 200 * time.Millisecond
+
+// OpenReadOnly opens an existing database for reading only: it never creates the file, migrates, switches the journal
+// mode or takes the write lock, waits at most readOnlyBusy for any lock and does not retry. A schema other than the
+// one this binary knows gives ErrSchema, since the queries here would not be valid on it.
+func OpenReadOnly(ctx context.Context, file string) (*Store, error) {
+	file, err := filepath.Abs(file)
+	if err != nil {
+		return nil, fmt.Errorf("open database %s: %w", file, err)
+	}
+	// A WAL database read normally gets -wal and -shm files created beside it, which a read-only caller must not leave
+	// behind. While no process has the database open there is no -wal file and nothing can change under us, so read
+	// it as immutable (no locks, no side files); with a -wal file, another process is active, and a normal read-only
+	// connection finds the files in place.
+	query := "mode=ro&_busy_timeout=" + strconv.Itoa(int(readOnlyBusy.Milliseconds()))
+	if _, err := os.Stat(file + "-wal"); err != nil {
+		query = "mode=ro&immutable=1"
+	}
+	dsn := (&url.URL{Scheme: "file", Path: file, RawQuery: query}).String()
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open database %s: %w", file, err)
+	}
+	db.SetMaxOpenConns(1)
+	latest, _, err := latestMigration()
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	var newest sql.NullInt64
+	if err := db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
+		db.Close()
+		if strings.Contains(err.Error(), "no such table") {
+			err = errors.Join(ErrSchema, err)
+		}
+		return nil, fmt.Errorf("open database %s: read schema version: %w", file, err)
+	}
+	if !newest.Valid || int(newest.Int64) != latest {
+		db.Close()
+		err := ErrSchema
+		if newest.Int64 > int64(latest) {
+			err = errors.Join(ErrSchema, ErrSchemaNewer)
+		}
+		return nil, fmt.Errorf("open database %s: schema version %d, this Agentium knows %d: %w", file, newest.Int64, latest, err)
+	}
+	return &Store{db: db}, nil
+}
+
+type migration struct {
+	name    string
+	version int
+}
+
+// latestMigration is the newest embedded migration's version, and every migration in order.
+func latestMigration() (int, []migration, error) {
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil {
+		return 0, nil, fmt.Errorf("list migrations: %w", err)
+	}
+	latest := 0
+	all := make([]migration, len(names))
+	for i, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
+		version, err := strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0])
+		if err != nil {
+			return 0, nil, fmt.Errorf("migration %s: version prefix: %w", name, err)
+		}
+		all[i] = migration{name, version}
+		latest = max(latest, version)
+	}
+	return latest, all, nil
+}
+
 // Close releases the database.
 func (s *Store) Close() error {
 	return s.db.Close()
@@ -101,17 +202,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
 	}
-	names, err := fs.Glob(migrations, "migrations/*.sql")
+	latest, all, err := latestMigration()
 	if err != nil {
-		return fmt.Errorf("list migrations: %w", err)
-	}
-	latest := 0
-	versions := make([]int, len(names))
-	for i, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
-		if versions[i], err = strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0]); err != nil {
-			return fmt.Errorf("migration %s: version prefix: %w", name, err)
-		}
-		latest = max(latest, versions[i])
+		return err
 	}
 	var newest sql.NullInt64
 	if err := s.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil {
@@ -120,8 +213,8 @@ func (s *Store) migrate(ctx context.Context) error {
 	if newest.Valid && int(newest.Int64) > latest {
 		return fmt.Errorf("the database has schema version %d, but this Agentium knows up to %d: upgrade Agentium", newest.Int64, latest)
 	}
-	for i, name := range names {
-		version := versions[i]
+	for _, m := range all {
+		name, version := m.name, m.version
 		body, err := migrations.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("migration %d: %w", version, err)

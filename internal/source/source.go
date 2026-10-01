@@ -37,6 +37,9 @@ func WorkingTree(ctx context.Context, root string) (Source, error) {
 	}
 	var existing []string
 	for _, p := range splitNUL(string(out)) { // tracked files deleted from disk are gone; submodules are directories
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(p))); err == nil && (info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0) {
 			existing = append(existing, p)
 		}
