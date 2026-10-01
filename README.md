@@ -48,6 +48,7 @@ agentium context diff baseline trimmed --patch
 agentium task import --commit <sha>                # base: its parent; hidden tests: its test-file changes
 agentium task edit <name> --reviewed               # once the instruction doesn't give the solution away (--accept-gaps: hidden tests need texts or names nothing states)
 agentium task validate <name> --snapshot trimmed   # tests fail on the base and pass with the reference, in each arm
+agentium task validate <name> --repeat 3           # run every stage 3 times: a task whose runs disagree is flaky, and experiments reject it
 ```
 
 **3. Run and compare**

@@ -37,9 +37,9 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "task", "edit", "value", "--reviewed"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value"), ExitError,
 		"task value cannot be in this experiment: not validated (agentium task validate value --snapshot lean)")
-	expect(t, f.run(ctx, "task", "validate", "value"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "value", "--repeat", "3"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean"), ExitError, "value: not validated in context lean")
-	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean", "--repeat", "3"), ExitOK)
 
 	// The default: the Quick tier's sample of what is eligible, and a budget a quarter above the estimate (6 runs at
 	// the default profile's $1.612 on claude-sonnet-5) plus 3 caps of $3 held for runs in flight, rounded up.
@@ -68,6 +68,19 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 		"Floors (method phase1-v2): verdicts on cost need 8 tasks with 1 or more runs per arm, and on success 20 tasks with 3 or more;")
 	if strings.Contains(ready.stdout, "MISSING") || strings.Contains(ready.stdout, "Not ready") {
 		t.Errorf("a calibrated experiment is ready:\n%s", ready.stdout)
+	}
+
+	// A validation that ran each stage fewer than 3 times only warns, and names the command that fixes it.
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+	few := f.run(ctx, "experiment", "plan", "lean-ab")
+	expect(t, few, ExitOK, "WARNING  validated with fewer than 3 repeats", "value (agentium task validate NAME --repeat 3 --snapshot lean)",
+		"ok       1 task(s), each valid in every arm's context")
+	if strings.Contains(few.stdout, "MISSING") || strings.Contains(few.stdout, "Not ready") {
+		t.Errorf("few repeats is a warning, not a gate:\n%s", few.stdout)
+	}
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean", "--repeat", "3"), ExitOK)
+	if again := f.run(ctx, "experiment", "plan", "lean-ab"); strings.Contains(again.stdout, "fewer than 3 repeats") {
+		t.Errorf("3 repeats should not warn:\n%s", again.stdout)
 	}
 
 	// Calibrations are per Claude Code version and model.
@@ -235,7 +248,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	if !strings.Contains(plan.stdout, "This experiment     2          1     4      $4.40      $12.00") {
 		t.Errorf("this experiment's row, want $4.40 and the worst case $12.00:\n%s", plan.stdout)
 	}
-	if strings.Contains(plan.stdout, "WARNING") {
+	if strings.Contains(plan.stdout, "the budget $") { // the budget's own warning; validation warnings may appear
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
 	}
 	// The tiers draw from every eligible task, also those outside the experiment: the note shows the average they use.

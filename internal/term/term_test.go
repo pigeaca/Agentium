@@ -54,6 +54,7 @@ func TestStatus(t *testing.T) {
 		{"WARNING", s.Warn("WARNING")},
 		{"NOT OK (timed out)", s.Bad("NOT OK (timed out)")},
 		{"invalid: base/hidden-tests wanted fail", s.Bad("invalid: base/hidden-tests wanted fail")},
+		{"flaky: base/reference passed 2 of 3 times", s.Bad("flaky: base/reference passed 2 of 3 times")},
 		{"cancelled", s.Warn("cancelled")},
 		{"yes", s.Good("yes")},
 		{"no", s.Bad("no")},

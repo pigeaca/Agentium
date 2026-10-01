@@ -36,9 +36,11 @@ const taskUsage = `Usage:
   agentium task show NAME
   agentium task edit NAME [--instruction TEXT | --instruction-file FILE] [--setup CMD... | --no-setup]
                          [--verify CMD]... [--reviewed] [--accept-gaps]
-  agentium task validate NAME [--snapshot NAME]... [--timeout DURATION] [--keep]
+  agentium task validate NAME [--snapshot NAME]... [--repeat N] [--timeout DURATION] [--keep]
                          the hidden tests fail on the base and the reference passes them, in the base's own
-                         context and with each snapshot applied (without a solution: the base passes)
+                         context and with each snapshot applied (without a solution: the base passes);
+                         --repeat N (1 to 20) runs every stage N times, and a stage whose runs disagree makes the
+                         task flaky, which experiments reject (experiment plan asks for at least 3)
   agentium task rm NAME
 
 task show and task validate list what the hidden tests require that neither the instruction nor the base code states
@@ -611,6 +613,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("task validate", flag.ContinueOnError)
 	var snapshots stringList
 	fs.Var(&snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
+	repeat := fs.Int("repeat", 1, "run every stage this many times; a stage whose runs disagree makes the task flaky")
 	timeout := fs.Duration("timeout", 10*time.Minute, "time limit for each verification command")
 	keep := fs.Bool("keep", false, "keep the checkouts for inspection")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
@@ -619,6 +622,10 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	}
 	if len(rest) != 1 {
 		fmt.Fprint(env.Stderr, taskUsage)
+		return ExitUsage
+	}
+	if *repeat < 1 || *repeat > 20 {
+		fmt.Fprintln(env.Stderr, "agentium task validate: --repeat must be 1 to 20")
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -650,7 +657,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	defer live.Stop()
 	folder := filepath.Join(w.layout.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), env.Now().UTC().Format("20060102T150405Z"))
 	v := task.Validator{Bare: w.bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: *timeout, Keep: *keep, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now,
+		Timeout: *timeout, Keep: *keep, Repeats: *repeat, Env: buildEnv, Progress: env.Stdout, Style: env.style(), Now: env.Now,
 		Started: func(arm, stage string) { live.Step("validating " + t.Name + ": " + arm + ", " + stage) }}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(arms))), strings.Join(t.Verify, "; "))
@@ -675,7 +682,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("arm %s changes what runs, not only what the model reads: %s", arm, strings.Join(files, ", "))))
 	}
 	fmt.Fprintf(env.Stdout, "Result: %s %s\n", st.Status(result.Summary()), st.Note("(logs: "+v.LogDir+")"))
-	if result.Status == task.StatusInvalid {
+	if result.Status == task.StatusInvalid || result.Status == task.StatusFlaky {
 		return ExitError
 	}
 	return ExitOK

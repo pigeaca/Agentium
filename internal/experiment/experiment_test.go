@@ -284,3 +284,13 @@ func TestSample(t *testing.T) {
 		t.Error("Sample reordered its input")
 	}
 }
+
+func TestIneligibleRejectsFlakyTasks(t *testing.T) {
+	flaky := &task.Validation{Status: task.StatusFlaky, Repeats: 3, Arms: []task.Arm{{Name: "base"}, {Name: "lean", Snapshot: "abc"}},
+		Stages: []task.Stage{{Arm: "minimal", Stage: "reference", Runs: 3, PassedRuns: 2, Flaky: true}}}
+	why := Ineligible(Candidate{Name: "t", Validation: flaky}, validDesign().Arms)
+	if !strings.Contains(why, "its validation is flaky: minimal/reference passed 2 of 3 times") ||
+		!strings.Contains(why, "make the check deterministic, then revalidate: agentium task validate t --snapshot lean --repeat 3)") {
+		t.Errorf("flaky: %q", why)
+	}
+}
