@@ -52,6 +52,9 @@ type Entry struct {
 type Context struct {
 	Entries  []Entry  `json:"entries"`
 	Warnings []string `json:"warnings"`
+	// Broken are the Warnings that name an @import of a file that does not exist (also in Warnings; lint reports them
+	// as problems of their own).
+	Broken []string `json:"broken_imports,omitempty"`
 	// Linked are documents (see IsDocument) that context files link to ([text](path)) but do not load: the agent reads
 	// them only if it opens them, so they are not context unless a snapshot includes them explicitly.
 	Linked []string `json:"linked,omitempty"`
@@ -88,7 +91,7 @@ func Resolve(src source.Source) (Context, error) {
 		return Context{}, err
 	}
 	sort.SliceStable(r.entries, func(i, j int) bool { return kindOrder(r.entries[i].Kind) < kindOrder(r.entries[j].Kind) })
-	return Context{Entries: r.entries, Warnings: r.warnings, Linked: r.linked()}, nil
+	return Context{Entries: r.entries, Warnings: r.warnings, Broken: r.broken, Linked: r.linked()}, nil
 }
 
 // kindOrder sorts entries for display: startup instructions in load order first, then the rest by kind.
@@ -120,6 +123,7 @@ type resolver struct {
 	seen      map[string]bool
 	entries   []Entry
 	warnings  []string
+	broken    []string
 	importers []importer
 }
 
@@ -283,6 +287,7 @@ func (r *resolver) imports(chain []string, data []byte, startup bool) {
 		if !source.Has(r.src, resolved) {
 			if pathLike {
 				r.warn("%s imports %s, which does not exist.", from, resolved)
+				r.broken = append(r.broken, r.warnings[len(r.warnings)-1])
 			}
 			continue
 		}
@@ -347,18 +352,27 @@ func stripCodeSpans(line string) string {
 // folders. Snapshots may change documents and instruction files, never code, configuration or test inputs, which would
 // change what a task builds and tests. Plain .txt is excluded: requirements.txt and CMakeLists.txt are build inputs.
 func IsDocument(p string) bool {
+	return IsDocumentExt(p) && !InDataFolder(p)
+}
+
+// IsDocumentExt is IsDocument by file extension only, wherever the file is.
+func IsDocumentExt(p string) bool {
 	switch strings.ToLower(path.Ext(p)) {
 	case ".md", ".mdx", ".markdown", ".rst", ".adoc":
-	default:
-		return false
+		return true
 	}
+	return false
+}
+
+// InDataFolder reports whether p is under a folder of tests, fixtures, vendored or installed code.
+func InDataFolder(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch strings.ToLower(dir) {
 		case "test", "tests", "testdata", "fixtures", "__fixtures__", "__snapshots__", "golden", "node_modules", "vendor":
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // linkPattern finds Markdown link targets: [text](target) or [text](target "title").

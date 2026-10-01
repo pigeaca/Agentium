@@ -492,3 +492,74 @@ func TestExperimentLockStatusAndRuns(t *testing.T) {
 		t.Errorf("run after its experiment was removed = %+v, %v", run, err)
 	}
 }
+
+func TestOpenReadOnlyReadsWithoutWritingOrMigrating(t *testing.T) {
+	ctx := context.Background()
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	s, err := Open(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveProject(ctx, "/repo", "repo", []byte(`{}`), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	before, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, side := range []string{"-wal", "-shm"} {
+		if _, err := os.Stat(file + side); err == nil {
+			t.Fatalf("precondition: %s left behind by the last close", side)
+		}
+	}
+
+	ro, err := OpenReadOnly(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ro.ProjectByRoot(ctx, "/repo"); err != nil {
+		t.Errorf("read: %v", err)
+	}
+	if _, err := ro.SaveProject(ctx, "/other", "other", []byte(`{}`), time.Now()); err == nil {
+		t.Error("a read-only store accepted a write")
+	}
+	ro.Close()
+	after, err := os.ReadFile(file)
+	if err != nil || string(after) != string(before) {
+		t.Errorf("the database file changed (%v)", err)
+	}
+	if _, err := os.Stat(file + "-wal"); err == nil {
+		t.Error("a -wal file was created")
+	}
+}
+
+func TestOpenReadOnlySchemaAndMissingFile(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	if _, err := OpenReadOnly(ctx, filepath.Join(dir, "none.db")); err == nil {
+		t.Error("a missing database must not be created or opened")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "none.db")); err == nil {
+		t.Error("OpenReadOnly created the file")
+	}
+	file := filepath.Join(dir, "agentium.db")
+	s, err := Open(ctx, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (9999, 'now')`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := OpenReadOnly(ctx, file); !errors.Is(err, ErrSchema) || !errors.Is(err, ErrSchemaNewer) {
+		t.Errorf("a newer schema: %v, want ErrSchema and ErrSchemaNewer", err)
+	}
+	notDB := filepath.Join(dir, "garbage.db")
+	if err := os.WriteFile(notDB, []byte(strings.Repeat("not a database ", 500)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenReadOnly(ctx, notDB); err == nil || errors.Is(err, ErrSchema) {
+		t.Errorf("a corrupt file is unreadable, not another schema: %v", err)
+	}
+}
