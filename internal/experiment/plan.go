@@ -118,32 +118,109 @@ func DefaultProfile() pricing.Usage {
 	return pricing.Usage{CacheWrite1h: 200_000, CacheRead: 2_160_000, Input: 40_000, Output: 30_000}
 }
 
-// MinPastRuns is how many earlier runs make their median the estimate instead of the default profile.
+// MinPastRuns is how many earlier task runs on a model make their median the estimate for a task without runs of its
+// own, instead of the default profile.
 const MinPastRuns = 3
 
-// Estimate is the expected cost of one run.
-type Estimate struct {
-	PerRunUSD float64
-	Known     bool
-	Basis     string
+// PastRun is an earlier fair task run on a model that reported its cost: what estimates learn from.
+type PastRun struct {
+	// Task is the task the run ran, or empty when the run no longer belongs to one (its task was removed, or changed
+	// after an experiment locked it): such a run counts only toward the project's median.
+	Task    string
+	CostUSD float64
 }
 
-// EstimateRun estimates a run on model: the median cost of the project's earlier fair task runs on that model when
-// there are enough, else the default profile at list price, else unknown.
-func EstimateRun(model string, past []float64) Estimate {
-	if len(past) >= MinPastRuns {
-		costs := slices.Sorted(slices.Values(past))
-		median := costs[len(costs)/2]
-		if len(costs)%2 == 0 {
-			median = (costs[len(costs)/2-1] + median) / 2
+// TaskCost is a task's own estimate: the median cost of its Runs earlier runs on the model.
+type TaskCost struct {
+	PerRunUSD float64
+	Runs      int
+}
+
+// Estimate is the expected cost of runs on a model. Tasks differ in cost far more than one task's runs do (a run's log
+// cost spreads by about σ = 0.19, while the 16-run A/B's tasks ranged from about $0.4 to $2 a run), so a task's own
+// earlier runs predict it best, even one of them. A task without any falls back to PerRunUSD.
+type Estimate struct {
+	PerRunUSD float64             // a run of a task without runs of its own: the project's median, or the default profile
+	Known     bool                // PerRunUSD is known
+	Basis     string              // how PerRunUSD was estimated, in words
+	Tasks     map[string]TaskCost // the tasks with earlier runs of their own on the model
+}
+
+// EstimateRun estimates runs on model from the project's earlier fair task runs on it. A task with runs of its own is
+// estimated by their median. Any other task gets the median of all of them when there are at least MinPastRuns, else
+// the default profile at list price, else no estimate.
+func EstimateRun(model string, past []PastRun) Estimate {
+	est := Estimate{Tasks: map[string]TaskCost{}}
+	byTask := map[string][]float64{}
+	var all []float64
+	for _, r := range past {
+		if r.Task != "" {
+			byTask[r.Task] = append(byTask[r.Task], r.CostUSD)
 		}
-		return Estimate{PerRunUSD: median, Known: true, Basis: fmt.Sprintf("the median of this project's %d earlier task runs on %s", len(past), model)}
+		all = append(all, r.CostUSD)
 	}
-	if rates, ok := pricing.Lookup(model); ok {
-		return Estimate{PerRunUSD: rates.Cost(DefaultProfile()), Known: true,
-			Basis: fmt.Sprintf("a default task run's tokens at %s's list prices of %s (fewer than %d earlier task runs on it)", model, pricing.Date, MinPastRuns)}
+	for task, costs := range byTask {
+		est.Tasks[task] = TaskCost{PerRunUSD: median(costs), Runs: len(costs)}
 	}
-	return Estimate{Basis: fmt.Sprintf("%s has no list price in Agentium's table and fewer than %d earlier task runs", model, MinPastRuns)}
+	switch rates, priced := pricing.Lookup(model); {
+	case len(all) >= MinPastRuns:
+		est.PerRunUSD, est.Known = median(all), true
+		est.Basis = fmt.Sprintf("the median of this project's %d earlier task runs on %s", len(all), model)
+	case priced:
+		est.PerRunUSD, est.Known = rates.Cost(DefaultProfile()), true
+		est.Basis = fmt.Sprintf("a default task run's tokens at %s's list prices of %s (fewer than %d earlier task runs on it)", model, pricing.Date, MinPastRuns)
+	default:
+		est.Basis = fmt.Sprintf("%s has no list price in Agentium's table and fewer than %d earlier task runs", model, MinPastRuns)
+	}
+	return est
+}
+
+func median(values []float64) float64 {
+	sorted := slices.Sorted(slices.Values(values))
+	m := sorted[len(sorted)/2]
+	if len(sorted)%2 == 0 {
+		m = (sorted[len(sorted)/2-1] + m) / 2
+	}
+	return m
+}
+
+// TaskUSD is one run of task: its own estimate when it has earlier runs, else PerRunUSD; false when neither is known.
+func (e Estimate) TaskUSD(task string) (float64, bool) {
+	if own, ok := e.Tasks[task]; ok {
+		return own.PerRunUSD, true
+	}
+	return e.PerRunUSD, e.Known
+}
+
+// DesignUSD is the expected cost of every run of d: each task's runs in every arm at its own estimate. False when a
+// task has no estimate.
+func (e Estimate) DesignUSD(d Design) (float64, bool) {
+	total := 0.0
+	for _, t := range d.Tasks {
+		perRun, ok := e.TaskUSD(t)
+		if !ok {
+			return 0, false
+		}
+		total += perRun * float64(d.Repeats*len(d.Arms))
+	}
+	return total, true
+}
+
+// MeanUSD is the average run over tasks, which is what a run of a task drawn from them is expected to cost; PerRunUSD
+// without tasks. False when a task has no estimate.
+func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
+	if len(tasks) == 0 {
+		return e.PerRunUSD, e.Known
+	}
+	total := 0.0
+	for _, t := range tasks {
+		perRun, ok := e.TaskUSD(t)
+		if !ok {
+			return 0, false
+		}
+		total += perRun
+	}
+	return total / float64(len(tasks)), true
 }
 
 // Reserve is what the budget must hold back for runs that may be in flight: a run (or a pair's two runs) starts only
@@ -153,10 +230,11 @@ func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunBudgetUS
 
 // DefaultBudget is a quarter above the estimate plus the reserve, in whole dollars; zero when the estimate is unknown.
 func DefaultBudget(d Design, est Estimate) float64 {
-	if !est.Known {
+	expected, ok := est.DesignUSD(d)
+	if !ok {
 		return 0
 	}
-	return math.Ceil(1.25*float64(d.Runs())*est.PerRunUSD + Reserve(d))
+	return math.Ceil(1.25*expected + Reserve(d))
 }
 
 // Row is one line of a preview.
@@ -167,27 +245,32 @@ type Row struct {
 	Runs        int
 	Short       bool    // fewer tasks are eligible than the tier asks for
 	CostUSD     float64 // expected; zero when the estimate is unknown
+	CostKnown   bool    // every task the row may hold has an estimate
 	WorstUSD    float64 // every run at its cap
 	Detect      Detectable
 	Exploratory []string
 }
 
-// Preview sizes each tier, limited to the eligible tasks, and the design itself.
-func Preview(d Design, eligible int, est Estimate) []Row {
-	row := func(name string, tasks, repeats int) Row {
+// Preview sizes each tier, limited to the eligible tasks, and the design itself. The design's cost is its own tasks'
+// estimates; a tier, which would draw its tasks from the eligible ones, costs their average run.
+func Preview(d Design, eligible []string, est Estimate) []Row {
+	row := func(name string, tasks, repeats int, perRun float64, known bool) Row {
 		runs := tasks * repeats * len(d.Arms)
 		r := Row{Name: name, Tasks: tasks, Repeats: repeats, Runs: runs, WorstUSD: float64(runs) * d.RunBudgetUSD,
-			Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats)}
-		if est.Known {
-			r.CostUSD = float64(runs) * est.PerRunUSD
+			Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
+		if known {
+			r.CostUSD = float64(runs) * perRun
 		}
 		return r
 	}
+	mean, known := est.MeanUSD(eligible)
 	var rows []Row
 	for _, t := range Tiers() {
-		r := row(t.Name, min(t.Tasks, eligible), t.Repeats)
-		r.Short = eligible < t.Tasks
+		r := row(t.Name, min(t.Tasks, len(eligible)), t.Repeats, mean, known)
+		r.Short = len(eligible) < t.Tasks
 		rows = append(rows, r)
 	}
-	return append(rows, row("This experiment", len(d.Tasks), d.Repeats))
+	own := row("This experiment", len(d.Tasks), d.Repeats, 0, false)
+	own.CostUSD, own.CostKnown = est.DesignUSD(d)
+	return append(rows, own)
 }
