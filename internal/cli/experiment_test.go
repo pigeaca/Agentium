@@ -248,7 +248,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	if !strings.Contains(plan.stdout, "This experiment     2          1     4      $4.40      $12.00") {
 		t.Errorf("this experiment's row, want $4.40 and the worst case $12.00:\n%s", plan.stdout)
 	}
-	if strings.Contains(plan.stdout, "WARNING") {
+	if strings.Contains(plan.stdout, "the budget $") { // the budget's own warning; validation warnings may appear
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
 	}
 	// The tiers draw from every eligible task, also those outside the experiment: the note shows the average they use.
