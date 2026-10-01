@@ -313,9 +313,11 @@ func estimateRun(ctx context.Context, w *workspace, model string) (experiment.Es
 				SawResult bool `json:"saw_result"`
 			} `json:"metrics"`
 		}
+		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.Metrics.SawResult {
+			continue
+		}
 		// The agent's cost alone: what the judge spends is estimated apart (Design.JudgeEstimateUSD).
-		agent := storedSpend(r).AgentUSD
-		if json.Unmarshal(r.Record, &rec) == nil && rec.Model == model && rec.Metrics.SawResult && agent > 0 {
+		if agent := storedSpend(r).AgentUSD; agent > 0 {
 			own := ""
 			if r.TaskID != 0 {
 				own = r.TaskName

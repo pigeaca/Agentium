@@ -601,24 +601,37 @@ func TestRunGradesWithoutUnreadableFiles(t *testing.T) {
 func TestRunRecordsTheRunningCommand(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	marker := filepath.Join(t.TempDir(), "setup-pid")
-	expect(t, f.run(context.Background(), "task", "edit", "value", "--setup", "echo $$ > "+marker+"; sleep 1"), ExitOK)
+	dir := t.TempDir()
+	marker, release := filepath.Join(dir, "setup-pid"), filepath.Join(dir, "release")
+	// The setup waits for the test to release it, so the start file is read while it surely runs; a failed test
+	// releases it too.
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+	expect(t, f.run(context.Background(), "task", "edit", "value", "--setup",
+		"echo $$ > "+marker+"; while [ ! -e "+release+" ]; do sleep 0.05; done"), ExitOK)
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt", false)
 	done := make(chan cliResult)
 	go func() { done <- f.run(context.Background(), "run", "once", "value") }()
-	var pid string
-	waitFor(t, "the setup command", func() bool {
-		data, err := os.ReadFile(marker)
-		pid = strings.TrimSpace(string(data))
-		return err == nil && pid != ""
+	var data []byte
+	// The pid is written before the start file learns the process group, and the start file is rewritten in place: a
+	// read too early, or of a partial file, retries.
+	waitFor(t, "the setup command's process group in the start file", func() bool {
+		raw, err := os.ReadFile(marker)
+		pid := strings.TrimSpace(string(raw))
+		if err != nil || pid == "" {
+			return false
+		}
+		files, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "started.json"))
+		if len(files) != 1 {
+			return false
+		}
+		data, _ = os.ReadFile(files[0])
+		return strings.Contains(string(data), `"pgid":`+pid)
 	})
-	files, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "started.json"))
-	if len(files) != 1 {
-		t.Fatalf("start files %v", files)
+	if strings.Contains(string(data), `"agent_started":true`) {
+		t.Errorf("start file during setup says the agent started: %s", data)
 	}
-	data, _ := os.ReadFile(files[0])
-	if !strings.Contains(string(data), `"pgid":`+pid) || strings.Contains(string(data), `"agent_started":true`) {
-		t.Errorf("start file during setup (setup's process group %s): %s", pid, data)
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 	expect(t, <-done, ExitOK, "verification passed")
 }

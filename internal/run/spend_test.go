@@ -3,6 +3,7 @@ package run
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,8 +12,8 @@ import (
 
 // spendFields says how Spend accounts for every money field a run record holds (a float64 named *USD, at any depth):
 //   - "agent" and "judge": the field is Spend's AgentUSD or JudgeUSD, and so in TotalUSD;
-//   - "folded": an estimate that Once and recovery copy into Metrics.CostUSD when Claude Code reported no cost, so it is
-//     counted there, never on its own.
+//   - "folded": counted elsewhere, or not spend: Metrics.EstimatedCostUSD is an estimate that Once and recovery copy
+//     into Metrics.CostUSD when Claude Code reported no cost, so it is counted there, never on its own.
 //
 // A new money field fails TestSpendCoversEveryCost until it is added here and to Spend.
 var spendFields = map[string]string{
@@ -21,7 +22,8 @@ var spendFields = map[string]string{
 	"Judge.CostUSD":            "judge",
 }
 
-// moneyFields lists the paths of the float64 fields named *USD under t, through structs, pointers, slices and maps.
+// moneyFields lists the paths of the float64 fields (or pointers to one) named *USD under t, through structs,
+// pointers, slices and maps.
 func moneyFields(t reflect.Type, prefix string, seen map[reflect.Type]bool, out *[]string) {
 	switch t.Kind() {
 	case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Map:
@@ -39,7 +41,11 @@ func moneyFields(t reflect.Type, prefix string, seen map[reflect.Type]bool, out 
 	for i := range t.NumField() {
 		f := t.Field(i)
 		path := prefix + f.Name
-		if f.Type.Kind() == reflect.Float64 && strings.HasSuffix(f.Name, "USD") {
+		leaf := f.Type
+		if leaf.Kind() == reflect.Pointer {
+			leaf = leaf.Elem()
+		}
+		if leaf.Kind() == reflect.Float64 && strings.HasSuffix(f.Name, "USD") {
 			*out = append(*out, path)
 			continue
 		}
@@ -63,6 +69,10 @@ func setField(t *testing.T, rec *Record, path string, value float64) {
 		}
 		v = v.FieldByName(name)
 	}
+	if v.Kind() == reflect.Pointer { // a pointer to a float64 is a leaf
+		v.Set(reflect.New(v.Type().Elem()))
+		v = v.Elem()
+	}
 	v.SetFloat(value)
 }
 
@@ -75,7 +85,7 @@ func TestSpendCoversEveryCost(t *testing.T) {
 		}
 	}
 	for path := range spendFields {
-		if !strings.Contains(strings.Join(found, " "), path) {
+		if !slices.Contains(found, path) {
 			t.Errorf("spendFields names %s, which Record no longer has", path)
 		}
 	}

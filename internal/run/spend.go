@@ -34,7 +34,8 @@ func (r Record) Spend() Spend {
 	return s
 }
 
-// JudgeCostUSD is Spend().JudgeUSD: what the judge spent on the run, none without a verdict.
+// JudgeCostUSD is Spend().JudgeUSD: what the judge spent on the run, none without a verdict. It is kept only for the
+// existing tests (report/judge_test.go, run/judge_test.go); drop it when step 2 of the refactor round moves them.
 func (r Record) JudgeCostUSD() float64 { return r.Spend().JudgeUSD }
 
 // StoredSpend is a stored run's spend: agentUSD is its cost column (the record's Metrics.CostUSD when it was saved),

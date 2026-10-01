@@ -638,7 +638,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		c := calibration{Arm: a.arm.Name, Snapshot: a.arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
 			EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion, Model: m.Model,
 			RequestedModel: *model, SignIn: runEnv.SignIn, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
-			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: m.CostUSD}
+			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: rec.Spend().AgentUSD}
 		c.Sandbox, c.LargeOutput, c.Instructions = judge(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
 		results = append(results, c)
 		if !c.healthy() { // only a calibration that passed every check becomes what later runs are checked against
