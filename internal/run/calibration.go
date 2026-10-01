@@ -239,7 +239,7 @@ func WriteCalibrations(out io.Writer, st term.Style, results []Calibration) erro
 	fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file."))
 	if len(results) > 0 {
 		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools; between arms:\n",
-			orNone(results[0].CLIVersion), orNone(results[0].Model))
+			term.OrNone(results[0].CLIVersion), term.OrNone(results[0].Model))
 	}
 	base := results[0]
 	for _, c := range results[1:] {
@@ -253,11 +253,4 @@ func WriteCalibrations(out io.Writer, st term.Style, results []Calibration) erro
 		fmt.Fprintf(out, "  %s: measured %+d tokens, estimated %+d (measured/estimated %s)\n", c.Arm, measured, estimated, ratio)
 	}
 	return nil
-}
-
-func orNone(value string) string {
-	if value == "" {
-		return "none found"
-	}
-	return value
 }

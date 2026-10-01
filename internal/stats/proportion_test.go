@@ -19,3 +19,18 @@ func TestWilson(t *testing.T) {
 		}
 	}
 }
+
+func TestBinomialTwoSided(t *testing.T) {
+	if p := BinomialTwoSided(0, 8); !near(p, 2.0/256, 1e-12) {
+		t.Errorf("p(0 of 8) = %v", p)
+	}
+	if p := BinomialTwoSided(4, 8); p != 1 {
+		t.Errorf("p(4 of 8) = %v", p)
+	}
+	if p := BinomialTwoSided(0, 0); p != 1 {
+		t.Errorf("p(0 of 0) = %v", p)
+	}
+	if lo, hi := Wilson(17, 17); hi != 1 || lo <= 0 {
+		t.Errorf("wilson 17/17 = %v %v", lo, hi)
+	}
+}

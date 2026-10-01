@@ -131,3 +131,11 @@ func Width(text string) int {
 
 // Plain removes escape codes from text.
 func Plain(text string) string { return escape.ReplaceAllString(text, "") }
+
+// OrNone is value, or "none found" when it is empty: how reports show a detail that was not there.
+func OrNone(value string) string {
+	if value == "" {
+		return "none found"
+	}
+	return value
+}

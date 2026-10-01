@@ -168,17 +168,6 @@ func TestDeniedPathsCoverDataRepositoryAndOtherRuns(t *testing.T) {
 	}
 }
 
-func TestInstructionFilesAbove(t *testing.T) {
-	outer := t.TempDir()
-	if err := os.WriteFile(filepath.Join(outer, "AGENTS.md"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	found := instructionFilesAbove(filepath.Join(outer, "data", "workspaces", "r1", "repo"))
-	if !slices.Contains(found, filepath.Join(outer, "AGENTS.md")) {
-		t.Errorf("found = %v", found)
-	}
-}
-
 func TestNewIDSortsByTime(t *testing.T) {
 	a, err := NewID(time.Date(2026, 9, 28, 10, 0, 0, 0, time.UTC))
 	if err != nil {

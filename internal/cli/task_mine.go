@@ -182,7 +182,7 @@ func finishMine(ctx context.Context, env Env, w *workspace, a mineArgs, prep min
 	}
 	valid := 0
 	for _, r := range results {
-		if r.validated && task.ValidationOf(r.task).Status == task.StatusValid {
+		if r.Validated && task.ValidationOf(r.Task).Status == task.StatusValid {
 			valid++
 		}
 	}
@@ -207,14 +207,6 @@ func (w *workspace) importer(names map[string]bool) mine.Importer {
 			return w.commitTask(ctx, c.Hash, c.Instruction(), t)
 		},
 		Complete: func(ctx context.Context, t store.Task) (store.Task, error) { return w.completeTask(ctx, t, judgeNever) }}
-}
-
-// errAlreadyTask means a candidate became a task (in another process) while it was being imported.
-var errAlreadyTask = mine.ErrAlreadyTask
-
-// mineTask imports candidate c as the task t describes (mine.Importer.One), with a name not in names.
-func (w *workspace) mineTask(ctx context.Context, c mine.Candidate, t store.Task, names map[string]bool) (store.Task, error) {
-	return w.importer(names).One(ctx, c, t)
 }
 
 // maxSubject is how many characters of a subject the candidates table shows.
@@ -304,10 +296,10 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 	}
 	batchAdvice(env, results, jobs)
 	for _, r := range results {
-		if !r.validated {
+		if !r.Validated {
 			return ExitError
 		}
-		if s := task.ValidationOf(r.task).Status; s == task.StatusInvalid || s == task.StatusFlaky {
+		if s := task.ValidationOf(r.Task).Status; s == task.StatusInvalid || s == task.StatusFlaky {
 			return ExitError
 		}
 	}
@@ -316,13 +308,13 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 
 // batchAdvice suggests validating invalid or flaky tasks again one at a time after a batch that ran several at once:
 // tests that share ports, temporary paths or databases can fail only side by side.
-func batchAdvice(env Env, results []batchResult, jobs int) {
+func batchAdvice(env Env, results []task.BatchResult, jobs int) {
 	if jobs < 2 {
 		return
 	}
 	var cmds []string
 	for _, s := range []string{task.StatusInvalid, task.StatusFlaky} {
-		if slices.ContainsFunc(results, func(r batchResult) bool { return r.validated && task.ValidationOf(r.task).Status == s }) {
+		if slices.ContainsFunc(results, func(r task.BatchResult) bool { return r.Validated && task.ValidationOf(r.Task).Status == s }) {
 			cmds = append(cmds, env.style().Command("agentium task validate --all --status "+s+" --jobs 1"))
 		}
 	}
@@ -333,10 +325,10 @@ func batchAdvice(env Env, results []batchResult, jobs int) {
 }
 
 // interrupted reports how far an interrupted batch got and returns ExitError.
-func interrupted(env Env, results []batchResult) int {
+func interrupted(env Env, results []task.BatchResult) int {
 	done := 0
 	for _, r := range results {
-		if r.validated {
+		if r.Validated {
 			done++
 		}
 	}
@@ -347,9 +339,9 @@ func interrupted(env Env, results []batchResult) int {
 
 // validateBatch validates tasks with o, jobs at a time (task.Validating.Batch), with a live line naming those in progress.
 // The error is for what stops the whole batch before it starts.
-func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Task, o task.ValidateOptions, jobs int) ([]batchResult, error) {
+func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Task, o task.ValidateOptions, jobs int) ([]task.BatchResult, error) {
 	if len(tasks) == 0 {
-		return []batchResult{}, nil
+		return []task.BatchResult{}, nil
 	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
@@ -358,28 +350,7 @@ func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Tas
 	env, live := liveEnv(env)
 	defer live.Stop()
 	out := task.BatchOutput{Out: env.Stdout, Style: env.style(), Show: live.Show, RunsBusy: w.layout.RunsBusy()}
-	var results []batchResult
-	for _, r := range w.validating(buildEnv, env.Now).Batch(ctx, out, tasks, o, jobs) {
-		results = append(results, batchResult{task: r.Task, validated: r.Validated, started: r.Started, stopped: r.Stopped, err: r.Err})
-	}
-	return results, nil
-}
-
-// statusOf is a task's status for --status (task.StatusOf).
-func statusOf(t store.Task) string { return task.StatusOf(t) }
-
-// batchResult is one task's outcome in a batch validation (task.BatchResult).
-type batchResult struct {
-	task      store.Task // with its new validation when validated
-	validated bool       // the validation finished and is stored
-	started   bool
-	stopped   bool  // the interrupt stopped it
-	err       error // why a started validation did not finish
-}
-
-// problem says why the task's validation is not in the table: "" when it is.
-func (r batchResult) problem() string {
-	return task.BatchResult{Task: r.task, Validated: r.validated, Started: r.started, Stopped: r.stopped, Err: r.err}.Problem()
+	return w.validating(buildEnv, env.Now).Batch(ctx, out, tasks, o, jobs), nil
 }
 
 // batchRow is a row of the table task mine and task validate --all end with: a task, or a commit that did not
@@ -392,10 +363,10 @@ type batchRow struct {
 }
 
 // batchRows makes the table's rows of a batch's results.
-func batchRows(results []batchResult) []batchRow {
+func batchRows(results []task.BatchResult) []batchRow {
 	rows := make([]batchRow, len(results))
 	for i := range results {
-		rows[i] = batchRow{task: &results[i].task, problem: results[i].problem()}
+		rows[i] = batchRow{task: &results[i].Task, problem: results[i].Problem()}
 	}
 	return rows
 }
@@ -409,7 +380,7 @@ func printBatchTable(ctx context.Context, env Env, w *workspace, rows []batchRow
 	table := term.NewTable(st, term.Left("NAME"), term.Left("COMMIT"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS"))
 	for _, r := range rows {
 		if r.task == nil {
-			table.Row(orNone(r.name), experiment.ShortCommit(r.commit), "-", "-", st.Bad(r.problem))
+			table.Row(term.OrNone(r.name), experiment.ShortCommit(r.commit), "-", "-", st.Bad(r.problem))
 			continue
 		}
 		t := *r.task
