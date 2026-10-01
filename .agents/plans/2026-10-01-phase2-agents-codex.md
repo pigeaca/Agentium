@@ -1,7 +1,7 @@
 # Phase 2: agent comparison and Codex
 
 - Date: 2026-10-01
-- Status: Planned, not started. It needs a Codex CLI on this machine, which is **not installed**; Agentium never installs tools, so the user installs it and approves the sign-in. Real runs (steps 1 and 6) are paid and need approval.
+- Status: Deferred (2026-10-01): the user chose to skip Codex for now. Comparing Claude Code models and efforts moved to its own [plan](2026-10-01-model-ab.md). When resumed: the user installs the Codex CLI and approves the sign-in; real runs (steps 1 and 6) are paid and need approval.
 - Scope: the roadmap's Phase 2. The [feasibility study](../../docs/research/2026-09-27-ai-development-lab.md) calls for:
   - Claude Code and Codex adapters, with Codex "integrated through the CLI";
   - an "Agent/Model comparison" experiment;
