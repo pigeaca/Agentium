@@ -43,10 +43,12 @@ Every item says which one it moves.
 | 2 | Speed | Quick start: `agentium start`, calibration inside `experiment run` | its own plan when it starts | cli, experiment | `task mine`, refactor step 2 | time ↓ |
 | 2 | Cost | Cheaper verdicts: run reuse, then early stopping | its own plan when it starts | experiment, stats, store | refactor steps 1–2 | $ ↓ |
 | 2 | Reach | Java and Rust pilot (paid; estimate first) | [plan](2026-09-30-java-rust.md) | — | step 3 | reach |
-| 3 | Reach | CI mode and PR comment; `agentium history`; Claude Code skill `/agentium compare` | its own plan when it starts | cli, report, new | wave 2 | reach ↑↑ |
+| 2 | Automation | A1 headless foundation (`--json`, exit codes, `start --yes`, `agentium.toml`); A2 supply loop (`pool update`); A3 Linux runs spike (paid; approval) | [automation](2026-10-01-automation.md) | cli, new | quick start, task mining, temp isolation | time ↓ |
+| 3 | Automation | A4 fast check on pull requests (`ci check`, policy exit codes, comment, GitHub Action); A5 deep watch (`watch`, drift, history, digest) | [automation](2026-10-01-automation.md) | cli, report, experiment, new | A1, A2, cheaper verdicts | reach ↑↑ |
+| 3 | Reach | Claude Code skill `/agentium compare` | its own plan when it starts | new | A1 | reach |
 | 3 | Trust | Judge: check its claims by execution; then pairs (1b) and ticket grading (step 2) | [pairs](2026-10-01-judge-pairs.md), [tickets](2026-10-01-ticket-tasks.md) | judge, experiment | judge step 3 | trust |
 | 3 | Reach | Model and effort A/B | [plan](2026-10-01-model-ab.md) | experiment, run | refactor step 2 | reach |
-| Later | — | Codex (deferred by the user), containers (Harbor), live Jira, benchmarks, team sharing | — | — | — | — |
+| Later | — | Autopilot (A6: propose, test and open pull requests with context changes); Codex (deferred by the user); containers (Harbor); live Jira; benchmarks; team sharing | [automation](2026-10-01-automation.md) | — | — | — |
 
 ## Assignments (wave 1)
 - **Temp-folder isolation:** the coordinator investigates (read-only), then an implementer fixes it in `claude/fix/run-temp-isolation`, and one probe session checks it.

@@ -10,6 +10,6 @@ History: [completed plans](plans/archive/INDEX.md) and [decisions](decisions/REA
 
 ## Next, in waves ([coordinating plan](plans/2026-10-01-next-chapter.md))
 1. Now: [judge per run](plans/2026-10-01-llm-judge.md), [temp isolation](plans/2026-10-01-run-temp-isolation.md), [task mining](plans/2026-10-01-task-mine.md), [refactor round](plans/2026-10-01-refactor-round.md), [Java and Rust](plans/2026-09-30-java-rust.md).
-2. Next: quick start, cheaper verdicts (run reuse, early stopping), the Java and Rust pilot.
-3. Then: CI and PR comments, history, a Claude Code skill; judge [pairs](plans/2026-10-01-judge-pairs.md) and [tickets](plans/2026-10-01-ticket-tasks.md); [model and effort A/B](plans/2026-10-01-model-ab.md).
-4. Later: [Codex](plans/2026-10-01-phase2-agents-codex.md) (deferred), containers, live Jira, benchmarks.
+2. Next: quick start, cheaper verdicts (run reuse, early stopping), task pool and headless mode, the Java and Rust pilot.
+3. Then: [automation](plans/2026-10-01-automation.md) (PR checks, scheduled watch); judge [pairs](plans/2026-10-01-judge-pairs.md), [tickets](plans/2026-10-01-ticket-tasks.md); [model A/B](plans/2026-10-01-model-ab.md).
+4. Later: autopilot, [Codex](plans/2026-10-01-phase2-agents-codex.md) (deferred), containers, live Jira.
