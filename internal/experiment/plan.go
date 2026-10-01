@@ -149,7 +149,15 @@ type Estimate struct {
 // EstimateRun estimates runs on model from the project's earlier fair task runs on it. A task with runs of its own is
 // estimated by their median. Any other task gets the median of all of them when there are at least MinPastRuns, else
 // the default profile at list price, else no estimate.
-func EstimateRun(model string, past []PastRun) Estimate {
+func EstimateRun(model string, past []PastRun) Estimate { return EstimateRunAt(model, "", past, 0) }
+
+// EstimateRunAt is EstimateRun for runs at an effort level, when the earlier runs include some of unknown effort (made
+// before runs recorded theirs): unrecorded of past are such, and the basis says so. An empty effort is not named.
+func EstimateRunAt(model, effort string, past []PastRun, unrecorded int) Estimate {
+	label := model
+	if effort != "" {
+		label += " at effort " + effort
+	}
 	est := Estimate{Tasks: map[string]TaskCost{}}
 	byTask := map[string][]float64{}
 	var all []float64
@@ -165,12 +173,15 @@ func EstimateRun(model string, past []PastRun) Estimate {
 	switch rates, priced := pricing.Lookup(model); {
 	case len(all) >= MinPastRuns:
 		est.PerRunUSD, est.Known = median(all), true
-		est.Basis = fmt.Sprintf("the median of this project's %d earlier task runs on %s", len(all), model)
+		est.Basis = fmt.Sprintf("the median of this project's %d earlier task runs on %s", len(all), label)
+		if unrecorded > 0 {
+			est.Basis += fmt.Sprintf(" (%d of them from before runs recorded their effort, so at an unknown one)", unrecorded)
+		}
 	case priced:
 		est.PerRunUSD, est.Known = rates.Cost(DefaultProfile()), true
-		est.Basis = fmt.Sprintf("a default task run's tokens at %s's list prices of %s (fewer than %d earlier task runs on it)", model, pricing.Date, MinPastRuns)
+		est.Basis = fmt.Sprintf("a default task run's tokens at %s's list prices of %s (fewer than %d earlier task runs on %s)", model, pricing.Date, MinPastRuns, label)
 	default:
-		est.Basis = fmt.Sprintf("%s has no list price in Agentium's table and fewer than %d earlier task runs", model, MinPastRuns)
+		est.Basis = fmt.Sprintf("%s has no list price in Agentium's table and fewer than %d earlier task runs", label, MinPastRuns)
 	}
 	return est
 }

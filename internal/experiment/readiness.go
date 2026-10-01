@@ -167,9 +167,9 @@ func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d D
 	case version != "" && cal.CLIVersion != version:
 		c.line(false, "context %s was calibrated on Claude Code %s, not %s: %s", a.Context, cal.CLIVersion, version, calibrate)
 	case cal.RequestedModel != d.ArmModel(a):
-		c.line(false, "context %s was calibrated with %s, not %s: %s", a.Context, orNone(cal.RequestedModel), d.ArmModel(a), calibrate)
+		c.line(false, "context %s was calibrated with %s, not %s: %s", a.Context, term.OrNone(cal.RequestedModel), d.ArmModel(a), calibrate)
 	case cal.SignIn != e.SignIn:
-		c.line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, orNone(cal.SignIn), e.SignIn, calibrate)
+		c.line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, term.OrNone(cal.SignIn), e.SignIn, calibrate)
 	case d.PerArmProfiles():
 		c.line(true, "context %s calibrated on %s %s: first request %d tokens", a.Context, a.Model, stored.CreatedAt.Format("2006-01-02 15:04"), cal.FirstRequest)
 	default:
@@ -241,11 +241,4 @@ func snapshotFlags(arms []Arm) string {
 		}
 	}
 	return flags
-}
-
-func orNone(value string) string {
-	if value == "" {
-		return "none found"
-	}
-	return value
 }

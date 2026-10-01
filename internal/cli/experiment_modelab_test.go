@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
@@ -151,7 +152,7 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 	expect(t, plan, ExitOK, "arm A: model claude-sonnet-5, effort the CLI's default, context base; each run up to $3.00",
 		"arm B: model claude-opus-5-5, effort high, context base; each run up to $5.00",
 		"Arm A: Estimated cost per run on claude-sonnet-5:", "value $0.40 (3 run(s))",
-		"Arm B: Estimated cost per run on claude-opus-5-5:", "value $2.00 (3 run(s))",
+		"Arm B: Estimated cost per run on claude-opus-5-5 at effort high:", "value $2.00 (3 run(s))",
 		"Worst case: every run reaches its cap (arm A $3.00, arm B $5.00)",
 		"MISSING  context base is not calibrated on claude-opus-5-5 (arm B): agentium run calibrate --model claude-opus-5-5",
 		"ok       context base calibrated on claude-sonnet-5", "Not ready to run")
@@ -287,7 +288,7 @@ func TestModelABEstimatesByEffort(t *testing.T) {
 	for range 3 {
 		for effort, cost := range map[string]float64{"medium": 1, "high": 3} {
 			runs = append(runs, store.Run{TaskID: id, TaskName: "value", Outcome: "ok", CostUSD: cost,
-				Record: []byte(`{"model":"` + opus + `","effort":"` + effort + `","metrics":{"saw_result":true}}`)})
+				Record: []byte(`{"model":"` + opus + `","effort":"` + effort + `","effort_recorded":true,"metrics":{"saw_result":true}}`)})
 		}
 	}
 	saveRuns(t, f, runs...)
@@ -295,4 +296,59 @@ func TestModelABEstimatesByEffort(t *testing.T) {
 		"--budget", "40"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "e"), ExitOK, "value $1.00 (3 run(s))", "value $3.00 (3 run(s))", "$4.00",
 		"not split by model or effort")
+}
+
+// Runs from before efforts were recorded have an unknown effort: they fill in for an arm only while fewer than 3 runs
+// match its effort, and the basis says so. Runs at another recorded effort never count.
+func TestModelABUnrecordedEffortRunsFillIn(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	var runs []store.Run
+	for range 20 { // $2 each, made before runs recorded their effort
+		runs = append(runs, store.Run{TaskName: "gone", Outcome: "ok", CostUSD: 2, Record: []byte(`{"model":"` + opus + `","metrics":{"saw_result":true}}`)})
+	}
+	runs = append(runs, store.Run{TaskName: "gone", Outcome: "ok", CostUSD: 10,
+		Record: []byte(`{"model":"` + opus + `","effort":"high","effort_recorded":true,"metrics":{"saw_result":true}}`)})
+	saveRuns(t, f, runs...)
+	expect(t, f.run(ctx, "experiment", "new", "e", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
+		"--budget", "40"), ExitOK)
+	plan := f.run(ctx, "experiment", "plan", "e")
+	expect(t, plan, ExitOK, "the median of this project's 20 earlier task runs on claude-opus-5-5 at effort medium (20 of them from before runs recorded their effort",
+		"the median of this project's 21 earlier task runs on claude-opus-5-5 at effort high (20 of them from before runs recorded their effort")
+}
+
+// A design whose version does not match its template is not one this Agentium reads: a model-ab design at version 1
+// would run both arms on arm A's model in an older Agentium, and a context design at version 2 is not ours.
+func TestLoadRefusesMismatchedDesignVersions(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	base := func(version, template, arms string) string {
+		return `{"version":` + version + `,"template":"` + template + `","arms":` + arms + `,"tasks":["value"],"repeats":1,"model":"claude-sonnet-5","goal":"cheaper",` +
+			`"cost_margin":0.1,"success_margin":0.15,"run_budget_usd":3,"budget_usd":30,"timeout":60000000000,"verify_timeout":60000000000,"concurrency":2,"seed":1}`
+	}
+	modelArms := `[{"name":"A","context":"base","requested_model":"claude-sonnet-5"},{"name":"B","context":"base","requested_model":"claude-opus-5-5"}]`
+	contextArms := `[{"name":"A","context":"base"},{"name":"B","context":"base"}]`
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	for name, c := range map[string]struct{ template, design string }{
+		"old-model": {"model-ab", base("1", "model-ab", modelArms)},
+		"new-ctx":   {"aa", base("2", "aa", contextArms)},
+		"good":      {"model-ab", base("2", "model-ab", modelArms)},
+	} {
+		if _, err := db.SaveExperiment(ctx, store.Experiment{ProjectID: projects[0].ID, Name: name, Template: c.template, Design: []byte(c.design), CreatedAt: time.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	expect(t, f.run(ctx, "experiment", "plan", "old-model"), ExitError, "its design (version 1) is not one this Agentium reads")
+	expect(t, f.run(ctx, "experiment", "plan", "new-ctx"), ExitError, "its design (version 2) is not one this Agentium reads")
+	expect(t, f.run(ctx, "experiment", "plan", "good"), ExitOK, "model A/B")
 }

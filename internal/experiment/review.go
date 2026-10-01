@@ -216,7 +216,7 @@ func (r Review) writeCostBasis(out io.Writer, st term.Style) {
 	}
 	for i, a := range d.Arms {
 		fmt.Fprintf(out, "Arm %s: ", a.Name)
-		WriteCostBasis(out, st, withModel(d, a.Model), r.Eligible, r.Estimates[i])
+		WriteCostBasis(out, st, withModel(d, a.Model+map[bool]string{true: " at effort " + a.Effort}[a.Effort != ""]), r.Eligible, r.Estimates[i])
 	}
 }
 

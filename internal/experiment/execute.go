@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
@@ -73,7 +76,8 @@ type Plan struct {
 	Schedule    []Slot
 	Concurrency int
 	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD): the larger arm's
-	// ArmCapUSD, when the arms' caps differ (model-ab), gives each arm's own; an arm without an entry has RunCapUSD.
+	// ArmCapUSD, set for a model-ab experiment (even when the caps are equal), gives each arm's own; an arm without an
+	// entry has RunCapUSD.
 	ArmCapUSD   map[string]float64
 	BudgetUSD   float64
 	MaxAttempts int
@@ -328,7 +332,15 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				continue // a cancelled wait ends as interrupted
 			case blocked && wake.IsZero(): // a run waiting to be retried comes first in order, and may still fit
 				sum.Status = StatusBudget
-				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, $%.2f per run at most)", p.BudgetUSD, spent, p.RunCapUSD)
+				perRun := fmt.Sprintf("$%.2f", p.RunCapUSD)
+				if len(p.ArmCapUSD) > 0 {
+					var caps []string
+					for _, arm := range slices.Sorted(maps.Keys(p.ArmCapUSD)) {
+						caps = append(caps, fmt.Sprintf("$%.2f (arm %s)", p.ArmCapUSD[arm], arm))
+					}
+					perRun = strings.Join(caps, " or ")
+				}
+				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, %s per run at most)", p.BudgetUSD, spent, perRun)
 				return sum, nil
 			case wake.IsZero():
 				return sum, errors.New("execute: nothing can start and nothing is waiting") // unreachable: the earliest unfinished slot can always start

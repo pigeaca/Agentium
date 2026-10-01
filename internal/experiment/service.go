@@ -45,7 +45,7 @@ func (p Project) Load(ctx context.Context, name string) (Design, error) {
 	if err := json.Unmarshal(stored.Design, &d); err != nil {
 		return Design{}, fmt.Errorf("experiment %s: %w", name, err)
 	}
-	if d.Version != DesignVersion && d.Version != DesignVersionModelAB || len(d.Arms) != 2 || d.Version != d.WantVersion() {
+	if d.Version != d.WantVersion() || len(d.Arms) != 2 { // a model-ab design is version 2, any other 1
 		return Design{}, fmt.Errorf("experiment %s: its design (version %d) is not one this Agentium reads", name, d.Version)
 	}
 	return d, nil
@@ -150,20 +150,16 @@ func (p Project) EstimateFor(ctx context.Context, model, effort string) (Estimat
 	if err != nil {
 		return Estimate{}, err
 	}
-	type candidate struct {
-		PastRun
-		effort string
-	}
-	var found []candidate
-	recorded := false // some run on the model carries its effort level: then only runs at this effort count
+	var matching, unrecorded []PastRun // runs at this effort; runs from before efforts were recorded (effort unknown)
 	for _, r := range runs {
 		if r.Kind != "task" || !slices.Contains([]string{claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout}, r.Outcome) {
 			continue
 		}
 		var rec struct {
-			Model   string `json:"model"`
-			Effort  string `json:"effort"`
-			Metrics struct {
+			Model          string `json:"model"`
+			Effort         string `json:"effort"`
+			EffortRecorded bool   `json:"effort_recorded"`
+			Metrics        struct {
 				SawResult bool `json:"saw_result"`
 			} `json:"metrics"`
 		}
@@ -176,17 +172,19 @@ func (p Project) EstimateFor(ctx context.Context, model, effort string) (Estimat
 			if r.TaskID != 0 {
 				own = r.TaskName
 			}
-			found = append(found, candidate{PastRun{Task: own, CostUSD: agent}, rec.Effort})
-			recorded = recorded || rec.Effort != ""
+			switch run := (PastRun{Task: own, CostUSD: agent}); {
+			case !rec.EffortRecorded:
+				unrecorded = append(unrecorded, run)
+			case rec.Effort == effort:
+				matching = append(matching, run)
+			}
 		}
 	}
-	var past []PastRun
-	for _, c := range found {
-		if !recorded || c.effort == effort {
-			past = append(past, c.PastRun)
-		}
+	// Runs at another effort never count. Runs of unknown effort fill in only while too few runs match.
+	if len(matching) >= MinPastRuns {
+		return EstimateRunAt(model, effort, matching, 0), nil
 	}
-	return EstimateRun(model, past), nil
+	return EstimateRunAt(model, effort, append(matching, unrecorded...), len(unrecorded)), nil
 }
 
 // DescribeJudge is the judge's settings in words.
