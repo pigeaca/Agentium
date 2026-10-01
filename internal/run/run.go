@@ -193,6 +193,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
+	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)
 	repo := filepath.Join(workspace, "repo")
 	graded := filepath.Join(rec.RecordsDir, "verify") // Agentium's own repository of the context commit, for grading
 	// The start file follows the run (see Recover): whether the agent started, the process group of whatever runs now
@@ -224,7 +225,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			os.RemoveAll(workspace)
 			os.RemoveAll(graded)
 		}
+		// Even a kept run's temp root goes: it holds only Claude Code's own temp files, in a folder shared with other users.
+		if tempRoot != "" {
+			if tempErr := removeRunTemp(tempRoot); tempErr != nil && err == nil {
+				err = tempErr
+			}
+		}
 	}()
+	if tempRoot == "" {
+		return rec, errors.New("the data folder's layout names no folder for the runs' temp roots")
+	}
 	if found := instructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
@@ -234,7 +244,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		Deny: append(env.denied(ctx, workspace), env.DenyExtra...)}
+		Deny: append(env.denied(ctx, workspace), env.DenyExtra...), TempRoot: tempRoot, UID: os.Getuid()}
 	if env.SignIn != claude.SignInLogin {
 		inv.ConfigDir = filepath.Join(workspace, "config")
 	}
@@ -242,11 +252,17 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// and stays, so a Go run's folders are unchanged.
 	inv.BuildCache = filepath.Join(workspace, "go-build")
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
-	// reason that is not the agent's.
+	// reason that is not the agent's. So would one that holds its temp root.
 	for _, denied := range inv.DeniedPaths(env.Environ) {
 		if within(realPath(workspace), realPath(denied)) {
 			return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
 		}
+		if within(realPath(tempRoot), realPath(denied)) {
+			return rec, fmt.Errorf("the run's temp root %s lies inside %s, which runs may not read", tempRoot, denied)
+		}
+	}
+	if err := claude.TempRootFits(tempRoot, inv.UID); err != nil {
+		return rec, err
 	}
 	if err := os.MkdirAll(rec.RecordsDir, 0o700); err != nil {
 		return rec, fmt.Errorf("run records: %w", err)
@@ -262,6 +278,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return rec, fmt.Errorf("run folder %s: %w", filepath.Base(dir), err)
 		}
+	}
+	// After the start file, so a dead process's root is found and removed (Recover); before the agent's settings are
+	// made, so the root's resolved form (/private/tmp) is known.
+	if err := makeRunTemp(tempRoot); err != nil {
+		return rec, err
 	}
 	env.step("preparing the workspace")
 	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
@@ -657,9 +678,10 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 }
 
 // denied lists what the agent may not read: Agentium's data except its own workspace (projects and hidden tests,
-// records, artifacts, the database, other runs' workspaces), and the user's repository: every worktree of it, which
-// can sit at a later commit holding the solution, and its git data. Workspaces created after this run starts are not
-// listed: a known gap for concurrent runs, whose workspaces hold no hidden tests.
+// records, artifacts, the database, other runs' workspaces), other runs' temp roots, and the user's repository: every
+// worktree of it, which can sit at a later commit holding the solution, and its git data. Workspaces and temp roots
+// created after this run starts are not listed unless predicted (Env.DenyExtra): a known gap for concurrent runs,
+// whose workspaces hold no hidden tests.
 func (env Env) denied(ctx context.Context, workspace string) []string {
 	db := env.Layout.Database
 	paths := []string{filepath.Join(env.Layout.Root, "projects"), env.Layout.Records, env.Layout.Artifacts, env.Layout.Cache, db, db + "-wal", db + "-shm"}
@@ -671,7 +693,7 @@ func (env Env) denied(ctx context.Context, workspace string) []string {
 			}
 		}
 	}
-	return paths
+	return append(paths, runTemps(env.Layout, env.Layout.RunTemp(filepath.Base(workspace)))...)
 }
 
 // repositoryPaths are the user's repository, all its worktrees, and its shared git data.

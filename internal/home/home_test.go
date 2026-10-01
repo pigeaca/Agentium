@@ -156,3 +156,28 @@ func TestLockRunsIsExclusiveAndReleased(t *testing.T) {
 	}
 	again()
 }
+
+func TestRunTemp(t *testing.T) {
+	layout, err := Resolve(env(map[string]string{"AGENTIUM_HOME": "/data"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := layout.RunTemp("e1-s2-t1")
+	if layout.Temp != "/tmp" || filepath.Dir(root) != "/tmp" || !IsRunTempName(filepath.Base(root)) || len(root) != len("/tmp/ag-0123456789") {
+		t.Errorf("RunTemp = %q (Temp %q)", root, layout.Temp)
+	}
+	// Predictable from the data folder and the workspace's name, distinct across both.
+	other, _ := Resolve(env(map[string]string{"AGENTIUM_HOME": "/elsewhere"}))
+	if layout.RunTemp("e1-s2-t1") != root || layout.RunTemp("e1-s2-t2") == root || other.RunTemp("e1-s2-t1") == root {
+		t.Error("RunTemp must depend on the data folder and the workspace only")
+	}
+	if (Layout{Root: "/data"}).RunTemp("r1") != "" {
+		t.Error("a layout without Temp has no temp roots")
+	}
+	for name, want := range map[string]bool{"ag-0123456789": true, "ag-abcdef0123": true, "ag-012345678": false, "ag-ABCDEF0123": false,
+		"ag-0123456789x": false, "claude-501": false, "xag-0123456789": false} {
+		if IsRunTempName(name) != want {
+			t.Errorf("IsRunTempName(%q) = %v", name, !want)
+		}
+	}
+}

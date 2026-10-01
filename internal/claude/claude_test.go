@@ -807,3 +807,109 @@ func TestParseContextUseInputs(t *testing.T) {
 		}
 	}
 }
+
+// A run's own temp root keeps the agent out of the user's shared Claude Code temp folder, in every sign-in mode: the
+// root is CLAUDE_CODE_TMPDIR, and the shared folder (both forms, and under the user's own CLAUDE_CODE_TMPDIR) is denied
+// to the shell for reading and writing, and to the Read tool.
+func TestReq5RunsOwnTempRootAndTheSharedTempFolder(t *testing.T) {
+	environ := append(slices.Clone(parentEnv), "CLAUDE_CODE_TMPDIR=/users/tmp", "TMPDIR=/var/folders/u/T/")
+	shared := []string{"/tmp/claude-501", "/private/tmp/claude-501", "/users/tmp/claude-501"}
+	for _, mode := range []string{SignInLogin, SignInTokenFile, SignInAPIKey} {
+		secret := ""
+		if mode != SignInLogin {
+			secret = "s3cret"
+		}
+		inv := invocation(t, mode, secret)
+		inv.TempRoot, inv.UID = "/tmp/ag-0123456789", 501
+		args, list, err := inv.Command(environ)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var tmpdirs []string
+		for _, kv := range list {
+			if strings.HasPrefix(kv, "CLAUDE_") && !strings.HasPrefix(kv, "CLAUDE_CODE_DISABLE_AUTO_MEMORY=") && !strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") &&
+				!strings.HasPrefix(kv, "CLAUDE_CODE_OAUTH_TOKEN=") {
+				tmpdirs = append(tmpdirs, kv)
+			}
+		}
+		if !slices.Equal(tmpdirs, []string{"CLAUDE_CODE_TMPDIR=/tmp/ag-0123456789"}) {
+			t.Errorf("%s: the run's CLAUDE_* temp variables = %q, want only its own root (the parent's dropped)", mode, tmpdirs)
+		}
+		var settings struct {
+			Permissions struct{ Deny []string }
+			Sandbox     struct {
+				Filesystem struct{ DenyRead, DenyWrite, AllowWrite []string }
+			}
+		}
+		if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil {
+			t.Fatal(err)
+		}
+		fs := settings.Sandbox.Filesystem
+		for _, dir := range shared {
+			if !slices.Contains(fs.DenyRead, dir) || !slices.Contains(fs.DenyWrite, dir) || !slices.Contains(settings.Permissions.Deny, "Read(/"+dir+"/**)") {
+				t.Errorf("%s: the shared temp folder %s is not denied: %+v, %q", mode, dir, fs, settings.Permissions.Deny)
+			}
+		}
+		for _, p := range inv.Deny { // what belongs to Agentium, the user and other runs is not the agent's to write
+			if !slices.Contains(fs.DenyWrite, p) {
+				t.Errorf("%s: %s is not denied for writing: %q", mode, p, fs.DenyWrite)
+			}
+		}
+		for _, list := range [][]string{fs.DenyRead, fs.DenyWrite} {
+			for _, p := range list {
+				if strings.HasPrefix(p, "/tmp/ag-") || strings.HasPrefix(p, "/private/tmp/ag-") {
+					t.Errorf("%s: the run's own temp root is denied: %s", mode, p)
+				}
+			}
+		}
+	}
+
+	// Without a temp root of its own, Claude Code needs the shared folder: it is left alone, and no variable is set.
+	inv := invocation(t, SignInLogin, "")
+	_, env, settings := command(t, inv)
+	if _, ok := env["CLAUDE_CODE_TMPDIR"]; ok {
+		t.Error("CLAUDE_CODE_TMPDIR set without a temp root")
+	}
+	if strings.Contains(fmt.Sprint(settings), "tmp/claude-") {
+		t.Errorf("the shared temp folder is denied without a temp root: %v", settings)
+	}
+	inv.TempRoot = "tmp/ag-x"
+	if _, _, err := inv.Command(parentEnv); err == nil {
+		t.Error("a relative temp root must be refused")
+	}
+}
+
+// A socket path Claude Code cannot use makes it fall back to the shared temp folder: a root too long is refused.
+func TestTempRootFitsSockets(t *testing.T) {
+	const maxUID = 4294967294 // the longest user id: 10 digits
+	for _, root := range []string{"/tmp/ag-0123456789", "/private/tmp/ag-0123456789"} {
+		if err := TempRootFits(root, maxUID); err != nil {
+			t.Errorf("%s: %v", root, err)
+		}
+	}
+	// 103 bytes is the limit: "/claude-501" (11) and the socket's part (31) leave 61 for the root.
+	fits, over := "/"+strings.Repeat("a", 60), "/"+strings.Repeat("a", 61)
+	if err := TempRootFits(fits, 501); err != nil {
+		t.Errorf("61 bytes: %v", err)
+	}
+	if err := TempRootFits(over, 501); err == nil || !strings.Contains(err.Error(), "too long") {
+		t.Errorf("62 bytes: %v", err)
+	}
+	// The resolved form counts too: a short link to a long folder does not fit.
+	long := filepath.Join(t.TempDir(), strings.Repeat("d", 60))
+	if err := os.Mkdir(long, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "l")
+	if err := os.Symlink(long, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := TempRootFits(link, 501); err == nil {
+		t.Errorf("a link to %s fits", long)
+	}
+	inv := invocation(t, SignInLogin, "")
+	inv.TempRoot, inv.UID = over, 501
+	if _, _, err := inv.Command(parentEnv); err == nil {
+		t.Error("Command took a temp root too long for sockets")
+	}
+}

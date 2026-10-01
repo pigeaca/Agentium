@@ -26,7 +26,7 @@ func fakeAgent(t *testing.T, edit, permissionMode, extraTool string) (cli, seen 
 	dir := t.TempDir()
 	seen = filepath.Join(dir, "seen")
 	script := `#!/bin/sh
-{ pwd; test -e tests/value_test.sh && echo hidden-present || echo hidden-absent; echo "config=$CLAUDE_CONFIG_DIR"; } > ` + seen + `
+{ pwd; test -e tests/value_test.sh && echo hidden-present || echo hidden-absent; echo "config=$CLAUDE_CONFIG_DIR"; echo "tmp=$CLAUDE_CODE_TMPDIR"; test -d "$CLAUDE_CODE_TMPDIR" && echo tmp-ready; } > ` + seen + `
 ` + edit + `
 cat <<EOF
 {"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"` + permissionMode + `","tools":["Bash","Edit","Read"],"skills":[],"slash_commands":["compact"]}
@@ -103,7 +103,17 @@ func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
 	if !strings.Contains(string(diff), "+new") || strings.Contains(string(diff), "value_test.sh") {
 		t.Errorf("the agent's diff (hidden tests are not the agent's work):\n%s", diff)
 	}
-	for _, gone := range []string{filepath.Join(runDir, "verify"), filepath.Join(data, "workspaces", entries[0].Name())} {
+	// The run's own Claude Code temp root: short, in /tmp, made before the agent started and removed after it.
+	tempRoot := ""
+	for _, line := range strings.Split(string(saw), "\n") {
+		if v, ok := strings.CutPrefix(line, "tmp="); ok {
+			tempRoot = v
+		}
+	}
+	if !strings.HasPrefix(tempRoot, "/tmp/ag-") || !strings.Contains(string(saw), "tmp-ready") {
+		t.Errorf("the agent's temp root %q (it saw:\n%s)", tempRoot, saw)
+	}
+	for _, gone := range []string{filepath.Join(runDir, "verify"), filepath.Join(data, "workspaces", entries[0].Name()), tempRoot} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s should be removed after the run", gone)
 		}
