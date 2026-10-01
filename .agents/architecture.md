@@ -27,7 +27,7 @@ Shape:
 |---|---|
 | `AGENTS.md`, `CLAUDE.md`, `.agents/` | Shared instructions: rules, references, roles, skills, templates, plans, decisions |
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
-| `internal/cli` | Command-line parsing and dispatch (`init`, `context`, `task`, `run`, `experiment`) |
+| `internal/cli` | Command-line parsing, dispatch and printing; each handler calls one service |
 | `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
 | `internal/home` | The data folder (`~/.agentium` or `AGENTIUM_HOME`, owner-only), outside every repository: database, artifacts, workspaces, records; caches and temporary files of Agentium's own commands; the run lock |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments (design, lock, status; runs keep their slot and attempt) |
@@ -42,12 +42,12 @@ Shape:
 | `internal/buildtool` | Build-tool profiles (Go so far): test commands, environment, caches; pinned by a golden test |
 | `internal/claude` | Claude Code headless and isolated (project settings only, no connectors, fixed permission mode, sandbox without network, denied paths, credentials and shared temp folders, its own build cache and temp root, an allowlisted environment); stream-json metrics, outcomes and drift |
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), per-arm validation (flaky and weak-test checks), and unstated-requirement gaps |
-| `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed) and their preview; the lock (with its method); the seeded interleaved schedule; execution (a window, a budget no run passes, usage pauses, retries, stop rules, resume); counting and analysis (roles, floors, verdicts, noise) |
+| `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed), `new`, `plan`, `run` (a window, a budget no run passes, usage pauses, retries, stop rules, resume); the lock and schedule; counting and analysis (roles, floors, verdicts, noise) |
 | `internal/judge` | The opt-in LLM judge, which decides nothing: the pilot's prompts, code-only diffs, majority of repeats, pairs in both orders |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
-| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`: agent and judge costs, one total); a start file recovering dead runs; its temp root; folders for overlapping runs |
+| `internal/run` | One run (and calibration): a workspace prepared as the arm, Claude Code denied everything else, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`: agent and judge costs, one total); a start file recovering dead runs; its temp root; folders for overlapping runs |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |

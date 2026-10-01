@@ -1,7 +1,7 @@
 # Refactor round
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 4 (faster tests) in #59: the CLI tests went from 125 s to about 30 s under `-race`. Step 1 (spending record) is implemented and reviewed (approve with notes, fixes applied); its PR is next. Step 2 follows. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
+- Status: In Progress (2026-10-01): step 4 (faster tests) in #59: the CLI tests went from 125 s to about 30 s under `-race`. Step 1 (spending record) is implemented and reviewed (approve with notes, fixes applied); its PR is next. Step 2 (handlers into services) is implemented on its branch. Step 3 comes after Java and Rust step 3. Approved with the [next chapter](2026-10-01-next-chapter.md).
 - Scope: the code findings of the 2026-10-01 review. No change in behavior.
 
 ## Why
@@ -29,7 +29,7 @@
 ## Work
 Each step is one PR with a review.
 - [x] **1. Spending record** (`run`, `experiment`, `cli`, `report`): `run.Spend` (the agent's and the judge's costs, whether the agent's was estimated) from `Record.Spend` or `StoredSpend` (cost column plus record), totalled by `TotalUSD`. The budget, status, `judgePending`, `show` and the report's spend use the total; the cost metric, arms' and tasks' costs, calibration, the cost column and `EstimateRun` use `AgentUSD`. Schema unchanged; tests and goldens unchanged. A reflection test fails on any `*USD` field `Spend` leaves out. Review: approve with notes, no behavior change; fixes: pointer leaves and exact paths in the guard, calibration through `Spend`, one decode in `estimateRun`, and a deterministic `TestRunRecordsTheRunningCommand` (the setup waits for a release file; the test polls for its process group).
-- [ ] **2. Command handlers into services** (`experiment`, `cli`): `new`, `plan`, `run`, `report` and `calibrate`.
+- [x] **2. Command handlers into services** (`experiment`, `report`, `run`, `cli`): `new`, `plan`, `run`, `report` and `calibrate`. Services take a `context.Context` and their I/O as parameters, keep no state, and wrap errors with `%w`. `experiment.Create`, `LoadReview` and `Runner.Run` (the live status line and per-run progress stay in `cli`, wired through `experiment.Observer`), `report.Load` and `Report.Write`, `run.Calibrator` and `run.Calibration`. A `UsageError` becomes exit 2 in the handler. `TestCommandHandlersStayShort` parses the package with `go/ast` and fails on any handler over 80 lines; `taskValidate` (113) is allowlisted until the task-mining PR (#62) merges. Tests moved with their code: `TestJudgeEdgeCases` (to `run`), `TestSpendReachesTheBudget` and `TestUsageFromStoredRecords` (to `experiment`).
 - [ ] **3. Shared helpers** (`claude`, `run`, `gitx`, `runner`, `stats`, `judge`), after Java and Rust step 3.
 - [x] **4. Faster tests** (`cli` tests): [#59](https://github.com/pigeaca/Agentium/pull/59), `t.Parallel()` on every independent test, 125 s → about 30 s.
 
