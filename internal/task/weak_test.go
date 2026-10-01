@@ -239,3 +239,23 @@ func TestWeakTestsSkipReasonNamesTheStage(t *testing.T) {
 		t.Errorf("%+v", got.WeakTests)
 	}
 }
+
+// A path that turns into a symlink, or back, is two diffs (a delete and an add): neither is a text hunk to take out.
+func TestHunksSkipTypeChangesBetweenFileAndSymlink(t *testing.T) {
+	bare, base, solution := weakRepo(t, map[string]string{"a.txt": "1\n2\n", "b.txt": "x\n", "keep.txt": "k\n"}, func(t *testing.T, user string) {
+		if err := os.Symlink("keep.txt", filepath.Join(user, "l")); err != nil {
+			t.Fatal(err)
+		}
+	}, func(t *testing.T, user string) {
+		os.Remove(filepath.Join(user, "a.txt"))
+		os.Remove(filepath.Join(user, "l"))
+		if err := os.Symlink("keep.txt", filepath.Join(user, "a.txt")); err != nil { // file -> link
+			t.Fatal(err)
+		}
+		commit(t, user, map[string]string{"l": "now a file\n", "b.txt": "y\n"}, "type changes") // link -> file
+	})
+	hunks, err := Hunks(context.Background(), base, solution, []string{"a.txt", "b.txt", "l"}, "--git-dir", bare)
+	if err != nil || len(hunks) != 1 || hunks[0].File != "b.txt" {
+		t.Errorf("%v, %v", hunks, err)
+	}
+}

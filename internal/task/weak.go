@@ -58,18 +58,9 @@ type WeakTests struct {
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
-// symlinkLine matches the extended header lines of a diff that involve a symbolic link (mode 120000).
+// symlinkLine matches the extended header lines of a diff (any of them: a change between a file and a link is two
+// diffs of one path; content lines start with +, -, a space or a backslash, so they never match) that involve a symbolic link (mode 120000).
 var symlinkLine = regexp.MustCompile(`^((old|new) mode|new file mode|deleted file mode) 120000$|^index \S+ 120000$`)
-
-// headerLines is the diff's lines before its first hunk.
-func headerLines(lines []string) []string {
-	for i, l := range lines {
-		if strings.HasPrefix(l, "@@ ") {
-			return lines[:i]
-		}
-	}
-	return lines
-}
 
 // Hunks lists the hunks of each reference file's change between base and solution, in file then line order. Binary
 // files, symbolic links and mode-only changes have none, and are not checked.
@@ -83,7 +74,7 @@ func Hunks(ctx context.Context, base, solution string, files []string, where ...
 			return nil, err
 		}
 		lines := strings.Split(string(out), "\n")
-		if slices.ContainsFunc(headerLines(lines), symlinkLine.MatchString) {
+		if slices.ContainsFunc(lines, symlinkLine.MatchString) {
 			continue // a link's diff is its target text, but a checkout would follow it: not checked, like binary files
 		}
 		for _, line := range lines {
