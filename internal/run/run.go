@@ -136,6 +136,7 @@ type Record struct {
 	// that ended before their transcript could be read.
 	ContextUse *ContextUse `json:"context_use,omitempty"`
 	// CostEstimated: Claude Code reported no cost, so Metrics.CostUSD prices the transcript's requests at list prices.
+	// Read costs through Spend, which keeps the agent's and the judge's apart.
 	CostEstimated bool `json:"cost_estimated,omitempty"`
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
 	// and is cancelled) or RecoveredFinished (it had finished).
@@ -147,7 +148,7 @@ type Record struct {
 	ProjectSkills   []string `json:"-"`
 	ProjectCommands []string `json:"-"`
 	// Judge is the judge's verdict on a graded run, when its experiment asked for one: a second opinion beside Passed
-	// that decides nothing. Its cost is kept here, apart from Metrics.CostUSD, which stays the agent's alone.
+	// that decides nothing. Its cost is kept here, apart from Metrics.CostUSD, which stays the agent's alone (Spend).
 	Judge *judge.Verdict `json:"judge,omitempty"`
 }
 
@@ -445,7 +446,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
 	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
-	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Metrics.CostUSD, rec.Metrics.Turns)
+	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
 
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {

@@ -41,15 +41,6 @@ func NeedsJudging(rec Record, spec task.Spec) bool {
 	return rec.Passed != nil && HasReferenceCode(spec) && (rec.Judge == nil || rec.Judge.Stopped != "")
 }
 
-// JudgeCostUSD is what the judge spent on a run: none without a verdict. It counts against an experiment's budget,
-// never toward the run's cost (Metrics.CostUSD).
-func (r Record) JudgeCostUSD() float64 {
-	if r.Judge == nil {
-		return 0
-	}
-	return r.Judge.CostUSD
-}
-
 // Judge asks the judge s about a graded run (rec.Passed set) and stores its verdict in rec.Judge. It reads the task's
 // instruction, the reference solution's code diff and the run's agent.diff from its records. The judge never decides
 // anything: whatever happens here leaves the run's outcome, Passed and Metrics as they were.
@@ -73,7 +64,7 @@ func (env Env) Judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 		return
 	}
 	s = s.WithDefaults()
-	priorCost := rec.JudgeCostUSD()
+	priorCost := rec.Spend().JudgeUSD
 	blank := func() judge.Verdict {
 		return judge.Verdict{Version: judge.Version, Answers: []string{}, Reasons: []string{}, Requested: s.Repeats, Model: s.Model,
 			Effort: s.Effort, CostUSD: priorCost}
