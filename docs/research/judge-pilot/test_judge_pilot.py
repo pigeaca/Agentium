@@ -431,6 +431,19 @@ class Verdicts(unittest.TestCase):
         self.assertIn("arm A preferred in 7 of the 7 with a preference", text)
         self.assertIn("- NOT met: no significant arm preference on A/A pairs (p >= 0.05)", text)
 
+    def test_the_exploratory_section_ignores_labels_and_lists_flagged_tasks_first(self):
+        singles = [(True, "yes", ["yes"] * 3, False)] * 2 + [(True, "yes", ["partly"] * 3, False)] * 3 + \
+                  [(False, "yes", ["partly"] * 3, False), (False, "yes", ["yes"] * 3, False), (False, "no", ["no"] * 3, True)]
+        synthetic(self.work, singles, [])
+        key = json.loads((self.work / "key.json").read_text())
+        for sid, task in zip(sorted(key["singles"]), ["a", "a", "b", "b", "b", "b", "a", "a"]):
+            key["singles"][sid]["task"] = task
+        jp.write_json(self.work / "key.json", key)
+        text = jp.analyze(self.work, unblinded=set())
+        # S06 and S07 fail and are labelled fixed, so the rules leave them out; this section counts them. The empty S08 is not.
+        self.assertIn("- Failing runs with a change, judged not fixed, whatever your label: 1 of 2", text)
+        self.assertIn("- Passing runs judged not fixed, by task: b 3 of 3, a 0 of 2.", text)
+
 
 if __name__ == "__main__":
     unittest.main()

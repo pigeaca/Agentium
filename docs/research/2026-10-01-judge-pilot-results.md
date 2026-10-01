@@ -10,9 +10,11 @@ Run on 2026-10-01 under the [judge pilot plan](../../.agents/plans/archive/2026-
 - **The human labels could not support the comparison.** All 46 single changes were labelled "yes, fully", including the two that change nothing, and no pair was a tie. Warned about this, the user chose to run the judge anyway. The two verdicts that compare the judge with the labels therefore say little about the judge.
 - **What the judge showed, whatever the labels:**
   - It misses both reliability bars, narrowly. It gave the same verdict on all 3 repeats in 87% of changes (the bar is 90%), and swapping a pair's order flipped its preference in 2 of 19 pairs (11%; the bar is 10%).
-  - It judged all 4 failing runs that have a change "partly", on every repeat, and both empty changes "no".
-  - It judged 18 of the 40 passing runs not fully fixed. All 18 come from 5 of the 10 tasks; on the other 5 it called every passing run fixed.
-  - Its reasons are concrete claims, each naming an input and the wrong result it would give. Whether those are real gaps the hidden tests miss, or the judge holding agents to extras in the reference that the instruction never asked for, is what careful labels were meant to settle.
+  - *Exploratory, outside the rules:*
+    - It judged all 4 failing runs that have a change "partly", on every repeat, and both empty changes "no".
+    - Three of those four runs are from `documents-filter`. There it judged every run "partly" for the same reason, whether the run passed or failed. Only one failing run (S39) shows it telling a failing run from passing ones.
+  - *Exploratory:* it judged 18 of the 40 passing runs not fully fixed, by majority. All 18 come from 5 of the 10 tasks; on the other 5, its majority called every passing run fixed.
+  - Its reasons are concrete. Many name an input and the wrong output it would give; others name a requirement of the instruction that the change misses. Whether those are real gaps the hidden tests miss, or the judge holding agents to extras in the reference that the instruction never asked for, is what careful labels were meant to settle.
 - **Cost:** $12.07 for 176 judgements, 34% over the $9 estimate. That is $0.063 per single judgement and $0.088 per pair judgement, or about $0.19 per run at 3 repeats.
 
 ## What ran
@@ -34,6 +36,9 @@ Run on 2026-10-01 under the [judge pilot plan](../../.agents/plans/archive/2026-
 - **Effect on each use:**
   - **False passes:** no passing run is labelled not fixed. A verdict needs at least 3, so it is INCONCLUSIVE by rule.
   - **Tasks without tests:** the rate leaves out runs where the label and the test result disagree. All 6 failing runs are labelled fixed, so none remains, and it is INCONCLUSIVE by rule.
+    - This follows the protocol's Measures section ("the failing runs are counted after this") and the script committed before any label.
+    - Read literally, the Verdicts section's "fewer than 3 failing runs have a change" would count the 4 failing runs. The checks would then apply and give NO-GO, since 22 of 40 is 55%, under the 90% bar.
+    - Either reading gives no GO.
   - **Quality:** this is computed over 18 pairs, but its labels are as doubtful as the singles'.
 
 This is a limit of this run, not a finding about the judge.
@@ -47,7 +52,7 @@ This is a limit of this run, not a finding about the judge.
 - The A/A check passes: arm A was preferred in 4 of 6 preferences (p = 0.69), so there is no sign of an arm bias.
 
 **Tasks without tests (INCONCLUSIVE).** No failing run remains under the rule. Outside the rules:
-- all 4 failing runs with a change were judged not fixed (95% interval 51–100%);
+- All 4 failing runs with a change were judged not fixed (95% interval 51–100%). They come from only 2 tasks, though, and on `documents-filter` (3 of the 4) every passing run was judged "partly" too.
 - 22 of 40 passing runs were judged fixed.
 
 Taking the tests as the truth, the judge matches them on 28 of 46 runs (61%). That assumes the 18 passing runs it flags were real fixes, which is exactly what is not known.
@@ -56,25 +61,25 @@ Taking the tests as the truth, the judge matches them on 28 of 46 runs (61%). Th
 
 ## What the judge objects to
 Paraphrased from its reasons, one task at a time:
-- **`scrub-whole-paths`** (7 of 8 passing runs). The fix checks for a path boundary after the folder but not before it, and it replaces the given spelling before the resolved one. With a data folder of `/var/x`, the text `/private/var/x/...` becomes `/private~/...`. Some fixes also stop replacing a folder followed by a space, colon or quote.
-- **`run-survives-erase`** (5 of 6). Commits are still counted with `git -C repo`, so git can find an enclosing repository. A run is not always stored when grading fails.
-- **`documents-filter`** (3 of 3, plus the 3 failing runs). The test-data check skips only folders named `testdata`, while the reference also skips `test`, `tests`, `fixtures` and others. Whether the instruction asked for that is the anchoring question.
-- **`fresh-checkouts`** (2 of 2). Binary files' `-1` line counts are compared with a pull request's line counts, so a squash-merged pull request with a binary file is wrongly rejected.
+- **`scrub-whole-paths`** (7 of 8 passing runs). The fix checks for a path boundary after the folder but not before it, and it replaces the given spelling before the resolved one. With a data folder of `/var/x`, the text `/private/var/x/...` becomes `/private<agentium data>/...`. Some fixes also stop replacing a folder followed by a space, colon or quote.
+- **`run-survives-erase`** (5 of 6). Shared by all five: a run is not always stored with its spend when Agentium fails after the agent ran, for example while reading the transcript, listing skills or grading. Three also count commits with `git -C repo`, so git can find an enclosing repository.
+- **`documents-filter`** (3 of 3, plus the 3 failing runs). The test-data check skips only folders named `testdata`, while the reference also skips `test`, `tests`, `fixtures` and others. Whether the instruction asked for that is the anchoring question. Some runs are also faulted for refusing `.markdown` or `.mdx` files.
+- **`fresh-checkouts`** (2 of 2). Binary files' `-1` line counts are compared with a pull request's line counts, so a squash-merged pull request with a binary file is wrongly rejected. One run also writes solution files before setup, against the instruction's order.
 - **`stats-review`** (1 of 2). A floor check keeps a condition the reference removed.
 
-Each claim can be checked by running it: build the input, apply the agent's change, and see the output.
+Most claims can be checked by running them: build the input, apply the agent's change, and see the output. The others name a requirement, which can be checked against the instruction.
 
 ## Decision
 - No GO for any use, so no decision record and no product plan. Tests stay the only grader, and nothing in `internal/` changes.
 - Even with careful labels, the judge as configured fails both reliability bars. A product judge would need to be steadier first.
-- The judge did catch every failing run that had a change. It also flags passing runs only on some tasks, not across the board, so a careful look is still worth having.
+- Exploratory, outside the rules: the judge flags passing runs on only some tasks, not across the board, and its claims are specific. A careful look is still worth having. Its "not fixed" on all 4 failing runs with a change shows less than it seems, because on `documents-filter` it judged passing and failing runs alike.
 
 ## What would settle it
 1. **Check the judge's claims by running them.** This needs no human labels. For each "partly" or "no", ask the judge for one concrete failing input, turn it into a test, and run that test against both the agent's change and the reference. A claim counts only when the reference passes and the agent's change fails. That separates real false passes from anchoring on the reference, and the 18 flagged passing runs on 5 tasks are enough for a first look.
 2. **Careful labels.** Label only the singles, grouped by task (one reading of each reference), ideally by someone who did not run the experiments.
 3. **A steadier judge.** Before any product use, test whether a tighter rubric or a different effort lifts repeat agreement above 90% and keeps order flips under 10%.
 
-None of these is on the roadmap yet; it moves on to Java and Rust.
+None of these is on the roadmap yet; the roadmap moves on to Java and Rust.
 
 ## Reproduce
 1. Rebuild `items.json` from the acceptance data folder: `python3 docs/research/judge-pilot/judge_pilot.py prepare`.
