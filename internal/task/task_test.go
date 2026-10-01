@@ -356,7 +356,7 @@ func TestValidatorEnvFollowsTheCheckoutsBuildTools(t *testing.T) {
 	if got := v.envFor(dir); !slices.Equal(got, []string{"A=1"}) {
 		t.Errorf("a checkout with no marker: %q", got)
 	}
-	for file, want := range map[string]string{"build.gradle.kts": "GRADLE_USER_HOME=/data/cache/gradle", "pom.xml": "MAVEN_ARGS=-Dmaven.repo.local=/data/cache/m2",
+	for file, want := range map[string]string{"build.gradle.kts": "GRADLE_USER_HOME=/data/cache/gradle", "pom.xml": "MAVEN_ARGS=-Dmaven.repo.local=/data/cache/m2 -Dmaven.build.cache.enabled=false",
 		"Cargo.toml": "RUSTC_WRAPPER="} {
 		if err := os.WriteFile(filepath.Join(dir, file), nil, 0o600); err != nil {
 			t.Fatal(err)
