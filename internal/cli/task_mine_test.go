@@ -424,6 +424,9 @@ func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
 
 // When no candidate can be imported, task mine says why per commit and fails, without a review reminder.
 func TestTaskMineNothingImported(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("read-only folders do not stop root")
+	}
 	repo, _ := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
 	run := cliIn(t, repo, data)
@@ -500,4 +503,37 @@ func TestTaskValidateAllNotesARunningExperiment(t *testing.T) {
 	}
 	defer release()
 	expect(t, run("task", "validate", "--all"), ExitOK, "note: an experiment is running")
+}
+
+// After a parallel batch, the advice names a command for each status that may come from running side by side.
+func TestBatchAdviceNamesEachStatusFound(t *testing.T) {
+	t.Parallel()
+	result := func(status string) batchResult {
+		return batchResult{validated: true, task: store.Task{Validation: []byte(`{"status":"` + status + `"}`)}}
+	}
+	for _, c := range []struct {
+		statuses []string
+		jobs     int
+		want     []string
+	}{
+		{[]string{"valid", "flaky"}, 2, []string{"--status flaky --jobs 1"}},
+		{[]string{"invalid", "flaky", "invalid"}, 2, []string{"--status invalid --jobs 1 and agentium task validate --all --status flaky --jobs 1"}},
+		{[]string{"valid"}, 2, nil},
+		{[]string{"invalid"}, 1, nil},
+	} {
+		var stdout strings.Builder
+		var results []batchResult
+		for _, s := range c.statuses {
+			results = append(results, result(s))
+		}
+		batchAdvice(Env{Stdout: &stdout, Getenv: func(string) string { return "" }}, results, c.jobs)
+		if len(c.want) == 0 && stdout.Len() > 0 {
+			t.Errorf("%v with --jobs %d gave advice: %s", c.statuses, c.jobs, stdout.String())
+		}
+		for _, w := range c.want {
+			if !strings.Contains(stdout.String(), w) {
+				t.Errorf("%v with --jobs %d: advice %q lacks %q", c.statuses, c.jobs, stdout.String(), w)
+			}
+		}
+	}
 }

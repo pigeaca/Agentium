@@ -373,12 +373,15 @@ func batchAdvice(env Env, results []batchResult, jobs int) {
 	if jobs < 2 {
 		return
 	}
-	for _, r := range results {
-		if s := validationOf(r.task).Status; r.validated && (s == task.StatusInvalid || s == task.StatusFlaky) {
-			fmt.Fprintf(env.Stdout, "%s: %s\n", note(env.style(), "some tasks failed while others ran beside them; if their tests share ports, temporary paths or databases, check them alone"),
-				env.style().Command("agentium task validate --all --status invalid --jobs 1"))
-			return
+	var cmds []string
+	for _, s := range []string{task.StatusInvalid, task.StatusFlaky} {
+		if slices.ContainsFunc(results, func(r batchResult) bool { return r.validated && validationOf(r.task).Status == s }) {
+			cmds = append(cmds, env.style().Command("agentium task validate --all --status "+s+" --jobs 1"))
 		}
+	}
+	if len(cmds) > 0 {
+		fmt.Fprintf(env.Stdout, "%s: %s\n", note(env.style(), "some tasks failed while others ran beside them; if their tests share ports, temporary paths or databases, check them alone"),
+			strings.Join(cmds, " and "))
 	}
 }
 
