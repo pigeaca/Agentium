@@ -202,6 +202,17 @@ class Pipeline(unittest.TestCase):
         jp.prepare(self.data, other)
         self.assertEqual(jp.judge(other, fake_claude(self.root), budget=0.025, log=quiet)["calls"], 3)
 
+    def test_jobs_that_ended_in_an_error_are_tried_again(self):
+        jp.prepare(self.data, self.work)
+        broken = self.root / "broken"
+        broken.write_text("#!/bin/sh\necho 'API Error: 400 this version does not support the model'\nexit 1\n")
+        broken.chmod(0o755)
+        self.assertEqual(jp.judge(self.work, str(broken), limit=2, log=lambda *a: None)["calls"], 2)
+        again = jp.judge(self.work, fake_claude(self.root), log=lambda *a: None)
+        self.assertEqual(again["calls"], 6 * jp.SINGLE_REPEATS + 2 * 2)  # the two errors are judged again
+        latest = jp.latest([json.loads(l) for l in (self.work / "verdicts.jsonl").read_text().splitlines()])
+        self.assertTrue(all("error" not in r for r in latest.values()))
+
     def test_label_saves_each_answer_and_resumes(self):
         jp.prepare(self.data, self.work)
         answers = iter(["maybe", "y", "p wrong field", "q"])

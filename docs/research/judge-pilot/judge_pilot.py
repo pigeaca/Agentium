@@ -311,8 +311,9 @@ def jobs(items: dict) -> List[Tuple[str, str, dict, str]]:
 def judge(work: Path, cmd: str = "claude", limit: Optional[int] = None, budget: Optional[float] = None, log=print) -> Dict[str, float]:
     items = read_json(work / "items.json")
     path = work / "verdicts.jsonl"
-    done = {json.loads(line)["job"] for line in path.read_text().splitlines() if line.strip()} if path.exists() else set()
-    spent = sum(json.loads(line).get("cost_usd", 0) for line in path.read_text().splitlines() if line.strip()) if path.exists() else 0.0
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    done = {r["job"] for r in latest(rows).values() if "error" not in r}  # a job that ended in an error is tried again
+    spent = sum(r.get("cost_usd", 0) for r in rows)
     env = dict(os.environ, CLAUDE_CODE_DISABLE_AUTO_MEMORY="1", ENABLE_CLAUDEAI_MCP_SERVERS="false", DISABLE_AUTOUPDATER="1")
     calls = 0
     for job, kind, item, prompt in jobs(items):
@@ -349,6 +350,14 @@ def judge(work: Path, cmd: str = "claude", limit: Optional[int] = None, budget: 
         os.chmod(path, 0o600)
         log("%-8s %-7s %s  $%.4f  (spent $%.2f)" % (job, row.get("fixed") or row.get("prefer") or "ERROR", row.get("reason", error)[:70], cost, spent))
     return {"calls": calls, "spent": spent}
+
+
+def latest(rows: List[dict]) -> Dict[str, dict]:
+    """Each job's last row: a job retried after an error keeps only its later answer."""
+    out: Dict[str, dict] = {}
+    for r in rows:
+        out[r["job"]] = r
+    return out
 
 
 # ---- analyze ----
@@ -426,8 +435,9 @@ def analyze(work: Path) -> str:
     items = read_json(work / "items.json")
     key = read_json(work / "key.json")
     labels = read_json(work / "labels.json", {"singles": {}, "pairs": {}})
-    verdicts = [json.loads(line) for line in (work / "verdicts.jsonl").read_text().splitlines() if line.strip()] \
+    rows = [json.loads(line) for line in (work / "verdicts.jsonl").read_text().splitlines() if line.strip()] \
         if (work / "verdicts.jsonl").exists() else []
+    verdicts = list(latest(rows).values())
     by_item = collections.defaultdict(list)
     for v in verdicts:
         by_item[v["item"]].append(v)
@@ -492,7 +502,7 @@ def analyze(work: Path) -> str:
     arm_a = sum(key["pairs"][p][judge_prefer[p]]["arm"] == "A" for p in aa)
     w("- A/A pairs (same context in both arms) with a preference: arm A preferred in %d of %d (two-sided p = %.2f; no "
       "difference expected)." % (arm_a, len(aa), binomial_two_sided(arm_a, len(aa))))
-    costs = [v["cost_usd"] for v in verdicts]
+    costs = [r["cost_usd"] for r in rows]  # retried calls cost too
     w("- Judgements: %d (%d errors); cost $%.2f in all, $%.3f each on average (%s, effort %s).\n" %
       (len(verdicts), errors, sum(costs), sum(costs) / len(costs) if costs else 0, JUDGE_MODEL, JUDGE_EFFORT))
 

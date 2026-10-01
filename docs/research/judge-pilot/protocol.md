@@ -34,7 +34,7 @@ Run `python3 docs/research/judge-pilot/judge_pilot.py label`. It shows one item 
 An optional note can follow, after a space.
 
 ## Judge
-- **Call:** Claude Code headless (`claude -p`, 2.1.274), model `claude-opus-5-5`, effort `high`. It runs with:
+- **Call:** Claude Code headless (`claude -p`, 2.1.284; see Changes), model `claude-opus-5-5`, effort `high`. It runs with:
   - no tools (`--tools ""`) and the system prompt below instead of Claude Code's own;
   - a JSON schema for the answer;
   - project settings only, and no MCP servers;
@@ -93,4 +93,5 @@ Committed:
 Not committed: `items.json`, which `prepare` rebuilds from the data folder, and the judge's transcripts.
 
 ## Changes after the first label or judge call
-None yet.
+- **2026-10-01, before any verdict: the Claude Code version.** The first three pricing calls failed at no cost: Claude Code 2.1.274, the installed Homebrew version, refuses `claude-opus-5-5` and asks for 2.1.280 or newer, and Homebrew's newest is 2.1.277. The judge therefore runs on the Claude Code that the desktop app bundles, 2.1.284, passed with `--judge-cmd "$HOME/Library/Application Support/Claude/claude-code/2.1.284/claude.app/Contents/MacOS/claude"`. Nothing else changes.
+- **Same date, before any verdict: retrying errors.** A job that ended in an error, such as a refused call, is tried again on the next `judge` run, and only its last row counts. Before this, a failed call counted as done. Retried calls still count toward the cost.
