@@ -31,6 +31,8 @@ type Spec struct {
 	// directly, so a background process that keeps the output open cannot hold Run past the command's end.
 	Output io.Writer
 	Stderr io.Writer
+	// Stdin, when set, is the command's standard input (for example a prompt too long for an argument).
+	Stdin io.Reader
 	// Started, when set, is called with the process ID (also its process group's) once the command runs.
 	Started func(pid int)
 }
@@ -95,7 +97,7 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		base = Environ(os.Environ())
 	}
 	cmd.Env = append(append([]string{}, base...), spec.Env...)
-	cmd.Stdout, cmd.Stderr = spec.Output, spec.Output
+	cmd.Stdout, cmd.Stderr, cmd.Stdin = spec.Output, spec.Output, spec.Stdin
 	if spec.Stderr != nil {
 		cmd.Stderr = spec.Stderr
 	}
