@@ -7,14 +7,16 @@ import (
 	"github.com/pigeaca/agentium/internal/buildtool"
 )
 
-// pinnedEnviron: credentials, GIT_*, AGENTIUM_*, CLAUDE_*, system and toolchain settings, and variables the allowlist
-// does not know. RUST_BACKTRACE, RUSTUP_TOOLCHAIN and CGO_ENABLED belong to build-tool profiles.
+// pinnedEnviron: credentials (also on allowlisted names), GIT_*, AGENTIUM_*, CLAUDE_*, system and toolchain settings, and
+// variables the allowlist does not know. RUST_BACKTRACE, RUSTUP_TOOLCHAIN and CGO_ENABLED belong to build-tool profiles.
 func pinnedEnviron() []string {
 	return []string{"PATH=/bin", "HOME=/h", "GIT_DIR=/x", "GIT_AUTHOR_NAME=a", "AGENTIUM_HOME=/a", "AGENTIUM_X=1", "ANTHROPIC_API_KEY=k",
 		"GITHUB_TOKEN=t", "SSH_AUTH_SOCK=/s", "MY_PASSWORD=p", "CLAUDE_CODE_TMPDIR=/t", "LC_ALL=C", "GOFLAGS=-mod=mod", "JAVA_HOME=/j",
 		"RUSTC_WRAPPER=w", "HTTPS_PROXY=http://p", "XDG_RUNTIME_DIR=/r", "FOO=bar", "NODE_OPTIONS=x", "TERM=xterm", "EMPTY=", "GOPATH=/g",
 		"MAVEN_OPTS=-X", "GRADLE_USER_HOME=/gu", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp", "AWS_PROFILE=p", "NETRC=/n", "GIT=ok", "GITHUB=ok",
-		"RUST_BACKTRACE=1", "RUSTUP_TOOLCHAIN=stable", "CGO_ENABLED=0"}
+		"RUST_BACKTRACE=1", "RUSTUP_TOOLCHAIN=stable", "CGO_ENABLED=0",
+		// Credentials on names the allowlist (or a profile) would otherwise keep: the credential check must win.
+		"NODE_AUTH_TOKEN=x", "HOMEBREW_GITHUB_API_TOKEN=x", "PIP_PASSWORD=x", "CGO_SECRET=x", "my_token=x", "DOCKER_AUTH_CONFIG=x"}
 }
 
 // TestEnvironPinned pins the agent's allowlist byte for byte: the base list, then what the selected profiles add.
