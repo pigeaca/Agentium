@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -266,8 +267,11 @@ var jsonObject = regexp.MustCompile(`(?s)\{.*\}`)
 // Other errors (an overload, a timeout, a transport failure) leave one repeat out and the judgement goes on.
 var stopText = regexp.MustCompile(`(?i)usage limit|session limit|weekly limit|limit reached|hit your .{0,20}limit|rate limit|authenticat|not logged in|/login|oauth|credit balance|api key|does not support the model|model.{0,40}not (found|available)`)
 
-// parse reads Claude Code's JSON result: the structured verdict, or one written as JSON in the text.
-func parse(r Reply) answer {
+// parse reads Claude Code's JSON result of a single judgement: the structured verdict, or one written as JSON in the text.
+func parse(r Reply) answer { return parseField(r, "fixed", []string{Yes, Partly, No}) }
+
+// parseField reads the answer in the schema's field, which must be one of allowed (answer.fixed holds it).
+func parseField(r Reply, field string, allowed []string) answer {
 	var out struct {
 		IsError          bool            `json:"is_error"`
 		Result           json.RawMessage `json:"result"`
@@ -292,24 +296,21 @@ func parse(r Reply) answer {
 	if out.IsError {
 		return answer{cost: out.TotalCostUSD, err: "error result: " + short(result), kind: kindInfra}
 	}
-	var v struct {
-		Fixed  any `json:"fixed"`
-		Reason any `json:"reason"`
-	}
-	if json.Unmarshal(out.StructuredOutput, &v) != nil || v.Fixed == nil {
-		v.Fixed, v.Reason = nil, nil
+	var v map[string]any
+	if json.Unmarshal(out.StructuredOutput, &v) != nil || v[field] == nil {
+		v = nil
 		if m := jsonObject.FindString(result); m != "" {
 			_ = json.Unmarshal([]byte(m), &v)
 		}
 	}
-	fixed, _ := v.Fixed.(string)
-	if fixed != Yes && fixed != Partly && fixed != No {
+	fixed, _ := v[field].(string)
+	if !slices.Contains(allowed, fixed) {
 		return answer{cost: out.TotalCostUSD, err: "no valid verdict in: " + short(result), kind: kindMalformed}
 	}
 	if r.ExitCode != 0 {
 		return answer{cost: out.TotalCostUSD, err: fmt.Sprintf("exit %d: %s", r.ExitCode, short(r.Stderr)), kind: kindInfra}
 	}
-	reason, _ := v.Reason.(string)
+	reason, _ := v["reason"].(string)
 	return answer{fixed: fixed, reason: reason, cost: out.TotalCostUSD}
 }
 
@@ -398,11 +399,20 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 // Agentium's own (in its data folder) with no instruction file above it, which Claude Code would load into the judge's
 // context. timeout bounds each call (CallTimeout when zero).
 func ClaudeCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
+	return newCaller(s, j, environ, timeout, Schema)
+}
+
+// PairCaller is ClaudeCaller with the pair schema (PairSchema), for JudgePair.
+func PairCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
+	return newCaller(s, j, environ, timeout, PairSchema)
+}
+
+func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration, schema string) (Caller, error) {
 	if above := instructionFilesAbove(filepath.Join(j.Dir, "call")); len(above) > 0 { // the calls start one level below
 		return nil, fmt.Errorf("judge: Claude Code would load %s above the judge's folder", strings.Join(above, ", "))
 	}
 	s = s.WithDefaults()
-	j.Model, j.Effort, j.SystemPrompt, j.Schema = s.Model, s.Effort, SystemPrompt, Schema
+	j.Model, j.Effort, j.SystemPrompt, j.Schema = s.Model, s.Effort, SystemPrompt, schema
 	if j.BudgetUSD == 0 {
 		j.BudgetUSD = CallCapUSD
 	}
