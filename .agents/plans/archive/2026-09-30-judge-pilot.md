@@ -93,7 +93,7 @@ Unit tests for the script, the fake-judge dry run, `harness.py check changed`, C
 ## Metrics
 - Agent: Claude Code desktop / claude-opus-5-5 / default (coordinator); `reviewer` subagents on Opus / high
 - Elapsed: about 6h over 2026-09-30 to 2026-10-01, including the user's labelling and a 31-minute judge run
-- Check-fix loops: 4 (protocol review: changes requested, then approved with notes; label form; results presentation)
+- Check-fix loops: 5 (protocol review: changes requested, then approved with notes; label form; results presentation; results review notes)
 - User corrections: 1 (the terminal label form did not work for the user, so a browser form was built)
 - Paid calls: 4 pricing and verification calls (about $0.16) and the judge run ($12.07)
-- Review: protocol and script reviewed before labelling (#46); results reviewed before merge
+- Review: protocol and script reviewed before labelling (#46). The results review re-derived every number and approved with notes: one overstated exploratory claim, paraphrases, a stale link, the user's timezone in an error string, and a thin test. All were fixed; no verdict or number changed.
