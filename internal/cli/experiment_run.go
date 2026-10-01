@@ -520,7 +520,7 @@ func buildLock(ctx context.Context, env Env, w *workspace, d experiment.Design, 
 		if err != nil {
 			return l, err
 		}
-		var c calibration
+		var c run.Calibration
 		if err := json.Unmarshal(stored.Result, &c); err != nil {
 			return l, fmt.Errorf("calibration of %s: %w", a.Context, err)
 		}

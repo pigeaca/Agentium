@@ -21,6 +21,7 @@ import (
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/report"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -588,7 +589,7 @@ func printReadiness(ctx context.Context, env Env, w *workspace, d experiment.Des
 			line(false, "context %s: %v", a.Context, err)
 			continue
 		}
-		var c calibration
+		var c run.Calibration
 		if err := json.Unmarshal(stored.Result, &c); err != nil {
 			line(false, "context %s: its calibration cannot be read: %v", a.Context, err)
 			continue
