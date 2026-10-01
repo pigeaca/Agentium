@@ -120,8 +120,9 @@ func judgeSummary(in Input) *Judge {
 		if arm == nil {
 			continue
 		}
-		arm.CostUSD += rec.JudgeCostUSD()
-		out.CostUSD += rec.JudgeCostUSD()
+		judged := rec.Spend().JudgeUSD
+		arm.CostUSD += judged
+		out.CostUSD += judged
 		if !experiment.Fair(rec.Outcome) {
 			continue
 		}

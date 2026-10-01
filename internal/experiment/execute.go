@@ -45,6 +45,9 @@ type Result struct {
 	Usage *claude.UsageReading
 }
 
+// AgentUSD is the agent's share of what the attempt spent: CostUSD without the judgement's.
+func (r Result) AgentUSD() float64 { return r.CostUSD - r.JudgeUSD }
+
 // Executor runs an attempt of a slot. overlap lists the positions of the slots whose runs may overlap it: their
 // folders must be denied to it before it starts.
 type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (Result, error)

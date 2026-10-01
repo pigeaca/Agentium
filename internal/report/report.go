@@ -159,7 +159,7 @@ func Build(in Input) (Report, error) {
 	for _, r := range in.Runs {
 		m := r.Record.Metrics
 		data = append(data, experiment.RunData{Slot: r.Slot, Task: r.Record.Task, Arm: r.Record.Arm, Outcome: r.Record.Outcome,
-			Passed: r.Record.Passed, ConfigChanged: r.Record.Behavior.ConfigChanged, CostUSD: m.CostUSD, DurationS: float64(m.DurationMS) / 1000,
+			Passed: r.Record.Passed, ConfigChanged: r.Record.Behavior.ConfigChanged, CostUSD: r.Record.Spend().AgentUSD, DurationS: float64(m.DurationMS) / 1000,
 			OutputTokens: float64(m.OutputTokens)})
 	}
 	analysis, err := experiment.Analyze(l, data)
@@ -170,7 +170,7 @@ func Build(in Input) (Report, error) {
 		Lock: redactLock(l), Analysis: analysis}
 	settled := map[int]bool{}
 	for _, r := range in.Runs {
-		rep.SpentUSD += r.Record.Metrics.CostUSD + r.Record.JudgeCostUSD() // all the budget counts; the arms' cost is the agent's
+		rep.SpentUSD += r.Record.Spend().TotalUSD() // all the budget counts; the arms' cost is the agent's
 		if experiment.Settles(r.Record.Outcome) {
 			settled[r.Slot] = true
 		}
@@ -180,7 +180,7 @@ func Build(in Input) (Report, error) {
 		metrics.SubagentModels = shareableModels(rec)
 		row := RunRow{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
-			CostEstimated: rec.CostEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
+			CostEstimated: rec.Spend().AgentEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
 			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Judge: in.shareVerdict(rec.Judge), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
 			Finished: rec.Finished.UTC().Format("2006-01-02T15:04:05Z")}
 		for _, c := range rec.Verify {
@@ -255,7 +255,7 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		if m.FirstRequest > 0 {
 			first = append(first, float64(m.FirstRequest))
 		}
-		cost = append(cost, m.CostUSD)
+		cost = append(cost, rec.Spend().AgentUSD)
 		if c, ok := coldCost(rec); ok {
 			cold = append(cold, c)
 		}
@@ -359,7 +359,7 @@ func coldCost(rec run.Record) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	return m.CostUSD + float64(m.CacheReadTokens)*(rates.CacheWrite1h-rates.CacheRead)/1e6, true
+	return rec.Spend().AgentUSD + float64(m.CacheReadTokens)*(rates.CacheWrite1h-rates.CacheRead)/1e6, true
 }
 
 func mean(values []float64) *float64 {
@@ -394,7 +394,7 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 					cell.Marks += "○"
 				}
 				cell.Counted++
-				costs = append(costs, rec.Metrics.CostUSD)
+				costs = append(costs, rec.Spend().AgentUSD)
 			}
 			cell.CostUSD = mean(costs)
 			row.Arms[a.Name] = cell
@@ -460,7 +460,7 @@ func notes(rep Report, in Input) []string {
 				harness = append(harness, entry)
 			}
 		}
-		if rec.CostEstimated {
+		if rec.Spend().AgentEstimated {
 			estimated++
 		}
 		switch rec.Recovered {
