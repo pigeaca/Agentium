@@ -2,11 +2,15 @@ package cli
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -53,5 +57,56 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 	}
 	if js := f.run(ctx, "experiment", "report", "lean-ab", "--json"); js.code != ExitOK || !strings.Contains(js.stdout, `"experiment": "lean-ab"`) || strings.Contains(js.stdout, "\x1b") {
 		t.Errorf("--json on a terminal:\n%s", js.stdout)
+	}
+}
+
+// Each run records what it used of its arm's context, and the report counts it per arm. Runs recorded before that get
+// it from their transcripts; a run whose transcript is gone is reported as not recorded.
+func TestExperimentReportContextUse(t *testing.T) {
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	writeFile(t, ctrl, "subagent", "s1-t1 claude-sonnet-5\n") // slot 1's run starts the investigator
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30"), ExitOK)
+
+	runs := experimentRuns(t, f, "lean-ab")
+	var withSubagent, without []run.Record
+	for _, r := range runs {
+		var rec run.Record
+		if err := json.Unmarshal(r.Record, &rec); err != nil {
+			t.Fatal(err)
+		}
+		if rec.ContextUse == nil || !slices.Equal(rec.ContextUse.Start, []string{"CLAUDE.md"}) {
+			t.Fatalf("run %s (slot %d): context use %+v", r.ID, r.Slot, rec.ContextUse)
+		}
+		if slices.Equal(rec.ContextUse.Subagents, []string{"investigator"}) {
+			withSubagent = append(withSubagent, rec)
+		} else {
+			without = append(without, rec)
+		}
+	}
+	if len(withSubagent) != 1 || len(without) != 3 {
+		t.Fatalf("runs that started the investigator: %d of %d", len(withSubagent), len(runs))
+	}
+	want := []string{"## Context use", "| files loaded at start | 1 | 1 |", "| subagent `investigator` |", "Loaded at start: A, `CLAUDE.md`; B, `CLAUDE.md`."}
+	first := f.run(ctx, "experiment", "report", "lean-ab")
+	expect(t, first, ExitOK, want...)
+
+	// As if recorded before context use was kept: the report works it out from the transcripts, and says which run had none.
+	db, err := sql.Open("sqlite3", filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `UPDATE runs SET record = json_remove(record, '$.context_use')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(without[0].RecordsDir, "stream.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	again := f.run(ctx, "experiment", "report", "lean-ab")
+	expect(t, again, ExitOK, append(want, "Not recorded, for lack of a transcript, for 1 of "+without[0].Arm+"'s 2 counted runs.")...)
+	if again.stderr != "" {
+		t.Errorf("recovering context use warned: %s", again.stderr)
 	}
 }

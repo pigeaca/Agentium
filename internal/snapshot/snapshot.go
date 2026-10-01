@@ -206,6 +206,16 @@ func PlanOverlay(base, snap source.Source) (Overlay, error) {
 	return overlay, nil
 }
 
+// Apply returns base as an arm's checkout holds it: snap written over it, and the files that load by being present but
+// that snap lacks deleted. It makes PlanOverlay's checks, so it refuses what an arm would refuse.
+func Apply(base, snap source.Source) (source.Source, error) {
+	overlay, err := PlanOverlay(base, snap)
+	if err != nil {
+		return nil, err
+	}
+	return &applied{base: base, snap: snap, deleted: overlay.Deletes}, nil
+}
+
 // harnessChanges lists harness files added, removed or changed between base and snap.
 func harnessChanges(base, snap source.Source, baseContext, snapContext claudectx.Context) ([]string, error) {
 	paths := map[string]bool{}

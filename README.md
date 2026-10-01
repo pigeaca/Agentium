@@ -83,7 +83,7 @@ While runs go, a status line under the events shows the progress and redraws in 
 
 <img src="docs/images/console-live.svg" alt="An animation of agentium experiment run: event lines appear while a status line below them counts runs settled and in flight, spend and usage, then the summary">
 
-**3. Report it:** verdicts in words, then the metrics with both intervals, noise, context and cost per arm, behavior (tests run, files changed, denials), per-task results and notes. On a terminal it looks like this; piped, with `--out FILE` or with `--markdown`, it is Markdown you can paste into a pull request, like the [full report](docs/examples/context-ab-report.md) (`--json` for everything).
+**3. Report it:** verdicts in words, then the metrics with both intervals, noise, context and cost per arm, what the runs used of their context (files read on demand, project skills, subagents), behavior (tests run, files changed, denials), per-task results and notes. On a terminal it looks like this; piped, with `--out FILE` or with `--markdown`, it is Markdown you can paste into a pull request, like the [full report](docs/examples/context-ab-report.md) (`--json` for everything).
 
 <img src="docs/images/console-report.svg" alt="agentium experiment report ab on a terminal: exploratory verdicts in yellow, the metrics table, and per-task results">
 

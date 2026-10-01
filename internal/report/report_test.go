@@ -65,6 +65,24 @@ func fixture() Input {
 				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: first, SawInit: true, SawResult: true},
 			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, TestsChanged: s.Arm == "A", RanTests: true, RanChecks: s.Arm == "A",
 				BashCommands: 6}, Verify: []task.Command{{Command: "make test", ExitCode: 0, Seconds: 1.5}}}
+		// What the runs used of their context: arm A reads the testing doc and invokes its skill more than lean B; one
+		// counted run predates context use.
+		use := &run.ContextUse{Start: []string{"AGENTS.md", "CLAUDE.md"}}
+		if s.Arm == "B" {
+			use.Start = []string{"CLAUDE.md"}
+		}
+		if ti%2 == 0 && (s.Arm == "A" || ti%4 == 0) {
+			use.Files = []string{"docs/testing.md"}
+		}
+		if s.Arm == "A" && ti%5 == 0 {
+			use.Skills = []string{"review-change"}
+		}
+		if ti == 3 && s.Repeat == 1 {
+			use.Subagents = []string{"Explore"}
+		}
+		if s.Position != 12 {
+			rec.ContextUse = use
+		}
 		switch s.Position {
 		case 3:
 			rec.Outcome, rec.Passed = claude.OutcomeUnfair, nil

@@ -40,6 +40,19 @@ Means over counted runs. The first request is what Claude Code sent first: the c
 | A | `base` | 30 | 30000 | $0.397 | $1.917 | 93% |
 | B | `lean` | 29 | 27000 (-3000) | $0.320 | $1.840 | 93% |
 
+## Context use
+
+What the counted runs used of their context beyond what loads at start: context files and linked documents they read (with the Read tool, or named in a shell command), the project's skills they invoked, and the subagents they started. Not recorded, for lack of a transcript, for 1 of B's 29 counted runs.
+
+| | A | B |
+|---|---|---|
+| files loaded at start | 2 | 1 |
+| `docs/testing.md` | 15 of 30 | 8 of 28 |
+| skill `review-change` | 6 of 30 | 0 of 28 |
+| subagent `Explore` | 1 of 30 | 1 of 28 |
+
+Loaded at start: A, `AGENTS.md`, `CLAUDE.md`; B, `CLAUDE.md`.
+
 ## Behavior
 
 Runs counted in each arm, unless a total.

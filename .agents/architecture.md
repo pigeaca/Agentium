@@ -42,9 +42,9 @@ Shape:
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), per-arm validation, and unstated-requirement gaps |
 | `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed) and their preview; the lock (with its method); the seeded interleaved schedule; execution (a window, a budget no run passes, usage pauses, retries, stop rules, resume); counting and analysis (roles, floors, verdicts, noise) |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
-| `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context and costs, behavior, per-task results and honesty notes, for a terminal, as Markdown or JSON (without personal names or paths) |
+| `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, per-task results and honesty notes, for a terminal, as Markdown or JSON (without personal names or paths) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
-| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, redacted records; a start file to recover a dead process's runs; the folders a run will use, predicted for runs that may overlap it |
+| `internal/run` | One run: a workspace prepared as the arm, Claude Code denied everything else, grading on a hidden copy, behavior flags, what it used of its context, redacted records; a start file to recover a dead process's runs; the folders a run will use, predicted for runs that may overlap it |
 | `scripts/harness.py` | Standard-library entrypoint for checks (docs, harness, Go, vulnerabilities), hooks, worktrees and metrics |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
