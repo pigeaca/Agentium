@@ -46,6 +46,7 @@ func records(t *testing.T, runs []store.Run) []run.Record {
 }
 
 func TestExperimentNewJudgeFlags(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	for _, c := range []struct {
@@ -109,6 +110,7 @@ func storedDesign(t *testing.T, f runFixture, name string) experiment.Design {
 // With --judge, the preview states the judge's estimate apart from the agent's, every graded run gets a verdict, the
 // budget counts the judge's spend, and the agent's cost (the run's cost column and its record's metrics) stays its own.
 func TestExperimentJudgesEveryGradedRun(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "judged", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--judge-repeats", "2",
@@ -186,6 +188,7 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 // A judge at its usage limit pauses the experiment; the resume judges the runs left without a verdict (stopped, or
 // never judged), keeps what the stopped judgement spent, then runs the rest.
 func TestExperimentJudgePausesAndResumes(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1", "--judge",
@@ -267,6 +270,7 @@ func TestAgentDiffFormIsPinned(t *testing.T) {
 // The judge hitting its limit on the last run leaves the experiment paused, not done. A resume judges it when the budget
 // leaves room for a judgement, and says so when it does not.
 func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	// Runs at $5, each with up to 2 × 2 × $1 of judgement: the $14 budget fits one pair.

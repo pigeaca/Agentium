@@ -136,6 +136,7 @@ func emptyWorkspaces(t *testing.T, f runFixture) {
 }
 
 func TestExperimentRunEndToEnd(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5"), ExitOK)
@@ -222,6 +223,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 }
 
 func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	// Runs cost $0.30 at a $1 cap, 2 at a time: a pair starts only while the spend so far and the caps of the runs in
@@ -268,6 +270,7 @@ func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
 
 // TestExperimentHelperProcess is `agentium experiment run` in a process of its own, for TestExperimentSurvivesAKill.
 func TestExperimentHelperProcess(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("AGENTIUM_TEST_HELPER") != "1" {
 		t.Skip("run by TestExperimentSurvivesAKill")
 	}
@@ -292,6 +295,7 @@ func waitFor(t *testing.T, what string, done func() bool) {
 // next start: while that agent still runs, the resume refuses; once it is gone, the run is stored as cancelled with
 // what its transcript shows it spent, its workspace is removed, and the slot runs again in a fresh workspace.
 func TestExperimentSurvivesAKill(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "kill", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
@@ -378,6 +382,7 @@ func TestExperimentSurvivesAKill(t *testing.T) {
 // Ctrl-C stops an experiment: the run in progress is interrupted and stored as cancelled (not an attempt), and the
 // next run resumes with that slot.
 func TestExperimentRunInterrupted(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	expect(t, f.run(context.Background(), "experiment", "new", "stop", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1"), ExitOK)
 	if err := os.WriteFile(filepath.Join(ctrl, "hang"), []byte("s1-t1\n"), 0o644); err != nil {
@@ -408,6 +413,7 @@ func TestExperimentRunInterrupted(t *testing.T) {
 // Ctrl-C while a run is still in its setup: the run has no outcome and no record, and the progress line says it was
 // stopped before its agent started (not "none found"); it is not an attempt, so the resume runs the whole schedule.
 func TestExperimentRunInterruptedBeforeAgent(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	slow := filepath.Join(ctrl, "slow")

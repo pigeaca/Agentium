@@ -24,6 +24,7 @@ func versioned(t *testing.T, cli, version string) string {
 }
 
 func TestExperimentNewPlanListAndRemove(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	ctx := context.Background()
 	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
@@ -208,6 +209,7 @@ func saveRuns(t *testing.T, f runFixture, runs ...store.Run) {
 // median: the 16-run A/B's new tasks cost twice that median. The default budget and the warning follow the tasks'
 // estimates, and the preview says which basis each task used.
 func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", "costly", "--verify", "sh run_tests.sh"), ExitOK)
@@ -265,6 +267,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 }
 
 func TestExperimentNewUsage(t *testing.T) {
+	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "No experiments yet")

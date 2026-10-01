@@ -17,6 +17,7 @@ import (
 // On a terminal the report is rendered for reading (no Markdown markup, colored unless NO_COLOR); --markdown, --out
 // and a pipe keep the Markdown, byte for byte; --json is unchanged.
 func TestExperimentReportOnATerminal(t *testing.T) {
+	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5"), ExitOK)
@@ -64,6 +65,7 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 // which loads when the agent reads value.txt. Runs recorded before that get it from their transcripts; a run whose
 // transcript is gone is reported as not recorded.
 func TestExperimentReportContextUse(t *testing.T) {
+	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	writeFile(t, f.repo, ".claude/rules/values.md", "---\npaths: [\"*.txt\"]\n---\nValues are lowercase.\n")

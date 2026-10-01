@@ -8,6 +8,7 @@ import (
 )
 
 func TestParseArgsInterspersedAndTerminator(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	env := Env{Stdout: &stdout, Stderr: &stderr}
 	fs := flag.NewFlagSet("x", flag.ContinueOnError)

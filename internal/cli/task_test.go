@@ -13,6 +13,7 @@ import (
 )
 
 func TestTaskImportValidateAndManage(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "run_tests.sh", "grep -q Rules CLAUDE.md || { echo 'CLAUDE.md lost its rules'; exit 1; }\n"+
@@ -132,6 +133,7 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 }
 
 func TestTaskName(t *testing.T) {
+	t.Parallel()
 	commit := "0123456789abcdef"
 	for subject, want := range map[string]string{
 		"fix(harness): map only the harness files to check harness": "fix-harness-map-only-the-harness-files-0123456",
@@ -145,6 +147,7 @@ func TestTaskName(t *testing.T) {
 }
 
 func TestParseNumstat(t *testing.T) {
+	t.Parallel()
 	out := "3\t1\tsrc/a.go\x00" + "0\t0\t\x00old/name.go\x00new/name.go\x00" + "-\t-\tlogo.png\x00"
 	got, err := parseNumstat(out)
 	if err != nil {
@@ -165,6 +168,7 @@ func TestParseNumstat(t *testing.T) {
 }
 
 func TestTaskFairnessGaps(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "go.mod", "module example.com/m\n\ngo 1.22\n")
@@ -228,6 +232,7 @@ func TestTaskFairnessGaps(t *testing.T) {
 }
 
 func TestTaskValidateWeakTests(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
@@ -270,6 +275,7 @@ func TestTaskValidateWeakTests(t *testing.T) {
 }
 
 func TestTaskRefusesInlineRustTests(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "src/lib.rs", "pub fn double(x: i32) -> i32 { x }\n")
@@ -315,6 +321,7 @@ func TestTaskRefusesInlineRustTests(t *testing.T) {
 }
 
 func TestTaskTicketsAndJudgeGrading(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
 	writeFile(t, repo, "run_tests.sh", "for f in tests/*.sh; do [ -e \"$f\" ] || continue; sh \"$f\" || exit 1; done\n")
