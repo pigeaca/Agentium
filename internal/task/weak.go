@@ -58,8 +58,9 @@ type WeakTests struct {
 
 var hunkHeader = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 
-// symlinkLine matches the extended header lines of a diff (any of them: a change between a file and a link is two
-// diffs of one path; content lines start with +, -, a space or a backslash, so they never match) that involve a symbolic link (mode 120000).
+// symlinkLine matches a diff's extended header lines that involve a symbolic link (mode 120000). It is matched against
+// every line: a change between a file and a link is two diffs of one path, and content lines, which start with +, -,
+// a space or a backslash, never match.
 var symlinkLine = regexp.MustCompile(`^((old|new) mode|new file mode|deleted file mode) 120000$|^index \S+ 120000$`)
 
 // Hunks lists the hunks of each reference file's change between base and solution, in file then line order. Binary
