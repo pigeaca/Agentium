@@ -634,7 +634,11 @@ func printProgress(ctx context.Context, env Env, w *workspace, name string, id i
 	}
 	fmt.Fprintln(out, st.Note("Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted."))
 	if unjudgedRuns > 0 {
-		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", unjudgedRuns)), st.Command("agentium experiment run "+name))
+		resume := "agentium experiment run " + name
+		if stored.Status == store.StatusBudget { // the budget left no room to judge them: the same command as the stop's
+			resume += " --budget USD"
+		}
+		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", unjudgedRuns)), st.Command(resume))
 	}
 	return nil
 }

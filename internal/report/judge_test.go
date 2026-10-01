@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -99,7 +100,7 @@ func TestReportJudgeGolden(t *testing.T) {
 	assertTerminalColors(t, rep, txt)
 	for _, want := range []string{"## Judge", "which decides nothing", "claude-opus-5-5 at effort high with 3 repeats per run", "Its accuracy is unmeasured",
 		"| Arm | Tests | Judged | Fixed | Partly | No |", "Not judged: A ", "changed no code", "got no answer", "have no reference in code",
-		"Repeat agreement: every repeat gave the same answer in ", "Judge cost: A $", "in the spend and not in the arms' costs",
+		"Repeat agreement: every answer was the same in ", "Judge cost: A $", "in the spend and not in the arms' costs",
 		"Passing runs the judge did not call fixed (", "and 7 more (the JSON report lists them all)", "The repeats had no majority",
 		"partly (no majority of 3)", "no (2 of 3)"} {
 		if !strings.Contains(md, want) {
@@ -243,11 +244,20 @@ func TestReportWithoutJudge(t *testing.T) {
 // the experiment is unfinished, and how to judge the rest.
 func TestReportOnlyJudgeVerdictsMissing(t *testing.T) {
 	for _, c := range []struct {
-		status, note, want string
+		status, note, want, command string
 	}{
-		{experiment.StatusStopped, "2 run(s) still need the judge", "lack a judge verdict: agentium experiment run lean-ab-judged judges them."},
-		{experiment.StatusBudget, "2 run(s) still need the judge; the budget leaves no room", "lack a judge verdict, which the budget leaves no room for: agentium experiment run lean-ab-judged --budget USD judges them."},
-		{experiment.StatusUsage, "the judge hit a usage limit", "lack a judge verdict (the judge was paused at a usage limit): agentium experiment run lean-ab-judged judges them once it resets."},
+		{experiment.StatusStopped, "2 run(s) still need the judge", "lack a judge verdict: agentium experiment run lean-ab-judged judges them.",
+			"agentium experiment run lean-ab-judged judges them."},
+		{experiment.StatusBudget, "2 run(s) still need the judge, but the budget leaves no room for a judgement ($6.00)",
+			"lack a judge verdict, which the budget leaves no room for: agentium experiment run lean-ab-judged --budget USD judges them.",
+			"agentium experiment run lean-ab-judged --budget USD judges them."},
+		{experiment.StatusUsage, "the judge hit a usage limit or a sign-in failure, which the next calls would hit too",
+			"lack a judge verdict (the judge was paused at a usage limit): agentium experiment run lean-ab-judged judges them once the usage limit resets.",
+			"agentium experiment run lean-ab-judged judges them once the usage limit resets."},
+		// Another status note is kept, scrubbed.
+		{experiment.StatusStopped, "Agentium could not store a judgement: open /home/someone/.agentium/agentium.db: locked",
+			"lack a judge verdict (stopped: Agentium could not store a judgement: open <agentium data>/agentium.db: locked): agentium experiment run lean-ab-judged judges them.",
+			"agentium experiment run lean-ab-judged judges them."},
 	} {
 		in := judged()
 		in.Status, in.StatusNote = c.status, c.note
@@ -274,7 +284,8 @@ func TestReportOnlyJudgeVerdictsMissing(t *testing.T) {
 		}
 		for _, text := range []string{md, txt} {
 			if strings.Contains(text, "not finished") || !strings.Contains(text, "Every run settled, so the success and cost verdicts are complete; 2 run(s) "+c.want) ||
-				!strings.Contains(text, "1 stopped early") || !strings.Contains(text, "1 not judged yet") || !strings.Contains(text, "2 run(s) still need the judge: agentium experiment run lean-ab-judged judges them.") {
+				!strings.Contains(text, "1 stopped early") || !strings.Contains(text, "1 not judged yet") || !strings.Contains(text, "2 run(s) still need the judge: "+c.command) || strings.Contains(text, "/home/someone") ||
+				strings.Count(text, "agentium experiment run lean-ab-judged") != 2 || strings.Count(text, c.command) != 2 {
 				t.Errorf("%s:\n%s", c.status, text)
 			}
 		}
@@ -315,5 +326,85 @@ func TestReportJudgeRunRows(t *testing.T) {
 	}
 	if rep.Runs[0].Outcome != claude.OutcomeOK {
 		t.Errorf("run outcome %s", rep.Runs[0].Outcome)
+	}
+}
+
+// Every free-text string of judge.Verdict reaches the shared report scrubbed: a new string field that shareVerdict
+// leaves alone fails here. Enumerations (the answers, model, effort and why it stopped) are not free text.
+func TestShareVerdictScrubsEveryText(t *testing.T) {
+	enums := map[string]bool{"Fixed": true, "Answers": true, "Model": true, "Effort": true, "Stopped": true}
+	const private = "/home/someone/.agentium/x \x1b[31mred"
+	var v judge.Verdict
+	rv := reflect.ValueOf(&v).Elem()
+	for i := range rv.NumField() {
+		f, field := rv.Field(i), rv.Type().Field(i)
+		switch {
+		case enums[field.Name]:
+		case f.Kind() == reflect.String:
+			f.SetString(private)
+		case f.Kind() == reflect.Slice && f.Type().Elem().Kind() == reflect.String:
+			f.Set(reflect.ValueOf([]string{private}))
+		case f.Kind() == reflect.Bool || f.Kind() == reflect.Int || f.Kind() == reflect.Float64:
+		default:
+			t.Fatalf("Verdict.%s is a %s: decide how a report shares it", field.Name, f.Kind())
+		}
+	}
+	in := Input{DataDir: "/home/someone/.agentium", Home: "/home/someone"}
+	data, err := json.Marshal(in.shareVerdict(&v))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "/home/someone") || strings.Contains(string(data), `\u001b`) {
+		t.Errorf("a verdict's text is shared as it was: %s", data)
+	}
+	if !strings.Contains(string(data), `"answers":[]`) {
+		t.Errorf("nil answers should be an empty list: %s", data)
+	}
+}
+
+// Control characters in a model's reason never reach the terminal or Markdown, and a flagged run's detail is scrubbed.
+func TestReportJudgeStripsControlCharacters(t *testing.T) {
+	in := judged()
+	for i := range in.Runs {
+		v := in.Runs[i].Record.Judge
+		if v != nil && v.Fixed == judge.No && in.Runs[i].Record.Passed != nil && *in.Runs[i].Record.Passed {
+			v.Reason = "Skips \x1b[2Jthe\x07 check\r\nentirely.\x00"
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, js, txt := renderAll(t, rep)
+	for _, text := range []string{md, txt} {
+		if strings.ContainsAny(text, "\x1b\x07\x00\r") || !strings.Contains(text, "Skips [2Jthe check entirely.") {
+			t.Errorf("control characters reached the rendering:\n%q", text)
+		}
+	}
+	if strings.Contains(js, `\u001b`) || strings.Contains(js, `\u0007`) {
+		t.Error("control characters reached the JSON")
+	}
+	for _, f := range rep.Judge.Flagged {
+		if strings.ContainsAny(f.Detail+f.Reason, "\x1b\x07\x00\r\n") {
+			t.Errorf("flagged %+v", f)
+		}
+	}
+}
+
+// With no passing run judged, the report does not claim the judge called them all fixed.
+func TestReportJudgeNoPassingRunJudged(t *testing.T) {
+	in := judged()
+	for i := range in.Runs {
+		if rec := &in.Runs[i].Record; rec.Passed != nil && *rec.Passed {
+			rec.Judge = nil
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, _, _ := renderAll(t, rep)
+	if !strings.Contains(md, "The judge has judged no passing run.") || strings.Contains(md, "called every passing run") {
+		t.Errorf("no passing run judged:\n%s", md)
 	}
 }

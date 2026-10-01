@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
@@ -152,7 +153,10 @@ func judgeSummary(in Input) *Judge {
 		if counts[rec.Arm] == nil {
 			counts[rec.Arm] = &[2]tally{}
 		}
-		c := &counts[rec.Arm][map[bool]int{true: 0, false: 1}[success]]
+		c := &counts[rec.Arm][1] // failing
+		if success {
+			c = &counts[rec.Arm][0]
+		}
 		c.judged++
 		switch v.Fixed {
 		case judge.Yes:
@@ -169,7 +173,7 @@ func judgeSummary(in Input) *Judge {
 			}
 		}
 		if success && v.Fixed != judge.Yes {
-			out.Flagged = append(out.Flagged, Flagged{Run: r.ID, Task: rec.Task, Arm: rec.Arm, Verdict: v.Fixed, Detail: run.Describe(*v),
+			out.Flagged = append(out.Flagged, Flagged{Run: r.ID, Task: rec.Task, Arm: rec.Arm, Verdict: v.Fixed, Detail: oneLine(in.scrub(run.Describe(*v))),
 				Reason: oneLine(in.scrub(v.Reason))})
 		}
 	}
@@ -197,20 +201,51 @@ func allSame(answers []string) bool {
 	return true
 }
 
-// oneLine joins a text's lines and runs of spaces into one line.
-func oneLine(text string) string { return strings.Join(strings.Fields(text), " ") }
+// oneLine joins a text's lines and runs of spaces into one line, without control characters: the judge's texts are a
+// model's, and an escape sequence or a raw control byte must not reach a terminal or a Markdown file.
+func oneLine(text string) string {
+	return strings.Join(strings.Fields(strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, text)), " ")
+}
 
-// shareVerdict is a run's verdict as a report shares it: its texts scrubbed (Claude Code's, which may name paths).
+// stripControl drops a text's control characters but its line breaks and tabs (JSON escapes those).
+func stripControl(text string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, text)
+}
+
+// shareVerdict is a run's verdict as a report shares it: its texts (Claude Code's, which may name paths or carry
+// control characters) scrubbed. Every string field of judge.Verdict that is free text must be scrubbed here;
+// TestShareVerdictScrubsEveryText fails when a new one is not.
 func (in Input) shareVerdict(v *judge.Verdict) *judge.Verdict {
 	if v == nil {
 		return nil
 	}
+	clean := func(text string) string { return stripControl(in.scrub(text)) }
+	cleanAll := func(texts []string) []string {
+		out := []string{}
+		for _, t := range texts {
+			out = append(out, clean(t))
+		}
+		return out
+	}
 	out := *v
-	out.Reason = in.scrub(v.Reason)
-	out.Reasons = in.scrubAll(v.Reasons)
-	out.Errors = in.scrubAll(v.Errors)
-	if out.Reasons == nil {
-		out.Reasons = []string{}
+	out.Reason = clean(v.Reason)
+	out.Reasons = cleanAll(v.Reasons)
+	out.Errors = cleanAll(v.Errors)
+	if len(out.Errors) == 0 {
+		out.Errors = nil // omitted, as stored
+	}
+	if out.Answers == nil {
+		out.Answers = []string{}
 	}
 	return &out
 }
@@ -273,7 +308,7 @@ func (r Report) judgeView() judgeView {
 		v.lines = append(v.lines, "Not judged: "+strings.Join(missing, "; ")+".")
 	}
 	if g := j.Agreement; g.Share != nil {
-		v.lines = append(v.lines, fmt.Sprintf("Repeat agreement: every repeat gave the same answer in %d of %d runs with two or more answers (%s; %.0f–%.0f%%).",
+		v.lines = append(v.lines, fmt.Sprintf("Repeat agreement: every answer was the same in %d of %d runs with two or more answers (%s; %.0f–%.0f%%).",
 			g.Count, g.Of, pct(*g.Share), 100*g.Low, 100*g.High))
 	} else {
 		v.lines = append(v.lines, "Repeat agreement: no judged run has two or more answers to compare.")
@@ -284,10 +319,17 @@ func (r Report) judgeView() judgeView {
 	}
 	v.lines = append(v.lines, fmt.Sprintf("Judge cost: %s; $%.2f in total, in the spend and not in the arms' costs.", strings.Join(costs, ", "), j.CostUSD))
 	if j.Pending > 0 {
-		v.lines = append(v.lines, fmt.Sprintf("%d run(s) still need the judge: agentium experiment run %s judges them.", j.Pending, r.Experiment))
+		v.lines = append(v.lines, fmt.Sprintf("%d run(s) still need the judge: %s.", j.Pending, judgeResume(r)))
 	}
 	if len(j.Flagged) == 0 {
 		v.flaggedTitle = "The judge called every passing run it judged fixed."
+		passing := 0
+		for _, a := range j.Arms {
+			passing += a.Passing.Judged
+		}
+		if passing == 0 {
+			v.flaggedTitle = "The judge has judged no passing run."
+		}
 		return v
 	}
 	v.flaggedTitle = fmt.Sprintf("Passing runs the judge did not call fixed (%d), with its reasons, to check by hand:", len(j.Flagged))
@@ -305,20 +347,34 @@ func (r Report) judgeView() judgeView {
 	return v
 }
 
+// judgeResume is the command that judges the runs still waiting, as the experiment's status calls for it.
+func judgeResume(rep Report) string {
+	command := "agentium experiment run " + rep.Experiment
+	switch rep.Status {
+	case experiment.StatusBudget:
+		return command + " --budget USD judges them"
+	case experiment.StatusUsage:
+		return command + " judges them once the usage limit resets"
+	}
+	return command + " judges them"
+}
+
 // pendingNote replaces the "not finished" note when every slot settled and only judge verdicts are missing: the
-// success and cost verdicts are complete then. ok is false otherwise.
-func pendingNote(rep Report) (string, bool) {
+// success and cost verdicts are complete then. ok is false otherwise. A status note other than the CLI's own about
+// the judge (an error storing a judgement, say) is kept, scrubbed.
+func pendingNote(rep Report, in Input) (string, bool) {
 	if rep.Judge == nil || rep.Judge.Pending == 0 || rep.Settled < rep.Slots {
 		return "", false
 	}
 	note := fmt.Sprintf("Every run settled, so the success and cost verdicts are complete; %d run(s) lack a judge verdict", rep.Judge.Pending)
 	switch rep.Status {
 	case experiment.StatusBudget:
-		note += fmt.Sprintf(", which the budget leaves no room for: agentium experiment run %s --budget USD judges them.", rep.Experiment)
+		note += ", which the budget leaves no room for"
 	case experiment.StatusUsage:
-		note += fmt.Sprintf(" (the judge was paused at a usage limit): agentium experiment run %s judges them once it resets.", rep.Experiment)
-	default:
-		note += fmt.Sprintf(": agentium experiment run %s judges them.", rep.Experiment)
+		note += " (the judge was paused at a usage limit)"
 	}
-	return note, true
+	if own := strings.Contains(rep.StatusNote, "still need the judge") || strings.HasPrefix(rep.StatusNote, "the judge hit a usage limit"); rep.StatusNote != "" && !own {
+		note += " (" + rep.Status + ": " + in.scrub(rep.StatusNote) + ")"
+	}
+	return note + ": " + judgeResume(rep) + ".", true
 }

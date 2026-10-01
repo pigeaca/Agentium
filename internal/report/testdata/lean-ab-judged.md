@@ -101,7 +101,7 @@ A second opinion beside the tests, which decides nothing: pass, fail and the ver
 | B | failed | 5 | 0 (0%; 0–43%) | 0 (0%; 0–43%) | 5 (100%; 57–100%) |
 
 Not judged: A 4 (1 got no answer, 3 have no reference in code); B 4 (1 changed no code, 3 have no reference in code).
-Repeat agreement: every repeat gave the same answer in 42 of 51 runs with two or more answers (82%; 70–90%).
+Repeat agreement: every answer was the same in 42 of 51 runs with two or more answers (82%; 70–90%).
 Judge cost: A $5.94, B $5.46; $11.40 in total, in the spend and not in the arms' costs.
 
 Passing runs the judge did not call fixed (17), with its reasons, to check by hand:

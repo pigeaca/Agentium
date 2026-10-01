@@ -295,6 +295,7 @@ func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
 	unfunded := f.run(ctx, "experiment", "run", "last")
 	// Every slot settled, and only the judge is waiting for a budget: a budget stop (exit 0), not a failure.
 	expect(t, unfunded, ExitOK, "1 run(s) still need the judge, but the budget leaves no room for a judgement ($4.00): raise it with --budget",
+		"1 graded run(s) still need the judge: agentium experiment run last --budget USD",
 		"Stopped at the budget. To continue: agentium experiment run last --budget USD")
 	if strings.Contains(unfunded.stdout, "Judged run") || strings.Contains(unfunded.stdout, "Stopped. To continue") {
 		t.Errorf("a judgement past the budget, or a stop:\n%s", unfunded.stdout)
@@ -304,7 +305,8 @@ func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
 	report := f.run(ctx, "experiment", "report", "last")
 	expect(t, report, ExitOK, "2 of 2 runs settled (budget)", "## Judge",
 		"Every run settled, so the success and cost verdicts are complete; 1 run(s) lack a judge verdict, which the budget leaves no room for: "+
-			"agentium experiment run last --budget USD judges them.", "1 stopped early")
+			"agentium experiment run last --budget USD judges them.", "1 stopped early",
+		"1 run(s) still need the judge: agentium experiment run last --budget USD judges them.")
 	if strings.Contains(report.stdout, "not finished") {
 		t.Errorf("the report calls the experiment unfinished:\n%s", report.stdout)
 	}

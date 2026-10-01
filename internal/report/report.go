@@ -415,7 +415,7 @@ func bySlot(runs []Run) []Run {
 func notes(rep Report, in Input) []string {
 	var out []string
 	a := rep.Analysis
-	if note, ok := pendingNote(rep); ok && rep.Status != experiment.StatusDone {
+	if note, ok := pendingNote(rep, in); ok && rep.Status != experiment.StatusDone {
 		out = append(out, note)
 	} else if rep.Status != experiment.StatusDone {
 		status := rep.Status
