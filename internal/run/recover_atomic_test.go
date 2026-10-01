@@ -197,8 +197,8 @@ func TestRecoverUnreadableRetriesAfterAFailedCleanup(t *testing.T) {
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	old := now.Add(-time.Hour)
 	dir := filepath.Join(layout.Records, "r1")
-	notes := filepath.Join(dir, "notes.txt")
-	for p, body := range map[string]string{filepath.Join(dir, startFile): "{", filepath.Join(dir, "stream.jsonl"): `{"type":"system","subtype":"init"}` + "\n",
+	notes := filepath.Join(dir, "zz-notes.txt") // after stream.jsonl in the walk: it is rewritten before this one fails
+	for p, body := range map[string]string{filepath.Join(dir, startFile): "{", filepath.Join(dir, "stream.jsonl"): `{"type":"system","subtype":"init","note":"sk-` + `ant-api03-abcdefghijklmnopqrstuvwxyz"}` + "\n",
 		notes: "token sk-" + "ant-api03-abcdefghijklmnopqrstuvwxyz", filepath.Join(dir, "judge", "config.json"): "login"} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 			t.Fatal(err)
@@ -218,7 +218,18 @@ func TestRecoverUnreadableRetriesAfterAFailedCleanup(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, startFile)); err != nil {
 		t.Fatalf("the start file was moved before cleanup finished: %v", err)
 	}
+	stream := filepath.Join(dir, "stream.jsonl")
+	// Redaction rewrote the transcript before failing; its mtime must not make the retry wait for the alive window.
+	if data, _ := os.ReadFile(stream); strings.Contains(string(data), "sk-ant") {
+		t.Fatal("the transcript was not rewritten before the failure: the test does not cover the mtime")
+	}
+	if info, _ := os.Stat(stream); !info.ModTime().Equal(old) {
+		t.Errorf("the transcript's mtime moved to %v", info.ModTime())
+	}
 	if err := os.Chmod(notes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "judge"), 0o700); err != nil { // the retry removes it again
 		t.Fatal(err)
 	}
 	orphans, err := Recover(context.Background(), layout, stored, "", now)
@@ -303,31 +314,83 @@ func TestRemoveStaleWorkspace(t *testing.T) {
 	workspaces := filepath.Join(t.TempDir(), "workspaces")
 	outside := t.TempDir()
 	os.WriteFile(filepath.Join(outside, "precious"), []byte("x"), 0o600)
-	stale := filepath.Join(workspaces, "e1-s2-t1")
-	if err := os.MkdirAll(filepath.Join(stale, "repo"), 0o700); err != nil {
+	mk := func(p string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale, sibling := filepath.Join(workspaces, "e1-s2-t1"), filepath.Join(workspaces, "e1-s3-t1")
+	mk(filepath.Join(stale, "repo", "a.txt"))
+	mk(filepath.Join(sibling, "repo", "a.txt"))
+	temp := filepath.Join(t.TempDir(), "root")
+	mk(filepath.Join(temp, "claude-501", "shell-snapshot")) // a non-empty temp root of the user's own
+	if err := removeStaleWorkspace(workspaces, stale, temp); err != nil {
 		t.Fatal(err)
 	}
-	if err := removeStaleWorkspace(workspaces, stale, ""); err != nil {
-		t.Fatal(err)
+	for _, gone := range []string{stale, temp} {
+		if _, err := os.Stat(gone); err == nil {
+			t.Errorf("%s was left", gone)
+		}
 	}
-	if _, err := os.Stat(stale); err == nil {
-		t.Error("the stale workspace was left")
+	if _, err := os.Stat(filepath.Join(sibling, "repo", "a.txt")); err != nil {
+		t.Errorf("a sibling workspace was removed: %v", err)
 	}
 	if err := removeStaleWorkspace(workspaces, stale, ""); err != nil {
 		t.Errorf("a missing workspace: %v", err)
 	}
+	// A temp root that is a link is not the user's own folder: it stays, with its target.
+	mk(filepath.Join(workspaces, "e1-s4-t1", "a.txt"))
+	linkTemp := filepath.Join(t.TempDir(), "linkroot")
+	os.Symlink(outside, linkTemp)
+	if err := removeStaleWorkspace(workspaces, filepath.Join(workspaces, "e1-s4-t1"), linkTemp); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "precious")); err != nil {
+		t.Errorf("a temp root link's target was removed: %v", err)
+	}
+	mk(filepath.Join(workspaces, "a", "b", "c.txt")) // nested: not a direct child
 	link := filepath.Join(workspaces, "linked")
-	os.Symlink(outside, link)
+	os.Symlink(sibling, link) // a link to a direct child: the link is not removed
 	for _, bad := range []string{link, workspaces, filepath.Join(workspaces, "a", "b"), outside} {
 		if err := removeStaleWorkspace(workspaces, bad, ""); err != nil {
 			t.Errorf("%s: %v", bad, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(outside, "precious")); err != nil {
-		t.Errorf("a path outside was removed: %v", err)
+	for _, kept := range []string{filepath.Join(outside, "precious"), filepath.Join(workspaces, "a", "b", "c.txt"), link,
+		filepath.Join(sibling, "repo", "a.txt"), workspaces} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Errorf("%s was removed: %v", kept, err)
+		}
 	}
-	if _, err := os.Stat(workspaces); err != nil {
-		t.Errorf("the workspaces folder was removed: %v", err)
+}
+
+// Once clears a stale workspace of the same name before its checkout, so a retried experiment slot starts fresh.
+func TestOnceRemovesAStaleWorkspace(t *testing.T) {
+	data := t.TempDir()
+	short, err := os.MkdirTemp("/tmp", "ag") // Claude Code's temp root must be short
+	if err != nil {
+		t.Skip("no short temp folder:", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(short) })
+	layout := home.Layout{Root: data, Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Temp: short}
+	stale := filepath.Join(layout.Workspaces, "e1-s2-t1", "repo", "leftover.txt")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// It fails later (no repository to check out); what matters is that it is not the checkout meeting the leftover.
+	_, err = Once(context.Background(), Env{ID: "r1", Workspace: "e1-s2-t1", Layout: layout, Now: time.Now}, Spec{})
+	if err == nil {
+		t.Fatal("Once succeeded without a repository")
+	}
+	if strings.Contains(err.Error(), "already exists") {
+		t.Errorf("the checkout met the stale workspace: %v", err)
 	}
 }
 
@@ -357,5 +420,14 @@ func TestRecoverUnreadableUsesAReadablePGID(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, startFile)); err != nil {
 		t.Errorf("a live run was touched: %v", err)
+	}
+
+	// A number cut off mid-way ("pgid":12 from 123) names some other group: it blocks nothing.
+	if err := os.WriteFile(filepath.Join(dir, startFile), []byte(fmt.Sprintf(`{"agent_started":true,"pgid":%d`, pgid)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(filepath.Join(dir, startFile), old, old)
+	if orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now()); err != nil || len(orphans) != 1 {
+		t.Errorf("a cut-off pgid: %+v, %v", orphans, err)
 	}
 }

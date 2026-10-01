@@ -128,8 +128,6 @@ func (e *AliveError) Error() string {
 	if len(e.Runs) == 0 {
 		return strings.Join(e.Unreadable, "; ")
 	}
-	if len(e.Unreadable) > 0 {
-	}
 	return strings.Join(append([]string{e.runsText()}, e.Unreadable...), "; ")
 }
 
@@ -296,7 +294,7 @@ func groupExists(pgid int) bool {
 // the truncated bytes is checked first and is exact.
 const unreadableAliveWindow = 25 * time.Minute
 
-var pgidInTruncated = regexp.MustCompile(`"pgid":\s*(\d+)`)
+var pgidInTruncated = regexp.MustCompile(`"pgid":\s*(\d+)[,}]`)
 
 // recoverUnreadable handles a run whose start file cannot be parsed, losing the least. A start file that cannot be
 // read must not block every later start, but the run's task, arm, experiment slot and process group are unknown, so
@@ -329,7 +327,8 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	if match := pgidInTruncated.FindSubmatch(data); match != nil {
 		if pgid, err := strconv.Atoi(string(match[1])); err == nil && pgid > 0 && groupExists(pgid) {
 			return nil, fmt.Sprintf("run %s: its start file is unreadable, but its process group %d exists; it may still be running: "+
-				"wait for it to finish, or stop it, then try again", id, pgid), nil
+				"wait for it to finish, or stop it, then try again (ps -o pid,command -g %d shows what it is; after a restart the "+
+				"number may belong to something else; if it is not an Agentium agent, move %s aside)", id, pgid, pgid, startPath), nil
 		}
 	}
 	fresh, written := info, transcript
@@ -342,23 +341,19 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 			"try again after %s, or stop it first", id, written, fresh.ModTime().Format("15:04:05"),
 			fresh.ModTime().Add(unreadableAliveWindow).Format("15:04:05")), nil
 	}
-	workspaces := realPath(layout.Workspaces)
 	workspace := ""
 	switch {
 	case m.CWD != "":
 		// Claude Code started in <workspace>/repo. Only that shape is trusted with a removal: an absolute path whose
-		// last element is repo, resolving to a direct child of the workspaces folder.
+		// last element is repo; removeStaleWorkspace then requires a direct child of the workspaces folder.
 		if cwd := filepath.Clean(m.CWD); filepath.IsAbs(cwd) && filepath.Base(cwd) == "repo" {
-			workspace = realPath(filepath.Dir(cwd))
+			workspace = filepath.Dir(cwd)
 		}
 	case !hasTranscript:
-		workspace = realPath(filepath.Join(layout.Workspaces, id)) // the agent never started; the default workspace name
+		workspace = filepath.Join(layout.Workspaces, id) // the agent never started; the default workspace name
 	}
-	if workspace != "" && filepath.Dir(workspace) == workspaces && within(workspace, workspaces) && workspace != workspaces {
-		if err := os.RemoveAll(workspace); err != nil {
-			return nil, "", fmt.Errorf("remove %s: %w", workspace, err)
-		}
-		if err := removeRunTemp(layout.RunTemp(filepath.Base(workspace))); err != nil {
+	if workspace != "" {
+		if err := removeStaleWorkspace(layout.Workspaces, workspace, layout.RunTemp(filepath.Base(workspace))); err != nil {
 			return nil, "", fmt.Errorf("run %s: %w", id, err)
 		}
 	}
@@ -373,8 +368,14 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 			return nil, "", fmt.Errorf("remove the %s folder of %s: %w", sub, id, err)
 		}
 	}
-	if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
-		return nil, "", err
+	// Redaction rewrites stream.jsonl, which would make a half-finished cleanup look like a live run for the next
+	// window: the transcript keeps its mtime, on failure too.
+	redactErr := (Env{Secret: secret}).redactRecords(dir)
+	if err := os.Chtimes(transcript, info.ModTime(), info.ModTime()); err != nil && redactErr == nil {
+		redactErr = err
+	}
+	if redactErr != nil {
+		return nil, "", redactErr
 	}
 	aside := startPath + corruptSuffix
 	if err := os.Rename(startPath, aside); err != nil {

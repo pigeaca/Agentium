@@ -999,15 +999,15 @@ func copyTree(src, dst string) (unreadable []string, err error) {
 }
 
 // removeStaleWorkspace removes a workspace and its temp root left by a run that no one stored, before a new run reuses
-// the name. Only a direct child of the workspaces folder is removed (symlinks are resolved first), so a name that
-// escapes it is left alone and the run's own checks fail as before.
+// the name. Only a real folder (not a symlink) that is a direct child of the workspaces folder is removed, so a name
+// that escapes it is left alone and the run's own checks fail as before.
 func removeStaleWorkspace(workspaces, workspace, tempRoot string) error {
 	resolved := realPath(workspace)
 	if filepath.Dir(resolved) != realPath(workspaces) || !within(resolved, realPath(workspaces)) {
 		return nil
 	}
-	if _, err := os.Lstat(workspace); err != nil {
-		return nil // nothing there
+	if info, err := os.Lstat(workspace); err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return nil // nothing there, or a link: not ours to remove
 	}
 	if err := os.RemoveAll(workspace); err != nil {
 		return fmt.Errorf("remove the stale workspace %s: %w", workspace, err)
