@@ -13,6 +13,7 @@ func toolInvocation(t *testing.T, tools ...string) Invocation {
 	inv := invocation(t, SignInLogin, "")
 	inv.Tools, inv.BuildCache = tools, "/work/runs/r1/go-build"
 	inv.Deps, inv.JavaHome = "/data/deps/1", "/host/jdk"
+	inv.AllowLocalBinding = true // the user's opt-in, which only Gradle projects use
 	return inv
 }
 
@@ -101,6 +102,26 @@ func TestGradleRunEnvironmentAndSandbox(t *testing.T) {
 	if network["allowLocalBinding"] != true {
 		t.Errorf("Gradle's file-lock service binds a local socket: %v", network)
 	}
+	// allowLocalBinding is a grant of its own (bind any local port, inbound, outbound to localhost): opt-in, and a run
+	// without it does not start; non-Gradle projects never get it, opt-in or not.
+	refused := inv
+	refused.AllowLocalBinding = false
+	if _, _, err := refused.Command(userTools); err == nil || !strings.Contains(err.Error(), "agentium init --allow-local-binding") ||
+		!strings.Contains(err.Error(), "localhost") {
+		t.Errorf("a Gradle run without the opt-in: %v", err)
+	}
+	if err := LocalBindingRefusal([]string{"gradle"}, true); err != nil {
+		t.Errorf("with the opt-in: %v", err)
+	}
+	for _, tools := range [][]string{nil, {"go"}, {"maven"}, {"cargo"}, {"maven", "cargo"}} {
+		if err := LocalBindingRefusal(tools, false); err != nil {
+			t.Errorf("%v is refused without the opt-in: %v", tools, err)
+		}
+		_, other := toolCommand(t, toolInvocation(t, tools...), userTools)
+		if n, _ := sandbox(other); n["allowLocalBinding"] != nil {
+			t.Errorf("%v gets local binding", tools)
+		}
+	}
 	if domains, _ := network["allowedDomains"].([]any); len(domains) != 0 || network["strictAllowlist"] != true {
 		t.Errorf("outbound network is not blocked: %v", network)
 	}
@@ -123,13 +144,11 @@ func TestGradleRunEnvironmentAndSandbox(t *testing.T) {
 func TestCargoRunEnvironmentAndSandbox(t *testing.T) {
 	inv := toolInvocation(t, "cargo")
 	env, settings := toolCommand(t, inv, userTools)
-	for name, v := range map[string]string{"CARGO_HOME": "/data/deps/1/cargo", "CARGO_NET_OFFLINE": "true", "RUSTC_WRAPPER": ""} {
+	for name, v := range map[string]string{"CARGO_HOME": "/data/deps/1/cargo", "CARGO_NET_OFFLINE": "true", "RUSTC_WRAPPER": "",
+		"CARGO_TARGET_DIR": "/work/runs/r1/repo/target"} { // the checkout's own, whatever the user's config says
 		if got, ok := env[name]; !ok || got != v {
 			t.Errorf("%s = %q (set %v), want %q: sccache would cache compiled hidden tests", name, got, ok, v)
 		}
-	}
-	if _, ok := env["CARGO_TARGET_DIR"]; ok {
-		t.Error("CARGO_TARGET_DIR reaches the agent")
 	}
 	if network, _ := sandbox(settings); network["allowLocalBinding"] != nil {
 		t.Errorf("Cargo projects get no local binding: %v", network)
@@ -176,6 +195,30 @@ func TestToolPathsAreChecked(t *testing.T) {
 		mutate(&inv)
 		if _, _, err := inv.Command(userTools); err == nil {
 			t.Error("a relative deps folder or JDK is accepted")
+		}
+	}
+}
+
+// A real Go run, with a deps folder: Go's environment is as before, and the deps folder is stated read-only and left
+// readable, with no local binding. This pins the one change a Go project's sandbox gets from profiles.
+func TestGoRunWithADepsFolder(t *testing.T) {
+	inv := toolInvocation(t, "go")
+	inv.AllowLocalBinding = false
+	env, settings := toolCommand(t, inv, userTools)
+	network, fs := sandbox(settings)
+	if network["allowLocalBinding"] != nil {
+		t.Error("local binding for a Go project")
+	}
+	writes, _ := fs["denyWrite"].([]any)
+	if !slices.Contains(writes, any("/data/deps/1")) {
+		t.Errorf("denyWrite lacks the deps folder: %v", writes)
+	}
+	if env["GOFLAGS"] != "-buildvcs=false" || env["GOCACHE"] != "/work/runs/r1/go-build" || env["RUSTC_WRAPPER"] != "sccache" {
+		t.Errorf("a Go project's environment changed: %v", env)
+	}
+	for _, name := range []string{"MAVEN_ARGS", "GRADLE_USER_HOME", "CARGO_NET_OFFLINE", "CARGO_TARGET_DIR"} {
+		if _, ok := env[name]; ok {
+			t.Errorf("%s reaches a Go project's agent", name)
 		}
 	}
 }

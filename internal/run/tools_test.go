@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 )
 
@@ -49,7 +50,7 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 	ctx := context.Background()
 	warm := func(base string, steps []buildtool.WarmStep) string {
 		t.Helper()
-		note, err := env.warmTools(ctx, checkout, deps, base, []string{"cargo"}, steps, filepath.Join(dir, "setup.log"), func(int) {})
+		note, err := env.warmTools(ctx, checkout, deps, base, buildtool.Select([]string{"cargo"}), []string{"cargo"}, steps, filepath.Join(dir, "setup.log"), func(int) {})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -82,6 +83,79 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 	}
 	if info, err := os.Stat(deps); err != nil || info.Mode().Perm() != 0o700 {
 		t.Errorf("deps folder: %v %v", info, err)
+	}
+}
+
+// bareWith commits the files in a repository and fetches that commit into a bare one, as Agentium keeps tasks' bases.
+func bareWith(t *testing.T, files map[string]string) (bare, commit string) {
+	t.Helper()
+	ctx := context.Background()
+	user := goldenRepo(t, files)
+	out, err := gitx.Run(ctx, "-C", user, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare = filepath.Join(t.TempDir(), "repo.git")
+	if err := gitx.InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	if err := gitx.FetchCommit(ctx, user, out, gitx.SourceRef(out), "--git-dir", bare); err != nil {
+		t.Fatal(err)
+	}
+	return bare, out
+}
+
+// A run's tools come from the task's base commit: an arm's snapshot that adds a build file changes nothing about the
+// tools, the sandbox or the warm-up (the run asks about the base, not the overlaid checkout).
+func TestToolsComeFromTheBaseCommit(t *testing.T) {
+	ctx := context.Background()
+	bare, base := bareWith(t, map[string]string{"pom.xml": "<project/>", "src/Main.java": "x"})
+	user := goldenRepo(t, map[string]string{"pom.xml": "<project/>", "settings.gradle": "", "src/Main.java": "x"})
+	snap, _ := gitx.Run(ctx, "-C", user, "rev-parse", "HEAD")
+	if err := gitx.FetchCommit(ctx, user, snap, gitx.SourceRef(snap), "--git-dir", bare); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := toolsAtBase(ctx, bare, base); err != nil || !slices.Equal(got, []string{"maven"}) {
+		t.Errorf("tools at the base: %v, %v", got, err)
+	}
+	if got, err := toolsAtBase(ctx, bare, snap); err != nil || !slices.Equal(got, []string{"maven", "gradle"}) {
+		t.Errorf("tools at the snapshot's commit: %v, %v (the check must tell them apart)", got, err)
+	}
+	if needed, err := NeedsLocalBinding(ctx, bare, []string{base}); err != nil || needed {
+		t.Errorf("a Maven base needs local binding: %v, %v", needed, err)
+	}
+	if needed, err := NeedsLocalBinding(ctx, bare, []string{base, snap}); err != nil || !needed {
+		t.Errorf("a Gradle commit among the bases: %v, %v", needed, err)
+	}
+	if _, err := toolsAtBase(ctx, bare, "0000000000000000000000000000000000000000"); err == nil {
+		t.Error("an unknown commit is not an error")
+	}
+}
+
+// The warm-up runs in a throwaway checkout of the base, in the data folder's cache: the run's own checkout never sees
+// what it builds, and the throwaway is gone afterwards.
+func TestWarmRunsInAThrowawayCheckoutOfTheBase(t *testing.T) {
+	ctx := context.Background()
+	bare, base := bareWith(t, map[string]string{"pom.xml": "<project/>"})
+	data := t.TempDir()
+	seen := filepath.Join(data, "seen")
+	fake := buildtool.Profile{Name: "fake", Warm: func(dir, deps string, _ func(string) bool) []buildtool.WarmStep {
+		return []buildtool.WarmStep{{Command: `pwd > ` + seen + `; ls >> ` + seen + `; touch target-from-warmup`}}
+	}}
+	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, Bare: bare, VerifyTimeout: 20 * time.Second}
+	if note, err := env.warmInThrowaway(ctx, []buildtool.Profile{fake}, filepath.Join(data, "deps"), base, filepath.Join(data, "setup.log"), func(int) {}); err != nil || note != "" {
+		t.Fatalf("%q, %v", note, err)
+	}
+	got, _ := os.ReadFile(seen)
+	lines := strings.Fields(string(got))
+	if len(lines) < 2 || !strings.Contains(lines[0], "/cache/warm/") {
+		t.Fatalf("the warm-up ran in %q", got)
+	}
+	if !slices.Contains(lines, "pom.xml") {
+		t.Errorf("the base commit was not checked out: %q", got)
+	}
+	if left, _ := os.ReadDir(filepath.Join(data, "cache", "warm")); len(left) != 0 {
+		t.Errorf("the throwaway checkout is left: %v", left)
 	}
 }
 

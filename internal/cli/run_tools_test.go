@@ -50,6 +50,22 @@ env > `+filepath.Join(out, "env")+`
 cat "$GRADLE_USER_HOME/gradle.properties" > `+filepath.Join(out, "props")+` 2>/dev/null
 ls "$GRADLE_USER_HOME/wrapper/dists" > `+filepath.Join(out, "dists")+` 2>/dev/null
 true`, false)
+			if c.binding {
+				// A Gradle project's agent runs need the user's opt-in for local binding: nothing starts without it, and init
+				// keeps the choice until it is changed.
+				expect(t, f.run(context.Background(), "init"), ExitOK, "agentium init --allow-local-binding")
+				expect(t, f.run(context.Background(), "run", "once", "tool"), 1, "agentium init --allow-local-binding", "localhost")
+				if _, err := os.Stat(filepath.Join(out, "tool")); err == nil {
+					t.Error("the build tool ran for a run that was refused")
+				}
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding", "--no-allow-local-binding"), ExitUsage)
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding"), ExitOK, "agents may bind local ports")
+				expect(t, f.run(context.Background(), "init"), ExitOK, "agents may bind local ports")
+			} else {
+				if r := f.run(context.Background(), "init"); strings.Contains(r.stdout, "local ports") {
+					t.Errorf("init mentions local ports for a project without Gradle:\n%s", r.stdout)
+				}
+			}
 			expect(t, f.run(context.Background(), "run", "once", "tool", "--keep"), ExitOK, "outcome      ok; verification passed")
 
 			workspaces, _ := os.ReadDir(filepath.Join(f.data, "workspaces"))
@@ -77,7 +93,7 @@ true`, false)
 				}
 			}
 			if c.tool == "gradle" {
-				if got := readString(t, filepath.Join(out, "props")); got != "org.gradle.daemon=false\n" {
+				if got := readString(t, filepath.Join(out, "props")); !strings.HasPrefix(got, "org.gradle.daemon=false\n") {
 					t.Errorf("the run's gradle.properties = %q", got)
 				}
 				if got := strings.TrimSpace(readString(t, filepath.Join(out, "dists"))); got != "d" {
@@ -94,6 +110,10 @@ true`, false)
 			expect(t, f.run(context.Background(), "run", "once", "tool"), ExitOK, "outcome      ok; verification passed")
 			if again := strings.Split(strings.TrimSpace(readString(t, filepath.Join(out, "tool"))), "\n"); len(again) != c.calls {
 				t.Errorf("the second run warmed again: %q", again)
+			}
+			if c.binding {
+				expect(t, f.run(context.Background(), "init", "--no-allow-local-binding"), ExitOK, "refuse to start")
+				expect(t, f.run(context.Background(), "run", "once", "tool"), 1, "agentium init --allow-local-binding")
 			}
 		})
 	}

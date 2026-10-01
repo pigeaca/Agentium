@@ -89,6 +89,9 @@ type Env struct {
 	// Meta is kept in the run's start file and returned by Recover: what the caller needs to store a run whose
 	// Agentium process died (its project and experiment slot, say).
 	Meta json.RawMessage
+	// AllowLocalBinding is the project's opt-in for the sandbox's local binding (store.Project): a run on a Gradle
+	// project does not start without it (claude.LocalBindingRefusal).
+	AllowLocalBinding bool
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
@@ -107,6 +110,9 @@ type Env struct {
 func BuildEnv(layout home.Layout) ([]string, error) {
 	tmp := filepath.Join(layout.Cache, "tmp")
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
+		return nil, fmt.Errorf("build cache: %w", err)
+	}
+	if err := buildtool.PrepareCommands(layout.Cache); err != nil {
 		return nil, fmt.Errorf("build cache: %w", err)
 	}
 	return buildtool.CommandEnv(layout.Cache, tmp), nil
@@ -247,6 +253,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if found := instructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
+	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so
+	// change one arm's sandbox, warm-up or environment. A run that needs the user's opt-in for local binding stops here,
+	// before it costs anything.
+	tools, err := toolsAtBase(ctx, env.Bare, spec.Task.Base)
+	if err != nil {
+		return rec, err
+	}
+	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
+		return rec, err
+	}
 	prompt := spec.Instruction + suffix
 	if spec.PlainPrompt {
 		prompt = spec.Instruction
@@ -328,10 +344,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	// The repository's build tools (profiles) choose the agent's environment and sandbox, add their caches to the
 	// environment of Agentium's own commands, and warm the dependencies the agent will read.
-	inv.Tools, inv.Deps = buildtool.DetectIn(repo), env.depsFolder()
+	inv.Tools, inv.Deps, inv.AllowLocalBinding = tools, env.depsFolder(), env.AllowLocalBinding
 	profiles := buildtool.Select(inv.Tools)
 	if slices.Contains(inv.Tools, "maven") || slices.Contains(inv.Tools, "gradle") {
-		inv.JavaHome = buildtool.ResolveJavaHome(env.Environ, buildtool.CommandOutput)
+		inv.JavaHome = buildtool.ResolveJavaHome(ctx, env.Environ, buildtool.CommandOutput)
 	}
 	if env.Layout.Cache != "" {
 		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, env.Layout.Cache)...)
@@ -342,11 +358,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return
 		}
 		stopped = true
-		if stopErr := buildtool.StopRun(profiles, inv.BuildCache, buildtool.SystemHost()); stopErr != nil {
+		// Even a cancelled run stops what it started, within half a minute.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		if stopErr := buildtool.StopRun(stopCtx, profiles, inv.BuildCache, buildtool.SystemHost()); stopErr != nil {
 			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
 		}
 	}
-	notes, err := env.prepareTools(ctx, profiles, repo, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
+	notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
 	if err != nil {
 		return rec, err

@@ -492,3 +492,31 @@ func TestExperimentLockStatusAndRuns(t *testing.T) {
 		t.Errorf("run after its experiment was removed = %+v, %v", run, err)
 	}
 }
+
+// The local-binding opt-in is off for a new project, stored per project, kept when the project is registered again, and
+// read back with the project.
+func TestProjectLocalBindingOptIn(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx, now := context.Background(), time.Now()
+	p, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil || p.AllowLocalBinding {
+		t.Fatalf("a new project: %+v, %v", p, err)
+	}
+	other, _ := s.SaveProject(ctx, "/work/other", "other", []byte(`{}`), now)
+	if err := s.SetLocalBinding(ctx, p.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now.Add(time.Hour))
+	if err != nil || !again.AllowLocalBinding {
+		t.Fatalf("registering again must keep the choice: %+v, %v", again, err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/other"); got.ID != other.ID || got.AllowLocalBinding {
+		t.Errorf("another project: %+v", got)
+	}
+	if err := s.SetLocalBinding(ctx, p.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/app"); got.AllowLocalBinding {
+		t.Error("turning it off did not stick")
+	}
+}

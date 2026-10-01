@@ -2,10 +2,12 @@ package buildtool
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -105,7 +107,7 @@ func withoutGo(kvs []string) []string {
 // tool's offline settings are left out, not set to empty folders.
 func TestAgentEnvPerTool(t *testing.T) {
 	ctx := AgentContext{Allowed: []string{"PATH=/usr/bin", "JAVA_HOME=/user/jdk", "RUSTC_WRAPPER=sccache"}, Environ: []string{"RUSTC_WRAPPER=sccache"},
-		Home: "/home/u", BuildCache: "/data/workspaces/r1/go-build", Deps: "/data/deps/1", JavaHome: "/host/jdk"}
+		Home: "/home/u", Repo: "/data/workspaces/r1/repo", BuildCache: "/data/workspaces/r1/go-build", Deps: "/data/deps/1", JavaHome: "/host/jdk"}
 	maven := env(t, AgentEnv(Select([]string{"maven"}), ctx))
 	for name, want := range map[string]string{"JAVA_HOME": "/host/jdk", "MAVEN_USER_HOME": "/data/deps/1/mvnw-home",
 		"MAVEN_ARGS": "-o -Dmaven.repo.local=/data/workspaces/r1/go-build/m2 -Dmaven.repo.local.tail=/data/deps/1/m2"} {
@@ -121,7 +123,8 @@ func TestAgentEnvPerTool(t *testing.T) {
 		}
 	}
 	cargo := env(t, AgentEnv(Select([]string{"cargo"}), ctx))
-	for name, want := range map[string]string{"CARGO_HOME": "/data/deps/1/cargo", "CARGO_NET_OFFLINE": "true", "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": ""} {
+	for name, want := range map[string]string{"CARGO_HOME": "/data/deps/1/cargo", "CARGO_NET_OFFLINE": "true", "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "",
+		"CARGO_TARGET_DIR": "/data/workspaces/r1/repo/target"} {
 		if v, ok := cargo[name]; !ok || v != want {
 			t.Errorf("cargo: %s = %q (set %v), want %q", name, v, ok, want)
 		}
@@ -149,7 +152,8 @@ func TestCommandEnvPerTool(t *testing.T) {
 	got := env(t, CommandEnvFor(Select([]string{"maven", "gradle", "cargo"}), "/data/cache"))
 	for name, want := range map[string]string{"MAVEN_USER_HOME": "/data/cache/maven", "MAVEN_ARGS": "-Dmaven.repo.local=/data/cache/m2",
 		"GRADLE_USER_HOME": "/data/cache/gradle", "RUSTC_WRAPPER": "", "RUSTC_WORKSPACE_WRAPPER": "", "CARGO_BUILD_RUSTC_WRAPPER": "",
-		"CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": ""} {
+		"CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": "",
+		"CARGO_TARGET_DIR":                    "target"} {
 		if v, ok := got[name]; !ok || v != want {
 			t.Errorf("%s = %q (set %v), want %q", name, v, ok, want)
 		}
@@ -194,9 +198,25 @@ func TestLocalBindingOnlyForGradle(t *testing.T) {
 	}
 }
 
-// The warm-up commands name the wrapper when there is one, and put the fetched files in the deps folder.
+// repoWith makes a checkout with the named files (and the test class, when given, under src/test/java).
+func repoWith(t *testing.T, files ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, f := range files {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+// The warm-up commands name the wrapper when there is one, put the fetched files in the deps folder, and Maven's runs
+// one real test class of the base when there is one.
 func TestWarmSteps(t *testing.T) {
-	steps := WarmSteps(Select([]string{"maven", "gradle", "cargo"}), hasFiles("mvnw", "gradlew"), "/data/deps/1")
+	steps := WarmSteps(Select([]string{"maven", "gradle", "cargo"}), repoWith(t, "mvnw", "gradlew", "src/test/java/org/x/FooTest.java"), "/data/deps/1")
 	var commands []string
 	for _, s := range steps {
 		commands = append(commands, s.Command)
@@ -205,17 +225,31 @@ func TestWarmSteps(t *testing.T) {
 		}
 	}
 	joined := strings.Join(commands, "\n")
-	for _, want := range []string{"./mvnw -B -q test", "./gradlew --no-daemon", "cargo fetch"} {
+	for _, want := range []string{"./mvnw -B -q test -Dtest=FooTest ", "./gradlew --no-daemon", "cargo fetch"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("no warm-up %q in %q", want, commands)
 		}
 	}
-	plain := WarmSteps(Select([]string{"maven", "gradle"}), hasFiles(), "/d")
-	if !strings.Contains(plain[0].Command, "mvn -B") || strings.Contains(plain[0].Command, "./mvnw") || strings.Contains(plain[1].Command, "./gradlew") {
-		t.Errorf("without wrappers: %q", plain)
+	plain := WarmSteps(Select([]string{"maven", "gradle"}), repoWith(t), "/d")
+	if !strings.Contains(plain[0].Command, "mvn -B") || strings.Contains(plain[0].Command, "./mvnw") || strings.Contains(plain[1].Command, "./gradlew") ||
+		!strings.Contains(plain[0].Command, "AgentiumWarmNoSuchTest") {
+		t.Errorf("without wrappers or tests: %q", plain)
 	}
 	if got := NeedsWarming(Select([]string{"cargo", "maven"})); !slices.Equal(got, []string{"maven", "cargo"}) {
 		t.Errorf("warmed tools: %q", got)
+	}
+}
+
+// The deps folder's Gradle home never cleans its cache up: agents read it while later warm-ups run.
+func TestGradleDepsHomeKeepsItsFiles(t *testing.T) {
+	deps := t.TempDir()
+	if err := PrepareDeps(Select([]string{"gradle", "maven"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	props, _ := os.ReadFile(filepath.Join(deps, "gradle", "gradle.properties"))
+	script, _ := os.ReadFile(filepath.Join(deps, "gradle", "init.d", "agentium-no-cleanup.gradle"))
+	if !strings.Contains(string(props), "org.gradle.cache.cleanup=false") || !strings.Contains(string(script), "Cleanup.DISABLED") {
+		t.Errorf("cleanup is not disabled: %q %q", props, script)
 	}
 }
 
@@ -233,8 +267,11 @@ func TestPrepareGradleRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	props, _ := os.ReadFile(filepath.Join(cache, "gradle", "gradle.properties"))
-	if string(props) != "org.gradle.daemon=false\n" {
-		t.Errorf("gradle.properties = %q", props)
+	if want := "org.gradle.daemon=false\norg.gradle.java.installations.paths=" + filepath.Join(deps, "gradle", "jdks") + "\norg.gradle.java.installations.auto-download=false\n"; string(props) != want {
+		t.Errorf("gradle.properties = %q, want %q", props, want)
+	}
+	if init, _ := os.ReadFile(filepath.Join(cache, "gradle", "init.d", "agentium-offline.gradle")); !strings.Contains(string(init), "startParameter.offline = true") {
+		t.Errorf("no offline init script: %q", init)
 	}
 	copied := filepath.Join(cache, "gradle", "wrapper", "dists", "gradle-9.7.1-bin", "abc", "gradle-9.7.1", "bin", "gradle")
 	info, err := os.Stat(copied)
@@ -261,75 +298,159 @@ func TestPrepareGradleRun(t *testing.T) {
 	}
 }
 
-// Daemons the run left are stopped through the logs of its own Gradle home, and only when the process really is a
-// Gradle daemon; nothing from the checkout runs. A fake host stands for the machine.
+// stopHost is a fake machine: processes with command lines and open files, and signals that end them.
+type stopHost struct {
+	commands map[int]string
+	open     map[int][]string
+	alive    map[int]bool
+	ignores  map[int]bool // processes that survive SIGTERM
+	signals  []string
+}
+
+func (h *stopHost) host() Host {
+	return Host{
+		Command: func(_ context.Context, pid int) string { return h.commands[pid] },
+		OpenFiles: func(_ context.Context, pid int) ([]string, error) {
+			if h.open == nil {
+				return nil, errors.New("no lsof")
+			}
+			return h.open[pid], nil
+		},
+		Signal: func(pid int, sig syscall.Signal) error {
+			if !h.alive[pid] {
+				return syscall.ESRCH
+			}
+			if sig != 0 {
+				h.signals = append(h.signals, strconv.Itoa(pid)+":"+sig.String())
+			}
+			if sig == syscall.SIGKILL || (sig == syscall.SIGTERM && !h.ignores[pid]) {
+				h.alive[pid] = false
+			}
+			return nil
+		},
+		Grace: 150 * time.Millisecond,
+	}
+}
+
+const daemonCommand = "/jdk/bin/java -Xmx8g org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.7.1"
+
+// Daemons the run left are stopped through the logs of its own Gradle home, and only when the process is a Gradle daemon
+// that has that very log open. The agent can write the logs, so planted ones naming other processes (the user's own
+// daemon, another run's, anything) kill nothing. Nothing from the checkout runs. A fake machine stands for the host.
 func TestStopGradleDaemons(t *testing.T) {
-	cache := t.TempDir()
+	cache, other := t.TempDir(), t.TempDir()
 	logs := filepath.Join(cache, "gradle", "daemon", "9.7.1")
 	if err := os.MkdirAll(logs, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"daemon-4242.out.log", "daemon-777.out.log", "daemon-1.out.log", "daemon-x.out.log", "registry.bin"} {
-		if err := os.WriteFile(filepath.Join(logs, name), nil, 0o600); err != nil {
+	realCache, _ := filepath.EvalSymlinks(cache) // lsof reports real paths (/private/var on macOS)
+	log := func(pid int) string { return filepath.Join(logs, "daemon-"+strconv.Itoa(pid)+".out.log") }
+	realLog := func(pid int) string {
+		return filepath.Join(realCache, "gradle", "daemon", "9.7.1", "daemon-"+strconv.Itoa(pid)+".out.log")
+	}
+	// The user's own daemon, with its own log elsewhere.
+	userLog := filepath.Join(other, "daemon-5000.out.log")
+	for _, f := range []string{log(4242), log(5000), log(777), log(6000), log(1), filepath.Join(logs, "daemon-x.out.log"), userLog} {
+		if err := os.WriteFile(f, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	alive := map[int]bool{4242: true, 777: true}
-	var signals []string
-	host := Host{
-		Command: func(pid int) string {
-			switch pid {
-			case 4242:
-				return "/jdk/bin/java -Xmx8g org.gradle.launcher.daemon.bootstrap.GradleDaemon 9.7.1"
-			case 777:
-				return "/usr/bin/vim notes.txt" // not a daemon: the agent named it in a log
-			}
-			return ""
-		},
-		Signal: func(pid int, sig syscall.Signal) error {
-			if !alive[pid] {
-				return syscall.ESRCH
-			}
-			signals = append(signals, sig.String())
-			if sig == syscall.SIGTERM {
-				alive[pid] = false // the daemon ends on SIGTERM
-			}
-			return nil
-		},
-		Grace: time.Second,
-	}
-	if err := StopRun(Select([]string{"gradle"}), cache, host); err != nil {
+	// Planted: a link to the user's daemon's real log, under the run's own Gradle home.
+	if err := os.Remove(log(6000)); err != nil {
 		t.Fatal(err)
 	}
-	if alive[4242] || !alive[777] {
-		t.Errorf("alive after the stop: %v (the daemon must be stopped, the other process left alone)", alive)
+	if err := os.Symlink(userLog, log(6000)); err != nil {
+		t.Fatal(err)
 	}
-	if len(signals) != 1 || signals[0] != "terminated" { // SIGTERM; the next probe finds it gone
-		t.Errorf("signals: %v", signals)
+	h := &stopHost{
+		commands: map[int]string{4242: daemonCommand, 5000: daemonCommand, 6000: daemonCommand, 777: "/usr/bin/vim notes.txt"},
+		open: map[int][]string{4242: {realLog(4242)}, // the run's own daemon: has its log open
+			5000: {userLog},              // the user's daemon, named by a planted log in the run's folder: holds another file
+			6000: {mustReal(t, userLog)}, // named through a link out of the run's folder
+			777:  {realLog(777)}},        // not a daemon at all
+		alive: map[int]bool{4242: true, 5000: true, 6000: true, 777: true},
+	}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
+		t.Fatal(err)
+	}
+	if h.alive[4242] || !h.alive[5000] || !h.alive[6000] || !h.alive[777] {
+		t.Errorf("alive: %v (only the run's own daemon must stop)", h.alive)
+	}
+	if !slices.Equal(h.signals, []string{"4242:terminated"}) {
+		t.Errorf("signals %v", h.signals)
 	}
 	// A daemon that ignores SIGTERM is killed after the grace period.
-	stubborn := map[int]bool{4242: true}
-	var killed bool
-	host.Grace = 100 * time.Millisecond
-	host.Signal = func(pid int, sig syscall.Signal) error {
-		if sig == syscall.SIGKILL {
-			killed = true
-			stubborn[pid] = false
-		}
-		if !stubborn[pid] {
-			return syscall.ESRCH
-		}
-		return nil
-	}
-	if err := StopRun(Select([]string{"gradle"}), cache, host); err != nil {
+	h = &stopHost{commands: map[int]string{4242: daemonCommand}, open: map[int][]string{4242: {realLog(4242)}},
+		alive: map[int]bool{4242: true}, ignores: map[int]bool{4242: true}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
 		t.Fatal(err)
 	}
-	if !killed {
-		t.Error("a daemon that ignores SIGTERM is not killed")
+	if h.alive[4242] || !slices.Equal(h.signals, []string{"4242:terminated", "4242:killed"}) {
+		t.Errorf("a stubborn daemon: alive %v, signals %v", h.alive, h.signals)
+	}
+	// A machine that cannot tell what a process has open (no lsof) is not trusted: nothing is signalled, and it is said.
+	h = &stopHost{commands: map[int]string{4242: daemonCommand}, alive: map[int]bool{4242: true}}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err == nil || len(h.signals) != 0 {
+		t.Errorf("without lsof: error %v, signals %v", err, h.signals)
 	}
 	// No Gradle home, no error.
-	if err := StopRun(Select([]string{"gradle"}), t.TempDir(), host); err != nil {
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), t.TempDir(), h.host()); err != nil {
 		t.Errorf("a run without daemons: %v", err)
+	}
+}
+
+func mustReal(t *testing.T, p string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// The agent can plant as many logs as it likes: only the first few are read, and a cancelled context still ends a
+// daemon that ignores SIGTERM at once.
+func TestStopGradleDaemonsIsBounded(t *testing.T) {
+	cache := t.TempDir()
+	logs := filepath.Join(cache, "gradle", "daemon", "9")
+	if err := os.MkdirAll(logs, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realLogs := filepath.Join(mustReal(t, cache), "gradle", "daemon", "9")
+	h := &stopHost{commands: map[int]string{}, open: map[int][]string{}, alive: map[int]bool{}}
+	for pid := 100; pid < 140; pid++ { // 40 daemons' logs, in pid order
+		if err := os.WriteFile(filepath.Join(logs, "daemon-"+strconv.Itoa(pid)+".out.log"), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h.commands[pid], h.alive[pid] = daemonCommand, true
+		h.open[pid] = []string{filepath.Join(realLogs, "daemon-"+strconv.Itoa(pid)+".out.log")}
+	}
+	if err := StopRun(context.Background(), Select([]string{"gradle"}), cache, h.host()); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.signals) != maxDaemonLogs {
+		t.Errorf("%d daemons signalled, want the first %d", len(h.signals), maxDaemonLogs)
+	}
+	h2 := &stopHost{commands: map[int]string{100: daemonCommand}, open: map[int][]string{100: {filepath.Join(realLogs, "daemon-100.out.log")}},
+		alive: map[int]bool{100: true}, ignores: map[int]bool{100: true}}
+	host := h2.host()
+	host.Grace = time.Minute
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if err := StopRun(ctx, Select([]string{"gradle"}), cache, host); err != nil || h2.alive[100] || time.Since(start) > 5*time.Second {
+		t.Errorf("a cancelled stop: %v, alive %v, after %v", err, h2.alive, time.Since(start))
+	}
+}
+
+// Agentium's own Gradle commands never start a daemon.
+func TestGradleCommandsGetNoDaemon(t *testing.T) {
+	cache := t.TempDir()
+	if err := PrepareCommands(cache); err != nil {
+		t.Fatal(err)
+	}
+	if props, _ := os.ReadFile(filepath.Join(cache, "gradle", "gradle.properties")); string(props) != "org.gradle.daemon=false\n" {
+		t.Errorf("gradle.properties = %q", props)
 	}
 }
 
@@ -346,11 +467,11 @@ func TestResolveJavaHome(t *testing.T) {
 	}
 	dir := t.TempDir()
 	user, found, onPath := jdk(filepath.Join(dir, "user")), jdk(filepath.Join(dir, "found")), jdk(filepath.Join(dir, "path"))
-	run := func(string, ...string) (string, error) { return found + "\n", nil }
-	if got := ResolveJavaHome([]string{"JAVA_HOME=" + user}, run); got != user {
+	run := func(context.Context, string, ...string) (string, error) { return found + "\n", nil }
+	if got := ResolveJavaHome(context.Background(), []string{"JAVA_HOME=" + user}, run); got != user {
 		t.Errorf("the user's JAVA_HOME: %s", got)
 	}
-	if got := ResolveJavaHome([]string{"JAVA_HOME=" + filepath.Join(dir, "gone"), "PATH=/nonexistent"}, run); got == filepath.Join(dir, "gone") {
+	if got := ResolveJavaHome(context.Background(), []string{"JAVA_HOME=" + filepath.Join(dir, "gone"), "PATH=/nonexistent"}, run); got == filepath.Join(dir, "gone") {
 		t.Errorf("a JAVA_HOME without a JDK is used: %s", got)
 	}
 	// On PATH, through a link, as Homebrew and SDKMAN lay JDKs out.
@@ -362,10 +483,39 @@ func TestResolveJavaHome(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolvedPath, _ := filepath.EvalSymlinks(onPath)
-	if got := ResolveJavaHome([]string{"PATH=" + link}, func(string, ...string) (string, error) { return "", os.ErrNotExist }); got != resolvedPath {
+	if got := ResolveJavaHome(context.Background(), []string{"PATH=" + link}, func(context.Context, string, ...string) (string, error) { return "", os.ErrNotExist }); got != resolvedPath {
 		t.Errorf("java on PATH: %s, want %s", got, resolvedPath)
 	}
-	if got := ResolveJavaHome([]string{"PATH=/nonexistent"}, func(string, ...string) (string, error) { return "", os.ErrNotExist }); got != "" {
+	if got := ResolveJavaHome(context.Background(), []string{"PATH=/nonexistent"}, func(context.Context, string, ...string) (string, error) { return "", os.ErrNotExist }); got != "" {
 		t.Errorf("no JDK anywhere: %q", got)
+	}
+}
+
+// A target directory set in the user's Cargo config or environment cannot take grading's compiled hidden tests to a
+// folder agents read: the user's are denied, and Agentium's own commands and the agent set CARGO_TARGET_DIR themselves.
+func TestCargoTargetDirectories(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".cargo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	config := "[net]\ngit-fetch-with-cli = true\n\n[build]\njobs = 4\ntarget-dir = \"/shared/target\" # fast disk\n\n[env]\ntarget-dir = \"/not/this\"\n"
+	if err := os.WriteFile(filepath.Join(home, ".cargo", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := UserCaches([]string{"CARGO_BUILD_TARGET_DIR=/env/target"}, home)
+	for _, want := range []string{"/shared/target", "/env/target"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s is not denied: %q", want, got)
+		}
+	}
+	if slices.Contains(got, "/not/this") {
+		t.Error("a target-dir outside [build] is denied")
+	}
+	// Relative to the folder above .cargo, as Cargo reads it.
+	if err := os.WriteFile(filepath.Join(home, ".cargo", "config.toml"), []byte("[build]\ntarget-dir = 'out/target'\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := UserCaches(nil, home); !slices.Contains(got, filepath.Join(home, "out", "target")) {
+		t.Errorf("a relative target-dir: %q", got)
 	}
 }

@@ -76,18 +76,24 @@ type Profile struct {
 	// AgentEnv returns variables to set in the agent's environment, replacing any of the same name the allowlist kept:
 	// what the tool needs to build and test offline in the sandbox.
 	AgentEnv func(c AgentContext) []string
-	// LocalBinding asks the sandbox to let the agent bind local sockets (outbound network stays blocked): Gradle's
-	// file-lock service binds a local UDP socket and fails without it.
+	// LocalBinding asks the sandbox's allowLocalBinding: Gradle's file-lock service binds a local UDP socket and fails
+	// without it. It grants any local port to bind, inbound connections, and outbound connections to localhost, so a
+	// run needs the user's opt-in (claude.LocalBindingRefusal).
 	LocalBinding bool
-	// Warm returns the commands that fetch this tool's dependencies into deps, run by a run's setup in the checkout
-	// before hidden tests are anywhere near it (see the package documentation); has reports files at the repository root.
-	Warm func(has func(name string) bool, deps string) []WarmStep
+	// Warm returns the commands that fetch this tool's dependencies into deps, run by a run's setup in a throwaway
+	// checkout of the base commit (dir), where no hidden test exists (see the package documentation).
+	Warm func(dir, deps string, has func(name string) bool) []WarmStep
+	// PrepareDeps makes the deps folder's own settings before a warm-up writes it (Gradle: no cache cleanup, which
+	// would delete files under agents that read them).
+	PrepareDeps func(deps string) error
 	// PrepareRun makes the run's own folders for the tool (inside buildCache) before the agent starts: the agent
 	// cannot write deps, so what must be writable is copied or created here.
 	PrepareRun func(ctx context.Context, deps, buildCache string) error
 	// StopRun ends what the tool left running when the run's agent ended; it must not run anything from the checkout,
 	// which the agent may have changed.
-	StopRun func(buildCache string, host Host) error
+	StopRun func(ctx context.Context, buildCache string, host Host) error
+	// PrepareCommands makes what Agentium's own commands need under the data folder's cache root (see CommandCaches).
+	PrepareCommands func(cache string) error
 	// UserCaches are the user's own caches of this tool, which the agent may not read: they hold what earlier builds
 	// compiled, the hidden tests of validations and gradings included. Only absolute paths count.
 	UserCaches func(environ []string, home string) []string
@@ -118,6 +124,7 @@ func Profiles() []Profile {
 type AgentContext struct {
 	Allowed, Environ []string // the allowlisted environment and the parent's whole one
 	Home             string   // the user's home folder
+	Repo             string   // the run's checkout, where its agent works; "" when unknown
 	BuildCache       string   // the run's own build cache; "" without one
 	Deps             string   // the deps folder agents read; "" without one
 	JavaHome         string   // a JDK resolved on the host (ResolveJavaHome); "" when none was found

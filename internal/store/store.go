@@ -36,8 +36,10 @@ type Project struct {
 	Root      string
 	Name      string
 	Discovery []byte // JSON from the last `agentium init`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AllowLocalBinding is the user's opt-in for the sandbox's local binding in agent runs (see claude.Invocation).
+	AllowLocalBinding bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // openRetry bounds how long Open waits for other processes opening the same database. Switching a new database to WAL
@@ -160,10 +162,11 @@ func (s *Store) SaveProject(ctx context.Context, root, name string, discovery []
 	stamp := formatTime(now)
 	var id int64
 	var created string
+	var allowed bool
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO projects (root, name, discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (root) DO UPDATE SET name = excluded.name, discovery = excluded.discovery, updated_at = excluded.updated_at
-		RETURNING id, created_at`, root, name, string(discovery), stamp, stamp).Scan(&id, &created)
+		RETURNING id, created_at, allow_local_binding`, root, name, string(discovery), stamp, stamp).Scan(&id, &created, &allowed)
 	if err != nil {
 		return Project{}, fmt.Errorf("save project %s: %w", root, err)
 	}
@@ -171,7 +174,15 @@ func (s *Store) SaveProject(ctx context.Context, root, name string, discovery []
 	if err != nil {
 		return Project{}, fmt.Errorf("save project %s: %w", root, err)
 	}
-	return Project{ID: id, Root: root, Name: name, Discovery: discovery, CreatedAt: createdAt, UpdatedAt: now.UTC()}, nil
+	return Project{ID: id, Root: root, Name: name, Discovery: discovery, AllowLocalBinding: allowed, CreatedAt: createdAt, UpdatedAt: now.UTC()}, nil
+}
+
+// SetLocalBinding stores the project's opt-in for the sandbox's local binding.
+func (s *Store) SetLocalBinding(ctx context.Context, projectID int64, allow bool) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET allow_local_binding = ? WHERE id = ?`, allow, projectID); err != nil {
+		return fmt.Errorf("save the local binding setting: %w", err)
+	}
+	return nil
 }
 
 // ProjectByRoot returns the project registered at root, or ErrNotFound.
@@ -192,7 +203,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 }
 
 func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, created_at, updated_at FROM projects `+clause, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, allow_local_binding, created_at, updated_at FROM projects `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query projects: %w", err)
 	}
@@ -201,7 +212,7 @@ func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) (
 	for rows.Next() {
 		var p Project
 		var discovery, created, updated string
-		if err := rows.Scan(&p.ID, &p.Root, &p.Name, &discovery, &created, &updated); err != nil {
+		if err := rows.Scan(&p.ID, &p.Root, &p.Name, &discovery, &p.AllowLocalBinding, &created, &updated); err != nil {
 			return nil, fmt.Errorf("read project: %w", err)
 		}
 		p.Discovery = []byte(discovery)

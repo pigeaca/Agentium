@@ -14,15 +14,28 @@ import (
 	"time"
 )
 
-// WarmSteps are the selected profiles' warm-up commands for deps, in table order.
-func WarmSteps(selected []Profile, has func(name string) bool, deps string) []WarmStep {
+// WarmSteps are the selected profiles' warm-up commands for deps, in table order; dir is the throwaway checkout.
+func WarmSteps(selected []Profile, dir, deps string) []WarmStep {
+	has := func(name string) bool { _, err := os.Stat(filepath.Join(dir, name)); return err == nil }
 	var steps []WarmStep
 	for _, p := range selected {
 		if p.Warm != nil {
-			steps = append(steps, p.Warm(has, deps)...)
+			steps = append(steps, p.Warm(dir, deps, has)...)
 		}
 	}
 	return steps
+}
+
+// PrepareDeps runs the selected profiles' PrepareDeps hooks.
+func PrepareDeps(selected []Profile, deps string) error {
+	for _, p := range selected {
+		if p.PrepareDeps != nil {
+			if err := p.PrepareDeps(deps); err != nil {
+				return fmt.Errorf("%s: prepare the deps folder: %w", p.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // NeedsWarming names the selected profiles that fetch dependencies (one stamp each, see run's warm-up).
@@ -34,6 +47,19 @@ func NeedsWarming(selected []Profile) []string {
 		}
 	}
 	return names
+}
+
+// PrepareCommands makes the files Agentium's own commands need in the data folder's cache root (Gradle's user home
+// with no daemon), for every tool: the cache is shared by every project.
+func PrepareCommands(cache string) error {
+	for _, p := range Profiles() {
+		if p.PrepareCommands != nil {
+			if err := p.PrepareCommands(cache); err != nil {
+				return fmt.Errorf("%s: %w", p.Name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // PrepareRun runs the selected profiles' PrepareRun hooks.
@@ -49,11 +75,11 @@ func PrepareRun(ctx context.Context, selected []Profile, deps, buildCache string
 }
 
 // StopRun runs the selected profiles' StopRun hooks and returns the first failure after trying all of them.
-func StopRun(selected []Profile, buildCache string, host Host) error {
+func StopRun(ctx context.Context, selected []Profile, buildCache string, host Host) error {
 	var errs []error
 	for _, p := range selected {
 		if p.StopRun != nil {
-			if err := p.StopRun(buildCache, host); err != nil {
+			if err := p.StopRun(ctx, buildCache, host); err != nil {
 				errs = append(errs, fmt.Errorf("%s: stop: %w", p.Name, err))
 			}
 		}
@@ -64,41 +90,63 @@ func StopRun(selected []Profile, buildCache string, host Host) error {
 // Host is how a StopRun hook sees the machine's processes; tests replace it.
 type Host struct {
 	// Command is a process's command line, or "" when it does not exist.
-	Command func(pid int) string
+	Command func(ctx context.Context, pid int) string
+	// OpenFiles lists the files a process has open (by real path); an error means it could not be told (no lsof).
+	OpenFiles func(ctx context.Context, pid int) ([]string, error)
 	// Signal sends a signal (0 only tests that the process exists).
 	Signal func(pid int, sig syscall.Signal) error
 	// Grace is how long a process gets to end after SIGTERM before SIGKILL.
 	Grace time.Duration
 }
 
-// SystemHost is the real machine.
+// SystemHost is the real machine: ps for command lines, lsof for open files.
 func SystemHost() Host {
 	return Host{
-		Command: func(pid int) string {
-			out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
+		Command: func(ctx context.Context, pid int) string {
+			out, err := exec.CommandContext(ctx, "ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
 			if err != nil {
 				return ""
 			}
 			return strings.TrimSpace(string(out))
+		},
+		OpenFiles: func(ctx context.Context, pid int) ([]string, error) {
+			out, err := exec.CommandContext(ctx, "lsof", "-w", "-p", strconv.Itoa(pid), "-Fn").Output()
+			if err != nil && len(out) == 0 {
+				return nil, fmt.Errorf("lsof -p %d: %w", pid, err)
+			}
+			var files []string
+			for _, line := range strings.Split(string(out), "\n") {
+				if name, ok := strings.CutPrefix(line, "n"); ok {
+					files = append(files, name)
+				}
+			}
+			return files, nil
 		},
 		Signal: func(pid int, sig syscall.Signal) error { return syscall.Kill(pid, sig) },
 		Grace:  5 * time.Second,
 	}
 }
 
-// terminate asks a process to end, then kills it after the grace period.
-func (h Host) terminate(pid int) {
+// terminate asks a process to end, then kills it after the grace period (or at once when ctx ends).
+func (h Host) terminate(ctx context.Context, pid int) {
 	if h.Signal(pid, syscall.SIGTERM) != nil {
 		return
 	}
-	deadline := time.Now().Add(h.Grace)
-	for time.Now().Before(deadline) {
-		if h.Signal(pid, 0) != nil {
+	deadline := time.After(h.Grace)
+	for {
+		select {
+		case <-deadline:
+			h.Signal(pid, syscall.SIGKILL)
 			return
+		case <-ctx.Done():
+			h.Signal(pid, syscall.SIGKILL)
+			return
+		case <-time.After(50 * time.Millisecond):
+			if h.Signal(pid, 0) != nil {
+				return
+			}
 		}
-		time.Sleep(50 * time.Millisecond)
 	}
-	h.Signal(pid, syscall.SIGKILL)
 }
 
 // cloneTree copies src to dst (which must not exist), as a copy-on-write clone where the file system can (macOS

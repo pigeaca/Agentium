@@ -69,8 +69,25 @@ type Invocation struct {
 	// Deps is the folder of warmed dependencies (home.Layout.Deps for the project): the agent's offline builds read it,
 	// and the sandbox keeps it read-only. It lies outside every denied folder. Empty: none.
 	Deps string
+	// AllowLocalBinding is the user's opt-in (`agentium init --allow-local-binding`) for the sandbox's local binding,
+	// which a Gradle project needs (see LocalBindingRefusal). Without it such a run does not start.
+	AllowLocalBinding bool
 	// JavaHome is a JDK resolved on the host (buildtool.ResolveJavaHome), which the JVM tools' environments name.
 	JavaHome string
+}
+
+// LocalBindingRefusal is why a run may not start: its tools (Gradle) need the sandbox's allowLocalBinding and the user
+// has not allowed it. The setting is more than its name says (Claude Code 2.1.285 writes allow rules for network-bind
+// on any local port, network-inbound on any local port, and network-outbound to localhost on any port): the agent
+// could bind a port and connect to any service listening on this machine, a database or a dev server. Outbound
+// network to other hosts stays blocked. Hence an opt-in, per project.
+func LocalBindingRefusal(tools []string, allowed bool) error {
+	if allowed || !buildtool.LocalBinding(buildtool.Select(tools)) {
+		return nil
+	}
+	return errors.New("this project builds with Gradle, whose file-lock service needs the sandbox to let the agent bind local ports and connect to localhost. " +
+		"That also lets the agent reach any service listening on this machine (a database, a dev server); outbound network to other hosts stays blocked. " +
+		"Agent runs on this project do not start until you allow it: agentium init --allow-local-binding")
 }
 
 // Claude Code 2.1.285's limits on its temp root, which TempRootFits checks:
@@ -213,6 +230,9 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, err
 		}
 	}
+	if err := LocalBindingRefusal(inv.Tools, inv.AllowLocalBinding); err != nil {
+		return nil, nil, err
+	}
 	settings, err := json.Marshal(inv.settings(userConfig, environ))
 	if err != nil {
 		return nil, nil, fmt.Errorf("encode settings: %w", err)
@@ -232,7 +252,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
 	profiles := buildtool.Select(inv.Tools)
 	allowed := EnvironFor(environ, profiles)
-	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home,
+	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
 		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
@@ -419,8 +439,10 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		filesystem["allowWrite"] = forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
 	}
 	network := map[string]any{"strictAllowlist": true, "allowedDomains": []string{}}
-	if buildtool.LocalBinding(buildtool.Select(inv.Tools)) {
-		network["allowLocalBinding"] = true // Gradle's file-lock service binds a local UDP socket; outbound stays blocked
+	if inv.AllowLocalBinding && buildtool.LocalBinding(buildtool.Select(inv.Tools)) {
+		// Gradle's file-lock service binds a local UDP socket. This also allows binding any local port and connecting
+		// to localhost (see LocalBindingRefusal), so it is set only for Gradle projects whose user opted in.
+		network["allowLocalBinding"] = true
 	}
 	return map[string]any{
 		"sandbox": map[string]any{

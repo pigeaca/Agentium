@@ -1,6 +1,10 @@
 package buildtool
 
-import "path/filepath"
+import (
+	"io/fs"
+	"path/filepath"
+	"strings"
+)
 
 // mavenProfile holds Maven's special cases; the repository's own wrapper (mvnw) is preferred, as the user decided.
 //
@@ -45,15 +49,20 @@ func mavenProfile() Profile {
 			}
 			return env
 		},
-		// A test goal that selects no test: it resolves and compiles everything the tests need and fetches the test
-		// plugin, without running the project's tests.
-		Warm: func(has func(string) bool, deps string) []WarmStep {
+		// One real test class of the base, so the build resolves and compiles what the tests need and fetches the test
+		// plugin and its provider exactly as an agent's `mvn test` will; none found (a multi-module layout, say): a
+		// selector that matches nothing, which may leave the provider unfetched (the step 5 pilot checks both).
+		Warm: func(dir, deps string, has func(string) bool) []WarmStep {
 			mvn := "mvn"
 			if has("mvnw") {
 				mvn = "./mvnw"
 			}
+			selector := "AgentiumWarmNoSuchTest"
+			if class := firstTestClass(filepath.Join(dir, "src", "test", "java")); class != "" {
+				selector = class
+			}
 			return []WarmStep{{
-				Command: mvn + " -B -q test -Dtest=AgentiumWarmNoSuchTest -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false",
+				Command: mvn + " -B -q test -Dtest=" + selector + " -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false",
 				Env:     []string{"MAVEN_USER_HOME=" + filepath.Join(deps, "mvnw-home"), "MAVEN_ARGS=-Dmaven.repo.local=" + filepath.Join(deps, "m2")},
 			}}
 		},
@@ -61,4 +70,16 @@ func mavenProfile() Profile {
 			return []string{filepath.Join(home, ".m2"), userHome(environ, "MAVEN_USER_HOME", filepath.Join(home, ".m2"))}
 		},
 	}
+}
+
+// firstTestClass is the simple name of the first test class (*Test.java, by path) under dir, or "".
+func firstTestClass(dir string) string {
+	var found string
+	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && found == "" && !d.IsDir() && strings.HasSuffix(d.Name(), "Test.java") {
+			found = strings.TrimSuffix(d.Name(), ".java")
+		}
+		return nil
+	})
+	return found
 }

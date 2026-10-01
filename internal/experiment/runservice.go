@@ -73,6 +73,9 @@ type Runner struct {
 	StartRuns func(ctx context.Context) error
 	// NewRunEnv resolves what every run needs.
 	NewRunEnv func(verifyTimeout time.Duration) (run.Env, error)
+	// NeedsLocalBinding tells whether runs on the tasks' base commits need the sandbox's local binding (a Gradle build)
+	// and whether the project's user allowed it (agentium init --allow-local-binding); nil: no check.
+	NeedsLocalBinding func(ctx context.Context, bases []string) (needed, allowed bool, err error)
 	// ExecuteRun runs and stores one run; the caller of Execute holds the run lock.
 	ExecuteRun func(ctx context.Context, e run.Env, meta RunMeta, spec run.Spec) (run.Record, error)
 	// WaitUntil waits for the usage window to reset (Wait); nil without it.
@@ -176,6 +179,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if raised != nil {
 		lock.BudgetChanges = append(lock.BudgetChanges, *raised)
 	}
+	if lock.LocalBinding, err = r.checkLocalBinding(ctx, lock); err != nil {
+		return Lock{}, err
+	}
 	encoded, err := json.Marshal(lock)
 	if err != nil {
 		return Lock{}, fmt.Errorf("encode lock: %w", err)
@@ -192,6 +198,26 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		fmt.Fprintf(out, "The judge: %s.\n", DescribeJudge(*d.Judge))
 	}
 	return lock, nil
+}
+
+// checkLocalBinding refuses an experiment whose runs need the sandbox's local binding without the user's opt-in, before
+// anything is locked or spent, and returns whether the runs get it (recorded in the lock, and shown by the report).
+func (r Runner) checkLocalBinding(ctx context.Context, lock Lock) (bool, error) {
+	if r.NeedsLocalBinding == nil {
+		return false, nil
+	}
+	bases := make([]string, len(lock.Tasks))
+	for i, t := range lock.Tasks {
+		bases[i] = t.Base
+	}
+	needed, allowed, err := r.NeedsLocalBinding(ctx, bases)
+	if err != nil {
+		return false, err
+	}
+	if needed && !allowed {
+		return false, claude.LocalBindingRefusal([]string{"gradle"}, false)
+	}
+	return needed && allowed, nil
 }
 
 // resume reads a locked experiment's lock and checks that it can go on: the same Claude Code, sign-in and host, and
@@ -277,6 +303,9 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if err != nil {
 		return RunOutcome{}, err
 	}
+	// The lock decides: a resumed experiment never gets local binding its first run did not have (and not after the user
+	// turned it off, either: NewRunEnv holds the project's setting now).
+	runEnv.AllowLocalBinding = runEnv.AllowLocalBinding && lock.LocalBinding
 	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
 	if err := p.DB.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return RunOutcome{}, err

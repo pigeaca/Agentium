@@ -1,6 +1,7 @@
 package buildtool
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,13 +14,13 @@ import (
 // would find no JDK at all. Order: the user's JAVA_HOME when it holds a JDK; macOS's java_home; the folder above the
 // bin/ of the first `java` on PATH. It returns "" when none is found. run is exec.Command's output, a parameter so tests
 // need no JDK.
-func ResolveJavaHome(environ []string, run func(name string, args ...string) (string, error)) string {
+func ResolveJavaHome(ctx context.Context, environ []string, run func(ctx context.Context, name string, args ...string) (string, error)) string {
 	env := vars(environ)
 	if isJDK(env["JAVA_HOME"]) {
 		return env["JAVA_HOME"]
 	}
 	if runtime.GOOS == "darwin" && run != nil {
-		if out, err := run("/usr/libexec/java_home"); err == nil && isJDK(strings.TrimSpace(out)) {
+		if out, err := run(ctx, "/usr/libexec/java_home"); err == nil && isJDK(strings.TrimSpace(out)) {
 			return strings.TrimSpace(out)
 		}
 	}
@@ -45,8 +46,8 @@ func isJDK(dir string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// CommandOutput is exec.Command(name, args...).Output() as a string, for ResolveJavaHome.
-func CommandOutput(name string, args ...string) (string, error) {
-	out, err := exec.Command(name, args...).Output()
+// CommandOutput is exec.CommandContext(ctx, name, args...).Output() as a string, for ResolveJavaHome.
+func CommandOutput(ctx context.Context, name string, args ...string) (string, error) {
+	out, err := exec.CommandContext(ctx, name, args...).Output()
 	return string(out), err
 }

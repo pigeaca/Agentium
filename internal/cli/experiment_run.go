@@ -76,6 +76,10 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 			return err
 		},
 		NewRunEnv: func(verifyTimeout time.Duration) (run.Env, error) { return newRunEnv(env, w, verifyTimeout) },
+		NeedsLocalBinding: func(ctx context.Context, bases []string) (needed, allowed bool, err error) {
+			needed, err = run.NeedsLocalBinding(ctx, w.bare, bases)
+			return needed, w.project.AllowLocalBinding, err
+		},
 		ExecuteRun: func(ctx context.Context, e run.Env, meta experiment.RunMeta, spec run.Spec) (run.Record, error) {
 			return executeRun(ctx, env, w, e, runMeta{Kind: "task", TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
 				Attempt: meta.Attempt}, spec)

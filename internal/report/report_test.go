@@ -563,3 +563,32 @@ func TestReportSubagentModelsAreShareable(t *testing.T) {
 		t.Error("the input's record was changed")
 	}
 }
+
+// An experiment whose agents had the sandbox's local binding says so in the report, in every format: the grant is wider
+// than its name (any local port, and localhost services), so the reader must be able to see it.
+func TestReportShowsLocalBinding(t *testing.T) {
+	in := fixture()
+	in.Lock.LocalBinding = true
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, termOut, js bytes.Buffer
+	rep.Markdown(&md)
+	rep.Terminal(&termOut, term.Style{})
+	rep.JSON(&js)
+	for name, out := range map[string]string{"Markdown": md.String(), "terminal": termOut.String()} {
+		if !strings.Contains(out, "allowed local binding") {
+			t.Errorf("%s lacks the local binding note", name)
+		}
+	}
+	if !strings.Contains(js.String(), `"local_binding": true`) {
+		t.Error("the JSON lock lacks local_binding")
+	}
+	plain, _ := Build(fixture())
+	var out bytes.Buffer
+	plain.Markdown(&out)
+	if strings.Contains(out.String(), "local binding") {
+		t.Error("a note without local binding")
+	}
+}

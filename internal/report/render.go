@@ -40,6 +40,9 @@ func (r Report) Markdown(w io.Writer) error {
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, d.Model, orDefault(d.Effort), l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
+	if l.LocalBinding {
+		b.WriteString(localBindingNote + "\n")
+	}
 
 	b.WriteString("\n## Metrics\n\nA and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.\n\n")
 	b.WriteString("| Metric | Role | A | B | B vs A | 95% bootstrap | 95% t | Verdict |\n|---|---|---|---|---|---|---|---|\n")
