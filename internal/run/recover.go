@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -117,9 +119,21 @@ type Orphan struct {
 }
 
 // AliveError reports runs whose agents may still be working: their process groups exist.
-type AliveError struct{ Runs []string }
+type AliveError struct {
+	Runs       []string
+	Unreadable []string // runs with an unreadable start file that may be alive: full sentences, each with what to do
+}
 
 func (e *AliveError) Error() string {
+	if len(e.Runs) == 0 {
+		return strings.Join(e.Unreadable, "; ")
+	}
+	if len(e.Unreadable) > 0 {
+	}
+	return strings.Join(append([]string{e.runsText()}, e.Unreadable...), "; ")
+}
+
+func (e *AliveError) runsText() string {
 	return fmt.Sprintf("%s may still be running (its Agentium process ended): wait for it to finish, or stop it, then try again "+
 		"(ps -o pid,command -g PGID shows what it is; after a restart the number may belong to something else)", strings.Join(e.Runs, ", "))
 }
@@ -188,12 +202,12 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 				// Valid JSON of another shape (a newer version's file, say) is not damage: fail loudly, touch nothing.
 				return orphans, fmt.Errorf("run %s: start file: %w", e.Name(), parseErr)
 			}
-			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), parseErr, secret, now)
+			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), data, parseErr, secret, now)
 			if err != nil {
 				return orphans, err
 			}
 			if aliveNote != "" {
-				alive.Runs = append(alive.Runs, aliveNote)
+				alive.Unreadable = append(alive.Unreadable, aliveNote)
 				continue
 			}
 			if orphan != nil {
@@ -263,7 +277,7 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
 	}
 	slices.SortFunc(orphans, func(a, b Orphan) int { return strings.Compare(a.Record.ID, b.Record.ID) })
-	if len(alive.Runs) > 0 {
+	if len(alive.Runs) > 0 || len(alive.Unreadable) > 0 {
 		return orphans, alive
 	}
 	return orphans, nil
@@ -275,46 +289,72 @@ func groupExists(pgid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// unreadableAliveWindow is how recently a run without a start file may have written, with no result yet, to count as
-// possibly alive: the default run timeout (20 minutes) plus a grace period.
+// unreadableAliveWindow is how recently an unreadable run must have written, with no result yet, for its agent to count
+// as possibly alive. It is about the time since the last write, not the run's timeout: nobody enforces --timeout once
+// Agentium is dead, so a live agent silent for longer than this is recovered (and a still-running one is not stopped),
+// and in the no-transcript case a setup command running longer than this looks dead too. A "pgid" still readable in
+// the truncated bytes is checked first and is exact.
 const unreadableAliveWindow = 25 * time.Minute
+
+var pgidInTruncated = regexp.MustCompile(`"pgid":\s*(\d+)`)
 
 // recoverUnreadable handles a run whose start file cannot be parsed, losing the least. A start file that cannot be
 // read must not block every later start, but the run's task, arm, experiment slot and process group are unknown, so
 // it is not stored as a run. What needs nothing from the file is done: the transcript decides what is left of it.
-//   - A transcript without a result, written recently (or, with no transcript, a start file written recently), may
-//     belong to a live agent: aliveNote is returned and nothing is touched.
-//   - Otherwise the file is moved aside (not retried, not deleted), the grading copy, the judge's config folder and
-//     the workspace (found from the transcript's working directory) are removed, the records are redacted, and the
-//     transcript's spend is returned as an Orphan with Unreadable set, for the caller to report.
-//   - With no transcript the agent never started and nothing was spent: the records folder goes too.
+//   - A process group still readable in the bytes and alive, or a transcript without a result written within
+//     unreadableAliveWindow (with no transcript, a recently written start file), may belong to a live agent: aliveNote
+//     is returned and nothing is touched.
+//   - Otherwise the workspace (found from the transcript's working directory, which must be <Workspaces>/<name>/repo),
+//     its temp root, the grading copy and the judge's config folder are removed and the records redacted; then, last,
+//     the file is moved aside (not retried, not deleted) and the transcript's spend is returned as an Orphan with
+//     Unreadable set, for the caller to report. The rename is the commit point: every step before it is safe to
+//     repeat, so a failure leaves the file in place and the next start retries.
+//   - With no transcript the agent never started and nothing was spent: the records folder and a workspace named
+//     after the run go too. That covers `run once` workspaces only; an experiment's workspace is named after its slot
+//     and found by no one, so Once removes a stale one before its checkout.
 //
 // The judge's per-call cost lives only in the start file and may be missing from the spend.
-func recoverUnreadable(layout home.Layout, dir, id string, parseErr error, secret string, now time.Time) (orphan *Orphan, aliveNote string, err error) {
+func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr error, secret string, now time.Time) (orphan *Orphan, aliveNote string, err error) {
 	startPath := filepath.Join(dir, startFile)
 	transcript := filepath.Join(dir, "stream.jsonl")
 	info, statErr := os.Stat(transcript)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, "", fmt.Errorf("run %s: %w", id, statErr)
+	}
 	hasTranscript := statErr == nil
 	var m claude.Metrics
 	if hasTranscript {
 		m, _ = parseFile(transcript)
 	}
-	fresh := info
+	if match := pgidInTruncated.FindSubmatch(data); match != nil {
+		if pgid, err := strconv.Atoi(string(match[1])); err == nil && pgid > 0 && groupExists(pgid) {
+			return nil, fmt.Sprintf("run %s: its start file is unreadable, but its process group %d exists; it may still be running: "+
+				"wait for it to finish, or stop it, then try again", id, pgid), nil
+		}
+	}
+	fresh, written := info, transcript
 	if !hasTranscript {
 		fresh, _ = os.Stat(startPath)
+		written = startPath
 	}
 	if fresh != nil && !m.SawResult && now.Sub(fresh.ModTime()) < unreadableAliveWindow {
-		return nil, fmt.Sprintf("run %s (its start file is unreadable and it wrote recently: its agent may be working)", id), nil
+		return nil, fmt.Sprintf("run %s: its start file is unreadable and %s was written at %s, so it may still be running: "+
+			"try again after %s, or stop it first", id, written, fresh.ModTime().Format("15:04:05"),
+			fresh.ModTime().Add(unreadableAliveWindow).Format("15:04:05")), nil
 	}
 	workspaces := realPath(layout.Workspaces)
 	workspace := ""
 	switch {
 	case m.CWD != "":
-		workspace = realPath(filepath.Dir(m.CWD)) // Claude Code started in <workspace>/repo
+		// Claude Code started in <workspace>/repo. Only that shape is trusted with a removal: an absolute path whose
+		// last element is repo, resolving to a direct child of the workspaces folder.
+		if cwd := filepath.Clean(m.CWD); filepath.IsAbs(cwd) && filepath.Base(cwd) == "repo" {
+			workspace = realPath(filepath.Dir(cwd))
+		}
 	case !hasTranscript:
 		workspace = realPath(filepath.Join(layout.Workspaces, id)) // the agent never started; the default workspace name
 	}
-	if workspace != "" && within(workspace, workspaces) && workspace != workspaces {
+	if workspace != "" && filepath.Dir(workspace) == workspaces && within(workspace, workspaces) && workspace != workspaces {
 		if err := os.RemoveAll(workspace); err != nil {
 			return nil, "", fmt.Errorf("remove %s: %w", workspace, err)
 		}
@@ -328,10 +368,6 @@ func recoverUnreadable(layout home.Layout, dir, id string, parseErr error, secre
 		}
 		return nil, "", nil
 	}
-	aside := startPath + corruptSuffix
-	if err := os.Rename(startPath, aside); err != nil {
-		return nil, "", fmt.Errorf("run %s: start file unreadable (%v) and not moved aside: %w", id, parseErr, err)
-	}
 	for _, sub := range []string{"verify", "judge"} { // hidden tests; the sign-in config folder
 		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
 			return nil, "", fmt.Errorf("remove the %s folder of %s: %w", sub, id, err)
@@ -339,6 +375,10 @@ func recoverUnreadable(layout home.Layout, dir, id string, parseErr error, secre
 	}
 	if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
 		return nil, "", err
+	}
+	aside := startPath + corruptSuffix
+	if err := os.Rename(startPath, aside); err != nil {
+		return nil, "", fmt.Errorf("run %s: start file unreadable (%v) and not moved aside: %w", id, parseErr, err)
 	}
 	rec := Record{ID: id, RecordsDir: dir, Outcome: claude.OutcomeCancelled, Recovered: RecoveredStopped, Finished: info.ModTime().UTC(), Metrics: m}
 	if !m.SawResult && m.EstimatedCostUSD > 0 {

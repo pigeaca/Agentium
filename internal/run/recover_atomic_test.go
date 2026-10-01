@@ -3,9 +3,11 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,7 +162,8 @@ func TestRecoverUnreadableStartFile(t *testing.T) {
 	write(filepath.Join(ws, "repo", "a.txt"), "", old)
 	stored5 := func(id string) (bool, error) { return id != "r5", nil }
 	var aliveErr *AliveError
-	if _, err := Recover(context.Background(), layout, stored5, "", now); !errors.As(err, &aliveErr) || len(aliveErr.Runs) != 1 || !strings.Contains(aliveErr.Runs[0], "r5") {
+	if _, err := Recover(context.Background(), layout, stored5, "", now); !errors.As(err, &aliveErr) || len(aliveErr.Unreadable) != 1 || !strings.Contains(aliveErr.Unreadable[0], "r5") ||
+		!strings.Contains(aliveErr.Unreadable[0], "stream.jsonl") || !strings.Contains(aliveErr.Unreadable[0], "try again after") || strings.Contains(aliveErr.Error(), "PGID") {
 		t.Fatalf("a recent transcript: %v", err)
 	}
 	for _, kept := range []string{filepath.Join(layout.Records, "r5", startFile), filepath.Join(ws, "repo", "a.txt")} {
@@ -174,5 +177,185 @@ func TestRecoverUnreadableStartFile(t *testing.T) {
 	}
 	if _, err := os.Stat(ws); err == nil {
 		t.Error("the workspace was left behind")
+	}
+}
+
+// The rename is the commit point: when cleanup fails the start file stays, so the next start retries it.
+func TestRecoverUnreadableRetriesAfterAFailedCleanup(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("file permissions do not bind root")
+	}
+	layout, err := home.Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-time.Hour)
+	dir := filepath.Join(layout.Records, "r1")
+	notes := filepath.Join(dir, "notes.txt")
+	for p, body := range map[string]string{filepath.Join(dir, startFile): "{", filepath.Join(dir, "stream.jsonl"): `{"type":"system","subtype":"init"}` + "\n",
+		notes: "token sk-" + "ant-api03-abcdefghijklmnopqrstuvwxyz", filepath.Join(dir, "judge", "config.json"): "login"} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		os.Chtimes(p, old, old)
+	}
+	stored := func(string) (bool, error) { return false, nil }
+	if err := os.Chmod(notes, 0); err != nil { // redaction cannot read it
+		t.Fatal(err)
+	}
+	if _, err := Recover(context.Background(), layout, stored, "", now); err == nil {
+		t.Fatal("a failed redaction was not reported")
+	}
+	if _, err := os.Stat(filepath.Join(dir, startFile)); err != nil {
+		t.Fatalf("the start file was moved before cleanup finished: %v", err)
+	}
+	if err := os.Chmod(notes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	orphans, err := Recover(context.Background(), layout, stored, "", now)
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("retry = %+v, %v", orphans, err)
+	}
+	if data, _ := os.ReadFile(notes); strings.Contains(string(data), "sk-ant") {
+		t.Errorf("not redacted: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "judge")); err == nil {
+		t.Error("judge folder left")
+	}
+	if _, err := os.Stat(filepath.Join(dir, startFile+corruptSuffix)); err != nil {
+		t.Error(err)
+	}
+}
+
+// A transcript's working directory must not steer a removal outside the workspaces folder or onto the folder itself.
+func TestRecoverUnreadableTouchesNothingOutsideWorkspaces(t *testing.T) {
+	layout, err := home.Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	old := now.Add(-time.Hour)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "precious"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(outside, "repo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(layout.Workspaces, "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	guard := filepath.Join(layout.Workspaces, "guard")
+	if err := os.WriteFile(guard, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwds := map[string]string{
+		"outside":  filepath.Join(outside, "repo"),
+		"direct":   filepath.Join(layout.Workspaces, "repo"), // its parent is the workspaces folder itself
+		"dotdot":   filepath.Join(layout.Workspaces, "w", "..", "..", "x", "repo"),
+		"symlink":  filepath.Join(link, "repo"),
+		"relative": "workspaces/w/repo",
+		"notrepo":  filepath.Join(layout.Workspaces, "w", "src"),
+	}
+	for id, cwd := range cwds {
+		dir := filepath.Join(layout.Records, id)
+		for p, body := range map[string]string{filepath.Join(dir, startFile): "{",
+			filepath.Join(dir, "stream.jsonl"): `{"type":"system","subtype":"init","cwd":"` + cwd + `"}` + "\n"} {
+			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			os.Chtimes(p, old, old)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(layout.Workspaces, "w", "src"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", now)
+	if err != nil || len(orphans) != len(cwds) {
+		t.Fatalf("Recover = %d orphans, %v", len(orphans), err)
+	}
+	for _, kept := range []string{filepath.Join(outside, "precious"), filepath.Join(outside, "repo"), guard, link, filepath.Join(layout.Workspaces, "w", "src")} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Errorf("%s was touched: %v", kept, err)
+		}
+	}
+}
+
+func TestRemoveStaleWorkspace(t *testing.T) {
+	workspaces := filepath.Join(t.TempDir(), "workspaces")
+	outside := t.TempDir()
+	os.WriteFile(filepath.Join(outside, "precious"), []byte("x"), 0o600)
+	stale := filepath.Join(workspaces, "e1-s2-t1")
+	if err := os.MkdirAll(filepath.Join(stale, "repo"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeStaleWorkspace(workspaces, stale, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); err == nil {
+		t.Error("the stale workspace was left")
+	}
+	if err := removeStaleWorkspace(workspaces, stale, ""); err != nil {
+		t.Errorf("a missing workspace: %v", err)
+	}
+	link := filepath.Join(workspaces, "linked")
+	os.Symlink(outside, link)
+	for _, bad := range []string{link, workspaces, filepath.Join(workspaces, "a", "b"), outside} {
+		if err := removeStaleWorkspace(workspaces, bad, ""); err != nil {
+			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outside, "precious")); err != nil {
+		t.Errorf("a path outside was removed: %v", err)
+	}
+	if _, err := os.Stat(workspaces); err != nil {
+		t.Errorf("the workspaces folder was removed: %v", err)
+	}
+}
+
+func TestRecoverUnreadableUsesAReadablePGID(t *testing.T) {
+	layout, err := home.Resolve(func(key string) string {
+		return map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data")}[key]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := layout.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	pgid := syscall.Getpgrp() // exists
+	dir := filepath.Join(layout.Records, "r1")
+	os.MkdirAll(dir, 0o700)
+	old := time.Now().Add(-time.Hour)
+	for name, body := range map[string]string{startFile: fmt.Sprintf(`{"agent_started":true,"pgid":%d,"meta":`, pgid), "stream.jsonl": `{"type":"system","subtype":"init"}` + "\n"} {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte(body), 0o600)
+		os.Chtimes(p, old, old)
+	}
+	var aliveErr *AliveError
+	_, err = Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if !errors.As(err, &aliveErr) || len(aliveErr.Unreadable) != 1 || !strings.Contains(aliveErr.Unreadable[0], "process group") {
+		t.Fatalf("a live group in a truncated file: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, startFile)); err != nil {
+		t.Errorf("a live run was touched: %v", err)
 	}
 }

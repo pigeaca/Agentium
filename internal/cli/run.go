@@ -237,7 +237,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	for _, o := range orphans {
 		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored
 			fmt.Fprintf(env.Stdout, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+
-				"Its transcript shows $%.2f spent (judge spend, if any, is not included), which experiment budgets and show do not count; the file was moved to %s\n",
+				"Its transcript shows $%.2f spent (judge spend, if any, is not included), which neither experiment budgets nor `agentium experiment show` count; the file was moved to %s\n",
 				o.Record.ID, o.Record.Spend().AgentUSD, o.Unreadable)
 			continue
 		}

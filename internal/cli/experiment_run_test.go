@@ -476,7 +476,7 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 	}
 	out := f.run(ctx, "experiment", "run", "unreadable")
 	expect(t, out, ExitOK, "Run r-old left behind by a stopped Agentium has an unreadable start file, so it is not stored.",
-		"$0.08 spent", "experiment budgets and show do not count", "started.json.corrupt")
+		"$0.08 spent", "neither experiment budgets nor `agentium experiment show` count", "started.json.corrupt")
 	for _, r := range experimentRuns(t, f, "unreadable") {
 		if r.ID == "r-old" {
 			t.Errorf("the unreadable run was stored: %+v", r)
