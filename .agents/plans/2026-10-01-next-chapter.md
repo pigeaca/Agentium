@@ -40,7 +40,7 @@
 | Wave | Features (at most 2) | Maintenance (1) | Exit gate |
 |---|---|---|---|
 | 0 (done) | The judge in experiments (#54); tasks from tickets (#55) | — | merged |
-| 1 Finish | [Task mining](2026-10-01-task-mine.md); [judge](archive/2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](archive/2026-10-01-run-temp-isolation.md), then [refactor](2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
+| 1 Finish | [Task mining](archive/2026-10-01-task-mine.md); [judge](archive/2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](archive/2026-10-01-run-temp-isolation.md), then [refactor](2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
 | 2 First decisive verdict | Quick start (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
 | 3 Cheaper verdicts | The statistics note, then run reuse with a pinned Claude Code; group-sequential stopping | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The simulation shows at most 5% false verdicts, and a reused-against-fresh A/A passes |
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) | A Python or TypeScript smoke test; the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
@@ -67,7 +67,7 @@ The note must fix these before any code:
 
 ## Assignments (wave 1)
 - **Temp isolation:** step 2 done after two review rounds (`e27a899`, `f1e7630`); a re-review is running.
-- **Task mining:** step 1 done (`4e1395e`) and in re-review. Step 2 (the CLI) builds `RunsTest` from the build-tool profiles.
+- **Task mining:** done (#57 and #62); mining this repository gave 10 valid tasks.
 - **Judge:** done (#61 and a real check: every run got a verdict; it flagged one passing run).
 - **Refactor:** step 4 (faster CLI tests, test code only) started first with an implementer on `claude/refactor/faster-tests`. Steps 1–2 start after judge step 3 merges, since they share the report and CLI code.
 - **Temp isolation:** the real probe passed on 2026-10-01 ($0.13), through Agentium's own `run once`: the shared Claude temp folders, `/tmp/claude`, the socket folders, npm logs and another run's root were all denied (Bash, Read and Write); the run's own temp folder worked; `go test` passed; the root was removed even with `--keep`.

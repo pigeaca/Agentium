@@ -165,3 +165,19 @@ func TestAllowlistAndRunners(t *testing.T) {
 		t.Errorf("test patterns: %s", got)
 	}
 }
+
+// Detected follows the Detect files, and a detected profile names the languages task mine keeps.
+func TestDetected(t *testing.T) {
+	if got := Detected(func(string) bool { return false }); len(got) != 0 {
+		t.Fatalf("nothing at the root detects %d profile(s)", len(got))
+	}
+	got := Detected(func(name string) bool { return name == "go.mod" })
+	if len(got) != 1 || got[0].Name != "go" || !slices.Equal(got[0].Languages, []string{"go"}) {
+		t.Fatalf("go.mod detects %+v", got)
+	}
+	for _, p := range Profiles() {
+		if len(p.Detect) > 0 && len(p.Languages) == 0 {
+			t.Errorf("%s: detected but names no test language", p.Name)
+		}
+	}
+}
