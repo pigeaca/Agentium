@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted by the user on 2026-09-27.
+Accepted by the user on 2026-09-27. Its container clause is superseded by [containers driven directly through Docker](2026-10-02-containers-direct-docker.md) (2026-10-02).
 
 ## Context
 
