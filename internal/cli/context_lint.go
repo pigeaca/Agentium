@@ -39,6 +39,10 @@ func contextLint(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, contextUsage)
 		return ExitUsage
 	}
+	if env.JSON && (*hook || *printHook) {
+		fmt.Fprintln(env.Stderr, "agentium context lint: --hook and --print-hook print their own JSON for Claude Code; they do not take --json")
+		return ExitUsage
+	}
 	switch {
 	case *printHook:
 		return printHookSettings(env)
@@ -54,8 +58,38 @@ func contextLint(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	result.compare(ctx, env, root)
+	if env.JSON {
+		return env.emit(result.document(filepath.Base(root)))
+	}
 	result.print(env.Stdout, env.style(), "Context lint of "+filepath.Base(root)+" ("+result.where+")")
 	return ExitOK
+}
+
+type lintDoc struct {
+	header
+	Project       string       `json:"project"`
+	Where         string       `json:"where"`
+	StartupTokens int          `json:"startup_tokens_estimated"`
+	Snapshot      *lintBaseDoc `json:"snapshot"`                // the last snapshot it was compared with; null when there is none
+	NoComparison  string       `json:"no_comparison,omitempty"` // why there is no snapshot comparison
+	Problems      []string     `json:"problems"`
+	Warnings      []string     `json:"warnings"`
+}
+
+type lintBaseDoc struct {
+	Name          string `json:"name"`
+	StartupTokens int    `json:"startup_tokens_estimated"`
+	DeltaTokens   int    `json:"delta_tokens_estimated"`
+}
+
+func (r lintResult) document(project string) lintDoc {
+	doc := lintDoc{header: hdr("context lint"), Project: project, Where: r.where, StartupTokens: claudectx.EstimateTokens(r.StartupBytes),
+		NoComparison: r.noBase, Problems: list(r.Problems), Warnings: list(r.Warnings)}
+	if r.base != "" {
+		was := claudectx.EstimateTokens(r.baseBytes)
+		doc.Snapshot = &lintBaseDoc{Name: r.base, StartupTokens: was, DeltaTokens: doc.StartupTokens - was}
+	}
+	return doc
 }
 
 // lintResult is a lint of one repository state and, when there is one, its comparison with the last snapshot.

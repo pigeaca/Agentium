@@ -71,6 +71,9 @@ const taskUsage = `Usage:
                          tests can run side by side: no fixed ports, shared /tmp paths or databases
   agentium task rm NAME
 
+list, show, mine, validate, import, add, edit and rm take --json: one JSON document instead of text (docs/guide.md,
+"Scripting and automation"); nothing prompts, and exit codes are 0 success, 1 failure or an invalid task, 2 usage.
+
 Judge-graded tasks have no hidden tests: their runs are to be graded by the judge against the reference solution.
 task validate checks that the reference changes code and the instruction says something, and runs nothing.
 Experiments and run once do not take them yet.
@@ -413,6 +416,10 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	} else if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		return env.emit(taskSavedDoc{header: env.hdr(), Task: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), saved), Setup: list(saved.Setup),
+			Verify: list(saved.Verify), SolutionLeakSections: list(task.SolutionSections(saved.Instruction)), NextCommand: "agentium task validate " + saved.Name})
+	}
 	if saved.Grading == task.GradingJudge {
 		fmt.Fprintf(env.Stdout, "Added task %s (%s): base %s, judge-graded (no hidden tests), %d reference file(s)\n",
 			saved.Name, saved.Source, experiment.ShortCommit(saved.BaseCommit), len(saved.Reference))
@@ -620,6 +627,14 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		fair := task.NewFairness("--git-dir", w.bare)
+		doc := taskListDoc{header: env.hdr(), Tasks: []taskInfo{}}
+		for _, t := range tasks {
+			doc.Tasks = append(doc.Tasks, taskInfoOf(ctx, fair, t))
+		}
+		return env.emit(doc)
+	}
 	if len(tasks) == 0 {
 		st := env.style()
 		fmt.Fprintf(env.Stdout, "No tasks yet: %s, %s, or %s\n", st.Command("agentium task mine"), st.Command("agentium task import --commit REF"),
@@ -745,6 +760,9 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		return env.emit(taskShowDocument(ctx, env, w, t))
+	}
 	out, st := env.Stdout, env.style()
 	fmt.Fprintf(out, "%s\n  base       %s\n", st.Heading(fmt.Sprintf("Task %s (%s)", t.Name, t.Source)), t.BaseCommit)
 	if t.SolutionCommit != "" {
@@ -839,6 +857,9 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	}
 	if err := w.db.UpdateTask(ctx, t, env.Now()); err != nil {
 		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(taskEditDoc{header: env.hdr(), Task: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Updated: true})
 	}
 	fmt.Fprintf(env.Stdout, "Updated task %s\n", t.Name)
 	return ExitOK
@@ -992,6 +1013,9 @@ func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("arm %s changes what runs, not only what the model reads: %s", arm, strings.Join(files, ", "))))
 	}
 	printWeakTests(env.Stdout, st, result.WeakTests)
+	if env.JSON {
+		return env.emitCode(validatedDocument(ctx, env, w, t, o, result), validationExit(result.Status))
+	}
 	fmt.Fprintf(env.Stdout, "Result: %s %s\n", st.Status(result.Summary()), st.Note("(logs: "+v.LogDir+")"))
 	if result.Status == task.StatusInvalid || result.Status == task.StatusFlaky {
 		return ExitError
@@ -1040,6 +1064,12 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		fmt.Fprintf(out, "%s: %s\n", st.Warn("The instruction is not reviewed yet"), st.Command("agentium task show "+t.Name)+", then "+
 			st.Command("task edit "+t.Name+" --reviewed"))
 	}
+	if env.JSON {
+		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview,
+			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
+				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}
+		return env.emitCode(doc, validationExit(result.Status))
+	}
 	fmt.Fprintf(out, "Result: %s\n", st.Status(result.Summary()))
 	if result.Status == task.StatusInvalid {
 		return ExitError
@@ -1063,6 +1093,9 @@ func taskRemove(ctx context.Context, env Env, args []string) int {
 	defer w.Close()
 	if err := w.db.DeleteTask(ctx, w.project.ID, rest[0]); err != nil {
 		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(taskRemovedDoc{header: env.hdr(), Removed: rest[0]})
 	}
 	fmt.Fprintf(env.Stdout, "Removed task %s\n", rest[0])
 	return ExitOK

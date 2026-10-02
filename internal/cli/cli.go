@@ -11,7 +11,8 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// Exit codes: 0 success, 1 runtime failure, 2 usage error.
+// Exit codes: 0 success (including "nothing to do"), 1 runtime failure or a bad result (an invalid task), 2 usage error.
+// Scripts may rely on these; tests fix them (docs/guide.md, "Scripting and automation").
 const (
 	ExitOK    = 0
 	ExitError = 1
@@ -43,6 +44,13 @@ type Env struct {
 	Backoff func(attempt int) time.Duration
 	// Sleep waits for d or until ctx is cancelled (experiment run --wait); nil means a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+
+	// JSON is set by Run for a command given --json: the handler prints its document with emit instead of text, never
+	// asks a question, and uses no styles. Plain is the styling half alone (no escape codes whatever the terminal or
+	// FORCE_COLOR say); a command run inside another one's JSON output keeps Plain and clears JSON. Both are Run's, not
+	// the caller's: tests and main leave them false.
+	JSON, Plain bool
+	json        *jsonState
 }
 
 const usage = `agentium measures how coding agents, models and project context change coding-agent results.
@@ -71,6 +79,16 @@ func Run(ctx context.Context, env Env) int {
 		return ExitUsage
 	}
 	command, args := env.Args[0], env.Args[1:]
+	if rest, want := splitJSONFlag(command, args); want {
+		return runJSON(ctx, env, command, rest)
+	} else if len(rest) != len(args) {
+		args = rest // --json with a help request: the help is printed as text
+	}
+	return dispatch(ctx, env, command, args)
+}
+
+// dispatch runs a command whose --json flag, if any, has been dealt with.
+func dispatch(ctx context.Context, env Env, command string, args []string) int {
 	switch command {
 	case "help", "-h", "--help":
 		fmt.Fprint(env.Stdout, usage)
@@ -103,7 +121,12 @@ func fail(env Env, err error) int {
 }
 
 // style is how output to Stdout is styled.
-func (env Env) style() term.Style { return term.Detect(env.Terminal, env.Getenv) }
+func (env Env) style() term.Style {
+	if env.Plain {
+		return term.Style{}
+	}
+	return term.Detect(env.Terminal, env.Getenv)
+}
 
 // warning is a warning line's text, its label styled.
 func warning(st term.Style, text string) string { return st.Warn("warning:") + " " + text }

@@ -19,11 +19,12 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-const initUsage = `Usage: agentium init [path]
+const initUsage = `Usage: agentium init [path] [--json]
 
 Registers the git repository containing path (default: the current folder) and reports what Agentium found. It only
 reads the repository; data goes to ~/.agentium (or AGENTIUM_HOME), which must be outside the repository.
 
+  --json                    print one JSON document instead of text (docs/guide.md, "Scripting and automation")
   --allow-local-binding     let agent runs on a Gradle project bind local ports and connect to localhost in the sandbox
   --no-allow-local-binding  turn that off again
 
@@ -100,8 +101,64 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		return env.emit(initDocument(saved, info, resolved))
+	}
 	printInit(env, saved, info, layout, resolved)
 	return ExitOK
+}
+
+// initDoc is init's --json document. It names no path: not the repository's, the data folder's or Claude Code's.
+type initDoc struct {
+	header
+	Project      projectDoc      `json:"project"`
+	Head         string          `json:"head"`
+	ClaudeCode   claudeCodeDoc   `json:"claude_code"`
+	SignIn       string          `json:"sign_in"` // api-key | token-file | login (presence only, never the secret)
+	TestCommands []string        `json:"test_commands"`
+	Context      contextSizeDoc  `json:"context"`
+	LocalBinding localBindingDoc `json:"local_binding"`
+	Warnings     []string        `json:"warnings"`
+}
+
+type projectDoc struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+type claudeCodeDoc struct {
+	Found   bool   `json:"found"`
+	Version string `json:"version"`
+}
+
+// contextSizeDoc is what a context loads: tokens are estimated (claudectx.EstimateTokens).
+type contextSizeDoc struct {
+	StartupTokens int `json:"startup_tokens_estimated"`
+	StartupFiles  int `json:"startup_files"`
+	OnDemandFiles int `json:"on_demand_files"`
+}
+
+type localBindingDoc struct {
+	Allowed bool `json:"allowed"`
+	Gradle  bool `json:"gradle_project"`
+}
+
+func contextSize(resolved claudectx.Context) contextSizeDoc {
+	startup := 0
+	for _, e := range resolved.Entries {
+		if e.StartupBytes > 0 {
+			startup++
+		}
+	}
+	return contextSizeDoc{StartupTokens: claudectx.EstimateTokens(resolved.StartupBytes()), StartupFiles: startup, OnDemandFiles: len(resolved.Entries) - startup}
+}
+
+func initDocument(saved store.Project, info project.Info, resolved claudectx.Context) initDoc {
+	return initDoc{header: hdr("init"), Project: projectDoc{ID: saved.ID, Name: saved.Name}, Head: info.Head,
+		ClaudeCode: claudeCodeDoc{Found: info.Claude.Path != "", Version: info.Claude.Version}, SignIn: info.Claude.SignIn,
+		TestCommands: list(info.TestCommands), Context: contextSize(resolved),
+		LocalBinding: localBindingDoc{Allowed: saved.AllowLocalBinding, Gradle: slices.Contains(buildtool.DetectIn(info.Root), "gradle")},
+		Warnings:     list(info.Warnings)}
 }
 
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {

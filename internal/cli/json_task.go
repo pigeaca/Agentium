@@ -1,0 +1,250 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+
+	"github.com/pigeaca/agentium/internal/mine"
+	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
+)
+
+// The --json documents of the task commands.
+
+// taskInfo is a task as list, add, import, edit and the batches show it.
+type taskInfo struct {
+	Name           string `json:"name"`
+	Source         string `json:"source"`
+	BaseCommit     string `json:"base_commit"`
+	SolutionCommit string `json:"solution_commit,omitempty"`
+	GradedBy       string `json:"graded_by"` // tests | judge
+	HiddenTests    int    `json:"hidden_test_files"`
+	Reference      int    `json:"reference_files"`
+	// Status is the stored validation's: valid, invalid, flaky, unchecked, or unvalidated; StatusSummary says why in words.
+	Status        string `json:"status"`
+	StatusSummary string `json:"status_summary"`
+	NeedsReview   bool   `json:"needs_review"` // the instruction awaits a person's review for solution leaks
+	UntestedHunks int    `json:"untested_hunks"`
+	// UnstatedRequirements counts what the hidden tests need that nothing states; null when it could not be checked.
+	UnstatedRequirements *int `json:"unstated_requirements"`
+}
+
+func taskInfoOf(ctx context.Context, fair *task.Fairness, t store.Task) taskInfo {
+	info := taskInfo{Name: t.Name, Source: t.Source, BaseCommit: t.BaseCommit, SolutionCommit: t.SolutionCommit, GradedBy: grading(t),
+		HiddenTests: len(t.HiddenTests), Reference: len(t.Reference), Status: task.StatusOf(t), StatusSummary: validationStatus(t),
+		NeedsReview: t.NeedsReview, UntestedHunks: untestedCount(t)}
+	if gaps, err := task.Gaps(ctx, fair, t); err == nil {
+		n := len(gaps)
+		info.UnstatedRequirements = &n
+	}
+	return info
+}
+
+type taskListDoc struct {
+	header
+	Tasks []taskInfo `json:"tasks"`
+}
+
+type taskSavedDoc struct {
+	header
+	Task                 taskInfo `json:"task"`
+	Setup                []string `json:"setup"`
+	Verify               []string `json:"verify"`
+	SolutionLeakSections []string `json:"solution_leak_sections"` // instruction headings that may give the solution away (unreviewed tasks)
+	NextCommand          string   `json:"next_command"`
+}
+
+type taskEditDoc struct {
+	header
+	Task    taskInfo `json:"task"`
+	Updated bool     `json:"updated"`
+}
+
+type taskRemovedDoc struct {
+	header
+	Removed string `json:"removed"`
+}
+
+type weakTestsDoc struct {
+	Checked  int      `json:"checked"`
+	Skipped  int      `json:"skipped"`
+	Untested []string `json:"untested"`
+	TimedOut int      `json:"timed_out"`
+	Reason   string   `json:"reason,omitempty"` // why nothing was checked
+}
+
+func weakTestsOf(w *task.WeakTests) *weakTestsDoc {
+	if w == nil {
+		return nil
+	}
+	doc := &weakTestsDoc{Checked: w.Checked, Skipped: w.Skipped, TimedOut: w.TimedOut, Reason: w.Reason, Untested: []string{}}
+	for _, h := range w.Untested {
+		doc.Untested = append(doc.Untested, h.String())
+	}
+	return doc
+}
+
+type taskShowDoc struct {
+	header
+	taskInfo
+	Instruction string        `json:"instruction"`
+	Review      string        `json:"review,omitempty"` // ticket | history: why the instruction needs a review; empty when it does not
+	Setup       []string      `json:"setup"`
+	Verify      []string      `json:"verify"`
+	HiddenTests []string      `json:"hidden_tests"`
+	Reference   []string      `json:"reference"`
+	WeakTests   *weakTestsDoc `json:"weak_tests"`
+	Gaps        []task.Gap    `json:"unstated_requirement_details"`
+	// InstructionNamesFiles lists reference files the instruction names: it tells the agent where the fix goes.
+	InstructionNamesFiles []string `json:"instruction_names_reference_files"`
+}
+
+func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) taskShowDoc {
+	doc := taskShowDoc{header: env.hdr(), taskInfo: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Instruction: t.Instruction,
+		Setup: list(t.Setup), Verify: list(t.Verify), HiddenTests: list(t.HiddenTests), Reference: list(t.Reference), Gaps: []task.Gap{},
+		InstructionNamesFiles: []string{}}
+	switch {
+	case t.NeedsReview && isTicket(t):
+		doc.Review = "ticket"
+	case t.NeedsReview:
+		doc.Review = "history"
+	}
+	var stored task.Validation
+	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
+		doc.WeakTests = weakTestsOf(stored.WeakTests)
+	}
+	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err == nil {
+		doc.Gaps = list(gaps)
+	}
+	for _, p := range t.Reference {
+		if strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p)) {
+			doc.InstructionNamesFiles = append(doc.InstructionNamesFiles, p)
+		}
+	}
+	return doc
+}
+
+// validationExit is task validate's exit code for a result: a task that cannot be trusted is a failure.
+func validationExit(status string) int {
+	if status == task.StatusInvalid || status == task.StatusFlaky {
+		return ExitError
+	}
+	return ExitOK
+}
+
+type judgeCheckDoc struct {
+	InstructionWords       int      `json:"instruction_words"`
+	CodeFiles              []string `json:"code_files"`
+	ChangedLines           int      `json:"changed_lines"`
+	ReferenceDiffTruncated bool     `json:"reference_diff_truncated"` // the judge reads a cut copy
+}
+
+type validatedDoc struct {
+	header
+	Task           string              `json:"task"`
+	Status         string              `json:"status"`
+	Summary        string              `json:"summary"`
+	Arms           []string            `json:"arms"`
+	Repeats        int                 `json:"repeats"`
+	NeedsReview    bool                `json:"needs_review"`
+	Gaps           []task.Gap          `json:"unstated_requirement_details"`
+	HarnessChanged map[string][]string `json:"harness_changed"` // per arm: settings, hooks or MCP the arm changes
+	WeakTests      *weakTestsDoc       `json:"weak_tests"`
+	Judge          *judgeCheckDoc      `json:"judge"` // judge-graded tasks only
+}
+
+func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task, o task.ValidateOptions, result task.Validation) validatedDoc {
+	doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), Arms: []string{}, Repeats: result.RepeatCount(),
+		NeedsReview: t.NeedsReview, Gaps: []task.Gap{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests)}
+	for _, a := range o.Arms {
+		doc.Arms = append(doc.Arms, a.Name)
+	}
+	for arm, files := range result.HarnessChanged {
+		doc.HarnessChanged[arm] = list(files)
+	}
+	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err == nil {
+		doc.Gaps = list(gaps)
+	}
+	return doc
+}
+
+// batchRowDoc is a row of task mine's and task validate --all's table: a task, or a commit that did not become one.
+type batchRowDoc struct {
+	Name    string    `json:"name"`
+	Commit  string    `json:"commit"`
+	Problem string    `json:"problem,omitempty"` // why it was not imported or validated
+	Task    *taskInfo `json:"task"`              // null when the commit did not become a task
+}
+
+func batchRowDocs(ctx context.Context, w *workspace, rows []batchRow) []batchRowDoc {
+	ctx = context.WithoutCancel(ctx)
+	fair := task.NewFairness("--git-dir", w.bare)
+	docs := []batchRowDoc{}
+	for _, r := range rows {
+		if r.task == nil {
+			docs = append(docs, batchRowDoc{Name: r.name, Commit: r.commit, Problem: r.problem})
+			continue
+		}
+		info := taskInfoOf(ctx, fair, *r.task)
+		docs = append(docs, batchRowDoc{Name: r.task.Name, Commit: r.task.SolutionCommit, Problem: r.problem, Task: &info})
+	}
+	return docs
+}
+
+type validateAllDoc struct {
+	header
+	Rows        []batchRowDoc `json:"tasks"`
+	Valid       int           `json:"valid"`
+	Total       int           `json:"total"`
+	Interrupted bool          `json:"interrupted"`
+}
+
+type mineCandidateDoc struct {
+	Commit  string   `json:"commit"`
+	Score   int      `json:"score"`
+	Subject string   `json:"subject"`
+	Tests   int      `json:"test_files"`
+	Code    int      `json:"code_files"`
+	Lines   int      `json:"changed_lines"`
+	Reasons []string `json:"score_parts"`
+}
+
+type mineDoc struct {
+	header
+	DryRun          bool               `json:"dry_run"`
+	Ref             string             `json:"ref"`
+	Head            string             `json:"head"`
+	Scanned         int                `json:"commits_read"`
+	Shallow         bool               `json:"shallow"`
+	CandidatesFound int                `json:"candidates_found"`
+	Candidates      []mineCandidateDoc `json:"candidates"` // dry run only: the best --limit
+	SetAside        map[string]int     `json:"set_aside"`  // commits not taken, per reason
+	Verify          []string           `json:"verify"`
+	// The rest is for a run that imports.
+	Tried       int           `json:"tried"`
+	Imported    int           `json:"imported"`
+	Valid       int           `json:"valid"`
+	Rows        []batchRowDoc `json:"tasks"`
+	Interrupted bool          `json:"interrupted"`
+}
+
+// mineDocument is the scan's part of task mine's document; the caller adds what an import did.
+func (env Env) mineDocument(prep mine.Prepared, top []mine.Candidate, dry bool) mineDoc {
+	res := prep.Result
+	doc := mineDoc{header: env.hdr(), DryRun: dry, Ref: res.Ref, Head: res.Head, Scanned: res.Scanned, Shallow: res.Shallow,
+		CandidatesFound: len(res.Candidates), Candidates: []mineCandidateDoc{}, SetAside: map[string]int{}, Verify: list(prep.Verify), Rows: []batchRowDoc{}}
+	for _, c := range top {
+		parts := make([]string, len(c.Reasons))
+		for i, p := range c.Reasons {
+			parts[i] = p.String()
+		}
+		doc.Candidates = append(doc.Candidates, mineCandidateDoc{Commit: c.Hash, Score: c.Score, Subject: c.Subject, Tests: len(c.Tests), Code: len(c.Code),
+			Lines: c.Lines, Reasons: parts})
+	}
+	for reason, n := range res.Counts() {
+		doc.SetAside[string(reason)] = n
+	}
+	return doc
+}
