@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -804,5 +805,26 @@ func TestSetTaskValidationIdleSkipsTasksOfLockedExperiments(t *testing.T) {
 	}
 	if ok, err := s.SetTaskValidationIdle(ctx, 9999, verify, nil, []byte(`{}`), now); err != nil || ok {
 		t.Errorf("a missing task: SetTaskValidationIdle = %v, %v; want not stored", ok, err)
+	}
+}
+
+// Two migrations with one version prefix (parallel branches that both took the next number) are refused, so the
+// second to merge must renumber; the embedded set has none.
+func TestMigrationVersionsAreUnique(t *testing.T) {
+	if _, _, err := latestMigration(); err != nil {
+		t.Fatalf("the embedded migrations: %v", err)
+	}
+	clash := fstest.MapFS{
+		"migrations/0001_projects.sql":   {Data: []byte("SELECT 1;")},
+		"migrations/0002_a.sql":          {Data: []byte("SELECT 1;")},
+		"migrations/0002_b.sql":          {Data: []byte("SELECT 1;")},
+		"migrations/0003_after_both.sql": {Data: []byte("SELECT 1;")},
+	}
+	if _, _, err := migrationsIn(clash); err == nil || !strings.Contains(err.Error(), "share version 2") {
+		t.Errorf("a shared version: %v", err)
+	}
+	delete(clash, "migrations/0002_b.sql")
+	if latest, all, err := migrationsIn(clash); err != nil || latest != 3 || len(all) != 3 {
+		t.Errorf("distinct versions: %d, %v, %v", latest, all, err)
 	}
 }

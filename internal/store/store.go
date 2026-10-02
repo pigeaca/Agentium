@@ -178,17 +178,29 @@ type migration struct {
 
 // latestMigration is the newest embedded migration's version, and every migration in order.
 func latestMigration() (int, []migration, error) {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
+	return migrationsIn(migrations)
+}
+
+// migrationsIn lists the migrations/NNNN_name.sql files of fsys, in order, and the newest version. Two files with one
+// version are an error: parallel branches that each took the next free number must renumber when the second merges,
+// or one of the migrations would never apply on databases that recorded the other.
+func migrationsIn(fsys fs.FS) (int, []migration, error) {
+	names, err := fs.Glob(fsys, "migrations/*.sql")
 	if err != nil {
 		return 0, nil, fmt.Errorf("list migrations: %w", err)
 	}
 	latest := 0
 	all := make([]migration, len(names))
+	seen := map[int]string{}
 	for i, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
 		version, err := strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0])
 		if err != nil {
 			return 0, nil, fmt.Errorf("migration %s: version prefix: %w", name, err)
 		}
+		if other, ok := seen[version]; ok {
+			return 0, nil, fmt.Errorf("migrations %s and %s share version %d: renumber one", other, name, version)
+		}
+		seen[version] = name
 		all[i] = migration{name, version}
 		latest = max(latest, version)
 	}
