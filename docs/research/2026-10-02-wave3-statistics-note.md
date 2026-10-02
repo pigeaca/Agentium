@@ -67,18 +67,42 @@
 **Isolated-run cost (in scope: reported beside actual cost).**
 - **The effect it removes:** Claude Code writes its prompt cache for an hour. A run whose shared prefix (tools, system prompt, context) is still cached from another run reads that prefix at the cache-read rate instead of writing it.
 - **Its name:** the *isolated-run cost* is what the run would have cost if no other run had warmed the cache. It differs from the report's existing "cold-cache cost" (`internal/report/report.go`): that column reprices *every* cached read as a write, the run's own included, as a sensitivity bound.
-- **The rule:** start from the run's reported cost. Then reprice, at the cache-write rate the session used, the cache-read tokens of:
+- **The rule:** start from the run's reported cost. Then reprice as cache writes the cache-read tokens of:
   - the main session's first request;
-  - the first launch of each subagent *type* (the Task tool's `subagent_type`, matched by `parent_tool_use_id`).
+  - the first request of each subagent launch (the Agent or Task tool's `subagent_type`, matched by `parent_tool_use_id`) that could not read its type's prefix from the same run.
 
-  The write rate is 1 hour unless the stream's `ephemeral_5m` field says otherwise. A later launch of a type already launched in the same run reads the prefix that run wrote itself, so it is not repriced. The repricing uses Agentium's dated price table.
+  A launch *repeats* its type, and is not repriced, only when an earlier launch of that type made a request before this launch's Agent call, and at most that launch's write TTL before this launch's first request (event timestamps). Every other launch is repriced:
+  - the first launch of a type;
+  - parallel launches of one type (from one message, neither can read the other's write);
+  - a launch made after its type's prefix expired;
+  - a launch whose timing is unknown (a missing timestamp).
+
+  No recorded transcript contains a repeat launch yet: all 12 subagent launches in 98 runs were their type's first. The repeat rule rests on synthetic streams only.
+- **First request:** the first message with input, cache-write or cache-read tokens. Messages with `"usage": null`, and Claude Code's `<synthetic>` ones, are skipped.
+- **Write rate:** the TTL of the launch's first request that wrote the cache, from the stream's `cache_creation` split: 1 hour if it wrote any `ephemeral_1h` tokens, else 5 minutes. If the launch wrote nothing, the fallback is:
+  - the TTL other launches of its type wrote in the run;
+  - else 5 minutes for a subagent and 1 hour for the main session. That is what recorded runs wrote: every main session wrote 1 hour, and all 200 subagent events that wrote used 5 minutes.
+
+  Neither fallback direction is conservative for a bias correction: assuming 5 minutes under-reprices a launch that would have written for an hour, and assuming 1 hour over-reprices the opposite. None of the 110 repriced requests in recorded runs needed the fallback.
+- **The repricing** uses Agentium's dated price table, at each request's own model.
 - **What stays the same:**
   - A run that started cold is unchanged.
-  - A model missing from the price table leaves the value absent, not zero.
+  - The value is absent, not zero, when:
+    - a model is missing from the price table;
+    - a subagent request names no model;
+    - a subagent launch's type is unknown;
+    - the run has no cost or no first request.
   - Actual cost stays the primary metric (the user's decision).
-- **To confirm on recorded transcripts (step 2 of the plan):**
-  - on a run with no other run inside the cache TTL, every request this rule reprices must show `cache_read` = 0;
-  - otherwise some of the rule's reads are the run's own (two subagent types sharing a prefix, say), and the rule changes before it ships.
+- **Relation to the cold-cache cost:** the isolated-run cost should be at most the cold-cache cost. It reprices a subset of the cached reads, and the 5-minute write rate is below the 1-hour one. The report's column breaks this in two cases:
+  - it prices *all* reads at the session model's 1-hour rate, so a subagent on a pricier model can make the isolated-run cost higher;
+  - it takes reads from the result event, so a run without a result reprices nothing.
+
+  The column should price reads per request at each request's model before both are shown side by side. Until then, the report explains the difference.
+- **Confirmed on recorded transcripts (step 2, 98 runs, 2026-10-02):** every repriced request with no other run's request inside its TTL before it showed `cache_read` = 0:
+  - 8 main-session first requests (1-hour TTL);
+  - 8 subagent first launches (5-minute TTL; another run's request of the same type and model counts).
+
+  The 4 subagent first launches that read 6,082 tokens each followed another run's request of the same type within 5 minutes. Main sessions read 0 when isolated, and 7,881–16,836 tokens otherwise.
 - **Upper bounds from report data** (first-request tokens × (1-hour write rate − read rate); not measured cross-run hits):
 
 | Real experiment | First request | Cost per run | Bound | Share |

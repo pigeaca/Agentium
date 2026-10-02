@@ -11,9 +11,10 @@ import (
 )
 
 // The golden stream of internal/claude, through the parser and the repricing: the main session's warm first request at
-// the one-hour write rate, the reviewer type's first launch (cold, five minutes) and the explorer's (no split: one hour);
-// the reviewer's second launch is not repriced. Rates of 2026-09-29: claude-sonnet-5 and -5-5 write $4 an hour and read
-// $0.20; claude-haiku-4-5 writes $1.25 for five minutes and reads $0.10.
+// the one-hour write rate, the reviewer type's first launch (cold, five minutes) and the explorer's (no split: a
+// subagent's five minutes); the reviewer's quick second launch is not repriced. Rates of 2026-09-29: claude-sonnet-5
+// and -5-5 write $4 an hour or $2.50 for five minutes and read $0.20; claude-haiku-4-5 writes $1.25 for five minutes
+// and reads $0.10.
 func TestIsolatedCostOfTheGoldenStream(t *testing.T) {
 	m, err := parseFile(filepath.Join("..", "claude", "testdata", "first-reads.jsonl"))
 	if err != nil {
@@ -21,7 +22,7 @@ func TestIsolatedCostOfTheGoldenStream(t *testing.T) {
 	}
 	rec := Record{Model: "claude-sonnet-5", Metrics: m}
 	got := isolatedCost(rec)
-	want := 0.25 + (16754*(4-0.2)+0*(1.25-0.1)+1200*(4-0.2))/1e6
+	want := 0.25 + (16754*(4-0.2)+0*(1.25-0.1)+1200*(2.5-0.2))/1e6
 	if got == nil || math.Abs(*got-want) > 1e-12 {
 		t.Errorf("isolated-run cost = %v, want %.7f", got, want)
 	}
@@ -48,8 +49,12 @@ func TestIsolatedCost(t *testing.T) {
 			ptr(0.85 + 16754*(4-0.2)/1e6)},
 		{"a five-minute time to live is repriced at its own rate", func() Record { return record(0.85, main(16754, claude.TTL5m)) },
 			ptr(0.85 + 16754*(2.5-0.2)/1e6)},
-		{"no time to live in the stream: one hour", func() Record { return record(0.85, main(16754, "")) },
+		// Records made before the time-to-live fallback: a main session's empty one is an hour, a subagent's five minutes.
+		{"an older main session without a time to live: one hour", func() Record { return record(0.85, main(16754, "")) },
 			ptr(0.85 + 16754*(4-0.2)/1e6)},
+		{"an older subagent without a time to live: five minutes", func() Record {
+			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "claude-sonnet-5", CacheRead: 6082})
+		}, ptr(0.85 + 6082*(2.5-0.2)/1e6)},
 		{"subagents are priced at their own model's rates", func() Record {
 			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "claude-opus-5-5", CacheRead: 6082, WriteTTL: claude.TTL5m})
 		}, ptr(0.85 + 6082*(5-0.2)/1e6)},
@@ -71,6 +76,10 @@ func TestIsolatedCost(t *testing.T) {
 			rec.Metrics.Model, rec.Model = "", "claude-opus-5-5"
 			return rec
 		}, ptr(0.85 + 1000*(8-0.2)/1e6)},
+		{"a subagent request without a model is absent: it may not run on the session's", func() Record {
+			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{CacheRead: 6082, WriteTTL: claude.TTL5m})
+		}, nil},
+		{"no cost is absent", func() Record { return record(0, main(0, claude.TTL1h)) }, nil},
 		{"an unknown model is absent, not zero", func() Record {
 			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "somebody-elses-model", CacheRead: 6082})
 		}, nil},
