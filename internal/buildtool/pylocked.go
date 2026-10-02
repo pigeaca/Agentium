@@ -52,6 +52,9 @@ func PythonLocked(files []string, read func(path string) ([]byte, bool)) bool {
 				queue = append(queue, next)
 				continue
 			}
+			if m := editableOption.FindStringSubmatch(line); m != nil && (strings.Contains(m[1], "://") || strings.Contains(m[1], "git+")) {
+				return false // an editable from a URL or VCS (git+https://...@main) follows whatever it names
+			}
 			if strings.HasPrefix(line, "-") {
 				continue // other options (an index, an editable local path) choose no version
 			}
@@ -63,6 +66,9 @@ func PythonLocked(files []string, read func(path string) ([]byte, bool)) bool {
 	}
 	return pins > 0
 }
+
+// editableOption is an editable requirement (-e, --editable) and its value.
+var editableOption = regexp.MustCompile(`^(?:-e|--editable)(?:\s*=\s*|\s+)(\S+)`)
 
 // hashOption is a --hash option on a requirement line (pip-tools' --generate-hashes).
 var hashOption = regexp.MustCompile(`\s+--hash[=\s]\S+`)

@@ -52,11 +52,11 @@ type Options struct {
 	Languages []string
 	// TestCommand names the verify commands in that rejection's detail (for example "go test"); optional.
 	TestCommand string
-	// AllowUnlocked keeps Python candidates whose base pins no dependencies (no uv.lock, no fully pinned requirement
-	// files: buildtool.PythonLocked). Without it they are rejected (ReasonUnlocked): the warm-up would resolve today's
-	// versions, not those the commit was tested with, and the base's tests can fail for that alone (the Python pilot's
-	// attrs base under today's mypy).
-	AllowUnlocked bool
+	// RequireLock rejects Python candidates whose base pins no dependencies (no uv.lock, no fully pinned requirement
+	// files: buildtool.PythonLocked), as ReasonUnlocked. Off by default: such bases are supported, their warm-up resolves
+	// today's versions with a note (the user's decision 3 in the Python and TypeScript plan), but the base's tests can
+	// fail for that alone (the Python pilot's attrs base under today's mypy).
+	RequireLock bool
 }
 
 // Reason says why a commit is not a candidate.
@@ -84,7 +84,7 @@ const (
 	ReasonTooLarge     Reason = "too large"
 	ReasonGenerated    Reason = "generated code"
 	ReasonInlineRust   Reason = "inline Rust tests"
-	ReasonUnlocked     Reason = "no lock file"              // a Python base that pins no dependencies (Options.AllowUnlocked)
+	ReasonUnlocked     Reason = "no lock file"              // a Python base that pins no dependencies (Options.RequireLock)
 	ReasonCopy         Reason = "the same change as a task" // the task pool's: a rebased or cherry-picked copy
 )
 
@@ -670,14 +670,14 @@ func inspect(ctx context.Context, root string, c *Candidate, o Options) (*Reject
 	if len(generated) > 0 {
 		return &Rejection{Reason: ReasonGenerated, Detail: strings.Join(generated, ", ")}, nil
 	}
-	if !o.AllowUnlocked && touchesPython(*c) {
+	if o.RequireLock && touchesPython(*c) {
 		python, locked, err := baseLock(ctx, root, c.Parent)
 		if err != nil {
 			return nil, err
 		}
 		if python && !locked {
 			return &Rejection{Reason: ReasonUnlocked, Detail: "the base has no uv.lock or fully pinned requirement files, so its " +
-				"dependencies would be today's versions; --allow-unlocked keeps it"}, nil
+				"dependencies would be today's versions; without --require-lock it is kept"}, nil
 		}
 	}
 	if !slices.ContainsFunc(c.Code, func(p string) bool { return path.Ext(p) == ".rs" }) {

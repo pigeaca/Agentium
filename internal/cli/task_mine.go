@@ -28,7 +28,7 @@ const (
 
 // mineArgs is what task mine was asked for.
 type mineArgs struct {
-	opts    mine.Options // Since, MaxFiles, MaxLines and AllowUnlocked
+	opts    mine.Options // Since, MaxFiles, MaxLines and RequireLock
 	limit   int
 	jobs    int
 	timeout time.Duration
@@ -45,7 +45,7 @@ func parseMine(env Env, args []string) (a mineArgs, code int, ok bool) {
 	fs.IntVar(&a.opts.MaxFiles, "max-files", mine.DefaultMaxFiles, "skip commits that change more test and code files than this")
 	fs.IntVar(&a.opts.MaxLines, "max-lines", mine.DefaultMaxLines, "skip commits that change more test and code lines than this")
 	fs.BoolVar(&a.dryRun, "dry-run", false, "list the candidates and why other commits were set aside; save nothing")
-	fs.BoolVar(&a.opts.AllowUnlocked, "allow-unlocked", false, "keep Python commits whose base pins no dependencies (no uv.lock or pinned requirements)")
+	fs.BoolVar(&a.opts.RequireLock, "require-lock", false, "set aside Python commits whose base pins no dependencies (no uv.lock or pinned requirements)")
 	fs.IntVar(&a.jobs, "jobs", defaultJobs, "how many imported tasks to validate at once")
 	fs.DurationVar(&a.timeout, "timeout", 10*time.Minute, "time limit for each verification command")
 	fs.Var(&a.verify, "verify", "a verification command for the tasks (repeatable; default: the detected test commands)")

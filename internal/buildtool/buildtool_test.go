@@ -183,24 +183,33 @@ func TestDetected(t *testing.T) {
 	}
 }
 
-// Go's agent side (allowlisted GO* and CGO_* names, GOFLAGS, the run's GOCACHE) applies where go.mod is detected, or
-// where no profile is (an unknown layout keeps Go's settings, as before profiles); a project detected as something else
-// alone (Python) gets none of it. Go's caches for Agentium's own commands stay on for every project.
+// Go's agent side (allowlisted GO* and CGO_* names, GOFLAGS, the run's GOCACHE) applies where go.mod is detected, where
+// the base has a go.mod or go.work anywhere (a Python root with a Go module in a subfolder: without the run's GOCACHE, go
+// would fall back to the user's denied cache and fail), or where no profile is (as before profiles); a project detected
+// as something else alone, with no Go file of that kind (Python), gets none of it. Go's caches for Agentium's own
+// commands stay on for every project.
 func TestGoAgentSideOnlyWhereDetected(t *testing.T) {
 	ctx := AgentContext{Allowed: []string{"PATH=/bin"}, Home: "/nonexistent-home", Repo: "/repo"}
 	goVar := func(kv string) bool { return strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, "GOCACHE=") }
 	for _, c := range []struct {
 		name  string
 		tools []string
+		paths []string // the base commit's files
 		goOn  bool
 	}{
-		{"nothing detected", nil, true},
-		{"a Go module", []string{"go"}, true},
-		{"Go and Python", []string{"go", "python"}, true},
-		{"Python alone", []string{"python"}, false},
-		{"Cargo alone", []string{"cargo"}, false},
+		{"nothing detected", nil, nil, true},
+		{"a Go module", []string{"go"}, []string{"go.mod", "main.go"}, true},
+		{"Go and Python", []string{"go", "python"}, []string{"go.mod", "pyproject.toml"}, true},
+		{"Python alone", []string{"python"}, []string{"pyproject.toml", "src/pkg/__init__.py", "docs/go.md"}, false},
+		{"Cargo alone", []string{"cargo"}, []string{"Cargo.toml", "src/lib.rs"}, false},
+		{"Python with a Go module in a subfolder", []string{"python"}, []string{"pyproject.toml", "tools/foo/go.mod", "tools/foo/main.go"}, true},
+		{"Python with go.work at the root", []string{"python"}, []string{"go.work", "pyproject.toml", "svc/main.go"}, true},
 	} {
-		selected := Select(c.tools)
+		// AgentKept names Go exactly where the base holds a go.mod or go.work (a docs/go.md is not one).
+		if kept := AgentKept(c.paths); slices.Contains(kept, "go") != (len(c.paths) > 0 && c.goOn) {
+			t.Errorf("%s: AgentKept(%q) = %q", c.name, c.paths, kept)
+		}
+		selected := SelectRun(c.tools, AgentKept(c.paths))
 		if !slices.ContainsFunc(selected, func(p Profile) bool { return p.Name == "go" }) {
 			t.Errorf("%s: Go's profile is not selected", c.name)
 		}

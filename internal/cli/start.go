@@ -21,7 +21,7 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--allow-unlocked] [--json]
+const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--require-lock] [--json]
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
@@ -42,14 +42,14 @@ your review, the tasks start itself mined: it checks only solution headings, ref
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
 accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks, finished, or ran with --yes) and
 never asks: only --yes runs the experiment, and then the document holds the run's result too. Without a terminal on stdin,
-start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget. --allow-unlocked mines
-Python commits whose base pins no dependencies too (as task mine --allow-unlocked).
+start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget. --require-lock mines
+no Python commit whose base pins no dependencies (as task mine --require-lock).
 `
 
 // startArgs is what start was asked for.
 type startArgs struct {
 	yes, acceptMined bool
-	allowUnlocked    bool // mine Python commits whose base has no lock file (mine.Options.AllowUnlocked)
+	requireLock      bool // mine no Python commit whose base has no lock file (mine.Options.RequireLock)
 	budget           float64
 	b                string // the snapshot to compare the context with; "" for an A/A calibration
 }
@@ -62,7 +62,7 @@ func runStart(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.BoolVar(&a.yes, "yes", false, "run the experiment without asking (real, paid runs)")
 	fs.BoolVar(&a.acceptMined, "accept-mined", false, "accept the tasks start mined without your review (only automatic checks)")
-	fs.BoolVar(&a.allowUnlocked, "allow-unlocked", false, "mine Python commits whose base pins no dependencies too")
+	fs.BoolVar(&a.requireLock, "require-lock", false, "mine no Python commit whose base pins no dependencies")
 	fs.Float64Var(&a.budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
 	fs.StringVar(&a.b, "b", "", "compare the context with this snapshot (default: an A/A calibration)")
 	rest, code, ok := parseArgs(env, fs, args, startUsage)

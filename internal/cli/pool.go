@@ -21,7 +21,7 @@ import (
 )
 
 const poolUsage = `Usage:
-  agentium pool update [--dry-run] [--accept-mined] [--allow-unlocked] [--limit N] [--jobs N]
+  agentium pool update [--dry-run] [--accept-mined] [--require-lock] [--limit N] [--jobs N]
                          one pass over the task pool; it runs no agent and costs nothing: mines the commits of
                          the default branch since the last pass (within 270 days), imports up to --limit (default
                          10) as tasks that need your review and validates them --jobs at a time (default 2);
@@ -31,8 +31,10 @@ const poolUsage = `Usage:
                          delete). Tasks a locked experiment uses are kept as they are. While an experiment is
                          running, re-validations are skipped. --dry-run lists what it would do and writes
                          nothing; --accept-mined accepts the tasks this pass imported without your review, after
-                         the automatic checks start --accept-mined makes; --allow-unlocked mines Python
-                         commits whose base pins no dependencies too (as task mine --allow-unlocked)
+                         the automatic checks start --accept-mined makes. --require-lock mines no Python
+                         commit whose base pins no dependencies (as task mine --require-lock); passes scan
+                         only new commits, so those a pass set aside are not revisited later without the flag:
+                         task mine reaches them
   agentium pool status   the pool's health: valid, weak, flaky, invalid, awaiting review and retired tasks, the
                          last pass and the oldest valid base
   agentium pool update|status ... --json
@@ -64,7 +66,7 @@ const poolValidateTimeout = 10 * time.Minute
 // poolArgs is what pool update was asked for.
 type poolArgs struct {
 	dryRun, acceptMined bool
-	allowUnlocked       bool // mine Python commits whose base has no lock file (mine.Options.AllowUnlocked)
+	requireLock         bool // mine no Python commit whose base has no lock file (mine.Options.RequireLock)
 	limit, jobs         int
 }
 
@@ -72,7 +74,7 @@ func parsePoolUpdate(env Env, args []string) (a poolArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("pool update", flag.ContinueOnError)
 	fs.BoolVar(&a.dryRun, "dry-run", false, "list what the pass would mine, validate, re-validate and retire; write nothing")
 	fs.BoolVar(&a.acceptMined, "accept-mined", false, "accept this pass's imports without a review, after the automatic checks")
-	fs.BoolVar(&a.allowUnlocked, "allow-unlocked", false, "mine Python commits whose base pins no dependencies too")
+	fs.BoolVar(&a.requireLock, "require-lock", false, "mine no Python commit whose base pins no dependencies")
 	fs.IntVar(&a.limit, "limit", pool.DefaultPolicy().Limit, "how many tasks to import at most")
 	fs.IntVar(&a.jobs, "jobs", defaultJobs, "how many tasks to validate at once")
 	rest, code, ok := parseArgs(env, fs, args, poolUsage)
@@ -136,7 +138,7 @@ func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 	p.opts.Languages, commands = mine.TestLanguages(w.root)
 	p.opts.TestCommand = strings.Join(commands, ", ")
 	p.opts.MaxFiles, p.opts.MaxLines, p.opts.MaxCommits = mine.DefaultMaxFiles, mine.DefaultMaxLines, mine.DefaultMaxCommits
-	p.opts.AllowUnlocked = a.allowUnlocked
+	p.opts.RequireLock = a.requireLock
 	// As task mine: the build tools' own test commands, else the project's detected ones.
 	if p.verify = commands; len(p.verify) == 0 {
 		p.verify = w.defaultVerify()

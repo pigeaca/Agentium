@@ -21,6 +21,9 @@ func TestPythonLocked(t *testing.T) {
 		{"an included file is missing", map[string]string{"requirements.txt": "-r requirements/base.txt\nattrs==1.0\n"}, false},
 		{"an include out of the repository", map[string]string{"requirements.txt": "-c ../constraints.txt\nattrs==1.0\n"}, false},
 		{"a test requirement file in requirements/", map[string]string{"requirements/test.txt": "pytest==8.0.0\n"}, true},
+		{"an editable from git", map[string]string{"requirements.txt": "attrs==1.0\n-e git+https://github.com/x/y.git@main#egg=y\n"}, false},
+		{"an editable from a URL", map[string]string{"requirements.txt": "attrs==1.0\n--editable=https://example.com/y.tar.gz\n"}, false},
+		{"a local editable", map[string]string{"requirements.txt": "attrs==1.0\n-e ./vendor/y\n"}, true},
 		{"only options", map[string]string{"requirements.txt": "--index-url https://example.com/simple\n"}, false},
 		{"other .txt files are not requirements", map[string]string{"notes.txt": "pytest==8\n"}, false},
 	} {

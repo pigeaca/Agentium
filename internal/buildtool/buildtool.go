@@ -35,6 +35,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -47,11 +48,16 @@ type Profile struct {
 	Name string
 	// Always selects the profile for every repository, whatever Detect finds (Go's, for compatibility): its caches for
 	// Agentium's own commands, test patterns and languages apply everywhere. Its agent side (EnvNames, EnvPrefixes,
-	// AgentEnv, AgentCaches) applies only where it is detected, or where no profile is (an unknown layout, such as a Go
-	// module in a subfolder, keeps Go's settings as before profiles): a Python project's agent gets no GOFLAGS or GOCACHE.
+	// AgentEnv, AgentCaches) is off only where the repository has another profile and none of its AgentMarkers anywhere
+	// (SelectRun): a Python project's agent gets no GOFLAGS or GOCACHE, while one with a Go module in a subfolder, or a
+	// go.work at its root, keeps them (without the run's GOCACHE, go falls back to the user's cache, which the sandbox
+	// denies, and fails at once). Where no profile is detected, the agent side stays on, as before profiles.
 	Always bool
+	// AgentMarkers are file names that, anywhere in the base commit, keep an Always profile's agent side on though
+	// Detect finds nothing at the root (Go: go.mod, go.work). See AgentKept.
+	AgentMarkers []string
 	// implicit marks an Always profile Select chose though the repository has another profile and not this one: its
-	// agent side is off (agentSide).
+	// agent side is off (agentSide) unless SelectRun keeps it.
 	implicit bool
 	// Detect are files at the repository root that mark a project of this tool; discovery asks TestCommand only when
 	// one of them is present.
@@ -198,6 +204,34 @@ func Select(names []string) []Profile {
 	return out
 }
 
+// SelectRun is Select for a run's agent: kept names Always profiles whose agent side stays on though they are not
+// detected at the root (AgentKept of the base commit's paths).
+func SelectRun(names, kept []string) []Profile {
+	out := Select(names)
+	for i := range out {
+		if slices.Contains(kept, out[i].Name) {
+			out[i].implicit = false
+		}
+	}
+	return out
+}
+
+// AgentKept names the Always profiles with one of their AgentMarkers anywhere among paths (a commit's files,
+// slash-separated): their agent side stays on in a run (SelectRun). It adds nothing to the detected names, which would
+// add the profile's test command to mined tasks' verify commands.
+func AgentKept(paths []string) []string {
+	var kept []string
+	for _, p := range Profiles() {
+		if !p.Always || len(p.AgentMarkers) == 0 {
+			continue
+		}
+		if slices.ContainsFunc(paths, func(f string) bool { return slices.Contains(p.AgentMarkers, path.Base(f)) }) {
+			kept = append(kept, p.Name)
+		}
+	}
+	return kept
+}
+
 // agentSide reports whether the profile's agent variables (allowlist, AgentEnv, AgentCaches) apply.
 func (p Profile) agentSide() bool {
 	return !p.implicit
@@ -228,8 +262,9 @@ func goProfile() Profile {
 		EnvNames: []string{"GOPATH", "GOROOT", "GOBIN", "GOCACHE", "GOMODCACHE", "GOENV", "GOFLAGS", "GOTOOLCHAIN", "GOPROXY",
 			"GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOWORK", "GO111MODULE", "GOTMPDIR", "GOEXPERIMENT",
 			"GODEBUG", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOOS", "GOARCH", "GOAMD64", "GOARM64"},
-		EnvPrefixes: []string{"CGO_"},
-		Always:      true,
+		EnvPrefixes:  []string{"CGO_"},
+		Always:       true,
+		AgentMarkers: []string{"go.mod", "go.work"},
 		// GOCACHEPROG is cleared so hidden tests go to no cache program (one set with `go env -w` still applies).
 		CommandCaches: []CacheVar{{Name: "GOCACHE", Dir: "go-build"}, {Name: "GOCACHEPROG", Clear: true}},
 		TempVars:      []string{"GOTMPDIR"},
