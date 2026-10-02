@@ -507,3 +507,40 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A retired task leaves new designs and previews with its reason, but an experiment that locked it resumes and reports as
+// before: eligibility is checked only before the lock.
+func TestRetiredTaskLeavesDesignsButNotLockedExperiments(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "unlocked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "locked", "--budget", "30"), ExitOK, "Experiment locked: done")
+
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tk, err := db.TaskByName(ctx, projects[0].ID, "value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := db.RetireTask(ctx, tk.ID, "its file is gone from the default branch", time.Now()); err != nil || !retired {
+		t.Fatalf("retire: %v, %v", retired, err)
+	}
+	db.Close()
+
+	const why = "it is retired: its file is gone from the default branch"
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean"), ExitError, "no task can be in this experiment yet", "value: "+why)
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean", "--task", "value"), ExitError, "task value cannot be in this experiment: "+why)
+	expect(t, f.run(ctx, "experiment", "plan", "unlocked"), ExitOK, "task value: "+why)
+	expect(t, f.run(ctx, "experiment", "run", "unlocked"), ExitError, "not ready to run", why)
+
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK, "Resuming experiment locked", "2 of 2 runs settled")
+	expect(t, f.run(ctx, "experiment", "report", "locked"), ExitOK, "# Experiment locked", "| value |")
+}
