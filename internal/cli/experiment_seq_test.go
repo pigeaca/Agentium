@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -118,6 +119,7 @@ func TestSeqExperimentStopsAtItsFirstLook(t *testing.T) {
 		"Experiment lean-seq: done: stopped at look 1 of 3 (8 tasks): cost improved", "16 of 32 runs settled",
 		"Done: stopped at look 1 of 3 (8 tasks): cost improved. The report: agentium experiment report lean-seq",
 		"Looks (method seq-v1): stopped at look 1 of 3 (8 tasks): cost improved")
+	t.Log("experiment run, stopped at look 1:\n" + run.stdout)
 	if strings.Contains(run.stdout, "[17/32]") {
 		t.Errorf("a run of stage 2 started after the stop:\n%s", run.stdout)
 	}
@@ -376,4 +378,25 @@ func TestLegacyCostExperimentStaysPhase1(t *testing.T) {
 			t.Errorf("a phase1-v2 report says %q:\n%s", seq, report.stdout)
 		}
 	}
+}
+
+// Lost tasks through the executor: a slot of stage 1 that fails three times for infrastructure leaves look 1 with 7
+// tasks, below the floor, so it gives no verdict and stage 2 runs; look 2 counts 11 tasks, at the level the spending
+// function gives 11 of the planned 16, and its verdict stops the experiment.
+func TestSeqExperimentLostTasks(t *testing.T) {
+	t.Parallel()
+	f, ctrl := seqFixture(t)
+	ctx := context.Background()
+	control(t, ctrl, map[string]string{"cost-lean": "0.15", "cost-jitter": "", "infra": "s0-t1\ns0-t2\ns0-t3\n"})
+	expect(t, f.run(ctx, "experiment", "new", "lossy", "--b", "lean", "--seed", "5"), ExitOK)
+	looks, err := stats.SequentialLooks([]int{11}, 16, false, stats.SeqAlpha, stats.SeqEquivalenceAlpha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := f.run(ctx, "experiment", "run", "lossy")
+	expect(t, got, ExitOK, "(attempt 3 of 3): started",
+		"Look 1 of 3 (7 of 8 tasks counted): no verdict (7 task(s) have cost in both arms, below the floor of 8): continue",
+		"Look 2 of 3 (11 of 12 tasks counted): cost improved at "+strconv.FormatFloat(100*looks[0].EffLevel, 'f', 2, 64)+"%: stop",
+		"Experiment lossy: done: stopped at look 2 of 3 (11 tasks): cost improved")
+	checkBarrier(t, seqLockOf(t, f, "lossy"), experimentRuns(t, f, "lossy"))
 }

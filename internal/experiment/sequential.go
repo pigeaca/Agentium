@@ -369,7 +369,10 @@ func DescribeLooks(d Design) string {
 	if d.NoFutility {
 		stops = "it stops at the first look with a cost verdict (futility stops off)"
 	}
-	if len(looks) == 1 {
+	switch {
+	case looks[0] < stats.SeqFirstLook:
+		return fmt.Sprintf("one look, after all %d task(s), below the cost floor of %d: cost stays exploratory", looks[0], stats.SeqFirstLook)
+	case len(looks) == 1:
 		return fmt.Sprintf("one look, after all %d tasks (a fixed design at the sequential level)", looks[0])
 	}
 	return fmt.Sprintf("looks after %s tasks; %s", countList(looks), stops)

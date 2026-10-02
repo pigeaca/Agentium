@@ -52,9 +52,9 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// all of them (2 runs at $1.612, a quarter above, plus 3 caps of $3).
 	expect(t, f.run(ctx, "experiment", "new", "cost-ab", "--b", "lean", "--seed", "7"), ExitOK,
 		"Created experiment cost-ab: context A/B, A = base, B = lean, 1 task(s) × 1 run(s) per arm = 2 runs, budget $14.00",
-		"Method seq-v1: one look, after all 1 tasks", "note: a cost experiment takes up to 16 tasks; only 1 can be in it")
+		"Method seq-v1: one look, after all 1 task(s), below the cost floor of 8: cost stays exploratory.", "note: a cost experiment takes up to 16 tasks; only 1 can be in it")
 	cost := f.run(ctx, "experiment", "plan", "cost-ab")
-	expect(t, cost, ExitOK, "method seq-v1: one look, after all 1 tasks", "Looks (method seq-v1; runs count both arms):", "1 of 1", "$3.22", "$6.00",
+	expect(t, cost, ExitOK, "method seq-v1: one look, after all 1 task(s), below the cost floor of 8", "Looks (method seq-v1; runs count both arms):", "1 of 1", "$3.22", "$6.00",
 		"96.50%", "90.00%", "Spend: at most $3.22 if every look runs (all 1 tasks; $6.00 if every run reaches its cap)",
 		"Cost decides at each look", "Floors (method seq-v1)")
 	for _, tiers := range []string{"Quick", "Confident", "Detectable effects"} {
