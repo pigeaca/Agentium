@@ -19,6 +19,7 @@ Canonical role instructions live in `.agents/roles/`; Claude subagents in `.clau
 | [investigator](../roles/investigator.md) | Answer one question before planning or delegation; returns a handoff with `path:line` evidence | Sonnet, medium effort, plan mode, `Read/Grep/Glob/Bash` |
 | [reviewer](../roles/reviewer.md) | Independent review of a finished change against acceptance criteria, diff and check results | Opus, high effort, `Read/Grep/Glob/Bash` |
 | [implementer](../roles/implementer.md) | One assigned plan step in its own worktree, often in parallel with others; returns an implementation handoff | Sonnet, medium effort, `Read/Edit/Write/Grep/Glob/Bash` |
+| [implementer-critical](../roles/implementer-critical.md) | The implementer for high-risk steps: sandbox and denied paths, money and consent, persistence and recovery, concurrency | Opus, high effort, `Read/Edit/Write/Grep/Glob/Bash` |
 
 Give the reviewer the plan (or inline acceptance), `base...head`, the worktree path and the checks already run, not the author's conversation. Codex uses the same roles by opening the canonical file, e.g. "review `claude/fix/x` against its plan as described in `.agents/roles/reviewer.md`". New `.claude/agents` files load after a client restart; until then, a general-purpose subagent told to follow the role file is equivalent.
 
@@ -34,6 +35,14 @@ Pick the tier from the task's risk and ambiguity, not its size. These are starti
 | Concurrency, persistence, security, public contracts, cross-package refactors, unclear requirements | deep | Opus, high (xhigh when stuck) | strongest model, high |
 | Independent review | deep | `reviewer` subagent (Opus, high) | strongest model, high |
 | Long multi-hour increments | deep | Fable when available | strongest model, high |
+
+**Routing implementation steps by risk.** Sonnet implementers on risky steps needed 3–5 review rounds, against 1–2 for mechanical work, so pay for the stronger model up front where a missed case is expensive:
+
+| Step | Implementer | Review |
+|---|---|---|
+| High risk: sandbox and denied paths, money and consent, persistence and recovery, concurrency | `implementer-critical` (Opus, high), with the [threat checklist](../roles/reviewer.md#threat-checklist) in the brief | `reviewer` (Opus, high), walking the same checklist |
+| Normal features | `implementer` (Sonnet, medium) | `reviewer` (Opus, high) |
+| Mechanical: tests, docs, moves, small fixes under about 150 changed lines | `implementer` (Sonnet, medium) | the coordinator's own review is enough |
 
 - **Aliases move.** `sonnet` and `opus` in `.claude/agents` resolve to the newest model of that tier that the installed Claude Code knows, so a release (such as Sonnet 5.5 on 2026-09-29) changes the subagents' model without an edit. Record the exact model ID each agent used in the plan's Metrics.
 - **Re-tier after investigation.** If the work turns out to touch a contract, schema or several packages, stop and re-plan at the deep tier.
