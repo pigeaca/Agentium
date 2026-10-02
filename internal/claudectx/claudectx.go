@@ -13,6 +13,7 @@ package claudectx
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"path"
 	"regexp"
@@ -308,6 +309,7 @@ func HarnessFrontmatter(data []byte) HarnessFields {
 		return HarnessFields{}
 	}
 	var h HarnessFields
+	keyIndent, contentIndent := -1, -1 // inside a block scalar: its key's column, and its content's once known
 	for i := 1; i < len(lines); i++ {
 		line := strings.TrimRight(lines[i], " \t\r")
 		switch {
@@ -318,22 +320,50 @@ func HarnessFrontmatter(data []byte) HarnessFields {
 			h.Doubt = fmt.Sprintf("the line %q might end the frontmatter", line)
 			h.Text = strings.Join(lines[1:], "\n")
 			return h
+		case strings.ContainsAny(lines[i], yamlBreaks) && h.Doubt == "":
+			// YAML also breaks lines at a lone CR, NEL, LS and PS, so one line here may hold several keys there.
+			h.Doubt = fmt.Sprintf("a line break other than LF or CRLF in the frontmatter line %q", line)
 		}
-		h.scan(line)
+		if keyIndent >= 0 && strings.TrimSpace(line) != "" {
+			spaces := len(line) - len(strings.TrimLeft(line, " "))
+			switch {
+			case spaces <= keyIndent && line[spaces] == '\t':
+				h.Doubt = cmp.Or(h.Doubt, fmt.Sprintf("a tab where a block scalar may end, in the frontmatter line %q", line))
+			case spaces > keyIndent && contentIndent < 0:
+				contentIndent = spaces
+			case spaces > keyIndent && spaces < contentIndent:
+				h.Doubt = cmp.Or(h.Doubt, fmt.Sprintf("a dedent inside a block scalar, in the frontmatter line %q", line))
+			}
+			if spaces > keyIndent {
+				continue // block scalar text, however it starts (Markdown lists, links, emphasis)
+			}
+			keyIndent, contentIndent = -1, -1
+		}
+		if keyIndent < 0 {
+			keyIndent = h.scan(line)
+		}
 	}
 	h.Doubt = "the frontmatter has no closing --- line"
 	h.Text = strings.Join(lines[1:], "\n")
 	return h
 }
 
-// scan reads one frontmatter line for a key.
-func (h *HarnessFields) scan(line string) {
+// yamlBreaks are the characters YAML 1.2 reads as line breaks, besides LF (and the CR of CRLF, already joined).
+const yamlBreaks = "\r\u0085\u2028\u2029"
+
+// blockScalar matches a value that starts a block scalar: | or >, with optional chomping and indentation indicators,
+// and an optional comment.
+var blockScalar = regexp.MustCompile(`^[|>][-+0-9]*(?:[ \t]+#.*)?$`)
+
+// scan reads one frontmatter line for a key. When the key's value starts a block scalar, it returns the key's column,
+// so the caller reads the more indented lines that follow as text; otherwise it returns -1.
+func (h *HarnessFields) scan(line string) int {
 	rest := strings.TrimLeft(line, " \t")
 	for rest == "-" || strings.HasPrefix(rest, "- ") || strings.HasPrefix(rest, "-\t") { // sequence items
 		rest = strings.TrimLeft(rest[1:], " \t")
 	}
 	if rest == "" || rest[0] == '#' {
-		return
+		return -1
 	}
 	doubt := func(why string) {
 		if h.Doubt == "" {
@@ -342,33 +372,37 @@ func (h *HarnessFields) scan(line string) {
 	}
 	if strings.ContainsRune("{[?!&*%@`|><", rune(rest[0])) {
 		doubt("YAML syntax this reader does not parse at a key")
-		return
+		return -1
 	}
-	key := ""
+	key, value := "", ""
 	if quote := rest[0]; quote == '"' || quote == '\'' {
 		end := strings.IndexByte(rest[1:], quote)
 		if end < 0 {
 			doubt("a quoted key or value that spans lines")
-			return
+			return -1
 		}
 		inner, after := rest[1:1+end], strings.TrimLeft(rest[2+end:], " \t")
 		if strings.Contains(inner, `\`) || (quote == '\'' && strings.HasPrefix(after, "'")) {
 			doubt("an escape in a quoted key")
-			return
+			return -1
 		}
 		if !strings.HasPrefix(after, ":") {
-			return // a quoted value continuing from an earlier line
+			return -1 // a quoted value continuing from an earlier line
 		}
-		key = inner
-	} else if before, _, ok := strings.Cut(rest, ":"); ok {
-		key = before
+		key, value = inner, after[1:]
+	} else if before, after, ok := strings.Cut(rest, ":"); ok {
+		key, value = before, after
 	} else {
-		return // a value continuing from an earlier line
+		return -1 // a value continuing from an earlier line
 	}
 	key = strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "", "\t", "").Replace(key))
 	if slices.Contains(harnessFields, key) && !slices.Contains(h.Fields, key) {
 		h.Fields = append(h.Fields, key)
 	}
+	if blockScalar.MatchString(strings.TrimSpace(value)) {
+		return len(line) - len(rest)
+	}
+	return -1
 }
 
 // LoadsByPresence reports whether a file at p is context just by existing (instruction files, .claude, .mcp.json), as

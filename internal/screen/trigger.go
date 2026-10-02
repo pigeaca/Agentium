@@ -613,8 +613,10 @@ func (c *classifier) readNames(s *side) error {
 	return nil
 }
 
-// commandKeys are settings keys (normalized: lower case, no "-" or "_") whose values are commands Claude Code runs.
-var commandKeys = []string{"hooks", "command", "statusline", "apikeyhelper", "awsauthrefresh", "awscredentialexport", "otelheadershelper", "filesuggestion"}
+// commandKeys are settings keys (normalized: lower case, no "-" or "_") whose values are commands Claude Code runs,
+// or plugins and marketplaces, which bring their own hooks, MCP servers and commands.
+var commandKeys = []string{"hooks", "command", "statusline", "apikeyhelper", "awsauthrefresh", "awscredentialexport", "otelheadershelper",
+	"filesuggestion", "enabledplugins", "extraknownmarketplaces"}
 
 // runsCommands says why a settings file makes Claude Code run commands, or returns "". A file it cannot parse may.
 func runsCommands(data []byte) string {

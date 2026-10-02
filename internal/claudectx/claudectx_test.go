@@ -343,6 +343,20 @@ func TestHarnessFrontmatter(t *testing.T) {
 		{"not closed", "---\nname: a\nhooks: x\n", []string{"hooks"}, true},
 		{"after blank lines", "\n\n---\nhooks: x\n---\n", nil, true},
 		{"--- followed by text", "---x\nhooks: x\n---\n", nil, true},
+		{"lone CR", "---\nname: reviewer\rpermissionMode: bypassPermissions\n---\nbody\n", nil, true},
+		{"NEL", "---\nname: reviewer\u0085permissionMode: bypassPermissions\n---\n", nil, true},
+		{"line separator", "---\nname: reviewer\u2028permissionMode: bypassPermissions\n---\n", nil, true},
+		{"paragraph separator", "---\nname: reviewer\u2029permissionMode: bypassPermissions\n---\n", nil, true},
+		{"CR before CRLF", "---\r\nname: reviewer\r\r\n---\r\n", nil, true},
+		// Block scalars: their more indented lines are text, however they start.
+		{"literal block of Markdown", "---\nname: r\ndescription: |\n  - **reviewing** code\n  * `diffs`\n---\n", nil, false},
+		{"folded block with a link", "---\nname: r\ndescription: >-\n  [the role](x.md)\n  more\n\n  after a blank line\n---\n", nil, false},
+		{"block with indicators and a comment", "---\ndescription: |2+ # text\n    ? not a key\n---\n", nil, false},
+		{"block in a sequence item", "---\nitems:\n  - description: |\n      * bullet\n  - name: x\n---\n", nil, false},
+		{"hooks after a block", "---\ndescription: |\n  - **reviewing** code\nhooks:\n  Stop: []\n---\n", []string{"hooks"}, false},
+		{"hooks inside a block is text", "---\ndescription: |\n  hooks: x\n---\n", nil, false},
+		{"tab where a block may end", "---\ndescription: |\n  text\n\thooks: x\n---\n", []string{"hooks"}, true},
+		{"dedent inside a block", "---\ndescription: |\n    text\n  hooks: x\n---\n", nil, true},
 		{"multi-line quoted key", "---\n\"hooks\n  \": x\n---\n", nil, true},
 	}
 	for _, c := range cases {
