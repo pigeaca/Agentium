@@ -60,7 +60,7 @@ Mined instructions need your review for solution leaks (`agentium task show NAME
 | `experiment new / plan / run / report` | Design, price, run and read an experiment (`run` is paid) |
 | `experiment new --judge` | Add an LLM second opinion; tests still decide |
 | `experiment new --judge-pairs` | Ask which arm fixed each task better (unvalidated, exploratory) |
-| `experiment new --template model-ab` | Compare two models or efforts on one context |
+| `experiment new --b MODEL[:EFFORT]` | Compare two models or efforts on one context (`--b` decides the template) |
 
 Everything else is in the [guide](docs/guide.md).
 

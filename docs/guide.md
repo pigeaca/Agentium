@@ -12,6 +12,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 - [Experiment templates](#experiment-templates)
 - [The judge](#the-judge-second-opinion)
 - [Scripting and automation](#scripting-and-automation)
+- [Advanced flags](#advanced-flags) and [renamed and removed](#renamed-and-removed)
 - [Data folder and environment](#data-folder-and-environment)
 
 ## Requirements in detail
@@ -96,16 +97,15 @@ For a Python project the venv holds its dependencies only, never the project: te
 > These commands start real Claude Code runs. They cost money, or use your plan's limits.
 
 ```sh
-agentium run calibrate --snapshot trimmed     # optional: short checks (sandbox, large outputs, context size, tools); experiment run does it for any arm that lacks one
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
 agentium experiment new lean --b trimmed      # a cost A/B: each task's own context against trimmed, on up to 16 valid tasks (method seq-v1, below)
 agentium experiment plan lean                 # runs, estimated cost (calibrations included), detectable effects; what is missing
-agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs in stages, a look after each, within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
+agentium experiment run lean                  # calibrates what is not calibrated (short checks: sandbox, large outputs, context size, tools), locks it, then runs interleaved pairs in stages, a look after each, within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
-Runs use `claude-sonnet-5-5` unless `--model` says otherwise (`experiment new`, `run once` and `run calibrate`); an experiment keeps the model it was made with. Estimates come only from earlier runs on the same model (and effort), so the first experiments on Sonnet 5.5 fall back to a default task run at list prices, and their default budgets and consent prompts look high until runs on it measure the project.
+Runs use `claude-sonnet-5-5` at the CLI's default effort unless `--model MODEL[:EFFORT]` says otherwise (`experiment new` and `run once`; `--model claude-opus-5-5:high`, say); an experiment keeps the model it was made with. Estimates come only from earlier runs on the same model (and effort), so the first experiments on Sonnet 5.5 fall back to a default task run at list prices, and their default budgets and consent prompts look high until runs on it measure the project.
 
 Each run stops at its cap (`--run-budget`, default $3). Claude Code checks the cap after each turn, so a run can pass it by the turn that crosses it (the `seq-v1` smoke check: $0.507 against $0.50). The budget therefore holds back an allowance beside the cap of every run in flight: 10% of the cap, at least $0.15 on a model whose output costs what Sonnet's does, a floor that scales with the model's output price ($0.30 on Opus 5.5, $0.375 on Opus 5, the dearest price in the table for a model without one). A judge other than the default model and effort holds the same allowance per call. The preview's worst case includes it, and a run's estimate is never above its cap. A capped run records how far it went past its cap; one that passed the allowance gets a warning in the run's progress and in the report.
 
@@ -116,26 +116,37 @@ The report marks runs cut short, capped at their cost cap or turn limit or stopp
 Cost experiments (`--goal cheaper`, the default) run method `seq-v1`, a group-sequential design: up to 16 tasks x 1 run per arm, in stages, with a look after 8, 12 and 16 tasks (one look after all of them with 8 to 11 tasks, two with 12 to 15).
 
 - **Looks.** A look comes once its stage's runs are settled, retries included, and analyses exactly the tasks of the stages so far. No run of the next stage starts before it. Each look's cost interval is wider than a fixed design's (99.84%, 98.84% and 96.88% at 8, 12 and 16 tasks): together they spend a two-sided 3.5%, O'Brien–Fleming-type, which keeps false differences at or under 5% in the simulations of the [statistics note](research/2026-10-02-wave3-statistics-note.md).
-- **Stops.** The experiment stops at the first look with a cost verdict (improved, regressed or equivalent), or for futility, when a verdict by the last look has become unlikely (below 10%); `experiment new --no-futility` turns futility stops off.
+- **Stops.** The experiment stops at the first look with a cost verdict (improved, regressed or equivalent), or for futility, when a verdict by the last look has become unlikely (below 10%); `experiment new --no-futility` turns futility stops off (an [advanced flag](#advanced-flags)).
 - **Spend.** `experiment plan` shows each look's runs and spend, the maximum (every stage; the default budget covers it), and the expected spend if nothing changed and at a 20% cut.
 - **Stops between looks.** The budget, the usage limit or Ctrl-C keep the last look's verdict; `experiment run` resumes the stage, and its look comes once the stage is settled.
 - **Reading it.** The report says where the experiment stopped ("stopped at look 1 of 3") and lists each look with its interval. An early stop overstates the effect's size on average: the true change is likely smaller than the estimate.
 
-Success and time are exploratory in cost experiments. For success verdicts use `--goal better` with `--tier quick|confident` or `--task` and `--repeats` (method `phase1-v2`, one analysis at 95%). Experiments locked before keep the method they were locked under.
+Success and time are exploratory in cost experiments. For success verdicts use `--goal better`: 12 tasks x 3 runs per arm, or the tasks `--task` names (method `phase1-v2`, one analysis at 95%); the [advanced flags](#advanced-flags) `--tier confident` (23 x 5) and `--repeats` change the size. Experiments locked before keep the method they were locked under.
 
 ## Experiment templates
 
- `experiment new` has three: `context-ab` (the default; `--b` names the snapshot to compare with arm A's context), `aa` (one context in both arms, which must find no difference: it measures the noise) and `model-ab`, which compares two Claude Code profiles on the same tasks and one context:
+ `experiment new` reads the template from `--b`, which says what the experiment compares:
+
+| `--b` | Template | Compares |
+|---|---|---|
+| none | `aa` | one context in both arms (`--a`, default `base`, each task's own context), which must find no difference: it measures the noise |
+| a snapshot | `context-ab` | arm A's context (`--a`, default `base`) with the snapshot |
+| `MODEL[:EFFORT]` | `model-ab` | two Claude Code profiles on the same tasks and one context (`--context`, default `base`): arm A's (`--a`, default `--model`) with B's |
 
 ```sh
-agentium experiment new models --template model-ab --a claude-sonnet-5-5 --b claude-opus-5-5:high [--context trimmed]
+agentium experiment new noise                                    # an A/A
+agentium experiment new lean --b trimmed                         # a context A/B
+agentium experiment new models --b claude-opus-5-5:high          # a model A/B: claude-sonnet-5-5 (--model's default) against Opus 5.5 at high effort
+agentium experiment new efforts --a claude-sonnet-5-5:low --b claude-sonnet-5-5:high --context trimmed
 ```
 
-`--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default). The arms must differ in model or effort. Both run one context: the base's own, or `--context SNAPSHOT`. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget-a` and `--run-budget-b` give an arm its own run cap. Each arm's model needs its own calibration of the context: `experiment run` makes the ones that are missing, once, before the first pair (`run calibrate --model MODEL` does it ahead of time). The preview counts their cost, and a calibration that fails its checks stops the experiment before any task run. Reports of model experiments name each arm by profile (model and effort) in the headlines, the metric tables and the per-task rows, with a one-line verdict such as `B (claude-sonnet-5-5) costs 48% less; success: exploratory`; the noise note says it pools both models.
+A model is one Agentium's price table knows (`claude-sonnet-5-5`, `claude-opus-5-5`, a dated ID such as `claude-haiku-4-5-20251001`) or any `claude-…` name; an alias such as `sonnet` reads as a snapshot's name. A `--b` that names both a model and a snapshot is refused, saying it was read as the model: snapshot that context again under another name to compare it. The stored design, `experiment list` and the JSON keep the template's name.
+
+In a model A/B, `--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default), and `--a` and `--model` both set arm A, so give one of them. The arms must differ in model or effort. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget` caps each run in both arms. Each arm's model needs its own calibration of the context: `experiment run` makes the ones that are missing, once, before the first pair. The preview counts their cost, and a calibration that fails its checks stops the experiment before any task run. Reports of model experiments name each arm by profile (model and effort) in the headlines, the metric tables and the per-task rows, with a one-line verdict such as `B (claude-sonnet-5-5) costs 48% less; success: exploratory`; the noise note says it pools both models.
 
 ## The judge (second opinion)
 
- Tests decide pass and fail. `experiment new ... --judge` also asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference solution does? The judge reads the instruction and both changes' code, never the tests; tasks whose reference solution has no code are skipped. It answers fixed, partly or no, with a one-line reason, and takes the majority of a few repeats. `--judge-model`, `--judge-effort` and `--judge-repeats` set it.
+ Tests decide pass and fail. `experiment new ... --judge` also asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference solution does? The judge reads the instruction and both changes' code, never the tests; tasks whose reference solution has no code are skipped. It answers fixed, partly or no, with a one-line reason, and takes the majority of 3 repeats. It runs on `claude-opus-5-5` at high effort; `--judge=MODEL[:EFFORT]` picks another (with the equals sign: `--judge claude-opus-5-5` would read the model as a second NAME).
 
 The report's Judge section shows, for each arm:
 - the judge's verdicts among passing runs and among failing runs, with 95% intervals;
@@ -149,7 +160,7 @@ Its limits:
 - **Its accuracy is unmeasured.** In the [pilot](research/2026-10-01-judge-pilot-results.md), it judged 18 of 40 passing runs not fully fixed.
 - **It costs extra.** Each call costs a few cents: about $0.065 a call (the preview's estimate; $0.063 per single judgement in the pilot). The calls count against the budget, but not toward an arm's cost.
 
-**Which arm fixed it better (unvalidated).** `--judge-pairs` asks a pair judge, when both of a pair's runs pass (a task's run in each arm with the same repeat index), which change is the better fix. It reads what the judge reads and asks in both orders; when the orders disagree, the pair is a tie. `--judge-model` and `--judge-effort` set it too. It runs beside the runs: a pair is compared as soon as both of its runs have passed, so it never holds a run, a look or a stage, and an experiment that ends at a look leaves its unrun pairs uncompared. The budget holds back 4 calls per pair (both orders, each asked again after a malformed reply) at $0.50 each on the default judge, and at $0.50 plus the model's overshoot allowance (for example $0.80 on Opus 5.5 at another effort) on any other; `experiment plan` states the cap. The preview estimates $0.176 a pair (the pilot's $0.088 a call). No queued comparison starts while `--wait` waits for the usage window, and a pause at the usage limit leaves them for the resume; a pair judge at a usage limit pauses the experiment's runs at once. Comparisons do not count toward `--usage-limit` themselves: the ones queued when the last run ends still run (one at a time, and a real limit stops them). A comparison is stored on the pair's arm-B run; a resume compares the pairs left without one, and those whose comparison stopped early, once. In the [pilot](research/2026-10-01-judge-pilot-results.md) swapping the order flipped its preference in 11% of pairs, above the 10% bar, so its preferences are exploratory: they never make a verdict and never count toward the north star. With more than one run per arm, a task's pairs are not independent, so its preference is counted once per task. The report's lines for it come in a later step.
+**Which arm fixed it better (unvalidated).** `--judge-pairs` asks a pair judge, when both of a pair's runs pass (a task's run in each arm with the same repeat index), which change is the better fix. It reads what the judge reads and asks in both orders; when the orders disagree, the pair is a tie. It runs on the judge's default model and effort; `--judge-pairs=MODEL[:EFFORT]` picks another, apart from `--judge`'s. It runs beside the runs: a pair is compared as soon as both of its runs have passed, so it never holds a run, a look or a stage, and an experiment that ends at a look leaves its unrun pairs uncompared. The budget holds back 4 calls per pair (both orders, each asked again after a malformed reply) at $0.50 each on the default judge, and at $0.50 plus the model's overshoot allowance (for example $0.80 on Opus 5.5 at another effort) on any other; `experiment plan` states the cap. The preview estimates $0.176 a pair (the pilot's $0.088 a call). No queued comparison starts while `--wait` waits for the usage window, and a pause at the usage limit leaves them for the resume; a pair judge at a usage limit pauses the experiment's runs at once. Comparisons do not count toward `--usage-limit` themselves: the ones queued when the last run ends still run (one at a time, and a real limit stops them). A comparison is stored on the pair's arm-B run; a resume compares the pairs left without one, and those whose comparison stopped early, once. In the [pilot](research/2026-10-01-judge-pilot-results.md) swapping the order flipped its preference in 11% of pairs, above the 10% bar, so its preferences are exploratory: they never make a verdict and never count toward the north star. With more than one run per arm, a task's pairs are not independent, so its preference is counted once per task. The report's lines for it come in a later step.
 
 ## Scripting and automation
 
@@ -200,6 +211,35 @@ A run (`run once`, `run show`) has `cost_usd`, the agent's own cost, apart from 
 The result also has `note` and `method` (human text, and the experiment's method; an error after runs started is in `note` with the stored `status` kept, and the exit code is 1 whatever the status), `judge_paused`, `looks[]`, `runs` (`total` = `settled` + `pending` + `skipped` + `failed`: `pending` slots would run on a resume; `skipped` ones a `seq-v1` experiment chose not to run because it ended at a look, so `pending` is 0 once `ended_by` is set; `failed` ones ran out of attempts and a resume does not retry them), `spent_usd` (everything the budget counts, calibrations and both judges too) and `budget_usd`, `verdict` (`decisive`, a human `summary`, and `metrics[]` with `metric`, `role`, `verdict`, `decisive`, `tasks`, `a`, `b`, `interval`, `level`; `null` when no run exists or it could not be computed, in which case `note` says why; a number that is not finite is `null`), `north_star` (as in `start`) and `next_command` (for `usage` with no `resume_at`, it suggests `--usage-limit PCT`). A failure before any run (not ready, a lower `--budget`, an unreadable lock) is the error document, exit 1, or 2 for a usage mistake. In `start --json --yes` the same object is `"run"`.
 
 Planned (part 2): a committed `agentium.toml` that Agentium reads and never writes, for budgets and consent to spend. See the [plan](../.agents/plans/2026-10-02-headless.md).
+
+## Advanced flags
+
+Expert flags still work but are left out of the commands' help.
+
+| Flag | Command | Default | What it does |
+|---|---|---|---|
+| `--tier quick\|confident` | `experiment new` | `quick`, unless `--task` names the tasks | A success experiment's (`--goal better`) sample: 12 tasks x 3 runs per arm, or 23 x 5 |
+| `--repeats N` | `experiment new` | the tier's (3 with `--task`) | Runs per task per arm in a success experiment; a cost experiment runs 1 |
+| `--no-futility` | `experiment new` | off | A cost experiment makes no futility stop: it runs to a verdict or its last look |
+| `--concurrency N` | `experiment new` | 2 (at most 8) | Runs at a time |
+| `--timeout DURATION` | `experiment new`, `run once` | `20m` | Stops each run after this long |
+| `--verify-timeout DURATION` | `experiment new`, `run once` | `10m` | Time limit for each setup or verification command |
+| `--seed N` | `experiment new` | random | The seed of the task sample and the run order |
+| `--keep` | `run once` | off | Keeps the run's workspace and verification copy |
+
+`agentium run calibrate [--snapshot NAME]... [--model MODEL[:EFFORT]] [--budget USD] [--timeout DURATION]` (default $0.50 and `5m` per run) also still works, though its help is gone: it makes ahead of time the short calibration runs that `experiment run` makes for any arm that lacks one. A calibration is of a context on a model, so an effort in `--model` is accepted and not used.
+
+## Renamed and removed
+
+Each of these fails with a usage error (exit 2) that names its replacement.
+
+- `experiment new --template`: `--b` decides it (none for an A/A, a snapshot for a context A/B, `MODEL[:EFFORT]` for a model A/B).
+- `--effort` (`experiment new`, `run once`): `--model MODEL:EFFORT`.
+- `experiment new --run-budget-a` and `--run-budget-b`: `--run-budget` caps each run in both arms.
+- `experiment new --judge-model` and `--judge-effort`: `--judge=MODEL[:EFFORT]` and `--judge-pairs=MODEL[:EFFORT]`.
+- `experiment new --judge-repeats`: none; the judge asks 3 times per run.
+
+Experiments made with them keep their designs: they load, resume and report as before.
 
 ## Data folder and environment
 
