@@ -414,7 +414,7 @@ func TestSeqModelAB(t *testing.T) {
 	if d := loadDesign(t, f, "models"); d.Version != experiment.DesignVersionSeq || d.Method != experiment.MethodSeq || d.Template != experiment.TemplateModelAB {
 		t.Errorf("the stored design: version %d, method %s, template %s", d.Version, d.Method, d.Template)
 	}
-	expect(t, f.run(ctx, "experiment", "plan", "models"), ExitOK, "Looks (method seq-v1; runs count both arms):", "$26.80", "$53.60",
+	expect(t, f.run(ctx, "experiment", "plan", "models"), ExitOK, "Looks (method seq-v1; runs count both arms):", "$27.60", "$55.20",
 		"if every run reaches its cap")
 	got := f.run(ctx, "experiment", "run", "models")
 	expect(t, got, ExitOK, "each run up to $2.00 (arm A) or $1.00 (arm B)", "Look 1 of 3 (8 of 8 tasks counted): cost improved at 99.84%: stop",
@@ -424,12 +424,12 @@ func TestSeqModelAB(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "experiment", "report", "models"), ExitOK, "B (claude-sonnet-5) costs", "Method seq-v1: stopped at look 1 of 3")
 
-	// $2 and $1 caps ($2.20 and $1.15 with their overshoot), 2 at a time: a pair starts only while the spend, the caps in
-	// flight and its own $3.35 fit $6.
+	// $2 and $1 caps ($2.30 and $1.15 with their overshoot: Opus 5.5's floor is $0.30), 2 at a time: a pair starts only
+	// while the spend, the caps in flight and its own $3.45 fit $6.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5",
 		"--run-budget-a", "2", "--run-budget-b", "1", "--budget", "6", "--seed", "5"), ExitOK)
 	tight := f.run(ctx, "experiment", "run", "tight")
-	expect(t, tight, ExitOK, "Experiment tight: budget: the next run would not fit the $6.00 budget", "$2.20 (arm A) or $1.15 (arm B) per run at most")
+	expect(t, tight, ExitOK, "Experiment tight: budget: the next run would not fit the $6.00 budget", "$2.30 (arm A) or $1.15 (arm B) per run at most")
 	spent := 0.0
 	runs := experimentRuns(t, f, "tight")
 	for _, r := range runs {
