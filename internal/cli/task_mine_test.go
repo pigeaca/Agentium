@@ -646,4 +646,7 @@ func TestTaskMineUnlockedPython(t *testing.T) {
 		}
 	}
 	expect(t, run("pool", "update", "--dry-run", "--require-lock", "--limit", "0"), ExitUsage, "--limit must be at least 1")
+	// pool update passes it on to mining too: the dry run's candidate is gone with the flag.
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "2 commit(s) since the last pass, 1 candidate(s)", "Add double to pkg.core")
+	expect(t, run("pool", "update", "--dry-run", "--require-lock"), ExitOK, "2 commit(s) since the last pass, 0 candidate(s)", "No candidates.")
 }

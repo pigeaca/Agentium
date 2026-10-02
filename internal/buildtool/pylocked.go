@@ -67,8 +67,9 @@ func PythonLocked(files []string, read func(path string) ([]byte, bool)) bool {
 	return pins > 0
 }
 
-// editableOption is an editable requirement (-e, --editable) and its value.
-var editableOption = regexp.MustCompile(`^(?:-e|--editable)(?:\s*=\s*|\s+)(\S+)`)
+// editableOption is an editable requirement (-e, --editable) and its value; pip also takes -e glued to its value
+// (-egit+https://...).
+var editableOption = regexp.MustCompile(`^(?:-e|--editable)(?:\s*=\s*|\s*)(\S+)`)
 
 // hashOption is a --hash option on a requirement line (pip-tools' --generate-hashes).
 var hashOption = regexp.MustCompile(`\s+--hash[=\s]\S+`)

@@ -72,7 +72,7 @@ type Invocation struct {
 	// local-binding setting.
 	Tools []string
 	// AgentTools names the always-on profiles whose agent side stays on though Tools lacks them (buildtool.AgentKept of
-	// the base commit: Go, with a go.mod or go.work anywhere). See buildtool.SelectRun.
+	// the base commit: Go, with a go.mod, go.work or .go file anywhere). See buildtool.SelectRun.
 	AgentTools []string
 	// Deps is the folder of warmed dependencies (home.Layout.Deps for the project): the agent's offline builds read it,
 	// and the sandbox keeps it read-only. It lies outside every denied folder. Empty: none.

@@ -49,12 +49,14 @@ type Profile struct {
 	// Always selects the profile for every repository, whatever Detect finds (Go's, for compatibility): its caches for
 	// Agentium's own commands, test patterns and languages apply everywhere. Its agent side (EnvNames, EnvPrefixes,
 	// AgentEnv, AgentCaches) is off only where the repository has another profile and none of its AgentMarkers anywhere
-	// (SelectRun): a Python project's agent gets no GOFLAGS or GOCACHE, while one with a Go module in a subfolder, or a
-	// go.work at its root, keeps them (without the run's GOCACHE, go falls back to the user's cache, which the sandbox
-	// denies, and fails at once). Where no profile is detected, the agent side stays on, as before profiles.
+	// (SelectRun): a Python project's agent gets no GOFLAGS or GOCACHE, while one with any Go file (a module in a
+	// subfolder, a go.work at its root, a lone scripts/gen.go for go run) keeps them (without the run's GOCACHE, go falls
+	// back to the user's cache, which the sandbox denies, and fails at once). Where no profile is detected, the agent side
+	// stays on, as before profiles.
+	// A marker errs toward the agent side on, which only passes Go's settings to an agent that may not need them.
 	Always bool
-	// AgentMarkers are file names that, anywhere in the base commit, keep an Always profile's agent side on though
-	// Detect finds nothing at the root (Go: go.mod, go.work). See AgentKept.
+	// AgentMarkers are file-name patterns (path.Match, on the name alone) that, anywhere in the base commit, keep an
+	// Always profile's agent side on though Detect finds nothing at the root (Go: go.mod, go.work, *.go). See AgentKept.
 	AgentMarkers []string
 	// implicit marks an Always profile Select chose though the repository has another profile and not this one: its
 	// agent side is off (agentSide) unless SelectRun keeps it.
@@ -225,7 +227,12 @@ func AgentKept(paths []string) []string {
 		if !p.Always || len(p.AgentMarkers) == 0 {
 			continue
 		}
-		if slices.ContainsFunc(paths, func(f string) bool { return slices.Contains(p.AgentMarkers, path.Base(f)) }) {
+		if slices.ContainsFunc(paths, func(f string) bool {
+			return slices.ContainsFunc(p.AgentMarkers, func(pattern string) bool {
+				ok, _ := path.Match(pattern, path.Base(f))
+				return ok
+			})
+		}) {
 			kept = append(kept, p.Name)
 		}
 	}
@@ -264,7 +271,7 @@ func goProfile() Profile {
 			"GODEBUG", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOOS", "GOARCH", "GOAMD64", "GOARM64"},
 		EnvPrefixes:  []string{"CGO_"},
 		Always:       true,
-		AgentMarkers: []string{"go.mod", "go.work"},
+		AgentMarkers: []string{"go.mod", "go.work", "*.go"},
 		// GOCACHEPROG is cleared so hidden tests go to no cache program (one set with `go env -w` still applies).
 		CommandCaches: []CacheVar{{Name: "GOCACHE", Dir: "go-build"}, {Name: "GOCACHEPROG", Clear: true}},
 		TempVars:      []string{"GOTMPDIR"},

@@ -184,7 +184,7 @@ func TestDetected(t *testing.T) {
 }
 
 // Go's agent side (allowlisted GO* and CGO_* names, GOFLAGS, the run's GOCACHE) applies where go.mod is detected, where
-// the base has a go.mod or go.work anywhere (a Python root with a Go module in a subfolder: without the run's GOCACHE, go
+// the base has a go.mod, go.work or .go file anywhere (a Python root with a Go module in a subfolder: without the run's GOCACHE, go
 // would fall back to the user's denied cache and fail), or where no profile is (as before profiles); a project detected
 // as something else alone, with no Go file of that kind (Python), gets none of it. Go's caches for Agentium's own
 // commands stay on for every project.
@@ -203,9 +203,12 @@ func TestGoAgentSideOnlyWhereDetected(t *testing.T) {
 		{"Python alone", []string{"python"}, []string{"pyproject.toml", "src/pkg/__init__.py", "docs/go.md"}, false},
 		{"Cargo alone", []string{"cargo"}, []string{"Cargo.toml", "src/lib.rs"}, false},
 		{"Python with a Go module in a subfolder", []string{"python"}, []string{"pyproject.toml", "tools/foo/go.mod", "tools/foo/main.go"}, true},
-		{"Python with go.work at the root", []string{"python"}, []string{"go.work", "pyproject.toml", "svc/main.go"}, true},
+		{"Python with go.work at the root", []string{"python"}, []string{"go.work", "pyproject.toml"}, true},
+		{"Python with a lone Go script (go run)", []string{"python"}, []string{"pyproject.toml", "scripts/gen.go"}, true},
+		{"Cargo whose build.rs calls go", []string{"cargo"}, []string{"Cargo.toml", "build.rs", "gen/main.go"}, true},
+		{"Python with Go-like names only", []string{"python"}, []string{"pyproject.toml", "docs/go.md", "go/README", "x.gox"}, false},
 	} {
-		// AgentKept names Go exactly where the base holds a go.mod or go.work (a docs/go.md is not one).
+		// AgentKept names Go exactly where the base holds a go.mod, go.work or .go file (a docs/go.md is not one).
 		if kept := AgentKept(c.paths); slices.Contains(kept, "go") != (len(c.paths) > 0 && c.goOn) {
 			t.Errorf("%s: AgentKept(%q) = %q", c.name, c.paths, kept)
 		}
