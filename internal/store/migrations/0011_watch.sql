@@ -1,15 +1,17 @@
--- The watch (`agentium watch`) and the cost screen: the user's consent, enrolment, passes, drift charts and screen
--- checks. Nothing here counts spend: the ledger (internal/watch) is derived from the runs a pass made (watch_pass_id)
--- and their records, so a crash between a run and any bookkeeping cannot double-count or drop it.
+-- The watch (`agentium watch`) and the cost screen: the user's consent and each project's loops, enrolment, passes,
+-- drift charts and screen checks. Nothing here counts spend: the ledger (internal/watch) is derived from the runs a
+-- pass made (watch_pass_id) and their records, so a crash between a run and any bookkeeping cannot double-count it.
 
--- The user's consent to the watch's spend, per project; append-only, so every grant, lowering and revocation is kept
--- with who made it. The newest row per project is the consent in force; no row, or a newest row with enabled = 0,
--- means the watch spends nothing. Shares and thresholds are fractions (0.3 is 30%): pass_share of one five-hour window
--- per pass, weekly_share of the seven-day window over 7 days, and start_five_hour and start_seven_day the readings
--- above which no pair starts. interactive marks a row written by `agentium watch enable` at a terminal.
+-- The user's consent to the watch's spend, for the whole data folder: one budget for all projects together, since the
+-- subscription's windows belong to one login. Append-only (no UPDATE, no DELETE), so every grant, lowering and
+-- revocation is kept with who made it. The newest row is the consent in force; no row, or a newest row with
+-- enabled = 0, means the watch spends nothing. Shares and thresholds are fractions (0.3 is 30%): pass_share of one
+-- five-hour window per pass, weekly_share of the seven-day window over 7 days, and start_five_hour and start_seven_day
+-- the readings above which no pair starts. sign_in_identity is a fingerprint that never derives from a secret (for a
+-- token file, its path and inode; empty where none is available). confirmed marks a row the user confirmed at a
+-- terminal (watch.TerminalConfirmation).
 CREATE TABLE watch_consents (
     id               INTEGER PRIMARY KEY,
-    project_id       INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
     enabled          INTEGER NOT NULL CHECK (enabled IN (0, 1)),
     weekly_usd       REAL    NOT NULL CHECK (weekly_usd >= 0),
     run_cap_usd      REAL    NOT NULL CHECK (run_cap_usd >= 0),
@@ -17,34 +19,56 @@ CREATE TABLE watch_consents (
     weekly_share     REAL    NOT NULL CHECK (weekly_share >= 0 AND weekly_share <= 1),
     start_five_hour  REAL    NOT NULL CHECK (start_five_hour >= 0 AND start_five_hour <= 1),
     start_seven_day  REAL    NOT NULL CHECK (start_seven_day >= 0 AND start_seven_day <= 1),
-    loop_experiments INTEGER NOT NULL CHECK (loop_experiments IN (0, 1)),
-    loop_drift       INTEGER NOT NULL CHECK (loop_drift IN (0, 1)),
-    loop_screens     INTEGER NOT NULL CHECK (loop_screens IN (0, 1)),
     sign_in          TEXT    NOT NULL CHECK (sign_in IN ('login', 'token-file', 'api-key')),
-    interactive      INTEGER NOT NULL CHECK (interactive IN (0, 1)),
+    sign_in_identity TEXT    NOT NULL DEFAULT '',
+    confirmed        INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
     granted_by       TEXT    NOT NULL CHECK (granted_by <> ''), -- the OS user
     agentium_version TEXT    NOT NULL,
     granted_at       TEXT    NOT NULL
 );
-CREATE INDEX watch_consents_by_project ON watch_consents (project_id, id);
-CREATE TRIGGER watch_consents_append_only BEFORE UPDATE ON watch_consents
+CREATE TRIGGER watch_consents_no_update BEFORE UPDATE ON watch_consents
 BEGIN
     SELECT RAISE(ABORT, 'watch consents are append-only');
 END;
--- Only the terminal raises: a row that is not interactive may only revoke, or keep every cap, threshold and loop at or
--- below the consent in force, with the same sign-in mode. internal/watch refuses the same with a clearer message; this
--- holds for any other writer.
+CREATE TRIGGER watch_consents_no_delete BEFORE DELETE ON watch_consents
+BEGIN
+    SELECT RAISE(ABORT, 'watch consents are append-only');
+END;
+-- Only the terminal raises: an unconfirmed row may only revoke, or keep every cap and threshold at or below the
+-- consent in force, with the same sign-in mode and identity. internal/watch refuses the same with a clearer message;
+-- this holds for any other writer.
 CREATE TRIGGER watch_consents_raise BEFORE INSERT ON watch_consents
-WHEN NEW.interactive = 0 AND NEW.enabled = 1 AND NOT EXISTS (
+WHEN NEW.confirmed = 0 AND NEW.enabled = 1 AND NOT EXISTS (
     SELECT 1 FROM watch_consents AS p
-    WHERE p.id = (SELECT MAX(id) FROM watch_consents WHERE project_id = NEW.project_id)
-      AND p.enabled = 1 AND p.sign_in = NEW.sign_in
+    WHERE p.id = (SELECT MAX(id) FROM watch_consents)
+      AND p.enabled = 1 AND p.sign_in = NEW.sign_in AND p.sign_in_identity = NEW.sign_in_identity
       AND NEW.weekly_usd <= p.weekly_usd AND NEW.run_cap_usd <= p.run_cap_usd
       AND NEW.pass_share <= p.pass_share AND NEW.weekly_share <= p.weekly_share
-      AND NEW.start_five_hour <= p.start_five_hour AND NEW.start_seven_day <= p.start_seven_day
-      AND NEW.loop_experiments <= p.loop_experiments AND NEW.loop_drift <= p.loop_drift AND NEW.loop_screens <= p.loop_screens)
+      AND NEW.start_five_hour <= p.start_five_hour AND NEW.start_seven_day <= p.start_seven_day)
 BEGIN
     SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal raises it');
+END;
+
+-- What the watch may do in each project (its loops), within the one consent above. No row: nothing. Enabling a loop
+-- needs a confirmed row, as raising a cap does; turning one off does not.
+CREATE TABLE watch_loops (
+    project_id  INTEGER PRIMARY KEY REFERENCES projects (id) ON DELETE CASCADE,
+    experiments INTEGER NOT NULL CHECK (experiments IN (0, 1)), -- continue enrolled experiments
+    drift       INTEGER NOT NULL CHECK (drift IN (0, 1)),       -- drift checks
+    screens     INTEGER NOT NULL CHECK (screens IN (0, 1)),     -- queued cost screens
+    confirmed   INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
+    set_by      TEXT    NOT NULL CHECK (set_by <> ''),
+    set_at      TEXT    NOT NULL
+);
+CREATE TRIGGER watch_loops_enable BEFORE INSERT ON watch_loops
+WHEN NEW.confirmed = 0 AND NEW.experiments + NEW.drift + NEW.screens > 0
+BEGIN
+    SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal enables a loop');
+END;
+CREATE TRIGGER watch_loops_raise BEFORE UPDATE ON watch_loops
+WHEN NEW.confirmed = 0 AND (NEW.experiments > OLD.experiments OR NEW.drift > OLD.drift OR NEW.screens > OLD.screens)
+BEGIN
+    SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal enables a loop');
 END;
 
 -- Watch passes: one at a time (watch.lock). started_by is "schedule" (launchd) or "terminal" (a screen run by hand,
@@ -132,3 +156,4 @@ ALTER TABLE runs ADD COLUMN watch_pass_id INTEGER REFERENCES watch_passes (id);
 ALTER TABLE runs ADD COLUMN drift_check_id INTEGER REFERENCES drift_checks (id) ON DELETE SET NULL;
 CREATE INDEX runs_by_watch_pass ON runs (watch_pass_id);
 CREATE INDEX runs_by_drift_check ON runs (drift_check_id);
+CREATE INDEX runs_by_finish ON runs (finished_at); -- the ledger's week, across projects

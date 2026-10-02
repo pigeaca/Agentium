@@ -12,15 +12,14 @@ import (
 // RunKindDrift is the kind of a drift chart's runs (Run.Kind); they carry their check (Run.DriftCheckID).
 const RunKindDrift = "drift"
 
-// ErrConsentRaise is returned when a consent row that is not interactive would raise the consent in force (see
-// migrations/0011_watch.sql): only `agentium watch enable` at a terminal raises it.
+// ErrConsentRaise is returned when an unconfirmed consent or loops row would raise what is in force (see
+// migrations/0011_watch.sql): only `agentium watch enable`, confirmed at a terminal, raises it.
 var ErrConsentRaise = errors.New("only agentium watch enable at a terminal raises the watch's consent")
 
-// WatchConsent is one row of a project's consent history (see migrations/0011_watch.sql). Shares and thresholds are
-// fractions.
+// WatchConsent is one row of the data folder's consent history (see migrations/0011_watch.sql): one budget for every
+// project together. Shares and thresholds are fractions.
 type WatchConsent struct {
 	ID              int64
-	ProjectID       int64
 	Enabled         bool
 	WeeklyUSD       float64
 	RunCapUSD       float64
@@ -28,32 +27,33 @@ type WatchConsent struct {
 	WeeklyShare     float64
 	StartFiveHour   float64
 	StartSevenDay   float64
-	LoopExperiments bool
-	LoopDrift       bool
-	LoopScreens     bool
 	SignIn          string
-	Interactive     bool
+	SignInIdentity  string
+	Confirmed       bool
 	GrantedBy       string
 	AgentiumVersion string
 	GrantedAt       time.Time
 }
 
-// AddWatchConsent appends a consent row, which becomes the consent in force. A row that is not interactive and would
-// raise the consent in force (or grant one where none is) gives ErrConsentRaise; the check runs inside the insert,
-// under the write lock, so it compares with the row actually in force.
+// raiseRefused maps the triggers' refusal to ErrConsentRaise.
+func raiseRefused(err error) error {
+	if err != nil && strings.Contains(err.Error(), "watch consent raise") {
+		return ErrConsentRaise
+	}
+	return err
+}
+
+// AddWatchConsent appends a consent row, which becomes the consent in force. An unconfirmed row that would raise the
+// consent in force (or grant one where none is) gives ErrConsentRaise; the check runs inside the insert, under the
+// write lock, so it compares with the row actually in force.
 func (s *Store) AddWatchConsent(ctx context.Context, c WatchConsent) (WatchConsent, error) {
 	result, err := s.db.ExecContext(ctx, `
-		INSERT INTO watch_consents (project_id, enabled, weekly_usd, run_cap_usd, pass_share, weekly_share, start_five_hour,
-		                            start_seven_day, loop_experiments, loop_drift, loop_screens, sign_in, interactive, granted_by,
-		                            agentium_version, granted_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.ProjectID, c.Enabled, c.WeeklyUSD, c.RunCapUSD, c.PassShare,
-		c.WeeklyShare, c.StartFiveHour, c.StartSevenDay, c.LoopExperiments, c.LoopDrift, c.LoopScreens, c.SignIn, c.Interactive,
-		c.GrantedBy, c.AgentiumVersion, formatTime(c.GrantedAt))
+		INSERT INTO watch_consents (enabled, weekly_usd, run_cap_usd, pass_share, weekly_share, start_five_hour, start_seven_day, sign_in,
+		                            sign_in_identity, confirmed, granted_by, agentium_version, granted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, c.Enabled, c.WeeklyUSD, c.RunCapUSD, c.PassShare, c.WeeklyShare, c.StartFiveHour,
+		c.StartSevenDay, c.SignIn, c.SignInIdentity, c.Confirmed, c.GrantedBy, c.AgentiumVersion, formatTime(c.GrantedAt))
 	if err != nil {
-		if strings.Contains(err.Error(), "watch consent raise") {
-			return WatchConsent{}, fmt.Errorf("save the watch's consent: %w", ErrConsentRaise)
-		}
-		return WatchConsent{}, fmt.Errorf("save the watch's consent: %w", err)
+		return WatchConsent{}, fmt.Errorf("save the watch's consent: %w", raiseRefused(err))
 	}
 	if c.ID, err = result.LastInsertId(); err != nil {
 		return WatchConsent{}, fmt.Errorf("save the watch's consent: %w", err)
@@ -62,10 +62,10 @@ func (s *Store) AddWatchConsent(ctx context.Context, c WatchConsent) (WatchConse
 	return c, nil
 }
 
-// WatchConsentOf returns the consent in force for a project (its newest row, which may be a revocation), or
-// ErrNotFound when the project has none.
-func (s *Store) WatchConsentOf(ctx context.Context, projectID int64) (WatchConsent, error) {
-	found, err := s.queryConsents(ctx, `WHERE project_id = ? ORDER BY id DESC LIMIT 1`, projectID)
+// WatchConsentInForce returns the consent in force (the newest row, which may be a revocation), or ErrNotFound when
+// there is none.
+func (s *Store) WatchConsentInForce(ctx context.Context) (WatchConsent, error) {
+	found, err := s.queryConsents(ctx, `ORDER BY id DESC LIMIT 1`)
 	if err != nil {
 		return WatchConsent{}, err
 	}
@@ -75,15 +75,15 @@ func (s *Store) WatchConsentOf(ctx context.Context, projectID int64) (WatchConse
 	return found[0], nil
 }
 
-// WatchConsents lists a project's consent history, newest first.
-func (s *Store) WatchConsents(ctx context.Context, projectID int64) ([]WatchConsent, error) {
-	return s.queryConsents(ctx, `WHERE project_id = ? ORDER BY id DESC`, projectID)
+// WatchConsents lists the consent history, newest first.
+func (s *Store) WatchConsents(ctx context.Context) ([]WatchConsent, error) {
+	return s.queryConsents(ctx, `ORDER BY id DESC`)
 }
 
 func (s *Store) queryConsents(ctx context.Context, clause string, args ...any) ([]WatchConsent, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, project_id, enabled, weekly_usd, run_cap_usd, pass_share, weekly_share, start_five_hour, start_seven_day,
-		       loop_experiments, loop_drift, loop_screens, sign_in, interactive, granted_by, agentium_version, granted_at
+		SELECT id, enabled, weekly_usd, run_cap_usd, pass_share, weekly_share, start_five_hour, start_seven_day, sign_in, sign_in_identity,
+		       confirmed, granted_by, agentium_version, granted_at
 		FROM watch_consents `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query the watch's consent: %w", err)
@@ -93,9 +93,8 @@ func (s *Store) queryConsents(ctx context.Context, clause string, args ...any) (
 	for rows.Next() {
 		var c WatchConsent
 		var granted string
-		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Enabled, &c.WeeklyUSD, &c.RunCapUSD, &c.PassShare, &c.WeeklyShare, &c.StartFiveHour,
-			&c.StartSevenDay, &c.LoopExperiments, &c.LoopDrift, &c.LoopScreens, &c.SignIn, &c.Interactive, &c.GrantedBy,
-			&c.AgentiumVersion, &granted); err != nil {
+		if err := rows.Scan(&c.ID, &c.Enabled, &c.WeeklyUSD, &c.RunCapUSD, &c.PassShare, &c.WeeklyShare, &c.StartFiveHour, &c.StartSevenDay,
+			&c.SignIn, &c.SignInIdentity, &c.Confirmed, &c.GrantedBy, &c.AgentiumVersion, &granted); err != nil {
 			return nil, fmt.Errorf("read the watch's consent: %w", err)
 		}
 		if c.GrantedAt, err = parseTime(granted); err != nil {
@@ -107,6 +106,60 @@ func (s *Store) queryConsents(ctx context.Context, clause string, args ...any) (
 		return nil, fmt.Errorf("query the watch's consent: %w", err)
 	}
 	return found, nil
+}
+
+// WatchLoops is what the watch may do in one project (see migrations/0011_watch.sql).
+type WatchLoops struct {
+	ProjectID   int64
+	Experiments bool
+	Drift       bool
+	Screens     bool
+	Confirmed   bool
+	SetBy       string
+	SetAt       time.Time
+}
+
+// SetWatchLoops records a project's loops. An unconfirmed write that turns a loop on gives ErrConsentRaise.
+func (s *Store) SetWatchLoops(ctx context.Context, l WatchLoops) error {
+	// An update first, then an insert: an upsert would fire the insert's trigger even when the row exists.
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		stamp := formatTime(l.SetAt)
+		result, err := tx.ExecContext(ctx, `
+			UPDATE watch_loops SET experiments = ?, drift = ?, screens = ?, confirmed = ?, set_by = ?, set_at = ? WHERE project_id = ?`,
+			l.Experiments, l.Drift, l.Screens, l.Confirmed, l.SetBy, stamp, l.ProjectID)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n > 0 {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO watch_loops (project_id, experiments, drift, screens, confirmed, set_by, set_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			l.ProjectID, l.Experiments, l.Drift, l.Screens, l.Confirmed, l.SetBy, stamp)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("save the watch's loops of project %d: %w", l.ProjectID, raiseRefused(err))
+	}
+	return nil
+}
+
+// WatchLoopsOf returns a project's loops, or ErrNotFound when none were set.
+func (s *Store) WatchLoopsOf(ctx context.Context, projectID int64) (WatchLoops, error) {
+	l := WatchLoops{ProjectID: projectID}
+	var set string
+	err := s.db.QueryRowContext(ctx, `SELECT experiments, drift, screens, confirmed, set_by, set_at FROM watch_loops WHERE project_id = ?`,
+		projectID).Scan(&l.Experiments, &l.Drift, &l.Screens, &l.Confirmed, &l.SetBy, &set)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WatchLoops{}, fmt.Errorf("the watch's loops of project %d: %w", projectID, ErrNotFound)
+	}
+	if err != nil {
+		return WatchLoops{}, fmt.Errorf("the watch's loops of project %d: %w", projectID, err)
+	}
+	if l.SetAt, err = parseTime(set); err != nil {
+		return WatchLoops{}, err
+	}
+	return l, nil
 }
 
 // WatchPass is one pass of the watch (see migrations/0011_watch.sql). Finished is zero while it runs, or after its
@@ -204,10 +257,10 @@ func (s *Store) WatchPasses(ctx context.Context, since time.Time) ([]WatchPass, 
 	return found, nil
 }
 
-// RunsFinishedSince lists a project's runs (of every kind, the watch's or not) that finished after since, oldest
-// first.
-func (s *Store) RunsFinishedSince(ctx context.Context, projectID int64, since time.Time) ([]Run, error) {
-	runs, err := s.queryRuns(ctx, `WHERE project_id = ? AND finished_at >= ? ORDER BY started_at, id`, projectID, coarseBound(since))
+// RunsFinishedSince lists the runs of every project (of every kind, the watch's or not) that finished after since,
+// oldest first.
+func (s *Store) RunsFinishedSince(ctx context.Context, since time.Time) ([]Run, error) {
+	runs, err := s.queryRuns(ctx, `WHERE finished_at >= ? ORDER BY started_at, id`, coarseBound(since))
 	if err != nil {
 		return nil, err
 	}

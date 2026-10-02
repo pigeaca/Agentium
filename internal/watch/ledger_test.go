@@ -32,7 +32,7 @@ func TestLedgerAtTheSevenDayBoundary(t *testing.T) {
 		stored{id: "user", signIn: claude.SignInLogin, agent: 5, finished: now.Add(-2 * time.Hour)},
 	)
 	c.now = now
-	l, err := s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err := s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestLedgerAtTheSevenDayBoundary(t *testing.T) {
 	}
 
 	c.now = now.Add(time.Second)
-	l, err = s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err = s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +60,10 @@ func TestLedgerAtTheSevenDayBoundary(t *testing.T) {
 	}
 }
 
-// A five-hour reset inside a pass: each window counts its own rise, the new window from 0 when only a run that crossed
-// the reset read it first, and the crossing run adds the per-run estimate for its part before the reset. Once the
-// latest window resets, its reading is unknown (the next run probes), while the week's use stays.
+// A five-hour reset inside a pass: each window counts its own rise, the new window from 0 because a run crossed into
+// it (r4's later first reading of 0.04 does not hide r3's use after the reset), and the crossing run adds the per-run
+// estimate for its part before the reset. Once the latest window resets, its reading is unknown (the next run probes),
+// while the week's use stays.
 func TestLedgerAcrossAFiveHourReset(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 10, 2, 5, 0, 0, 0, time.UTC)
@@ -80,29 +81,29 @@ func TestLedgerAcrossAFiveHourReset(t *testing.T) {
 			first: reading(0.04, b, 0.43, seven), last: reading(0.10, b, 0.44, seven)},
 	)
 	c.now = now
-	l, err := s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err := s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if l.PerRun != experiment.DefaultUsagePerRun {
 		t.Fatalf("per run = %v, want the default (no window has %d runs)", l.PerRun, experiment.MinUsageRuns)
 	}
-	// 0.22-0.10 in the first window, 0.10-0.04 in the second, and the estimate for r3's part before the reset.
-	if sh := l.Week.Share; !near(sh.FiveHour, 0.12+0.06+0.06) || !near(sh.SevenDay, 0.04) || sh.Estimates != 1 {
+	// 0.22-0.10 in the first window, 0.10-0 in the second, and the estimate for r3's part before the reset.
+	if sh := l.Week.Share; !near(sh.FiveHour, 0.12+0.10+0.06) || !near(sh.SevenDay, 0.04) || sh.Estimates != 1 {
 		t.Errorf("the share across a five-hour reset = %+v", sh)
 	}
 	if w := l.Current; !w.FiveHourKnown || w.FiveHour != 0.10 || !w.FiveHourResets.Equal(b) {
 		t.Errorf("the current five-hour window = %+v", w)
 	}
 	c.now = b.Add(time.Minute)
-	l, err = s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err = s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if w := l.Current; w.FiveHourKnown || !w.SevenDayKnown || w.SevenDay != 0.44 {
 		t.Errorf("after the window reset, the current windows = %+v; want the five-hour unknown", w)
 	}
-	if !near(l.Week.Share.FiveHour, 0.24) || l.Week.Runs != 4 {
+	if !near(l.Week.Share.FiveHour, 0.28) || l.Week.Runs != 4 {
 		t.Errorf("after the reset the week = %+v, %+v; want unchanged", l.Week, l.Week.Share)
 	}
 }
@@ -135,7 +136,7 @@ func TestLedgerAcrossASevenDayReset(t *testing.T) {
 			first: reading(0.20, five(now.Add(-2*time.Hour)), 0.05, s2), last: reading(0.26, five(now.Add(-2*time.Hour)), 0.07, s2)},
 	)
 	c.now = now
-	l, err := s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err := s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestLedgerAcrossASevenDayReset(t *testing.T) {
 		t.Errorf("the current seven-day window = %+v", w)
 	}
 	c.now = now.Add(4*day + time.Hour)
-	l, err = s.Ledger(ctx, app.ID, claude.SignInLogin)
+	l, err = s.Ledger(ctx, claude.SignInLogin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +175,7 @@ func TestAPIKeyLedgerHasDollarsAndNoShare(t *testing.T) {
 			first: reading(0.1, now.Add(time.Hour), 0.1, now.Add(time.Hour)), last: reading(0.2, now.Add(time.Hour), 0.1, now.Add(time.Hour))},
 	)
 	c.now = now
-	l, err := s.Ledger(ctx, app.ID, claude.SignInAPIKey)
+	l, err := s.Ledger(ctx, claude.SignInAPIKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestAPIKeyLedgerHasDollarsAndNoShare(t *testing.T) {
 	}
 }
 
-// Where readings cannot tell, Measure errs high: a subscription run with a cost and no readings adds the per-run
+// Where readings cannot tell, Measure adds the estimate: a subscription run with a cost and no readings adds the per-run
 // estimate in both units, as does a reading without the seven-day window; an API-key run in the same pass, a run that
 // spent nothing and an unreadable record add none. Dollars still come from every run.
 func TestMeasureEstimatesWhatReadingsCannotTell(t *testing.T) {
@@ -205,16 +206,20 @@ func TestMeasureEstimatesWhatReadingsCannotTell(t *testing.T) {
 		{ID: "corrupt", WatchPassID: 1, CostUSD: 1, Record: []byte(`{not json`)},
 		{ID: "no-seven", WatchPassID: 2, CostUSD: 1, Record: record(claude.SignInLogin, reading(0.1, five, 0, time.Time{}), reading(0.2, five, 0, time.Time{}))},
 		{ID: "full", WatchPassID: 3, CostUSD: 1, Record: record(claude.SignInLogin, reading(0.3, five, 0.1, seven), reading(0.35, five, 0.11, seven))},
+		{ID: "both", WatchPassID: 4, CostUSD: 1, Record: record(claude.SignInLogin, reading(0.3, five, 0.1, seven),
+			reading(0.02, five.Add(5*time.Hour), 0.01, seven.Add(Week)))},
 	}
 	use := Measure(runs, true, 0.05)
-	if use.Runs != 7 || !near(use.USD(), 6) {
+	if use.Runs != 8 || !near(use.USD(), 7) {
 		t.Errorf("dollars = %+v", use)
 	}
-	// unread and token: 0.05 each in both; no-seven: 0.1 five-hour and 0.05 seven-day; full: 0.05 and 0.01.
-	if sh := use.Share; !near(sh.FiveHour, 0.05+0.05+0.1+0.05) || !near(sh.SevenDay, 0.05+0.05+0.05+0.01) || sh.Estimates != 3 {
+	// unread and token: 0.05 each in both; no-seven: 0.1 five-hour and 0.05 seven-day; full: 0.05 and 0.01; both
+	// (crossed both resets): 0.02 and 0.01 in the new windows, and 0.05 in each for the parts before. Four runs were
+	// estimated: "both" counts once though it was estimated in both windows.
+	if sh := use.Share; !near(sh.FiveHour, 0.05+0.05+0.1+0.05+0.02+0.05) || !near(sh.SevenDay, 0.05+0.05+0.05+0.01+0.01+0.05) || sh.Estimates != 4 {
 		t.Errorf("the share = %+v", sh)
 	}
-	if none := Measure(runs, false, 0.05); none.Share != nil || !near(none.USD(), 6) {
+	if none := Measure(runs, false, 0.05); none.Share != nil || !near(none.USD(), 7) {
 		t.Errorf("without shares = %+v", none)
 	}
 }
@@ -242,11 +247,11 @@ func TestLedgerIsDerivedFromRuns(t *testing.T) {
 	}
 	// The dead pass's second run, stored by recovery from its start file during the next pass.
 	saveRuns(t, s, app.ID, stored{id: "recovered", pass: dead, signIn: claude.SignInAPIKey, agent: 0.75, finished: now.Add(30 * time.Minute)})
-	first, err := s.Ledger(ctx, app.ID, claude.SignInAPIKey)
+	first, err := s.Ledger(ctx, claude.SignInAPIKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := s.Ledger(ctx, app.ID, claude.SignInAPIKey)
+	second, err := s.Ledger(ctx, claude.SignInAPIKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,5 +261,82 @@ func TestLedgerIsDerivedFromRuns(t *testing.T) {
 	use, err := s.PassUse(ctx, dead, false, 0)
 	if err != nil || use.Runs != 2 || !near(use.USD(), 1.75) {
 		t.Errorf("the dead pass's use = %+v, %v", use, err)
+	}
+}
+
+// Adding a run never hides use already counted: over the five-hour reset scenario, in either order, every longer
+// prefix of the runs measures at least as much in both units. The crossing run alone counts 0.04 after the reset
+// (plus its estimate), and a later run that first reads 0.04 in the new window keeps it.
+func TestAddingARunNeverHidesUse(t *testing.T) {
+	now := time.Date(2026, 10, 2, 5, 0, 0, 0, time.UTC)
+	a, b, seven := now.Add(-time.Hour), now.Add(4*time.Hour), now.Add(3*24*time.Hour)
+	run := func(id string, first, last *claude.UsageReading) store.Run {
+		return store.Run{ID: id, WatchPassID: 1, CostUSD: 1, Record: []byte(`{"sign_in":"login","metrics":{"usage_first":` + jsonOf(first) +
+			`,"usage_last":` + jsonOf(last) + `}}`)}
+	}
+	r1 := run("r1", reading(0.10, a, 0.40, seven), reading(0.16, a, 0.41, seven))
+	r2 := run("r2", reading(0.16, a, 0.41, seven), reading(0.22, a, 0.42, seven))
+	r3 := run("r3", reading(0.22, a, 0.42, seven), reading(0.04, b, 0.43, seven))
+	r4 := run("r4", reading(0.04, b, 0.43, seven), reading(0.10, b, 0.44, seven))
+	const perRun = 0.06
+	if got := Measure([]store.Run{r3}, true, perRun).Share.FiveHour; !near(got, 0.04+perRun) {
+		t.Errorf("the crossing run alone = %v", got)
+	}
+	if got := Measure([]store.Run{r3, r4}, true, perRun).Share.FiveHour; !near(got, 0.10+perRun) {
+		t.Errorf("the crossing run and the next = %v; want 0.10 after the reset, not 0.06", got)
+	}
+	for _, order := range [][]store.Run{{r1, r2, r3, r4}, {r4, r3, r2, r1}, {r3, r1, r4, r2}} {
+		var last Share
+		for k := 1; k <= len(order); k++ {
+			sh := *Measure(order[:k], true, perRun).Share
+			if sh.FiveHour < last.FiveHour-1e-12 || sh.SevenDay < last.SevenDay-1e-12 {
+				t.Errorf("adding %s lowered the share: %+v to %+v", order[k-1].ID, last, sh)
+			}
+			last = sh
+		}
+		if !near(last.FiveHour, 0.28) {
+			t.Errorf("all four runs = %v, want 0.28 in any order", last.FiveHour)
+		}
+	}
+}
+
+// One budget for all projects: the ledger sums the watch's runs in every project, so two projects together cannot
+// spend more than one cap; the current windows come from any project's latest run, the user's own included.
+func TestOneBudgetForAllProjects(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 5, 0, 0, 0, time.UTC)
+	s, c, app := newService(t, now.Add(-3*time.Hour))
+	other, err := s.DB.SaveProject(ctx, "/work/other", "other", []byte(`{}`), c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third, err := s.DB.SaveProject(ctx, "/work/third", "third", []byte(`{}`), c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := startPass(t, s)
+	c.now = now.Add(-time.Hour)
+	second := startPass(t, s)
+	five, seven := now.Add(2*time.Hour), now.Add(3*24*time.Hour)
+	saveRuns(t, s, app.ID, stored{id: "a1", pass: first, signIn: claude.SignInLogin, agent: 8, finished: now.Add(-2 * time.Hour),
+		first: reading(0.10, five, 0.01, seven), last: reading(0.20, five, 0.05, seven)})
+	saveRuns(t, s, other.ID, stored{id: "b1", pass: second, signIn: claude.SignInLogin, agent: 9, finished: now.Add(-30 * time.Minute),
+		first: reading(0.25, five, 0.06, seven), last: reading(0.35, five, 0.11, seven)})
+	saveRuns(t, s, third.ID, stored{id: "user", signIn: claude.SignInLogin, agent: 2, finished: now.Add(-10 * time.Minute),
+		first: reading(0.35, five, 0.11, seven), last: reading(0.45, five, 0.13, seven)})
+	c.now = now
+	l, err := s.Ledger(ctx, claude.SignInLogin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l.Week.Runs != 2 || !near(l.Week.USD(), 17) || !near(l.Week.Share.FiveHour, 0.20) || !near(l.Week.Share.SevenDay, 0.09) {
+		t.Errorf("the week across projects = %+v, %+v", l.Week, l.Week.Share)
+	}
+	room := l.Room(Consent{Caps: DefaultCaps()})
+	if !near(room.USD, 3) || room.USD >= 2*DefaultCaps().RunCapUSD || !near(room.SevenDay, 0.06) {
+		t.Errorf("the room = %+v; want $3 left, less than a pair's two run caps", room)
+	}
+	if w := l.Current; !w.FiveHourKnown || w.FiveHour != 0.45 || w.SevenDay != 0.13 {
+		t.Errorf("the current windows = %+v; want the third project's latest reading", w)
 	}
 }

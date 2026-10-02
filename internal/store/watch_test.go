@@ -27,10 +27,10 @@ func watchVersion(t *testing.T) int {
 	return version
 }
 
-func consent(projectID int64, interactive bool, weekly float64, now time.Time) WatchConsent {
-	return WatchConsent{ProjectID: projectID, Enabled: true, WeeklyUSD: weekly, RunCapUSD: 3, PassShare: 0.3, WeeklyShare: 0.15,
-		StartFiveHour: 0.5, StartSevenDay: 0.6, LoopExperiments: true, LoopDrift: true, SignIn: "login", Interactive: interactive,
-		GrantedBy: "ana", AgentiumVersion: "dev", GrantedAt: now}
+func consent(confirmed bool, weekly float64, now time.Time) WatchConsent {
+	return WatchConsent{Enabled: true, WeeklyUSD: weekly, RunCapUSD: 3, PassShare: 0.3, WeeklyShare: 0.15, StartFiveHour: 0.5,
+		StartSevenDay: 0.6, SignIn: "token-file", SignInIdentity: "id-1", Confirmed: confirmed, GrantedBy: "ana", AgentiumVersion: "dev",
+		GrantedAt: now}
 }
 
 // Crash and recovery: a database populated before the watch migration (a project, a task, a locked experiment, task
@@ -78,7 +78,7 @@ func TestWatchMigrationOnAPopulatedDatabase(t *testing.T) {
 	old.Close()
 
 	s := open(t, file)
-	runs, err := s.RunsFinishedSince(ctx, app.ID, now.Add(-time.Hour))
+	runs, err := s.RunsFinishedSince(ctx, now.Add(-time.Hour))
 	if err != nil || len(runs) != 2 {
 		t.Fatalf("runs after the migration = %+v, %v", runs, err)
 	}
@@ -90,8 +90,11 @@ func TestWatchMigrationOnAPopulatedDatabase(t *testing.T) {
 	if got, err := s.ExperimentRuns(ctx, e.ID); err != nil || len(got) != 1 {
 		t.Errorf("the experiment's runs after the migration = %+v, %v", got, err)
 	}
-	if _, err := s.WatchConsentOf(ctx, app.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("a migrated project's consent: %v, want none", err)
+	if _, err := s.WatchConsentInForce(ctx); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the consent after the migration: %v, want none", err)
+	}
+	if _, err := s.WatchLoopsOf(ctx, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a migrated project's loops: %v, want none", err)
 	}
 	if added, err := s.EnrolExperiment(ctx, app.ID, e.ID, now); err != nil || !added {
 		t.Errorf("enrolling a migrated experiment = %v, %v", added, err)
@@ -109,21 +112,18 @@ func TestWatchMigrationOnAPopulatedDatabase(t *testing.T) {
 	}
 }
 
-// Budget and consent: the history is append-only, and a row that is not interactive cannot raise the consent in
-// force, whatever writes it: the trigger refuses a first grant, a higher cap or threshold, a new loop and a changed
-// sign-in mode, and accepts a lowering and a revocation. After a revocation only an interactive row restores it.
+// Budget and consent: the history is append-only (no update, no delete), and an unconfirmed row cannot raise the
+// consent in force, whatever writes it: the trigger refuses a first grant, a higher cap or threshold, and another
+// sign-in mode or identity, and accepts a lowering and a revocation. After a revocation only a confirmed row restores
+// it.
 func TestWatchConsentOnlyTheTerminalRaises(t *testing.T) {
 	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
 	ctx := context.Background()
 	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
-	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := s.AddWatchConsent(ctx, consent(false, 20, now)); !errors.Is(err, ErrConsentRaise) {
+		t.Fatalf("an unconfirmed first grant: %v, want ErrConsentRaise", err)
 	}
-	if _, err := s.AddWatchConsent(ctx, consent(app.ID, false, 20, now)); !errors.Is(err, ErrConsentRaise) {
-		t.Fatalf("a first grant that is not interactive: %v, want ErrConsentRaise", err)
-	}
-	granted, err := s.AddWatchConsent(ctx, consent(app.ID, true, 20, now))
+	granted, err := s.AddWatchConsent(ctx, consent(true, 20, now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,44 +134,116 @@ func TestWatchConsentOnlyTheTerminalRaises(t *testing.T) {
 		"week share": func(c *WatchConsent) { c.WeeklyShare = 0.2 },
 		"five-hour":  func(c *WatchConsent) { c.StartFiveHour = 0.9 },
 		"seven-day":  func(c *WatchConsent) { c.StartSevenDay = 0.7 },
-		"loop":       func(c *WatchConsent) { c.LoopScreens = true },
 		"sign-in":    func(c *WatchConsent) { c.SignIn = "api-key" },
+		"identity":   func(c *WatchConsent) { c.SignInIdentity = "id-2" },
 	}
 	for name, raise := range raises {
-		c := consent(app.ID, false, 20, now)
+		c := consent(false, 20, now)
 		raise(&c)
 		if _, err := s.AddWatchConsent(ctx, c); !errors.Is(err, ErrConsentRaise) {
-			t.Errorf("a raise of the %s that is not interactive: %v, want ErrConsentRaise", name, err)
+			t.Errorf("an unconfirmed raise of the %s: %v, want ErrConsentRaise", name, err)
 		}
 	}
-	if got, err := s.WatchConsentOf(ctx, app.ID); err != nil || got.ID != granted.ID {
+	if got, err := s.WatchConsentInForce(ctx); err != nil || got.ID != granted.ID {
 		t.Fatalf("the consent in force after refused raises = %+v, %v", got, err)
 	}
-	lower := consent(app.ID, false, 10, now.Add(time.Hour))
-	lower.LoopDrift = false
-	if _, err := s.AddWatchConsent(ctx, lower); err != nil {
+	if _, err := s.AddWatchConsent(ctx, consent(false, 10, now.Add(time.Hour))); err != nil {
 		t.Fatalf("a lowering: %v", err)
 	}
-	if _, err := s.AddWatchConsent(ctx, consent(app.ID, false, 15, now)); !errors.Is(err, ErrConsentRaise) {
+	if _, err := s.AddWatchConsent(ctx, consent(false, 15, now)); !errors.Is(err, ErrConsentRaise) {
 		t.Errorf("raising back above the lowered budget: %v, want ErrConsentRaise", err)
 	}
-	revoked := WatchConsent{ProjectID: app.ID, SignIn: "login", GrantedBy: "ana", GrantedAt: now.Add(2 * time.Hour)}
+	revoked := WatchConsent{SignIn: "token-file", SignInIdentity: "id-1", GrantedBy: "ana", GrantedAt: now.Add(2 * time.Hour)}
 	if _, err := s.AddWatchConsent(ctx, revoked); err != nil {
 		t.Fatalf("a revocation: %v", err)
 	}
-	if _, err := s.AddWatchConsent(ctx, consent(app.ID, false, 1, now)); !errors.Is(err, ErrConsentRaise) {
-		t.Errorf("a grant after the revocation that is not interactive: %v, want ErrConsentRaise", err)
+	if _, err := s.AddWatchConsent(ctx, consent(false, 1, now)); !errors.Is(err, ErrConsentRaise) {
+		t.Errorf("an unconfirmed grant after the revocation: %v, want ErrConsentRaise", err)
 	}
-	history, err := s.WatchConsents(ctx, app.ID)
-	if err != nil || len(history) != 3 || history[0].Enabled || history[1].WeeklyUSD != 10 || !history[2].Interactive || history[2].GrantedBy != "ana" {
+	history, err := s.WatchConsents(ctx)
+	if err != nil || len(history) != 3 || history[0].Enabled || history[1].WeeklyUSD != 10 || !history[2].Confirmed ||
+		history[2].GrantedBy != "ana" || history[2].SignInIdentity != "id-1" {
 		t.Fatalf("the consent history = %+v, %v", history, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `UPDATE watch_consents SET weekly_usd = 1000`); err == nil || !strings.Contains(err.Error(), "append-only") {
 		t.Errorf("updating a consent row: %v, want refused", err)
 	}
-	bad := consent(app.ID, true, -1, now)
-	if _, err := s.AddWatchConsent(ctx, bad); err == nil {
+	if _, err := s.AddWatchConsent(ctx, consent(true, -1, now)); err == nil {
 		t.Error("a negative budget was stored")
+	}
+}
+
+// Budget and consent: deleting consent rows is refused, whether the newest (which would bring back an older, higher
+// consent) or all of them; deleting a project leaves the data folder's consent in place.
+func TestWatchConsentRowsCannotBeDeleted(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	app, _ := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if _, err := s.AddWatchConsent(ctx, consent(true, 50, now)); err != nil {
+		t.Fatal(err)
+	}
+	lowered, err := s.AddWatchConsent(ctx, consent(false, 5, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []string{`DELETE FROM watch_consents WHERE id = ` + strconv.FormatInt(lowered.ID, 10), `DELETE FROM watch_consents`} {
+		if _, err := s.db.ExecContext(ctx, query); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Errorf("%s: %v, want refused", query, err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, app.ID); err != nil {
+		t.Fatalf("deleting a project: %v", err)
+	}
+	if got, err := s.WatchConsentInForce(ctx); err != nil || got.ID != lowered.ID || got.WeeklyUSD != 5 {
+		t.Errorf("the consent in force = %+v, %v; want the lowering", got, err)
+	}
+}
+
+// Budget and consent: an unconfirmed write may turn a project's loops off but never on, each loop alone included, on
+// insert and on update; a confirmed write may turn them on. A project's loops go with the project.
+func TestWatchLoopsOnlyTheTerminalEnables(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	app, _ := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	enable := map[string]func(l *WatchLoops){
+		"experiments": func(l *WatchLoops) { l.Experiments = true },
+		"drift":       func(l *WatchLoops) { l.Drift = true },
+		"screens":     func(l *WatchLoops) { l.Screens = true },
+	}
+	for name, on := range enable {
+		l := WatchLoops{ProjectID: app.ID, SetBy: "ana", SetAt: now}
+		on(&l)
+		if err := s.SetWatchLoops(ctx, l); !errors.Is(err, ErrConsentRaise) {
+			t.Errorf("an unconfirmed first %s loop: %v, want ErrConsentRaise", name, err)
+		}
+	}
+	if err := s.SetWatchLoops(ctx, WatchLoops{ProjectID: app.ID, SetBy: "ana", SetAt: now}); err != nil {
+		t.Fatalf("an unconfirmed row with every loop off: %v", err)
+	}
+	for name, on := range enable {
+		l := WatchLoops{ProjectID: app.ID, SetBy: "ana", SetAt: now}
+		on(&l)
+		if err := s.SetWatchLoops(ctx, l); !errors.Is(err, ErrConsentRaise) {
+			t.Errorf("an unconfirmed update turning on %s: %v, want ErrConsentRaise", name, err)
+		}
+	}
+	if err := s.SetWatchLoops(ctx, WatchLoops{ProjectID: app.ID, Experiments: true, Drift: true, Screens: true, Confirmed: true, SetBy: "ana",
+		SetAt: now}); err != nil {
+		t.Fatalf("a confirmed update: %v", err)
+	}
+	if err := s.SetWatchLoops(ctx, WatchLoops{ProjectID: app.ID, Experiments: true, SetBy: "agentium.toml", SetAt: now}); err != nil {
+		t.Fatalf("an unconfirmed lowering: %v", err)
+	}
+	if got, err := s.WatchLoopsOf(ctx, app.ID); err != nil || !got.Experiments || got.Drift || got.Screens || got.Confirmed || got.SetBy != "agentium.toml" {
+		t.Errorf("the loops = %+v, %v", got, err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM projects WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.WatchLoopsOf(ctx, app.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a removed project's loops: %v", err)
 	}
 }
 
@@ -462,7 +534,7 @@ func TestRunsFinishedSinceAtSubSecondBounds(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	runs, err := s.RunsFinishedSince(ctx, app.ID, since)
+	runs, err := s.RunsFinishedSince(ctx, since)
 	if err != nil {
 		t.Fatal(err)
 	}

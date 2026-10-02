@@ -35,22 +35,25 @@ func (u Use) USD() float64 { return u.AgentUSD + u.JudgeUSD }
 type Share struct {
 	FiveHour float64
 	SevenDay float64
-	// Estimates counts the per-run estimates added where a reading could not tell (see Measure).
+	// Estimates counts the runs that added the per-run estimate somewhere, once per run (see Measure).
 	Estimates int
 }
 
 // Measure is what runs used. Dollars are each run's stored spend, the judge's included. With shares, the window share
-// is derived from the runs' usage readings, so it errs high and never low:
+// is derived from the runs' usage readings:
 //   - Runs are grouped by their watch pass (a run without a pass is its own group), since between passes the user's
 //     own use moves the readings too.
 //   - In each group, for each window (keyed by its reset time), the use is the highest reading in that window less
-//     the lowest first reading of a run in it; a window the group only saw from the inside (it reset during a run) is
-//     counted from 0. Anything else using the subscription meanwhile, the user included, counts as the watch's.
-//   - A run whose readings cannot tell its use adds perRun (the five-hour estimate per run, an upper bound in the
-//     seven-day window too, which is larger): a subscription run with a cost but no readings adds it to both units,
-//     and a run that crossed a window's reset adds it for the part before the reset, which no reading shows.
+//     the lowest first reading of a run in it. A window that began during a run of the group (the run crossed its
+//     reset) is counted from 0, whatever later runs read first, so adding a run never hides use already counted.
+//     Anything else using the subscription meanwhile, the user included, counts as the watch's.
+//   - Where readings cannot tell, the run adds perRun, the five-hour estimate per run (experiment.UsagePerRun), also
+//     in the seven-day window: a subscription run with a cost but no readings adds it to both, a run that crossed a
+//     reset adds it for the part before the reset, and a run whose readings lack the seven-day window adds it there.
 //
-// The five-hour use of runs that span several windows is their sum, in units of one window.
+// It errs high where readings cannot tell, but two uses are not seen: a run's first reading may come after its first
+// request, and use after a group's last reading (a run still going, or its last requests) shows only in a later
+// reading. The five-hour use of runs that span several windows is their sum, in units of one window.
 func Measure(runs []store.Run, shares bool, perRun float64) Use {
 	use := Use{Runs: len(runs)}
 	if shares {
@@ -58,7 +61,7 @@ func Measure(runs []store.Run, shares bool, perRun float64) Use {
 	}
 	groups := map[string][]readings{}
 	var order []string
-	for _, r := range runs {
+	for i, r := range runs {
 		spend := run.StoredSpend(r.CostUSD, r.Record)
 		use.AgentUSD += spend.AgentUSD
 		use.JudgeUSD += spend.JudgeUSD
@@ -82,22 +85,32 @@ func Measure(runs []store.Run, shares bool, perRun float64) Use {
 		if _, ok := groups[key]; !ok {
 			order = append(order, key)
 		}
-		groups[key] = append(groups[key], readings{*rec.Metrics.UsageFirst, *rec.Metrics.UsageLast})
+		groups[key] = append(groups[key], readings{run: i, first: *rec.Metrics.UsageFirst, last: *rec.Metrics.UsageLast})
 	}
+	estimated := map[int]bool{}
 	for _, key := range order {
 		for _, d := range []struct {
 			dim dimension
 			to  *float64
 		}{{fiveHour, &use.Share.FiveHour}, {sevenDay, &use.Share.SevenDay}} {
 			rise, unknown := d.dim.rise(groups[key])
-			*d.to += rise + perRun*float64(unknown)
-			use.Share.Estimates += unknown
+			*d.to += rise + perRun*float64(len(unknown))
+			for _, i := range unknown {
+				estimated[i] = true
+			}
 		}
+	}
+	if shares {
+		use.Share.Estimates += len(estimated)
 	}
 	return use
 }
 
-type readings struct{ first, last claude.UsageReading }
+// readings are a run's first and last usage readings; run is its index in Measure's runs.
+type readings struct {
+	run         int
+	first, last claude.UsageReading
+}
 
 // dimension is one kind of window: the five-hour or the seven-day.
 type dimension int
@@ -121,9 +134,9 @@ func (d dimension) value(u claude.UsageReading) float64 {
 	return u.FiveHour
 }
 
-// rise is a group's use of one kind of window (see Measure), and how many runs it could not measure: those that
+// rise is a group's use of one kind of window (see Measure), and the runs it could not measure there: those that
 // crossed a reset, or whose readings lack this window.
-func (d dimension) rise(group []readings) (total float64, unknown int) {
+func (d dimension) rise(group []readings) (total float64, unknown []int) {
 	type window struct {
 		base, high float64
 		hasBase    bool
@@ -137,21 +150,25 @@ func (d dimension) rise(group []readings) (total float64, unknown int) {
 		}
 		return w
 	}
+	lower := func(w *window, v float64) {
+		if !w.hasBase || v < w.base {
+			w.base, w.hasBase = v, true
+		}
+	}
 	for _, g := range group {
 		from, to := d.resets(g.first), d.resets(g.last)
 		if from.IsZero() || to.IsZero() {
-			unknown++
+			unknown = append(unknown, g.run)
 			continue
 		}
 		w := at(from)
-		if v := d.value(g.first); !w.hasBase || v < w.base {
-			w.base, w.hasBase = v, true
-		}
+		lower(w, d.value(g.first))
 		w.high = max(w.high, d.value(g.first))
 		w = at(to)
 		w.high = max(w.high, d.value(g.last))
 		if !from.Equal(to) {
-			unknown++
+			lower(w, 0) // the window began during this run: all of its use so far counts
+			unknown = append(unknown, g.run)
 		}
 	}
 	for _, w := range windows {
@@ -197,27 +214,28 @@ type Window struct {
 	SevenDayKnown  bool
 }
 
-// Ledger is what the watch spent on a project over the last Week, derived from the runs its passes made (agent and
-// judge spend, and usage readings), never from a counter of its own, so a crash cannot double-count or drop a run.
+// Ledger is what the watch spent over the last Week, in every project together (the consent is one budget), derived
+// from the runs its passes made (agent and judge spend, and usage readings), never from a counter of its own, so a
+// crash cannot double-count or drop a stored run.
 type Ledger struct {
 	Now, Since time.Time
 	// Shares is false with an API key: Week.Share and Current are then nil, and only dollars bind.
 	Shares bool
-	// PerRun is the five-hour share one run is expected to use (experiment.UsagePerRun over the week's runs), which
-	// Measure adds where readings cannot tell.
+	// PerRun is the five-hour share one run is expected to use (experiment.UsagePerRun over the week's runs of every
+	// project), which Measure adds where readings cannot tell.
 	PerRun float64
-	// Week is the watch's runs of the project that finished in (Since, Now]: runs of every pass, scheduled or started
-	// at the terminal, and only those.
+	// Week is the watch's runs that finished in (Since, Now], in every project: runs of every pass, scheduled or
+	// started at the terminal, and only those.
 	Week Use
-	// Current is the latest reading of any of the project's runs in the week, the user's own included.
+	// Current is the latest reading of any run in the week, in any project, the user's own runs included.
 	Current *Window
 }
 
-// Ledger reads the project's ledger at the service's clock, for the sign-in mode the project uses now.
-func (s Service) Ledger(ctx context.Context, projectID int64, signIn string) (Ledger, error) {
+// Ledger reads the ledger at the service's clock, for the sign-in mode Agentium uses now.
+func (s Service) Ledger(ctx context.Context, mode string) (Ledger, error) {
 	now := s.Now()
-	l := Ledger{Now: now, Since: now.Add(-Week), Shares: signIn != claude.SignInAPIKey}
-	runs, err := s.DB.RunsFinishedSince(ctx, projectID, l.Since)
+	l := Ledger{Now: now, Since: now.Add(-Week), Shares: mode != claude.SignInAPIKey}
+	runs, err := s.DB.RunsFinishedSince(ctx, l.Since)
 	if err != nil {
 		return Ledger{}, err
 	}
