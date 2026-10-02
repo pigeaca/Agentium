@@ -747,6 +747,34 @@ func (s *Store) SaveCalibration(ctx context.Context, c Calibration) error {
 	return nil
 }
 
+// Calibrations returns every calibration of a project's arm with this snapshot commit, newest first (empty when none).
+func (s *Store) Calibrations(ctx context.Context, projectID int64, arm, snapshot string) ([]Calibration, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, project_id, arm, snapshot, run_id, result, created_at FROM calibrations
+		WHERE project_id = ? AND arm = ? AND snapshot = ? ORDER BY created_at DESC, id DESC`, projectID, arm, snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("calibrations of %s: %w", arm, err)
+	}
+	defer rows.Close()
+	var out []Calibration
+	for rows.Next() {
+		var c Calibration
+		var result, created string
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Arm, &c.Snapshot, &c.RunID, &result, &created); err != nil {
+			return nil, fmt.Errorf("calibrations of %s: %w", arm, err)
+		}
+		c.Result = []byte(result)
+		if c.CreatedAt, err = parseTime(created); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("calibrations of %s: %w", arm, err)
+	}
+	return out, nil
+}
+
 // LatestCalibration returns the newest calibration of a project's arm with this snapshot commit, or ErrNotFound.
 func (s *Store) LatestCalibration(ctx context.Context, projectID int64, arm, snapshot string) (Calibration, error) {
 	var c Calibration

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"time"
 
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -20,25 +21,36 @@ import (
 // NewOptions is what `experiment new` was asked for, as flags give it. Prepare checks it and fills the defaults.
 type NewOptions struct {
 	Template, ContextA, ContextB string
-	Tier                         string // a tier's name, or "" (quick unless Tasks are given)
-	Tasks                        []string
-	Repeats                      int
-	Model, Effort, Goal          string
-	RunBudget, Budget            float64
-	Concurrency                  int
-	Timeout, VerifyTimeout       time.Duration
-	Seed                         uint64
-	Judge                        bool
-	JudgeModel, JudgeEffort      string
-	JudgeRepeats                 int
+	// ProfileA and ProfileB, for model-ab only, are the arms' MODEL[:EFFORT] (--a and --b); ContextA is then the one
+	// context both arms run (default: the base's). RunBudgetA and RunBudgetB optionally give a model-ab arm its own
+	// run cap (zero: RunBudget).
+	ProfileA, ProfileB      string
+	RunBudgetA, RunBudgetB  float64
+	Tier                    string // a tier's name, or "" (quick unless Tasks are given)
+	Tasks                   []string
+	Repeats                 int
+	Model, Effort, Goal     string
+	RunBudget, Budget       float64
+	Concurrency             int
+	Timeout, VerifyTimeout  time.Duration
+	Seed                    uint64
+	Judge                   bool
+	JudgeModel, JudgeEffort string
+	JudgeRepeats            int
 
-	tier     Tier
-	prepared bool // Prepare ran: the tier and the seed are set
+	tier         Tier
+	profA, profB profile // model-ab: ProfileA and ProfileB, parsed
+	prepared     bool    // Prepare ran: the tier and the seed are set
 }
+
+type profile struct{ model, effort string }
 
 // Prepare checks the options before anything is read: the name, flag combinations, the tier, repeats and a seed (random
 // when 0). A mistake in them is a UsageError. It changes o.
 func (o *NewOptions) Prepare(name string) error {
+	if err := o.prepareProfiles(); err != nil {
+		return UsageError(err.Error())
+	}
 	switch {
 	case !snapshot.ValidName(name):
 		return UsageError(fmt.Sprintf("%q cannot name an experiment: use letters, digits, '.', '_' and '-'", name))
@@ -79,6 +91,35 @@ func (o *NewOptions) Prepare(name string) error {
 	return nil
 }
 
+// prepareProfiles checks the options that only model-ab takes, and reads its profiles.
+func (o *NewOptions) prepareProfiles() error {
+	if o.Template != TemplateModelAB {
+		if o.ProfileA != "" || o.ProfileB != "" || o.RunBudgetA != 0 || o.RunBudgetB != 0 {
+			return fmt.Errorf("per-arm models and run budgets belong to the %s template: agentium experiment new NAME --template %s --a MODEL[:EFFORT] --b MODEL[:EFFORT]",
+				TemplateModelAB, TemplateModelAB)
+		}
+		return nil
+	}
+	switch {
+	case o.ProfileA == "" || o.ProfileB == "":
+		return fmt.Errorf("a %s experiment needs --a MODEL[:EFFORT] and --b MODEL[:EFFORT]", TemplateModelAB)
+	case o.ContextB != "":
+		return fmt.Errorf("a %s experiment runs one context in both arms (--context NAME); --a and --b name models", TemplateModelAB)
+	case o.Model != "" || o.Effort != "":
+		return fmt.Errorf("a %s experiment takes each arm's model and effort from --a and --b, not --model or --effort", TemplateModelAB)
+	case o.RunBudgetA < 0 || o.RunBudgetB < 0:
+		return errors.New("--run-budget-a and --run-budget-b must be positive")
+	}
+	var err error
+	if o.profA.model, o.profA.effort, err = ParseProfile(o.ProfileA); err != nil {
+		return fmt.Errorf("--a %w", err)
+	}
+	if o.profB.model, o.profB.effort, err = ParseProfile(o.ProfileB); err != nil {
+		return fmt.Errorf("--b %w", err)
+	}
+	return nil
+}
+
 // Created is a stored experiment: its design, and how many tasks could have been in it.
 type Created struct {
 	Design   Design
@@ -104,7 +145,13 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 			return Created{}, err
 		}
 	}
-	d := Design{Version: DesignVersion, Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: o.Model, Effort: o.Effort,
+	model, effort := o.Model, o.Effort
+	if o.Template == TemplateModelAB { // Design.Model and Effort are arm A's, for what reads one model of an experiment
+		armA.Model, armA.Effort, armA.RunBudgetUSD = o.profA.model, o.profA.effort, o.RunBudgetA
+		armB.Model, armB.Effort, armB.RunBudgetUSD = o.profB.model, o.profB.effort, o.RunBudgetB
+		model, effort = armA.Model, armA.Effort
+	}
+	d := Design{Version: Design{Template: o.Template}.WantVersion(), Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
 		Goal: o.Goal, CostMargin: DefaultCostMargin, SuccessMargin: DefaultSuccessMargin, RunBudgetUSD: o.RunBudget,
 		BudgetUSD: o.Budget, Timeout: o.Timeout, VerifyTimeout: o.VerifyTimeout, Concurrency: o.Concurrency, Seed: o.Seed}
 	if o.Judge {
@@ -115,13 +162,13 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 	if err != nil {
 		return Created{}, err
 	}
-	est, err := p.EstimateFor(ctx, d.Model)
+	ests, err := p.EstimatesFor(ctx, d)
 	if err != nil {
 		return Created{}, err
 	}
 	if d.BudgetUSD == 0 {
-		if d.BudgetUSD = DefaultBudget(d, est); d.BudgetUSD == 0 {
-			return Created{}, fmt.Errorf("the cost of a run cannot be estimated (%s): set --budget", est.Basis)
+		if d.BudgetUSD = DefaultBudgetFor(d, ests); d.BudgetUSD == 0 {
+			return Created{}, fmt.Errorf("the cost of a run cannot be estimated (%s): set --budget", unknownBasis(d, ests))
 		}
 	}
 	if err := d.Validate(); err != nil { // everything it checks came from flags
@@ -136,6 +183,20 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		return Created{}, err
 	}
 	return Created{Design: d, Eligible: len(eligible), Tier: o.tier, Explicit: len(o.Tasks) > 0}, nil
+}
+
+// unknownBasis says why the cost cannot be estimated: for a model-ab experiment, in which arm.
+func unknownBasis(d Design, ests ArmEstimates) string {
+	if !d.PerArmProfiles() {
+		return ests[0].Basis
+	}
+	var why []string
+	for i, a := range d.Arms {
+		if _, ok := ests[i].DesignUSD(Design{Tasks: d.Tasks, Repeats: 1, Arms: []Arm{a}}); !ok {
+			why = append(why, "arm "+a.Name+": "+ests[i].Basis)
+		}
+	}
+	return strings.Join(why, "; ")
 }
 
 // chooseTasks sets d.Tasks: the named tasks (each must be eligible), or the tier's seeded sample of the eligible ones.

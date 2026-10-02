@@ -163,7 +163,7 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if err != nil {
 		return Lock{}, err
 	}
-	est, err := p.EstimateFor(ctx, d.Model)
+	est, err := p.EstimatesFor(ctx, d)
 	if err != nil {
 		return Lock{}, err
 	}
@@ -200,7 +200,7 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		fmt.Fprintf(out, "Budget raised to $%.2f (recorded in the lock).\n", raised.To)
 	}
 	fmt.Fprintf(out, "Locked: Claude Code %s, %s, sign-in %s, %d runs in a seeded order (seed %d), prices of %s.\n",
-		lock.ClaudeCode, d.Model, lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable)
+		lock.ClaudeCode, d.ModelLabel(), lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable)
 	if d.Judge != nil {
 		fmt.Fprintf(out, "The judge: %s.\n", DescribeJudge(*d.Judge))
 	}
@@ -358,8 +358,15 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if design.Judge != nil {
 		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
 	}
-	fmt.Fprintf(out, "Running up to %d at a time; each run up to $%.2f%s and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
-		design.Concurrency, design.RunBudgetUSD, judging, design.Timeout, design.BudgetUSD)
+	runCap := fmt.Sprintf("$%.2f", design.RunBudgetUSD)
+	if design.PerArmProfiles() {
+		runCap = fmt.Sprintf("$%.2f", design.ArmRunBudgetUSD(design.Arms[0]))
+		if capB := design.ArmRunBudgetUSD(design.Arms[1]); capB != design.ArmRunBudgetUSD(design.Arms[0]) {
+			runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), capB)
+		}
+	}
+	fmt.Fprintf(out, "Running up to %d at a time; each run up to %s%s and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
+		design.Concurrency, runCap, judging, design.Timeout, design.BudgetUSD)
 	if r.Observer.Begin != nil {
 		r.Observer.Begin(lock, standing)
 	}
@@ -376,7 +383,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		sum = Summary{Status: StatusUsage, Note: judgeNote}
 		x.judgePaused.Store(true)
 	default:
-		sum, runErr = Execute(ctx, Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(),
+		sum, runErr = Execute(ctx, Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
 			BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}, x.slot)
 	}
 	if sum.Status == "" { // Execute refused its input
@@ -465,8 +472,9 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		meta.TaskID = current.ID // linked only while the task is the one the lock ran
 	}
 	rec, err := r.ExecuteRun(ctx, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
-		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.Model, Effort: design.Effort, BudgetUSD: design.RunBudgetUSD,
-		Timeout: design.Timeout, Judge: design.Judge})
+		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.ArmModel(arm.Arm), Effort: design.ArmEffort(arm.Arm),
+		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm),
+		Timeout:   design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
 	if v := rec.Judge; v != nil {
@@ -671,7 +679,7 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 				locked.Files = append(locked.Files, FileDigest{Path: f.Path, SHA256: f.SHA256})
 			}
 		}
-		stored, err := p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
+		stored, err := p.CalibrationFor(ctx, d, a)
 		if err != nil {
 			return l, err
 		}
@@ -691,4 +699,13 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}))
 	}
 	return l, nil
+}
+
+// armCaps is each arm's run cap by name for a model-ab experiment (even equal ones: they may all differ from the
+// design's RunBudgetUSD), and nil for a context experiment, whose arms share the design's.
+func armCaps(d Design) map[string]float64 {
+	if len(d.Arms) != 2 || !d.PerArmProfiles() {
+		return nil
+	}
+	return map[string]float64{d.Arms[0].Name: d.ArmRunCapUSD(d.Arms[0]), d.Arms[1].Name: d.ArmRunCapUSD(d.Arms[1])}
 }

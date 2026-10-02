@@ -165,7 +165,7 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	if err := json.Unmarshal(stored.Lock, &lock); err != nil {
 		return fail(env, fmt.Errorf("experiment %s: its lock cannot be read: %w", rest[0], err))
 	}
-	fmt.Fprintf(out, "%s; %d task(s) × %d run(s) per arm; %s\n", experiment.DescribeArms(d), len(lock.Tasks), d.Repeats, d.Model)
+	fmt.Fprintf(out, "%s; %d task(s) × %d run(s) per arm; %s\n", experiment.DescribeArms(d), len(lock.Tasks), d.Repeats, d.ModelLabel())
 	fmt.Fprintf(out, "Locked %s: Claude Code %s, sign-in %s, %s, method %s, prices of %s\n", lock.LockedAt.Format("2006-01-02 15:04"),
 		lock.ClaudeCode, lock.SignIn, lock.Host, lock.Method, lock.PriceTable)
 	if j := lock.Design.Judge; j != nil {

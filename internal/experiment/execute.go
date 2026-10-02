@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
@@ -72,7 +75,10 @@ type Event struct {
 type Plan struct {
 	Schedule    []Slot
 	Concurrency int
-	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD)
+	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD): the larger arm's
+	// ArmCapUSD, set for a model-ab experiment (even when the caps are equal), gives each arm's own; an arm without an
+	// entry has RunCapUSD.
+	ArmCapUSD   map[string]float64
 	BudgetUSD   float64
 	MaxAttempts int
 	Prior       []Attempt                       // the experiment's stored runs
@@ -178,6 +184,12 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	for i := range state {
 		state[i].failed = !state[i].settled && state[i].attempts >= p.MaxAttempts
 	}
+	capOf := func(pos int) float64 { // what the run at pos may spend at most
+		if c, ok := p.ArmCapUSD[p.Schedule[pos].Arm]; ok {
+			return c
+		}
+		return p.RunCapUSD
+	}
 	emit := func(e Event) {
 		if p.Progress != nil {
 			e.SpentUSD = spent
@@ -212,7 +224,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			reserved, held := 0.0, 0
 			for i := range state {
 				if state[i].running || state[i].held {
-					reserved += p.RunCapUSD
+					reserved += capOf(i)
 				}
 				if state[i].held && !state[i].running {
 					held++
@@ -231,12 +243,12 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				}
 				extra := 0.0
 				if !s.held {
-					extra += p.RunCapUSD
+					extra += capOf(pos)
 				}
 				var hold *slotState
 				if q := partner[pos]; q >= 0 {
 					if qs := &state[q]; !qs.finished() && !qs.running && !qs.held {
-						extra += p.RunCapUSD
+						extra += capOf(q)
 						hold = qs
 					}
 				}
@@ -320,7 +332,15 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				continue // a cancelled wait ends as interrupted
 			case blocked && wake.IsZero(): // a run waiting to be retried comes first in order, and may still fit
 				sum.Status = StatusBudget
-				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, $%.2f per run at most)", p.BudgetUSD, spent, p.RunCapUSD)
+				perRun := fmt.Sprintf("$%.2f", p.RunCapUSD)
+				if len(p.ArmCapUSD) > 0 {
+					var caps []string
+					for _, arm := range slices.Sorted(maps.Keys(p.ArmCapUSD)) {
+						caps = append(caps, fmt.Sprintf("$%.2f (arm %s)", p.ArmCapUSD[arm], arm))
+					}
+					perRun = strings.Join(caps, " or ")
+				}
+				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, %s per run at most)", p.BudgetUSD, spent, perRun)
 				return sum, nil
 			case wake.IsZero():
 				return sum, errors.New("execute: nothing can start and nothing is waiting") // unreachable: the earliest unfinished slot can always start

@@ -21,7 +21,7 @@ type Review struct {
 	Design    Design
 	Eligible  []string
 	Reasons   map[string]string
-	Estimate  Estimate
+	Estimates ArmEstimates // each arm's, on its own model
 	Readiness Readiness
 	Rows      []Row
 	Runs      []store.Run
@@ -37,7 +37,7 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
-	est, err := p.EstimateFor(ctx, d.Model)
+	est, err := p.EstimatesFor(ctx, d)
 	if err != nil {
 		return Review{}, err
 	}
@@ -45,8 +45,8 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
-	return Review{Design: d, Eligible: eligible, Reasons: reasons, Estimate: est, Runs: runs,
-		Readiness: CheckReadiness(ctx, p, e, d, eligible, reasons, est), Rows: Preview(d, eligible, est)}, nil
+	return Review{Design: d, Eligible: eligible, Reasons: reasons, Estimates: est, Runs: runs,
+		Readiness: CheckReadiness(ctx, p, e, d, eligible, reasons, est), Rows: PreviewFor(d, eligible, est)}, nil
 }
 
 // Write prints the review: the design, what is missing before it runs, the sizes with their costs and detectable
@@ -64,7 +64,7 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 		return err
 	}
 	d := r.Design
-	WriteCostBasis(out, st, d, r.Eligible, r.Estimate)
+	r.writeCostBasis(out, st)
 	r.writeWorstCase(out, st)
 	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
 		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
@@ -79,6 +79,9 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
 		"below them a metric is exploratory.\n", MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
 	WriteUsagePreview(out, st, r.Runs, 2*len(d.Tasks)*d.Repeats, signIn, DefaultUsageLimit/100, now)
+	if d.PerArmProfiles() {
+		fmt.Fprintln(out, st.Note("The usage figures above are not split by model or effort: they are measured over all earlier runs, and a larger model\nuses more of the window per run."))
+	}
 	if !r.Readiness.Ready {
 		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}
@@ -98,18 +101,29 @@ func (r Review) writeDesign(out io.Writer, st term.Style, name string) {
 		if a.Snapshot != "" {
 			commit = " (" + ShortCommit(a.Snapshot) + ")"
 		}
+		if d.PerArmProfiles() {
+			fmt.Fprintf(out, "  arm %s: model %s, effort %s, context %s%s; each run up to $%.2f\n", a.Name, a.Model, orDefaultEffort(a.Effort), a.Context, commit, d.ArmRunBudgetUSD(a))
+			continue
+		}
 		fmt.Fprintf(out, "  arm %s: context %s%s\n", a.Name, a.Context, commit)
 	}
-	effort := d.Effort
-	if effort == "" {
-		effort = "the CLI's default"
+	if d.PerArmProfiles() {
+		fmt.Fprintf(out, "  each run up to %s; %d at a time\n", d.Timeout, d.Concurrency)
+	} else {
+		fmt.Fprintf(out, "  model %s, effort %s; each run up to $%.2f and %s; %d at a time\n", d.Model, orDefaultEffort(d.Effort), d.RunBudgetUSD, d.Timeout, d.Concurrency)
 	}
-	fmt.Fprintf(out, "  model %s, effort %s; each run up to $%.2f and %s; %d at a time\n", d.Model, effort, d.RunBudgetUSD, d.Timeout, d.Concurrency)
 	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
 	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
 	if d.Judge != nil {
 		fmt.Fprintf(out, "  judge: %s; each run's judgement up to $%.2f; a second opinion, it decides nothing\n", DescribeJudge(*d.Judge), d.JudgeCapUSD())
 	}
+}
+
+func orDefaultEffort(effort string) string {
+	if effort == "" {
+		return "the CLI's default"
+	}
+	return effort
 }
 
 // writeSizes prints the table of sizes, and the footnote of a tier asking for more tasks than are eligible.
@@ -171,7 +185,11 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
 			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
 	}
-	if d.Judge == nil {
+	if d.PerArmProfiles() {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s). A run starts only when the spend so far and the caps of the\n"+
+			"runs in flight leave room for its own cap, so spending never passes the $%.2f budget.", d.ArmRunBudgetUSD(d.Arms[0]), d.ArmRunBudgetUSD(d.Arms[1]),
+			judgeCapNote(d), d.BudgetUSD)))
+	} else if d.Judge == nil {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
 			"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
 	} else {
@@ -179,6 +197,32 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 			"most). A run starts only when the spend so far and the caps of the runs in flight leave room for its own cap, so\n"+
 			"spending never passes the $%.2f budget.", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, llmjudge.CallCapUSD, d.BudgetUSD)))
 	}
+}
+
+func judgeCapNote(d Design) string {
+	if d.Judge == nil {
+		return ""
+	}
+	return fmt.Sprintf(", and its judgement $%.2f", d.JudgeCapUSD())
+}
+
+// writeCostBasis says how each arm's runs are estimated: once for a context experiment, whose arms share a model, and
+// per arm for a model-ab experiment, with a note when the arms' per-run costs differ.
+func (r Review) writeCostBasis(out io.Writer, st term.Style) {
+	d := r.Design
+	if !d.PerArmProfiles() {
+		WriteCostBasis(out, st, d, r.Eligible, r.Estimates[0])
+		return
+	}
+	for i, a := range d.Arms {
+		fmt.Fprintf(out, "Arm %s: ", a.Name)
+		WriteCostBasis(out, st, withModel(d, a.Model+map[bool]string{true: " at effort " + a.Effort}[a.Effort != ""]), r.Eligible, r.Estimates[i])
+	}
+}
+
+func withModel(d Design, model string) Design {
+	d.Model = model
+	return d
 }
 
 // WriteCostBasis says how each of the experiment's tasks is estimated: from its own earlier runs, or from the fallback

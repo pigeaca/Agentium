@@ -45,7 +45,7 @@ func (p Project) Load(ctx context.Context, name string) (Design, error) {
 	if err := json.Unmarshal(stored.Design, &d); err != nil {
 		return Design{}, fmt.Errorf("experiment %s: %w", name, err)
 	}
-	if d.Version != DesignVersion || len(d.Arms) != 2 {
+	if d.Version != d.WantVersion() || len(d.Arms) != 2 { // a model-ab design is version 2, any other 1
 		return Design{}, fmt.Errorf("experiment %s: its design (version %d) is not one this Agentium reads", name, d.Version)
 	}
 	return d, nil
@@ -61,6 +61,45 @@ func (p Project) ResolveArm(ctx context.Context, name, contextName string) (Arm,
 		return Arm{}, err
 	}
 	return Arm{Name: name, Context: contextName, Snapshot: snap.CommitID}, nil
+}
+
+// CalibrationFor returns the newest calibration of arm a's context on the arm's model (d.ArmModel(a)): tools and
+// skills can differ by model, so a calibration on another model is none, and a model-ab calibration on one model does
+// not displace a context experiment's on another. ErrNotFound when there is none; the caller names the command that
+// makes it.
+func (p Project) CalibrationFor(ctx context.Context, d Design, a Arm) (store.Calibration, error) {
+	all, err := p.DB.Calibrations(ctx, p.ID, a.Context, a.Snapshot)
+	if err != nil {
+		return store.Calibration{}, err
+	}
+	model := d.ArmModel(a)
+	for _, c := range all {
+		var cal run.Calibration
+		if err := json.Unmarshal(c.Result, &cal); err != nil {
+			return store.Calibration{}, fmt.Errorf("calibration of %s: %w", a.Context, err)
+		}
+		if cal.RequestedModel == model {
+			return c, nil
+		}
+	}
+	return store.Calibration{}, fmt.Errorf("calibration of %s on %s: %w", a.Context, model, store.ErrNotFound)
+}
+
+// EstimatesFor estimates each arm on its own model and effort: the same estimate twice when the arms share a profile.
+func (p Project) EstimatesFor(ctx context.Context, d Design) (ArmEstimates, error) {
+	var out ArmEstimates
+	for i, a := range d.Arms[:2] {
+		if i == 1 && d.ArmModel(a) == d.ArmModel(d.Arms[0]) && d.ArmEffort(a) == d.ArmEffort(d.Arms[0]) {
+			out[1] = out[0]
+			break
+		}
+		est, err := p.EstimateFor(ctx, d.ArmModel(a), d.ArmEffort(a))
+		if err != nil {
+			return out, err
+		}
+		out[i] = est
+	}
+	return out, nil
 }
 
 // EligibleTasks returns the names of the tasks that can be in an experiment with these arms, and why each other task
@@ -101,24 +140,26 @@ func WriteIneligible(w io.Writer, reasons map[string]string) {
 // and the arms' costs; the judge's spend, from its record, counts against the budget with it.
 func storedSpend(r store.Run) run.Spend { return run.StoredSpend(r.CostUSD, r.Record) }
 
-// EstimateFor estimates runs on model from the project's earlier fair task runs on it that reported their cost (a run
+// EstimateFor estimates runs on model (and effort, once any of the model's runs records one) from the project's earlier fair task runs on it that reported their cost (a run
 // stopped before Claude Code's result has none): each task from its own runs, when it has some. A run is a task's own
 // only while it is linked to it: a removed task's runs, and an experiment's runs of a task changed after the lock, are
 // not, so a task imported again under the same name starts without history. A task edited in place keeps its ID, and
 // so its earlier runs.
-func (p Project) EstimateFor(ctx context.Context, model string) (Estimate, error) {
+func (p Project) EstimateFor(ctx context.Context, model, effort string) (Estimate, error) {
 	runs, err := p.DB.Runs(ctx, p.ID)
 	if err != nil {
 		return Estimate{}, err
 	}
-	var past []PastRun
+	var matching, unrecorded []PastRun // runs at this effort; runs from before efforts were recorded (effort unknown)
 	for _, r := range runs {
 		if r.Kind != "task" || !slices.Contains([]string{claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout}, r.Outcome) {
 			continue
 		}
 		var rec struct {
-			Model   string `json:"model"`
-			Metrics struct {
+			Model          string `json:"model"`
+			Effort         string `json:"effort"`
+			EffortRecorded bool   `json:"effort_recorded"`
+			Metrics        struct {
 				SawResult bool `json:"saw_result"`
 			} `json:"metrics"`
 		}
@@ -131,10 +172,19 @@ func (p Project) EstimateFor(ctx context.Context, model string) (Estimate, error
 			if r.TaskID != 0 {
 				own = r.TaskName
 			}
-			past = append(past, PastRun{Task: own, CostUSD: agent})
+			switch run := (PastRun{Task: own, CostUSD: agent}); {
+			case !rec.EffortRecorded:
+				unrecorded = append(unrecorded, run)
+			case rec.Effort == effort:
+				matching = append(matching, run)
+			}
 		}
 	}
-	return EstimateRun(model, past), nil
+	// Runs at another effort never count. Runs of unknown effort fill in only while too few runs match.
+	if len(matching) >= MinPastRuns {
+		return EstimateRunAt(model, effort, matching, 0), nil
+	}
+	return EstimateRunAt(model, effort, append(matching, unrecorded...), len(unrecorded)), nil
 }
 
 // DescribeJudge is the judge's settings in words.
@@ -144,8 +194,12 @@ func DescribeJudge(s llmjudge.Settings) string {
 
 // DescribeArms is the experiment's arms in words.
 func DescribeArms(d Design) string {
-	if d.Template == TemplateAA {
+	switch d.Template {
+	case TemplateAA:
 		return "A/A calibration of context " + d.Arms[0].Context
+	case TemplateModelAB:
+		return fmt.Sprintf("model A/B on context %s, A = %s, B = %s", d.Arms[0].Context, Profile(d.Arms[0].Model, d.Arms[0].Effort),
+			Profile(d.Arms[1].Model, d.Arms[1].Effort))
 	}
 	return fmt.Sprintf("context A/B, A = %s, B = %s", d.Arms[0].Context, d.Arms[1].Context)
 }

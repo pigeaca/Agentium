@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/gitx"
+	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -58,10 +59,11 @@ func (c *checker) line(ok bool, format string, a ...any) {
 
 // CheckReadiness checks what running needs: Claude Code, each context's calibration on its version and the
 // experiment's model, the snapshot commits, and every task still eligible. The report says whether all is in place.
-func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, eligible []string, reasons map[string]string, est Estimate) Readiness {
+func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, eligible []string, reasons map[string]string, est ArmEstimates) Readiness {
 	c := &checker{r: Readiness{Ready: true}}
 	version := c.claude(ctx, e)
 	c.contexts(ctx, p, e, d, version)
+	c.prices(d)
 	c.tasks(d, eligible, reasons)
 	c.fairness(ctx, p, e, d, eligible)
 	if c.r.Ready {
@@ -74,6 +76,19 @@ func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, el
 			d.BudgetUSD, expected, reserve))
 	}
 	return c.r
+}
+
+// prices warns of a model-ab model without a list price: its runs that report no cost are priced at nothing known, and
+// the preview's estimate rests on earlier runs, if any.
+func (c *checker) prices(d Design) {
+	if !d.PerArmProfiles() {
+		return
+	}
+	for i, a := range d.Arms {
+		if _, priced := pricing.Lookup(a.Model); !priced && (i == 0 || a.Model != d.Arms[0].Model) {
+			c.check("WARNING", fmt.Sprintf("model %s has no list price in Agentium's table (%s): its cost can be estimated only from earlier runs, and a run whose transcript lacks Claude Code's own cost cannot be priced", a.Model, pricing.Date))
+		}
+	}
 }
 
 // claude checks that Claude Code is found and reports its version, "" when it is not known.
@@ -89,22 +104,25 @@ func (c *checker) claude(ctx context.Context, e ReadinessEnv) string {
 	return version
 }
 
-// contexts checks each distinct context: its snapshot commit is kept, and its calibration is on this Claude Code, this
-// model and this sign-in.
+// contexts checks each distinct context (in a model-ab experiment, each context and model): its snapshot commit is
+// kept, and its calibration is on this Claude Code, this model and this sign-in.
 func (c *checker) contexts(ctx context.Context, p Project, e ReadinessEnv, d Design, version string) {
 	var seen []Arm
 	for _, a := range d.Arms {
-		if slices.ContainsFunc(seen, func(s Arm) bool { return s.Context == a.Context && s.Snapshot == a.Snapshot }) {
+		if slices.ContainsFunc(seen, func(s Arm) bool {
+			return s.Context == a.Context && s.Snapshot == a.Snapshot && s.Model == a.Model
+		}) {
 			continue
 		}
 		seen = append(seen, a)
-		if a.Snapshot != "" {
+		// a context's commit is checked once, with its first arm
+		if a.Snapshot != "" && !slices.ContainsFunc(seen[:len(seen)-1], func(s Arm) bool { return s.Snapshot == a.Snapshot }) {
 			if _, err := gitx.Run(ctx, "--git-dir", p.Bare, "cat-file", "-e", a.Snapshot+"^{commit}"); err != nil {
 				c.line(false, "context %s: its snapshot commit %s is gone from Agentium's repository", a.Context, ShortCommit(a.Snapshot))
 				continue
 			}
 		}
-		calibrate := "agentium run calibrate --model " + d.Model
+		calibrate := "agentium run calibrate --model " + d.ArmModel(a)
 		if a.Snapshot != "" {
 			calibrate += " --snapshot " + a.Context
 		}
@@ -114,9 +132,16 @@ func (c *checker) contexts(ctx context.Context, p Project, e ReadinessEnv, d Des
 
 // calibrated checks arm a's latest calibration; calibrate is the command that makes a new one.
 func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d Design, a Arm, version, calibrate string) {
-	stored, err := p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
+	stored, err := p.CalibrationFor(ctx, d, a)
+	if errors.Is(err, store.ErrNotFound) && !d.PerArmProfiles() { // a calibration on another model: say so below
+		stored, err = p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
+	}
 	if errors.Is(err, store.ErrNotFound) {
-		c.line(false, "context %s is not calibrated: %s", a.Context, calibrate)
+		if d.PerArmProfiles() {
+			c.line(false, "context %s is not calibrated on %s (arm %s): %s", a.Context, a.Model, a.Name, calibrate)
+		} else {
+			c.line(false, "context %s is not calibrated: %s", a.Context, calibrate)
+		}
 		return
 	}
 	if err != nil {
@@ -141,10 +166,12 @@ func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d D
 	switch {
 	case version != "" && cal.CLIVersion != version:
 		c.line(false, "context %s was calibrated on Claude Code %s, not %s: %s", a.Context, cal.CLIVersion, version, calibrate)
-	case cal.RequestedModel != d.Model:
-		c.line(false, "context %s was calibrated with %s, not %s: %s", a.Context, orNone(cal.RequestedModel), d.Model, calibrate)
+	case cal.RequestedModel != d.ArmModel(a):
+		c.line(false, "context %s was calibrated with %s, not %s: %s", a.Context, term.OrNone(cal.RequestedModel), d.ArmModel(a), calibrate)
 	case cal.SignIn != e.SignIn:
-		c.line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, orNone(cal.SignIn), e.SignIn, calibrate)
+		c.line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, term.OrNone(cal.SignIn), e.SignIn, calibrate)
+	case d.PerArmProfiles():
+		c.line(true, "context %s calibrated on %s %s: first request %d tokens", a.Context, a.Model, stored.CreatedAt.Format("2006-01-02 15:04"), cal.FirstRequest)
 	default:
 		c.line(true, "context %s calibrated %s: first request %d tokens", a.Context, stored.CreatedAt.Format("2006-01-02 15:04"), cal.FirstRequest)
 	}
@@ -214,11 +241,4 @@ func snapshotFlags(arms []Arm) string {
 		}
 	}
 	return flags
-}
-
-func orNone(value string) string {
-	if value == "" {
-		return "none found"
-	}
-	return value
 }
