@@ -13,6 +13,7 @@ package claudectx
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"path"
 	"regexp"
@@ -248,7 +249,7 @@ func (r *resolver) classify(p string) {
 		if data, ok := r.read(p); ok {
 			r.add(p, KindCommand, data, descriptionBytes(data), "")
 		}
-	case p == ".claude/settings.json" || p == ".mcp.json" || strings.HasPrefix(p, ".claude/hooks/"):
+	case IsHarness(p):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindHarness, data, 0, "")
 		}
@@ -258,6 +259,151 @@ func (r *resolver) classify(p string) {
 			r.importers = append(r.importers, importer{p, data, false})
 		}
 	}
+}
+
+// IsHarness reports whether Claude Code reads the file at p, a repository path, to decide what runs rather than as
+// text for the model: project settings (hooks, env, permissions, helpers), hook scripts and MCP servers. Resolve
+// classifies with it, and the pull-request screen refuses changes to these files. The paths are lower case and exact;
+// a caller that must also catch variants a case-insensitive file system would load folds the path first.
+func IsHarness(p string) bool {
+	return p == ".claude/settings.json" || p == ".mcp.json" || strings.HasPrefix(p, ".claude/hooks/")
+}
+
+// harnessFields are frontmatter fields of skills, subagents and commands that change what runs rather than what the
+// model reads (Claude Code's skills and subagents docs, CLI 2.1): hooks run commands outside the Bash sandbox,
+// mcpServers start servers, allowed-tools and permissionMode grant tools without asking, and memory gives a subagent
+// a memory folder that outlives the session (from the docs as recalled, unverified: a field Claude Code lacks only
+// costs a refusal). They are compared normalized: lower case, without "-", "_" or spaces.
+var harnessFields = []string{"hooks", "mcpservers", "allowedtools", "permissionmode", "memory"}
+
+// HarnessFields is what a skill's, subagent's or command's frontmatter says about what runs.
+type HarnessFields struct {
+	Fields []string // the harness fields declared, at any nesting level, normalized (see harnessFields)
+	// Doubt says why the frontmatter cannot be read safely (YAML syntax this reader does not parse at a key, a
+	// delimiter some parser might read differently, no closing line); a doubt counts as harness.
+	Doubt string
+	// Text is the frontmatter, which is what names the commands its hooks run (the whole rest of the file when in
+	// doubt); the body is prose for the model.
+	Text string
+}
+
+// Harness reports whether the frontmatter changes what runs, or may.
+func (h HarnessFields) Harness() bool { return len(h.Fields) > 0 || h.Doubt != "" }
+
+// HarnessFrontmatter reads the frontmatter of a skill, subagent or command for harness fields. It fails closed: only
+// plain and simply quoted keys in block style are read, and anything else at a key position (flow mappings or
+// sequences, explicit keys, tags, anchors, aliases, merge keys, directives, escapes in quoted keys) is a doubt. So is
+// a delimiter line a different parser might honor: a "---" that is not alone on its line, a "..." end marker, a
+// frontmatter that is not closed, or one after a byte-order mark or blank lines. The body is never read.
+func HarnessFrontmatter(data []byte) HarnessFields {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimPrefix(string(data), "\ufeff"), "\r\n", "\n"), "\n")
+	if strings.TrimRight(lines[0], " \t\r") != "---" {
+		for _, line := range lines {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				if strings.HasPrefix(trimmed, "---") {
+					return HarnessFields{Doubt: "a --- line that might open frontmatter", Text: strings.Join(lines, "\n")}
+				}
+				break
+			}
+		}
+		return HarnessFields{}
+	}
+	var h HarnessFields
+	keyIndent, contentIndent := -1, -1 // inside a block scalar: its key's column, and its content's once known
+	for i := 1; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \t\r")
+		switch {
+		case line == "---":
+			h.Text = strings.Join(lines[1:i], "\n")
+			return h
+		case strings.HasPrefix(line, "---") || line == "...":
+			h.Doubt = fmt.Sprintf("the line %q might end the frontmatter", line)
+			h.Text = strings.Join(lines[1:], "\n")
+			return h
+		case strings.ContainsAny(lines[i], yamlBreaks) && h.Doubt == "":
+			// YAML also breaks lines at a lone CR, NEL, LS and PS, so one line here may hold several keys there.
+			h.Doubt = fmt.Sprintf("a line break other than LF or CRLF in the frontmatter line %q", line)
+		}
+		if keyIndent >= 0 && strings.TrimSpace(line) != "" {
+			spaces := len(line) - len(strings.TrimLeft(line, " "))
+			switch {
+			case spaces <= keyIndent && line[spaces] == '\t':
+				h.Doubt = cmp.Or(h.Doubt, fmt.Sprintf("a tab where a block scalar may end, in the frontmatter line %q", line))
+			case spaces > keyIndent && contentIndent < 0:
+				contentIndent = spaces
+			case spaces > keyIndent && spaces < contentIndent:
+				h.Doubt = cmp.Or(h.Doubt, fmt.Sprintf("a dedent inside a block scalar, in the frontmatter line %q", line))
+			}
+			if spaces > keyIndent {
+				continue // block scalar text, however it starts (Markdown lists, links, emphasis)
+			}
+			keyIndent, contentIndent = -1, -1
+		}
+		if keyIndent < 0 {
+			keyIndent = h.scan(line)
+		}
+	}
+	h.Doubt = "the frontmatter has no closing --- line"
+	h.Text = strings.Join(lines[1:], "\n")
+	return h
+}
+
+// yamlBreaks are the characters YAML 1.2 reads as line breaks, besides LF (and the CR of CRLF, already joined).
+const yamlBreaks = "\r\u0085\u2028\u2029"
+
+// blockScalar matches a value that starts a block scalar: | or >, with an optional chomping indicator and an optional
+// comment. An explicit indentation indicator (a digit) is left out on purpose: it can claim more indentation than the
+// text has, so its lines are scanned as keys instead (fail closed).
+var blockScalar = regexp.MustCompile(`^[|>][-+]?(?:[ \t]+#.*)?$`)
+
+// scan reads one frontmatter line for a key. When the key's value starts a block scalar, it returns the key's column,
+// so the caller reads the more indented lines that follow as text; otherwise it returns -1.
+func (h *HarnessFields) scan(line string) int {
+	rest := strings.TrimLeft(line, " \t")
+	for rest == "-" || strings.HasPrefix(rest, "- ") || strings.HasPrefix(rest, "-\t") { // sequence items
+		rest = strings.TrimLeft(rest[1:], " \t")
+	}
+	if rest == "" || rest[0] == '#' {
+		return -1
+	}
+	doubt := func(why string) {
+		if h.Doubt == "" {
+			h.Doubt = fmt.Sprintf("%s in the frontmatter line %q", why, line)
+		}
+	}
+	if strings.ContainsRune("{[?!&*%@`|><", rune(rest[0])) {
+		doubt("YAML syntax this reader does not parse at a key")
+		return -1
+	}
+	key, value := "", ""
+	if quote := rest[0]; quote == '"' || quote == '\'' {
+		end := strings.IndexByte(rest[1:], quote)
+		if end < 0 {
+			doubt("a quoted key or value that spans lines")
+			return -1
+		}
+		inner, after := rest[1:1+end], strings.TrimLeft(rest[2+end:], " \t")
+		if strings.Contains(inner, `\`) || (quote == '\'' && strings.HasPrefix(after, "'")) {
+			doubt("an escape in a quoted key")
+			return -1
+		}
+		if !strings.HasPrefix(after, ":") {
+			return -1 // a quoted value continuing from an earlier line
+		}
+		key, value = inner, after[1:]
+	} else if before, after, ok := strings.Cut(rest, ":"); ok {
+		key, value = before, after
+	} else {
+		return -1 // a value continuing from an earlier line
+	}
+	key = strings.ToLower(strings.NewReplacer("-", "", "_", "", " ", "", "\t", "").Replace(key))
+	if slices.Contains(harnessFields, key) && !slices.Contains(h.Fields, key) {
+		h.Fields = append(h.Fields, key)
+	}
+	if blockScalar.MatchString(strings.TrimSpace(value)) {
+		return len(line) - len(rest)
+	}
+	return -1
 }
 
 // LoadsByPresence reports whether a file at p is context just by existing (instruction files, .claude, .mcp.json), as
@@ -427,17 +573,19 @@ func (r *resolver) linked() []string {
 	return linked
 }
 
-// frontmatter returns the YAML frontmatter lines, if the file starts with "---".
+// frontmatter returns the YAML frontmatter lines: the file opens with a "---" line (trailing spaces allowed), and the
+// frontmatter ends at the first later line that is exactly "---" once trailing spaces are trimmed.
 func frontmatter(data []byte) []string {
-	text := strings.ReplaceAll(string(data), "\r\n", "\n")
-	if !strings.HasPrefix(text, "---\n") {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if strings.TrimRight(lines[0], " \t\r") != "---" {
 		return nil
 	}
-	end := strings.Index(text[4:], "\n---")
-	if end < 0 {
-		return nil
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimRight(lines[i], " \t\r") == "---" {
+			return lines[1:i]
+		}
 	}
-	return strings.Split(text[4:4+end], "\n")
+	return nil
 }
 
 func frontmatterField(data []byte, key string) string {

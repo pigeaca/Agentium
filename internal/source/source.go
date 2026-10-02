@@ -78,11 +78,17 @@ func (w *workingTree) Executable(p string) bool {
 
 // Commit reads commit through git, located by where (e.g. "-C", root or "--git-dir", bare).
 func Commit(ctx context.Context, commit string, where ...string) (Source, error) {
-	out, err := gitx.Output(ctx, nil, append(where, "ls-tree", "-r", "-z", commit)...)
+	return CommitEnv(ctx, nil, commit, where...)
+}
+
+// CommitEnv is Commit with extra environment variables on every git call it makes, listing and reads alike (for
+// example GIT_NO_LAZY_FETCH=1, so a read never fetches a missing object from a promisor remote).
+func CommitEnv(ctx context.Context, env []string, commit string, where ...string) (Source, error) {
+	out, err := gitx.OutputEnv(ctx, env, nil, append(where, "ls-tree", "-r", "-z", commit)...)
 	if err != nil {
 		return nil, err
 	}
-	c := &commitSource{ctx: ctx, where: where, commit: commit, modes: map[string]string{}}
+	c := &commitSource{ctx: ctx, env: env, where: where, commit: commit, modes: map[string]string{}}
 	for _, entry := range splitNUL(string(out)) { // "<mode> <type> <object>\t<path>"
 		meta, p, ok := strings.Cut(entry, "\t")
 		fields := strings.Fields(meta)
@@ -98,6 +104,7 @@ func Commit(ctx context.Context, commit string, where ...string) (Source, error)
 
 type commitSource struct {
 	ctx    context.Context // Source methods take no context; reads use the one the view was created with
+	env    []string
 	where  []string
 	commit string
 	paths  []string
@@ -115,7 +122,7 @@ func (c *commitSource) ReadFile(p string) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s: %w", p, os.ErrNotExist)
 		}
-		data, err := gitx.Output(c.ctx, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+		data, err := gitx.OutputEnv(c.ctx, c.env, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
 		if err != nil || mode != "120000" {
 			return data, err
 		}
@@ -126,6 +133,44 @@ func (c *commitSource) ReadFile(p string) ([]byte, error) {
 		p = target
 	}
 	return nil, fmt.Errorf("%s: too many symbolic links", p)
+}
+
+// Link reports whether p is a symbolic link in src and, if it is, the target as stored: not cleaned, not followed and
+// possibly outside the repository. Sources that do not record links (in-memory test sources) report false. Only the
+// link itself is read, through git for a commit, so a hostile target is data, never opened.
+func Link(src Source, p string) (target string, ok bool, err error) {
+	if l, isLinker := src.(linker); isLinker && Has(src, p) {
+		return l.link(p)
+	}
+	return "", false, nil
+}
+
+// linker is a Source that knows which of its files are symbolic links.
+type linker interface {
+	link(p string) (string, bool, error)
+}
+
+func (c *commitSource) link(p string) (string, bool, error) {
+	if c.modes[p] != "120000" {
+		return "", false, nil
+	}
+	data, err := gitx.OutputEnv(c.ctx, c.env, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+	if err != nil {
+		return "", true, fmt.Errorf("read the symbolic link %s: %w", p, err)
+	}
+	return string(data), true, nil
+}
+
+func (w *workingTree) link(p string) (string, bool, error) {
+	full := filepath.Join(w.root, filepath.FromSlash(p))
+	if info, err := os.Lstat(full); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false, nil
+	}
+	target, err := os.Readlink(full)
+	if err != nil {
+		return "", true, fmt.Errorf("read the symbolic link %s: %w", p, err)
+	}
+	return filepath.ToSlash(target), true, nil
 }
 
 // Has reports whether p is a file in src.
