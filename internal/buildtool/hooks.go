@@ -326,8 +326,15 @@ func (h Host) terminate(ctx context.Context, pid int, stillTheSame func() bool) 
 // clonefile, Linux reflinks), so a distribution of hundreds of megabytes costs neither time nor space; the copy is
 // independent: writing in it never changes src.
 func cloneTree(ctx context.Context, src, dst string) error {
+	_, err := copyTree(ctx, src, dst)
+	return err
+}
+
+// copyTree is cloneTree, and returns how it copied: the cp command that succeeded. cp clones file by file, so a tree of
+// thousands of files takes seconds even where it clones (CloneFolder clones a whole folder in one call).
+func copyTree(ctx context.Context, src, dst string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
+		return "", err
 	}
 	var attempts [][]string
 	switch runtime.GOOS {
@@ -340,16 +347,17 @@ func cloneTree(ctx context.Context, src, dst string) error {
 	var last error
 	for _, args := range attempts {
 		os.RemoveAll(dst) // a failed attempt may leave a part
+		how := "cp " + strings.Join(args[:len(args)-2], " ")
 		out, err := exec.CommandContext(ctx, "cp", args...).CombinedOutput()
 		if err == nil {
-			return nil
+			return how, nil
 		}
-		last = fmt.Errorf("cp %s: %w: %s", strings.Join(args[:len(args)-2], " "), err, strings.TrimSpace(string(out)))
+		last = fmt.Errorf("%s: %w: %s", how, err, strings.TrimSpace(string(out)))
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return last
+	return "", last
 }
 
 // userHome returns the folder named by environ's variable name when it is absolute, else def.

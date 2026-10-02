@@ -56,6 +56,7 @@ func mavenProfile() Profile {
 			}
 			return env
 		},
+		GradeEnv: jvmGradeEnv,
 		// One real test class of the base, so the build resolves and compiles what the tests need and fetches the test
 		// plugin and its provider exactly as an agent's `mvn test` will; none found (a multi-module layout, say): a
 		// selector that matches nothing, which may leave the provider unfetched (the step 5 pilot checks both).

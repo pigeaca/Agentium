@@ -63,6 +63,7 @@ func gradleProfile() Profile {
 			return env
 		},
 		LocalBinding: true,
+		GradeEnv:     gradleGradeEnv,
 		// Three steps: the compile classpaths, the test task with a filter that selects nothing (it fails for that
 		// reason, after resolving the test runtime classpath), then every other resolvable configuration of every
 		// project (Checkstyle, JaCoCo, ...: the agent may run tasks that `test` does not reach), through an init script
