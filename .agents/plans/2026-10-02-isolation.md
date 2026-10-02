@@ -1,7 +1,7 @@
 # Isolation: sandboxed grading on macOS, then a container mode
 
 - Date: 2026-10-02
-- Status: Planned (2026-10-02), awaiting the user's answers to the open questions. Planning only: no code yet.
+- Status: Ready (2026-10-02): the user answered the open questions (see Decisions). Part 1 starts with step 0, the free spike.
 - Scope: the user's "plan all" (2026-10-02). Part 1 comes first; part 2 is its own later track, planned here in shape only. It closes the [Java and Rust plan](archive/2026-09-30-java-rust.md)'s open threat and the [Python plan](2026-10-02-python-ts.md)'s decision 5.
 
 ## The threat today (from the code)
@@ -74,13 +74,13 @@ Steps go in order. Each is one PR with green CI, the reviewer's [threat checklis
 - **First spike** (needs Docker running; the user starts Docker Desktop or colima, and Agentium never installs or starts tools): build the Go image with the Claude Code layer; run 2–4 sessions on small Go tasks (this repository's or samber/lo's), graded in a second container; measure build and start time, egress (only the API reachable), stream-json parity, and cost and time against local runs.
   - *Estimate:* about $0.20–1.25 per session (samber/lo averaged $0.19 per run; Phase 1's Go runs averaged $1.23), so $1–5 with a calibration, **capped at $6**. Separate approval.
 
-## Open questions for the user
-1. **Default mode:** once step 3 lands, should new experiments on macOS grade in the sandbox by default, with `--grader host` as an explicit opt-out?
-2. **Loopback in grading:** allowed by default (`httptest` and Gradle need it; local services such as a database or a Docker TCP port become reachable to the build), or opt-in per project, like Gradle's local binding for agents?
-3. **A failed grade with flagged denials:** count it as a fail when the denial is one the agent's own sandbox also imposes (network, writes outside), and otherwise as infrastructure (retried or left out)?
-4. **Grading cost:** accept slower grades for a per-run cache clone, to close the poisoning path?
-5. **Re-validation:** should locking in sandbox mode re-validate tasks validated on the host automatically (time, no money), or refuse and ask?
-6. **Part 2:** approve direct Docker over Harbor (then a decision record), the $6 spike, and an API key only, or also the subscription token?
+## Decisions (the user, 2026-10-02)
+1. **Default mode:** new experiments on macOS grade in the sandbox; `--grader host` opts out. Existing experiments keep their mode.
+2. **Loopback in grading:** allowed by default, as in the agent's own sandbox.
+3. **A failed grade with flagged denials:** a fail only when the agent's own sandbox imposes the same limit; otherwise infrastructure (retried or left out).
+4. **Grading cost:** a per-run cache clone is accepted, to close the poisoning path.
+5. **Re-validation:** locking in sandbox mode re-validates host-validated tasks automatically (time, no money).
+6. **Part 2:** Docker driven directly, not through Harbor ([decision](../decisions/2026-10-02-containers-direct-docker.md)). Sign-in by `ANTHROPIC_API_KEY` or a subscription token file (`AGENTIUM_CLAUDE_TOKEN_FILE`), both mounted read-only; the subscription's usage windows are a first-class budget (the user checks the plan's terms for automated use). The container spike (about $1–5, cap $6) needs Docker started by the user and its own approval.
 
 ## Metrics
 - Agent: <client> / <exact model id> / <effort>

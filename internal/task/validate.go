@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -99,7 +100,13 @@ type Validation struct {
 	WeakTests *WeakTests `json:"weak_tests,omitempty"`
 	// Judge is the check of a judge-graded task (ValidateJudged), which runs nothing; nil for test-graded tasks.
 	Judge *JudgeCheck `json:"judge,omitempty"`
+	// Toolchain is the build tools' versions the stages ran with (Validator.Toolchain). Absent: unknown (validations
+	// before it was recorded, judge-graded tasks, callers that do not detect it), which never makes a validation stale.
+	Toolchain Toolchain `json:"toolchain,omitempty"`
 }
+
+// Toolchain maps a build tool ("go", "java", "cargo", ...) to its version as the tool reports it on the host.
+type Toolchain map[string]string
 
 // RepeatCount is how many times each stage ran: 1 when Repeats is absent.
 func (v Validation) RepeatCount() int {
@@ -125,11 +132,14 @@ type Validator struct {
 	// Started, when set, is called before each stage: it only feeds a status display and must not print.
 	Started func(arm, stage string)
 	Now     func() time.Time
+	// Toolchain, when set, is recorded in every validation made: the build tools' versions on this host, detected once
+	// by the caller (internal/pool's DetectToolchain), which compares them later to find stale validations.
+	Toolchain Toolchain
 }
 
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
 func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validation, error) {
-	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC()}
+	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC(), Toolchain: maps.Clone(v.Toolchain)}
 	if v.Repeats > 1 {
 		result.Repeats = v.Repeats
 	}

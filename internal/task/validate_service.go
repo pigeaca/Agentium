@@ -47,6 +47,12 @@ type Validating struct {
 	// ReferenceDiff returns the reference diff a judge-graded task's judge would read (judge.ReferenceDiff, which this
 	// package cannot import).
 	ReferenceDiff func(ctx context.Context, base, solution string, reference []string) (string, error)
+	// Toolchain is recorded in each validation (Validator.Toolchain); nil records none.
+	Toolchain Toolchain
+	// SkipInUse makes StoreValidation store nothing for a task that a locked experiment able to run still uses: it
+	// returns store.ErrTaskInUse instead (store.SetTaskValidationIdle). The task pool's re-validations set it; task
+	// validate, which the user asks for, does not.
+	SkipInUse bool
 }
 
 // ErrTaskChanged means a validation was not stored: the task's commands changed, or it was removed, while it ran.
@@ -103,20 +109,25 @@ func (v Validating) Arms(ctx context.Context, projectID int64, snapshots []strin
 func (v Validating) Validator(t store.Task, o ValidateOptions) Validator {
 	folder := filepath.Join(v.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), v.Now().UTC().Format("20060102T150405Z"))
 	return Validator{Bare: v.Bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Cache: v.Cache, Now: v.Now}
+		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Cache: v.Cache, Now: v.Now,
+		Toolchain: v.Toolchain}
 }
 
 // StoreValidation records result as t's validation, if t still has the verify and setup commands it was validated
-// with (ErrTaskChanged otherwise), and returns the task as stored now: edits made meanwhile (an instruction, the review
-// flag) are kept, not overwritten from t. It stores even when ctx is cancelled: a validation that finished is kept
-// through an interrupt.
+// with (ErrTaskChanged otherwise) and, with SkipInUse, no locked experiment able to run uses it (store.ErrTaskInUse),
+// and returns the task as stored now: edits made meanwhile (an instruction, the review flag) are kept, not overwritten
+// from t. It stores even when ctx is cancelled: a validation that finished is kept through an interrupt.
 func (v Validating) StoreValidation(ctx context.Context, t store.Task, result Validation, now time.Time) (store.Task, error) {
 	ctx = context.WithoutCancel(ctx)
 	encoded, err := json.Marshal(result)
 	if err != nil {
 		return t, fmt.Errorf("encode validation: %w", err)
 	}
-	stored, err := v.DB.SetTaskValidation(ctx, t.ID, t.Verify, t.Setup, encoded, now)
+	write := v.DB.SetTaskValidation
+	if v.SkipInUse {
+		write = v.DB.SetTaskValidationIdle
+	}
+	stored, err := write(ctx, t.ID, t.Verify, t.Setup, encoded, now)
 	if err != nil {
 		return t, err
 	}
@@ -175,6 +186,8 @@ func (r BatchResult) Problem() string {
 		return "interrupted"
 	case errors.Is(r.Err, ErrTaskChanged):
 		return r.Err.Error()
+	case errors.Is(r.Err, store.ErrTaskInUse):
+		return "not stored: " + r.Err.Error()
 	case r.Err != nil:
 		return "not validated: " + r.Err.Error()
 	}
@@ -251,7 +264,7 @@ func (v Validating) Batch(ctx context.Context, out BatchOutput, tasks []store.Ta
 		if !oc.started {
 			continue
 		}
-		r.Err, r.Stopped = oc.err, oc.err != nil && ctx.Err() != nil && !errors.Is(oc.err, ErrTaskChanged)
+		r.Err, r.Stopped = oc.err, oc.err != nil && ctx.Err() != nil && !errors.Is(oc.err, ErrTaskChanged) && !errors.Is(oc.err, store.ErrTaskInUse)
 		mu.Lock()
 		finished++
 		mu.Unlock()

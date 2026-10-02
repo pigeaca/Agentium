@@ -1,8 +1,8 @@
 # Judge: which arm fixed it better
 
 - Date: 2026-10-01
-- Status: Parked (2026-10-01): step 1a merged (#53). Step 1b and the rest wait for the judge gate in the [next chapter](../2026-10-01-next-chapter.md): the pilot gave pairs a NO-GO on order flips. Resume from this file.
-- Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
+- Status: In Progress (2026-10-02): resumed without the judge gate, by the user's decision ("integrate it without any proofs"). Step 1a merged (#53). Step 1b starts after `seq-v1` merges (it touches `internal/experiment` and `internal/report`). Because the pilot's NO-GO on order flips (11%) stands unrefuted, pair preferences are labeled "judge, unvalidated" in reports, are exploratory, and never count as a decisive verdict or toward the north star.
+- Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
 
 ## Why
 When both arms pass a task, tests cannot say which fix is better. The pilot's pair judge showed two things, without any labels:
