@@ -150,9 +150,18 @@ func TestInlineTestsPythonAndTypeScript(t *testing.T) {
 			map[string]string{"src/a.ts": vitest}, map[string]string{"src/a.ts": strings.Replace(vitest, "toBe(1)", "toBe(2)", 1)}, []string{"src/a.ts"}},
 		"code changes beside untouched in-source tests": {
 			map[string]string{"src/a.ts": vitest}, map[string]string{"src/a.ts": strings.Replace(vitest, "return 1; }\n\nif", "return 1 + 0; }\n\nif", 1)}, nil},
-		"the guard in a string or comment": {
+		"the guard in a string or comment is refused with the file (the lexer cannot tell it from a hidden one)": {
 			map[string]string{"src/a.ts": "export const a = 1;\n"},
-			map[string]string{"src/a.ts": "export const a = 2; // if (import.meta.vitest) { x }\nexport const s = 'import.meta.vitest {';\n"}, nil},
+			map[string]string{"src/a.ts": "export const a = 2; // if (import.meta.vitest) { x }\n"}, []string{"src/a.ts (an in-source test guard (import.meta.vitest) was seen 1 times but 0 could be parsed)"}},
+		"a backtick in a regex before the guard": {
+			map[string]string{"src/a.ts": "export const a = 1;\n"},
+			map[string]string{"src/a.ts": "export const a = (s) => s.replace(/`/g, '');\n" + vitest}, []string{"src/a.ts (an in-source test guard (import.meta.vitest) was seen 2 times but 0 could be parsed)"}},
+		"a slash-star in a regex before the guard": {
+			map[string]string{"src/a.ts": "export const a = 1;\n"},
+			map[string]string{"src/a.ts": "export const a = /a\\/*.ts/;\n" + vitest}, []string{"src/a.ts (an in-source test guard (import.meta.vitest) was seen 2 times but 0 could be parsed)"}},
+		"a character class with slash-star before the guard": {
+			map[string]string{"src/a.ts": "export const a = 1;\n"},
+			map[string]string{"src/a.ts": "export const a = /[/*]/;\n" + vitest}, []string{"src/a.ts (an in-source test guard (import.meta.vitest) was seen 2 times but 0 could be parsed)"}},
 		"unbalanced in-source block": {
 			map[string]string{"src/a.ts": "export const a = 1;\n"},
 			map[string]string{"src/a.ts": "if (import.meta.vitest) {\n  it('x', () => {});\n"}, []string{"src/a.ts (unbalanced braces: \"{\" opened on line 1 is never closed)"}},

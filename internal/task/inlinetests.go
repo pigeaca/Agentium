@@ -69,7 +69,8 @@ func pythonDoctests(src string) ([]string, error) {
 
 // vitestInSourceBlocks returns the text of each import.meta.vitest block of a TypeScript or JavaScript file, in
 // order: from the guard to the closing brace of the block that follows it (to the end of the line when no block
-// follows). Occurrences in comments and strings are ignored. An unbalanced block is an error. Limit: a test
+// follows). An unbalanced block is an error, and so is a file whose raw guard count differs from the guards found as code
+// (a comment or string mention, or a regular-expression literal the lexer mistook for a string or comment). Limit: a test
 // written outside such a block (a bare "describe" in a source file) is not seen.
 func vitestInSourceBlocks(src string) ([]string, error) {
 	if !strings.Contains(src, vitestInSource) {
@@ -91,7 +92,11 @@ func vitestInSourceBlocks(src string) ([]string, error) {
 		}
 		open := strings.IndexByte(src[i:i+stop], '{')
 		if open < 0 { // a guard alone on its line, the block starting on the next
-			if open = strings.IndexByte(src[i:], '{'); open < 0 || strings.Contains(src[i:i+open], ";") {
+			window := len(src) - i // the scan stops at the next guard, so a file of guard lines stays linear
+			if next := strings.Index(src[i+len(vitestInSource):], vitestInSource); next >= 0 {
+				window = len(vitestInSource) + next
+			}
+			if open = strings.IndexByte(src[i:i+window], '{'); open < 0 || strings.Contains(src[i:i+open], ";") {
 				out = append(out, src[i:i+stop])
 				i += stop
 				continue
@@ -103,6 +108,16 @@ func vitestInSourceBlocks(src string) ([]string, error) {
 		}
 		out = append(out, src[i:closeAt+1])
 		i = closeAt + 1
+	}
+	// The lexer has no regular-expression literals, so a backtick or "/*" inside one can hide a guard (a template
+	// literal or comment that never ends). Every raw occurrence must be one the lexer found as code; otherwise the
+	// file is refused, which is also what a guard in a comment or string costs (the caller refuses; nothing is missed).
+	parsed := 0 // occurrences inside the blocks found (the block's own guard and uses such as "= import.meta.vitest")
+	for _, b := range out {
+		parsed += strings.Count(b, vitestInSource)
+	}
+	if raw := strings.Count(src, vitestInSource); raw != parsed {
+		return nil, fmt.Errorf("an in-source test guard (%s) was seen %d times but %d could be parsed", vitestInSource, raw, parsed)
 	}
 	return out, nil
 }
