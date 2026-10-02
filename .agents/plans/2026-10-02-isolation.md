@@ -1,7 +1,7 @@
 # Isolation: sandboxed grading on macOS, then a container mode
 
 - Date: 2026-10-02
-- Status: Ready (2026-10-02): the user answered the open questions (see Decisions). Part 1 starts with step 0, the free spike.
+- Status: In progress (2026-10-02): the user answered the open questions (see Decisions). Step 0, the free spike, is done; step 1 is next.
 - Scope: the user's "plan all" (2026-10-02). Part 1 comes first; part 2 is its own later track, planned here in shape only. It closes the [Java and Rust plan](archive/2026-09-30-java-rust.md)'s open threat and the [Python plan](2026-10-02-python-ts.md)'s decision 5.
 
 ## The threat today (from the code)
@@ -18,33 +18,137 @@
 - **Mode:** a grader mode, `host` or `sandbox-v1`. In sandbox mode every grading and validation command runs as `/usr/bin/sandbox-exec -f <profile> /bin/sh -c <command>`, inside its own process group as today.
 - **Profile source: Agentium's own generator** (a new `internal/sandbox`), written in Go and modeled on the rule set of Claude Code 2.1.285. It is not taken from Claude Code itself. Reasons:
   - Claude Code's generator is internal to its binary (the leak checks extracted it with a throwaway harness), and Claude Code changed version five times in three days. Its npm sandbox runtime would be a Node dependency needing [approval](../rules/supply-chain.md).
-  - `(allow default)` is too weak: mach lookups to the security server would let a build script read the keychain. The profile is deny-default, with Claude Code's process, sysctl and mach allowlist.
+  - `(allow default)` is too weak: mach lookups to the security server would let a build script read the keychain. The profile is deny-default, with Claude Code's process and sysctl allowlist. Its mach allowlist is narrowed: Claude Code's own allows the security server (step 0).
   - Our own is versioned with Agentium (records name the grader), reviewable, and can express rules Claude Code's settings lack (the loopback rule below). The step 0 spike compares the two on the same fixtures and explains each difference.
 - **The profile:** no network, except loopback when needed (below). Writes only to the grading copy, the run's grading cache, its temp root and `/dev/null`. Reads everything except the denied paths runs already use (`run.Env.denied`, with the grading copy and the run's folders allowed, plus credential files and the token file's folder), in their real forms; deps read-only. `forms`, `realForm` and the `/tmp` owner rule move from `internal/claude` to `internal/sandbox`, one implementation for both.
 - **Toolchains:** the host's own, as in the agent's run, so agent and grader see the same JDK, Go and Python: the fairness argument against grading in Linux containers.
-- **The grader's environment is the agent's recipe** (the profiles' `AgentEnv`, `PrepareRun`, deps read-only), already proven offline in this sandbox for Go, Maven, Gradle, Cargo and Python, instead of the shared `CommandEnv`. Its cache is per run (a shared writable one is the poisoning path): an APFS clone (`cp -Rc`) of a seed only trusted commands write (validation, warm-up), removed after grading.
+- **The grader's environment is the agent's recipe** (the profiles' `AgentEnv`, `PrepareRun`, deps read-only), already proven offline in this sandbox for Go, Maven, Gradle, Cargo and Python, instead of the shared `CommandEnv`. Two additions from step 0:
+  - for the JVM profiles, `JAVA_TOOL_OPTIONS=-Djava.io.tmpdir=<temp root>`;
+  - for Gradle, `GRADLE_DAEMON_BIND_ADDRESS=::1`, with no IPv4-only flag.
+
+  Its cache is per run (a shared writable one is the poisoning path): a clone of a seed only trusted commands write (validation, warm-up), removed after grading. The clone is one `clonefile(2)` call on the seed folder, not `cp -Rc`, which clones file by file (step 0 timing).
 - **Fail closed:** a canary under the same profile first runs `/usr/bin/true`, writes the temp root and fails to read a denied path. If `sandbox-exec` is missing, refused or nested (Agentium inside a sandbox), the grade is an infrastructure outcome (retried or left out), never a fail, never a host grade instead.
 
 ### What will break under a sandboxed grader
 - **Gradle's file-lock service** binds a local UDP socket: Gradle grading needs local binding.
-- **Gradle worker daemons** (Checkstyle, PMD, CodeNarc, forked compilers) connect back over `::ffff:127.0.0.1`, which `localhost:*` does not match, and Gradle strips `JAVA_TOOL_OPTIONS` from workers. Our profile can try a rule Claude Code's settings lack (the IPv4-mapped loopback); the spike decides. If none works, **grading Checkstyle tasks fails**, and sandboxed validation marks them not gradeable before any run.
+- **Gradle worker daemons** (Checkstyle, PMD, CodeNarc, forked compilers) connect back over `::ffff:127.0.0.1`, which `localhost:*` does not match, and Gradle strips `JAVA_TOOL_OPTIONS` from workers. **Settled by step 0:** no seatbelt rule names that address. The fix is Gradle's own `GRADLE_DAEMON_BIND_ADDRESS=::1`, which makes the build listen on and announce `::1`, which `localhost:*` matches. Checkstyle passed with it. Without it, Gradle does not even start under a loopback-only profile (its single-use daemon listens on `127.0.0.1`, which a JVM opens as `::ffff:127.0.0.1`).
+- **JVM temp files:** on macOS the JVM takes `java.io.tmpdir` from the user's `/var/folders/<x>/T`, not from `TMPDIR`, and the sandbox denies writes there (jackson-core: 5 errors under our profile, 35 under Claude Code's, which also lost a jansi lock). The grader sets it to the temp root. The agent's sandbox has the same limit today.
 - **Tests that need sockets:** Go's `httptest` and servers on `127.0.0.1:0` need loopback bind and connect. Tests needing the internet, Docker, Testcontainers or a local database fail.
 - **A dependency the agent added** can no longer be fetched at grading (the agent's sandbox never could): a fail, made readable with `GOPROXY=off` and offline flags; a recorded difference between modes.
 - **Tests that write outside the copy** fail: `~/Library/Caches`, `$HOME` dotfiles, the keychain, `launchctl`.
 - **Telling a sandbox failure from a test failure.** A sandboxed grade never silently turns a real pass into a fail:
   1. **Validation in the same mode.** A lock in sandbox mode accepts only tasks whose last validation ran in that mode with the same profile version (a new `Validation.Grader` JSON field, so no migration). The reference solution passing in the sandbox proves the environment can grade a correct solution.
   2. **The canary** separates "the sandbox did not start" (infrastructure) from "the tests ran".
-  3. **Denials are recorded.** The spike picks the source: the unified log's sandbox reports for the grade's process group, else the commands' output. A failed grade with denials outside what the agent's own sandbox imposes is flagged in the record and the report (open question 3 decides whether it counts).
+  3. **Denials are recorded.** Source (step 0): the unified log, matched by a tag unique to each grade, which the profile names in `(deny default (with message "<tag>"))`. A failed grade with denials outside what the agent's own sandbox imposes is flagged in the record and the report; decision 3 says how it counts.
 
 ### Compatibility
 - Records gain `grader` and the profile digest; the lock gains `grader`. Empty means `host`, so old records keep their meaning and old locks resume unchanged. A run or resume whose grader differs from the lock is refused: one experiment never mixes modes. The report shows the mode.
 - Comparability is measured: step 4 grades the same kept agent trees in both modes and records how often they agree.
 
 ### Work
-- [ ] **0. Spike** (free, no agent run; not code). Risk: low.
+- [x] **0. Spike** (free, no agent run; not code). Risk: low.
   - Hand-written profiles, ours and Claude Code 2.1.285's extracted one, on fixtures: Go with `httptest`, Maven (jackson-core), Gradle with Checkstyle (junit-pioneer b8b747c), Cargo with `build.rs` (bytes), pytest with `conftest.py`.
   - *Acceptance:* each fixture matches its host result or names its break; the worker-daemon loopback rule is settled; the denial source is readable without admin rights; keychain and credential reads, deps writes and network are denied; a warm seed's clone time is measured.
   - *Packages:* none.
+  - **Done 2026-10-02.** No Claude Code session ran and nothing was spent.
+    - *The harness* (throwaway, not committed):
+      - a scratch copy of the module, printing what `claude.Invocation` builds for a run: the environment, the settings and `DeniedPaths`, and running `buildtool`'s warm-ups and `PrepareRun`;
+      - Claude Code 2.1.285's profile function (`WV` and its helpers), extracted from its binary and called from Node with the run's settings;
+      - our profile, written by a short Python script.
+    - *The fixtures* were cloned into a scratch folder, never into a user's repository. Their deps were warmed there with network, by the profiles' recipes (Python's from its plan).
+    - *A fake data folder:*
+      - the grading copy at `<data>/records/<run>/verify`, as `run.Env.grade` keeps it;
+      - the grading cache at `<data>/cache/grading/<run>`;
+      - another run's records and workspace, a shared cache entry, a database and a project repository;
+      - a temp root per run.
+    - *Each grade* started from a fresh copy and an empty cache, in the agent's environment (`Invocation.Command`'s, less Claude Code's own variables, with `TMPDIR` set to the temp root). The host grade used the same environment.
+    - *Claude Code's profile* got the run's settings, plus `allowRead` for the grading copy, cache and temp root, which lie inside the denied `records` and `cache`. The `denyWrite` entries that hold those three were dropped; writes are denied by default anyway. No proxy ports.
+    - *A deviation:* the temp root was not one of Agentium's short `/tmp` roots, so the shared Claude Code temp folders were not denied; the scratch folder lay inside one.
+  - **Per fixture.** The commands, from the grading copy:
+    - Go: `go test ./...` (GOMODCACHE in the deps folder, `GOPROXY=off`);
+    - Maven: `./mvnw -B test`;
+    - Gradle: `./gradlew checkstyleMain checkstyleTest`, then `./gradlew test --tests DisabledUntilExtensionTests --tests RetryingTestExtensionTests`;
+    - Cargo: `cargo test`, with a `build.rs` added as an agent would;
+    - Python: `python -m pytest tests --continue-on-collection-errors`.
+
+    | Fixture | Host | Our profile | Claude Code's profile (the run's settings) | Breaks and causes |
+    |---|---|---|---|---|
+    | Go: a scratch module, an `httptest` server and a module dependency | 2 passed | 2 passed | **fail**: `listen tcp6 [::1]:0: bind: operation not permitted` | Claude Code's settings give only Gradle projects local binding; ours allows loopback for every project |
+    | Maven: jackson-core `cacf488` | 1983 run, 0 failed, 2 skipped | the same, with the JVM temp folder set (without it: 5 errors) | 35 errors; with the JVM temp folder set, the same as the host | `java.io.tmpdir` is the user's `/var/folders/<x>/T`, which both profiles keep read-only. The grader points it at the temp root (`JAVA_TOOL_OPTIONS`); the agent's sandbox has the same limit today |
+    | Gradle with Checkstyle: junit-pioneer `b8b747c` (Gradle 9.7.1) | Checkstyle passed; 37 tests passed | the same with `GRADLE_DAEMON_BIND_ADDRESS=::1`; without it Gradle does not start | as configured, Gradle does not start ("Could not connect to the Gradle daemon"). With Claude Code's `-Djava.net.preferIPv4Stack=true`: the pilot's break (tests pass, the Checkstyle worker cannot connect). With `::1` and no IPv4-only flag: the same as the host | The IPv4-mapped loopback (below) |
+    | Cargo with `build.rs`: bytes `7930d93` | 1305 passed | 1305 passed | 1305 passed | none |
+    | pytest with `conftest.py`: click `06b2a67` | 2182 passed, 25 skipped, 1 xfailed, 1 collection error | the same | the same | None from the sandbox. The error is the Python recipe's known limit: `test_deprecations.py` calls `importlib.metadata.version("click")`, and the project is not installed. It belongs to the Python plan |
+
+    *Times* were noisy (other work shared the machine) and show no consistent cost of the sandbox:
+    - Go: 5–11 s;
+    - Maven: 17–24 s per mode, and once 131 s on the host, run beside the Cargo grades;
+    - Gradle: host 24–61 s, ours 31–156 s, Claude Code's 29–39 s;
+    - Cargo: 57–127 s;
+    - pytest: 3–16 s.
+  - **The worker-daemon loopback rule: no seatbelt rule exists.**
+    - A network address in a profile must have the host `*` or `localhost`. `127.0.0.1`, `::ffff:127.0.0.1`, `[::ffff:127.0.0.1]` and `lo0` are refused when the profile compiles ("host must be * or localhost").
+    - The `ip4`, `ip6`, `tcp`, `tcp4` and `tcp6` forms of `localhost:*` compile but do not match the mapped address. `remote-address`, `ip-prefix` and regexes do not exist.
+    - A Java probe under `localhost:*` rules: `::1` binds and connects; `127.0.0.1` is denied at bind and connect. Only `(allow network*)` or `*:*` lets it through.
+    - Gradle has no Unix-socket transport for workers.
+    - **The fix is in Gradle, not the profile.** Gradle 9.7.1's `InetAddressFactory` reads `GRADLE_DAEMON_BIND_ADDRESS`. Set to `::1`, the build listens on `::1` and tells workers that address. Workers lose the environment but get the address, connect over `::1`, and `localhost:*` matches them. With it, `checkstyleMain checkstyleTest` passed under both profiles.
+    - It conflicts with Claude Code's `-Djava.net.preferIPv4Stack=true` ("Unsupported address type").
+    - **For agents** (the Java plan's open item): Claude Code adds that flag to `JAVA_TOOL_OPTIONS` after the inherited value, unless the value already contains the flag. An inherited `-Djava.net.preferIPv4Stack=true -Djava.net.preferIPv4Stack=false` plus the bind address passed Checkstyle under Claude Code's profile (the JVM keeps the last value). This needs a real session, and it rests on Claude Code's internals.
+    - Gradle versions before 9.7.1 were not checked for the variable.
+    - **The rule for step 1:** `(allow network-bind (local ip "localhost:*"))`, `(allow network-inbound (local ip "localhost:*"))` and `(allow network-outbound (remote ip "localhost:*"))`.
+    - *Found:* the `localhost` bind and inbound rules also let a process listen on the wildcard address. A server inside our profile bound to `0.0.0.0` (or `::`) accepted a connection made to the machine's LAN address from outside the sandbox, on the same machine. A connection from another host was not tried. So a hostile build could serve the network while it grades: no outbound connect, but a party that can reach the machine could connect in. The firewall and NAT are the guard. Claude Code's `allowLocalBinding` (`*:*`) allows the same and more. No narrower seatbelt rule was found; step 1 records the limit.
+  - **Denial source** (without `sudo`; the account is an administrator, so a non-administrator account was not checked):
+    - `/usr/bin/log stream --style compact --predicate 'eventMessage ENDSWITH "<tag>"'` during the grade, or `/usr/bin/log show --last <n>m` with the same predicate afterwards. Use the absolute path: zsh has a `log` builtin.
+    - It prints the kernel's `Sandbox: <process>(<pid>) deny(1) <operation> <path>`, then the tag. The tag is the profile's `(deny default (with message "<tag>"))`, the mechanism Claude Code's own monitor uses; each grade needs its own tag.
+    - The kernel merges repeats ("10 duplicate reports for ...") and limits the rate, so counts are lower bounds.
+    - Tools add denials unrelated to the grade: `security`, for one, looks up `com.apple.diagnosticd` and `com.apple.analyticsd`. Claude Code's monitor ignores these lookups; ours should too.
+    - `sandbox-exec` reports nothing itself. The `(trace ...)` directive is accepted but writes nothing.
+    - For the canary: a nested `sandbox-exec`, a missing profile and a profile that does not compile all exit 65, which a test can also return; a command's own exit code passes through.
+  - **Hostile probes**, from the grading copy, with output thrown away (reads open the file and read nothing):
+
+    | Probe | Ours | Claude Code's (agent) profile |
+    |---|---|---|
+    | Mach lookup of `com.apple.SecurityServer` (no message sent) | denied | **allowed** |
+    | Keychain search (a made-up service name) | fails: no security server | **runs** (the login keychain is searched) |
+    | Read `~/Library/Keychains/login.keychain-db` | denied | **allowed** |
+    | `~/.ssh`, `~/.config/gh` | denied | denied |
+    | `~/.claude/.credentials.json`, `~/.pypirc`, `~/.netrc`, pip's `pip.conf`, uv's `credentials.toml` | absent on this machine (a missing path reads as missing, deny or not); ours lists them all | the first three are listed, pip's and uv's are not |
+    | Write the deps folder, the user's `GOMODCACHE`, another run's workspace, the shared cache | denied | denied |
+    | Read another run's hidden test, this run's own records, the shared cache, the database, the deps folder's Gradle home | denied | denied |
+    | `curl https://example.com`; `curl https://1.1.1.1`; TCP to 1.1.1.1:443; UDP to 1.1.1.1:53 | denied (no DNS; connect and send refused) | denied |
+    | Links planted in the grading copy, to the shared cache, `~/.ssh` and the deps folder (read, list, write) | denied | denied |
+    | Loopback TCP on `127.0.0.1` (Python) | allowed | allowed (Gradle settings) |
+
+    The Claude Code credential itself was not read: the permission system refused keychain access in this session (see the agent-run finding above). No probe file was left in the deps folder or `GOMODCACHE`.
+  - **Timing of the per-run cache.** Seeds:
+    - a run's Gradle home after a grade: 259 MB, 2,385 files;
+    - a Go build cache of this repository's tests: 147 MB, 1,890 files;
+    - six copies of both: 2.4 GB, 25,650 files.
+
+    Each was timed three times on a loaded machine:
+
+    | Seed | `clonefile(2)` on the folder | `cp -Rc` | `cp -R` | Removal |
+    |---|---|---|---|---|
+    | Gradle home | 0.03–0.13 s | 0.9–3.5 s | 0.7–6.1 s | 0.9–1.4 s |
+    | Go build cache | 0.03–0.14 s | 0.9–1.9 s | 1.8–3.1 s | 0.3–0.8 s |
+    | 2.4 GB, 25,650 files | 0.40–0.53 s | 11–22 s | 11–38 s | 2–15 s |
+
+    `cp -Rc` clones file by file and costs about as much as a plain copy. One `clonefile(2)` call on the folder costs under a second even for the large seed. Removal is the larger cost; it can run after the grade, off the critical path. Go reaches `clonefile` through the cgo the SQLite driver already needs, or through `golang.org/x/sys/unix`, a new module that needs [approval](../rules/supply-chain.md).
+  - **Recommended profile source for step 1: our own (confirmed).** Claude Code's profile, as the run's settings build it:
+    - has no loopback for non-Gradle projects;
+    - keeps the security server and the keychain files open;
+    - binds any local address when local binding is on;
+    - lacks pip's and uv's credential stores.
+
+    Ours, as the spike ran it:
+    - `(deny default (with message "<tag>"))`;
+    - Claude Code's process and sysctl rules;
+    - Mach lookups only for `opendirectoryd.libinfo`, `opendirectoryd.membership`, `bsd.dirhelper`, `logd`, `system.logger` and `system.notification_center`. The security server, launch services, fonts, audio and power were dropped, and none of the five fixtures needed them;
+    - reads everywhere except the whole data folder and the run's denied paths (`DeniedPaths`), plus `~/Library/Keychains`, `~/.config/pip`, `~/Library/Application Support/pip`, `~/.config/uv` and `~/.local/share/uv/credentials`. `~/.local/share/uv/python` stays readable. Then the grading copy, its cache, the temp root and the project's deps are allowed, then `DepsDenied` is denied again;
+    - metadata reads of those folders' parents only;
+    - writes to the grading copy, the cache, the temp root and the standard devices only;
+    - the loopback rule above.
+
+    Our profile closed every gap found in Claude Code's: the security server and the keychain files denied, loopback for every project, pip's and uv's credential stores denied. The grader's environment adds the two variables under Design.
 - [ ] **1. `internal/sandbox`:** the profile generator, the moved `forms`, the canary, and a wrapper that turns a `runner.Spec` into a sandboxed one. **Risk: high** (sandbox, credentials and network).
   - *Threats:* a hostile agent (a grading copy holding links to deps, the data folder or `/tmp` entries is written through to the real path and denied); credentials (keychain, token file, `~/.ssh`); concurrent runs (each grade has its own profile file, cache and temp root).
   - *Acceptance:* golden profile tests, plus darwin-only tests that really run `sandbox-exec` for each deny; the moved `forms` keeps its tests.
