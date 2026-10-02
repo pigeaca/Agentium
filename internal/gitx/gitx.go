@@ -53,6 +53,26 @@ func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...strin
 	return out, nil
 }
 
+// PartialClone reports whether the repository at dir is a partial clone (cloned with --filter): its config names a
+// promisor remote or sets extensions.partialClone. Some of its objects are then missing locally, and reading history
+// offline fails or makes git try to fetch them. Only the repository's own config is read.
+func PartialClone(ctx context.Context, dir string) (bool, error) {
+	out, err := Run(ctx, "-C", dir, "config", "--local", "--list")
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") { // git prints keys lowercased: key=value
+		key, value, _ := strings.Cut(line, "=")
+		switch {
+		case key == "extensions.partialclone":
+			return true, nil
+		case strings.HasPrefix(key, "remote.") && strings.HasSuffix(key, ".promisor") && strings.EqualFold(value, "true"):
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // Environ is environ without GIT_* variables and without credentials (Agentium's git calls are all local, and a
 // filter or program configured in a repository must not see an API key), plus: never prompt, ignore system-wide
 // config, and never take optional locks (so `git status` does not rewrite the user's index).
