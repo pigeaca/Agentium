@@ -73,6 +73,9 @@ func (c Client) PullRequests(ctx context.Context, repo Repo, sha string) ([]Pull
 		return nil, err
 	}
 	var found []PullRequest
+	// The comparison uses the remote's owner and name: a repository renamed or transferred since the remote was set
+	// answers through GitHub's redirect with its new full_name, so nothing matches and nothing is posted (fail-safe).
+	// The remote must use the repository's current name.
 	for _, p := range pulls {
 		sameRepo := p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo.String()) &&
 			strings.EqualFold(p.Base.Repo.FullName, repo.String())

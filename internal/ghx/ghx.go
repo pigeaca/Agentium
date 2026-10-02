@@ -42,7 +42,7 @@ var (
 	// ErrNotLoggedIn: gh has no usable login for github.com (exit code 4, or HTTP 401).
 	ErrNotLoggedIn = errors.New("the GitHub CLI (gh) is not logged in to github.com; run `gh auth login`")
 	// ErrRateLimited: GitHub refused the call for a rate limit (HTTP 403 or 429 saying so); try again later.
-	ErrRateLimited = errors.New("GitHub's rate limit for this login is used up; try again later")
+	ErrRateLimited = errors.New("GitHub rate-limited this login; try again later")
 	// ErrTimeout: a gh call ran past the client's timeout; its process group was killed.
 	ErrTimeout = errors.New("the GitHub CLI (gh) timed out")
 )
