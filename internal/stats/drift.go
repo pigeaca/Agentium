@@ -88,13 +88,15 @@ func DriftAlarm(up, down float64) int {
 
 // DriftResult is a chart read over a series of points.
 type DriftResult struct {
-	Points     int       // points read
-	WarmingUp  bool      // fewer than DriftClaimChecks points: no alarm is not yet evidence of no change
-	Scores     []float64 // U_j for each point from index DriftRefChecks on (Scores[i] is point i+DriftRefChecks)
-	Up, Down   []float64 // S⁺ and S⁻ after each scored point, same indexing as Scores
-	Alarm      int       // +1 up, -1 down, 0 none
-	AlarmAt    int       // index of the alarming point; -1 without an alarm
-	ClimbStart int       // index of the point where the run of increments that led to the alarm began: where the CUSUM started climbing, not an estimate of the change point; -1 without one
+	Points    int       // points read
+	WarmingUp bool      // fewer than DriftClaimChecks points: no alarm is not yet evidence of no change
+	Scores    []float64 // U_j for each point from index DriftRefChecks on (Scores[i] is point i+DriftRefChecks)
+	Up, Down  []float64 // S⁺ and S⁻ after each scored point, same indexing as Scores
+	Alarm     int       // +1 up, -1 down, 0 none
+	AlarmAt   int       // index of the alarming point; -1 without an alarm
+	// ClimbStart is the index of the point where the run of increments that led to the alarm began: where the CUSUM
+	// started climbing, not an estimate of the change point; -1 without one.
+	ClimbStart int
 }
 
 // DriftChart reads the points in order, stopping at the first alarm (later points are ignored and not counted in
