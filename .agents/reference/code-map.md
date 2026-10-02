@@ -8,12 +8,12 @@ Where each part of Agentium lives. Loaded on demand (not default context): read 
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
 | `internal/cli` | Command-line parsing, dispatch and printing; each handler calls one service; `start` composes setup |
 | `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
-| `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock |
+| `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock and file locks that wait until cancelled |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
 | `internal/mine` | Task candidates from git history: explained scores, rejections, import; the pool's bounded range scan with patch IDs |
 | `internal/pool` | The task pool: state, watermark, a pass and its recovery; stale, retire and health rules; toolchain versions |
-| `internal/gitx` | Every git call (hooks, fsmonitor, prompts and optional index writes off; inherited `GIT_*` dropped); hook-free fetch of task bases |
+| `internal/gitx` | Every git call (hooks, fsmonitor, prompts and optional index writes off; inherited `GIT_*` dropped); hook-free fetch of task bases, one at a time per repository |
 | `internal/ghx` | GitHub through the user's own `gh` (never inside a run): the open pull request of a commit, one marked comment edited in place (only the user's own), a warn-only commit status; the repository from the git remote |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
 | `internal/claudectx` | Which files Claude Code loads in experiments (instructions, `@` imports, rules, skill/subagent/command descriptions, harness files, linked documents); warnings; lint and its hook |
@@ -29,6 +29,7 @@ Where each part of Agentium lives. Loaded on demand (not default context): read 
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, looks, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths); `Load` reads the store; the north star (time and spend to the first decisive verdict) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run or calibration: the arm's workspace with everything else denied, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`) and isolated-run cost; recovery of dead runs; its temp root |
+| `internal/screen` | The pull-request cost screen: `Classify` reads a pushed range (and the merge base with the default branch) through `gitx`, `source` and `claudectx`, and calls it read context (a candidate), harness (refused in automated mode) or neither |
 | `scripts/harness.py` | Standard-library entrypoint: checks, hooks, worktrees, metrics, PR merges ([harness](../../docs/harness.md)) |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
