@@ -173,6 +173,9 @@ type Record struct {
 	// metric; this is a counterfactual beside it, not spend. Nil when it cannot be computed and in records made before
 	// it existed: absent, never zero.
 	IsolatedCostUSD *float64 `json:"isolated_cost_usd,omitempty"`
+	// Overshoot is how far a run Claude Code stopped at its cost cap went past it, against the allowance budgets hold
+	// for that (claude.CapOvershoot); nil for any other run, and for runs recorded before Agentium kept it.
+	Overshoot *claude.Overshoot `json:"overshoot,omitempty"`
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
 	// and is cancelled) or RecoveredFinished (it had finished).
 	Recovered string `json:"recovered,omitempty"`
@@ -562,6 +565,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
 	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
+	if rec.Overshoot = claude.CapOvershoot(rec.Metrics, rec.Spend().AgentUSD, spec.BudgetUSD, spec.Model); rec.Overshoot != nil && rec.Overshoot.Exceeded() {
+		note := OvershootNote(*rec.Overshoot)
+		rec.Notes = append(rec.Notes, note)
+		env.progress("  %s", env.Style.Warn("warning: "+note))
+	}
 
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
@@ -595,6 +603,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 	}
 	return rec, nil
+}
+
+// OvershootNote says that a run passed its cost cap by more than the allowance budgets hold for that.
+func OvershootNote(o claude.Overshoot) string {
+	return fmt.Sprintf("it passed its $%.2f cost cap by $%.3f, more than the $%.2f allowance budgets hold for that: an experiment's spending may pass its budget by the difference",
+		o.CapUSD, o.OverUSD, o.AllowanceUSD)
 }
 
 // grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the

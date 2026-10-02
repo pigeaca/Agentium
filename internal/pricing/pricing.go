@@ -65,3 +65,13 @@ func (r Rates) Cost(u Usage) float64 {
 	return (float64(u.Input)*r.Input + float64(u.CacheWrite5m)*r.CacheWrite5m + float64(u.CacheWrite1h)*r.CacheWrite1h +
 		float64(u.CacheRead)*r.CacheRead + float64(u.Output)*r.Output) / 1e6
 }
+
+// MaxOutput is the dearest output rate in the table: what a model without a list price is assumed to cost, where
+// assuming less could under-reserve.
+func MaxOutput() float64 {
+	rate := 0.0
+	for _, r := range table() {
+		rate = max(rate, r.Output)
+	}
+	return rate
+}

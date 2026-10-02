@@ -56,9 +56,20 @@ func TestJudgeCapsAndEstimates(t *testing.T) {
 	if plain.JudgeCapUSD() != 0 || !near(plain.RunCapUSD(), 3.3) || plain.JudgeEstimateUSD() != 0 || !near(Reserve(plain), 9.9) {
 		t.Errorf("without the judge: cap %v, run cap %v, estimate %v, reserve %v", plain.JudgeCapUSD(), plain.RunCapUSD(), plain.JudgeEstimateUSD(), Reserve(plain))
 	}
-	d := judged(judge.Settings{Model: "m", Effort: "high", Repeats: 3})
+	d := judged(judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 3})
 	if d.JudgeCapUSD() != 3 || !near(d.RunCapUSD(), 6.3) || !near(Reserve(d), 18.9) {
 		t.Errorf("with 3 repeats: judge cap %v (want 3 × 2 × $0.50), run cap %v, reserve %v (want 3 run caps of $6.30)", d.JudgeCapUSD(), d.RunCapUSD(), Reserve(d))
+	}
+	// A judge other than the default was never measured: each call also holds a run's overshoot allowance on its model.
+	for s, want := range map[judge.Settings]float64{
+		{Model: judge.DefaultModel, Effort: "max", Repeats: 1}:   2 * (0.5 + 0.30),  // claude-opus-5-5's floor
+		{Model: "claude-opus-5", Effort: "high", Repeats: 1}:     2 * (0.5 + 0.375), // output $25 per million
+		{Model: "no-such-model", Effort: "high", Repeats: 2}:     4 * (0.5 + 0.75),  // the dearest output price
+		{Model: judge.DefaultModel, Effort: judge.DefaultEffort}: 3 * 2 * 0.5,       // the default: measured, none
+	} {
+		if got := judged(s).JudgeCapUSD(); !near(got, want) {
+			t.Errorf("judge %+v: cap %v, want %v", s, got, want)
+		}
 	}
 	if want := 6 * 3 * judge.EstimateUSD; math.Abs(d.JudgeEstimateUSD()-want) > 1e-9 {
 		t.Errorf("estimate %v, want %v", d.JudgeEstimateUSD(), want)
@@ -106,7 +117,7 @@ func TestExecutePausesWhenTheJudgeHitsALimit(t *testing.T) {
 func TestExecuteReservesTheJudgement(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
 	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeOK, CostUSD: 3, JudgeUSD: 2} }} // agent $1, judge $2
-	d := judged(judge.Settings{Model: "m", Effort: "high", Repeats: 1})
+	d := judged(judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 1})
 	d.RunBudgetUSD = 1 // a run's cap: $1, its $0.15 overshoot, and 1 × 2 × $0.50
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: d.RunCapUSD(), BudgetUSD: 12, MaxAttempts: 3}, f.run)
 	// Pairs start while spend + both caps fit: two pairs ($4.30 held, $6 spent each) fit, and a third past $12 does not.

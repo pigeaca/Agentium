@@ -51,13 +51,14 @@ func TestEffortsIsAFreshSlice(t *testing.T) {
 func TestEqualArmCapsBelowTheRunBudget(t *testing.T) {
 	d := modelAB()
 	d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 1, 4
-	if !near(d.RunCapUSD(), 1.15) || !near(d.PairCapUSD(), 2.3) || !near(Reserve(d), 3.45) {
-		t.Errorf("run cap %v, pair %v, reserve %v; want 1.15, 2.30, 3.45 (each $1 cap and its $0.15 overshoot)", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
+	// Each $1 cap and its overshoot: $0.15 on Sonnet (arm A), $0.30 on Opus 5.5 (arm B), whose output costs twice as much.
+	if !near(d.RunCapUSD(), 1.3) || !near(d.PairCapUSD(), 2.45) || !near(Reserve(d), 3.9) {
+		t.Errorf("run cap %v, pair %v, reserve %v; want 1.30, 2.45, 3.90", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
 	if err := d.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if caps := armCaps(d); !near(caps["A"], 1.15) || !near(caps["B"], 1.15) {
+	if caps := armCaps(d); !near(caps["A"], 1.15) || !near(caps["B"], 1.3) {
 		t.Errorf("armCaps = %v", caps)
 	}
 	if armCaps(validDesign()) != nil {
@@ -145,7 +146,7 @@ func TestArmProfilesAndCaps(t *testing.T) {
 	if d.ArmRunBudgetUSD(a) != 3 || d.ArmRunBudgetUSD(d.Arms[1]) != 5 || !near(d.RunCapUSD(), 5.5) || !near(d.PairCapUSD(), 8.8) || !near(Reserve(d), 16.5) {
 		t.Errorf("caps: %v %v, run cap %v, pair %v, reserve %v", d.ArmRunBudgetUSD(a), d.ArmRunBudgetUSD(d.Arms[1]), d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
-	d.Judge = &judge.Settings{Model: "m", Effort: "high", Repeats: 1}
+	d.Judge = &judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 1}
 	if !near(d.ArmRunCapUSD(a), 4.3) || !near(d.PairCapUSD(), 10.8) { // each arm's judgement ($1) on top of its own cap and overshoot
 		t.Errorf("with the judge: arm A cap %v, pair %v", d.ArmRunCapUSD(a), d.PairCapUSD())
 	}

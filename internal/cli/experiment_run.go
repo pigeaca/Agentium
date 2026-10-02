@@ -178,6 +178,9 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 				judged = fmt.Sprintf("; judge: %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
 			}
 			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.AgentUSD(), judged, e.SpentUSD, design.BudgetUSD)
+			if e.Result.Overshoot != "" {
+				fmt.Fprintf(out, "%s: %s\n", label, st.Warn("warning: "+e.Result.Overshoot))
+			}
 		case "retry":
 			fmt.Fprintf(out, "%s: %s in %s\n", label, st.Warn("retrying"), e.RetryIn)
 		case "wait":

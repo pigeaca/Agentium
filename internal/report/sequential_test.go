@@ -10,6 +10,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -204,7 +205,7 @@ func TestReportMarksCappedRuns(t *testing.T) {
 		}
 	}
 	md, plain := renderings(t, rep)
-	note := "1 counted run(s) were capped (A 0, B 1): Claude Code stopped them at their cost cap or turn limit, so each one's cost is a lower bound"
+	note := "1 counted run(s) were cut short (A 0 capped, 0 timed out; B 1 capped, 0 timed out): Claude Code stopped them at their cost cap or turn limit, or Agentium at the timeout, so each one's cost is a lower bound"
 	for _, out := range []string{md, plain} {
 		for _, want := range []string{"1/1, 1 capped", "→ ≥$3.070", "≥ marks a mean that includes one", note} {
 			if !strings.Contains(out, want) {
@@ -229,7 +230,7 @@ func TestReportMarksCappedRuns(t *testing.T) {
 func TestCappedNoteWithDifferentArmCaps(t *testing.T) {
 	rep := Report{Arms: []Arm{{Name: "A", Capped: 2}, {Name: "B"}}, Lock: experiment.Lock{Design: experiment.Design{Template: experiment.TemplateModelAB,
 		RunBudgetUSD: 3, Arms: []experiment.Arm{{Name: "A", Model: "m1", RunBudgetUSD: 1}, {Name: "B", Model: "m2"}}}}}
-	if note := cappedNote(rep); !strings.HasPrefix(note, "2 counted run(s) were capped (A 2, B 0)") || !strings.HasSuffix(note, "the arm with the lower cap is cut shorter.") {
+	if note := cappedNote(rep); !strings.HasPrefix(note, "2 counted run(s) were cut short (A 2 capped, 0 timed out; B 0 capped, 0 timed out)") || !strings.HasSuffix(note, "the arm with the lower cap is cut shorter.") {
 		t.Errorf("note %q", note)
 	}
 	rep.Lock.Design.Arms[0].RunBudgetUSD = 3
@@ -239,5 +240,74 @@ func TestCappedNoteWithDifferentArmCaps(t *testing.T) {
 	rep.Arms[0].Capped = 0
 	if cappedNote(rep) != "" {
 		t.Error("no capped runs, no note")
+	}
+}
+
+// A timed-out run's cost is cut off too: it is counted, marked ≥, and in the note.
+func TestReportMarksTimedOutRuns(t *testing.T) {
+	in := seqInput(t, 1.0, 6, true, experiment.StatusBudget)
+	in.Runs[0].Record.Outcome = claude.OutcomeTimeout
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arm := in.Runs[0].Record.Arm
+	if a := rep.Arms[map[string]int{"A": 0, "B": 1}[arm]]; a.TimedOut != 1 || a.Capped != 0 || a.Censored() != 1 {
+		t.Errorf("arm %s: %+v", arm, a)
+	}
+	md, _ := renderings(t, rep)
+	for _, want := range []string{"1/1, 1 timed out", "≥$", "1 counted run(s) were cut short", "1 timed out"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the report lacks %q:\n%s", want, md)
+		}
+	}
+}
+
+// A cost verdict that runs cut short favour carries the caveat in its headline: "improved" favours arm B, so capped
+// runs in B are named there, and capped runs in A are not (they work against the verdict).
+func TestCostHeadlineNamesRunsCutShortThatFavourIt(t *testing.T) {
+	for arm, want := range map[string]bool{"B": true, "A": false} {
+		in := seqInput(t, 0.5, 16, true, experiment.StatusDone)
+		for i, r := range in.Runs {
+			if r.Record.Arm == arm {
+				in.Runs[i].Record.Outcome = claude.OutcomeCapped
+				break
+			}
+		}
+		rep, err := Build(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		md, plain := renderings(t, rep)
+		caveat := "improved (caveat: runs cut short at their cap or the timeout, 1 in arm B, cost at least what they reached and favour this verdict)."
+		if strings.Contains(md, caveat) != want || strings.Contains(plain, "caveat: runs cut short") != want {
+			t.Errorf("capped in arm %s: caveat shown %v, want %v:\n%s", arm, !want, want, md)
+		}
+	}
+	rep := Report{Arms: []Arm{{Name: "A", TimedOut: 1}, {Name: "B", Capped: 2}}}
+	if got := rep.censoredCaveat(experiment.MetricResult{Metric: experiment.MetricCost, Verdict: stats.Equivalent}); !strings.Contains(got, "1 in arm A and 2 in arm B") {
+		t.Errorf("equivalent: %q", got)
+	}
+	for _, res := range []experiment.MetricResult{{Metric: experiment.MetricCost, Verdict: stats.Inconclusive}, {Metric: experiment.MetricSuccess, Verdict: stats.Improved}} {
+		if got := rep.censoredCaveat(res); got != "" {
+			t.Errorf("%s %s: %q", res.Metric, res.Verdict, got)
+		}
+	}
+}
+
+// A run that passed its cap by more than the allowance is named in a warning note.
+func TestReportWarnsOfAnOvershootPastTheAllowance(t *testing.T) {
+	in := seqInput(t, 1.0, 6, true, experiment.StatusBudget)
+	in.Runs[0].Record.Overshoot = &claude.Overshoot{CapUSD: 0.5, OverUSD: 0.007, AllowanceUSD: 0.15}
+	if rep, _ := Build(in); overshootNote(in.Runs) != "" || strings.Contains(strings.Join(rep.Notes, " "), "past a") {
+		t.Error("an overshoot within the allowance is not a warning")
+	}
+	in.Runs[1].Record.Overshoot = &claude.Overshoot{CapUSD: 0.5, OverUSD: 0.42, AllowanceUSD: 0.15}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md, _ := renderings(t, rep); !strings.Contains(md, "Warning: 1 run(s) passed their cost cap by more than the allowance the budget holds for that (the most: $0.420 past a $0.50 cap, against a $0.15 allowance)") {
+		t.Errorf("no overshoot warning:\n%s", md)
 	}
 }

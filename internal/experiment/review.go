@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
@@ -260,10 +261,15 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
 			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
 	}
+	floor := fmt.Sprintf("$%.2f", claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])))
+	if fb := claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[1])); fb != claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])) {
+		floor = fmt.Sprintf("%s (arm A) or $%.2f (arm B)", floor, fb)
+	}
 	guard := fmt.Sprintf("\nClaude Code checks a cap after each turn, so a run can pass it by the turn that crosses it: the budget holds back\n"+
-		"%.0f%% of each cap for that, at least $%.2f. A run starts only when the spend so far and the caps of the runs in flight,\n"+
-		"with that allowance, leave room for its own, so spending stays within the $%.2f budget unless a single turn costs more.",
-		100*CapOvershootShare, CapOvershootMinUSD, d.BudgetUSD)
+		"%.0f%% of each cap for that, at least %s (the floor follows the model's output price). A run starts only when the\n"+
+		"spend so far and the caps of the runs in flight, with that allowance, leave room for its own, so spending stays within\n"+
+		"the $%.2f budget unless a single turn costs more.",
+		100*claude.CapOvershootShare, floor, d.BudgetUSD)
 	if d.PerArmProfiles() {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s).%s", d.ArmRunBudgetUSD(d.Arms[0]),
 			d.ArmRunBudgetUSD(d.Arms[1]), judgeCapNote(d), guard)))
@@ -271,7 +277,7 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap.%s", d.RunBudgetUSD, guard)))
 	} else {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap, and its judgement $%.2f (%d call(s) at $%.2f, each asked twice at\n"+
-			"most).%s", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, llmjudge.CallCapUSD, guard)))
+			"most).%s", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, d.JudgeCapUSD()/float64(2*d.Judge.WithDefaults().Repeats), guard)))
 	}
 }
 

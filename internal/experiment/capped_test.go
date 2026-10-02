@@ -73,12 +73,12 @@ func TestExecuteOvershootStaysWithinTheBudget(t *testing.T) {
 	t.Parallel()
 	d := validDesign()
 	d.RunBudgetUSD, d.Concurrency = 0.5, 2
-	over := d.RunBudgetUSD + CapOvershootUSD(d.RunBudgetUSD)
+	over := d.RunBudgetUSD + claude.CapOvershootUSD(d.RunBudgetUSD, d.Model)
 	if !near(over, 0.65) || !near(d.RunCapUSD(), over) || !near(d.PairCapUSD(), 2*over) || !near(Reserve(d), 3*over) {
 		t.Fatalf("a $0.50 cap holds $%.2f a run (pair $%.2f, reserve $%.2f), want $0.65 with the $0.15 floor", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
-	if !near(CapOvershootUSD(3), 0.3) || CapOvershootUSD(0) != 0 {
-		t.Errorf("the allowance is %.0f%% of a cap, at least $%.2f: $%.2f at $3", 100*CapOvershootShare, CapOvershootMinUSD, CapOvershootUSD(3))
+	if !near(claude.CapOvershootUSD(3, d.Model), 0.3) || claude.CapOvershootUSD(0, d.Model) != 0 {
+		t.Errorf("the allowance is %.0f%% of a cap, at least $%.2f: $%.2f at $3", 100*claude.CapOvershootShare, claude.CapOvershootMinUSD, claude.CapOvershootUSD(3, d.Model))
 	}
 	const budget = 3.6
 	run := func(runCap float64) (Summary, float64) {

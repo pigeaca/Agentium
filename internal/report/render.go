@@ -382,29 +382,33 @@ func orDefault(effort string) string {
 	return effort
 }
 
-// perTaskLegend explains the per-task table's marks; it names capped runs only when there are some.
+// perTaskLegend explains the per-task table's marks; it names runs cut short only when there are some.
 func (r Report) perTaskLegend() string {
 	legend := "● success, ○ failure, × not counted; cost is the mean of counted runs."
 	for _, a := range r.Arms {
-		if a.Capped > 0 {
-			return legend + " A capped run stopped at its cost cap or turn limit, so its cost is a lower bound: ≥ marks a mean that includes one."
+		if a.Censored() > 0 {
+			return legend + " A run cut short (capped at its cost cap or turn limit, or timed out) has a cost that is a lower bound: ≥ marks a mean that includes one."
 		}
 	}
 	return legend
 }
 
-// counts is a cell's successes of its counted runs, and its capped runs when there are any: "1/1" or "1/1, 1 capped".
+// counts is a cell's successes of its counted runs, and its runs cut short when there are any: "1/1", "1/1, 1 capped"
+// or "2/2, 1 capped, 1 timed out".
 func (c TaskCell) counts() string {
 	s := fmt.Sprintf("%d/%d", c.Successes, c.Counted)
 	if c.Capped > 0 {
 		s += fmt.Sprintf(", %d capped", c.Capped)
 	}
+	if c.TimedOut > 0 {
+		s += fmt.Sprintf(", %d timed out", c.TimedOut)
+	}
 	return s
 }
 
-// cost is a cell's mean cost, marked ≥ when a capped run makes it a lower bound.
+// cost is a cell's mean cost, marked ≥ when a run cut short makes it a lower bound.
 func (c TaskCell) cost() string {
-	if c.Capped > 0 && c.CostUSD != nil {
+	if c.Capped+c.TimedOut > 0 && c.CostUSD != nil {
 		return "≥" + num(c.CostUSD, "$%.3f")
 	}
 	return num(c.CostUSD, "$%.3f")

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -111,11 +112,11 @@ func sameCalibration(d Design, a, b Arm) bool {
 }
 
 // CalibrationCosts is the expected cost of needs, and the most they may spend: a cap for each, with the turn that may
-// cross it (CapOvershootUSD).
+// cross it on its model (claude.CapOvershootUSD).
 func CalibrationCosts(needs []CalibrationNeed) (estimate, capUSD float64) {
 	for _, n := range needs {
 		estimate += CalibrationEstimateUSD(n.Model)
-		capUSD += CalibrationBudgetUSD + CapOvershootUSD(CalibrationBudgetUSD)
+		capUSD += CalibrationBudgetUSD + claude.CapOvershootUSD(CalibrationBudgetUSD, n.Model)
 	}
 	return estimate, capUSD
 }

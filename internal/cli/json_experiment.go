@@ -112,8 +112,8 @@ func looksOf(s *experiment.SeqStatus) []lookDoc {
 }
 
 // spendDoc is what a design may spend, before it runs. Known is false when a task has no estimate yet: the
-// estimates are then null. Max is every look (or every run); WorstCase is every run, and its judgement, at its cap, which
-// is what the budget is sized for. Expected is what a seq-v1 experiment spends on average if nothing changed (the
+// estimates are then null. Max is every look (or every run); WorstCase is every run, and its judgement, at its cap
+// plus the cap's overshoot allowance (claude.CapOvershootUSD), which is what the budget's reserve holds for each run. Expected is what a seq-v1 experiment spends on average if nothing changed (the
 // planner's noise), and IfCut at a 20% cut in arm B's cost; both are null for other methods, whose expected spend is Max.
 type spendDoc struct {
 	Known         bool     `json:"known"`

@@ -14,7 +14,9 @@ import (
 //   - "agent" and "judge": the field is Spend's AgentUSD or JudgeUSD, and so in TotalUSD;
 //   - "folded": counted elsewhere, or not spend: Metrics.EstimatedCostUSD is an estimate that Once and recovery copy
 //     into Metrics.CostUSD when Claude Code reported no cost, so it is counted there, never on its own;
-//     IsolatedCostUSD is a counterfactual (the run's cost without other runs' prompt cache) that nobody paid.
+//     IsolatedCostUSD is a counterfactual (the run's cost without other runs' prompt cache) that nobody paid;
+//     Overshoot's fields describe Metrics.CostUSD against the run's cap (its cap, how far past it, the allowance held),
+//     so the cost is already counted there.
 //
 // A new money field fails TestSpendCoversEveryCost until it is added here and to Spend.
 var spendFields = map[string]string{
@@ -22,6 +24,9 @@ var spendFields = map[string]string{
 	"Metrics.EstimatedCostUSD": "folded",
 	"IsolatedCostUSD":          "folded",
 	"Judge.CostUSD":            "judge",
+	"Overshoot.CapUSD":         "folded",
+	"Overshoot.OverUSD":        "folded",
+	"Overshoot.AllowanceUSD":   "folded",
 }
 
 // moneyFields lists the paths of the float64 fields (or pointers to one) named *USD under t, through structs,

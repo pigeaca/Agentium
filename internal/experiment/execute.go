@@ -48,6 +48,9 @@ type Result struct {
 	WarmWait bool
 	// Usage is the run's last subscription usage reading, if it reported one: the gate's latest reading.
 	Usage *claude.UsageReading
+	// Overshoot, when set, says the run passed its cost cap by more than the allowance the budget held for it
+	// (run.OvershootNote), for progress lines.
+	Overshoot string
 }
 
 // AgentUSD is the agent's share of what the attempt spent: CostUSD without the judgement's.

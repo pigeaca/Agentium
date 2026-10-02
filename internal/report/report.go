@@ -79,9 +79,10 @@ type Arm struct {
 	// Profile is the arm's model and effort ("MODEL" or "MODEL:EFFORT"), in a model-ab experiment only.
 	Profile string `json:"profile,omitempty"`
 	Counted int    `json:"counted"`
-	// Capped counts the counted runs Claude Code stopped at their cost cap or turn limit: each one's cost is a lower
-	// bound of what it would have spent.
-	Capped int `json:"capped"`
+	// Capped counts the counted runs Claude Code stopped at their cost cap or turn limit, and TimedOut those Agentium
+	// stopped at the timeout: each one's cost is a lower bound of what it would have spent (Censored adds them up).
+	Capped   int `json:"capped"`
+	TimedOut int `json:"timed_out"`
 	// FirstRequest is the mean measured size of the first request: the context overhead Claude Code saw.
 	FirstRequest *float64 `json:"first_request_tokens"`
 	CostUSD      *float64 `json:"cost_usd"`      // mean reported cost
@@ -131,14 +132,15 @@ type TaskRow struct {
 }
 
 // TaskCell is a task's runs in one arm: marks in schedule order (● success, ○ failure, × not counted), and the mean cost
-// of the counted runs (nil without any). Capped counts the counted runs stopped at their cap: with any, CostUSD is a
-// lower bound.
+// of the counted runs (nil without any). Capped and TimedOut count the counted runs stopped at their cap or the
+// timeout: with any, CostUSD is a lower bound.
 type TaskCell struct {
 	Profile   string   `json:"profile,omitempty"` // the arm's model and effort, in a model-ab experiment only
 	Marks     string   `json:"marks"`
 	Successes int      `json:"successes"`
 	Counted   int      `json:"counted"`
 	Capped    int      `json:"capped"`
+	TimedOut  int      `json:"timed_out"`
 	CostUSD   *float64 `json:"cost_usd"`
 }
 
@@ -301,8 +303,11 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 			continue
 		}
 		arm.Counted++
-		if rec.Outcome == claude.OutcomeCapped {
+		switch rec.Outcome {
+		case claude.OutcomeCapped:
 			arm.Capped++
+		case claude.OutcomeTimeout:
+			arm.TimedOut++
 		}
 		m, b := rec.Metrics, rec.Behavior
 		if m.FirstRequest > 0 {
@@ -453,8 +458,11 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 					cell.Marks += "○"
 				}
 				cell.Counted++
-				if rec.Outcome == claude.OutcomeCapped {
+				switch rec.Outcome {
+				case claude.OutcomeCapped:
 					cell.Capped++
+				case claude.OutcomeTimeout:
+					cell.TimedOut++
 				}
 				costs = append(costs, rec.Spend().AgentUSD)
 			}
@@ -555,6 +563,9 @@ func notes(rep Report, in Input) []string {
 	if note := cappedNote(rep); note != "" {
 		out = append(out, note)
 	}
+	if note := overshootNote(in.Runs); note != "" {
+		out = append(out, note)
+	}
 	if estimated > 0 {
 		out = append(out, fmt.Sprintf("%d run(s) ended without Claude Code's cost: it was estimated from their transcripts at list prices.", estimated))
 	}
@@ -632,26 +643,77 @@ func notes(rep Report, in Input) []string {
 	return append(out, cold, isolatedNote)
 }
 
-// cappedNote says how many counted runs Claude Code stopped at their cap, and what that means for their cost and the
-// verdicts; "" when none was.
+// Censored is how many of the arm's counted runs were cut short (capped or timed out): their costs are lower bounds.
+func (a Arm) Censored() int { return a.Capped + a.TimedOut }
+
+// cappedNote says how many counted runs were cut short at their cap or the timeout, and what that means for their cost
+// and the verdicts; "" when none was.
 func cappedNote(rep Report) string {
 	total := 0
 	var parts []string
 	for _, a := range rep.Arms {
-		total += a.Capped
-		parts = append(parts, fmt.Sprintf("%s %d", a.Name, a.Capped))
+		total += a.Censored()
+		parts = append(parts, fmt.Sprintf("%s %d capped, %d timed out", a.Name, a.Capped, a.TimedOut))
 	}
 	if total == 0 {
 		return ""
 	}
-	note := fmt.Sprintf("%d counted run(s) were capped (%s): Claude Code stopped them at their cost cap or turn limit, so each one's cost is "+
-		"a lower bound of what it would have spent, and a mean that includes one is marked ≥ in the per-task table. They count as they ended, "+
-		"as every run does: graded with the hidden tests (a success when they pass) and at the cost they reached, which makes an arm that "+
-		"reaches its cap more often look cheaper than it would be without the cap.", total, strings.Join(parts, ", "))
+	note := fmt.Sprintf("%d counted run(s) were cut short (%s): Claude Code stopped them at their cost cap or turn limit, or Agentium at "+
+		"the timeout, so each one's cost is a lower bound of what it would have spent, and a mean that includes one is marked ≥ in the "+
+		"per-task table. They count as they ended, as every run does: graded with the hidden tests (a success when they pass) and at the "+
+		"cost they reached, which makes an arm cut short more often look cheaper than it would be without the cap; a cost verdict "+
+		"that favours such an arm says so in its headline.", total, strings.Join(parts, "; "))
 	if d := rep.Lock.Design; d.PerArmProfiles() && len(d.Arms) == 2 && d.ArmRunBudgetUSD(d.Arms[0]) != d.ArmRunBudgetUSD(d.Arms[1]) {
 		note += " The arms' caps differ, so the arm with the lower cap is cut shorter."
 	}
 	return note
+}
+
+// overshootNote names the runs that passed their cost cap by more than the allowance the budget held for it; "" when
+// none did.
+func overshootNote(runs []Run) string {
+	n, worst := 0, (*claude.Overshoot)(nil)
+	for _, r := range runs {
+		if o := r.Record.Overshoot; o != nil && o.Exceeded() {
+			n++
+			if worst == nil || o.OverUSD-o.AllowanceUSD > worst.OverUSD-worst.AllowanceUSD {
+				worst = o
+			}
+		}
+	}
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Warning: %d run(s) passed their cost cap by more than the allowance the budget holds for that (the most: $%.3f past a "+
+		"$%.2f cap, against a $%.2f allowance), so the spending may have passed the budget by the difference.", n, worst.OverUSD, worst.CapUSD, worst.AllowanceUSD)
+}
+
+// censoredCaveat is the headline's caveat on a cost verdict that runs cut short favour: "improved" favours arm B (it
+// looks cheaper), "regressed" arm A, and "equivalent" either (a cut-off cost narrows a difference). "" otherwise.
+func (r Report) censoredCaveat(res experiment.MetricResult) string {
+	if res.Metric != experiment.MetricCost || len(r.Arms) != 2 {
+		return ""
+	}
+	var favoured []Arm
+	switch res.Verdict {
+	case stats.Improved:
+		favoured = r.Arms[1:]
+	case stats.Regressed:
+		favoured = r.Arms[:1]
+	case stats.Equivalent:
+		favoured = r.Arms
+	}
+	var parts []string
+	for _, a := range favoured {
+		if a.Censored() > 0 {
+			parts = append(parts, fmt.Sprintf("%d in arm %s", a.Censored(), a.Name))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (caveat: runs cut short at their cap or the timeout, %s, cost at least what they reached and favour this verdict)",
+		strings.Join(parts, " and "))
 }
 
 func plural(n int, noun string) string {

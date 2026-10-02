@@ -56,6 +56,9 @@ func armProfile(d experiment.Design, a experiment.LockedArm) string {
 func (r Report) headlineParts(res experiment.MetricResult) (bold, mid, verdict string) {
 	d := r.Lock.Design
 	bold, mid, verdict = headlineParts(res, d)
+	if res.Tasks >= 2 {
+		verdict += r.censoredCaveat(res)
+	}
 	if !d.PerArmProfiles() || len(r.Arms) != 2 || res.Tasks < 2 {
 		return bold, mid, verdict
 	}

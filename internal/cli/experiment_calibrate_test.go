@@ -218,11 +218,12 @@ func TestExperimentRefusesABudgetBelowItsCalibrations(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	// The pair's caps are $6.60 with their overshoot; two Opus calibrations may cost up to $1.30 more.
+	// The pair's caps are $6.60 with their overshoot; two Opus calibrations may cost up to $1.60 more ($0.50 caps and
+	// Opus 5.5's $0.30 overshoot floor).
 	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--model", opus, "--task", "value", "--repeats", "1", "--budget", "7",
 		"--concurrency", "1"), ExitOK)
 	got := f.run(ctx, "experiment", "run", "ctx")
-	expect(t, got, ExitUsage, "the budget $7.00 cannot hold the calibrations this experiment needs (up to $1.30", "one pair of runs at their caps ($6.60)",
+	expect(t, got, ExitUsage, "the budget $7.00 cannot hold the calibrations this experiment needs (up to $1.60", "one pair of runs at their caps ($6.60)",
 		"--budget", "agentium run calibrate")
 	if log := calibrationsLog(t, ctrl); len(log) != 0 {
 		t.Errorf("a refused experiment spent on calibrations: %v", log)
@@ -233,13 +234,13 @@ func TestExperimentRefusesABudgetBelowItsCalibrations(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "calibration-fail"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitError, "failed its checks")
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "9"), ExitError, "failed its checks")
 	show := f.run(ctx, "experiment", "show", "ctx")
 	expect(t, show, ExitOK, "Calibration runs so far: $0.04 (in its budget)")
 	if err := os.Remove(filepath.Join(ctrl, "calibration-fail")); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitOK, "Calibrating 2 context(s)", "calibration $0.08 of it")
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "9"), ExitOK, "Calibrating 2 context(s)", "calibration $0.08 of it")
 	// The failed and the healthy calibration runs all count in the budget.
 	db, id := openFixtureDB(t, f)
 	e, _ := db.ExperimentByName(ctx, id, "ctx")

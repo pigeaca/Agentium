@@ -158,7 +158,7 @@ type Estimate struct {
 	// CapUSD is the run cap of the arm estimated (Design.ArmRunBudgetUSD), zero for none: Claude Code stops a run
 	// there, so no run is expected to cost more, and TaskUSD and MeanUSD never exceed it. A default profile or a median
 	// above the cap means runs are expected to reach it; the estimate is then the cap (its overshoot is the worst
-	// case's, CapOvershootUSD, not the estimate's).
+	// case's, claude.CapOvershootUSD, not the estimate's).
 	CapUSD float64
 }
 
@@ -293,7 +293,7 @@ func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
 // Reserve is what the budget must hold back for runs that may be in flight: a run (or a pair's two runs) starts only
 // when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it
 // while each run stays within its cap and overshoot allowance. With concurrency c, at most c−1 runs are in flight when
-// a pair's first run starts, so c+1 caps are reserved. A run's cap includes its overshoot (CapOvershootUSD) and its
+// a pair's first run starts, so c+1 caps are reserved. A run's cap includes its overshoot (claude.CapOvershootUSD) and its
 // judgement's (Design.RunCapUSD).
 func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunCapUSD() }
 
