@@ -71,7 +71,7 @@
   - the main session's first request;
   - the first request of each subagent launch (the Agent or Task tool's `subagent_type`, matched by `parent_tool_use_id`) that could not read its type's prefix from the same run.
 
-  A launch *repeats* its type, and is not repriced, only when an earlier launch of that type made a request before this launch's Agent call, and at most that launch's write TTL before this launch's first request (event timestamps). Every other launch is repriced:
+  A launch *repeats* its type, and is not repriced, only when an earlier launch of that type made a request before this launch's Agent call, and at most that launch's write TTL, less 30 seconds, before this launch's first request (event timestamps, which mark when a response finished, so the gap can read short). Every other launch is repriced:
   - the first launch of a type;
   - parallel launches of one type (from one message, neither can read the other's write);
   - a launch made after its type's prefix expired;

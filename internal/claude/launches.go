@@ -151,8 +151,13 @@ func (l *launchLog) firstReads() ([]FirstRead, int) {
 	return reads, unmatched
 }
 
+// stampSlack is taken off a time to live before a launch counts as a repeat. Event timestamps mark when a response
+// finished, not when its request was sent, so the gap between an earlier request and a launch's first one can read
+// short by up to the difference in their durations; near the boundary the launch is repriced instead of hidden.
+const stampSlack = 30 * time.Second
+
 // repeats reports whether launch ln, made by call, found its type's prefix written by this run: an earlier launch of
-// the type had a request before the call, at most its write time to live before ln's first request.
+// the type had a request before the call, at most its write time to live (less stampSlack) before ln's first request.
 func (l *launchLog) repeats(ln *launch, call agentCall, earlier []*launch, resolve func(*launch, string) (string, bool)) bool {
 	if ln.firstAt.IsZero() {
 		return false
@@ -163,7 +168,7 @@ func (l *launchLog) repeats(ln *launch, call agentCall, earlier []*launch, resol
 		}
 		ttl, _ := resolve(e, call.kind)
 		for _, ev := range e.events {
-			if ev.line < call.line && !ev.at.IsZero() && !ev.at.After(ln.firstAt) && ln.firstAt.Sub(ev.at) <= ttlDuration(ttl) {
+			if ev.line < call.line && !ev.at.IsZero() && !ev.at.After(ln.firstAt) && ln.firstAt.Sub(ev.at) <= ttlDuration(ttl)-stampSlack {
 				return true
 			}
 		}

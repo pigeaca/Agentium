@@ -140,6 +140,14 @@ func TestParseFirstReads(t *testing.T) {
 			s.sub("x2", "s2", subWarm, 3)
 			s.sub("x1", "s1", subWarm, 4)
 		}, []FirstRead{mainCold, repriced(6082, TTL5m, false), repriced(6082, TTL5m, false)}, 0},
+		// Within the last 30 seconds of the time to live, response timestamps may understate the gap: repriced.
+		{"a relaunch near the time to live is repriced", func(s *timed) {
+			s.main("m1", cold, 1, "x1:kind")
+			s.sub("x1", "s1", subCold, 3)
+			s.sub("x1", "s2", subWarm, 60)
+			s.main("m2", allRead, 300, "x2:kind")
+			s.sub("x2", "s3", subWarm, 60+4*60+45)
+		}, []FirstRead{mainCold, repriced(0, TTL5m, false), repriced(6082, TTL5m, false)}, 0},
 		// More than five minutes after the type's last request, its five-minute prefix is gone.
 		{"a late relaunch is repriced", func(s *timed) {
 			s.main("m1", cold, 1, "x1:kind")
