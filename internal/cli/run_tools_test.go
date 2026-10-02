@@ -75,7 +75,8 @@ true`, false)
 				if _, err := os.Stat(filepath.Join(out, "tool")); err == nil {
 					t.Error("the build tool ran for a run that was refused")
 				}
-				expect(t, f.run(context.Background(), "init", "--allow-local-binding", "--no-allow-local-binding"), ExitUsage)
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding", "--no-allow-local-binding"), ExitUsage,
+					"--no-allow-local-binding was removed: use --allow-local-binding=false")
 				expect(t, f.run(context.Background(), "init", "--allow-local-binding"), ExitOK, "agents may bind local ports")
 				expect(t, f.run(context.Background(), "init"), ExitOK, "agents may bind local ports")
 			} else {
@@ -137,7 +138,7 @@ true`, false)
 				t.Errorf("the second run warmed again: %q", again)
 			}
 			if c.binding {
-				expect(t, f.run(context.Background(), "init", "--no-allow-local-binding"), ExitOK, "refuse to start")
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding=false"), ExitOK, "refuse to start")
 				expect(t, f.run(context.Background(), "run", "once", "tool"), 1, "agentium init --allow-local-binding")
 			}
 		})

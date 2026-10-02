@@ -84,9 +84,13 @@ type poolUpdateDoc struct {
 	UnknownWatermark []string           `json:"unknown_watermark"`
 	CandidatesFound  int                `json:"candidates_found"`
 	Candidates       []mineCandidateDoc `json:"candidates"`
-	Imported         []string           `json:"imported"`
-	Tasks            []batchRowDoc      `json:"tasks"` // validations of mined tasks, and candidates that failed to import
-	Revalidated      []staleDoc         `json:"revalidated"`
+	// SetAside counts the commits not taken, per reason: the scan's reasons, those outside the window, and candidates
+	// whose base is too old or whose change was mined before.
+	SetAside    map[string]int `json:"set_aside"`
+	Verify      []string       `json:"verify"` // the commands mined tasks verify with
+	Imported    []string       `json:"imported"`
+	Tasks       []batchRowDoc  `json:"tasks"` // validations of mined tasks, and candidates that failed to import
+	Revalidated []staleDoc     `json:"revalidated"`
 	// RevalidationsSkipped: an experiment is running, so the stale tasks in revalidated were not re-validated.
 	RevalidationsSkipped bool         `json:"revalidations_skipped"`
 	Kept                 []staleDoc   `json:"kept"`
@@ -112,11 +116,23 @@ func candidateDocs(cands []mine.Candidate) []mineCandidateDoc {
 	return docs
 }
 
+// setAsideDoc is the set-aside counts by reason, leaving out the reasons with none.
+func setAsideDoc(rows []setAside) map[string]int {
+	doc := map[string]int{}
+	for _, r := range rows {
+		if r.count > 0 {
+			doc[r.reason] = r.count
+		}
+	}
+	return doc
+}
+
 // baseDocument is the part of both documents that the scan and the plan give.
 func (p *poolPass) baseDocument(health pool.Health) poolUpdateDoc {
 	scan := p.scan
 	return poolUpdateDoc{header: p.env.hdr(), Ref: p.ref, Head: p.head, CommitsRead: scan.Result.Scanned, OutsideWindow: scan.Old,
-		Complete: scan.Scanned.Complete, UnknownWatermark: list(scan.Scanned.Unknown), Candidates: []mineCandidateDoc{}, Imported: []string{},
+		Complete: scan.Scanned.Complete, UnknownWatermark: list(scan.Scanned.Unknown), Candidates: []mineCandidateDoc{}, SetAside: map[string]int{},
+		Verify: list(p.verify), Imported: []string{},
 		Tasks: []batchRowDoc{}, Revalidated: []staleDoc{}, Kept: []staleDoc{}, Retired: []retiredDoc{}, Accepted: []string{}, HeldBack: []heldDoc{},
 		Health: healthDocOf(health), Warnings: []string{}}
 }
@@ -132,6 +148,7 @@ func keptDocs(plan pool.Plan) []staleDoc {
 func (p *poolPass) dryRunDocument(ctx context.Context, prev pool.Preview[mine.Candidate], top []mine.Candidate, plan pool.Plan, health pool.Health, busy bool) poolUpdateDoc {
 	doc := p.baseDocument(health)
 	doc.DryRun, doc.Head, doc.CandidatesFound, doc.Candidates = true, prev.Head, len(prev.Candidates), candidateDocs(top)
+	doc.SetAside = setAsideDoc(p.setAside(len(prev.Candidates)))
 	doc.UnknownWatermark = list(prev.Unknown)
 	var rows []batchRow
 	for i := range prev.Unvalidated {
@@ -160,6 +177,7 @@ func (p *poolPass) document(ctx context.Context, res pool.PassResult, accepted [
 	doc.Head, doc.CandidatesFound, doc.WatermarkMoved, doc.Interrupted = res.Head, res.Candidates, res.Moved, interrupted
 	doc.UnknownWatermark = list(res.Unknown)
 	doc.Candidates = candidateDocs(p.tried)
+	doc.SetAside = setAsideDoc(p.setAside(res.Candidates))
 	for _, t := range res.Imported {
 		doc.Imported = append(doc.Imported, t.Name)
 	}

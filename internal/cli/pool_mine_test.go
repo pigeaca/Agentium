@@ -74,25 +74,53 @@ func storedTasks(t *testing.T, data string) []store.Task {
 	return tasks
 }
 
-func TestTaskMine(t *testing.T) {
+// cliNow is cliIn with the real clock: the pool's window is counted back from now, and the fixtures' commits are
+// made now.
+func cliNow(t *testing.T, dir, data string) func(args ...string) cliResult {
+	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
+	return func(args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: dir, Getenv: func(key string) string { return vars[key] },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+}
+
+// Mining is pool update's (task mine is gone, with a pointer): its dry run lists the candidates with their scores and
+// why the other commits were set aside; a pass imports the best --limit with the project's verify setting and
+// validates them; the next pass takes the rest; a re-scan (--since) counts the commits that are tasks now. task import
+// --commit makes the same tasks.
+func TestPoolUpdateMinesHistory(t *testing.T) {
 	t.Parallel()
 	repo, hashes := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
-	run := cliIn(t, repo, data)
+	run := cliNow(t, repo, data)
 	expect(t, run("init"), ExitOK)
 	before := repoState(t, repo)
 
-	expect(t, run("task", "mine", "--dry-run", "--verify", "true"), ExitUsage, "--dry-run imports and validates nothing, so --verify")
-	expect(t, run("task", "mine", "--limit", "0"), ExitUsage, "--limit must be at least 1")
-	expect(t, run("task", "mine", "--since", "yesterday", "--dry-run"), ExitUsage, `--since "yesterday" is not a date`)
-	expect(t, run("task", "mine", "--jobs", "0"), ExitUsage, "--jobs must be at least 1")
-	expect(t, run("task", "mine", "extra"), ExitUsage, "takes no arguments")
-	expect(t, run("task", "mine"), ExitError, "no test commands were detected")
+	for _, args := range [][]string{{"task", "mine"}, {"task", "mine", "--dry-run", "--since", "2026-01-01"}} {
+		got := run(args...)
+		expect(t, got, ExitUsage, "agentium task mine: removed: agentium pool update mines", "agentium pool update --dry-run lists the candidates")
+		if got.stdout != "" {
+			t.Errorf("%q printed on stdout: %s", args, got.stdout)
+		}
+	}
+	expect(t, run("pool", "update", "--limit", "0"), ExitUsage, "--limit must be at least 1")
+	expect(t, run("pool", "update", "--since", "yesterday", "--dry-run"), ExitUsage, `--since "yesterday" is not a date`)
+	expect(t, run("pool", "update", "--jobs", "0"), ExitUsage, "--jobs must be at least 1")
+	expect(t, run("pool", "update", "--max-files", "0"), ExitUsage, "--max-files and --max-lines must be at least 1")
+	expect(t, run("pool", "update", "--verify-timeout", "0s"), ExitUsage, "--verify-timeout must be more than 0")
+	expect(t, run("pool", "update", "extra"), ExitUsage, "takes no arguments")
+	// No test command is detected here: without one the pass mines nothing; --verify (this call) or the setting gives one.
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "so the pass mines nothing", "agentium init --verify CMD", "0 candidate(s)")
+	expect(t, run("pool", "update", "--dry-run", "--verify", "sh run_tests.sh"), ExitOK, "3 candidate(s)",
+		"mined tasks will verify with: sh run_tests.sh")
+	expect(t, run("init", "--verify", "sh run_tests.sh"), ExitOK, "verify          sh run_tests.sh")
 
-	dry := run("task", "mine", "--dry-run")
-	expect(t, dry, ExitOK, "Mined main at ", "7 commit(s) read, 3 candidate(s)", "SCORE", "Add farewell to the library",
+	dry := run("pool", "update", "--dry-run")
+	expect(t, dry, ExitOK, "Would mine main at ", "7 commit(s) since the last pass, 3 candidate(s)", "SCORE", "Add farewell to the library",
 		"+3 the message has a subject and a body", "Set aside: 4 commit(s)", "no parent commit", "documentation only", "no test changes",
-		"tests only", "Next: agentium task mine --limit 3")
+		"tests only", "note: mined tasks will verify with: sh run_tests.sh (agentium init --verify to change)", "agentium pool update mines, validates and retires")
 	for _, h := range hashes {
 		if !strings.Contains(dry.stdout, experiment.ShortCommit(h)) {
 			t.Errorf("dry run lacks candidate %s:\n%s", h, dry.stdout)
@@ -102,19 +130,17 @@ func TestTaskMine(t *testing.T) {
 	if order := []string{"no parent commit", "documentation only", "no test changes", "tests only"}; !inOrder(dry.stdout, order) {
 		t.Errorf("rejections not in scan order %v:\n%s", order, dry.stdout)
 	}
-	expect(t, run("task", "list"), ExitOK, "No tasks yet: agentium task mine")
-	limited := run("task", "mine", "--dry-run", "--limit", "1")
+	expect(t, run("task", "list"), ExitOK, "No tasks yet: agentium pool update")
+	limited := run("pool", "update", "--dry-run", "--limit", "1")
 	expect(t, limited, ExitOK, "2 more candidate(s); --limit N lists more")
 	if strings.Contains(limited.stdout, "  2  ") {
 		t.Errorf("--limit 1 listed a second candidate:\n%s", limited.stdout)
 	}
-	expect(t, run("task", "mine", "--dry-run", "--since", "2099-01-01"), ExitOK, "0 commit(s) read, 0 candidate(s)", "No candidates.")
+	expect(t, run("pool", "update", "--dry-run", "--since", "2099-01-01"), ExitOK, "0 commit(s) since 2099-01-01, 0 candidate(s)", "No candidates.")
 
-	first := run("task", "mine", "--limit", "2", "--verify", "sh run_tests.sh", "--jobs", "2")
-	expect(t, first, ExitOK, "Imported 2 of 2 candidate(s) tried (verify: sh run_tests.sh); validating them, 2 at a time", "NAME", "COMMIT",
-		"TESTS", "FILES", "STATUS", "(instruction not reviewed)", "Review each mined instruction for solution leaks",
-		"Keep the invalid ones", "a removed task's commit is mined again", "1 of 2 imported task(s) are valid",
-		"1 candidate(s) are left: agentium task mine --limit 1 mines more", "agentium task validate --all --status invalid --jobs 1")
+	first := run("pool", "update", "--limit", "2", "--jobs", "2")
+	expect(t, first, ExitOK, "Imported 2 of 2 candidate(s) tried (verify: sh run_tests.sh)", "Validating 2 mined task(s), 2 at a time",
+		"Review each mined instruction for solution leaks")
 	tasks := storedTasks(t, data)
 	if len(tasks) != 2 {
 		t.Fatalf("--limit 2 stored %d task(s)", len(tasks))
@@ -123,10 +149,7 @@ func TestTaskMine(t *testing.T) {
 	for _, task := range tasks {
 		mined[task.SolutionCommit] = task
 		if !task.NeedsReview || task.Validation == nil || !slices.Equal(task.Verify, []string{"sh run_tests.sh"}) {
-			t.Errorf("mined task %+v: wants review, a validation and the given --verify", task)
-		}
-		if !strings.Contains(first.stdout, task.Name) {
-			t.Errorf("the table lacks %s:\n%s", task.Name, first.stdout)
+			t.Errorf("mined task %+v: wants review, a validation and the project's verify setting", task)
 		}
 	}
 	greet, ok := mined[hashes[2]]
@@ -137,7 +160,8 @@ func TestTaskMine(t *testing.T) {
 		t.Errorf("instruction %q keeps its trailers", greet.Instruction)
 	}
 
-	second := run("task", "mine", "--verify", "sh run_tests.sh")
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "1 candidate(s)", "Next: agentium pool update imports 1 and validates them")
+	second := run("pool", "update")
 	expect(t, second, ExitOK, "1 candidate(s)", "Imported 1 of 1 candidate(s) tried")
 	tasks = storedTasks(t, data)
 	if len(tasks) != 3 {
@@ -157,22 +181,24 @@ func TestTaskMine(t *testing.T) {
 	if statuses[hashes[0]] != "valid" || statuses[hashes[1]] != "invalid" || statuses[hashes[2]] != "valid" {
 		t.Errorf("statuses %v: want farewell and greet valid, the comment invalid", statuses)
 	}
-	again := run("task", "mine", "--dry-run")
-	expect(t, again, ExitOK, "0 candidate(s)", "No candidates.")
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "0 commit(s) since the last pass, 0 candidate(s)", "No candidates.")
+	// A re-scan reads every commit again and counts the tasks among the commits it set aside; it imports nothing new.
+	again := run("pool", "update", "--dry-run", "--since", "2000-01-01")
+	expect(t, again, ExitOK, "a re-scan: it reads every commit from", "--since 2000-01-01 is earlier", "7 commit(s) since 2000-01-01, 0 candidate(s)")
 	if !slices.ContainsFunc(strings.Split(again.stdout, "\n"), func(line string) bool {
 		return strings.Join(strings.Fields(line), " ") == "already a task 3"
 	}) {
-		t.Errorf("mining again does not count the 3 tasks:\n%s", again.stdout)
+		t.Errorf("a re-scan does not count the 3 tasks:\n%s", again.stdout)
 	}
-	expect(t, run("task", "mine", "--verify", "true"), ExitOK, "Nothing to import")
+	expect(t, run("pool", "update", "--since", "2000-01-01"), ExitOK, "Nothing new to import")
 	expect(t, run("task", "list"), ExitOK, "invalid: base/hidden-tests wanted fail")
 
-	// task import --commit makes the same tasks, through the same path.
+	// task import --commit makes the same tasks, through the same path, with the same settings.
 	otherData := filepath.Join(t.TempDir(), "data")
-	other := cliIn(t, repo, otherData)
-	expect(t, other("init"), ExitOK)
+	other := cliNow(t, repo, otherData)
+	expect(t, other("init", "--verify", "sh run_tests.sh"), ExitOK)
 	for _, h := range hashes {
-		expect(t, other("task", "import", "--commit", h, "--verify", "sh run_tests.sh"), ExitOK)
+		expect(t, other("task", "import", "--commit", h), ExitOK, "verify: sh run_tests.sh")
 	}
 	for _, imported := range storedTasks(t, otherData) {
 		m := byCommit[imported.SolutionCommit]
@@ -184,7 +210,7 @@ func TestTaskMine(t *testing.T) {
 		}
 	}
 	if after := repoState(t, repo); after != before {
-		t.Errorf("task mine modified the repository:\nbefore %s\nafter  %s", before, after)
+		t.Errorf("mining modified the repository:\nbefore %s\nafter  %s", before, after)
 	}
 }
 
@@ -341,7 +367,8 @@ func mapsEqual(a, b map[string]string) bool {
 }
 
 // Mined tasks verify with the build tools' test commands, not every command init found; task import keeps those all.
-func TestTaskMineVerifiesWithBuildTools(t *testing.T) {
+// The project's verify and setup settings replace both defaults.
+func TestPoolUpdateVerifiesWithBuildTools(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
@@ -359,18 +386,43 @@ func TestTaskMineVerifiesWithBuildTools(t *testing.T) {
 		map[string]string{"m.go": "package m\n\nfunc Double(n int) int { return 2 * n }\n",
 			"m_test.go": "package m\n\nimport \"testing\"\n\nfunc TestDouble(t *testing.T) {\n\tif Double(2) != 4 {\n\t\tt.Fatal(Double(2))\n\t}\n}\n"})
 	data := filepath.Join(t.TempDir(), "data")
-	run := cliIn(t, repo, data)
-	expect(t, run("init"), ExitOK, "go test ./...; make test")
+	run := cliNow(t, repo, data)
+	expect(t, run("init"), ExitOK, "go test ./...; make test", "not set: mined tasks verify with go test ./..., imported ones with go test ./...; make test")
 
-	expect(t, run("task", "mine", "--dry-run"), ExitOK, "note: mined tasks will verify with: go test ./... (--verify to change)")
-	mined := run("task", "mine")
-	expect(t, mined, ExitOK, "Imported 1 of 1 candidate(s) tried (verify: go test ./...)", "valid")
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "note: mined tasks will verify with: go test ./... (agentium init --verify to change)",
+		"note: only commits with go tests count, as go test ./... runs them")
+	mined := run("pool", "update")
+	expect(t, mined, ExitOK, "Imported 1 of 1 candidate(s) tried (verify: go test ./...)")
 	tasks := storedTasks(t, data)
-	if len(tasks) != 1 || !slices.Equal(tasks[0].Verify, []string{"go test ./..."}) || statusOf(tasks[0]) != "valid" {
+	if len(tasks) != 1 || !slices.Equal(tasks[0].Verify, []string{"go test ./..."}) || len(tasks[0].Setup) != 0 || statusOf(tasks[0]) != "valid" {
 		t.Fatalf("mined %+v", tasks)
 	}
 	expect(t, run("task", "rm", tasks[0].Name), ExitOK)
 	expect(t, run("task", "import", "--commit", add), ExitOK, "verify: go test ./...; make test")
+	imported := storedTasks(t, data)[0]
+	expect(t, run("task", "rm", imported.Name), ExitOK)
+
+	// The settings replace both (in another data folder: the pool never mines a removed task's commit again), and task
+	// import takes them too; task import's own --verify and --setup (hidden) win for that call.
+	data = filepath.Join(t.TempDir(), "data")
+	run = cliNow(t, repo, data)
+	expect(t, run("init", "--verify", "go vet ./...", "--verify", "go test ./...", "--setup", "true"), ExitOK,
+		"verify          go vet ./...; go test ./...", "setup           true")
+	expect(t, run("pool", "update"), ExitOK, "Imported 1 of 1 candidate(s) tried (verify: go vet ./...; go test ./...)")
+	tasks = storedTasks(t, data)
+	if len(tasks) != 1 || !slices.Equal(tasks[0].Verify, []string{"go vet ./...", "go test ./..."}) || !slices.Equal(tasks[0].Setup, []string{"true"}) ||
+		statusOf(tasks[0]) != "valid" {
+		t.Fatalf("mined with the settings %+v", tasks)
+	}
+	expect(t, run("task", "rm", tasks[0].Name), ExitOK)
+	expect(t, run("task", "import", "--commit", add), ExitOK, "setup:  true", "verify: go vet ./...; go test ./...")
+	expect(t, run("task", "rm", storedTasks(t, data)[0].Name), ExitOK)
+	expect(t, run("task", "import", "--commit", add, "--verify", "go test ./...", "--setup", ""), ExitOK, "verify: go test ./...")
+	if got := storedTasks(t, data)[0]; !slices.Equal(got.Verify, []string{"go test ./..."}) || len(got.Setup) != 0 {
+		t.Errorf("task import's own flags: %+v", got)
+	}
+	// An empty --verify and --setup return init's settings to the defaults.
+	expect(t, run("init", "--verify", "", "--setup", ""), ExitOK, "not set: mined tasks verify with go test ./...", "setup           none")
 }
 
 // A batch stores each validation without undoing edits made while it ran, and drops one whose commands changed.
@@ -429,17 +481,17 @@ func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
 	expect(t, cliResult{<-done, out.String(), errOut.String()}, ExitError, "not stored: the task changed during validation")
 }
 
-// When no candidate can be imported, task mine says why per commit and fails, without a review reminder.
-func TestTaskMineNothingImported(t *testing.T) {
+// When no candidate can be imported, pool update says why per commit, without a review reminder.
+func TestPoolUpdateNothingImported(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("read-only folders do not stop root")
 	}
 	repo, _ := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
-	run := cliIn(t, repo, data)
-	expect(t, run("init"), ExitOK)
-	expect(t, run("task", "mine", "--dry-run"), ExitOK) // opens Agentium's repository of the project
+	run := cliNow(t, repo, data)
+	expect(t, run("init", "--verify", "sh run_tests.sh"), ExitOK)
+	expect(t, run("task", "list"), ExitOK) // opens Agentium's repository of the project
 	// Agentium's repository refuses new objects, so no commit can be kept there.
 	objects := filepath.Join(data, "projects", "1", "repo.git", "objects")
 	var dirs []string
@@ -461,8 +513,8 @@ func TestTaskMineNothingImported(t *testing.T) {
 			os.Chmod(d, 0o700)
 		}
 	})
-	r := run("task", "mine", "--verify", "sh run_tests.sh")
-	expect(t, r, ExitError, "Imported none of 3 candidate(s)", "not imported: ")
+	r := run("pool", "update")
+	expect(t, r, ExitOK, "Imported 0 of 3 candidate(s) tried", "not imported: ")
 	if strings.Contains(r.stdout, "Review each mined instruction") || len(storedTasks(t, data)) != 0 {
 		t.Errorf("nothing imported, yet:\n%s", r.stdout)
 	}
@@ -559,56 +611,55 @@ func (w *workspace) mineTask(ctx context.Context, c mine.Candidate, t store.Task
 	return w.importer(names).One(ctx, c, t)
 }
 
-// A partial clone (--filter) is refused by `task mine` and by start's mining step before any history is read, with the
+// A partial clone (--filter) is refused by pool update and by start's mining step before any history is read, with the
 // remedy; the same repository without the setting still mines.
 func TestMineRefusesPartialClone(t *testing.T) {
 	t.Parallel()
 	repo, _ := mineRepo(t)
 	data := filepath.Join(t.TempDir(), "data")
-	run := cliIn(t, repo, data)
-	expect(t, run("init"), ExitOK)
-	expect(t, run("task", "mine", "--dry-run"), ExitOK, "3 candidate(s)")
+	run := cliNow(t, repo, data)
+	expect(t, run("init", "--verify", "sh run_tests.sh"), ExitOK)
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "3 candidate(s)")
 
 	gitIn(t, repo, "config", "extensions.partialClone", "origin")
 	gitIn(t, repo, "config", "remote.origin.promisor", "true")
 	want := "agentium: this is a partial clone (--filter): mining needs the full history offline; run `git fetch --refetch` or clone without --filter"
-	got := run("task", "mine", "--dry-run")
+	got := run("pool", "update", "--dry-run")
 	expect(t, got, ExitError, want)
 	if got.stdout != "" {
 		t.Errorf("a refused mine printed on stdout: %s", got.stdout)
 	}
-	expect(t, run("task", "mine"), ExitError, want)
+	expect(t, run("pool", "update"), ExitError, want)
 	expect(t, run("start", "--accept-mined"), ExitError, "this is a partial clone (--filter)")
 
 	gitIn(t, repo, "config", "--unset", "extensions.partialClone")
 	gitIn(t, repo, "config", "--unset", "remote.origin.promisor")
-	expect(t, run("task", "mine", "--dry-run"), ExitOK, "3 candidate(s)")
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "3 candidate(s)")
 }
 
 // The scan's note names what runs the tests mining picks commits by: the tool's own command (Go's), else the verify
-// commands (Python's profile proposes none), else nothing, never an empty name.
+// commands (Python's profile proposes none), else nothing, never an empty name; without languages, no note.
 func TestMineScanNoteNamesTheRunner(t *testing.T) {
 	for _, c := range []struct {
-		prep mine.Prepared
-		want string
+		opts   mine.Options
+		verify []string
+		want   string
 	}{
-		{mine.Prepared{Options: mine.Options{Languages: []string{"go"}, TestCommand: "go test ./..."}, Verify: []string{"go test ./..."}},
-			"note: only commits with go tests count, as go test ./... runs them\n"},
-		{mine.Prepared{Options: mine.Options{Languages: []string{"python"}}, Verify: []string{"uv run pytest"}},
-			"note: only commits with python tests count, as uv run pytest runs them\n"},
-		{mine.Prepared{Options: mine.Options{Languages: []string{"python"}}}, "note: only commits with python tests count\n"},
+		{mine.Options{Languages: []string{"go"}, TestCommand: "go test ./..."}, []string{"go test ./..."}, "only commits with go tests count, as go test ./... runs them"},
+		{mine.Options{Languages: []string{"python"}}, []string{"uv run pytest"}, "only commits with python tests count, as uv run pytest runs them"},
+		{mine.Options{Languages: []string{"python"}}, nil, "only commits with python tests count"},
+		{mine.Options{}, []string{"make test"}, ""},
 	} {
-		var out bytes.Buffer
-		printScan(Env{Stdout: &out, Plain: true}, c.prep)
-		if got := out.String(); !strings.HasSuffix(got, c.want) || strings.Contains(got, "as  runs") {
-			t.Errorf("%+v: %q, want it to end %q", c.prep.Options, got, c.want)
+		if got := scanNote(c.opts, c.verify); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.opts, got, c.want)
 		}
 	}
 }
 
-// A Python commit whose base pins no dependencies is mined by default (the user's decision 3); --require-lock sets it
-// aside with the reason, and start passes the flag on to mining and names it when it emptied the history.
-func TestTaskMineUnlockedPython(t *testing.T) {
+// A Python commit whose base pins no dependencies is mined by default (the user's decision 3); the require-lock setting
+// sets it aside with the reason, a command's own --require-lock[=false] (hidden) overrides it for that call, and start
+// follows the setting and names it when it emptied the history.
+func TestPoolUpdateUnlockedPython(t *testing.T) {
 	t.Parallel()
 	repo := t.TempDir()
 	gitIn(t, repo, "init", "-q", "-b", "main")
@@ -625,28 +676,23 @@ func TestTaskMineUnlockedPython(t *testing.T) {
 	hash := commit("Add double to pkg.core\n\nThe double function returns twice its argument, for the reports.",
 		map[string]string{"pkg/core.py": "def base():\n    return 1\n\n\ndef double(x):\n    return 2 * x\n",
 			"tests/test_core.py": "from pkg.core import base, double\n\n\ndef test_double():\n    assert double(2) == 4\n"})
-	run := cliIn(t, repo, filepath.Join(t.TempDir(), "data"))
-	expect(t, run("init"), ExitOK)
-	dry := run("task", "mine", "--dry-run")
-	expect(t, dry, ExitOK, "1 candidate(s)", "Add double to pkg.core")
+	run := cliNow(t, repo, filepath.Join(t.TempDir(), "data"))
+	expect(t, run("init"), ExitOK, "require lock    off (default)")
+	dry := run("pool", "update", "--dry-run")
+	expect(t, dry, ExitOK, "2 commit(s) since the last pass, 1 candidate(s)", "Add double to pkg.core")
 	if !strings.Contains(dry.stdout, experiment.ShortCommit(hash)) || strings.Contains(dry.stdout, "no lock file") {
 		t.Errorf("the default:\n%s", dry.stdout)
 	}
-	expect(t, run("task", "mine", "--dry-run", "--require-lock"), ExitOK, "0 candidate(s)", "no lock file")
+	expect(t, run("pool", "update", "--dry-run", "--require-lock"), ExitOK, "0 candidate(s)", "No candidates.", "no lock file")
 
-	// start passes the flag on: its mining finds nothing, and says the flag is why.
-	started := run("start", "--require-lock", "--accept-mined")
-	expect(t, started, ExitError, "Mining: no more candidates in 2 commit(s) read; --require-lock set aside 1 Python commit(s)")
-	// The flag parses on pool update and start: a later mistake is reported, not an unknown flag.
-	for _, args := range [][]string{{"pool", "update", "--dry-run", "--require-lock", "--limit", "0"}, {"start", "--require-lock", "extra"}} {
-		got := run(args...)
-		expect(t, got, ExitUsage)
-		if strings.Contains(got.stderr, "flag provided but not defined") {
-			t.Errorf("%q: %s", args, got.stderr)
-		}
-	}
-	expect(t, run("pool", "update", "--dry-run", "--require-lock", "--limit", "0"), ExitUsage, "--limit must be at least 1")
-	// pool update passes it on to mining too: the dry run's candidate is gone with the flag.
-	expect(t, run("pool", "update", "--dry-run"), ExitOK, "2 commit(s) since the last pass, 1 candidate(s)", "Add double to pkg.core")
-	expect(t, run("pool", "update", "--dry-run", "--require-lock"), ExitOK, "2 commit(s) since the last pass, 0 candidate(s)", "No candidates.")
+	expect(t, run("init", "--require-lock"), ExitOK, "require lock    on")
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "0 candidate(s)", "no lock file")
+	expect(t, run("pool", "update", "--dry-run", "--require-lock=false"), ExitOK, "1 candidate(s)", "Add double to pkg.core")
+	// start follows the setting: its mining finds nothing, and says the setting is why. Its own --require-lock still parses.
+	started := run("start", "--accept-mined")
+	expect(t, started, ExitError, "Mining: no more candidates in 2 commit(s) read; the require-lock setting set aside 1 Python commit(s)",
+		"agentium init --require-lock=false mines them")
+	expect(t, run("start", "--require-lock", "extra"), ExitUsage)
+	expect(t, run("init", "--require-lock=false"), ExitOK, "require lock    off")
+	expect(t, run("start", "--require-lock", "--accept-mined"), ExitError, "the require-lock setting set aside 1 Python commit(s)")
 }

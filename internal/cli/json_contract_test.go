@@ -42,7 +42,9 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	keys := func(r jsonResult, want string) { t.Helper(); assertKeys(t, r.doc, want) }
 	row := func(r jsonResult, list, want string) { t.Helper(); assertKeys(t, r.get(list).([]any)[0], want) }
 
-	keys(jsonRun(t, f, ExitOK, "init"), "claude_code,command,context,head,local_binding,project,schema,sign_in,test_commands,warnings")
+	initDoc := jsonRun(t, f, ExitOK, "init")
+	keys(initDoc, "claude_code,command,context,head,local_binding,project,schema,settings,sign_in,test_commands,warnings")
+	assertKeys(t, initDoc.get("settings"), "allow_local_binding,defaults,jobs,mined_verify,require_lock,setup,verify,verify_timeout_seconds")
 	show := jsonRun(t, f, ExitOK, "context", "show")
 	keys(show, "above_repository_files,command,context,entries,linked,project,schema,warnings,where")
 	row(show, "entries", "bytes,kind,path,startup_bytes,via")
@@ -104,19 +106,6 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	failed := jsonRun(t, f, ExitError, "task", "show", "nope")
 	keys(failed, "command,error,schema")
 	assertKeys(t, failed.get("error"), "code,message")
-}
-
-func TestJSONMineKeys(t *testing.T) {
-	t.Parallel()
-	f, _ := startFixture(t, 3)
-	jsonRun(t, f, ExitOK, "init")
-	keys := "candidates,candidates_found,command,commits_read,dry_run,head,imported,interrupted,ref,schema,set_aside,shallow,tasks,tried,valid,verify"
-	dry := jsonRun(t, f, ExitOK, "task", "mine", "--dry-run", "--limit", "1")
-	assertKeys(t, dry.doc, keys)
-	assertKeys(t, dry.get("candidates").([]any)[0], "changed_lines,code_files,commit,score,score_parts,subject,test_files")
-	imp := jsonRun(t, f, ExitOK, "task", "mine", "--limit", "1")
-	assertKeys(t, imp.doc, keys)
-	assertKeys(t, imp.get("tasks").([]any)[0], "commit,name,problem,task")
 }
 
 // A judge-graded task has no hidden tests; validating it runs nothing, so no paid call is possible. Its document must

@@ -68,7 +68,7 @@ type Profile struct {
 	// wrapper script such as mvnw, say). An empty result proposes nothing.
 	TestCommand func(has func(name string) bool) string
 	// Languages are the languages this tool's tests are written in, as internal/mine names them ("go", "java",
-	// "kotlin", ...): task mine keeps only commits whose tests the project's tools run.
+	// "kotlin", ...): mining keeps only commits whose tests the project's tools run.
 	Languages []string
 	// Runners are the command words that run this tool (matched as whole words in a verification command), and Configs
 	// the files at the repository root that configure it: grading reports an agent's change to them.

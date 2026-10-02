@@ -44,7 +44,7 @@ About 35 visible flags instead of 67, with `experiment new` at about 10. Nothing
 
 ## Work
 - [ ] **1. Experiment and run flags** (derive, the judge, hide). Risk: medium (the experiment design and lock inputs).
-- [ ] **2. Project settings, one way to mine, the task and init flags** (hide). Risk: medium-high (a migration; mining's entry points).
+- [x] **2. Project settings, one way to mine, the task and init flags** (hide). Risk: medium-high (a migration; mining's entry points). Done: migration 0012 adds the settings to `projects`; `init` stores and prints them (text and JSON); `pool update`, `start`, `task import`, `task add` and `task validate` read them, with hidden per-call overrides; `task mine`, `--no-allow-local-binding` and `--instruction-file` fail with exit 2 and name their replacements; `pool update --dry-run` shows the scores and the commits set aside, and `--since` re-scans without moving the watermark. Visible flags in the usage texts of init, task, pool, start and context: 42 before, 34 after (all usage texts: 68 to 61).
 - [ ] **3. Docs and the count**: README, guide, help texts; the visible-flag count recorded.
 
 ## Verification

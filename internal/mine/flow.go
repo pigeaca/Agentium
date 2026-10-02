@@ -13,7 +13,7 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-// The flow of `task mine`: Prepare scans the history for candidates, Import turns the best into tasks. Both keep no
+// The flow of start's mining: Prepare scans the history for candidates, Import turns the best into tasks. Both keep no
 // state and take what they need as parameters; the command prints.
 
 // PrepareInput is what a scan needs: where the project is and what it already has.
@@ -76,7 +76,7 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 		}
 	}
 	if !in.DryRun && len(verify) == 0 {
-		return Prepared{}, errors.New("no test commands were detected for this project: pass --verify CMD")
+		return Prepared{}, errors.New("no test commands were detected for this project: set them with `agentium init --verify CMD`")
 	}
 	res, err := Scan(ctx, in.Root, opts)
 	if err != nil {
