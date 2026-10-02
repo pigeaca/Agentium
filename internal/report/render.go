@@ -95,14 +95,14 @@ func (r Report) Markdown(w io.Writer) error {
 
 	writeNoise(&b, r)
 
-	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Isolated-run cost | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|---|\n")
 	for i, a := range r.Arms {
 		first := num(a.FirstRequest, "%.0f")
 		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
 			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s |\n", a.label(), a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
-			num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
+		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s | %s |\n", a.label(), a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
+			num(a.IsolatedCostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 
 	if desc, rows, ok := contextUse(r); ok {

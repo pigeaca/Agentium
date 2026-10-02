@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -229,5 +230,33 @@ func TestClaudeRunsOutsideTheRepositoryAndEdgeCases(t *testing.T) {
 	stored, _ := info.JSON()
 	if !strings.Contains(string(stored), `"test_commands":[]`) {
 		t.Errorf("no test commands must be stored as []: %s", stored)
+	}
+}
+
+// Python projects: pytest runs in the venv a run's warm-up builds, through uv when the project locks with uv; a project
+// whose files never name pytest (unittest only) gets no proposal; the Python profile adds no command of its own.
+func TestDiscoverProposesPytestPerPackageManager(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"uv with pytest in a dependency group (click)", map[string]string{"pyproject.toml": "[dependency-groups]\ntests = [\"pytest\"]\n",
+			"uv.lock": "[[package]]\nname = \"pytest\"\n"}, []string{"uv run pytest"}},
+		{"uv with pytest only in the lock", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n", "uv.lock": "[[package]]\nname = \"pytest\"\n"},
+			[]string{"uv run pytest"}},
+		{"pip, pytest configured in setup.cfg", map[string]string{"setup.cfg": "[tool:pytest]\n", "requirements.txt": ""}, []string{"python3 -m pytest"}},
+		{"pip, pytest.ini alone", map[string]string{"pytest.ini": "", "requirements.txt": ""}, []string{"python3 -m pytest"}},
+		{"unittest only (more-itertools)", map[string]string{"pyproject.toml": "[project]\nname = \"more-itertools\"\n",
+			"requirements/testing.txt": "coverage\n"}, nil},
+		{"uv without pytest", map[string]string{"pyproject.toml": "[project]\nname = \"x\"\n", "uv.lock": "[[package]]\nname = \"ruff\"\n"}, nil},
+	} {
+		info, err := Discover(context.Background(), repo(t, c.files), testEnv(map[string]string{"HOME": t.TempDir()}, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(info.TestCommands, c.want) {
+			t.Errorf("%s: test commands %q, want %q", c.name, info.TestCommands, c.want)
+		}
 	}
 }

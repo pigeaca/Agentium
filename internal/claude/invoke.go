@@ -75,6 +75,12 @@ type Invocation struct {
 	AllowLocalBinding bool
 	// JavaHome is a JDK resolved on the host (buildtool.ResolveJavaHome), which the JVM tools' environments name.
 	JavaHome string
+	// Venv is the Python venv the run's warm-up chose in Deps (buildtool.Warmed), which the Python profile's
+	// environment activates. Empty: none.
+	Venv string
+	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
+	// commit): "src", or "" for Dir itself.
+	ImportRoot string
 }
 
 // LocalBindingRefusal is why a run may not start: its tools (Gradle) need the sandbox's allowLocalBinding and the user
@@ -197,6 +203,28 @@ func credentialFiles() []string {
 		".npmrc", ".pypirc", ".kube", ".gnupg"}
 }
 
+// movedCredentials are credential stores the user's environment moves out of credentialFiles' places: gh's config
+// (GH_CONFIG_DIR, else $XDG_CONFIG_HOME/gh), which can hold a plain-text token. Only absolute values count, and never
+// the home folder or one above it (a misconfigured variable would deny everything).
+func movedCredentials(environ []string, home string) []string {
+	var paths []string
+	add := func(p string) {
+		if !filepath.IsAbs(p) {
+			return
+		}
+		p = filepath.Clean(p)
+		if rel, err := filepath.Rel(p, home); err == nil && filepath.IsLocal(rel) {
+			return
+		}
+		paths = append(paths, p)
+	}
+	add(lookup(environ, "GH_CONFIG_DIR"))
+	if x := lookup(environ, "XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		add(filepath.Join(x, "gh"))
+	}
+	return paths
+}
+
 // Command returns the arguments and environment for the run. environ is the parent's environment (os.Environ()),
 // filtered through an allowlist; the sign-in secret is the only credential the child receives.
 func (inv Invocation) Command(environ []string) (args, env []string, err error) {
@@ -212,7 +240,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
 		}
@@ -245,7 +273,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	profiles := buildtool.Select(inv.Tools)
 	allowed := EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
-		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome})
+		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, ImportRoot: inv.ImportRoot})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
 		name, _, _ := strings.Cut(kv, "=")
@@ -367,6 +395,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	for _, name := range credentialFiles() {
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
+	paths = append(paths, movedCredentials(environ, inv.Home)...)
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	if inv.Deps != "" {
 		paths = append(paths, buildtool.DepsDenied(inv.Deps)...)
@@ -553,11 +582,14 @@ func Environ(environ []string) []string {
 // clears it in the agent's environment instead.
 func EnvironFor(environ []string, selected []buildtool.Profile) []string {
 	names := []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR",
-		"LANG", "TERM", "TZ", "VIRTUAL_ENV", "JAVA_HOME", "CARGO_HOME",
+		"LANG", "TERM", "TZ", "JAVA_HOME", "CARGO_HOME",
 		"RUSTUP_HOME", "PNPM_HOME", "BUN_INSTALL", "DENO_DIR",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
-	prefixes := []string{"LC_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
+	// No PYTHON*, PIP_*, UV_* or VIRTUAL_ENV, for any project: a PIP_INDEX_URL may carry a token, and PYTHONPATH,
+	// VIRTUAL_ENV or UV_CACHE_DIR would point the agent at other code or at the user's caches. A Python project's
+	// profile sets its own (buildtool's pythonEnv).
+	prefixes := []string{"LC_", "NODE_", "NVM_", "CONDA_", "RUSTC", "XDG_", "HOMEBREW_"}
 	toolNames, toolPrefixes := buildtool.EnvAllowlist(selected)
 	// Credentials are dropped by the shared policy; GIT_*, AGENTIUM_* and CLAUDE_* are simply not on the list.
 	return runner.EnvPolicy{Allowlist: true, Names: append(names, toolNames...), Prefixes: append(prefixes, toolPrefixes...)}.Filter(environ)

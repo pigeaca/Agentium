@@ -1,0 +1,431 @@
+== agent: a venv
+-- env
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+XDG_CACHE_HOME=/golden/home/xdg
+GOFLAGS=-buildvcs=false
+VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
+PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
+PYTHONPATH=/golden/data/workspaces/r1/repo
+PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+PYTEST_ADDOPTS=-p no:cacheprovider
+PIP_NO_INDEX=1
+PIP_DISABLE_PIP_VERSION_CHECK=1
+UV_OFFLINE=1
+UV_NO_SYNC=1
+UV_FROZEN=1
+UV_PYTHON_DOWNLOADS=never
+UV_PROJECT_ENVIRONMENT=/golden/data/deps/1/py/0123456789abcdef/venv
+UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=/golden/data/workspaces/r1/go-build
+CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
+-- denied paths
+/golden/data/projects
+/golden/data/records
+/golden/repo
+/golden/home/.claude/file-history
+/golden/home/.claude/history.jsonl
+/golden/home/.claude/todos
+/golden/home/.claude/sessions
+/golden/home/.claude/plans
+/golden/home/.claude/.claude.json
+/golden/home/.claude/.credentials.json
+/golden/home/.claude.json
+/golden/home/.ssh
+/golden/home/.codex
+/golden/home/.config/gh
+/golden/home/.config/agentium
+/golden/home/.netrc
+/golden/home/.git-credentials
+/golden/home/.aws
+/golden/home/.docker
+/golden/home/.npmrc
+/golden/home/.pypirc
+/golden/home/.kube
+/golden/home/.gnupg
+/golden/home/Library/Caches/go-build
+/golden/home/.cache/go-build
+/golden/home/xdg/go-build
+/golden/home/.m2
+/golden/home/.gradle/caches
+/golden/home/.gradle/daemon
+/golden/home/.gradle/native
+/golden/home/.gradle/jdks
+/golden/home/.gradle/init.d
+/golden/home/.gradle/init.gradle
+/golden/home/.gradle/init.gradle.kts
+/golden/home/.gradle/gradle.properties
+/golden/home/.gradle/build-scan-data
+/golden/home/.gradle/.tmp
+/golden/home/.gradle/workers
+/golden/home/.gradle/notifications
+/golden/home/.cargo/registry
+/golden/home/.cargo/git
+/golden/home/.cargo/credentials.toml
+/golden/home/.cargo/credentials
+/golden/home/.cargo/build
+/golden/home/Library/Caches/Mozilla.sccache
+/golden/home/.cache/sccache
+/golden/home/xdg/sccache
+/golden/home/.cache/uv
+/golden/home/.cache/pip
+/golden/home/Library/Caches/pip
+/golden/home/.cache/pypoetry
+/golden/home/Library/Caches/pypoetry
+/golden/home/xdg/uv
+/golden/home/xdg/pip
+/golden/home/xdg/pypoetry
+/golden/uvc
+/golden/pipc
+/golden/poetry
+/golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
+/golden/home/.npm
+/golden/home/Library/pnpm/store
+/golden/home/.local/share/pnpm/store
+/golden/data/deps/1/gradle
+/golden/data/deps/1/build-cache
+/golden/data/deps/1/uv-cache
+/golden/data/deps/1/pip-cache
+/golden/data/deps/1/py-resolve
+/tmp/claude-4242
+/private/tmp/claude-4242
+/tmp/claude
+/private/tmp/claude
+/tmp/cc-socks
+/private/tmp/cc-socks
+/tmp/cc-socks-4242
+/private/tmp/cc-socks-4242
+/tmp/cc-daemon-4242
+/private/tmp/cc-daemon-4242
+/golden/home/.npm/_logs
+/golden/home/.claude/debug
+== agent: a venv, the src layout (decided from the base)
+-- env
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+XDG_CACHE_HOME=/golden/home/xdg
+GOFLAGS=-buildvcs=false
+VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
+PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
+PYTHONPATH=/golden/data/workspaces/r1/repo/src
+PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+PYTEST_ADDOPTS=-p no:cacheprovider
+PIP_NO_INDEX=1
+PIP_DISABLE_PIP_VERSION_CHECK=1
+UV_OFFLINE=1
+UV_NO_SYNC=1
+UV_FROZEN=1
+UV_PYTHON_DOWNLOADS=never
+UV_PROJECT_ENVIRONMENT=/golden/data/deps/1/py/0123456789abcdef/venv
+UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=/golden/data/workspaces/r1/go-build
+CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
+-- denied paths
+/golden/data/projects
+/golden/data/records
+/golden/repo
+/golden/home/.claude/file-history
+/golden/home/.claude/history.jsonl
+/golden/home/.claude/todos
+/golden/home/.claude/sessions
+/golden/home/.claude/plans
+/golden/home/.claude/.claude.json
+/golden/home/.claude/.credentials.json
+/golden/home/.claude.json
+/golden/home/.ssh
+/golden/home/.codex
+/golden/home/.config/gh
+/golden/home/.config/agentium
+/golden/home/.netrc
+/golden/home/.git-credentials
+/golden/home/.aws
+/golden/home/.docker
+/golden/home/.npmrc
+/golden/home/.pypirc
+/golden/home/.kube
+/golden/home/.gnupg
+/golden/home/Library/Caches/go-build
+/golden/home/.cache/go-build
+/golden/home/xdg/go-build
+/golden/home/.m2
+/golden/home/.gradle/caches
+/golden/home/.gradle/daemon
+/golden/home/.gradle/native
+/golden/home/.gradle/jdks
+/golden/home/.gradle/init.d
+/golden/home/.gradle/init.gradle
+/golden/home/.gradle/init.gradle.kts
+/golden/home/.gradle/gradle.properties
+/golden/home/.gradle/build-scan-data
+/golden/home/.gradle/.tmp
+/golden/home/.gradle/workers
+/golden/home/.gradle/notifications
+/golden/home/.cargo/registry
+/golden/home/.cargo/git
+/golden/home/.cargo/credentials.toml
+/golden/home/.cargo/credentials
+/golden/home/.cargo/build
+/golden/home/Library/Caches/Mozilla.sccache
+/golden/home/.cache/sccache
+/golden/home/xdg/sccache
+/golden/home/.cache/uv
+/golden/home/.cache/pip
+/golden/home/Library/Caches/pip
+/golden/home/.cache/pypoetry
+/golden/home/Library/Caches/pypoetry
+/golden/home/xdg/uv
+/golden/home/xdg/pip
+/golden/home/xdg/pypoetry
+/golden/uvc
+/golden/pipc
+/golden/poetry
+/golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
+/golden/home/.npm
+/golden/home/Library/pnpm/store
+/golden/home/.local/share/pnpm/store
+/golden/data/deps/1/gradle
+/golden/data/deps/1/build-cache
+/golden/data/deps/1/uv-cache
+/golden/data/deps/1/pip-cache
+/golden/data/deps/1/py-resolve
+/tmp/claude-4242
+/private/tmp/claude-4242
+/tmp/claude
+/private/tmp/claude
+/tmp/cc-socks
+/private/tmp/cc-socks
+/tmp/cc-socks-4242
+/private/tmp/cc-socks-4242
+/tmp/cc-daemon-4242
+/private/tmp/cc-daemon-4242
+/golden/home/.npm/_logs
+/golden/home/.claude/debug
+== agent: no venv (a warm-up that failed)
+-- env
+PATH=/usr/local/bin:/usr/bin:/bin
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+XDG_CACHE_HOME=/golden/home/xdg
+GOFLAGS=-buildvcs=false
+PYTHONPATH=/golden/data/workspaces/r1/repo
+PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+PYTEST_ADDOPTS=-p no:cacheprovider
+PIP_NO_INDEX=1
+PIP_DISABLE_PIP_VERSION_CHECK=1
+UV_OFFLINE=1
+UV_NO_SYNC=1
+UV_FROZEN=1
+UV_PYTHON_DOWNLOADS=never
+UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=/golden/data/workspaces/r1/go-build
+CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
+-- denied paths
+/golden/data/projects
+/golden/data/records
+/golden/repo
+/golden/home/.claude/file-history
+/golden/home/.claude/history.jsonl
+/golden/home/.claude/todos
+/golden/home/.claude/sessions
+/golden/home/.claude/plans
+/golden/home/.claude/.claude.json
+/golden/home/.claude/.credentials.json
+/golden/home/.claude.json
+/golden/home/.ssh
+/golden/home/.codex
+/golden/home/.config/gh
+/golden/home/.config/agentium
+/golden/home/.netrc
+/golden/home/.git-credentials
+/golden/home/.aws
+/golden/home/.docker
+/golden/home/.npmrc
+/golden/home/.pypirc
+/golden/home/.kube
+/golden/home/.gnupg
+/golden/home/Library/Caches/go-build
+/golden/home/.cache/go-build
+/golden/home/xdg/go-build
+/golden/home/.m2
+/golden/home/.gradle/caches
+/golden/home/.gradle/daemon
+/golden/home/.gradle/native
+/golden/home/.gradle/jdks
+/golden/home/.gradle/init.d
+/golden/home/.gradle/init.gradle
+/golden/home/.gradle/init.gradle.kts
+/golden/home/.gradle/gradle.properties
+/golden/home/.gradle/build-scan-data
+/golden/home/.gradle/.tmp
+/golden/home/.gradle/workers
+/golden/home/.gradle/notifications
+/golden/home/.cargo/registry
+/golden/home/.cargo/git
+/golden/home/.cargo/credentials.toml
+/golden/home/.cargo/credentials
+/golden/home/.cargo/build
+/golden/home/Library/Caches/Mozilla.sccache
+/golden/home/.cache/sccache
+/golden/home/xdg/sccache
+/golden/home/.cache/uv
+/golden/home/.cache/pip
+/golden/home/Library/Caches/pip
+/golden/home/.cache/pypoetry
+/golden/home/Library/Caches/pypoetry
+/golden/home/xdg/uv
+/golden/home/xdg/pip
+/golden/home/xdg/pypoetry
+/golden/uvc
+/golden/pipc
+/golden/poetry
+/golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
+/golden/home/.npm
+/golden/home/Library/pnpm/store
+/golden/home/.local/share/pnpm/store
+/golden/data/deps/1/gradle
+/golden/data/deps/1/build-cache
+/golden/data/deps/1/uv-cache
+/golden/data/deps/1/pip-cache
+/golden/data/deps/1/py-resolve
+/tmp/claude-4242
+/private/tmp/claude-4242
+/tmp/claude
+/private/tmp/claude
+/tmp/cc-socks
+/private/tmp/cc-socks
+/tmp/cc-socks-4242
+/private/tmp/cc-socks-4242
+/tmp/cc-daemon-4242
+/private/tmp/cc-daemon-4242
+/golden/home/.npm/_logs
+/golden/home/.claude/debug
+== commands: CommandEnvFor
+UV_CACHE_DIR=/golden/data/cache/uv
+PIP_CACHE_DIR=/golden/data/cache/pip
+PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
+== commands: CheckoutEnv (grading's copy, the src layout)
+VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
+PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
+PYTHONPATH=/golden/data/workspaces/r1/graded/src
+PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
+PYTEST_ADDOPTS=-p no:cacheprovider
+PIP_NO_INDEX=1
+PIP_DISABLE_PIP_VERSION_CHECK=1
+UV_OFFLINE=1
+UV_NO_SYNC=1
+UV_FROZEN=1
+UV_PYTHON_DOWNLOADS=never
+UV_PROJECT_ENVIRONMENT=/golden/data/deps/1/py/0123456789abcdef/venv
+UV_CACHE_DIR=/golden/data/cache/uv
+== commands: CheckoutEnviron (their base environment)
+PATH=/usr/local/bin:/usr/bin:/bin
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+POETRY_CACHE_DIR=/golden/poetry
+XDG_CACHE_HOME=/golden/home/xdg
+== discovery: uv (click)
+["uv run pytest"]
+== discovery: pip with pytest configured
+["python3 -m pytest"]
+== discovery: unittest only (more-itertools)
+[]
+== checkFiles ["uv run pytest"]
+scripts []
+configs [".python-version" "conftest.py" "noxfile.py" "pyproject.toml" "pytest.ini" "requirements-dev.txt" "requirements.txt" "requirements/testing.txt" "setup.cfg" "setup.py" "tox.ini" "uv.lock"]
+== checkFiles ["python3 -m pytest -q tests/test_parser.py"]
+scripts []
+configs [".python-version" "conftest.py" "noxfile.py" "pyproject.toml" "pytest.ini" "requirements-dev.txt" "requirements.txt" "requirements/testing.txt" "setup.cfg" "setup.py" "tox.ini" "uv.lock"]
+== checkFiles ["python -m unittest tests.test_recipes"]
+scripts []
+configs [".python-version" "conftest.py" "noxfile.py" "pyproject.toml" "pytest.ini" "requirements-dev.txt" "requirements.txt" "requirements/testing.txt" "setup.cfg" "setup.py" "tox.ini" "uv.lock"]
+== checkFiles ["tox -e py312"]
+scripts []
+configs [".python-version" "conftest.py" "noxfile.py" "pyproject.toml" "pytest.ini" "requirements-dev.txt" "requirements.txt" "requirements/testing.txt" "setup.cfg" "setup.py" "tox.ini" "uv.lock"]
+== checkFiles ["nox -s tests"]
+scripts []
+configs [".python-version" "conftest.py" "noxfile.py" "pyproject.toml" "pytest.ini" "requirements-dev.txt" "requirements.txt" "requirements/testing.txt" "setup.cfg" "setup.py" "tox.ini" "uv.lock"]
+== checkFiles ["python3 scripts/check.py"]
+scripts []
+configs []
+== checkFiles ["make test"]
+scripts []
+configs []
+== ranTests
+true uv run pytest tests/test_formatting.py
+true python -m pytest
+true python3.12 -m unittest tests.test_recipes
+true pytest -x
+true .venv/bin/pytest
+true tox -e py312
+true nox -s tests
+false uv run ruff check
+false uv sync
+false pip install -e .
+false python -c 'import click'
+true cat pytest.ini

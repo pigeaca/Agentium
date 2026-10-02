@@ -62,7 +62,7 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 		return c, err
 	}
 	for _, t := range tasks {
-		if t.Grading == task.GradingJudge {
+		if t.Grading == task.GradingJudge || t.Retired() { // a retired task is never validated, reviewed or counted
 			continue
 		}
 		v := task.ValidationOf(t)
@@ -174,7 +174,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			snaps = append(snaps, name)
 		}
 	}
-	arms, err := s.w.validating(nil, s.env.Now).Arms(ctx, s.w.project.ID, snaps)
+	arms, err := s.w.validating(s.env, nil).Arms(ctx, s.w.project.ID, snaps)
 	if err != nil {
 		return err
 	}
