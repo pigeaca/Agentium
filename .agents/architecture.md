@@ -9,7 +9,7 @@ Agentium runs coding agents (Claude Code and Codex first) on tasks from a develo
 Shape:
 - **Hybrid.** Agentium owns context snapshots, tasks, experiment design, statistics and the UX.
 - **Local runs** drive agent CLIs headlessly in isolated checkouts.
-- **Harbor**, pinned and out of process, adds containers later.
+- **Containers** later, driven directly through the Docker CLI ([decision](decisions/2026-10-02-containers-direct-docker.md)).
 - **One binary:** a Go core (Go 1.27.1, module `github.com/pigeaca/agentium`) and SQLite through `mattn/go-sqlite3`, used from the console.
 
 ## Go conventions
