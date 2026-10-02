@@ -12,10 +12,10 @@
     - phase1-v2's excess over 5% on lopsided noise is a known limitation (§8).
     - A skew-robust interval (bootstrap-t or Johnson's t) is a later research item, for both methods.
     - The drift panel and the reuse defaults stay open until reuse resumes.
-  - **Plan:** the implementation steps are in the [cheaper verdicts plan](../../.agents/plans/2026-10-02-cheaper-verdicts.md).
+  - **Plan:** the implementation steps are in the [cheaper verdicts plan](../../.agents/plans/archive/2026-10-02-cheaper-verdicts.md).
   - **Built** (step 1, 2026-10-02): `seq-v1` is production code (`internal/stats/sequential.go`, `internal/experiment/sequential.go`), and the simulations call it.
     - The long gate on production code passes, with §7's figures unchanged: every null group's upper bound at or under 5% (largest 4.62%, arm-specific), "equivalent" at the margin 0.71%.
-    - The real smoke check is still to run.
+    - **The real smoke check passed the gate** (2026-10-02, [report](../examples/seq-v1-smoke-55-report.md)): an A/A on samber/lo, 16 tasks on `claude-sonnet-5-5`, made look 1 (inconclusive, conditional power 27%) and look 2 (inconclusive, 0%), and stopped for futility, with no cost verdict and the stage barrier holding; $2.25. The first attempt, on `claude-sonnet-5`, hit its $3.50 budget before look 1 ([report](../examples/seq-v1-smoke-report.md)).
 - Why it exists: the [next chapter](../../.agents/plans/2026-10-01-next-chapter.md#wave-3-requirement-a-statistics-note-before-any-code) requires this note before any code for run reuse, early stopping or the scheduled watch. Each of them breaks a safeguard the engine has today: the version lock, interleaving in time, and the study's rule against optional stopping (§5.6, rule 7).
 - Evidence:
   - **Where:** seeded simulations in `internal/stats` (`sequential_test.go`, `drift_test.go`; test-only).
