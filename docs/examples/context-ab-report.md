@@ -1,4 +1,4 @@
-> A real report from Phase 1's acceptance runs, printed by `agentium experiment report ab` at commit `871e6ae` and not edited. Claude Code 2.1.281 and claude-sonnet-5 worked on tasks taken from this repository. The experiment was stopped after 4 complete pairs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
+> A real report from Phase 1's acceptance runs, printed by `agentium experiment report ab` at commit `871e6ae` and not edited. Claude Code 2.1.281 and claude-sonnet-5 worked on tasks taken from this repository. The experiment was stopped after 4 complete pairs to fit one usage window, so it is exploratory. See the [gallery](../gallery.md).
 
 ---
 # Experiment ab
