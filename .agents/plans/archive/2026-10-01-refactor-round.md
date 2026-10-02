@@ -1,7 +1,7 @@
 # Refactor round
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-01): step 4 (faster tests) in #59: the CLI tests went from 125 s to about 30 s under `-race`. Step 1 (spending record) is implemented and reviewed (approve with notes, fixes applied); its PR is next. Step 2 (handlers into services) is implemented on its branch. Step 3 (shared helpers) is implemented, except `experiment`'s `orNone` copy. Approved with the [next chapter](2026-10-01-next-chapter.md).
+- Status: Done (2026-10-02): step 1 in #64, step 2 in #65, step 3 in #72 and #74 (the last `orNone`), step 4 in #59. Approved with the [next chapter](../2026-10-01-next-chapter.md).
 - Scope: the code findings of the 2026-10-01 review. No change in behavior.
 
 ## Why
@@ -40,8 +40,8 @@ Refactors only: no new features, no new Go modules, no change to output.
 Unchanged tests and golden files, `harness.py check changed`, CI, and a reviewer per step.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code / claude-opus-5-5 / high (coordinator, implementers and reviewers)
+- Elapsed: about 300m of wall clock over two days, beside other work
+- Check-fix loops: 6
+- User corrections: 1 (the user asked where refactoring had gone; it was added back to the roadmap)
+- Review: every step approved with notes after its fixes
