@@ -568,26 +568,26 @@ class TestSlots(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.directory = Path(temporary.name)
 
-    def test_two_holders_at_once_and_a_third_waits_for_a_release(self):
-        acquired, printed = threading.Event(), []
-        with contextlib.ExitStack() as stack, patch("builtins.print", side_effect=lambda *a, **k: printed.append(a[0])):
-            holders = {stack.enter_context(harness.test_slot(self.directory)): None for _ in range(2)}
-            self.assertEqual(set(holders), {0, 1})
+    def test_two_holders_at_once_and_a_third_takes_whichever_frees_first(self):
+        acquired, printed, got = threading.Event(), [], []
+        with patch("builtins.print", side_effect=lambda *a, **k: printed.append(a[0])):
+            first, second = harness.test_slot(self.directory, poll=0.01), harness.test_slot(self.directory, poll=0.01)
+            self.assertEqual((first.__enter__(), second.__enter__()), (0, 1))
             self.assertEqual(printed, [])  # neither of the first two waited
 
             def third():
-                with harness.test_slot(self.directory):
+                with harness.test_slot(self.directory, poll=0.01) as slot:
+                    got.append(slot)
                     acquired.set()
-            # The waiter blocks on the slot its pid picks; release exactly that one.
-            waited_on = os.getpid() % harness.TEST_SLOTS
             thread = threading.Thread(target=third, daemon=True)
             thread.start()
             self.assertFalse(acquired.wait(0.3))
-            self.assertEqual(printed, ["[harness] waiting for a test slot (another worktree is running tests)"])
-            stack.close()  # releases both slots, including waited_on
-            self.assertTrue(acquired.wait(5), f"waiter on slot {waited_on} never acquired it")
+            second.__exit__(None, None, None)  # free slot 1; slot 0 stays held
+            self.assertTrue(acquired.wait(5))
             thread.join(5)
-        self.assertEqual(len(printed), 1)  # the wait is announced once
+            first.__exit__(None, None, None)
+        self.assertEqual(got, [1])
+        self.assertEqual(printed, ["[harness] waiting for a test slot (another worktree is running tests)"])  # announced once
 
     def test_slot_is_released_on_exception(self):
         with self.assertRaises(RuntimeError), harness.test_slot(self.directory, slots=1):
@@ -601,6 +601,8 @@ class TestSlots(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(repo)], check=True)
             with patch.object(harness, "ROOT", repo):
                 self.assertEqual(harness.slot_directory(), repo / ".git")
+            with patch.object(harness, "ROOT", repo / "not-a-repo"):  # no git checkout: the system temp dir
+                self.assertEqual(harness.slot_directory(), Path(tempfile.gettempdir()))
 
 
 class ExitLine(unittest.TestCase):
@@ -626,6 +628,15 @@ class ExitLine(unittest.TestCase):
                                    check_go=unittest.mock.MagicMock(side_effect=KeyboardInterrupt))
         self.assertEqual((code, lines[-1]), (130, "[harness] exit=130"))
 
+    def test_signals_and_harness_bugs_still_end_with_the_line(self):
+        killed = unittest.mock.MagicMock(side_effect=subprocess.CalledProcessError(-2, ["go", "test"]))
+        code, lines = self.outcome(["check", "changed"], check_changed=killed)
+        self.assertEqual((code, lines[-1]), (130, "[harness] exit=130"))  # SIGINT, as a shell reports it
+        with patch.object(harness.traceback, "print_exc") as traceback:
+            code, lines = self.outcome(["check", "ci"], check_docs=unittest.mock.MagicMock(side_effect=KeyError("bug")))
+        traceback.assert_called_once()
+        self.assertEqual((code, lines[-1]), (1, "[harness] exit=1"))
+
     def test_usage_error_also_reports_and_other_commands_do_not(self):
         code, lines = self.outcome(["check", "changed", "--bogus"])
         self.assertEqual(code, 1)
@@ -634,77 +645,124 @@ class ExitLine(unittest.TestCase):
         self.assertEqual((code, lines), (0, []))
 
 
-def ci_run(sha, status="completed", conclusion="success", name="CI"):
+def ci_run(sha, status="completed", conclusion="success", name="CI", event="pull_request", prs=(7,)):
     return {"name": name, "head_sha": sha, "status": status, "conclusion": conclusion if status == "completed" else None,
+            "event": event, "pull_requests": [{"number": number} for number in prs],
             "html_url": f"https://github.com/o/r/actions/runs/{sha}"}
 
 
-class FakeGitHub:
-    """Scripted `gh`: each `pr view` returns the next PR state (the last repeats), each runs listing the next list."""
+def next_of(items):
+    """The next scripted reply; the last one repeats."""
+    return items.pop(0) if len(items) > 1 else items[0]
 
-    def __init__(self, prs, runs, head_sha_filter=True):
-        self.prs, self.runs, self.head_sha_filter, self.calls = list(prs), list(runs), head_sha_filter, []
+
+class FakeGitHub:
+    """Scripted `gh`: each `pr view` returns the next PR state, each compare the next behind_by, each runs listing the
+    next list (the last of each repeats). `failures` makes that many reads fail first."""
+
+    def __init__(self, prs, runs, behind=(0,), failures=0):
+        self.prs, self.runs, self.behind, self.failures, self.calls = list(prs), list(runs), list(behind), failures, []
 
     def __call__(self, *args):
         self.calls.append(args)
-        if args[:2] == ("pr", "view"):
-            pr = self.prs.pop(0) if len(self.prs) > 1 else self.prs[0]
-            return json.dumps({"number": 7, "url": "https://github.com/o/r/pull/7", "headRefName": "claude/fix/x",
-                               "state": "OPEN", "isDraft": False, "mergeable": "MERGEABLE", **pr})
-        if args[0] == "api":
-            if "head_sha=" in args[1] and not self.head_sha_filter:
-                raise ValueError("gh api failed: HTTP 422")
-            listing = self.runs.pop(0) if len(self.runs) > 1 else self.runs[0]
-            return json.dumps({"workflow_runs": listing})
         if args[:2] == ("pr", "merge"):
             return "Merged pull request #7\n"
+        if args[:2] == ("pr", "update-branch"):
+            return ""
+        if self.failures:
+            self.failures -= 1
+            raise ValueError("gh api failed: HTTP 502")
+        if args[:2] == ("pr", "view"):
+            return json.dumps({"number": 7, "url": "https://github.com/o/r/pull/7", "headRefName": "claude/fix/x", "state": "OPEN",
+                               "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "baseRefOid": "c" * 40, **next_of(self.prs)})
+        if args == ("api", "repos/o/r"):
+            return json.dumps({"default_branch": "main"})
+        if args[0] == "api" and "/compare/" in args[1]:
+            return json.dumps({"behind_by": next_of(self.behind)})
+        if args[0] == "api" and "/actions/runs?" in args[1]:
+            return json.dumps({"workflow_runs": next_of(self.runs)})
         raise AssertionError(f"unexpected gh call {args}")
+
+    def writes(self):
+        return [call for call in self.calls if call[:2] in {("pr", "merge"), ("pr", "update-branch")}]
 
     def merges(self):
         return [call for call in self.calls if call[:2] == ("pr", "merge")]
 
 
 class PullRequestLanding(unittest.TestCase):
-    def land(self, fake, dry_run=False, timeout=40):
+    A, B = "a" * 40, "b" * 40
+
+    def land(self, fake, dry_run=False, update=False, timeout=40):
         sleeps = []
         clock = iter(range(0, 100000, 20)).__next__  # every reading advances one poll interval
-        with patch.object(harness, "gh", fake), patch.object(harness, "github_repo", return_value="o/r"), patch("builtins.print") as output:
+        with patch.object(harness, "gh", fake), patch.object(harness, "github_repo", return_value="o/r"), \
+                patch("builtins.print") as output:
             try:
-                harness.pr_land(7, dry_run=dry_run, timeout_minutes=timeout, sleep=sleeps.append, clock=clock)
+                harness.pr_land(7, dry_run=dry_run, update=update, timeout_minutes=timeout, sleep=sleeps.append, clock=clock)
                 error = None
             except ValueError as raised:
                 error = str(raised)
         return error, sleeps, " ".join(str(call.args[0]) for call in output.call_args_list if call.args)
 
     def test_success_waits_for_ci_then_merges_the_exact_head(self):
-        fake = FakeGitHub([{"headRefOid": "a" * 40}], [[], [ci_run("a" * 40, "in_progress")],
-                                                       [ci_run("a" * 40), ci_run("a" * 40, name="Other", conclusion="failure"), ci_run("b" * 40, conclusion="failure")]])
+        a = self.A
+        fake = FakeGitHub([{"headRefOid": a}], [[], [ci_run(a, "in_progress")],
+                                                [ci_run(a), ci_run(a, name="Other", conclusion="failure"), ci_run(self.B, conclusion="failure"),
+                                                 ci_run(a, event="push", conclusion="failure"), ci_run(a, conclusion="failure", prs=(8,))]])
         error, sleeps, _ = self.land(fake)
         self.assertIsNone(error)
         self.assertEqual(sleeps, [20, 20])
-        self.assertEqual(fake.merges(), [("pr", "merge", "7", "--repo", "o/r", "--merge", "--match-head-commit", "a" * 40)])
+        self.assertEqual(fake.writes(), [("pr", "merge", "7", "--repo", "o/r", "--merge", "--match-head-commit", a)])
         self.assertTrue(all("--repo" in call or call[0] == "api" for call in fake.calls))
-        self.assertIn(f"repos/o/r/actions/runs?head_sha={'a' * 40}&per_page=100", [call[1] for call in fake.calls if call[0] == "api"])
+        apis = [call[1] for call in fake.calls if call[0] == "api"]
+        self.assertIn(f"repos/o/r/actions/runs?head_sha={a}&event=pull_request&per_page=100", apis)
+        self.assertIn(f"repos/o/r/compare/{'c' * 40}...{a}", apis)
 
     def test_failure_and_cancellation_never_merge_and_name_the_run(self):
         for conclusion in ("failure", "cancelled"):
             with self.subTest(conclusion=conclusion):
-                fake = FakeGitHub([{"headRefOid": "a" * 40}], [[ci_run("a" * 40, conclusion=conclusion)]])
+                fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A, conclusion=conclusion)]])
                 error, _, _ = self.land(fake)
-                self.assertIn(f"CI {conclusion}: https://github.com/o/r/actions/runs/{'a' * 40}", error)
-                self.assertEqual(fake.merges(), [])
+                self.assertIn(f"CI {conclusion}: https://github.com/o/r/actions/runs/{self.A}", error)
+                self.assertEqual(fake.writes(), [])
 
-    def test_draft_closed_and_conflicting_prs_are_refused_at_once(self):
+    def test_draft_closed_conflicting_and_foreign_base_prs_are_refused_at_once(self):
         for state, reason in [({"isDraft": True}, "is a draft"), ({"mergeable": "CONFLICTING"}, "merge conflicts"),
-                              ({"state": "MERGED"}, "is merged, not open")]:
+                              ({"state": "MERGED"}, "is merged, not open"), ({"baseRefName": "release"}, "targets release, not the default branch main")]:
             with self.subTest(reason=reason):
-                fake = FakeGitHub([{"headRefOid": "a" * 40, **state}], [[ci_run("a" * 40)]])
+                fake = FakeGitHub([{"headRefOid": self.A, **state}], [[ci_run(self.A)]])
                 error, sleeps, _ = self.land(fake)
                 self.assertIn(reason, error)
-                self.assertEqual((fake.merges(), sleeps, [c for c in fake.calls if c[0] == "api"]), ([], [], []))
+                self.assertEqual((fake.writes(), sleeps), ([], []))
+                self.assertFalse([call for call in fake.calls if "/actions/" in " ".join(call)])
+
+    def test_a_head_behind_its_base_is_refused_without_update(self):
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]], behind=[2])
+        for dry_run in (False, True):
+            with self.subTest(dry_run=dry_run):
+                error, _, _ = self.land(fake, dry_run=dry_run)
+                self.assertIn("head is 2 commit(s) behind main; update the branch (gh pr update-branch 7), then land again", error)
+                self.assertEqual(fake.writes(), [])
+
+    def test_update_brings_the_branch_up_to_date_then_waits_on_the_new_head(self):
+        a, b = self.A, self.B
+        # Behind on a; the update is asked once even while GitHub still shows a; then b appears, up to date, and passes.
+        fake = FakeGitHub([{"headRefOid": a}, {"headRefOid": a}, {"headRefOid": b}], [[ci_run(a)], [ci_run(b, "queued")], [ci_run(b)]],
+                          behind=[1, 1, 0])
+        error, _, printed = self.land(fake, update=True)
+        self.assertIsNone(error)
+        self.assertEqual(fake.writes(), [("pr", "update-branch", "7", "--repo", "o/r"),
+                                         ("pr", "merge", "7", "--repo", "o/r", "--merge", "--match-head-commit", b)])
+        self.assertIn("head changed to bbbbbbbbbbbb", printed)
+        fake = FakeGitHub([{"headRefOid": a}], [[ci_run(a)]], behind=[1])
+        error, _, printed = self.land(fake, update=True, dry_run=True)
+        self.assertIsNone(error)
+        self.assertIn("would update the branch (gh pr update-branch 7 --repo o/r)", printed)
+        self.assertEqual(fake.writes(), [])
 
     def test_a_new_head_restarts_the_wait_on_the_new_commit(self):
-        old, new = "a" * 40, "b" * 40
+        old, new = self.A, self.B
         # The old commit's CI gets cancelled by the push; that must not fail the landing.
         fake = FakeGitHub([{"headRefOid": old}, {"headRefOid": old}, {"headRefOid": new}],
                           [[ci_run(old, "in_progress")], [ci_run(new, "queued")], [ci_run(old, conclusion="cancelled"), ci_run(new)]])
@@ -714,29 +772,33 @@ class PullRequestLanding(unittest.TestCase):
         self.assertEqual(fake.merges()[0][-1], new)
 
     def test_timeout_never_merges(self):
-        fake = FakeGitHub([{"headRefOid": "a" * 40}], [[ci_run("a" * 40, "in_progress")]])
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A, "in_progress")]])
         error, sleeps, _ = self.land(fake, timeout=1)
         self.assertIn("timed out after 1 min (CI in_progress: https://github.com/o/r/actions/runs/", error)
-        self.assertEqual(fake.merges(), [])
+        self.assertEqual(fake.writes(), [])
         self.assertEqual(len(sleeps), 2)  # 60 s at a 20 s poll
 
+    def test_failed_reads_are_retried_then_give_up(self):
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]], failures=2)
+        error, sleeps, _ = self.land(fake)
+        self.assertIsNone(error)
+        self.assertEqual(sleeps, [5, 10])  # backoff before the second and third attempts
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]], failures=3)
+        error, _, _ = self.land(fake)
+        self.assertIn("HTTP 502", error)
+        self.assertEqual(fake.writes(), [])
+
     def test_dry_run_reports_without_waiting_or_merging(self):
-        fake = FakeGitHub([{"headRefOid": "a" * 40}], [[ci_run("a" * 40, "in_progress")]])
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A, "in_progress")]])
         error, sleeps, printed = self.land(fake, dry_run=True)
         self.assertIsNone(error)
-        self.assertEqual((sleeps, fake.merges()), ([], []))
+        self.assertEqual((sleeps, fake.writes()), ([], []))
         self.assertIn("would wait up to 40 min for CI, then merge only if it passes", printed)
-        fake = FakeGitHub([{"headRefOid": "a" * 40}], [[ci_run("a" * 40, conclusion="failure")]])
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A, conclusion="failure")]])
         error, _, printed = self.land(fake, dry_run=True)
         self.assertIn("CI failure", error)
         self.assertIn("would refuse", printed)
-        self.assertEqual(fake.merges(), [])
-
-    def test_runs_fall_back_to_the_branch_filter(self):
-        fake = FakeGitHub([{"headRefOid": "a" * 40}], [[ci_run("a" * 40)]], head_sha_filter=False)
-        error, _, _ = self.land(fake)
-        self.assertIsNone(error)
-        self.assertIn("repos/o/r/actions/runs?branch=claude/fix/x&per_page=100", [call[1] for call in fake.calls if call[0] == "api"])
+        self.assertEqual(fake.writes(), [])
 
     def test_repository_from_origin_and_usage(self):
         for url in ("git@github.com:/pigeaca/Agentium.git", "git@github.com:pigeaca/Agentium.git",
@@ -752,9 +814,8 @@ class PullRequestLanding(unittest.TestCase):
             with self.subTest(args=args), self.assertRaisesRegex(ValueError, "Usage: pr land"):
                 harness.main(["pr", *args])
         with patch.object(harness, "pr_land") as land:
-            harness.main(["pr", "land", "12", "--timeout", "5", "--dry-run"])
-        land.assert_called_once_with(12, dry_run=True, timeout_minutes=5.0)
-
+            harness.main(["pr", "land", "12", "--timeout", "5", "--dry-run", "--update"])
+        land.assert_called_once_with(12, dry_run=True, update=True, timeout_minutes=5.0)
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+import traceback
 from typing import Any, Callable, Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,9 +51,11 @@ OFFLINE_INSTALLERS = {
     "pnpm-lock.yaml": (["corepack", "pnpm", "install", "--frozen-lockfile", "--offline"], {"COREPACK_ENABLE_NETWORK": "0", "npm_config_update_notifier": "false"}),
 }
 # Ignored path components that tools recreate; any other ignored file blocks `worktree remove`.
-# Machine-wide slots for heavy test runs (go test -race), shared by every worktree through the git common dir.
-TEST_SLOTS = 2
 REGENERABLE = {"node_modules", "__pycache__", "dist", "build", "target", ".venv", ".pytest_cache", "coverage.out", "test-results", "playwright-report", ".DS_Store"}
+
+# Per-clone slots for heavy test runs (go test -race), shared by every worktree through the git common dir.
+TEST_SLOTS = 2
+TEST_SLOT_POLL_SECONDS = 0.5
 
 
 def run(*args: str, cwd: Path | None = None, extra_env: dict[str, str] | None = None) -> None:
@@ -244,20 +248,16 @@ def go_test_targets(go: Path, paths: list[str]) -> list[str] | None:
 
 
 def slot_directory() -> Path:
-    """Where test-slot lock files live: the git common dir, which every worktree of this clone shares."""
-    return Path(git_output("rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    """Where test-slot lock files live: the git common dir, which every worktree of this clone shares. Outside a git
+    checkout, the system temp dir, so the slots still work (shared by everything on the machine then)."""
+    try:
+        return Path(git_output("rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    except (OSError, subprocess.CalledProcessError):
+        return Path(tempfile.gettempdir())
 
 
-@contextlib.contextmanager
-def test_slot(directory: Path | None = None, slots: int = TEST_SLOTS) -> Iterator[int]:
-    """Hold one of `slots` machine-wide slots for a heavy test run; yields the slot number.
-
-    Every slot is tried without blocking first. When all are taken it says so once, then blocks on one slot (chosen
-    by process id, to spread waiters). The lock is an flock on an open file, so the kernel releases it whenever the
-    file is closed or the process dies, including on Ctrl-C or a crash; there is no stale lock to clean up."""
-    directory = directory or slot_directory()
-    paths = [directory / f"agentium-test-slot-{index}.lock" for index in range(slots)]
-    held = None
+def try_slots(paths: list[Path]) -> tuple[int, Any] | None:
+    """The first free slot, locked without blocking, as (index, open file); None when all are taken."""
     for index, path in enumerate(paths):
         handle = open(path, "a")
         try:
@@ -265,18 +265,25 @@ def test_slot(directory: Path | None = None, slots: int = TEST_SLOTS) -> Iterato
         except BlockingIOError:
             handle.close()
             continue
-        held = (index, handle)
-        break
+        return index, handle
+    return None
+
+
+@contextlib.contextmanager
+def test_slot(directory: Path | None = None, slots: int = TEST_SLOTS, poll: float = TEST_SLOT_POLL_SECONDS) -> Iterator[int]:
+    """Hold one of `slots` per-clone slots for a heavy test run; yields the slot number.
+
+    Every slot is tried without blocking. When all are taken it says so once, then retries all of them every `poll`
+    seconds, so it takes whichever frees first. The lock is an flock on an open file, so the kernel releases it
+    whenever the file is closed or the process dies, including on Ctrl-C or a crash; there is no stale lock."""
+    directory = directory or slot_directory()
+    paths = [directory / f"agentium-test-slot-{index}.lock" for index in range(slots)]
+    held = try_slots(paths)
     if held is None:
         print("[harness] waiting for a test slot (another worktree is running tests)", flush=True)
-        index = os.getpid() % slots
-        handle = open(paths[index], "a")
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        except BaseException:
-            handle.close()
-            raise
-        held = (index, handle)
+        while held is None:
+            time.sleep(poll)
+            held = try_slots(paths)
     index, handle = held
     try:
         yield index
@@ -595,8 +602,10 @@ def worktree_remove(branch: str) -> None:
 
 CI_WORKFLOW = "CI"
 LAND_POLL_SECONDS = 20
+LAND_READ_ATTEMPTS = 3  # a failed GitHub read is retried this often (with LAND_RETRY_SECONDS backoff) before giving up
+LAND_RETRY_SECONDS = 5
 LAND_TIMEOUT_MINUTES = 40
-LAND_USAGE = "Usage: pr land <number> [--dry-run] [--timeout MINUTES]"
+LAND_USAGE = "Usage: pr land <number> [--dry-run] [--update] [--timeout MINUTES]"
 
 
 def github_repo() -> str:
@@ -616,12 +625,16 @@ def gh(*args: str) -> str:
     return result.stdout
 
 
+def gh_json(*args: str) -> Any:
+    return json.loads(gh(*args))  # a malformed reply raises JSONDecodeError, a ValueError, so reads retry it too
+
+
 def pull_request(repo: str, number: int) -> dict[str, Any]:
-    fields = "number,state,isDraft,mergeable,headRefOid,headRefName,url"
-    return json.loads(gh("pr", "view", str(number), "--repo", repo, "--json", fields))
+    fields = "number,state,isDraft,mergeable,headRefOid,headRefName,baseRefName,baseRefOid,url"
+    return gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
 
 
-def landing_refusal(pr: dict[str, Any]) -> str | None:
+def landing_refusal(pr: dict[str, Any], default: str) -> str | None:
     """Why a PR cannot be landed at all, or None. An UNKNOWN mergeable state (GitHub still computing) is not refused."""
     number = pr.get("number")
     if pr.get("state") != "OPEN":
@@ -630,17 +643,23 @@ def landing_refusal(pr: dict[str, Any]) -> str | None:
         return f"PR #{number} is a draft; mark it ready first."
     if pr.get("mergeable") == "CONFLICTING":
         return f"PR #{number} has merge conflicts; resolve them on its branch first."
+    if pr.get("baseRefName") != default:
+        return f"PR #{number} targets {pr.get('baseRefName')}, not the default branch {default}; land it by hand."
     return None
 
 
-def ci_runs(repo: str, sha: str, branch: str) -> list[dict[str, Any]]:
-    """The CI workflow's runs for exactly `sha`: filtered by head_sha, or by branch when that filter fails."""
-    try:
-        listing = gh("api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100")
-    except ValueError:
-        listing = gh("api", f"repos/{repo}/actions/runs?branch={branch}&per_page=100")
-    runs = json.loads(listing).get("workflow_runs", [])
-    return [run for run in runs if run.get("name") == CI_WORKFLOW and run.get("head_sha") == sha]
+def commits_behind(repo: str, pr: dict[str, Any]) -> int:
+    """How many commits of the base branch's current tip the head lacks. Zero means the head contains the base, so
+    CI on the head tested exactly what the merge produces. This asks git ancestry directly; a CI run's recorded base
+    SHA would only say what the base was when CI started, and is empty for some events."""
+    return int(gh_json("api", f"repos/{repo}/compare/{pr['baseRefOid']}...{pr['headRefOid']}")["behind_by"])
+
+
+def ci_runs(repo: str, sha: str, number: int) -> list[dict[str, Any]]:
+    """The CI workflow's pull_request runs for exactly `sha` (and, where GitHub lists the PRs, for PR `number`)."""
+    runs = gh_json("api", f"repos/{repo}/actions/runs?head_sha={sha}&event=pull_request&per_page=100").get("workflow_runs", [])
+    return [run for run in runs if run.get("name") == CI_WORKFLOW and run.get("head_sha") == sha and run.get("event") == "pull_request"
+            and (not run.get("pull_requests") or number in [pr.get("number") for pr in run["pull_requests"]])]
 
 
 def ci_state(runs: list[dict[str, Any]]) -> tuple[str, str]:
@@ -657,43 +676,67 @@ def ci_state(runs: list[dict[str, Any]]) -> tuple[str, str]:
     return "success", f"CI passed: {runs[-1].get('html_url')}"
 
 
-def pr_land(number: int, dry_run: bool = False, timeout_minutes: float = LAND_TIMEOUT_MINUTES,
+def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_minutes: float = LAND_TIMEOUT_MINUTES,
             sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
-    """Merge PR `number` once the CI workflow passes on its current head commit, never otherwise.
+    """Merge PR `number` once the CI workflow passes on a head commit that contains the default branch's tip.
 
-    It refuses at once a PR that is not open, is a draft or conflicts; polls CI every LAND_POLL_SECONDS; restarts the
-    wait when the head commit changes; and merges with --match-head-commit, so GitHub itself rejects the merge if a
-    commit lands in between. It never pushes, edits branches or touches the default branch directly."""
+    It refuses at once a PR that is not open, is a draft, conflicts or targets another branch. A head behind its base
+    is refused, or with `update` brought up to date by `gh pr update-branch` (GitHub merges the base into it), after
+    which the wait restarts on the new head. It polls every LAND_POLL_SECONDS, re-reading the PR each time, and merges
+    with --match-head-commit, so GitHub rejects the merge if a commit lands in between. Reads are retried; the merge
+    and the update never are. It never pushes, and touches no branch except through that opt-in update."""
     repo = github_repo()
-    pr = pull_request(repo, number)
-    if refusal := landing_refusal(pr):
-        raise ValueError(refusal)
-    sha, branch = pr["headRefOid"], pr["headRefName"]
-    if dry_run:
-        state, detail = ci_state(ci_runs(repo, sha, branch))
-        action = {"success": "merge it now", "failure": "refuse: CI did not pass",
-                  "pending": f"wait up to {timeout_minutes:g} min for CI, then merge only if it passes"}[state]
-        print(f"[harness] dry run: PR #{number} ({pr.get('url')}) head {sha[:12]} on {branch}; {detail}.\n"
-              f"[harness] would {action}" + (f": gh pr merge {number} --repo {repo} --merge --match-head-commit {sha}"
-                                              if state != "failure" else "") + ".")
-        if state == "failure":
-            raise ValueError(f"PR #{number}: {detail}")
-        return
+
+    def read(fetch: Callable[[], Any]) -> Any:
+        for attempt in range(1, LAND_READ_ATTEMPTS + 1):
+            try:
+                return fetch()
+            except ValueError as error:
+                if attempt == LAND_READ_ATTEMPTS:
+                    raise
+                print(f"[harness] {error}; retrying ({attempt}/{LAND_READ_ATTEMPTS - 1})", file=sys.stderr, flush=True)
+                sleep(LAND_RETRY_SECONDS * attempt)
+
+    default = read(lambda: gh_json("api", f"repos/{repo}")["default_branch"])
     deadline = clock() + timeout_minutes * 60
-    print(f"[harness] PR #{number}: waiting for CI on {sha[:12]} (up to {timeout_minutes:g} min)", flush=True)
+    sha, updated_for = None, None
     while True:
-        # The PR first: a new push cancels the old commit's CI, which must restart the wait, not fail it.
-        current = pull_request(repo, number)
-        if refusal := landing_refusal(current):
+        pr = read(lambda: pull_request(repo, number))
+        if refusal := landing_refusal(pr, default):
             raise ValueError(refusal)
-        if current["headRefOid"] != sha:
-            sha, branch = current["headRefOid"], current["headRefName"]
-            print(f"[harness] PR #{number}: head changed to {sha[:12]}; waiting for CI on the new commit (same deadline)", flush=True)
-        state, detail = ci_state(ci_runs(repo, sha, branch))
-        if state == "failure":
-            raise ValueError(f"PR #{number} not merged: {detail}")
-        if state == "success":
-            break
+        if sha is not None and pr["headRefOid"] != sha:
+            print(f"[harness] PR #{number}: head changed to {pr['headRefOid'][:12]}; waiting for CI on it (same deadline)", flush=True)
+        elif sha is None:
+            print(f"[harness] PR #{number} ({pr.get('url')}): head {pr['headRefOid'][:12]} on {pr['headRefName']}", flush=True)
+        sha = pr["headRefOid"]
+        behind = read(lambda: commits_behind(repo, pr))
+        if behind:
+            detail = f"head is {behind} commit(s) behind {default}"
+            if not update:
+                raise ValueError(f"PR #{number}: {detail}; update the branch (gh pr update-branch {number}), then land again, "
+                                 "or pass --update.")
+            if dry_run:
+                print(f"[harness] dry run: {detail}; would update the branch (gh pr update-branch {number} --repo {repo}), "
+                      f"then wait up to {timeout_minutes:g} min for CI on the new head and merge only if it passes.")
+                return
+            if updated_for != (sha, pr["baseRefOid"]):  # once per head and base; GitHub needs a moment to show the result
+                print(f"[harness] PR #{number}: {detail}; updating the branch", flush=True)
+                gh("pr", "update-branch", str(number), "--repo", repo)
+                updated_for = (sha, pr["baseRefOid"])
+        else:
+            state, detail = ci_state(read(lambda: ci_runs(repo, sha, number)))
+            if dry_run:
+                action = {"success": "merge it now", "failure": "refuse: CI did not pass",
+                          "pending": f"wait up to {timeout_minutes:g} min for CI, then merge only if it passes"}[state]
+                print(f"[harness] dry run: up to date with {default}; {detail}.\n[harness] would {action}"
+                      + (f": gh pr merge {number} --repo {repo} --merge --match-head-commit {sha}" if state != "failure" else "") + ".")
+                if state == "failure":
+                    raise ValueError(f"PR #{number}: {detail}")
+                return
+            if state == "failure":
+                raise ValueError(f"PR #{number} not merged: {detail}")
+            if state == "success":
+                break
         if clock() >= deadline:
             raise ValueError(f"PR #{number} not merged: timed out after {timeout_minutes:g} min ({detail})")
         sleep(LAND_POLL_SECONDS)
@@ -704,8 +747,8 @@ def pr_land(number: int, dry_run: bool = False, timeout_minutes: float = LAND_TI
 
 def pr_command(args: list[str]) -> None:
     action, *values = args or [""]
-    dry_run = "--dry-run" in values
-    values = [value for value in values if value != "--dry-run"]
+    flags = {flag: flag in values for flag in ("--dry-run", "--update")}
+    values = [value for value in values if value not in flags]
     timeout = LAND_TIMEOUT_MINUTES
     if "--timeout" in values:
         at = values.index("--timeout")
@@ -718,7 +761,7 @@ def pr_command(args: list[str]) -> None:
         del values[at:at + 2]
     if action != "land" or len(values) != 1 or not values[0].isdigit():
         raise ValueError(LAND_USAGE)
-    pr_land(int(values[0]), dry_run=dry_run, timeout_minutes=timeout)
+    pr_land(int(values[0]), dry_run=flags["--dry-run"], update=flags["--update"], timeout_minutes=timeout)
 
 
 # --- Metrics ----------------------------------------------------------------------------------
@@ -767,12 +810,13 @@ HELP = """Agentium harness (Python standard library)
                              Task worktree from the remote default branch, offline dependency install
   worktree deps              Offline-install locked dependencies in this checkout
   worktree remove <branch>   Remove a merged, clean task worktree and its local branch
-  pr land <N> [--dry-run] [--timeout MINUTES]
-                             Merge PR N once CI passes on its head commit (default wait 40 min); refuses
-                             closed, draft or conflicting PRs and never merges on red or pending CI
+  pr land <N> [--dry-run] [--update] [--timeout MINUTES]
+                             Merge PR N once CI passes on a head that contains the default branch (wait 40
+                             min by default); refuses closed, draft, conflicting or out-of-date PRs (--update
+                             updates the branch instead) and never merges on red or pending CI
   metrics                    Summarize archived plans' Metrics blocks by agent and model
 
-ci = docs + harness tests + go. go = gofmt, vet, race tests (at most two race runs per machine at once). vuln = pinned govulncheck (online DB).
+ci = docs + harness tests + go. go = gofmt, vet, race tests (at most two race runs per clone at once). vuln = pinned govulncheck (online DB).
 changed and ci end with "[harness] exit=<code>". staged = pre-commit checks on the index. Go runs at the go.mod version with GOTOOLCHAIN=local.
 No toolchains, modules or tools are downloaded locally; worktree setup installs locked dependencies only from the
 local cache. check vuln reads the online vulnerability database, and in CI may download its pinned version.
@@ -838,12 +882,16 @@ def exit_code(args: list[str]) -> int:
         main(args)
         code = 0
     except subprocess.CalledProcessError as error:
-        code = error.returncode or 1
+        # A child killed by a signal has a negative return code; report it the way a shell would (SIGINT -> 130).
+        code = 128 - error.returncode if error.returncode < 0 else (error.returncode or 1)
     except (OSError, ValueError) as error:
         print(f"[harness] {error}", file=sys.stderr)
         code = 1
     except KeyboardInterrupt:
         code = 130
+    except Exception:  # a harness bug: show it, and still end with the exit line
+        traceback.print_exc()
+        code = 1
     if args[:1] == ["check"] and (args[1:2] in (["changed"], ["ci"], [])):
         sys.stderr.flush()
         print(f"[harness] exit={code}", flush=True)
