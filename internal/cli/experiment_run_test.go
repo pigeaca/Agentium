@@ -507,3 +507,46 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+// A retired task leaves new designs and previews with its reason, but an experiment that locked it carries on: eligibility
+// is checked only before the lock. The locked experiment is paused by its budget with runs left, the task is retired, and
+// resume executes the rest, plans without a readiness complaint, and reports.
+func TestRetiredTaskLeavesDesignsButNotLockedExperiments(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "3", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "unlocked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK, "Experiment locked: budget", "4 of 6 runs settled")
+
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tk, err := db.TaskByName(ctx, projects[0].ID, "value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := db.RetireTask(ctx, tk.ID, "its file is gone from the default branch", time.Now()); err != nil || !retired {
+		t.Fatalf("retire: %v, %v", retired, err)
+	}
+	db.Close()
+
+	const why = "it is retired: its file is gone from the default branch"
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean"), ExitError, "no task can be in this experiment yet", "value: "+why)
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean", "--task", "value"), ExitError, "task value cannot be in this experiment: "+why)
+	expect(t, f.run(ctx, "experiment", "plan", "unlocked"), ExitOK, "task value: "+why)
+	expect(t, f.run(ctx, "experiment", "run", "unlocked"), ExitError, "not ready to run", why)
+
+	// The locked experiment: its plan does not list the retired task as a problem, and resume runs what is left.
+	plan := f.run(ctx, "experiment", "plan", "locked")
+	if strings.Contains(plan.stdout, "retired") || strings.Contains(plan.stderr, "retired") {
+		t.Errorf("the plan of a locked experiment names the retired task:\n%s%s", plan.stdout, plan.stderr)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "locked", "--budget", "10"), ExitOK, "Resuming experiment locked", "6 of 6 runs settled")
+	expect(t, f.run(ctx, "experiment", "report", "locked"), ExitOK, "# Experiment locked", "| value |")
+}
