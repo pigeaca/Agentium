@@ -90,8 +90,11 @@ type WarmInput struct {
 // Warmed is what the warm-ups of a base commit found for its runs, kept in the run's stamp (JSON) so that later runs of
 // the same base get the same: the venv, and notes every run of it repeats (a resolve without a lock file).
 type Warmed struct {
-	Venv  string   `json:"venv,omitempty"`
-	Notes []string `json:"notes,omitempty"`
+	Venv string `json:"venv,omitempty"`
+	// Metadata is the base's own metadata folder (Python: a metadata-only .dist-info of the project, MetadataReady),
+	// which the environment puts on PYTHONPATH after the checkout.
+	Metadata string   `json:"metadata,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
 	// Failed explains a warm-up that did not finish. With Transient (a download that may work later) the base is not
 	// stamped and the next run tries again; otherwise (no interpreter meets requires-python, uv.lock without uv) it is
 	// stamped with the failure as a note, so every run of the base says so without warming again.
@@ -112,6 +115,9 @@ func WarmFuncs(ctx context.Context, selected []Profile, in WarmInput) (Warmed, e
 		}
 		if w.Venv != "" {
 			all.Venv = w.Venv
+		}
+		if w.Metadata != "" {
+			all.Metadata = w.Metadata
 		}
 		all.Notes = append(all.Notes, w.Notes...)
 		if w.Failed != "" {

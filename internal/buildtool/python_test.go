@@ -1,9 +1,11 @@
 package buildtool
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,25 +64,35 @@ func TestPythonTestPatterns(t *testing.T) {
 }
 
 // The agent's environment for a Python project: the venv active and first on PATH, the checkout (src/ for the src
-// layout) on PYTHONPATH, bytecode and uv's cache in the run's own cache, no pytest cache, pip and uv offline, uv in the
-// venv without syncing. Without a venv the host's interpreter runs with the same settings; without a build cache no
-// bytecode is written.
+// layout) on PYTHONPATH, then the base's metadata folder, bytecode, uv's cache and hypothesis's database in the run's
+// own cache, no pytest cache, pip and uv offline, uv in the venv without syncing. Without a venv the host's interpreter
+// runs with the same settings; without a build cache no bytecode is written. Agentium's own commands give each
+// checkout its own hypothesis database in the data folder.
 func TestPythonEnv(t *testing.T) {
 	repo := t.TempDir()
+	meta := "/data/deps/1/py-meta/0123456789abcdef"
 	ctx := AgentContext{Allowed: []string{"PATH=/usr/bin:/bin", "PYTHONPATH=/user/py"}, Home: "/home/u", Repo: repo,
-		BuildCache: "/data/workspaces/r1/go-build", Deps: "/data/deps/1", Venv: "/data/deps/1/py/k/venv"}
+		BuildCache: "/data/workspaces/r1/go-build", Deps: "/data/deps/1", Venv: "/data/deps/1/py/k/venv", Metadata: meta}
 	got := AgentEnv(Select([]string{"python"}), ctx)
 	want := []string{"GOFLAGS=-buildvcs=false", "VIRTUAL_ENV=/data/deps/1/py/k/venv", "PATH=/data/deps/1/py/k/venv/bin:/usr/bin:/bin",
-		"PYTHONPATH=" + repo, "PYTHONPYCACHEPREFIX=/data/workspaces/r1/go-build/pycache", "PYTEST_ADDOPTS=-p no:cacheprovider",
+		"PYTHONPATH=" + repo + ":" + meta, "PYTHONPYCACHEPREFIX=/data/workspaces/r1/go-build/pycache",
+		"HYPOTHESIS_STORAGE_DIRECTORY=/data/workspaces/r1/go-build/hypothesis", "PYTEST_ADDOPTS=-p no:cacheprovider",
 		"PIP_NO_INDEX=1", "PIP_DISABLE_PIP_VERSION_CHECK=1", "UV_OFFLINE=1", "UV_NO_SYNC=1", "UV_FROZEN=1", "UV_PYTHON_DOWNLOADS=never",
 		"UV_PROJECT_ENVIRONMENT=/data/deps/1/py/k/venv", "UV_CACHE_DIR=/data/workspaces/r1/go-build/uv"}
 	if !slices.Equal(got, want) {
 		t.Errorf("agent env\n got %q\nwant %q", got, want)
 	}
-	// Agentium's own commands in a checkout: the same, with the data folder's cache.
-	if got := CheckoutEnv(Select([]string{"python"}), AgentContext{Allowed: ctx.Allowed, Repo: repo, BuildCache: "/data/cache", Venv: ctx.Venv}); !slices.Contains(got, "PYTHONPYCACHEPREFIX=/data/cache/pycache") ||
-		!slices.Contains(got, "UV_CACHE_DIR=/data/cache/uv") || !slices.Contains(got, "VIRTUAL_ENV="+ctx.Venv) {
-		t.Errorf("checkout env %q", got)
+	// Agentium's own commands in a checkout: the same, with the data folder's cache, and a hypothesis database of the
+	// checkout's own there (a grading never replays what another arm's grading found).
+	checkout := CheckoutEnv(Select([]string{"python"}), AgentContext{Allowed: ctx.Allowed, Repo: repo, BuildCache: "/data/cache", Venv: ctx.Venv, Metadata: meta})
+	if !slices.Contains(checkout, "PYTHONPYCACHEPREFIX=/data/cache/pycache") || !slices.Contains(checkout, "UV_CACHE_DIR=/data/cache/uv") ||
+		!slices.Contains(checkout, "VIRTUAL_ENV="+ctx.Venv) || !slices.Contains(checkout, "PYTHONPATH="+repo+":"+meta) {
+		t.Errorf("checkout env %q", checkout)
+	}
+	other := env(t, CheckoutEnv(Select([]string{"python"}), AgentContext{Repo: t.TempDir(), BuildCache: "/data/cache"}))
+	if h := env(t, checkout)["HYPOTHESIS_STORAGE_DIRECTORY"]; !strings.HasPrefix(h, "/data/cache/hypothesis/") || h == other["HYPOTHESIS_STORAGE_DIRECTORY"] ||
+		!strings.HasPrefix(other["HYPOTHESIS_STORAGE_DIRECTORY"], "/data/cache/hypothesis/") {
+		t.Errorf("hypothesis's databases: %q and %q", h, other["HYPOTHESIS_STORAGE_DIRECTORY"])
 	}
 	if got := CheckoutEnv(Select([]string{"go", "maven", "gradle", "cargo"}), ctx); len(got) != 0 {
 		t.Errorf("other tools set %q in their commands' checkouts", got)
@@ -90,11 +102,11 @@ func TestPythonEnv(t *testing.T) {
 	// agent adds later changes nothing.
 	src := ctx
 	src.ImportRoot = "src"
-	if e := env(t, AgentEnv(Select([]string{"python"}), src)); e["PYTHONPATH"] != filepath.Join(repo, "src") {
+	if e := env(t, AgentEnv(Select([]string{"python"}), src)); e["PYTHONPATH"] != filepath.Join(repo, "src")+":"+meta {
 		t.Errorf("src layout: PYTHONPATH=%q", e["PYTHONPATH"])
 	}
 	writeFiles(t, repo, map[string]string{"src/added/__init__.py": ""})
-	if e := env(t, AgentEnv(Select([]string{"python"}), ctx)); e["PYTHONPATH"] != repo {
+	if e := env(t, AgentEnv(Select([]string{"python"}), ctx)); e["PYTHONPATH"] != repo+":"+meta {
 		t.Errorf("a src/ added in the checkout moved PYTHONPATH to %q", e["PYTHONPATH"])
 	}
 	for _, c := range []struct {
@@ -125,7 +137,8 @@ func TestPythonEnv(t *testing.T) {
 	}
 	bare := AgentEnv(Select([]string{"python"}), AgentContext{Allowed: ctx.Allowed})
 	if !slices.Contains(bare, "PYTHONDONTWRITEBYTECODE=1") || slices.ContainsFunc(bare, func(kv string) bool {
-		return strings.HasPrefix(kv, "PYTHONPYCACHEPREFIX=") || strings.HasPrefix(kv, "UV_CACHE_DIR=") || strings.HasPrefix(kv, "PYTHONPATH=")
+		return strings.HasPrefix(kv, "PYTHONPYCACHEPREFIX=") || strings.HasPrefix(kv, "UV_CACHE_DIR=") || strings.HasPrefix(kv, "PYTHONPATH=") ||
+			strings.HasPrefix(kv, "HYPOTHESIS_STORAGE_DIRECTORY=")
 	}) {
 		t.Errorf("no build cache, no checkout: %q", bare)
 	}
@@ -138,7 +151,7 @@ func TestPythonEnv(t *testing.T) {
 	if err := PrepareRun(context.Background(), Select([]string{"python"}), "", run); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"pycache", "uv"} {
+	for _, name := range []string{"pycache", "uv", "hypothesis"} {
 		if info, err := os.Stat(filepath.Join(run, name)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
 			t.Errorf("the run's %s folder: %v %v", name, info, err)
 		}
@@ -187,22 +200,79 @@ func TestPythonDepsDeniedWhole(t *testing.T) {
 }
 
 // fakePython is a host with fake tools in bin (and nothing else on PATH): an interpreter that reports version and
-// makes venvs, its pip (which writes report as its resolve's report and records what it installs), and, with uv, a
-// uv that finds that interpreter and syncs a venv. Every call is logged to calls.
+// makes venvs, its pip (which writes report as its resolve's report, records what it installs, and builds a wheel),
+// and, with uv, a uv that finds that interpreter, syncs a venv and builds a wheel. A build copies <dir>/<name>.whl into
+// its output folder: $FAKE_WHEEL, else "default" (fakeWheel), or with FAKE_SCM "scm-" and the pretended version, so a
+// build without the override fails; FAKE_BUILD_FAIL fails it, and FAKE_WHEEL=none succeeds with no wheel. Every call is logged to calls.
 type fakePython struct {
-	bin, calls, interp string
+	dir, bin, calls, interp string
+}
+
+// fakeMetadata is the METADATA of the fake's default wheel: headers with a continuation line, a Description header and
+// a long description, which must not reach the metadata folder.
+const fakeMetadata = "Metadata-Version: 2.4\r\nName: Fake.Project\r\nVersion: 1.2.3\r\nSummary: A fake\r\nLicense: MIT\r\n" +
+	"        with a second line\r\nDescription: an old-style long\r\n        description\r\nRequires-Dist: dep>=1\r\n\r\n# Fake\r\n\r\nThe README, and a changelog.\r\n"
+
+// fakeMetadataHeaders is what the metadata folder keeps of fakeMetadata.
+const fakeMetadataHeaders = "Metadata-Version: 2.4\nName: Fake.Project\nVersion: 1.2.3\nSummary: A fake\nLicense: MIT\n" +
+	"        with a second line\nRequires-Dist: dep>=1\n"
+
+// writeWheel writes a wheel (a zip) holding files.
+func writeWheel(t *testing.T, path string, files map[string]string) {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	names := slices.Sorted(maps.Keys(files))
+	for _, name := range names {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(files[name])); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fakeWheel is a project's wheel as a build makes it: its code, and a .dist-info with METADATA, RECORD, top_level.txt,
+// entry_points.txt, WHEEL and a license, of which only METADATA's headers may reach the metadata folder.
+func fakeWheel(t *testing.T, path, metadata string) {
+	t.Helper()
+	writeWheel(t, path, map[string]string{"fake_project/__init__.py": "X = 'wheel'\n",
+		"fake_project-1.2.3.dist-info/METADATA": metadata, "fake_project-1.2.3.dist-info/RECORD": "fake_project/__init__.py,,\n",
+		"fake_project-1.2.3.dist-info/top_level.txt": "fake_project\n", "fake_project-1.2.3.dist-info/WHEEL": "Wheel-Version: 1.0\n",
+		"fake_project-1.2.3.dist-info/entry_points.txt": "[console_scripts]\nfake = fake_project:main\n",
+		"fake_project-1.2.3.dist-info/licenses/LICENSE": "MIT\n"})
 }
 
 func newFakePython(t *testing.T, version string, uv bool, report string) fakePython {
 	t.Helper()
 	dir := t.TempDir()
-	f := fakePython{bin: filepath.Join(dir, "bin"), calls: filepath.Join(dir, "calls.log")}
+	f := fakePython{dir: dir, bin: filepath.Join(dir, "bin"), calls: filepath.Join(dir, "calls.log")}
 	f.interp = filepath.Join(f.bin, "python3")
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(report), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	fakeWheel(t, filepath.Join(dir, "default.whl"), fakeMetadata)
+	build := `build() {
+  echo "build into $1 | SETUPTOOLS_SCM_PRETEND_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION PDM_BUILD_SCM_VERSION=$PDM_BUILD_SCM_VERSION" >> '` + f.calls + `'
+  if [ -n "$FAKE_BUILD_FAIL" ]; then exit 1; fi
+  src="${FAKE_WHEEL:-default}"; if [ -n "$FAKE_SCM" ]; then src="scm-$SETUPTOOLS_SCM_PRETEND_VERSION"; fi
+  if [ "$src" = none ]; then exit 0; fi
+  /bin/cp '` + dir + `'/"$src.whl" "$1/"; exit $?
+}
+`
 	python := `#!/bin/sh
-echo "python $* | VIRTUAL_ENV=$VIRTUAL_ENV PIP_CACHE_DIR=$PIP_CACHE_DIR PYTHONPATH=$PYTHONPATH" >> '` + f.calls + `'
+` + build + `echo "python $* | VIRTUAL_ENV=$VIRTUAL_ENV PIP_CACHE_DIR=$PIP_CACHE_DIR PYTHONPATH=$PYTHONPATH" >> '` + f.calls + `'
+if [ "$1 $2 $3" = "-m pip wheel" ]; then
+  while [ $# -gt 0 ]; do if [ "$1" = "--wheel-dir" ]; then build "$2"; fi; shift; done; exit 3
+fi
 case "$1" in
 -I) if [ -n "$4" ] && [ "$4" = "$FAKE_MISSING" ]; then exit 1; fi; printf '%s\n%s\n' '` + version + `' '` + f.interp + `'; exit 0;;
 --version) echo 'Python ` + version + `'; exit 0;;
@@ -224,10 +294,11 @@ exit 3
 	writeExec(t, f.interp, python)
 	if uv {
 		writeExec(t, filepath.Join(f.bin, "uv"), `#!/bin/sh
-echo "uv $* | UV_CACHE_DIR=$UV_CACHE_DIR UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVIRONMENT UV_PYTHON_DOWNLOADS=$UV_PYTHON_DOWNLOADS UV_PYTHON=$UV_PYTHON VIRTUAL_ENV=$VIRTUAL_ENV" >> '`+f.calls+`'
+`+build+`echo "uv $* | UV_CACHE_DIR=$UV_CACHE_DIR UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVIRONMENT UV_PYTHON_DOWNLOADS=$UV_PYTHON_DOWNLOADS UV_PYTHON=$UV_PYTHON VIRTUAL_ENV=$VIRTUAL_ENV" >> '`+f.calls+`'
 case "$1" in
 --version) echo "uv ${FAKE_UV_VERSION:-0.11.28}"; exit 0;;
 python) echo '`+f.interp+`'; exit 0;;
+build) while [ $# -gt 0 ]; do if [ "$1" = "--out-dir" ]; then build "$2"; fi; shift; done; exit 3;;
 sync) /bin/mkdir -p "$UV_PROJECT_ENVIRONMENT/bin" "$UV_PROJECT_ENVIRONMENT/lib/python3.12/site-packages/dep" && echo 'x = 1' > "$UV_PROJECT_ENVIRONMENT/lib/python3.12/site-packages/dep/__init__.py" && echo 'home = /x' > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg" && /bin/ln -sf '`+f.interp+`' "$UV_PROJECT_ENVIRONMENT/bin/python"; exit $?;;
 esac
 exit 3
@@ -408,6 +479,11 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 		}
 		writeFiles(t, filepath.Dir(leftover), map[string]string{"half-installed": "x"})
 		damage()
+		// The venv's folder read-only again, as a stamped one is: moving it aside must cope (macOS asks for write
+		// permission on a folder that is renamed).
+		if err := os.Chmod(filepath.Dir(w.Venv), 0o555); err != nil {
+			t.Fatal(err)
+		}
 		if VenvReady(w.Venv) {
 			t.Errorf("%s: still ready", name)
 		}

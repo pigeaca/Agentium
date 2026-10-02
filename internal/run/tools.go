@@ -98,9 +98,9 @@ func (env Env) stampPath(deps, base string, names []string) string {
 }
 
 // readStamp reads a base's stamp (stampPath): whether the base is warmed, and what its runs get. A stamp that does not
-// parse, or names a venv that is no longer ready (removed by hand, its interpreter uninstalled, changed since), is not
-// warmed: the base is warmed again, under the lock. With a profile that warms in Go (Python), the stamp always holds
-// what it found, so an empty one is a write that did not finish, not a warmed base.
+// parse, or names a venv or metadata folder that is no longer ready (removed by hand, its interpreter uninstalled,
+// changed since), is not warmed: the base is warmed again, under the lock. With a profile that warms in Go (Python),
+// the stamp always holds what it found, so an empty one is a write that did not finish, not a warmed base.
 func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -114,6 +114,9 @@ func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, boo
 		return buildtool.Warmed{}, false
 	}
 	if w.Venv != "" && !buildtool.VenvReady(w.Venv) {
+		return buildtool.Warmed{}, false
+	}
+	if w.Metadata != "" && !buildtool.MetadataReady(w.Metadata) {
 		return buildtool.Warmed{}, false
 	}
 	return w, true
@@ -326,7 +329,7 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		Environ: runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
 		Env: func(dir string) []string {
 			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
-				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, ImportRoot: importRoot})
+				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
 		},
 		Notes: notes,
 	}, nil

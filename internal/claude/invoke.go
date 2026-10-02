@@ -82,6 +82,9 @@ type Invocation struct {
 	// Venv is the Python venv the run's warm-up chose in Deps (buildtool.Warmed), which the Python profile's
 	// environment activates. Empty: none.
 	Venv string
+	// ProjectMetadata is the base's Python metadata folder (buildtool.Warmed.Metadata), a read-only folder in Deps holding
+	// only the project's .dist-info, which the Python profile puts on PYTHONPATH after the checkout. Empty: none.
+	ProjectMetadata string
 	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
 	// commit): "src", or "" for Dir itself.
 	ImportRoot string
@@ -273,9 +276,16 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv, inv.AccountHome} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv, inv.ProjectMetadata, inv.AccountHome} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
+		}
+	}
+	// The metadata folder is on the agent's PYTHONPATH: only inside the deps folder, which the sandbox keeps read-only,
+	// can the agent not plant code there.
+	if inv.ProjectMetadata != "" {
+		if rel, err := filepath.Rel(inv.Deps, inv.ProjectMetadata); inv.Deps == "" || err != nil || !filepath.IsLocal(rel) || rel == "." {
+			return nil, nil, fmt.Errorf("the project's metadata %q is not inside the deps folder", inv.ProjectMetadata)
 		}
 	}
 	if inv.TempRoot != "" {
@@ -306,7 +316,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	profiles := buildtool.Select(inv.Tools)
 	allowed := EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
-		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, ImportRoot: inv.ImportRoot})
+		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
 		name, _, _ := strings.Cut(kv, "=")

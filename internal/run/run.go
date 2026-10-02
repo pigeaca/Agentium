@@ -407,14 +407,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	warmed, notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
-	// What the warm-up found (Python's venv) goes to the agent, and to Agentium's own commands in a checkout: the task's
+	// What the warm-up found (Python's venv and the project's metadata) goes to the agent, and to Agentium's own commands in a checkout: the task's
 	// setup in the run's, grading in its copy, with their caches in the data folder.
 	// They also lose the user's variables the agent never gets (buildtool.CheckoutEnviron: PYTHON*, PIP_*, UV_*), so the
 	// tests run with the same settings for the agent and for grading.
-	inv.Venv, inv.ImportRoot = warmed.Venv, importRoot
+	inv.Venv, inv.ProjectMetadata, inv.ImportRoot = warmed.Venv, warmed.Metadata, importRoot
 	env.checkoutEnv = func(dir string) []string {
 		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Home: env.Home, Repo: dir,
-			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv, ImportRoot: importRoot})
+			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
 	}
 	env.checkoutBase = runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ()))
 	rec.Notes = append(rec.Notes, buildtool.MissingRunners(ctx, warmed.Venv, spec.Task.Verify, env.environ())...)

@@ -103,7 +103,8 @@ type Profile struct {
 	// PrepareCommands makes what Agentium's own commands need under the data folder's cache root (see CommandCaches).
 	PrepareCommands func(cache string) error
 	// WarmFunc warms what fixed commands (Warm) cannot: Python finds an interpreter on the host and builds a venv per
-	// set of dependency inputs, whose path the agent's environment then names (Warmed.Venv). It runs where Warm's steps
+	// set of dependency inputs and the base's metadata-only .dist-info, whose paths the agent's environment then names
+	// (Warmed.Venv, Warmed.Metadata). It runs where Warm's steps
 	// do (a throwaway checkout of the base, with network, under the warm-up lock). A failure it can explain is
 	// Warmed.Failed, a note that leaves the base unstamped; errors are for cancellation and I/O.
 	WarmFunc func(ctx context.Context, in WarmInput) (Warmed, error)
@@ -153,6 +154,7 @@ type AgentContext struct {
 	Deps             string   // the deps folder agents read; "" without one
 	JavaHome         string   // a JDK resolved on the host (ResolveJavaHome); "" when none was found
 	Venv             string   // the Python venv the run's warm-up chose (Warmed.Venv); "" without one
+	Metadata         string   // the base's Python metadata folder (Warmed.Metadata), on PYTHONPATH after Repo; "" without one
 	// ImportRoot is where the project's code imports from, relative to Repo ("src", or "" for Repo itself), decided once
 	// from the base commit (ImportRoot), so the agent, setup, grading and validation agree whatever the agent changes.
 	ImportRoot string

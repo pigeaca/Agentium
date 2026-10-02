@@ -30,9 +30,10 @@ import (
 // plan, step 1): the run's warm-up finds an interpreter on the host that meets requires-python (never downloading one)
 // and builds a venv of the project's dependencies only, never the project itself, at <deps>/py/<key>/venv (warmPython).
 // The agent gets that venv (VIRTUAL_ENV, its bin first on PATH, uv pointed at it with no sync), its checkout on
-// PYTHONPATH (src/ when it holds the code), bytecode in its run's own cache (PYTHONPYCACHEPREFIX) and no pytest cache,
-// and pip and uv offline. The sandbox keeps the venv read-only, so one venv serves every run of every base with the same
-// dependency inputs.
+// PYTHONPATH (src/ when it holds the code), then the base's metadata-only .dist-info (projectMetadata), bytecode and
+// hypothesis's database in its run's own cache (PYTHONPYCACHEPREFIX, HYPOTHESIS_STORAGE_DIRECTORY) and no pytest
+// cache, and pip and uv offline. The sandbox keeps the venv read-only, so one venv serves every run of every base with
+// the same dependency inputs.
 //
 // Why the project is never installed: an editable install points at the throwaway warm-up checkout (which agents may
 // not read: the import fails, or with the folder readable the agent's tests would silently import the base's code, not
@@ -62,7 +63,7 @@ func pythonProfile() Profile {
 		CommandCaches: []CacheVar{{Name: "UV_CACHE_DIR", Dir: "uv"}, {Name: "PIP_CACHE_DIR", Dir: "pip"},
 			{Name: "PYTHONPYCACHEPREFIX", Dir: "pycache"}},
 		AgentEnv:     pythonEnv,
-		CheckoutEnv:  pythonEnv,
+		CheckoutEnv:  pythonCheckoutEnv,
 		CheckoutDrop: pythonVar,
 		WarmRecipe:   pythonRecipe,
 		WarmFunc:     warmPython,
@@ -73,12 +74,14 @@ func pythonProfile() Profile {
 
 // pythonRecipe is the warm-up's recipe, part of WarmVersion and of every venv's key: changing what warmPython does
 // changes it, so bases and venvs made by an earlier recipe are made again.
-const pythonRecipe = "python-2: interpreter by `uv python find --system --no-project <requires-python>` (UV_PYTHON_DOWNLOADS=never) " +
+const pythonRecipe = "python-3: interpreter by `uv python find --system --no-project <requires-python>` (UV_PYTHON_DOWNLOADS=never) " +
 	"or python3 on PATH; venv <deps>/py/<key>/venv, synced, read-only, its manifest in the stamp; uv: uv sync --frozen " +
 	"--no-install-project --no-install-workspace --no-install-local --no-install-package <project>; pip: venv, pip>=22.2, then " +
 	"pip install --dry-run --ignore-installed --report of the requirement files and .[test|tests|testing|dev|test-dependencies], " +
 	"the set less local packages and the project's own name pinned and installed with --no-deps; setuptools' dynamic files " +
-	"keyed\n"
+	"keyed; the project's metadata per base: uv build --wheel (uv) or the venv's pip wheel --no-deps (pip) in the warm-up " +
+	"checkout, versions from git pretended " + pythonPretendVersion + ", the wheel's METADATA headers only (no description), " +
+	"in <deps>/py-meta/<key>/<name>-<version>.dist-info, read-only\n"
 
 // pythonPrivate are the deps folder's Python folders agents may not read (DepsDenied): uv's and pip's download caches
 // and the resolve reports. Agents read only <deps>/py.
@@ -90,11 +93,36 @@ func pythonVar(name string) bool {
 	return strings.HasPrefix(name, "PYTHON") || strings.HasPrefix(name, "PIP_") || strings.HasPrefix(name, "UV_") || name == "VIRTUAL_ENV"
 }
 
-// pythonEnv is the environment of a command that tests a Python project in c.Repo: the agent's (c.BuildCache the run's
-// own cache) or one of Agentium's own commands (c.BuildCache the data folder's cache root). With a venv (c.Venv) it is
-// active and first on PATH, and uv runs in it without syncing. Without one (no deps folder, or a warm-up that failed)
-// the host's interpreter runs, with the same offline and cache settings.
+// pythonEnv is the environment of the agent's commands in c.Repo (c.BuildCache the run's own cache): see pythonEnvWith.
+// Hypothesis keeps its example database in the run's cache, never in the checkout (.hypothesis/).
 func pythonEnv(c AgentContext) []string {
+	hypothesis := ""
+	if c.BuildCache != "" {
+		hypothesis = filepath.Join(c.BuildCache, "hypothesis")
+	}
+	return pythonEnvWith(c, hypothesis)
+}
+
+// pythonCheckoutEnv is the environment of Agentium's own commands in a checkout (c.BuildCache the data folder's cache
+// root): see pythonEnvWith. Hypothesis's example database is the checkout's own, in the data folder: hypothesis replays
+// the failing examples it saved, so a database every grading shared would test one arm with what another arm's grading
+// found.
+func pythonCheckoutEnv(c AgentContext) []string {
+	hypothesis := ""
+	if c.BuildCache != "" && c.Repo != "" {
+		sum := sha256.Sum256([]byte(filepath.Clean(c.Repo)))
+		hypothesis = filepath.Join(c.BuildCache, "hypothesis", hex.EncodeToString(sum[:8]))
+	}
+	return pythonEnvWith(c, hypothesis)
+}
+
+// pythonEnvWith is the environment of a command that tests a Python project in c.Repo: the agent's or one of
+// Agentium's own commands. With a venv (c.Venv) it is active and first on PATH, and uv runs in it without syncing.
+// Without one (no deps folder, or a warm-up that failed) the host's interpreter runs, with the same offline and cache
+// settings. PYTHONPATH is the checkout's import root, then the base's metadata folder (c.Metadata), which holds only a
+// .dist-info: importlib.metadata finds the project's version there, while every import still resolves to the checkout
+// (first on the path; the folder holds no module). hypothesis ("" for none) is hypothesis's storage folder.
+func pythonEnvWith(c AgentContext, hypothesis string) []string {
 	var env []string
 	if c.Venv != "" {
 		path := filepath.Join(c.Venv, "bin")
@@ -104,12 +132,19 @@ func pythonEnv(c AgentContext) []string {
 		env = append(env, "VIRTUAL_ENV="+c.Venv, "PATH="+path)
 	}
 	if c.Repo != "" {
-		env = append(env, "PYTHONPATH="+filepath.Join(c.Repo, c.ImportRoot))
+		path := filepath.Join(c.Repo, c.ImportRoot)
+		if c.Metadata != "" {
+			path += string(os.PathListSeparator) + c.Metadata
+		}
+		env = append(env, "PYTHONPATH="+path)
 	}
 	if c.BuildCache != "" {
 		env = append(env, "PYTHONPYCACHEPREFIX="+filepath.Join(c.BuildCache, "pycache"))
 	} else {
 		env = append(env, "PYTHONDONTWRITEBYTECODE=1")
+	}
+	if hypothesis != "" {
+		env = append(env, "HYPOTHESIS_STORAGE_DIRECTORY="+hypothesis)
 	}
 	// No .pytest_cache in the checkout; pip and uv never reach an index (the sandbox has no network anyway, and uv run
 	// would otherwise try to build and install the project).
@@ -142,12 +177,12 @@ func ImportRoot(paths []string) string {
 	return ""
 }
 
-// preparePythonRun makes the run's own bytecode and uv folders, which the agent's environment names.
+// preparePythonRun makes the run's own bytecode, uv and hypothesis folders, which the agent's environment names.
 func preparePythonRun(_ context.Context, _, buildCache string) error {
 	if buildCache == "" {
 		return nil
 	}
-	for _, name := range []string{"pycache", "uv"} {
+	for _, name := range []string{"pycache", "uv", "hypothesis"} {
 		if err := os.MkdirAll(filepath.Join(buildCache, name), 0o700); err != nil {
 			return err
 		}
@@ -345,6 +380,8 @@ type pyInputs struct {
 	spec     string   // requires-python, "" when unstated
 	names    []string // the project's own names (pyproject's [project] or [tool.poetry] name, setup.cfg's), normalized
 	notes    []string
+	pkg      bool   // a package whose metadata a build backend makes (projectMetadata)
+	version  string // [project] version when static (one line); "" otherwise
 }
 
 // warmPython builds the base's venv, or finds it built: see pythonProfile. It runs under the warm-up lock (the run's),
@@ -387,8 +424,13 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	}
 	root := filepath.Join(in.Deps, "py", key)
 	venv := filepath.Join(root, "venv")
+	// The user's own settings must not move the venv or what goes into it; their index settings stay (private packages).
+	env := append(slices.Clone(in.Env), "VIRTUAL_ENV="+venv, "PYTHONPATH=", "PYTHONHOME=", "PYTHONNOUSERSITE=1", "PIP_USER=0",
+		"PIP_TARGET=", "PIP_PREFIX=", "PIP_ROOT=", "PIP_NO_INPUT=1", "PIP_DISABLE_PIP_VERSION_CHECK=1",
+		"PIP_CACHE_DIR="+filepath.Join(in.Deps, "pip-cache"), "UV_CACHE_DIR="+filepath.Join(in.Deps, "uv-cache"),
+		"UV_PROJECT_ENVIRONMENT="+venv, "UV_PYTHON="+interp, "UV_PYTHON_DOWNLOADS=never")
 	if stamp, ok := venvIntact(venv); ok {
-		return Warmed{Venv: venv, Notes: stamp.Notes}, nil
+		return withMetadata(ctx, in, inputs, uv, interp, env, Warmed{Venv: venv, Notes: stamp.Notes})
 	}
 	// Not intact: it is rebuilt from nothing, in place (a venv's scripts name its folder, so it cannot be built elsewhere
 	// and moved). Unstamped (a warm-up that died or failed), no run was ever handed it, so it is removed. Stamped (its
@@ -396,11 +438,8 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	// renamed aside, whole, to <key>.bad-<time> beside it and left there: Agentium cannot tell when no run uses it any
 	// more, so the user removes it (`chmod -R u+w` first: it is read-only). The setup log names it.
 	if _, err := os.Lstat(filepath.Join(root, venvStampName)); err == nil {
-		aside := fmt.Sprintf("%s.bad-%s", root, in.Now.UTC().Format("20060102T150405Z"))
-		for n := 2; fileExists(aside); n++ { // another rebuild in the same second
-			aside = fmt.Sprintf("%s.bad-%s-%d", root, in.Now.UTC().Format("20060102T150405Z"), n)
-		}
-		if err := os.Rename(root, aside); err != nil {
+		aside, err := moveAside(root, in.Now)
+		if err != nil {
 			return Warmed{}, fmt.Errorf("move a changed venv aside: %w", err)
 		}
 		fmt.Fprintf(in.Log, "[agentium] the venv %s no longer matches its stamp: moved aside to %s (remove it when no run uses it) and rebuilt\n", venv, aside)
@@ -417,11 +456,6 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	}
 	stamp := venvStamp{Recipe: pythonRecipe, Manager: inputs.manager, Tool: tool, Interpreter: interp, Version: version,
 		Inputs: inputs.files, Notes: inputs.notes}
-	// The user's own settings must not move the venv or what goes into it; their index settings stay (private packages).
-	env := append(slices.Clone(in.Env), "VIRTUAL_ENV="+venv, "PYTHONPATH=", "PYTHONHOME=", "PYTHONNOUSERSITE=1", "PIP_USER=0",
-		"PIP_TARGET=", "PIP_PREFIX=", "PIP_ROOT=", "PIP_NO_INPUT=1", "PIP_DISABLE_PIP_VERSION_CHECK=1",
-		"PIP_CACHE_DIR="+filepath.Join(in.Deps, "pip-cache"), "UV_CACHE_DIR="+filepath.Join(in.Deps, "uv-cache"),
-		"UV_PROJECT_ENVIRONMENT="+venv, "UV_PYTHON="+interp, "UV_PYTHON_DOWNLOADS=never")
 	switch inputs.manager {
 	case "uv":
 		args := []string{uv, "sync", "--frozen", "--no-install-project", "--no-install-workspace", "--no-install-local", "--python", interp}
@@ -457,7 +491,7 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	if err := setWritable(root, false); err != nil {
 		return Warmed{}, err
 	}
-	return Warmed{Venv: venv, Notes: stamp.Notes}, nil
+	return withMetadata(ctx, in, inputs, uv, interp, env, Warmed{Venv: venv, Notes: stamp.Notes})
 }
 
 // MissingRunners notes the test runners the verification commands use that are not installed in the venv (pytest,
@@ -726,6 +760,7 @@ func readPyInputs(dir string) (pyInputs, error) {
 			return in, err
 		}
 		in.spec = tomlString(pyproject, "project", "requires-python")
+		in.version = tomlString(pyproject, "project", "version")
 		for _, table := range []string{"project", "tool.poetry"} {
 			if name := tomlString(pyproject, table, "name"); name != "" {
 				in.names = append(in.names, normalizeName(name))
@@ -740,6 +775,16 @@ func readPyInputs(dir string) (pyInputs, error) {
 		}
 	}
 	in.names = slices.DeleteFunc(in.names, func(n string) bool { return !pyName.MatchString(n) })
+	// A package a build backend can describe (projectMetadata): a build system, a setup script or setup.cfg's metadata,
+	// or pip's legacy reading of a [project] table; uv treats a project without a build system as no package, and so
+	// does `[tool.uv] package = false`.
+	in.pkg = tomlTable(pyproject, "build-system") || has("setup.py") || (has("setup.cfg") && fileHasLine(dir, "setup.cfg", "[metadata]")) ||
+		(!has("uv.lock") && tomlTable(pyproject, "project"))
+	for _, line := range tomlSections(pyproject)["tool.uv"] {
+		if m := tomlKeyLine.FindStringSubmatch(line); m != nil && m[1] == "package" && strings.HasPrefix(strings.TrimSpace(m[2]), "false") {
+			in.pkg = false
+		}
+	}
 	if has("uv.lock") {
 		in.manager, in.files = "uv", []string{"uv.lock"}
 		if has("pyproject.toml") {
