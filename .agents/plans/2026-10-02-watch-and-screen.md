@@ -93,9 +93,10 @@ One check is 8 runs: about $0.80 on small tasks and $9 on Agentium-sized ones. O
 - **Can start now,** away from busy packages (`internal/experiment`, `internal/report`, `internal/pool`, `internal/store`, the pool CLI, `internal/buildtool`): steps 1, 2 and 3, and step 7 once approved.
 
 ## Work
-- [ ] **1. Drift statistics** (`internal/stats/drift.go`; `drift_test.go` calls it). **Risk: medium.**
+- [x] **1. Drift statistics** (`internal/stats/drift.go`; `drift_test.go` calls it). **Risk: medium.**
   - The self-starting standardization, the CUSUM, the alarm and the start-of-climb point, as pure functions. The test-only simulation moves onto production code, as `seq-v1` did.
   - *Acceptance:* the long drift simulation, `AGENTIUM_LONG_SIM=50 go test -run TestDriftChart ./internal/stats`, passes the note's gate on production code: at most 5% of charts alarm within 52 checks in every scenario.
+  - *Done (2026-10-02):* `DriftScore`, `DriftStep`, `DriftAlarm` and `DriftChart` (with the start of the climb) in `internal/stats/drift.go`; the simulation runs on them. The long run (`AGENTIUM_LONG_SIM=50`, 90,000 null charts, 43 s) reproduces the note: h = 6 alarms falsely within 52 checks in 3.59% [3.47, 3.71] pooled and 4.04% [3.53, 4.62] in the worst scenario (h = 5: 10.04%).
 - [ ] **2. Triggers and the refusal** (new `internal/screen`: `trigger.go`; reads through `gitx`, `source`, `claudectx`). **Risk: high** (security).
   - Classify a pushed range: read context, harness, or neither; refuse harness.
   - *Threats:* a hostile pull request (a symlink, a rename or a deletion of a harness file; settings under another name that Claude Code still loads, from `claudectx`'s own list; an `agentium.toml` change counts as harness).
