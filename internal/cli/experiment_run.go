@@ -29,11 +29,17 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 || o.Budget < 0 || o.UsageLimit <= 0 || o.UsageLimit > 100 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	name, ok := oneName(env, "experiment run", rest, experimentUsage)
+	switch {
+	case !ok:
+		return ExitUsage
+	case o.Budget < 0:
+		fmt.Fprintf(env.Stderr, "agentium experiment run: --budget cannot be negative (it raises the total)\n\n%s", experimentUsage)
+		return ExitUsage
+	case o.UsageLimit <= 0 || o.UsageLimit > 100:
+		fmt.Fprintf(env.Stderr, "agentium experiment run: --usage-limit is a percentage above 0 and at most 100\n\n%s", experimentUsage)
 		return ExitUsage
 	}
-	name := rest[0]
 	if env.JSON && !yes { // a script's consent is its flag: nothing is opened, locked or spent without it
 		return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: refusedRun(name, o)}, ExitError)
 	}
@@ -172,6 +178,9 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 				judged = fmt.Sprintf("; judge: %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
 			}
 			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.AgentUSD(), judged, e.SpentUSD, design.BudgetUSD)
+			if e.Result.Overshoot != "" {
+				fmt.Fprintf(out, "%s: %s\n", label, st.Warn("warning: "+e.Result.Overshoot))
+			}
 		case "retry":
 			fmt.Fprintf(out, "%s: %s in %s\n", label, st.Warn("retrying"), e.RetryIn)
 		case "wait":
@@ -198,8 +207,7 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	if _, ok := oneName(env, "experiment show", rest, experimentUsage); !ok {
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)

@@ -426,7 +426,7 @@ func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, mode
 	result := func(id, text string, isError bool) string {
 		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","content":"` + text + `","is_error":` + strconv.FormatBool(isError) + `}]}}`
 	}
-	lines := []string{`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":[` +
+	lines := []string{`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"@MODEL@","permissionMode":"acceptEdits","tools":[` +
 		tools + `],"skills":[` + skills + `],"slash_commands":["compact"]}`}
 	sandboxOut, sandboxErr := "agentium-sandbox-ok", false
 	if mode == "sandbox-error" {
@@ -448,10 +448,13 @@ func calibratingAgent(t *testing.T, tools, skills string, firstRequest int, mode
 	if mode == "read-claude-md" {
 		lines = append(lines, use("t4", "Read", `{"file_path":"CLAUDE.md"}`), result("t4", "# Rules", false))
 	}
-	script := "#!/bin/sh\ncode=$(cat CLAUDE.md AGENTS.md 2>/dev/null | sed -n 's/^Calibration codeword: //p' | tail -1)\n[ -n \"$code\" ] || code=NONE\n"
+	// It reports the model it was asked for (--model), as Claude Code does.
+	script := "#!/bin/sh\ncode=$(cat CLAUDE.md AGENTS.md 2>/dev/null | sed -n 's/^Calibration codeword: //p' | tail -1)\n[ -n \"$code\" ] || code=NONE\n" +
+		"model=" + experiment.DefaultExperimentModel + "; prev=\"\"; for a in \"$@\"; do [ \"$prev\" = --model ] && model=$a; prev=$a; done\n{\n"
 	for _, line := range lines {
 		script += "cat <<'EOF'\n" + line + "\nEOF\n"
 	}
+	script += "} | sed \"s/@MODEL@/$model/g\"\n"
 	script += `echo '{"type":"result","subtype":"success","is_error":false,"result":"SANDBOX=agentium-sandbox-ok LINE=20000 CODEWORD='"$code"'","total_cost_usd":0.02,"num_turns":4,"duration_ms":2000,"modelUsage":{}}'` + "\n"
 	cli := filepath.Join(t.TempDir(), "claude")
 	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
@@ -479,7 +482,7 @@ func TestCalibrationRecordsTheEnvironmentLaterRunsMustMatch(t *testing.T) {
 	// A later run with another tool set is unfair against the calibration; another model gets a note.
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "")
 	expect(t, f.run(context.Background(), "run", "once", "value", "--model", "claude-opus-5-5"), ExitOK,
-		"Checking the environment against the calibration of base", "note: the calibration used claude-sonnet-5, this run claude-opus-5-5",
+		"Checking the environment against the calibration of base", "note: the calibration used claude-sonnet-5-5, this run claude-opus-5-5",
 		"outcome      unfair", "tools differ (added Monitor; missing none)")
 	expect(t, f.run(context.Background(), "run", "once", "value", "--snapshot", "long"), ExitOK, "calibration of long")
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
@@ -133,8 +134,9 @@ func (r Review) writeSequential(out io.Writer, st term.Style) error {
 	if err := t.Write(out); err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "Spend: at most %s if every look runs (all %d tasks; %s if every run reaches its cap); expected about %s if nothing changed\n"+
-		"(%.1f tasks on average) and %s at a %.0f%% cut (%.1f tasks). The budget is sized for the maximum, and stops every run past it.\n",
+	fmt.Fprintf(out, "Spend: at most %s if every look runs (all %d tasks; %s if every run reaches its cap, overshoot included); expected\n"+
+		"about %s if nothing changed (%.1f tasks on average) and %s at a %.0f%% cut (%.1f tasks). The budget is sized for the\n"+
+		"maximum, and stops every run past it.\n",
 		usd(p.MaxUSD), len(d.Tasks), fmt.Sprintf("$%.2f", p.WorstUSD), usd(p.NoneUSD), p.TasksNone, usd(p.CutUSD), 100*PreviewCut, p.TasksCut)
 	futility := fmt.Sprintf("an interim look without one stops for futility when the chance\nof a verdict by the last look is below %.0f%%", 100*stats.SeqFutility)
 	if d.NoFutility {
@@ -259,17 +261,23 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
 			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
 	}
+	floor := fmt.Sprintf("$%.2f", claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])))
+	if fb := claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[1])); fb != claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])) {
+		floor = fmt.Sprintf("%s (arm A) or $%.2f (arm B)", floor, fb)
+	}
+	guard := fmt.Sprintf("\nClaude Code checks a cap after each turn, so a run can pass it by the turn that crosses it: the budget holds back\n"+
+		"%.0f%% of each cap for that, at least %s (the floor follows the model's output price). A run starts only when the\n"+
+		"spend so far and the caps of the runs in flight, with that allowance, leave room for its own, so spending stays within\n"+
+		"the $%.2f budget unless a single turn costs more.",
+		100*claude.CapOvershootShare, floor, d.BudgetUSD)
 	if d.PerArmProfiles() {
-		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s). A run starts only when the spend so far and the caps of the\n"+
-			"runs in flight leave room for its own cap, so spending never passes the $%.2f budget.", d.ArmRunBudgetUSD(d.Arms[0]), d.ArmRunBudgetUSD(d.Arms[1]),
-			judgeCapNote(d), d.BudgetUSD)))
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s).%s", d.ArmRunBudgetUSD(d.Arms[0]),
+			d.ArmRunBudgetUSD(d.Arms[1]), judgeCapNote(d), guard)))
 	} else if d.Judge == nil {
-		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap. A run starts only when the spend so far and the caps of the runs in flight\n"+
-			"leave room for its own cap, so spending never passes the $%.2f budget.", d.RunBudgetUSD, d.BudgetUSD)))
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap.%s", d.RunBudgetUSD, guard)))
 	} else {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its $%.2f cap, and its judgement $%.2f (%d call(s) at $%.2f, each asked twice at\n"+
-			"most). A run starts only when the spend so far and the caps of the runs in flight leave room for its own cap, so\n"+
-			"spending never passes the $%.2f budget.", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, llmjudge.CallCapUSD, d.BudgetUSD)))
+			"most).%s", d.RunBudgetUSD, d.JudgeCapUSD(), d.Judge.Repeats, d.JudgeCapUSD()/float64(2*d.Judge.WithDefaults().Repeats), guard)))
 	}
 }
 
@@ -306,7 +314,12 @@ func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, e
 	var own, other []string
 	for _, t := range d.Tasks {
 		if c, ok := est.Tasks[t]; ok {
-			own = append(own, fmt.Sprintf("%s $%.2f (%d run(s))", t, c.PerRunUSD, c.Runs))
+			perRun, _ := est.TaskUSD(t)
+			at := fmt.Sprintf("%s $%.2f (%d run(s))", t, perRun, c.Runs)
+			if est.Capped(c.PerRunUSD) {
+				at = fmt.Sprintf("%s $%.2f, the run cap (their median $%.2f, %d run(s))", t, perRun, c.PerRunUSD, c.Runs)
+			}
+			own = append(own, at)
 		} else {
 			other = append(other, t)
 		}
@@ -317,7 +330,10 @@ func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, e
 	}
 	if len(other) > 0 {
 		fallback := "no estimate (" + est.Basis + ")"
-		if est.Known {
+		switch {
+		case est.Known && est.Capped(est.PerRunUSD):
+			fallback = fmt.Sprintf("$%.2f, the run cap: runs are expected to reach it ($%.2f from %s)", est.CapUSD, est.PerRunUSD, est.Basis)
+		case est.Known:
 			fallback = fmt.Sprintf("$%.2f, %s", est.PerRunUSD, est.Basis)
 		}
 		fmt.Fprintf(out, "  %s, without runs of their own: %s\n", strings.Join(other, ", "), fallback)

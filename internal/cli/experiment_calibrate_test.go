@@ -160,18 +160,18 @@ func TestModelABCalibratesBothModels(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	const sonnet55 = "claude-sonnet-5-5"
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet55, "--b", opus, "--task", "value", "--repeats", "1", "--seed", "5",
+	const sonnet5 = "claude-sonnet-5" // the fixture's calibrations are on the default model, not this one
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet5, "--b", opus, "--task", "value", "--repeats", "1", "--seed", "5",
 		"--budget", "40", "--concurrency", "1"), ExitOK)
-	expect(t, f.run(ctx, "experiment", "plan", "m"), ExitOK, "context base on "+sonnet55+" is not calibrated: calibrated when the experiment runs",
+	expect(t, f.run(ctx, "experiment", "plan", "m"), ExitOK, "context base on "+sonnet5+" is not calibrated: calibrated when the experiment runs",
 		"context base on "+opus+" is not calibrated: calibrated when the experiment runs", "Calibration: 2 context calibration(s)")
 
 	got := f.run(ctx, "experiment", "run", "m")
-	expect(t, got, ExitOK, "Calibrating 1 context(s) on "+sonnet55, "Calibrating 1 context(s) on "+opus, "Locked:", "[2/2]")
-	if log := calibrationsLog(t, ctrl); len(log) != 2 || log[0] != sonnet55 || log[1] != opus {
-		t.Errorf("calibration runs on %v, want %s then %s", log, sonnet55, opus)
+	expect(t, got, ExitOK, "Calibrating 1 context(s) on "+sonnet5, "Calibrating 1 context(s) on "+opus, "Locked:", "[2/2]")
+	if log := calibrationsLog(t, ctrl); len(log) != 2 || log[0] != sonnet5 || log[1] != opus {
+		t.Errorf("calibration runs on %v, want %s then %s", log, sonnet5, opus)
 	}
-	for _, model := range []string{sonnet55, opus} {
+	for _, model := range []string{sonnet5, opus} {
 		if models := storedCalibrations(t, f, "base", ""); !slices.Contains(models, model) {
 			t.Errorf("no calibration on %s: %v", model, models)
 		}
@@ -181,7 +181,7 @@ func TestModelABCalibratesBothModels(t *testing.T) {
 		t.Errorf("%d runs, want 2", len(runs))
 	}
 	// The report names each arm by profile in all three formats.
-	label := "A (" + sonnet55 + ")"
+	label := "A (" + sonnet5 + ")"
 	expect(t, f.run(ctx, "experiment", "report", "m"), ExitOK, label, "B ("+opus+")", "(calibration $0.04 of it)") // piped: Markdown
 	expect(t, f.run(ctx, "experiment", "report", "m", "--markdown"), ExitOK, label, "B ("+opus+")")
 	expect(t, f.run(ctx, "experiment", "report", "m", "--json"), ExitOK, `"profile": "`+opus+`"`, `"calibration_usd": 0.04`)
@@ -218,11 +218,12 @@ func TestExperimentRefusesABudgetBelowItsCalibrations(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	// The pair's caps are $6; two Opus calibrations may cost up to $1.00 more.
-	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--model", opus, "--task", "value", "--repeats", "1", "--budget", "6.5",
+	// The pair's caps are $6.60 with their overshoot; two Opus calibrations may cost up to $1.60 more ($0.50 caps and
+	// Opus 5.5's $0.30 overshoot floor).
+	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--model", opus, "--task", "value", "--repeats", "1", "--budget", "7",
 		"--concurrency", "1"), ExitOK)
 	got := f.run(ctx, "experiment", "run", "ctx")
-	expect(t, got, ExitUsage, "the budget $6.50 cannot hold the calibrations this experiment needs (up to $1.00", "one pair of runs at their caps ($6.00)",
+	expect(t, got, ExitUsage, "the budget $7.00 cannot hold the calibrations this experiment needs (up to $1.60", "one pair of runs at their caps ($6.60)",
 		"--budget", "agentium run calibrate")
 	if log := calibrationsLog(t, ctrl); len(log) != 0 {
 		t.Errorf("a refused experiment spent on calibrations: %v", log)
@@ -233,13 +234,13 @@ func TestExperimentRefusesABudgetBelowItsCalibrations(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "calibration-fail"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitError, "failed its checks")
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "9"), ExitError, "failed its checks")
 	show := f.run(ctx, "experiment", "show", "ctx")
 	expect(t, show, ExitOK, "Calibration runs so far: $0.04 (in its budget)")
 	if err := os.Remove(filepath.Join(ctrl, "calibration-fail")); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitOK, "Calibrating 2 context(s)", "calibration $0.08 of it")
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "9"), ExitOK, "Calibrating 2 context(s)", "calibration $0.08 of it")
 	// The failed and the healthy calibration runs all count in the budget.
 	db, id := openFixtureDB(t, f)
 	e, _ := db.ExperimentByName(ctx, id, "ctx")

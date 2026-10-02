@@ -853,6 +853,8 @@
       "name": "A",
       "context": "base",
       "counted": 30,
+      "capped": 0,
+      "timed_out": 0,
       "first_request_tokens": 30000,
       "cost_usd": 0.3969,
       "cold_cost_usd": 1.9169000000000003,
@@ -893,6 +895,8 @@
       "context": "lean",
       "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
       "counted": 29,
+      "capped": 0,
+      "timed_out": 0,
       "first_request_tokens": 27000,
       "cost_usd": 0.31986206896551717,
       "cold_cost_usd": 1.839862068965518,
@@ -934,12 +938,16 @@
           "marks": "●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.324
         },
         "B": {
           "marks": "●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.25920000000000004
         }
       }
@@ -951,12 +959,16 @@
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.405
         },
         "B": {
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.32400000000000007
         }
       }
@@ -968,12 +980,16 @@
           "marks": "○○●",
           "successes": 1,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.486
         },
         "B": {
           "marks": "●○●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.38880000000000003
         }
       }
@@ -985,12 +1001,16 @@
           "marks": "○●●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.324
         },
         "B": {
           "marks": "○●●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.25920000000000004
         }
       }
@@ -1002,12 +1022,16 @@
           "marks": "●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.405
         },
         "B": {
           "marks": "●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.32400000000000007
         }
       }
@@ -1019,12 +1043,16 @@
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.486
         },
         "B": {
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.38880000000000003
         }
       }
@@ -1036,12 +1064,16 @@
           "marks": "●○●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.324
         },
         "B": {
           "marks": "×○●",
           "successes": 1,
           "counted": 2,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.264
         }
       }
@@ -1053,12 +1085,16 @@
           "marks": "○●●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.405
         },
         "B": {
           "marks": "○●●",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.32400000000000007
         }
       }
@@ -1070,12 +1106,16 @@
           "marks": "××●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.486
         },
         "B": {
           "marks": "●●●",
           "successes": 3,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.38880000000000003
         }
       }
@@ -1087,12 +1127,16 @@
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.324
         },
         "B": {
           "marks": "●●○",
           "successes": 2,
           "counted": 3,
+          "capped": 0,
+          "timed_out": 0,
           "cost_usd": 0.25920000000000004
         }
       }

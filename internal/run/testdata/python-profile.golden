@@ -11,6 +11,7 @@ VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
 PYTHONPATH=/golden/data/workspaces/r1/repo
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -122,7 +123,7 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /private/tmp/cc-daemon-4242
 /golden/home/.npm/_logs
 /golden/home/.claude/debug
-== agent: a venv, the src layout (decided from the base)
+== agent: a venv, the src layout (decided from the base), the project's metadata
 -- env
 HOME=/golden/home
 USER=u
@@ -133,8 +134,9 @@ XDG_CACHE_HOME=/golden/home/xdg
 GOFLAGS=-buildvcs=false
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
-PYTHONPATH=/golden/data/workspaces/r1/repo/src
+PYTHONPATH=/golden/data/workspaces/r1/repo/src:/golden/data/deps/1/py-meta/fedcba9876543210
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -258,6 +260,7 @@ XDG_CACHE_HOME=/golden/home/xdg
 GOFLAGS=-buildvcs=false
 PYTHONPATH=/golden/data/workspaces/r1/repo
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
+HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
 PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -372,11 +375,12 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 UV_CACHE_DIR=/golden/data/cache/uv
 PIP_CACHE_DIR=/golden/data/cache/pip
 PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
-== commands: CheckoutEnv (grading's copy, the src layout)
+== commands: CheckoutEnv (grading's copy, the src layout, the project's metadata)
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
-PYTHONPATH=/golden/data/workspaces/r1/graded/src
+PYTHONPATH=/golden/data/workspaces/r1/graded/src:/golden/data/deps/1/py-meta/fedcba9876543210
 PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
+HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/cache/hypothesis/be84c126bad8f8f9
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
 PIP_DISABLE_PIP_VERSION_CHECK=1

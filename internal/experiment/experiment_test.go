@@ -91,18 +91,18 @@ func TestEstimateRun(t *testing.T) {
 	d := validDesign()
 	d.Tasks = []string{"t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9", "t10", "t11", "t12"} // 72 runs, none with runs of its own
 	if got := DefaultBudget(d, profile); got != 155 {
-		t.Errorf("DefaultBudget = %v, want 155 (1.25 × 72 × $1.612 + 3 caps of $3 held for runs in flight, rounded up)", got)
+		t.Errorf("DefaultBudget = %v, want 155 (1.25 × 72 × $1.612 + 3 caps of $3.30, overshoot included, held for runs in flight, rounded up)", got)
 	}
 	// Cheap runs: the reserve keeps the budget above what a pair needs to start.
 	d.Tasks = d.Tasks[:1]
-	if got := DefaultBudget(d, Estimate{PerRunUSD: 0.25, Known: true}); got != 11 || got < 2*d.RunBudgetUSD {
-		t.Errorf("DefaultBudget for 6 runs at $0.25 = %v, want 11", got)
+	if got := DefaultBudget(d, Estimate{PerRunUSD: 0.25, Known: true}); got != 12 || got < d.PairCapUSD() {
+		t.Errorf("DefaultBudget for 6 runs at $0.25 = %v, want 12", got)
 	}
 	if DefaultBudget(d, Estimate{}) != 0 {
 		t.Error("an unknown estimate has no default budget")
 	}
-	if Reserve(d) != 9 {
-		t.Errorf("Reserve = %v, want 3 caps of $3 at concurrency 2", Reserve(d))
+	if !near(Reserve(d), 9.9) {
+		t.Errorf("Reserve = %v, want 3 caps of $3 and their $0.30 overshoot at concurrency 2", Reserve(d))
 	}
 }
 
@@ -134,12 +134,12 @@ func TestEstimateFromEachTasksOwnRuns(t *testing.T) {
 	if got, ok := est.DesignUSD(d); !ok || math.Abs(got-2*(0.6+1.9+0.8)) > 1e-9 {
 		t.Errorf("DesignUSD = %v, %v; want 6.60", got, ok)
 	}
-	if got := DefaultBudget(d, est); got != 18 { // 1.25 × $6.60 + 3 caps of $3, rounded up; the project's median gave 15
-		t.Errorf("DefaultBudget = %v, want 18", got)
+	if got := DefaultBudget(d, est); got != 19 { // 1.25 × $6.60 + 3 caps of $3.30, rounded up; the project's median gave 16
+		t.Errorf("DefaultBudget = %v, want 19", got)
 	}
 	rows := Preview(d, []string{"cheap", "costly", "mid", "new"}, est)
 	own := rows[len(rows)-1]
-	if !own.CostKnown || math.Abs(own.CostUSD-6.6) > 1e-9 || own.WorstUSD != 18 {
+	if !own.CostKnown || math.Abs(own.CostUSD-6.6) > 1e-9 || !near(own.WorstUSD, 6*3.3) {
 		t.Errorf("own row = %+v; the worst case stays every run at its cap", own)
 	}
 	// A tier would draw from the eligible tasks: it costs their average run, (0.6 + 1.9 + 0.8 + 0.8) / 4.
@@ -153,7 +153,7 @@ func TestEstimateFromEachTasksOwnRuns(t *testing.T) {
 		t.Errorf("alias = %+v", alias)
 	}
 	d.Tasks = []string{"cheap"}
-	if got, ok := alias.DesignUSD(d); !ok || math.Abs(got-1.2) > 1e-9 || DefaultBudget(d, alias) != 11 {
+	if got, ok := alias.DesignUSD(d); !ok || math.Abs(got-1.2) > 1e-9 || DefaultBudget(d, alias) != 12 {
 		t.Errorf("a design of tasks with their own runs = %v, %v, budget %v", got, ok, DefaultBudget(d, alias))
 	}
 	d.Tasks = []string{"cheap", "new"}
@@ -177,7 +177,7 @@ func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 		t.Fatalf("rows = %+v", rows)
 	}
 	quick, confident, own := rows[0], rows[1], rows[2]
-	if quick.Tasks != 12 || quick.Short || quick.Runs != 72 || quick.CostUSD != 36 || quick.WorstUSD != 216 {
+	if quick.Tasks != 12 || quick.Short || quick.Runs != 72 || quick.CostUSD != 36 || !near(quick.WorstUSD, 72*3.3) {
 		t.Errorf("quick = %+v", quick)
 	}
 	if confident.Tasks != 17 || !confident.Short || confident.Runs != 170 {
@@ -189,7 +189,7 @@ func TestPreviewLimitsTiersToEligibleTasks(t *testing.T) {
 	if own.CostUSD != 20 || !own.CostKnown {
 		t.Errorf("own cost = %v, want 40 runs at $0.50", own.CostUSD)
 	}
-	if unknown := Preview(d, eligible, Estimate{}); unknown[0].CostUSD != 0 || unknown[0].CostKnown || unknown[0].WorstUSD != 216 {
+	if unknown := Preview(d, eligible, Estimate{}); unknown[0].CostUSD != 0 || unknown[0].CostKnown || !near(unknown[0].WorstUSD, 72*3.3) {
 		t.Errorf("an unknown estimate still has a worst case: %+v", unknown[0])
 	}
 }
@@ -226,7 +226,7 @@ func TestValidate(t *testing.T) {
 		"goal":              {func(d *Design) { d.Goal = "faster" }, "unknown goal"},
 		"margin":            {func(d *Design) { d.SuccessMargin = 1.5 }, "margins"},
 		"budget":            {func(d *Design) { d.BudgetUSD = 0 }, "budgets"},
-		"below one pair":    {func(d *Design) { d.RunBudgetUSD = 60 }, "below one pair of runs at their caps ($120.00)"},
+		"below one pair":    {func(d *Design) { d.RunBudgetUSD = 60 }, "below one pair of runs at their caps ($132.00)"},
 		"version":           {func(d *Design) { d.Version = 0 }, "design version 0"},
 		"seed":              {func(d *Design) { d.Seed = MaxSeed + 1 }, "the seed must be at most"},
 		"timeout":           {func(d *Design) { d.Timeout = 0 }, "timeouts"},

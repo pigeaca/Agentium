@@ -147,7 +147,16 @@ func printScan(env Env, prep mine.Prepared) {
 		fmt.Fprintln(env.Stdout, note(st, "this is a shallow clone: older history is missing (git fetch --unshallow to mine it)"))
 	}
 	if langs := prep.Options.Languages; len(langs) > 0 {
-		fmt.Fprintln(env.Stdout, note(st, "only commits with "+strings.Join(langs, " or ")+" tests count, as "+prep.Options.TestCommand+" runs them"))
+		// A tool that proposes no test command of its own (Python: discovery reads the files) is run by the verify
+		// commands; without either, the note names none.
+		msg, runs := "only commits with "+strings.Join(langs, " or ")+" tests count", prep.Options.TestCommand
+		if runs == "" {
+			runs = strings.Join(prep.Verify, ", ")
+		}
+		if runs != "" {
+			msg += ", as " + runs + " runs them"
+		}
+		fmt.Fprintln(env.Stdout, note(st, msg))
 	}
 }
 

@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"flag"
-	"fmt"
 
 	"github.com/pigeaca/agentium/internal/report"
 )
@@ -18,8 +17,7 @@ func experimentReport(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	if _, ok := oneName(env, "experiment report", rest, experimentUsage); !ok {
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
