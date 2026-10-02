@@ -18,3 +18,5 @@ Archived plans are history, not default context. Search this index by title or d
 - [Runs isolated from Claude Code's shared temp folders](2026-10-01-run-temp-isolation.md) — 2026-10-01 (#58)
 - [Task mining](2026-10-01-task-mine.md) — 2026-10-01 (#57, #62)
 - [LLM judge per run](2026-10-01-llm-judge.md) — 2026-10-01 (#49, #54, #61; a real check)
+- [Refactor round: spend record, services, shared helpers, faster tests](2026-10-01-refactor-round.md) — 2026-10-01 to 2026-10-02 (#59, #64, #65, #72, #74)
+- [Model and effort comparison](2026-10-01-model-ab.md) — 2026-10-01 to 2026-10-02 (#74, #75; the first decisive verdict)

@@ -1,7 +1,7 @@
 # Quick start: from a fresh clone to a running experiment
 
 - Date: 2026-10-02
-- Status: Planned (2026-10-02): a wave-2 feature track in the [next chapter](2026-10-01-next-chapter.md), which the user approved. Step 1 starts after refactor step 2 (#65). Steps 2 and 3 change experiment code, so they run after the [model A/B](2026-10-01-model-ab.md) step that changes it too. No paid runs are needed beyond the wave's exit gate, which has its own approval.
+- Status: Planned (2026-10-02): a wave-2 feature track in the [next chapter](2026-10-01-next-chapter.md), which the user approved. Step 1 starts after refactor step 2 (#65). Steps 2 and 3 change experiment code, so they run after the [model A/B](archive/2026-10-01-model-ab.md) step that changes it too. No paid runs are needed beyond the wave's exit gate, which has its own approval.
 - Scope: the north star's "setup in 3 commands". Today a first experiment takes about 12 commands across four README sections, and two of them (calibration and validation) are easy to forget.
 
 ## Why
@@ -159,7 +159,7 @@ Each step is one PR with green CI and a review.
     ```
     A later `start` printed four "(skipped)" lines, then the same preview, in 0.3 s. The "not calibrated" line is expected until step 2.
   - **Deviations from the brief:** the `--accept-mined` flag (without it the review gate makes the one-command preview impossible); A/A calibrations do not count toward the north star.
-- [ ] **4. Real check (free up to the preview)** on a public repository, then docs.
+- [ ] **4. Real check (free up to the preview)** on a public repository, then docs. The wave-2 verdict on samber/lo ([report](../../docs/examples/model-ab-report.md)) used the manual commands, plus `run calibrate`, which predates calibration inside `experiment run` (#75). A plain `agentium start` on a fresh clone is still to record.
 - [ ] **5. README pictures** (the user's decision on 2026-10-02: refresh them once, after quick start, not before). The pictures date from 2026-09-30. Since then `plan`, `report` and the status line have changed, and the README's claim that they show today's output no longer holds.
   - **Redo from stored data with today's binary:** `experiment plan`, the run summary, `experiment report` and `run show`. Re-record the live status-line animation with the stand-in agent.
   - **Add:**
