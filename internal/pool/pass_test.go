@@ -638,3 +638,77 @@ func TestAFailingStepLeavesRecoverableState(t *testing.T) {
 	}
 	w.check("after the failure")
 }
+
+// A re-scan (Pass.Since) reads the commits from Since on whatever the watermark says, so it reaches a commit an earlier
+// pass set aside (here: not a candidate then, one now, as after a settings change); it imports it once, leaves the
+// watermark where it was, and keeps candidates whose base is older than Since (the window alone bounds bases).
+func TestARescanReachesSetAsideCommitsAndKeepsTheWatermark(t *testing.T) {
+	w := newWorld(t, 6, "c5")
+	if res, _, err := w.run(10); err != nil || !res.Moved || len(res.Imported) != 1 {
+		t.Fatalf("the first pass: %+v, %v", res, err)
+	}
+	w.candidate["c2"] = true
+	if res, _, err := w.run(10); err != nil || len(res.Imported) != 0 {
+		t.Fatalf("a plain pass reads only after the watermark: %+v, %v", res, err)
+	}
+	rescan := func(since time.Time) Pass[candidate] {
+		p := w.pass(10)
+		p.Since = since
+		w.ending = false
+		return p
+	}
+	run := func(since time.Time) PassResult {
+		t.Helper()
+		res, err := rescan(since).Run(w.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	if prev, err := rescan(w.nodes["c2"].at).Preview(w.ctx); err != nil || len(prev.Candidates) != 1 || prev.Candidates[0].commit != "c2" {
+		t.Errorf("the re-scan's preview: %+v, %v", prev, err)
+	}
+	if res := run(w.nodes["c3"].at); len(res.Imported) != 0 || res.Moved {
+		t.Errorf("a re-scan from after c2: %+v", res)
+	}
+	res := run(w.nodes["c2"].at)
+	if len(res.Imported) != 1 || res.Imported[0].SolutionCommit != "c2" || res.Moved || !slices.Equal(w.state().Watermark, []string{"c6"}) {
+		t.Errorf("the re-scan: %+v, state %+v", res, w.state())
+	}
+	if res := run(w.clock.Add(-400 * Day)); len(res.Imported) != 0 { // before the window: clamped to it; c2 is a task now
+		t.Errorf("a re-scan from before the window: %+v", res)
+	}
+	w.check("after the re-scans")
+}
+
+// A re-scan killed mid-import is recovered like any pass: the next re-scan imports the rest, none twice, every task
+// is validated, and neither moves the watermark.
+func TestAKilledRescanIsRecovered(t *testing.T) {
+	w := newWorld(t, 6, "c6")
+	if _, _, err := w.run(10); err != nil {
+		t.Fatal(err)
+	}
+	w.candidate["c2"], w.candidate["c3"], w.candidate["c4"] = true, true, true
+	rescan := func() (res PassResult, died bool, err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				if _, ok := r.(killed); !ok {
+					panic(r)
+				}
+				died = true
+			}
+		}()
+		p := w.pass(10)
+		p.Since, w.ending = w.nodes["c1"].at, false
+		res, err = p.Run(w.ctx)
+		return res, false, err
+	}
+	w.kill = "import:1"
+	if _, died, err := rescan(); !died || err != nil {
+		t.Fatalf("the killed re-scan: died %v, %v", died, err)
+	}
+	if res, died, err := rescan(); died || err != nil || res.Moved || len(res.Imported) != 2 {
+		t.Fatalf("the next re-scan: %+v, died %v, %v", res, died, err)
+	}
+	w.check("after a killed re-scan")
+}
