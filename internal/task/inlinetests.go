@@ -69,9 +69,9 @@ func pythonDoctests(src string) ([]string, error) {
 
 // vitestInSourceBlocks returns the text of each import.meta.vitest block of a TypeScript or JavaScript file, in
 // order: from the guard to the closing brace of the block that follows it (to the end of the line when no block
-// follows). An unbalanced block is an error, and so is a file whose raw guard count differs from the guards found as code
-// (a comment or string mention, or a regular-expression literal the lexer mistook for a string or comment). Limit: a test
-// written outside such a block (a bare "describe" in a source file) is not seen.
+// follows). An unbalanced block is an error, and so is a file whose raw guard count differs from the guards found as
+// code (a comment or string mention, or a regular-expression literal the lexer mistook for a string or comment).
+// Limit: a test written outside such a block (a bare "describe" in a source file) is not seen.
 func vitestInSourceBlocks(src string) ([]string, error) {
 	if !strings.Contains(src, vitestInSource) {
 		return nil, nil
