@@ -61,10 +61,11 @@ func (r Result) AgentUSD() float64 { return r.CostUSD - r.JudgeUSD }
 type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (Result, error)
 
 // Event reports progress: a run starting, finishing, or waiting to be retried, the execution waiting for the usage
-// window to reset (Kind "wait": Until and Usage, the window's share used), or a seq-v1 look (Kind "look": Look, of
-// Looks planned).
+// window to reset (Kind "wait": Until and Usage, the window's share used), a seq-v1 look (Kind "look": Look, of Looks
+// planned), or a pair compared by the pair judge (Kind "pair", from its own goroutine: Slot is the pair's arm-B slot,
+// Result.Judge the comparison in words and Result.JudgeUSD what it spent; SpentUSD is not set).
 type Event struct {
-	Kind     string // "start", "finish", "retry", "wait" or "look"
+	Kind     string // "start", "finish", "retry", "wait", "look" or "pair"
 	Slot     Slot
 	Attempt  int
 	Result   Result
@@ -96,12 +97,23 @@ type Plan struct {
 	// starts, and the execution is done once every slot before it is settled or out of attempts, with no run in
 	// flight: the stage barrier. It must fall between pairs.
 	Until int
+	// PairHoldUSD is held for each pair from the start of its first run in this execution until none of its runs is in
+	// flight or held for: what the pair's comparison may spend (Design.PairJudgeCapUSD). The executor of the run that
+	// completes a pair hands the comparison to work outside the schedule, which holds its cap in Outside before the run
+	// returns, so the money stays held throughout.
+	PairHoldUSD float64
+	// Outside, when set, is what work outside the schedule's runs (the pair judge) has spent since SpentUSD and Prior
+	// were read, and what it holds for what it may still spend. Every budget check adds both, and progress events count
+	// what it spent. It is called from Execute's goroutine only, and must be safe to call while that work goes on.
+	Outside func() (spentUSD, heldUSD float64)
 }
 
 // Summary is how an execution ended.
 type Summary struct {
-	Status   string
-	Note     string
+	Status string
+	Note   string
+	// SpentUSD is the spend before the schedule's runs and theirs: what work outside the schedule spent meanwhile
+	// (Plan.Outside) is not in it.
 	SpentUSD float64
 	Settled  int // slots with a fair or unfair run
 	Failed   int // slots out of attempts
@@ -142,7 +154,8 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 // when every slot is settled or failed, or it has to stop:
 //   - budget: a run starts only when the spend so far, the caps of the runs in flight (and of pair partners held for),
 //     and its own cap (both caps for a pair's first run) fit BudgetUSD, so spending never passes it while each run
-//     spends at most its cap (RunCapUSD and ArmCapUSD hold Design.RunCapUSD's: the overshoot allowance included);
+//     spends at most its cap (RunCapUSD and ArmCapUSD hold Design.RunCapUSD's: the overshoot allowance included); a
+//     pair's comparison (PairHoldUSD) and the work outside the schedule (Outside) are held and counted the same way;
 //   - retries: an infrastructure failure is retried after Backoff, up to MaxAttempts per slot; InfraStreak failures in
 //     a row, on more than one slot, stop the experiment;
 //   - usage (Usage set): a new pair starts only when the latest usage reading, plus the expected use of the runs in
@@ -209,9 +222,16 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		}
 		return p.RunCapUSD
 	}
+	outside := func() (float64, float64) {
+		if p.Outside == nil {
+			return 0, 0
+		}
+		return p.Outside()
+	}
 	emit := func(e Event) {
 		if p.Progress != nil {
-			e.SpentUSD = spent
+			done, _ := outside()
+			e.SpentUSD = spent + done
 			p.Progress(e)
 		}
 	}
@@ -241,14 +261,21 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				}
 			}
 			reserved, held := 0.0, 0
+			holding := map[int]bool{} // pairs with a run in flight or held for: each holds PairHoldUSD once
 			for i := range state {
 				if state[i].running || state[i].held {
 					reserved += capOf(i)
+					if !holding[p.Schedule[i].Pair] {
+						holding[p.Schedule[i].Pair] = true
+						reserved += p.PairHoldUSD
+					}
 				}
 				if state[i].held && !state[i].running {
 					held++
 				}
 			}
+			outSpent, outHeld := outside()
+			reserved += outSpent + outHeld
 			for pos := low; pos < limit && pos < low+Window(p.Concurrency) && running < p.Concurrency; pos++ {
 				s := &state[pos]
 				if s.finished() || s.running {
@@ -263,6 +290,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				extra := 0.0
 				if !s.held {
 					extra += capOf(pos)
+				}
+				if !holding[p.Schedule[pos].Pair] {
+					extra += p.PairHoldUSD
 				}
 				var hold *slotState
 				if q := partner[pos]; q >= 0 {
@@ -288,6 +318,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 					break // in order: a later run must not overtake one the budget holds back
 				}
 				reserved += extra
+				holding[p.Schedule[pos].Pair] = true
 				if hold != nil {
 					hold.held = true
 					held++
@@ -359,7 +390,8 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 					}
 					perRun = strings.Join(caps, " or ")
 				}
-				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, %s per run at most)", p.BudgetUSD, spent, perRun)
+				done, _ := outside()
+				sum.Note = fmt.Sprintf("the next run would not fit the $%.2f budget ($%.2f spent, %s per run at most)", p.BudgetUSD, spent+done, perRun)
 				return sum, nil
 			case wake.IsZero():
 				return sum, errors.New("execute: nothing can start and nothing is waiting") // unreachable: the earliest unfinished slot can always start

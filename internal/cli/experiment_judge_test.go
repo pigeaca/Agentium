@@ -53,8 +53,10 @@ func TestExperimentNewJudgeFlags(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--judge-model", "claude-opus-5-5"}, "set the judge: add --judge"},
-		{[]string{"--judge-repeats", "2"}, "set the judge: add --judge"},
+		{[]string{"--judge-model", "claude-opus-5-5"}, "--judge-model and --judge-effort set the judges: add --judge or --judge-pairs"},
+		{[]string{"--judge-effort", "max"}, "--judge-model and --judge-effort set the judges: add --judge or --judge-pairs"},
+		{[]string{"--judge-repeats", "2"}, "--judge-repeats sets the judge of each run: add --judge"},
+		{[]string{"--judge-pairs", "--judge-repeats", "2"}, "--judge-repeats sets the judge of each run: add --judge (the pair judge asks each order once)"},
 		{[]string{"--judge", "--judge-repeats", "-1"}, "--judge-repeats must be positive"},
 		{[]string{"--judge", "--judge-repeats", "10"}, "the judge's repeats must be 1 to 9"},
 	} {
@@ -73,7 +75,7 @@ func TestExperimentNewJudgeFlags(t *testing.T) {
 	if d := storedDesign(t, f, "plain"); d.Judge != nil {
 		t.Errorf("an experiment without --judge has judge settings %+v", d.Judge)
 	}
-	expect(t, f.run(ctx, "experiment", "--help"), ExitOK, "[--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]",
+	expect(t, f.run(ctx, "experiment", "--help"), ExitOK, "[--judge [--judge-repeats N]] [--judge-pairs] [--judge-model MODEL] [--judge-effort LEVEL]",
 		"--judge asks an LLM judge about every graded run", "it decides nothing")
 }
 

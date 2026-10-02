@@ -19,7 +19,7 @@ var experimentUsage = `Usage:
   agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--task NAME...] [--model MODEL] [--effort LEVEL]
                      [--goal cheaper|better [--tier quick|confident] [--repeats N]] [--no-futility] [--run-budget USD]
                      [--budget USD] [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
-                     [--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]
+                     [--judge [--judge-repeats N]] [--judge-pairs] [--judge-model MODEL] [--judge-effort LEVEL]
                      a context A/B: arm A (default: base, each task's own context) against snapshot B
   agentium experiment new NAME --template aa [--a CONTEXT] [...]
                      an A/A calibration: one context in both arms, which must find no difference
@@ -66,8 +66,15 @@ limit's per-run estimate leaves out the judge's use of a subscription; a judge t
 experiment, and --wait does not wait for it. The report's Judge section shows each arm's verdicts among passing and
 failing runs with 95%% intervals, the runs not judged and why, how often the repeats agreed, the judge's cost, and the
 passing runs it did not call fixed, with its reasons (the first %d; --json lists them all).
+
+--judge-pairs asks the pair judge, unvalidated, which of a pair's two changes is the better fix, when both runs pass
+(a task's run in each arm with the same repeat index): in both orders, on --judge-model at --judge-effort; when the
+orders disagree, the pair is a tie. It reads what --judge reads. Its preferences are exploratory: they never make a
+verdict. Each pair is compared beside the runs, so it holds no run's slot and no look; the budget holds back %d × $%.2f
+per pair for it (about $%.2f a pair at the pilot's mean). A pair judge that hits a usage limit pauses the experiment
+as the judge does.
 `, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD,
-	int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged)
+	int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged, llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD)
 
 func runExperiment(ctx context.Context, env Env, args []string) int {
 	if len(args) == 0 {
@@ -122,8 +129,9 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs.DurationVar(&o.VerifyTimeout, "verify-timeout", experiment.DefaultVerifyTimeout, "time limit for each setup or verification command")
 	fs.Uint64Var(&o.Seed, "seed", 0, "the seed for the task sample and the run order (default: random)")
 	fs.BoolVar(&o.Judge, "judge", false, "ask the LLM judge about every graded run (a second opinion; it decides nothing)")
-	fs.StringVar(&o.JudgeModel, "judge-model", "", "the judge's model (default "+llmjudge.DefaultModel+")")
-	fs.StringVar(&o.JudgeEffort, "judge-effort", "", "the judge's effort level (default "+llmjudge.DefaultEffort+")")
+	fs.BoolVar(&o.JudgePairs, "judge-pairs", false, "ask the pair judge which arm fixed each task better, when both pass (unvalidated, exploratory)")
+	fs.StringVar(&o.JudgeModel, "judge-model", "", "the judges' model (default "+llmjudge.DefaultModel+")")
+	fs.StringVar(&o.JudgeEffort, "judge-effort", "", "the judges' effort level (default "+llmjudge.DefaultEffort+")")
 	fs.IntVar(&o.JudgeRepeats, "judge-repeats", 0, fmt.Sprintf("the judge's calls per run, the majority wins (default %d, at most %d)", llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats))
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
