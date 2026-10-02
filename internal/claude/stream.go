@@ -71,7 +71,37 @@ type Metrics struct {
 	// model by alias (model: sonnet) follows Claude Code to newer models, which the run's pinned --model does not
 	// cover: an experiment compares these across its runs.
 	SubagentModels map[string][]string `json:"subagent_models,omitempty"`
+	// FirstReads are the cache reads the isolated-run cost reprices: the first real request of the main session (first
+	// in the list), then of each subagent launch that could not read its type's prefix from this run, in the order
+	// their first requests arrived (see launchLog.firstReads: the first launch of each type, and parallel or late ones).
+	// Nil when the transcript shows no real main-session request (and in records made before the field existed). Holds
+	// no subagent type names.
+	FirstReads []FirstRead `json:"first_reads,omitempty"`
+	// UnmatchedLaunches counts subagent launches whose requests name a parent tool call (parent_tool_use_id) that no
+	// Agent (Task) call in the transcript made: their type is unknown, so whether they are first launches is too.
+	UnmatchedLaunches int `json:"unmatched_launches,omitempty"`
 }
+
+// FirstRead is the first real request of the main session or of a repriced subagent launch, for the isolated-run
+// cost: how many tokens it read from the prompt cache, and at which time to live the launch wrote the cache.
+type FirstRead struct {
+	Main      bool   `json:"main,omitempty"`  // the main session's; otherwise a subagent launch's
+	Model     string `json:"model,omitempty"` // the request's model; empty when the stream did not name it
+	CacheRead int64  `json:"cache_read"`      // cache_read_input_tokens
+	// WriteTTL is the cache-write time to live of the launch's first request that wrote the cache, from the stream's
+	// cache_creation split: TTL5m when it wrote only five-minute entries, TTL1h when it wrote any one-hour entry. When
+	// no request of the launch reported a split write, it is what other launches of the type wrote in the run, else
+	// TTL5m for a subagent and TTL1h for the main session (what recorded runs wrote), and TTLAssumed is set. Empty
+	// only in records made before the fallback.
+	WriteTTL   string `json:"write_ttl,omitempty"`
+	TTLAssumed bool   `json:"ttl_assumed,omitempty"`
+}
+
+// Cache-write times to live, as FirstRead.WriteTTL records them.
+const (
+	TTL5m = "5m"
+	TTL1h = "1h"
+)
 
 // UsageReading is a subscription's usage as Claude Code reports it (rate_limit_event): the share of the five-hour and
 // seven-day windows used, when each resets, and the status (allowed, allowed_warning, rejected).
@@ -107,6 +137,7 @@ type (
 	envelope struct {
 		Type            string          `json:"type"`
 		Subtype         string          `json:"subtype"`
+		Timestamp       string          `json:"timestamp"` // on assistant and user events
 		ParentToolUseID *string         `json:"parent_tool_use_id"`
 		Message         json.RawMessage `json:"message"`
 	}
@@ -178,12 +209,15 @@ func Parse(r io.Reader) (Metrics, error) {
 	m := Metrics{ToolUses: map[string]int{}}
 	seen := map[string]bool{}
 	firstSeen := false
-	requests := map[string]*request{}    // by message ID: a message's content blocks arrive as separate events
+	requests := map[string]*request{} // by message ID: a message's content blocks arrive as separate events
+	launches := newLaunchLog()        // the isolated-run cost's first reads
+	lineNo := 0
 	subagentTypes := map[string]string{} // Agent (Task) tool calls by ID: the subagent type their messages run as
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // tool results can be large
 	for scanner.Scan() {
 		line := scanner.Bytes()
+		lineNo++
 		var event envelope
 		if err := json.Unmarshal(line, &event); err != nil {
 			continue
@@ -242,9 +276,11 @@ func Parse(r io.Reader) (Metrics, error) {
 				req = &request{model: message.Model}
 				requests[key] = req
 			}
+			at := eventTime(event.Timestamp)
 			if usageOK {
 				req.add(usage)
 			}
+			launches.request(event.ParentToolUseID, req, usage, usageOK, message.Model, lineNo, at)
 			if event.ParentToolUseID != nil && message.Model != "" { // a subagent's request
 				kind := subagentTypes[*event.ParentToolUseID]
 				if kind == "" {
@@ -273,6 +309,7 @@ func Parse(r io.Reader) (Metrics, error) {
 						kind = "general-purpose"
 					}
 					subagentTypes[block.ID] = kind
+					launches.call(block.ID, kind, lineNo, at)
 					if !slices.Contains(m.SubagentTypes, kind) {
 						m.SubagentTypes = sorted(append(m.SubagentTypes, kind))
 					}
@@ -319,6 +356,7 @@ func Parse(r io.Reader) (Metrics, error) {
 			}
 		}
 	}
+	m.FirstReads, m.UnmatchedLaunches = launches.firstReads()
 	for _, req := range requests {
 		model := req.model
 		if model == "" {
@@ -346,6 +384,15 @@ func skillName(input map[string]any) string {
 		}
 	}
 	return ""
+}
+
+// eventTime is an event's timestamp; zero when it has none or it does not parse.
+func eventTime(s string) time.Time {
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
 }
 
 func unixTime(seconds int64) time.Time {
@@ -380,6 +427,7 @@ func sortedKeys[V any](m map[string]V) []string {
 type request struct {
 	model                                 string
 	input, write5m, write1h, read, output int64
+	split                                 bool // the stream reported the cache write's time-to-live split
 	contentBytes                          int64
 }
 
@@ -388,6 +436,7 @@ func (r *request) add(u requestUsage) {
 	write5m, write1h := int64(0), int64(u.CacheCreation) // without the split, the one-hour rate Claude Code uses
 	if u.Split != nil {
 		write5m, write1h = int64(u.Split.FiveMinutes), int64(u.Split.OneHour)
+		r.split = true
 	}
 	r.input, r.read = max(r.input, int64(u.Input)), max(r.read, int64(u.CacheRead))
 	r.write5m, r.write1h, r.output = max(r.write5m, write5m), max(r.write1h, write1h), max(r.output, int64(u.Output))

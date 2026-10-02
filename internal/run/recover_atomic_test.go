@@ -102,8 +102,9 @@ func TestRecoverUnreadableStartFile(t *testing.T) {
 	for i, o := range orphans {
 		dir := filepath.Join(layout.Records, o.Record.ID)
 		ws := filepath.Join(layout.Workspaces, "e1-s"+o.Record.ID[1:]+"-t1")
+		// A cold start: the isolated-run cost is the (estimated) cost.
 		if o.Unreadable != filepath.Join(dir, startFile+corruptSuffix) || o.Record.Metrics.CostUSD != 0.082 || !o.Record.CostEstimated ||
-			!strings.Contains(strings.Join(o.Record.Notes, ";"), "judge spend") {
+			o.Record.IsolatedCostUSD == nil || *o.Record.IsolatedCostUSD != 0.082 || !strings.Contains(strings.Join(o.Record.Notes, ";"), "judge spend") {
 			t.Errorf("orphan %d = %+v", i, o)
 		}
 		for _, gone := range []string{filepath.Join(dir, startFile), filepath.Join(dir, "verify"), filepath.Join(dir, "judge"), ws, layout.RunTemp(filepath.Base(ws))} {
