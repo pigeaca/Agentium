@@ -275,7 +275,7 @@ func TestRecover(t *testing.T) {
 	}
 	o := orphans[0].Record
 	if o.ID != "r3" || o.Outcome != "cancelled" || o.Passed != nil || o.Metrics.CostUSD != 0.082 || string(orphans[0].Meta) != `{"slot":4}` ||
-		o.Recovered != RecoveredStopped || !o.CostEstimated ||
+		o.Recovered != RecoveredStopped || !o.CostEstimated || o.IsolatedCostUSD == nil || *o.IsolatedCostUSD != 0.082 || // a cold start
 		!strings.Contains(strings.Join(o.Notes, "; "), "estimated from the transcript's requests") {
 		t.Errorf("orphan = %+v (meta %s)", o, orphans[0].Meta)
 	}
