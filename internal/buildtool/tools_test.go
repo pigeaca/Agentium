@@ -235,6 +235,19 @@ func TestWarmSteps(t *testing.T) {
 		!strings.Contains(plain[0].Command, "AgentiumWarmNoSuchTest") {
 		t.Errorf("without wrappers or tests: %q", plain)
 	}
+	// Gradle: compile classpaths, the test runtime, then every other resolvable configuration, each its own step (a failure
+	// of one must not skip the next), all without the daemon and the build cache.
+	var gradle []string
+	for _, s := range WarmSteps(Select([]string{"gradle"}), repoWith(t, "gradlew"), "/d") {
+		if !strings.Contains(s.Command, "--no-daemon --no-build-cache") {
+			t.Errorf("a Gradle warm-up that may use the daemon or the build cache: %q", s.Command)
+		}
+		gradle = append(gradle, s.Command)
+	}
+	if len(gradle) != 3 || !strings.HasSuffix(gradle[0], "testClasses") || !strings.Contains(gradle[1], "AgentiumWarmNoSuchTest") ||
+		!strings.HasSuffix(gradle[2], "-q -I '/d/gradle/agentium-resolve-all.gradle' agentiumResolveAll || true") || strings.Contains(gradle[0]+gradle[1], "-I") {
+		t.Errorf("Gradle warm-up steps: %q", gradle)
+	}
 	if got := NeedsWarming(Select([]string{"cargo", "maven"})); !slices.Equal(got, []string{"maven", "cargo"}) {
 		t.Errorf("warmed tools: %q", got)
 	}
@@ -248,8 +261,64 @@ func TestGradleDepsHomeKeepsItsFiles(t *testing.T) {
 	}
 	props, _ := os.ReadFile(filepath.Join(deps, "gradle", "gradle.properties"))
 	script, _ := os.ReadFile(filepath.Join(deps, "gradle", "init.d", "agentium-no-cleanup.gradle"))
-	if !strings.Contains(string(props), "org.gradle.cache.cleanup=false") || !strings.Contains(string(script), "Cleanup.DISABLED") {
+	if !strings.Contains(string(props), "org.gradle.cache.cleanup=false") || !strings.Contains(string(script), "Cleanup.DISABLED") || !strings.Contains(string(script), "respondsTo(settings, \"getCaches\")") {
 		t.Errorf("cleanup is not disabled: %q %q", props, script)
+	}
+}
+
+// The warm-up's task exists through an init script in the deps folder's Gradle home only: it resolves every resolvable
+// configuration of every project, tolerating one that cannot be resolved, and the agent's home has no such script.
+func TestGradleDepsHomeResolvesEveryConfiguration(t *testing.T) {
+	deps, cache := t.TempDir(), t.TempDir()
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(filepath.Join(deps, "gradle", resolveAllScriptName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"allprojects", `register("agentiumResolveAll")`, "canBeResolved", "conf.resolve()", "catch (Exception e)", "notCompatibleWithConfigurationCache", "def confs = project.configurations", WarmSkippedFile} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("init script lacks %q:\n%s", want, script)
+		}
+	}
+	if strings.Contains(string(script), "project.configurations.matching") || strings.Contains(string(script), "doLast {\n            project.") {
+		t.Error("the script uses Task.project at execution time")
+	}
+	// Not in init.d (every step would load it), and not in the run's home.
+	if _, err := os.Stat(filepath.Join(deps, "gradle", "init.d", "agentium-resolve-all.gradle")); err == nil {
+		t.Error("the script loads in every warm-up step")
+	}
+	if err := PrepareRun(context.Background(), Select([]string{"gradle"}), "", cache); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "gradle", "init.d", "agentium-resolve-all.gradle")); err == nil {
+		t.Error("the run's Gradle home resolves configurations")
+	}
+}
+
+// A changed warm-up recipe changes its version (the stamps' name), and an unchanged one does not.
+func TestWarmVersion(t *testing.T) {
+	gradle := Select([]string{"gradle"})
+	if WarmVersion(gradle) != WarmVersion(Select([]string{"gradle"})) || WarmVersion(gradle) == WarmVersion(Select([]string{"cargo"})) {
+		t.Error("versions are not stable per tool set")
+	}
+	changed := slices.Clone(gradle)
+	changed[0].WarmRecipe += "x"
+	if WarmVersion(changed) == WarmVersion(gradle) {
+		t.Error("a changed recipe keeps its version")
+	}
+}
+
+// What a warm-up skipped is read from the checkout; network-looking reasons are flagged.
+func TestReadWarmSkipped(t *testing.T) {
+	dir := t.TempDir()
+	if names, transient := ReadWarmSkipped(dir); names != nil || transient {
+		t.Errorf("no file: %v %v", names, transient)
+	}
+	os.WriteFile(filepath.Join(dir, WarmSkippedFile), []byte(":a\tNo attributes\n\n:b:c\tread timed out\n"), 0o600)
+	if names, transient := ReadWarmSkipped(dir); !slices.Equal(names, []string{":a", ":b:c"}) || !transient {
+		t.Errorf("got %v %v", names, transient)
 	}
 }
 

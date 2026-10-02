@@ -2,6 +2,8 @@ package buildtool
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -24,6 +26,51 @@ func WarmSteps(selected []Profile, dir, deps string) []WarmStep {
 		}
 	}
 	return steps
+}
+
+// WarmVersion is a short hash of the selected profiles' warm-up recipes (their step commands and WarmRecipe), part of
+// a warm-up's stamp: a changed recipe gives a new version, so bases warmed by the old one are warmed again. A stamp
+// from before versions existed has no version and never matches.
+func WarmVersion(selected []Profile) string {
+	h := sha256.New()
+	for _, p := range selected {
+		fmt.Fprintf(h, "%s\n%s\n", p.Name, p.WarmRecipe)
+		if p.Warm != nil {
+			// Placeholders for the folders; both wrapper variants, since the choice is the repository's.
+			for _, wrapper := range []bool{false, true} {
+				for _, s := range p.Warm("", "<deps>", func(string) bool { return wrapper }) {
+					fmt.Fprintf(h, "%s\n%s\n", s.Command, strings.Join(s.Env, " "))
+				}
+			}
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))[:8]
+}
+
+// WarmSkippedFile is the file, in the warm-up's throwaway checkout, where a warm-up step lists what it could not warm
+// (Gradle: configurations that failed to resolve), one "name<TAB>reason" per line.
+const WarmSkippedFile = ".agentium-warm-skipped"
+
+// ReadWarmSkipped reads WarmSkippedFile of the warm-up checkout dir: the names of what was skipped, and whether any
+// reason looks like a network failure, which may pass: such a warm-up should be tried again, not stamped as done.
+func ReadWarmSkipped(dir string) (names []string, transient bool) {
+	data, err := os.ReadFile(filepath.Join(dir, WarmSkippedFile))
+	if err != nil {
+		return nil, false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		name, reason, _ := strings.Cut(line, "\t")
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		names = append(names, name)
+		for _, marker := range []string{"Could not GET", "Could not HEAD", "timed out", "Connection", "UnknownHost"} {
+			if strings.Contains(reason, marker) {
+				transient = true
+			}
+		}
+	}
+	return names, transient
 }
 
 // PrepareDeps runs the selected profiles' PrepareDeps hooks.

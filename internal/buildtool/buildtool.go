@@ -84,6 +84,9 @@ type Profile struct {
 	// Warm returns the commands that fetch this tool's dependencies into deps, run by a run's setup in a throwaway
 	// checkout of the base commit (dir), where no hidden test exists (see the package documentation).
 	Warm func(dir, deps string, has func(name string) bool) []WarmStep
+	// WarmRecipe is whatever else shapes a warm-up besides its steps (the scripts PrepareDeps writes). With the steps
+	// it makes WarmVersion, so changing the recipe re-warms bases that earlier recipes stamped as warmed.
+	WarmRecipe string
 	// PrepareDeps makes the deps folder's own settings before a warm-up writes it (Gradle: no cache cleanup, which
 	// would delete files under agents that read them).
 	PrepareDeps func(deps string) error
