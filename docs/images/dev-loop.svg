@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="242" viewBox="0 0 972 242" role="img" aria-label="How Agentium is built: plan, build, review, merge; review sends changes back to build" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<style>
+.card{fill:#ffffff;stroke:#d0d7de} .title{fill:#1f2328} .body{fill:#59636e} .arrow{stroke:#8c959f;fill:none} .head{fill:#8c959f} .label{fill:#59636e}
+.a1{fill:#0969da}.s1{stroke:#0969da}.t1{fill:#0969da}.a2{fill:#8250df}.s2{stroke:#8250df}.t2{fill:#8250df}.a3{fill:#1a7f37}.s3{stroke:#1a7f37}.t3{fill:#1a7f37}.a4{fill:#bc4c00}.s4{stroke:#bc4c00}.t4{fill:#bc4c00}
+@media (prefers-color-scheme: dark) {
+.card{fill:#161b22;stroke:#30363d} .title{fill:#e6edf3} .body{fill:#9198a1} .arrow{stroke:#6e7681} .head{fill:#6e7681} .label{fill:#9198a1}
+.a1{fill:#4493f8}.s1{stroke:#4493f8}.t1{fill:#4493f8}.a2{fill:#ab7df8}.s2{stroke:#ab7df8}.t2{fill:#ab7df8}.a3{fill:#3fb950}.s3{stroke:#3fb950}.t3{fill:#3fb950}.a4{fill:#f0883e}.s4{stroke:#f0883e}.t4{fill:#f0883e}
+}
+</style>
+<rect class="card" x="8" y="62" width="200" height="172" rx="14" stroke-width="1"/>
+<circle class="a1" cx="48" cy="104" r="22" opacity="0.13"/>
+<g class="s1" transform="translate(48,104)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><line x1="-6" y1="-7" x2="10" y2="-7"/><line x1="-6" y1="0" x2="10" y2="0"/><line x1="-6" y1="7" x2="6" y2="7"/><circle class="a1" cx="-11" cy="-7" r="1.3"/><circle class="a1" cx="-11" cy="0" r="1.3"/><circle class="a1" cx="-11" cy="7" r="1.3"/></g>
+<text class="title" x="28" y="156" font-size="17" font-weight="650">Plan</text>
+<text class="body" x="28" y="182" font-size="14">Scope and acceptance</text>
+<text class="body" x="28" y="203" font-size="14">criteria first.</text>
+<rect class="card" x="260" y="62" width="200" height="172" rx="14" stroke-width="1"/>
+<circle class="a2" cx="300" cy="104" r="22" opacity="0.13"/>
+<g class="s2" transform="translate(300,104)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><polyline points="-6,-8 -13,0 -6,8" fill="none"/><polyline points="6,-8 13,0 6,8" fill="none"/><line x1="3" y1="-11" x2="-3" y2="11"/></g>
+<text class="title" x="280" y="156" font-size="17" font-weight="650">Build</text>
+<text class="body" x="280" y="182" font-size="14">An agent in its own</text>
+<text class="body" x="280" y="203" font-size="14">worktree and branch.</text>
+<line class="arrow" x1="220" y1="148.0" x2="241" y2="148.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M248,148.0 L239,142.5 L239,153.5 Z"/>
+<rect class="card" x="512" y="62" width="200" height="172" rx="14" stroke-width="1"/>
+<circle class="a3" cx="552" cy="104" r="22" opacity="0.13"/>
+<g class="s3" transform="translate(552,104)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle cx="-3" cy="-3" r="8" fill="none"/><line x1="3" y1="3" x2="11" y2="11"/></g>
+<text class="title" x="532" y="156" font-size="17" font-weight="650">Review</text>
+<text class="body" x="532" y="182" font-size="14">An independent</text>
+<text class="body" x="532" y="203" font-size="14">reviewer reads it.</text>
+<line class="arrow" x1="472" y1="148.0" x2="493" y2="148.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M500,148.0 L491,142.5 L491,153.5 Z"/>
+<rect class="card" x="764" y="62" width="200" height="172" rx="14" stroke-width="1"/>
+<circle class="a4" cx="804" cy="104" r="22" opacity="0.13"/>
+<g class="s4" transform="translate(804,104)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle cx="-7" cy="-9" r="3" fill="none"/><circle cx="-7" cy="9" r="3" fill="none"/><circle cx="8" cy="0" r="3" fill="none"/><line x1="-7" y1="-6" x2="-7" y2="6"/><path d="M-7,-6 C-7,0 0,0 5,0" fill="none"/></g>
+<text class="title" x="784" y="156" font-size="17" font-weight="650">Merge</text>
+<text class="body" x="784" y="182" font-size="14">A pull request</text>
+<text class="body" x="784" y="203" font-size="14">with green CI.</text>
+<line class="arrow" x1="724" y1="148.0" x2="745" y2="148.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M752,148.0 L743,142.5 L743,153.5 Z"/>
+<path class="arrow" d="M612,58 C612,16 360,16 360,50" stroke-width="2" stroke-linecap="round" stroke-dasharray="5 5"/><path class="head" d="M360,59 L354.5,50 L365.5,50 Z"/><text class="label" x="486.0" y="22" font-size="13" text-anchor="middle">changes requested</text>
+</svg>
