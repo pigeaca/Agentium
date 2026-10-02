@@ -2,9 +2,9 @@
 // and logged in to. It finds the open pull request of a commit, keeps one marked comment on it up to date, and sets a
 // commit status. It never installs gh and adds no module.
 //
-// Where it runs: only in the user's own Agentium process (the watch's pass, or `screen run`), with the user's
-// environment and gh login, never inside a run or an agent's sandbox. The packages a run executes in must not import
-// it (a test checks the import graph), and the agent's sandbox denies ~/.config/gh and drops GH_TOKEN anyway.
+// Where it runs: only in the user's own Agentium process (a command that the user, a hook or an AI calls), with the
+// user's environment and gh login, never inside a run or an agent's sandbox. The packages a run executes in must not
+// import it (a test checks the import graph), and the agent's sandbox denies ~/.config/gh and drops GH_TOKEN anyway.
 //
 // What it trusts: the repository identity comes from the user's git remote (RepoOf), and commit IDs, pull request
 // numbers and comment IDs are validated before they go into an API path. Everything GitHub returns (titles, comment

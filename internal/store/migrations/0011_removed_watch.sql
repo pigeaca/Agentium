@@ -1,0 +1,9 @@
+-- Version 11 was the watch (`agentium watch`): consent, its weekly ledger, drift charts and queued screen checks. The
+-- user removed the watch on 2026-10-02, about an hour after it merged and before any command used it, so this
+-- migration does nothing: new databases get none of it. The version stays taken, because data folders opened by a
+-- binary from that hour record version 11, and the store refuses a database newer than it knows.
+--
+-- Such databases keep the old migration's tables (watch_consents, watch_loops, watch_passes, watch_enrolments,
+-- screen_checks, drift_panels, drift_checks, drift_points), the nullable runs.watch_pass_id and runs.drift_check_id
+-- columns and their indexes. Nothing reads or writes them: SaveRun names neither column, so both stay NULL. A later
+-- migration that rebuilds runs, or drops projects or experiments, must allow for them (store_test.go holds the old SQL).

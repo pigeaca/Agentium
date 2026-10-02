@@ -115,12 +115,12 @@ The deferred steps:
 - **3. The reuse key and storage.** Risk: high.
 - **4. The reused-against-fresh A/A.** Risk: high; paid.
 - **5. Reuse in cost experiments**, with anchors and the bias allowance. Risk: high.
-- **6. The drift chart:** moved, un-deferred by the user (2026-10-02), into the [watch and screen plan](2026-10-02-watch-and-screen.md) (A5), with the note's §4 design unchanged.
+- ~~**6. The drift chart.**~~ **Cancelled by the user (2026-10-02)** with the watch (A5) it was moved into ([watch and screen plan](2026-10-02-watch-and-screen.md)): Agentium runs nothing on a schedule. Only the pure statistics remain (`internal/stats/drift.go`, the note's §4), with no caller.
 
 ## Boundaries
 - **Unchanged:** phase1-v1 and phase1-v2 analysis for existing and locked experiments, `Decide`'s logic, and verdict thresholds. Only the default method of new cost experiments changes.
 - **Success:** no sequential success design.
-- **Not built:** no reuse in this wave; the drift chart is built under A5.
+- **Not built:** no reuse in this wave; no drift chart (cancelled with the watch).
 - **Approvals:** no paid run beyond the approved `seq-v1` smoke check. No new Go modules.
 
 ## Verification

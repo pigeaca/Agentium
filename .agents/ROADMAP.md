@@ -11,7 +11,7 @@ Time and dollars to the first decisive verdict (inconclusive doesn't count): rea
 1. Done: task mining, judge reports, temp isolation, [refactor](plans/archive/2026-10-01-refactor-round.md).
 2. First decisive verdict: [quick start](plans/archive/2026-10-02-quick-start.md), [model A/B](plans/archive/2026-10-01-model-ab.md); [Java and Rust](plans/archive/2026-09-30-java-rust.md).
 3. Cheaper verdicts: [statistics note](../docs/research/2026-10-02-wave3-statistics-note.md), then sequential stopping; run reuse deferred.
-4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, scheduled watch.
+4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, as commands that you, hooks or an AI call (the scheduled watch was cancelled by the user; nothing runs in the background).
 5. Later: Codex.
 
 [Judge](plans/archive/2026-10-01-llm-judge.md) (a second opinion): done, with a real check; pairs and tickets next, ungated (unvalidated, exploratory).
