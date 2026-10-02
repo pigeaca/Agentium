@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -387,30 +386,7 @@ func (env Env) warmFuncs(ctx context.Context, repo, deps, base string, profiles 
 		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now(), Base: base, State: env.warmState(deps)})
 }
 
-// lockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait); the lock goes with its holder's process.
+// lockFile is home.LockFile: an exclusive flock on path, waited for until ctx ends.
 func lockFile(ctx context.Context, path string, onWait func()) (unlock func(), err error) {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	for {
-		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-		if err == nil {
-			return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
-		}
-		if err != syscall.EWOULDBLOCK {
-			f.Close()
-			return nil, err
-		}
-		if onWait != nil {
-			onWait()
-			onWait = nil // once
-		}
-		select {
-		case <-ctx.Done():
-			f.Close()
-			return nil, ctx.Err()
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
+	return home.LockFile(ctx, path, onWait)
 }
