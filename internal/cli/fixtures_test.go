@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -137,15 +138,26 @@ func resolved(p string) string {
 	return p
 }
 
-// copyTree copies a directory tree, keeping modes and symlinks (git objects are hard-linked).
+// copyTree copies a directory tree, keeping modes and symlinks (git objects are hard-linked). Git's transient lock
+// files are not copied, and a file that vanishes during the walk (one such lock, removed by a git process that is still
+// finishing) is skipped.
 func copyTree(src, dst string) error {
 	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) && p != src {
+				return nil
+			}
 			return err
 		}
 		rel, _ := filepath.Rel(src, p)
 		target := filepath.Join(dst, rel)
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".lock") && strings.Contains(filepath.ToSlash(rel), ".git/") {
+			return nil
+		}
 		info, err := d.Info()
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}

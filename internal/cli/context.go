@@ -19,6 +19,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -71,10 +72,18 @@ type workspace struct {
 	layout  home.Layout
 	root    string
 	bare    string
+	// toolchain is the host's build-tool versions (hostToolchain), detected once per command.
+	toolchain task.Toolchain
 }
 
 // openProject opens the project containing env.Dir; it must have been registered with `agentium init`.
 func openProject(ctx context.Context, env Env) (*workspace, error) {
+	return openProjectFor(ctx, env, false)
+}
+
+// openProjectFor is openProject; readOnly leaves a missing project repository in the data folder uncreated (a dry run
+// writes nothing; a project without one has no tasks to read there).
+func openProjectFor(ctx context.Context, env Env, readOnly bool) (*workspace, error) {
 	if env.Dir == "" {
 		return nil, errors.New("the current folder cannot be read: run agentium inside your repository")
 	}
@@ -112,6 +121,9 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 		return nil, err
 	}
 	w := &workspace{db: db, project: project, layout: layout, root: root, bare: layout.ProjectRepo(project.ID)}
+	if readOnly {
+		return w, nil
+	}
 	if err := gitx.InitBare(ctx, w.bare); err != nil {
 		db.Close()
 		return nil, err

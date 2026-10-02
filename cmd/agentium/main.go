@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"syscall"
 	"time"
 
@@ -29,7 +30,17 @@ func main() {
 		StdinTerminal: term.IsTerminal(os.Stdin),
 		Columns:       func() int { return term.Columns(os.Stdout) },
 		Dir:           dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
+		AccountHome: accountHome,
 	})
 	stop()
 	os.Exit(code)
+}
+
+// accountHome is the account's home folder in the user database, or "" when it cannot be looked up.
+func accountHome() string {
+	u, err := user.Current()
+	if err != nil {
+		return ""
+	}
+	return u.HomeDir
 }
