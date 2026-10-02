@@ -28,7 +28,7 @@
 4. **Docs:** the README's method section and the architecture's code map describe `seq-v1` and the isolated-run cost. The note's status is updated, and the plan is archived with its metrics.
 
 ## Work
-Steps 1 and 2 touch different packages and can run in parallel (step 1: `internal/stats`, `internal/experiment`, `internal/report`, `internal/cli`; step 2: `internal/claude`, `internal/run`, the report's cost table).
+Steps 1 and 2 touch different packages and can run in parallel (step 1: `internal/stats`, `internal/experiment`, `internal/report`, `internal/cli`; step 2: `internal/claude`, `internal/run`). Both change `internal/report`: step 1 owns it, and step 2's cost-table change lands after step 1 merges, rebased on it.
 
 - [ ] **1. The sequential engine: method `seq-v1`. Risk: high** (money: stop and budget logic; persistence: lock schema; concurrency: the stage barrier).
   - **`internal/stats`:** the Lan–DeMets O'Brien–Fleming-type spending, and boundaries by numerical integration.
@@ -88,7 +88,7 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
 
 ## Deferred (resume needs the user)
 Steps 3–6 keep the note's design (§1, §2, §4). Before any of them resumes, the user must settle:
-- whether reuse is worth building at all: it pays only for cuts of 35% or more, after about 11–22 reuse experiments per key within 14 days (note §6);
+- whether reuse is worth building at all: it pays only for cuts of 35% or more, after about 10–20 reuse experiments per key within 14 days (note §6);
 - the reuse defaults: the 14-day window, the ±15% pass bound, 4 anchors, and the validation's day-effect sensitivity (its pass rate with no bias falls to 53–69% at day effects of 0.03–0.05);
 - the drift panel's size and budget;
 - approval of the real reused-against-fresh A/A (about $13–15 on samber/lo, about $140 on Agentium's tasks).

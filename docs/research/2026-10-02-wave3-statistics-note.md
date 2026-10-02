@@ -45,7 +45,7 @@
    - **False alarms:** 3.59% [3.47, 3.71] of charts within 52 checks.
    - **Detection:** a 20% change after 12 checks is caught in a median 5–6 checks.
 5. **North star.**
-   - **What sequential stopping buys:** *decisiveness per experiment* and a 5% guard that holds, not dollars.
+   - **What sequential stopping buys:** *decisiveness per experiment* and a 5% guard that holds per pooled null group (one extreme scenario exceeds it, §8), not dollars.
      - Against fixed 8 tasks, runs per decisive verdict are +5% at a 20% cut (τ = 0.10), −2% at τ = 0.25, and +23–27% at 35% cuts.
      - It shortens the time to a first decisive verdict, because fewer experiments end inconclusive.
    - **The dollar lever is small tasks:** on samber/lo a decisive cost verdict costs about $1.7–5.
@@ -335,7 +335,7 @@ The user narrowed the gate on 2026-10-02 to sequential stopping:
   - at a 35% cut it takes +27% (τ = 0.10) and +23% (τ = 0.25), because the stricter first look (99.84%) sends effects that fixed 8 would already decide on to 12 tasks.
 - **What it buys:**
   - a single experiment is far more often decisive (47% → 74% at a 20% cut), which shortens the time to the first decisive verdict;
-  - a 5% guard that holds on lopsided noise, which phase1-v2's does not (5.38% and 5.79%, §7);
+  - a 5% guard that holds per pooled null group, lopsided noise included, which phase1-v2's does not (5.38% and 5.79%, §7); one extreme scenario exceeds it (§8);
   - a third fewer runs than a fixed 16-task design when nothing changed.
 - **Reuse (deferred):** it saves runs only for cuts of 35% or more. At 20% it loses, because the allowance eats power.
   - At 35% (τ = 0.10) it saves 6.3 runs per decisive verdict against `seq-v1` (21.4 → 15.1), and 1.7 against fixed 8.
@@ -364,7 +364,7 @@ The user narrowed the gate on 2026-10-02 to sequential stopping:
   - strongly skewed against normal;
   - strongly skewed against its mirror, at τ = 0 and 0.10;
   - strongly skewed (σ 0.19) against normal (σ 0.35).
-- **The recorded group** resamples the 22 per-task log differences of `aa-report.md`, `context-ab-16-report.md` and `model-ab-report.md`, each experiment's centered and scaled by its own spread.
+- **The recorded group** resamples the 22 per-task log differences of `aa-report.md`, `context-ab-16-report.md` and `model-ab-report.md`, each experiment's centered and scaled by its own spread. With 6–8 values per experiment, a standardized value is bounded by about 2.0–2.5, so the group tests lopsided rather than heavy-tailed noise.
 - **Analysis:** the production `NewBootstrap`, `TInterval` and `Decide` at each look's levels, with 200 bootstrap draws (50 in the default run). The t-alone counts, which the assertions use, are an upper bound and differ from the widest-interval counts by at most 0.05 points.
 - **Seeds:** each scenario has its own seed, so the counts are reproducible.
 
@@ -392,7 +392,7 @@ The user narrowed the gate on 2026-10-02 to sequential stopping:
 | strongly skewed against its mirror, τ = 0.10 | 5.01% [4.72, 5.33] |
 
   - **Why the starred row fails:** its per-task difference has a skewness of about −1.6, which a t-interval on 8 tasks does not survive at any α tested (7.64% at 4.5%, 6.54% at 3.5%).
-  - **It is not a dollar difference:** equal mean log cost leaves arm B 0.55% cheaper in arithmetic mean, yet its false verdicts mostly say "regressed" (1,286 against 122 "improved" in 20,000, at 4.5%).
+  - **It is not a dollar difference:** equal mean log cost leaves arm B 0.55% cheaper in arithmetic mean, yet its false verdicts mostly say "regressed": about 10 to 1 against "improved" in an ad-hoc probe at 4.5% (20,000 experiments, not committed; its counts are not the 7.64% run's).
 - **phase1-v2 on the same scenarios,** logged by the same test, at its 95% level: the recorded differences give 5.38% [5.25, 5.51] and the arm-specific shapes 5.79% [5.66, 5.92]. An ad-hoc probe at 48,000 experiments each gave 5.31% and 5.76%.
 - **The α probe** that informed the decision (ad-hoc, not committed; 144,000 same-shape and 48,000 recorded and arm-specific experiments per design, t alone):
 
