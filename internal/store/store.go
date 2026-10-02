@@ -770,7 +770,7 @@ type Run struct {
 	ProjectID int64
 	TaskID    int64 // 0 when the task was removed
 	TaskName  string
-	Kind      string // "task" (default) or "calibration"
+	Kind      string // "task" (default), "calibration" or "drift" (a drift chart's run)
 	Arm       string
 	Outcome   string
 	Passed    *bool
@@ -782,13 +782,23 @@ type Run struct {
 	ExperimentID int64
 	Slot         int
 	Attempt      int
+	// WatchPassID is the watch pass that made the run, zero for runs the watch did not make: the watch's ledger counts
+	// exactly the runs that carry one. DriftCheckID places a drift run in its check.
+	WatchPassID  int64
+	DriftCheckID int64
 }
 
 // SaveRun records a finished run.
 func (s *Store) SaveRun(ctx context.Context, run Run) error {
-	var taskID, passed, experimentID, slot, attempt any
+	var taskID, passed, experimentID, slot, attempt, watchPass, driftCheck any
 	if run.TaskID != 0 {
 		taskID = run.TaskID
+	}
+	if run.WatchPassID != 0 {
+		watchPass = run.WatchPassID
+	}
+	if run.DriftCheckID != 0 {
+		driftCheck = run.DriftCheckID
 	}
 	if run.ExperimentID != 0 {
 		experimentID, slot, attempt = run.ExperimentID, run.Slot, run.Attempt
@@ -801,9 +811,9 @@ func (s *Store) SaveRun(ctx context.Context, run Run) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
-		                  experiment_id, slot, attempt)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
-		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished), experimentID, slot, attempt); err != nil {
+		                  experiment_id, slot, attempt, watch_pass_id, drift_check_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.ProjectID, taskID, run.TaskName, run.Kind, run.Arm, run.Outcome, passed,
+		run.CostUSD, string(run.Record), formatTime(run.Started), formatTime(run.Finished), experimentID, slot, attempt, watchPass, driftCheck); err != nil {
 		return fmt.Errorf("save run %s: %w", run.ID, err)
 	}
 	return nil
@@ -851,7 +861,7 @@ func (s *Store) Runs(ctx context.Context, projectID int64) ([]Run, error) {
 func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Run, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
-		       experiment_id, slot, attempt
+		       experiment_id, slot, attempt, watch_pass_id, drift_check_id
 		FROM runs `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query runs: %w", err)
@@ -860,15 +870,16 @@ func (s *Store) queryRuns(ctx context.Context, clause string, args ...any) ([]Ru
 	var runs []Run
 	for rows.Next() {
 		var run Run
-		var taskID, experimentID, slot, attempt sql.NullInt64
+		var taskID, experimentID, slot, attempt, watchPass, driftCheck sql.NullInt64
 		var passed sql.NullBool
 		var record, started, finished string
 		if err := rows.Scan(&run.ID, &run.ProjectID, &taskID, &run.TaskName, &run.Kind, &run.Arm, &run.Outcome, &passed, &run.CostUSD,
-			&record, &started, &finished, &experimentID, &slot, &attempt); err != nil {
+			&record, &started, &finished, &experimentID, &slot, &attempt, &watchPass, &driftCheck); err != nil {
 			return nil, fmt.Errorf("read run: %w", err)
 		}
 		run.TaskID, run.Record = taskID.Int64, []byte(record)
 		run.ExperimentID, run.Slot, run.Attempt = experimentID.Int64, int(slot.Int64), int(attempt.Int64)
+		run.WatchPassID, run.DriftCheckID = watchPass.Int64, driftCheck.Int64
 		if passed.Valid {
 			run.Passed = &passed.Bool
 		}
