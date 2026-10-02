@@ -94,9 +94,10 @@ const pythonRecipe = "python-3: interpreter by `uv python find --system --no-pro
 var pythonPrivate = []string{"uv-cache", "pip-cache", "py-resolve"}
 
 // pythonVar names the variables of the user's environment that never reach a Python project's tests, the agent's or
-// Agentium's own: PYTHON*, PIP_*, UV_* and VIRTUAL_ENV (pythonEnv sets the ones it needs).
+// Agentium's own: PYTHON*, PIP_*, UV_*, VIRTUAL_ENV and MYPYPATH (pythonEnv sets the ones it needs).
 func pythonVar(name string) bool {
-	return strings.HasPrefix(name, "PYTHON") || strings.HasPrefix(name, "PIP_") || strings.HasPrefix(name, "UV_") || name == "VIRTUAL_ENV"
+	return strings.HasPrefix(name, "PYTHON") || strings.HasPrefix(name, "PIP_") || strings.HasPrefix(name, "UV_") ||
+		name == "VIRTUAL_ENV" || name == "MYPYPATH"
 }
 
 // pythonEnv is the environment of the agent's commands in c.Repo (c.BuildCache the run's own cache): see pythonEnvWith.
@@ -132,7 +133,8 @@ func pythonHypothesis(cache, repo string) string {
 // Without one (no deps folder, or a warm-up that failed) the host's interpreter runs, with the same offline and cache
 // settings. PYTHONPATH is the checkout's import root, then the base's metadata folder (c.Metadata), which holds only a
 // .dist-info: importlib.metadata finds the project's version there, while every import still resolves to the checkout
-// (first on the path; the folder holds no module). hypothesis ("" for none) is hypothesis's storage folder.
+// (first on the path; the folder holds no module). MYPYPATH is the import root too, for mypy. hypothesis ("" for none)
+// is hypothesis's storage folder.
 func pythonEnvWith(c AgentContext, hypothesis string) []string {
 	var env []string
 	if c.Venv != "" {
@@ -147,7 +149,9 @@ func pythonEnvWith(c AgentContext, hypothesis string) []string {
 		if c.Metadata != "" {
 			path += string(os.PathListSeparator) + c.Metadata
 		}
-		env = append(env, "PYTHONPATH="+path)
+		// mypy (pytest-mypy-plugins' tests run it) finds the project through MYPYPATH: the attrs pilot's mypy 2.4 did not
+		// find it through PYTHONPATH alone. Only the import root: the metadata folder holds no module.
+		env = append(env, "PYTHONPATH="+path, "MYPYPATH="+filepath.Join(c.Repo, c.ImportRoot))
 	}
 	if c.BuildCache != "" {
 		env = append(env, "PYTHONPYCACHEPREFIX="+filepath.Join(c.BuildCache, "pycache"))

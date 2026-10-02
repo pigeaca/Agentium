@@ -6,7 +6,7 @@
   - **Kept:** steps 1–3. `internal/stats/drift.go` stays as the pure, tested CUSUM of the [statistics note's](../../docs/research/2026-10-02-wave3-statistics-note.md) §4, which documents it; nothing calls it.
   - **The screen (A4) remains,** as a command that hooks or an AI call, in the foreground. Everything below that runs it in a nightly pass, inside the watch's weekly caps, or posts from a later pass is void: the screen needs its own per-call budget design (dollars and window share, consented per call or per repository) before step 6.
 - Scope: sections 2 and 3 of the [automation plan](2026-10-01-automation.md), redesigned by **the user's decisions (2026-10-02, "plan all")**:
-  - ~~**The drift chart is un-deferred** for A5.~~ Cancelled with the watch; the [cheaper verdicts plan's](2026-10-02-cheaper-verdicts.md) step 6 is cancelled too.
+  - ~~**The drift chart is un-deferred** for A5.~~ Cancelled with the watch; the [cheaper verdicts plan's](archive/2026-10-02-cheaper-verdicts.md) step 6 is cancelled too.
   - **A4 runs without run reuse,** which stays deferred: fresh runs under `seq-v1`, with a small cap per check.
 - Builds on: `seq-v1` and the isolated-run cost (merged), A1 (`--json`, exit codes; [plan](2026-10-02-headless.md)), and A2's foreground pool ([plan](2026-10-02-task-pool.md)); A2's queue and its git hooks are parked by the user's no-background rule.
 

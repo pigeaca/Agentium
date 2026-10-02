@@ -23,18 +23,26 @@ import (
 
 // toolsAtBase names the build-tool profiles of a commit in the bare repository, from the files at its root.
 func toolsAtBase(ctx context.Context, bare, commit string) ([]string, error) {
-	tools, _, err := baseLayout(ctx, bare, commit)
-	return tools, err
+	l, err := baseLayout(ctx, bare, commit)
+	return l.tools, err
 }
 
-// baseLayout is what a run takes from its task's base commit, never from the overlaid checkout or the agent's work:
-// the build-tool profiles (files at its root) and where Python code imports from (buildtool.ImportRoot).
-func baseLayout(ctx context.Context, bare, commit string) (tools []string, importRoot string, err error) {
+// layout is what a run takes from its task's base commit, never from the overlaid checkout or the agent's work.
+type layout struct {
+	tools      []string // the build-tool profiles (files at its root: buildtool.DetectedNames)
+	agentTools []string // always-on profiles whose agent side stays on without being in tools (buildtool.AgentKept)
+	importRoot string   // where Python code imports from (buildtool.ImportRoot)
+}
+
+// baseLayout reads commit's layout in the bare repository.
+func baseLayout(ctx context.Context, bare, commit string) (layout, error) {
 	base, err := source.Commit(ctx, commit, "--git-dir", bare)
 	if err != nil {
-		return nil, "", err
+		return layout{}, err
 	}
-	return buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }), buildtool.ImportRoot(base.Paths()), nil
+	paths := base.Paths()
+	return layout{tools: buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }),
+		agentTools: buildtool.AgentKept(paths), importRoot: buildtool.ImportRoot(paths)}, nil
 }
 
 // NeedsLocalBinding reports whether runs on any of the commits need the sandbox's local binding (a Gradle build), so
@@ -318,10 +326,11 @@ type CommandsEnv struct {
 // checkout), and the notes runs of the base get, with a note for a test runner the verify commands use and the venv
 // lacks. A warm-up that waited out the lock is a note, not an error: validation then runs without the venv.
 func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
-	tools, importRoot, err := baseLayout(ctx, c.Bare, base)
+	l, err := baseLayout(ctx, c.Bare, base)
 	if err != nil {
 		return task.CheckoutCommands{}, err
 	}
+	tools, importRoot := l.tools, l.importRoot
 	profiles := buildtool.Select(tools)
 	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now}
 	if c.Layout.Cache != "" {

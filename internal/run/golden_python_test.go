@@ -31,7 +31,7 @@ func TestPythonProfileGolden(t *testing.T) {
 		"PYTHONPATH=/golden/py", "PYTHONHOME=/golden/pyhome", "PYTHONDONTWRITEBYTECODE=1", "PYTHONSTARTUP=/golden/home/.pythonrc",
 		"PIP_INDEX_URL=https://u:p@index.example/simple", "PIP_CACHE_DIR=/golden/pipc", "PIP_REQUIRE_VIRTUALENV=1", // secret-scan: allow
 		"UV_INDEX_URL=https://u:p@index.example/simple", "UV_CACHE_DIR=/golden/uvc", "UV_PYTHON=/golden/py/bin/python3", // secret-scan: allow
-		"VIRTUAL_ENV=/golden/home/proj/.venv", "POETRY_CACHE_DIR=/golden/poetry", "XDG_CACHE_HOME=/golden/home/xdg",
+		"VIRTUAL_ENV=/golden/home/proj/.venv", "MYPYPATH=/golden/home/stubs", "POETRY_CACHE_DIR=/golden/poetry", "XDG_CACHE_HOME=/golden/home/xdg",
 		"ANTHROPIC_API_KEY=parent-key", "GITHUB_TOKEN=parent-gh", "AGENTIUM_HOME=/golden/data"}
 	base := claude.Invocation{CLI: "/golden/bin/claude", Dir: "/golden/data/workspaces/r1/repo", Prompt: "Fix the parser.",
 		Model: "claude-sonnet-5", Effort: "medium", BudgetUSD: 3, Home: "/golden/home", SignIn: claude.SignInLogin,

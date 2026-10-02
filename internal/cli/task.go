@@ -39,14 +39,16 @@ const taskUsage = `Usage:
                          no test files, and the task is then judge-graded. --judge-graded asks the same of a solution
                          without a ticket (without it, such a solution is refused)
   agentium task mine [--since DATE] [--limit N] [--max-files N] [--max-lines N] [--dry-run] [--jobs N]
-                     [--timeout DURATION] [--setup CMD]... [--verify CMD]...
+                     [--timeout DURATION] [--setup CMD]... [--verify CMD]... [--require-lock]
                          tasks from history in one go: finds commits on the default branch that change tests and
                          code, small and with a clear message, imports the best --limit (default 10) as task import
                          --commit does, and validates them --jobs at a time (default 2), ending with one table;
                          --dry-run lists the candidates with their scores, and why other commits were set aside,
                          and saves nothing. Commits that are already tasks are skipped. Mined tasks verify with
                          the detected build tools' test commands (go test ./... for Go), not every command init
-                         found (linters and docs checks fail at old commits); without a build tool, with those
+                         found (linters and docs checks fail at old commits); without a build tool, with those.
+                         --require-lock sets aside Python commits whose base pins no dependencies (no uv.lock or
+                         fully pinned requirement files): their warm-up installs today's versions, with a note
   agentium task import (--commit REF | --pr N) [--name NAME] [--setup CMD]... [--verify CMD]...
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh); a commit's

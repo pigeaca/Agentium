@@ -182,3 +182,61 @@ func TestDetected(t *testing.T) {
 		}
 	}
 }
+
+// Go's agent side (allowlisted GO* and CGO_* names, GOFLAGS, the run's GOCACHE) applies where go.mod is detected, where
+// the base has a go.mod, go.work or .go file anywhere (a Python root with a Go module in a subfolder: without the run's GOCACHE, go
+// would fall back to the user's denied cache and fail), or where no profile is (as before profiles); a project detected
+// as something else alone, with no Go file of that kind (Python), gets none of it. Go's caches for Agentium's own
+// commands stay on for every project.
+func TestGoAgentSideOnlyWhereDetected(t *testing.T) {
+	ctx := AgentContext{Allowed: []string{"PATH=/bin"}, Home: "/nonexistent-home", Repo: "/repo"}
+	goVar := func(kv string) bool { return strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, "GOCACHE=") }
+	for _, c := range []struct {
+		name  string
+		tools []string
+		paths []string // the base commit's files
+		goOn  bool
+	}{
+		{"nothing detected", nil, nil, true},
+		{"a Go module", []string{"go"}, []string{"go.mod", "main.go"}, true},
+		{"Go and Python", []string{"go", "python"}, []string{"go.mod", "pyproject.toml"}, true},
+		{"Python alone", []string{"python"}, []string{"pyproject.toml", "src/pkg/__init__.py", "docs/go.md"}, false},
+		{"Cargo alone", []string{"cargo"}, []string{"Cargo.toml", "src/lib.rs"}, false},
+		{"Python with a Go module in a subfolder", []string{"python"}, []string{"pyproject.toml", "tools/foo/go.mod", "tools/foo/main.go"}, true},
+		{"Python with go.work at the root", []string{"python"}, []string{"go.work", "pyproject.toml"}, true},
+		{"Python with a lone Go script (go run)", []string{"python"}, []string{"pyproject.toml", "scripts/gen.go"}, true},
+		{"Cargo whose build.rs calls go", []string{"cargo"}, []string{"Cargo.toml", "build.rs", "gen/main.go"}, true},
+		{"Python with Go-like names only", []string{"python"}, []string{"pyproject.toml", "docs/go.md", "go/README", "x.gox"}, false},
+	} {
+		// AgentKept names Go exactly where the base holds a go.mod, go.work or .go file (a docs/go.md is not one).
+		if kept := AgentKept(c.paths); slices.Contains(kept, "go") != (len(c.paths) > 0 && c.goOn) {
+			t.Errorf("%s: AgentKept(%q) = %q", c.name, c.paths, kept)
+		}
+		selected := SelectRun(c.tools, AgentKept(c.paths))
+		if !slices.ContainsFunc(selected, func(p Profile) bool { return p.Name == "go" }) {
+			t.Errorf("%s: Go's profile is not selected", c.name)
+		}
+		agent := append(AgentEnv(selected, ctx), AgentCacheEnv(selected, "/run/cache")...)
+		names, prefixes := EnvAllowlist(selected)
+		on := []bool{slices.ContainsFunc(agent, goVar), slices.Contains(AgentCacheNames(selected), "GOCACHE"),
+			slices.Contains(names, "GOFLAGS"), slices.Contains(prefixes, "CGO_")}
+		for i, got := range on {
+			if got != c.goOn {
+				t.Errorf("%s: Go's agent side %d is %v, want %v (env %q)", c.name, i, got, c.goOn, agent)
+			}
+		}
+		if c.goOn && !slices.Contains(agent, "GOCACHE=/run/cache") {
+			t.Errorf("%s: the run's GOCACHE is missing: %q", c.name, agent)
+		}
+	}
+	if py := AgentEnv(Select([]string{"go", "python"}), ctx); !slices.Contains(py, "GOFLAGS=-buildvcs=false") ||
+		!slices.ContainsFunc(py, func(kv string) bool { return strings.HasPrefix(kv, "PYTHONPATH=") }) {
+		t.Errorf("a mixed project lost one side: %q", py)
+	}
+	if !slices.Contains(CommandEnv("/data/cache", "/data/tmp"), "GOCACHE=/data/cache/go-build") {
+		t.Errorf("Agentium's own commands lost Go's cache: %q", CommandEnv("/data/cache", "/data/tmp"))
+	}
+	if WarmVersion(Select([]string{"python"})) != WarmVersion([]Profile{goProfile(), pythonProfile()}) {
+		t.Errorf("the implicit mark changed the warm-up version, which would re-warm every Python base")
+	}
+}

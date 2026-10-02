@@ -74,8 +74,9 @@ func TestPythonEnv(t *testing.T) {
 	ctx := AgentContext{Allowed: []string{"PATH=/usr/bin:/bin", "PYTHONPATH=/user/py"}, Home: "/home/u", Repo: repo,
 		BuildCache: "/data/workspaces/r1/go-build", Deps: "/data/deps/1", Venv: "/data/deps/1/py/k/venv", Metadata: meta}
 	got := AgentEnv(Select([]string{"python"}), ctx)
-	want := []string{"GOFLAGS=-buildvcs=false", "VIRTUAL_ENV=/data/deps/1/py/k/venv", "PATH=/data/deps/1/py/k/venv/bin:/usr/bin:/bin",
-		"PYTHONPATH=" + repo + ":" + meta, "PYTHONPYCACHEPREFIX=/data/workspaces/r1/go-build/pycache",
+	// No GOFLAGS: the repository has no go.mod (Go's agent side is off).
+	want := []string{"VIRTUAL_ENV=/data/deps/1/py/k/venv", "PATH=/data/deps/1/py/k/venv/bin:/usr/bin:/bin",
+		"PYTHONPATH=" + repo + ":" + meta, "MYPYPATH=" + repo, "PYTHONPYCACHEPREFIX=/data/workspaces/r1/go-build/pycache",
 		"HYPOTHESIS_STORAGE_DIRECTORY=/data/workspaces/r1/go-build/hypothesis", "PYTEST_ADDOPTS=-p no:cacheprovider",
 		"PIP_NO_INDEX=1", "PIP_DISABLE_PIP_VERSION_CHECK=1", "UV_OFFLINE=1", "UV_NO_SYNC=1", "UV_FROZEN=1", "UV_PYTHON_DOWNLOADS=never",
 		"UV_PROJECT_ENVIRONMENT=/data/deps/1/py/k/venv", "UV_CACHE_DIR=/data/workspaces/r1/go-build/uv"}
@@ -86,7 +87,8 @@ func TestPythonEnv(t *testing.T) {
 	// checkout's own there (a grading never replays what another arm's grading found).
 	checkout := CheckoutEnv(Select([]string{"python"}), AgentContext{Allowed: ctx.Allowed, Repo: repo, BuildCache: "/data/cache", Venv: ctx.Venv, Metadata: meta})
 	if !slices.Contains(checkout, "PYTHONPYCACHEPREFIX=/data/cache/pycache") || !slices.Contains(checkout, "UV_CACHE_DIR=/data/cache/uv") ||
-		!slices.Contains(checkout, "VIRTUAL_ENV="+ctx.Venv) || !slices.Contains(checkout, "PYTHONPATH="+repo+":"+meta) {
+		!slices.Contains(checkout, "VIRTUAL_ENV="+ctx.Venv) || !slices.Contains(checkout, "PYTHONPATH="+repo+":"+meta) ||
+		!slices.Contains(checkout, "MYPYPATH="+repo) {
 		t.Errorf("checkout env %q", checkout)
 	}
 	other := env(t, CheckoutEnv(Select([]string{"python"}), AgentContext{Repo: t.TempDir(), BuildCache: "/data/cache"}))
@@ -102,8 +104,12 @@ func TestPythonEnv(t *testing.T) {
 	// agent adds later changes nothing.
 	src := ctx
 	src.ImportRoot = "src"
-	if e := env(t, AgentEnv(Select([]string{"python"}), src)); e["PYTHONPATH"] != filepath.Join(repo, "src")+":"+meta {
-		t.Errorf("src layout: PYTHONPATH=%q", e["PYTHONPATH"])
+	if e := env(t, AgentEnv(Select([]string{"python"}), src)); e["PYTHONPATH"] != filepath.Join(repo, "src")+":"+meta ||
+		e["MYPYPATH"] != filepath.Join(repo, "src") {
+		t.Errorf("src layout: PYTHONPATH=%q, MYPYPATH=%q", e["PYTHONPATH"], e["MYPYPATH"])
+	}
+	if e := env(t, CheckoutEnv(Select([]string{"python"}), src)); e["MYPYPATH"] != filepath.Join(repo, "src") {
+		t.Errorf("src layout, Agentium's own commands: MYPYPATH=%q", e["MYPYPATH"])
 	}
 	writeFiles(t, repo, map[string]string{"src/added/__init__.py": ""})
 	if e := env(t, AgentEnv(Select([]string{"python"}), ctx)); e["PYTHONPATH"] != repo+":"+meta {
@@ -138,7 +144,7 @@ func TestPythonEnv(t *testing.T) {
 	bare := AgentEnv(Select([]string{"python"}), AgentContext{Allowed: ctx.Allowed})
 	if !slices.Contains(bare, "PYTHONDONTWRITEBYTECODE=1") || slices.ContainsFunc(bare, func(kv string) bool {
 		return strings.HasPrefix(kv, "PYTHONPYCACHEPREFIX=") || strings.HasPrefix(kv, "UV_CACHE_DIR=") || strings.HasPrefix(kv, "PYTHONPATH=") ||
-			strings.HasPrefix(kv, "HYPOTHESIS_STORAGE_DIRECTORY=")
+			strings.HasPrefix(kv, "MYPYPATH=") || strings.HasPrefix(kv, "HYPOTHESIS_STORAGE_DIRECTORY=")
 	}) {
 		t.Errorf("no build cache, no checkout: %q", bare)
 	}

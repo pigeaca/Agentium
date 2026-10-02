@@ -90,9 +90,11 @@ func TestMavenRunEnvironmentAndSandbox(t *testing.T) {
 			t.Errorf("%s is not denied", p)
 		}
 	}
-	// Go's special cases stay, as for every project.
-	if env["GOFLAGS"] != "-buildvcs=false" {
-		t.Errorf("GOFLAGS = %q", env["GOFLAGS"])
+	// No go.mod: Go's agent side is off (buildtool.Profile.Always), so no GOFLAGS or GOCACHE of ours or the user's.
+	for _, name := range []string{"GOFLAGS", "GOCACHE"} {
+		if v, ok := env[name]; ok {
+			t.Errorf("%s = %q in a Maven project", name, v)
+		}
 	}
 }
 
