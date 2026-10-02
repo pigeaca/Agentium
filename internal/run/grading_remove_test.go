@@ -282,6 +282,14 @@ func TestAccessListsAreCleared(t *testing.T) {
 	if err := withGrading(context.Background(), in, func(g grading) error {
 		resistByACL(t, g.Copy)
 		resistByACL(t, g.Cache)
+		// A folder whose list denies readattr and readsecurity cannot even be looked at until the list is gone.
+		blind := filepath.Join(g.Copy, "blind")
+		must(t, os.MkdirAll(filepath.Join(blind, "sub"), 0o700))
+		for _, right := range []string{"readattr", "readsecurity"} {
+			if out, err := exec.Command("/bin/chmod", "+a", "everyone deny "+right, blind).CombinedOutput(); err != nil {
+				t.Fatalf("chmod +a %s: %v %s", right, err, out)
+			}
+		}
 		must(t, os.Symlink("/nonexistent", filepath.Join(g.Temp, "link")))
 		if out, err := exec.Command("/bin/chmod", "-h", "+a", "everyone deny delete", filepath.Join(g.Temp, "link")).CombinedOutput(); err != nil {
 			t.Fatalf("chmod -h +a: %v %s", err, out)
@@ -451,8 +459,8 @@ func TestLeftoverProcessesAreStopped(t *testing.T) {
 	}
 	endsSoon(t, "a process working in the copy", inCopy)
 	endsSoon(t, "a process holding a file in the cache", holding)
-	// Each killed process is reported (F-E), by ID and command.
-	if n := strings.Count(strings.Join(warnings, "\n"), "it was stopped: "); n != 2 || !strings.Contains(strings.Join(warnings, "\n"), " sleep") {
+	// Each killed process is reported (F-E), by ID and command, quoted (the grade picks the name).
+	if n := strings.Count(strings.Join(warnings, "\n"), "it was stopped: "); n != 2 || !strings.Contains(strings.Join(warnings, "\n"), ` "sleep"`) {
 		t.Errorf("warnings = %q", warnings)
 	}
 

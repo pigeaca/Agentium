@@ -91,6 +91,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -161,12 +163,37 @@ func (e *firstErrors) err() error {
 	return fmt.Errorf("%w (and %d more)", e.first, e.more)
 }
 
+// belowError is a removal error named by its path below the root. The grade picks the names and the depth, so the
+// message keeps the first and the last two names of a deep path and quotes each one (a name may hold a newline or a
+// terminal escape).
+type belowError struct {
+	path []string
+	err  error
+}
+
+func (e *belowError) Error() string {
+	quoted := make([]string, len(e.path))
+	for i, name := range e.path {
+		quoted[i] = strconv.Quote(name)
+	}
+	if len(quoted) > 3 {
+		quoted = []string{quoted[0], "…", quoted[len(quoted)-2], quoted[len(quoted)-1]}
+	}
+	return strings.Join(quoted, "/") + ": " + e.err.Error()
+}
+
+func (e *belowError) Unwrap() error { return e.err }
+
 // removeAt removes the entry name of the folder dfd, and what is under it (raced: see removeTreeRacing). What cannot
 // be removed is added to errs, named by its path below root.
 func removeAt(dfd int, name string, raced func(name string), errs *firstErrors) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
-	failed := func(err error) { errs.add(fmt.Errorf("%s: %w", name, err)) }
+	failed := func(err error) { errs.add(&belowError{path: []string{name}, err: err}) }
+	// The access list goes first (best effort, no-follow, any type): on macOS a folder whose list denies readattr or
+	// readsecurity cannot even be looked at. Not every file system keeps access lists; if a list was not cleared, what
+	// follows fails and says so.
+	C.ag_noaclat(C.int(dfd), cname)
 	var mode, flags C.uint32_t
 	if err := errnoOf(C.ag_lstatat(C.int(dfd), cname, &mode, &flags)); errors.Is(err, fs.ErrNotExist) {
 		return
@@ -183,9 +210,6 @@ func removeAt(dfd int, name string, raced func(name string), errs *firstErrors) 
 			return
 		}
 	}
-	// Best effort: not every file system keeps access lists, and if a list was not cleared the removal below fails
-	// and says so.
-	C.ag_noaclat(C.int(dfd), cname)
 	if uint32(mode)&syscall.S_IFMT != syscall.S_IFDIR {
 		if err := errnoOf(C.ag_unlinkat(C.int(dfd), cname, 0)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			failed(err)
@@ -214,7 +238,12 @@ func removeAt(dfd int, name string, raced func(name string), errs *firstErrors) 
 	}
 	dir.Close()
 	if below.first != nil {
-		errs.add(fmt.Errorf("%s/%w", name, below.first))
+		if b, ok := below.first.(*belowError); ok {
+			b.path = append([]string{name}, b.path...)
+			errs.add(b)
+		} else {
+			errs.add(&belowError{path: []string{name}, err: below.first})
+		}
 		errs.more += below.more
 		return
 	}

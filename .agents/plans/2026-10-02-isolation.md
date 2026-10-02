@@ -224,7 +224,7 @@
     - *Removal* (`removeTree`, review F1–F3): `os.RemoveAll` first, which never follows a link. When what the grade left resists it, `removeTreeAt` walks the tree through folder descriptors, one name at a time:
       - `fstatat` with `AT_SYMLINK_NOFOLLOW`;
       - only the flags that block removal (`uchg`, `uappnd`) cleared, with `setattrlistat(FSOPT_NOFOLLOW)`, links included (macOS has no `chflagsat`). The other flags stay: clearing `UF_COMPRESSED` on a compressed file the grade hard-linked in would destroy the user's data (re-review F-F);
-      - the access list removed with `setattrlistat(ATTR_CMN_EXTENDED_SECURITY, FSOPT_NOFOLLOW)` and no list, which the owner can always do (re-review F-C);
+      - the access list removed with `setattrlistat(ATTR_CMN_EXTENDED_SECURITY, FSOPT_NOFOLLOW)` and no list, first, before the entry is even looked at: a folder whose list denies readattr or readsecurity cannot be stat'ed until it is gone (re-review F-C; third review 1). The owner may always remove a list; a file system without lists leaves the removal to fail and be quarantined;
       - folders made `u+rwx` with `fchmodat(AT_SYMLINK_NOFOLLOW)`, and opened with `O_DIRECTORY|O_NOFOLLOW`;
       - removal from the bottom up with `unlinkat`.
 
