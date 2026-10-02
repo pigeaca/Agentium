@@ -42,6 +42,7 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
   - Resume: each call's cost is stored as it lands as a stopped comparison; a resume compares the pairs without a comparison or with a stopped one once (funded first, else a budget stop), keeping the earlier spend. A pair judge at a usage limit pauses the experiment as the judge does.
   - Clustering: `experiment.PairPreferenceOf` counts the preference once per task (the arm its comparisons preferred more often), and the flip rate per pair; with one run per arm both agree. Chosen over an honesty note so that the binomial test and the Wilson interval stay valid at repeats above 1. Step 2 shows it.
   - JSON (additive): `experiment.judge_pairs`, `progress.pair_judge_usd` and `uncompared_pairs` (`judge_usd` is both judges'), a run's `pair_judge_cost_usd`.
+  - Review of #126: no queued comparison starts while `--wait` waits for the usage window, and a pause at the usage limit drops the queue for the resume; a pair judge's usage limit pauses the runs at once (`Plan.Paused`, checked before every start and every seq-v1 stage); the comparisons' budget accounting has unit and CLI tests that fail under each reviewer mutation; `Recover` removes a leftover `pair-judge` folder on any command that takes the run lock; an interrupt never lowers a stored comparison's cost. Not done: the usage gate's projection leaves comparisons out, as it leaves the per-run judge out (no measured share of the window per comparison).
 - [ ] **2. Report.**
 - [ ] **3. Real check (paid; approval).**
 
