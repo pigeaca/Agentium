@@ -59,7 +59,7 @@ func TestExperimentRunShowsAStatusLineOnATerminal(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5"), ExitOK)
 	*f.terminal = true
 	f.vars["TERM"] = "xterm"
 	r := f.run(ctx, "experiment", "run", "lean-ab")

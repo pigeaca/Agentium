@@ -74,7 +74,7 @@ func TestModelABDesignIsValidated(t *testing.T) {
 		"--budget", "5"), ExitUsage, "below one pair of runs at their caps ($6.00)")
 
 	// A valid one is stored with each arm's profile, on one context (the base's, or a snapshot).
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--repeats", "2"),
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2"),
 		ExitOK, "Created experiment m: model A/B on context base, A = claude-sonnet-5, B = claude-opus-5-5:high, 1 task(s) × 2 run(s) per arm = 4 runs")
 	expect(t, f.run(ctx, "experiment", "new", "lean-m", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--context", "lean",
 		"--task", "value", "--repeats", "1"), ExitOK, "model A/B on context lean, A = claude-opus-5-5:medium, B = claude-opus-5-5:high")
@@ -146,7 +146,7 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 
 	// Per run $0.40 on Sonnet and $2.00 on Opus: 2 repeats cost $4.80, and the default budget is 1.25 × that plus 3 caps
 	// of the larger cap, $5, and a quarter more of Opus's calibration ($0.18): $22. The arms' caps are $3 and $5, so a pair's worst case is $8.
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--repeats", "2",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2",
 		"--run-budget-b", "5"), ExitOK, "= 4 runs, budget $22.00")
 	plan := f.run(ctx, "experiment", "plan", "m")
 	expect(t, plan, ExitOK, "arm A: model claude-sonnet-5, effort the CLI's default, context base; each run up to $3.00",
@@ -163,7 +163,7 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 		t.Errorf("the default budget covers both arms' estimates and the reserve:\n%s", plan.stdout)
 	}
 	// A budget that covers one arm's estimate and the reserve but not both arms is flagged.
-	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "2", "--budget", "12"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "12"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
 		"WARNING  the budget $12.00 is below the estimated $4.80 plus $0.18 of calibration plus $9.00 held for runs in flight")
 
@@ -196,7 +196,7 @@ func TestModelABRunsEachArmOnItsOwnProfile(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet+":low", "--b", opus+":high", "--task", "value", "--repeats", "3",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet+":low", "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "3",
 		"--seed", "5", "--budget", "40"), ExitOK)
 	out := f.run(ctx, "experiment", "run", "m")
 	expect(t, out, ExitOK, "Locked: Claude Code 2.1.281, A = claude-sonnet-5:low, B = claude-opus-5-5:high, sign-in login, 6 runs", "6 of 6 runs settled")
@@ -240,7 +240,7 @@ func TestModelABChecksDriftPerArm(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "2", "--seed", "5",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
 		"--budget", "40", "--concurrency", "1"), ExitOK)
 	// Every run reports Sonnet: arm B's calibration saw Opus, so its run does not compare, and the experiment stops.
 	if err := os.WriteFile(filepath.Join(ctrl, "report-model"), []byte(sonnet), 0o644); err != nil {
@@ -259,7 +259,7 @@ func TestModelABEqualArmCapsRun(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "2", "--seed", "5",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
 		"--run-budget-a", "1", "--run-budget-b", "1", "--budget", "4"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "m"), ExitOK, "each run up to $1.00 and", "Experiment m: done", "4 of 4 runs settled")
 }

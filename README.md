@@ -41,8 +41,8 @@ agentium start
 `start` never writes to your repository. It:
 
 - registers the repository and snapshots your context as `baseline`;
-- mines and validates 8 tasks from your history;
-- creates an experiment and previews runs, cost and detectable effect;
+- mines and validates up to 16 tasks from your history (8 at least);
+- creates an experiment and previews its looks and spend;
 - stops there: nothing paid runs without `--yes`.
 
 > [!WARNING]

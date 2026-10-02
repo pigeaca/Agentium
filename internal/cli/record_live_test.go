@@ -45,7 +45,7 @@ func TestRecordLiveRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "usage"), []byte(usage), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5", "--budget", "22"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--seed", "5", "--budget", "22"), ExitOK)
 	f.vars["TERM"] = "xterm"
 	w := &timedWriter{}
 	var stderr bytes.Buffer

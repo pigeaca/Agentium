@@ -10,10 +10,11 @@ import (
 	"testing"
 )
 
-// Research helpers and evidence for the wave-3 statistics note (docs/research/2026-10-02-wave3-statistics-note.md):
-// a group-sequential cost design (looks after 8, 12 and 16 tasks, O'Brien–Fleming-type Lan–DeMets spending,
-// non-binding futility), run reuse with a bias allowance, the reused-against-fresh A/A, and the drift chart. Test-only:
-// no production code uses any of it yet, and production verdicts (Decide) are called exactly as they are.
+// Evidence for the wave-3 statistics note (docs/research/2026-10-02-wave3-statistics-note.md): a group-sequential cost
+// design (method seq-v1: looks after 8, 12 and 16 tasks, O'Brien–Fleming-type Lan–DeMets spending, non-binding
+// futility), run reuse with a bias allowance, the reused-against-fresh A/A, and the drift chart. The sequential design's
+// spending, boundaries, nominal levels, look evidence and conditional power are the production code's (sequential.go),
+// and each look's verdict is the production Decide; only the simulated data and the reuse rules are test-only.
 //
 // The default run is sized for CI under the race detector, and asserts with margins of several Monte Carlo standard
 // errors. AGENTIUM_LONG_SIM=<factor> multiplies every replicate count; the note's figures and its exit gate come from
@@ -40,103 +41,12 @@ func longFactor() int {
 	return 1
 }
 
-func normalCDF(x float64) float64 { return 0.5 * math.Erfc(-x/math.Sqrt2) }
-func normalPDF(x float64) float64 { return math.Exp(-x*x/2) / math.Sqrt(2*math.Pi) }
+// seqAlpha is the production method's efficacy alpha: the gate below tests exactly it.
+const seqAlpha = SeqAlpha
 
-// obfSpending is Lan and DeMets' O'Brien–Fleming-type spending function: the one-sided error, of alpha in all, spent by
-// information fraction t: 2 − 2Φ(z(1 − alpha/2)/√t).
-func obfSpending(alpha, t float64) float64 {
-	switch {
-	case t <= 0:
-		return 0
-	case t >= 1:
-		return alpha
-	}
-	return 2 - 2*normalCDF(NormalQuantile(1-alpha/2)/math.Sqrt(t))
-}
-
-// groupSequentialBounds returns the z-boundaries at information fractions (increasing, the last 1) such that a
-// standard Brownian motion, observed at those fractions as Z_k = B(t_k)/√t_k, first crosses by look k with probability
-// spend(t_k): |Z| ≥ c when twoSided (spend is then the two-sided total), else Z ≥ c. It integrates the continuation
-// region's sub-density numerically (Armitage, McPherson and Rowe's recursion, Simpson's rule on the B scale).
-func groupSequentialBounds(fractions []float64, spend func(float64) float64, twoSided bool) []float64 {
-	const m = 1201 // grid points, odd for Simpson's rule
-	bounds := make([]float64, len(fractions))
-	var xs, ws []float64 // the continuation region's grid and its sub-density times the quadrature weights
-	prevT, prevSpent := 0.0, 0.0
-	for k, t := range fractions {
-		target := spend(t) - prevSpent
-		sd := math.Sqrt(t - prevT)
-		cross := func(c float64) float64 {
-			top := c * math.Sqrt(t)
-			if k == 0 {
-				p := 1 - normalCDF(c)
-				if twoSided {
-					p *= 2
-				}
-				return p
-			}
-			sum := 0.0
-			for j, u := range xs {
-				p := 1 - normalCDF((top-u)/sd)
-				if twoSided {
-					p += normalCDF((-top - u) / sd)
-				}
-				sum += ws[j] * p
-			}
-			return sum
-		}
-		lo, hi := 0.0, 15.0
-		for range 100 {
-			if mid := (lo + hi) / 2; cross(mid) > target {
-				lo = mid
-			} else {
-				hi = mid
-			}
-		}
-		c := (lo + hi) / 2
-		bounds[k] = c
-		prevSpent = spend(t)
-		top, bottom := c*math.Sqrt(t), -c*math.Sqrt(t)
-		if !twoSided {
-			bottom = -10 * math.Sqrt(t)
-		}
-		h := (top - bottom) / float64(m-1)
-		nx, nw := make([]float64, m), make([]float64, m)
-		for i := range nx {
-			b := bottom + float64(i)*h
-			dens := 0.0
-			if k == 0 {
-				dens = normalPDF(b/sd) / sd
-			} else {
-				for j, u := range xs {
-					dens += ws[j] * normalPDF((b-u)/sd) / sd
-				}
-			}
-			weight := 2.0
-			switch {
-			case i == 0 || i == m-1:
-				weight = 1
-			case i%2 == 1:
-				weight = 4
-			}
-			nx[i], nw[i] = b, dens*weight*h/3
-		}
-		xs, ws = nx, nw
-		prevT = t
-	}
-	return bounds
-}
-
-// seqAlpha is the note's two-sided error for efficacy (improved, regressed), as the user decided on 2026-10-02. At 5%
-// a first long run gave 5.12% [4.99, 5.24] false differences under normal noise (the t-interval at nominal levels runs
-// slightly liberal with 7–15 degrees of freedom). At 4.5% the arm-specific noise shapes gave 5.66% [5.53, 5.79]. 3.5%
-// is the level at which every null group keeps its Wilson upper bound at or under 5%.
-const seqAlpha = 0.035
-
-// seqDesign is a group-sequential cost design: looks after Looks[k] tasks (the last is the maximum), the nominal
-// two-sided level of each look's efficacy interval (improved, regressed) and of its equivalence interval (each side a
-// one-sided test), from O'Brien–Fleming-type spending of a two-sided Alpha (Alpha/2 a side) and of a one-sided EqAlpha.
+// seqDesign is a group-sequential cost design as the simulations use it: looks after Looks[k] tasks (the last is the
+// maximum), with the production boundaries and nominal levels (SequentialLooks) of O'Brien–Fleming-type spending of a
+// two-sided Alpha for efficacy and a one-sided EqAlpha per side for equivalence.
 type seqDesign struct {
 	Looks     []int
 	Fractions []float64
@@ -144,8 +54,8 @@ type seqDesign struct {
 	EqAlpha   float64
 	EffBounds []float64 // z-boundaries, two-sided
 	EqBounds  []float64 // z-boundaries, one-sided
-	EffLevel  []float64 // 1 − 2(1 − Φ(EffBounds[k])): the efficacy interval's two-sided level
-	EqLevel   []float64 // 1 − 2(1 − Φ(EqBounds[k])): the equivalence interval's two-sided level
+	EffLevel  []float64 // the efficacy interval's two-sided level
+	EqLevel   []float64 // the equivalence interval's two-sided level
 	// Futility: an interim look with no verdict stops when the conditional power to cross the final efficacy boundary,
 	// under the trend observed so far, is below Futility (0: never). Non-binding: the efficacy boundaries ignore it.
 	Futility float64
@@ -153,41 +63,51 @@ type seqDesign struct {
 
 func newSeqDesign(looks []int, alpha, eqAlpha, futility float64) seqDesign {
 	d := seqDesign{Looks: looks, Alpha: alpha, EqAlpha: eqAlpha, Futility: futility}
-	for _, n := range looks {
-		d.Fractions = append(d.Fractions, float64(n)/float64(looks[len(looks)-1]))
+	computed, err := SequentialLooks(looks, looks[len(looks)-1], true, alpha, eqAlpha)
+	if err != nil {
+		panic(err) // the designs here are fixed
 	}
-	d.EffBounds = groupSequentialBounds(d.Fractions, func(t float64) float64 { return 2 * obfSpending(alpha/2, t) }, true)
-	d.EqBounds = groupSequentialBounds(d.Fractions, func(t float64) float64 { return obfSpending(eqAlpha, t) }, false)
-	for k := range looks {
-		d.EffLevel = append(d.EffLevel, 1-2*(1-normalCDF(d.EffBounds[k])))
-		d.EqLevel = append(d.EqLevel, 1-2*(1-normalCDF(d.EqBounds[k])))
+	for _, l := range computed {
+		d.Fractions = append(d.Fractions, l.Fraction)
+		d.EffBounds, d.EqBounds = append(d.EffBounds, l.EffBound), append(d.EqBounds, l.EqBound)
+		d.EffLevel, d.EqLevel = append(d.EffLevel, l.EffLevel), append(d.EqLevel, l.EqLevel)
 	}
 	return d
 }
 
-// conditionalPower is the chance of crossing the final efficacy boundary from look k, under the trend so far, with z
-// the look's statistic (the t-statistic of the per-task differences, taken as normal).
+// conditionalPower is the production ConditionalPower at look k.
 func (d seqDesign) conditionalPower(k int, z float64) float64 {
-	t := d.Fractions[k]
-	final := d.EffBounds[len(d.EffBounds)-1]
-	return 1 - normalCDF((final-math.Abs(z)/math.Sqrt(t))/math.Sqrt(1-t))
+	return ConditionalPower(z, d.Fractions[k], d.EffBounds[len(d.EffBounds)-1])
+}
+
+// groupSequentialBounds is SequentialBounds with the error spent given as a function of the fractions.
+func groupSequentialBounds(fractions []float64, spend func(float64) float64, twoSided bool) []float64 {
+	spent := make([]float64, len(fractions))
+	for i, f := range fractions {
+		spent[i] = spend(f)
+	}
+	b, err := SequentialBounds(fractions, spent, twoSided)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 func TestGroupSequentialBounds(t *testing.T) {
 	// Published values (gsDesign, three equally spaced looks, one-sided 0.025, O'Brien–Fleming-type Lan–DeMets
 	// spending): 3.7103, 2.5114, 1.9930.
-	got := groupSequentialBounds([]float64{1.0 / 3, 2.0 / 3, 1}, func(t float64) float64 { return obfSpending(0.025, t) }, false)
+	got := groupSequentialBounds([]float64{1.0 / 3, 2.0 / 3, 1}, func(t float64) float64 { return OBFSpending(0.025, t) }, false)
 	for i, want := range []float64{3.7103, 2.5114, 1.9930} {
 		if math.Abs(got[i]-want) > 0.002 {
 			t.Errorf("look %d: boundary %.4f, want %.4f", i+1, got[i], want)
 		}
 	}
 	// One look spends everything: the fixed test's 1.96.
-	if one := groupSequentialBounds([]float64{1}, func(t float64) float64 { return 2 * obfSpending(0.025, t) }, true); math.Abs(one[0]-1.95996) > 1e-3 {
+	if one := groupSequentialBounds([]float64{1}, func(t float64) float64 { return 2 * OBFSpending(0.025, t) }, true); math.Abs(one[0]-1.95996) > 1e-3 {
 		t.Errorf("one look: %.4f, want 1.96", one[0])
 	}
 	// The note's design, checked by a Brownian simulation: the crossing probabilities are the spending function's.
-	d := newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0)
+	d := newSeqDesign(SeqLooks(SeqMaxTasks), seqAlpha, SeqEquivalenceAlpha, 0)
 	t.Logf("looks %v, fractions %.3f: efficacy z %.4f (two-sided nominal levels %.5f); equivalence z %.4f (interval levels %.4f)",
 		d.Looks, d.Fractions, d.EffBounds, d.EffLevel, d.EqBounds, d.EqLevel)
 	r := rand.New(rand.NewPCG(11, 12))
@@ -207,7 +127,7 @@ func TestGroupSequentialBounds(t *testing.T) {
 	cumulative := 0
 	for k, f := range d.Fractions {
 		cumulative += crossed[k]
-		got, want := float64(cumulative)/paths, 2*obfSpending(seqAlpha/2, f)
+		got, want := float64(cumulative)/paths, 2*OBFSpending(seqAlpha/2, f)
 		if se := math.Sqrt(want * (1 - want) / paths); math.Abs(got-want) > 4*se {
 			t.Errorf("look %d: crossed by then in %.4f%% of paths, want %.4f%%", k+1, 100*got, 100*want)
 		}
@@ -298,11 +218,7 @@ func isDifference(v string) bool { return v == Improved || v == ImprovedSmall ||
 // in the 95% slots, the equivalence interval in the 90% ones), or, with a reuse allowance, a difference only when the
 // widest efficacy interval clears ±allowance (and no equivalence). It also returns the t-only verdict and the t-statistic.
 func verdictAt(d seqDesign, k int, tb *Table, draws int, r *rand.Rand, allowance float64) (verdict, tOnly string, z float64) {
-	boot, _ := NewBootstrap(tb, "A", "B", math.Log, draws, r)
-	diffs := tb.Paired("A", "B", math.Log)
-	tEff, _ := TInterval(diffs, d.EffLevel[k])
-	tEq, _ := TInterval(diffs, d.EqLevel[k])
-	z = Mean(diffs) / math.Sqrt(Variance(diffs)/float64(len(diffs)))
+	e, z, _ := LookEvidence(tb, "A", "B", math.Log, draws, r, d.EffLevel[k], d.EqLevel[k])
 	margin := RatioMargin(0.10, LowerIsBetter)
 	if allowance > 0 {
 		clear := func(i Interval) string {
@@ -314,11 +230,10 @@ func verdictAt(d seqDesign, k int, tb *Table, draws int, r *rand.Rand, allowance
 			}
 			return Inconclusive
 		}
-		return clear(widest(boot.Percentile(d.EffLevel[k]), tEff)), clear(tEff), z
+		return clear(widest(e.Boot95, e.T95)), clear(e.T95), z
 	}
-	e := Evidence{Boot95: boot.Percentile(d.EffLevel[k]), T95: tEff, Boot90: boot.Percentile(d.EqLevel[k]), T90: tEq}
 	verdict, _ = Decide(e, LowerIsBetter, margin, false, false)
-	tOnly, _ = Decide(Evidence{Boot95: tEff, T95: tEff, Boot90: tEq, T90: tEq}, LowerIsBetter, margin, false, false)
+	tOnly, _ = Decide(Evidence{Boot95: e.T95, T95: e.T95, Boot90: e.T90, T90: e.T90}, LowerIsBetter, margin, false, false)
 	return verdict, tOnly, z
 }
 
@@ -496,7 +411,7 @@ func recordedDifferences() []float64 {
 func TestGroupSequentialFalseVerdicts(t *testing.T) {
 	factor := longFactor()
 	reps, draws := 400*factor, simDraws(factor)
-	d := newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0.10)
+	d := newSeqDesign(SeqLooks(SeqMaxTasks), seqAlpha, SeqEquivalenceAlpha, SeqFutility)
 	type group struct {
 		name  string
 		cells []seqCell
@@ -614,7 +529,7 @@ func TestGroupSequentialPower(t *testing.T) {
 		name string
 		d    seqDesign
 	}{
-		{"sequential 8/12/16", newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0.10)},
+		{"sequential 8/12/16", newSeqDesign(SeqLooks(SeqMaxTasks), seqAlpha, SeqEquivalenceAlpha, SeqFutility)},
 		{"fixed 8", newSeqDesign([]int{8}, 0.05, 0.05, 0)},
 		{"fixed 16", newSeqDesign([]int{16}, 0.05, 0.05, 0)},
 	}
@@ -672,7 +587,7 @@ func TestGroupSequentialPower(t *testing.T) {
 func TestReuseValidationAndAllowance(t *testing.T) {
 	factor := longFactor()
 	reps, draws := 100*factor, simDraws(factor)
-	d := newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0)
+	d := newSeqDesign(SeqLooks(SeqMaxTasks), seqAlpha, SeqEquivalenceAlpha, 0)
 	limit := math.Log(1.15)
 	type res struct {
 		pass, falseDiff, improved20, improved35, improved63, runs int

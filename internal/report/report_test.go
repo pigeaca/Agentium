@@ -35,7 +35,7 @@ func fixture() Input {
 	for i := range 10 {
 		d.Tasks = append(d.Tasks, fmt.Sprintf("task-%d", i))
 	}
-	l := experiment.Lock{Method: experiment.MethodVersion, Agentium: "test", LockedAt: at, ClaudeCode: "2.1.281", ClaudePath: "/usr/local/bin/claude",
+	l := experiment.Lock{Method: experiment.MethodV2, Agentium: "test", LockedAt: at, ClaudeCode: "2.1.281", ClaudePath: "/usr/local/bin/claude",
 		SignIn: claude.SignInLogin, Host: "darwin/arm64", PriceTable: "2026-09-29", Design: d, Schedule: experiment.Schedule(d), MaxAttempts: 3}
 	for _, a := range d.Arms {
 		l.Arms = append(l.Arms, experiment.LockedArm{Arm: a, Calibration: "cal-" + a.Name, Model: "claude-sonnet-5", Tools: []string{"Bash", "Edit", "Read"},
