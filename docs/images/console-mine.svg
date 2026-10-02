@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1046" height="533" viewBox="0 0 1046 533" role="img" aria-label="agentium task mine --dry-run">
+<rect width="1046" height="533" rx="8" fill="#1e1e1e"/>
+<circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
+<text x="523" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium task mine --dry-run</text>
+<g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
+<text x="16" y="54"><tspan fill="#29b8db">$</tspan>&#160;agentium&#160;task&#160;mine&#160;--dry-run&#160;--limit&#160;4</text>
+<text x="16" y="73"><tspan font-weight="bold">Mined&#160;master&#160;at&#160;dd2b995c61c3</tspan>:&#160;311&#160;commit(s)&#160;read,&#160;57&#160;candidate(s)</text>
+<text x="16" y="92"><tspan fill="#8b8b8b">note:&#160;only&#160;commits&#160;with&#160;go&#160;tests&#160;count,&#160;as&#160;go&#160;test&#160;./...&#160;runs&#160;them</tspan></text>
+<text x="16" y="111"><tspan fill="#8b8b8b">note:&#160;mined&#160;tasks&#160;will&#160;verify&#160;with:&#160;go&#160;test&#160;./...&#160;(--verify&#160;to&#160;change)</tspan></text>
+<text x="16" y="130"><tspan font-weight="bold">#</tspan>&#160;&#160;<tspan font-weight="bold">COMMIT</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">SCORE</tspan>&#160;&#160;<tspan font-weight="bold">SUBJECT</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan font-weight="bold">TESTS</tspan>&#160;&#160;<tspan font-weight="bold">CODE</tspan>&#160;&#160;<tspan font-weight="bold">LINES</tspan></text>
+<text x="16" y="149">1&#160;&#160;23f51de38a08&#160;&#160;&#160;&#160;&#160;&#160;9&#160;&#160;NewVersion&#160;now&#160;validates&#160;and&#160;CoerceNewVersion&#160;handles&#160;semve…&#160;&#160;&#160;&#160;&#160;&#160;4&#160;&#160;&#160;&#160;&#160;3&#160;&#160;&#160;&#160;446</text>
+<text x="16" y="168"><tspan fill="#8b8b8b">&#160;&#160;&#160;&#160;+3&#160;the&#160;message&#160;has&#160;a&#160;subject&#160;and&#160;a&#160;body,&#160;+2&#160;references&#160;an&#160;issue,&#160;+1&#160;a&#160;large&#160;change&#160;(446&#160;lines),&#160;+2&#160;tests&#160;in&#160;propo…</tspan></text>
+<text x="16" y="187">2&#160;&#160;abab1c2f5fcf&#160;&#160;&#160;&#160;&#160;&#160;8&#160;&#160;Handle&#160;pre-releases&#160;on&#160;all&#160;in&#160;an&#160;and&#160;group&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;134</text>
+<text x="16" y="206"><tspan fill="#8b8b8b">&#160;&#160;&#160;&#160;+3&#160;the&#160;message&#160;has&#160;a&#160;subject&#160;and&#160;a&#160;body,&#160;+3&#160;a&#160;moderate&#160;size&#160;(134&#160;lines),&#160;+0&#160;few&#160;test&#160;lines&#160;(17&#160;for&#160;117&#160;code&#160;lines…</tspan></text>
+<text x="16" y="225">3&#160;&#160;b1bb76193b9e&#160;&#160;&#160;&#160;&#160;&#160;8&#160;&#160;Fix&#160;issue&#160;with&#160;-&#160;ranges&#160;being&#160;transformed&#160;to&#160;something&#160;impa…&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;&#160;18</text>
+<text x="16" y="244"><tspan fill="#8b8b8b">&#160;&#160;&#160;&#160;+3&#160;the&#160;message&#160;has&#160;a&#160;subject&#160;and&#160;a&#160;body,&#160;+2&#160;references&#160;an&#160;issue,&#160;+1&#160;a&#160;small&#160;change&#160;(18&#160;lines),&#160;+0&#160;mostly&#160;tests&#160;(1…</tspan></text>
+<text x="16" y="263">4&#160;&#160;6d9e2e841210&#160;&#160;&#160;&#160;&#160;&#160;8&#160;&#160;More&#160;accurate&#160;validation&#160;messages&#160;on&#160;constraints&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;&#160;1&#160;&#160;&#160;&#160;211</text>
+<text x="16" y="282"><tspan fill="#8b8b8b">&#160;&#160;&#160;&#160;+3&#160;the&#160;message&#160;has&#160;a&#160;subject&#160;and&#160;a&#160;body,&#160;+2&#160;references&#160;an&#160;issue,&#160;+2&#160;a&#160;medium&#160;size&#160;(211&#160;lines),&#160;+0&#160;few&#160;test&#160;lines&#160;…</tspan></text>
+<text x="16" y="301"><tspan fill="#8b8b8b">note:&#160;53&#160;more&#160;candidate(s);&#160;--limit&#160;N&#160;lists&#160;more</tspan></text>
+<text x="16" y="320"><tspan font-weight="bold">Set&#160;aside:&#160;254&#160;commit(s)</tspan></text>
+<text x="16" y="339">&#160;&#160;merge&#160;commit&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;123</text>
+<text x="16" y="358">&#160;&#160;no&#160;parent&#160;commit&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1</text>
+<text x="16" y="377">&#160;&#160;already&#160;a&#160;task&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;10</text>
+<text x="16" y="396">&#160;&#160;documentation&#160;only&#160;&#160;&#160;&#160;&#160;&#160;44</text>
+<text x="16" y="415">&#160;&#160;no&#160;test&#160;changes&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;64</text>
+<text x="16" y="434">&#160;&#160;vendored&#160;code&#160;changes&#160;&#160;&#160;&#160;1</text>
+<text x="16" y="453">&#160;&#160;dependency&#160;update&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1</text>
+<text x="16" y="472">&#160;&#160;tests&#160;only&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;9</text>
+<text x="16" y="491">&#160;&#160;no&#160;source&#160;code&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1</text>
+<text x="16" y="510">Next:&#160;<tspan fill="#29b8db">agentium&#160;task&#160;mine&#160;--limit&#160;4</tspan>&#160;imports&#160;and&#160;validates&#160;them</text>
+</g></svg>
