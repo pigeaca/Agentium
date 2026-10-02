@@ -77,7 +77,7 @@ Parallel worktrees running `go test -race` at once starve each other: three at o
 
 ## Landing pull requests
 
-`pr land <N>` is the harness's auto-merge (GitHub's own can't wait for CI on this private, free-plan repository without branch protection). It calls `gh` with `--repo <owner>/<name>` taken from the `origin` remote (HTTPS or SSH) and:
+`pr land <N>` is the harness's auto-merge (GitHub's own can't wait for CI here: the repository's GitHub plan has no branch protection or required checks). It calls `gh` with `--repo <owner>/<name>` taken from the `origin` remote (HTTPS or SSH) and:
 1. refuses at once, with exit 1 and the reason, a PR that is not open, is a draft, has conflicts, or targets a branch other than the repository's default;
 2. refuses a head that lacks the base branch's current tip (`compare/<base>...<head>` reports `behind_by > 0`): "update the branch (gh pr update-branch N), then land again". With `--update` it runs `gh pr update-branch <N>` instead (GitHub merges the base into the PR branch) and waits on the new head. Requiring an up-to-date head means CI tested exactly what the merge produces;
 3. polls the Actions API (`actions/runs?head_sha=<sha>&event=pull_request`) every 20 s, up to `--timeout` minutes (default 40), until every `pull_request` run of the workflow named `CI` for that commit and PR has completed;
