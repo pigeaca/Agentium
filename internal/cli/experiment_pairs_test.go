@@ -242,10 +242,9 @@ func TestSeqExperimentComparesPairsBesideItsLooks(t *testing.T) {
 	control(t, ctrl, map[string]string{"cost-lean": "0.15", "cost-jitter": "", "pair-block": "", "fix-lib": ""})
 	expect(t, f.run(ctx, "experiment", "new", "lean-seq", "--b", "lean", "--seed", "5", "--judge-pairs"), ExitOK)
 	go func() {
-		for storedRunCount(f, "lean-seq") < 16 {
-			time.Sleep(50 * time.Millisecond)
+		if pollUntil(t, "16 stored runs", func() bool { return storedRunCount(f, "lean-seq") >= 16 }) {
+			time.Sleep(3 * time.Second)
 		}
-		time.Sleep(3 * time.Second)
 		os.Remove(filepath.Join(ctrl, "pair-block"))
 	}()
 	out := f.run(ctx, "experiment", "run", "lean-seq")
@@ -379,10 +378,9 @@ func TestExperimentUsagePauseDropsQueuedComparisons(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "window", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1",
 		"--judge-pairs", "--seed", "5"), ExitOK)
 	go func() { // once the second pair is stored and the execution has paused, let the running comparison go
-		for storedRunCount(f, "window") < 4 {
-			time.Sleep(50 * time.Millisecond)
+		if pollUntil(t, "4 stored runs", func() bool { return storedRunCount(f, "window") >= 4 }) {
+			time.Sleep(3 * time.Second)
 		}
-		time.Sleep(3 * time.Second)
 		os.Remove(filepath.Join(ctrl, "pair-block"))
 	}()
 	paused := f.run(ctx, "experiment", "run", "window")
@@ -413,9 +411,7 @@ func TestExperimentUsageWaitHoldsComparisons(t *testing.T) {
 	during := -1
 	*f.sleep = func(ctx context.Context, d time.Duration) error {
 		os.Remove(filepath.Join(ctrl, "pair-block")) // the running comparison finishes its two calls
-		for pairPrompts(t, ctrl) < 2 {
-			time.Sleep(20 * time.Millisecond)
-		}
+		pollUntil(t, "the running comparison's two calls", func() bool { return pairPrompts(t, ctrl) >= 2 })
 		time.Sleep(time.Second) // time enough for a queued comparison to start, were it let
 		during = pairPrompts(t, ctrl)
 		control(t, ctrl, map[string]string{"usage": fmt.Sprintf("0 0.06 %d\n", resets.Add(5*time.Hour).Unix())})
@@ -429,4 +425,17 @@ func TestExperimentUsageWaitHoldsComparisons(t *testing.T) {
 	if n := strings.Count(out.stdout, "Compared pair"); n != 3 || pairPrompts(t, ctrl) != 6 {
 		t.Errorf("%d comparisons and %d calls, want each of the 3 pairs once:\n%s", n, pairPrompts(t, ctrl), out.stdout)
 	}
+}
+
+// pollUntil checks cond every 20 ms until it holds, and reports whether it did. After two minutes it fails the test
+// instead of letting it hang until go test's own timeout; it is safe in the helper goroutines (it never calls FailNow).
+func pollUntil(t *testing.T, what string, cond func() bool) bool {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Minute); !cond(); time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Errorf("timed out waiting for %s", what)
+			return false
+		}
+	}
+	return true
 }
