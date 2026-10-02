@@ -108,7 +108,8 @@ func (p Project) EstimatesFor(ctx context.Context, d Design) (ArmEstimates, erro
 }
 
 // EligibleTasks returns the names of the tasks that can be in an experiment with these arms, and why each other task
-// cannot.
+// cannot. Retired tasks (the task pool's) are out. Only designs not yet locked consult it (new, plan, the first run):
+// a locked experiment keeps its locked tasks, so resuming and reporting never check eligibility again.
 func (p Project) EligibleTasks(ctx context.Context, arms []Arm) ([]string, map[string]string, error) {
 	all, err := p.DB.Tasks(ctx, p.ID)
 	if err != nil {
@@ -125,7 +126,9 @@ func (p Project) EligibleTasks(ctx context.Context, arms []Arm) ([]string, map[s
 			}
 			c.Validation = &v
 		}
-		if why := Ineligible(c, arms); why != "" {
+		if t.Retired() {
+			reasons[t.Name] = "it is retired: " + t.RetiredReason
+		} else if why := Ineligible(c, arms); why != "" {
 			reasons[t.Name] = why
 		} else {
 			eligible = append(eligible, t.Name)

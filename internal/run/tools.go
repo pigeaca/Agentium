@@ -3,6 +3,7 @@ package run
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,16 +16,26 @@ import (
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/source"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // toolsAtBase names the build-tool profiles of a commit in the bare repository, from the files at its root.
 func toolsAtBase(ctx context.Context, bare, commit string) ([]string, error) {
+	tools, _, err := baseLayout(ctx, bare, commit)
+	return tools, err
+}
+
+// baseLayout is what a run takes from its task's base commit, never from the overlaid checkout or the agent's work:
+// the build-tool profiles (files at its root) and where Python code imports from (buildtool.ImportRoot).
+func baseLayout(ctx context.Context, bare, commit string) (tools []string, importRoot string, err error) {
 	base, err := source.Commit(ctx, commit, "--git-dir", bare)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }), nil
+	return buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }), buildtool.ImportRoot(base.Paths()), nil
 }
 
 // NeedsLocalBinding reports whether runs on any of the commits need the sandbox's local binding (a Gradle build), so
@@ -79,9 +90,33 @@ func (env Env) warmState(deps string) string {
 
 // stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set by the current
 // recipe: the name holds buildtool.WarmVersion, so a stamp left by an older recipe (or from before versions) is never
-// found and the base is warmed again.
+// found and the base is warmed again. It holds what the warm-up found for the base's runs (buildtool.Warmed, as JSON:
+// Python's venv and notes); tools that find nothing leave it empty.
+
 func (env Env) stampPath(deps, base string, names []string) string {
 	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+"-"+filepath.Base(base))
+}
+
+// readStamp reads a base's stamp (stampPath): whether the base is warmed, and what its runs get. A stamp that does not
+// parse, or names a venv that is no longer ready (removed by hand, its interpreter uninstalled, changed since), is not
+// warmed: the base is warmed again, under the lock. With a profile that warms in Go (Python), the stamp always holds
+// what it found, so an empty one is a write that did not finish, not a warmed base.
+func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return buildtool.Warmed{}, false
+	}
+	if len(data) == 0 && warmsInGo(profiles) {
+		return buildtool.Warmed{}, false
+	}
+	var w buildtool.Warmed
+	if len(data) > 0 && json.Unmarshal(data, &w) != nil {
+		return buildtool.Warmed{}, false
+	}
+	if w.Venv != "" && !buildtool.VenvReady(w.Venv) {
+		return buildtool.Warmed{}, false
+	}
+	return w, true
 }
 
 // prepareTools is the build tools' part of a run's setup, before the task's own setup commands: it warms the project's
@@ -89,26 +124,30 @@ func (env Env) stampPath(deps, base string, names []string) string {
 // folders (Gradle's user home). The warm-up runs in a throwaway checkout of the base commit, never in the run's own:
 // whatever it builds (target/, build/, .gradle/) must not be a head start, or a handicap, for one arm. A warm-up that
 // fails does not fail the run, whose agent may still build; it returns a note instead. The commands' output goes to
-// logPath, setup.log.
-func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (notes []string, err error) {
-	if inv.Deps != "" && len(buildtool.NeedsWarming(profiles)) > 0 {
+// logPath, setup.log. warmed is what the base's stamp holds for its runs (Python's venv), read once the warm-up is done;
+// every run of the base repeats its notes.
+func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
+	if names := buildtool.NeedsWarming(profiles); inv.Deps != "" && len(names) > 0 {
 		note, err := env.warmInThrowaway(ctx, profiles, inv.Deps, base, logPath, running)
 		if err != nil {
-			return nil, err
+			return buildtool.Warmed{}, nil, err
 		}
+		// The stamp is the base's own (no other warm-up writes it), so it can be read after the lock is released.
+		warmed, _ = readStamp(env.stampPath(inv.Deps, base, names), profiles)
+		notes = append(notes, warmed.Notes...)
 		if note != "" {
 			notes = append(notes, note)
 		}
 	}
 	if err := buildtool.PrepareRun(ctx, profiles, inv.Deps, inv.BuildCache); err != nil {
-		return notes, err
+		return warmed, notes, err
 	}
-	return notes, nil
+	return warmed, notes, nil
 }
 
 // warmInThrowaway checks the base commit out in the data folder's cache (agents may not read it), warms, and removes it.
 func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile, deps, base, logPath string, running func(pid int)) (string, error) {
-	if _, err := os.Stat(env.stampPath(deps, base, buildtool.NeedsWarming(profiles))); err == nil {
+	if _, ok := readStamp(env.stampPath(deps, base, buildtool.NeedsWarming(profiles)), profiles); ok {
 		return "", nil // warmed already: no checkout needed (warmTools checks again under the lock)
 	}
 	parent := filepath.Join(env.Layout.Cache, "warm")
@@ -145,7 +184,7 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	cancel()
 	switch {
 	case err != nil && ctx.Err() == nil && errors.Is(err, context.DeadlineExceeded):
-		if _, statErr := os.Stat(env.stampPath(deps, base, names)); statErr == nil {
+		if _, ok := readStamp(env.stampPath(deps, base, names), profiles); ok {
 			return "", nil // the other warm-up finished meanwhile, and warmed this base too
 		}
 		return "", fmt.Errorf("%w: another warm-up of the dependencies held the lock for %s and this base commit is not warmed", errWarmWait, wait)
@@ -154,7 +193,7 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	}
 	defer unlock()
 	stamp := env.stampPath(deps, base, names)
-	if _, err := os.Stat(stamp); err == nil {
+	if _, ok := readStamp(stamp, profiles); ok {
 		return "", nil
 	}
 	if err := os.MkdirAll(deps, 0o700); err != nil {
@@ -163,40 +202,161 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	if err := buildtool.PrepareDeps(profiles, deps); err != nil {
 		return "", err
 	}
-	failed := ""
-	for _, step := range steps {
-		warm := env
-		warm.CommandEnv = append(slices.Clone(env.CommandEnv), step.Env...)
-		_, ok, err := warm.commands(ctx, repo, []string{step.Command}, logPath, running)
-		if err != nil {
-			return "", err
+	// The fixed steps, unless they already succeeded for this base and tool set while a Go warm-up (Python's) failed
+	// in a way worth retrying: that failure never makes the other tools warm again (stepsDone). The marker is written
+	// only when the steps are done for good: none failed and none skipped for a network failure (Gradle's skip file),
+	// and it keeps their note (permanent skips), which the stamp then carries as if the steps had just run.
+	failed, note, transient := "", "", false
+	stepsDone := stamp + ".steps"
+	if done, err := os.ReadFile(stepsDone); err == nil && warmsInGo(profiles) {
+		note = string(done)
+	} else {
+		for _, step := range steps {
+			warm := env
+			warm.CommandEnv = append(slices.Clone(env.CommandEnv), step.Env...)
+			_, ok, err := warm.commands(ctx, repo, []string{step.Command}, logPath, running)
+			if err != nil {
+				return "", err
+			}
+			if !ok && failed == "" {
+				failed = step.Command
+			}
 		}
-		if !ok && failed == "" {
-			failed = step.Command
+		// What a step could not warm (Gradle's unresolvable configurations) is a note. Mostly such skips are permanent
+		// and the base is stamped; a skip that looks like a network failure is not stamped, so the next run tries again.
+		var skipped []string
+		skipped, transient = buildtool.ReadWarmSkipped(repo)
+		if len(skipped) > 0 {
+			note = fmt.Sprintf("%d configuration(s) not warmed: %s", len(skipped), strings.Join(skipped[:min(len(skipped), 8)], ", "))
+			if len(skipped) > 8 {
+				note += ", ..."
+			}
+			note += "; the agent may not be able to use them offline"
 		}
+		if failed == "" && !transient && len(steps) > 0 && warmsInGo(profiles) {
+			if err := buildtool.WriteFileSynced(stepsDone, []byte(note), 0o600); err != nil {
+				return "", fmt.Errorf("warm-up state: %w", err)
+			}
+		}
+	}
+	// Then what warms in Go (Python's venv), in the same checkout, under the same lock. A failure the repository or the
+	// host causes (no interpreter meets requires-python, uv.lock without uv) is stamped with its note, like Gradle's
+	// permanent skips, so later runs of the base say so without trying again; one a download may cause is not.
+	warmed, err := env.warmFuncs(ctx, repo, deps, profiles, logPath, running)
+	if err != nil {
+		return "", err
 	}
 	if failed != "" {
 		return "dependency warm-up failed (" + failed + "): the agent may not be able to build offline; see setup.log", nil
 	}
-	// What a step could not warm (Gradle's unresolvable configurations) is a note. Mostly such skips are permanent and
-	// the base is stamped; a skip that looks like a network failure is not stamped, so the next run tries again.
-	skipped, transient := buildtool.ReadWarmSkipped(repo)
-	note := ""
-	if len(skipped) > 0 {
-		note = fmt.Sprintf("%d configuration(s) not warmed: %s", len(skipped), strings.Join(skipped[:min(len(skipped), 8)], ", "))
-		if len(skipped) > 8 {
-			note += ", ..."
+	if warmed.Failed != "" {
+		why := "dependency warm-up failed (" + warmed.Failed + "): the agent may not be able to build offline; see setup.log"
+		if warmed.Transient {
+			return why + " (not stamped: the next run warms again)", nil
 		}
-		note += "; the agent may not be able to use them offline"
-		if transient {
-			note += " (a network failure: not stamped, the next run warms again)"
-			return note, nil
+		warmed.Notes = append(warmed.Notes, why)
+	}
+	if transient {
+		return note + " (a network failure: not stamped, the next run warms again)", nil
+	}
+	var content []byte
+	if warmsInGo(profiles) || warmed.Venv != "" || len(warmed.Notes) > 0 {
+		if content, err = json.Marshal(warmed); err != nil {
+			return "", err
 		}
 	}
-	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
+	// Whole or not at all, and on disk: a stamp cut short by a crash would read as warmed with nothing in it.
+	if err := buildtool.WriteFileSynced(stamp, content, 0o600); err != nil {
 		return "", fmt.Errorf("warm-up state: %w", err)
 	}
 	return note, nil
+}
+
+// warmsInGo reports whether a selected profile warms in Go (buildtool.Profile.WarmFunc: Python).
+func warmsInGo(profiles []buildtool.Profile) bool {
+	return slices.ContainsFunc(profiles, func(p buildtool.Profile) bool { return p.WarmFunc != nil })
+}
+
+// CommandsEnv is what CheckoutCommands needs: the data folder, the project's bare repository, the user's environment,
+// the environment of Agentium's own commands (BuildEnv), the per-command timeout and the warm-up's wait.
+type CommandsEnv struct {
+	Layout     home.Layout
+	Bare       string
+	Environ    []string
+	CommandEnv []string
+	Timeout    time.Duration
+	WarmWait   time.Duration
+	Now        func() time.Time
+}
+
+// CheckoutCommands warms a base commit's build tools for Agentium's own commands outside a run (validation), as a
+// run's setup does: the same deps folder, lock and stamp, so a venv validation builds is the one runs get, and the other
+// way round. It returns how commands in a checkout of the base run: without the user's variables the agent never gets
+// (buildtool.CheckoutEnviron), with the warmed tools' (buildtool.CheckoutEnv: the venv, the base's import root in the
+// checkout), and the notes runs of the base get, with a note for a test runner the verify commands use and the venv
+// lacks. A warm-up that waited out the lock is a note, not an error: validation then runs without the venv.
+func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
+	tools, importRoot, err := baseLayout(ctx, c.Bare, base)
+	if err != nil {
+		return task.CheckoutCommands{}, err
+	}
+	profiles := buildtool.Select(tools)
+	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now}
+	if c.Layout.Cache != "" {
+		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, c.Layout.Cache)...)
+	}
+	var warmed buildtool.Warmed
+	var notes []string
+	if deps, names := env.depsFolder(), buildtool.NeedsWarming(profiles); deps != "" && len(names) > 0 {
+		note, err := env.warmInThrowaway(ctx, profiles, deps, base, logPath, func(int) {})
+		switch {
+		case errors.Is(err, errWarmWait):
+			note = err.Error() + ": validated without the warmed dependencies"
+		case err != nil:
+			return task.CheckoutCommands{}, err
+		}
+		warmed, _ = readStamp(env.stampPath(deps, base, names), profiles)
+		notes = append(notes, warmed.Notes...)
+		if note != "" {
+			notes = append(notes, note)
+		}
+		notes = append(notes, buildtool.MissingRunners(ctx, warmed.Venv, verify, env.environ())...)
+	}
+	return task.CheckoutCommands{
+		Environ: runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
+		Env: func(dir string) []string {
+			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
+				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, ImportRoot: importRoot})
+		},
+		Notes: notes,
+	}, nil
+}
+
+// environ is the user's environment as Agentium's own commands inherit it: Environ, else the process's.
+func (env Env) environ() []string {
+	if env.Environ != nil {
+		return env.Environ
+	}
+	return os.Environ()
+}
+
+// warmFuncs runs the profiles' warm-ups that are Go code (buildtool.WarmFuncs) in the warm-up checkout repo, with the
+// environment of Agentium's own commands, their output appended to logPath.
+func (env Env) warmFuncs(ctx context.Context, repo, deps string, profiles []buildtool.Profile, logPath string, running func(pid int)) (buildtool.Warmed, error) {
+	if !slices.ContainsFunc(profiles, func(p buildtool.Profile) bool { return p.WarmFunc != nil }) {
+		return buildtool.Warmed{}, nil
+	}
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return buildtool.Warmed{}, fmt.Errorf("log: %w", err)
+	}
+	defer log.Close()
+	now := time.Now
+	if env.Now != nil {
+		now = env.Now
+	}
+	return buildtool.WarmFuncs(ctx, profiles, buildtool.WarmInput{Dir: repo, Deps: deps, Environ: env.Environ, Env: env.CommandEnv,
+		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now()})
 }
 
 // lockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait); the lock goes with its holder's process.

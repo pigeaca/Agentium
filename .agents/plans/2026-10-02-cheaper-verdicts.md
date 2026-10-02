@@ -65,7 +65,7 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
 - [ ] **2. Isolated-run cost, reported beside actual cost. Risk: high** (a money metric; a new stored field).
   - **`internal/claude`:** record the first-request cache-read tokens and write TTL of the main session, and of the first launch of each subagent type (`subagent_type`, matched by `parent_tool_use_id`).
   - **`internal/run`:** compute the isolated-run cost with the dated price table, and store it beside the reported cost.
-  - **Reports** show it as "isolated-run cost", with a note that tells it apart from the existing "cold-cache cost" column. Actual cost stays primary.
+  - **Reports** show it as "isolated-run cost", with a note that tells it apart from the existing "cold-cache cost" column. Actual cost stays primary. **Done:** the report column (`Arm.IsolatedCostUSD`, shown only when every counted run has a value) and its note, with the count of runs lacking one.
   - *Threats* ([checklist](../roles/reviewer.md#threat-checklist)):
     - crash and recovery: old records, without the field, still load and report;
     - persistence: an absent value stays absent, never zero;

@@ -98,7 +98,7 @@ func verdictOf(t *testing.T, in Input, role string) string {
 // noisyTie is a 10 × 1 experiment whose arms differ by noise only: its verdicts are inconclusive.
 func noisyTie(t *testing.T) Input {
 	t.Helper()
-	in := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	in := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	r := rand.New(rand.NewPCG(9, 9))
 	for i := range in.Runs {
 		in.Runs[i].Record.Metrics.CostUSD = 0.30 * math.Exp(0.45*r.NormFloat64())
@@ -122,12 +122,12 @@ func TestNorthStarNoneYet(t *testing.T) {
 	if v := verdictOf(t, tie, experiment.RolePrimary); v != stats.Inconclusive {
 		t.Fatalf("premise: the noisy tie's cost verdict is %q, want inconclusive", v)
 	}
-	small := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	small := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	small.Name = "small"
 	small.Lock.Design.Tasks = small.Lock.Design.Tasks[:4]
 	small.Lock.Schedule = experiment.Schedule(small.Lock.Design)
 	small.Runs = small.Runs[:0]
-	for _, r := range oneRun(experiment.MethodVersion, experiment.TemplateContextAB).Runs {
+	for _, r := range oneRun(experiment.MethodV2, experiment.TemplateContextAB).Runs {
 		if strings.Contains(" task-0 task-1 task-2 task-3 ", " "+r.Record.Task+" ") {
 			small.Runs = append(small.Runs, r)
 		}
@@ -135,7 +135,7 @@ func TestNorthStarNoneYet(t *testing.T) {
 	if v := verdictOf(t, small, experiment.RolePrimary); v != stats.Exploratory {
 		t.Fatalf("premise: the 4-task cost verdict is %q, want exploratory", v)
 	}
-	aa := oneRun(experiment.MethodVersion, experiment.TemplateAA)
+	aa := oneRun(experiment.MethodV2, experiment.TemplateAA)
 	aa.Name = "aa"
 	for _, in := range []Input{tie, small, aa} {
 		storeExperiment(t, p, in)
@@ -159,13 +159,13 @@ func TestNorthStarDecisive(t *testing.T) {
 	for i := range tie.Runs {
 		tie.Runs[i].Record.Started, tie.Runs[i].Record.Finished = tie.Runs[i].Record.Started.Add(-time.Hour), tie.Runs[i].Record.Finished.Add(-time.Hour)
 	}
-	decisive := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	decisive := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	decisive.Name = "lean-ab"
 	if v := verdictOf(t, decisive, experiment.RolePrimary); !Decisive(v) {
 		t.Fatalf("premise: the 20%% cheaper arm's cost verdict is %q, want decisive", v)
 	}
 	// A later experiment's spend is not counted, and a judged run counts its judge's spend.
-	later := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	later := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	later.Name = "later"
 	for i := range later.Runs {
 		later.Runs[i].Record.Started, later.Runs[i].Record.Finished = later.Runs[i].Record.Started.Add(5*time.Hour), later.Runs[i].Record.Finished.Add(5*time.Hour)
@@ -206,7 +206,7 @@ func TestNorthStarDecisive(t *testing.T) {
 // The report shows the line in the terminal and Markdown renderings and in JSON, only when Load set it.
 func TestReportShowsTheNorthStar(t *testing.T) {
 	t.Parallel()
-	rep, err := Build(oneRun(experiment.MethodVersion, experiment.TemplateContextAB))
+	rep, err := Build(oneRun(experiment.MethodV2, experiment.TemplateContextAB))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func TestSpanFormat(t *testing.T) {
 func TestNorthStarIgnoresUnfinishedExperiments(t *testing.T) {
 	t.Parallel()
 	p, _ := starProject(t)
-	decisive := oneRun(experiment.MethodVersion, experiment.TemplateContextAB)
+	decisive := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	decisive.Name = "lean-ab"
 	storeExperimentAs(t, p, decisive, store.StatusRunning)
 	got, err := LoadNorthStar(context.Background(), p)

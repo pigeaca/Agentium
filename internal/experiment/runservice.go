@@ -434,8 +434,13 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		sum = Summary{Status: StatusUsage, Note: judgeNote}
 		x.judgePaused.Store(true)
 	default:
-		sum, runErr = Execute(ctx, Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
-			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}, x.slot)
+		plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
+			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}
+		if lock.Method == MethodSeq {
+			sum, runErr = x.runStages(ctx, plan, o)
+		} else {
+			sum, runErr = Execute(ctx, plan, x.slot)
+		}
 	}
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = StatusStopped, "Agentium could not start the runs: "+runErr.Error()
@@ -457,6 +462,15 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 // priorAttempts turns the stored runs into the scheduler's earlier attempts, counts each slot's stored runs, and reads
 // what is spent and settled.
 func (x *execution) priorAttempts(runs []store.Run) ([]Attempt, Standing) {
+	prior, standing := attemptsOf(runs)
+	for _, r := range runs {
+		x.storedTries[r.Slot]++
+	}
+	return prior, standing
+}
+
+// attemptsOf turns stored runs into the scheduler's earlier attempts, and reads what is spent and settled.
+func attemptsOf(runs []store.Run) ([]Attempt, Standing) {
 	var prior []Attempt
 	standing := Standing{Settled: map[int]bool{}}
 	for _, r := range runs {
@@ -467,9 +481,92 @@ func (x *execution) priorAttempts(runs []store.Run) ([]Attempt, Standing) {
 		if Settles(r.Outcome) {
 			standing.Settled[r.Slot] = true
 		}
-		x.storedTries[r.Slot]++
 	}
 	return prior, standing
+}
+
+// runStages runs a seq-v1 experiment stage by stage. Before each stage it reads the stored runs and makes the looks
+// (SequentialStatus), reporting each look once per execution; it ends at a look that ends the experiment, and otherwise
+// runs the next unsettled stage to its end (Plan.Until). Execute returns only when nothing is in flight, so no run of a
+// stage starts before the look of the stage before it: the stage barrier, retries and concurrency included. Every
+// stage's plan keeps the design's budget, caps and reserve: nothing is released by an early look. A stop, a pause or
+// the budget ending a stage is returned as Execute gave it; the results keep the last look's verdict.
+func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summary, error) {
+	r, lock := x.r, x.lock
+	made := 0           // looks reported in this execution
+	spent := p.SpentUSD // as of the last stage's end
+	for {
+		if ctx.Err() != nil { // cancelled between stages: Execute has nothing in flight
+			return Summary{Status: StatusStopped, Note: "interrupted", SpentUSD: spent}, nil
+		}
+		runs, err := r.Project.DB.ExperimentRuns(ctx, x.stored.ID)
+		if err != nil {
+			return Summary{}, err
+		}
+		data, err := RunDataOfStored(runs)
+		if err != nil {
+			return Summary{}, err
+		}
+		status, _, err := SequentialStatus(lock, data)
+		if err != nil {
+			return Summary{}, err
+		}
+		for i := made; i < len(status.Looks); i++ {
+			if p.Progress != nil {
+				p.Progress(Event{Kind: "look", Look: &status.Looks[i], Looks: len(status.Planned)})
+			}
+		}
+		made = len(status.Looks)
+		prior, standing := attemptsOf(runs)
+		spent = p.SpentUSD + standing.Spent
+		if status.Ended != "" {
+			sum := Summary{Status: StatusDone, SpentUSD: spent}
+			if status.Ended != LookFinal {
+				sum.Note = status.Describe()
+			}
+			for i, done := range slotsDone(lock, data) {
+				switch {
+				case standing.Settled[i]:
+					sum.Settled++
+				case done:
+					sum.Failed++
+				}
+			}
+			return sum, nil
+		}
+		stage := p
+		stage.Prior, stage.Until = prior, lock.Sequential.StageEnd(status.NextStage)
+		if p.Usage != nil { // the latest reading, which the last stage's runs may have moved
+			if stage.Usage, err = r.usageGate(ctx, lock, o, &standing); err != nil {
+				return Summary{}, err
+			}
+		}
+		sum, err := Execute(ctx, stage, x.slot)
+		if err != nil || sum.Status != StatusDone {
+			return sum, err
+		}
+	}
+}
+
+// RunDataOfStored decodes stored runs into what the analysis reads, in their stored order.
+func RunDataOfStored(runs []store.Run) ([]RunData, error) {
+	out := make([]RunData, 0, len(runs))
+	for _, s := range runs {
+		var rec run.Record
+		if err := json.Unmarshal(s.Record, &rec); err != nil {
+			return nil, fmt.Errorf("run %s: %w", s.ID, err)
+		}
+		out = append(out, RunDataOf(s.Slot, rec))
+	}
+	return out, nil
+}
+
+// RunDataOf is what the analysis reads of a run: the one mapping the executor's looks, the report and the north star
+// share, so the verdict a look stops on is the one the report shows.
+func RunDataOf(slot int, rec run.Record) RunData {
+	return RunData{Slot: slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
+		ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
+		OutputTokens: float64(rec.Metrics.OutputTokens)}
 }
 
 // usageGate is the gate that pauses pairs before the subscription's usage limit; nil with an API key, whose runs use no
@@ -591,6 +688,8 @@ func (x *execution) settle(ctx context.Context, sum *Summary, runErr error, unfu
 // or paused at a limit that a resume lifts); a run that stopped is not.
 func (o RunOutcome) Conclude(out io.Writer, st term.Style, name string, now time.Time) bool {
 	switch {
+	case o.Status == StatusDone && o.Note != "": // a seq-v1 experiment that ended at an early look
+		fmt.Fprintf(out, "%s The report: %s\n", st.Good("Done: "+o.Note+"."), st.Command("agentium experiment report "+name))
 	case o.Status == StatusDone:
 		fmt.Fprintf(out, "%s The report: %s\n", st.Good("Every run is done."), st.Command("agentium experiment report "+name))
 	case o.Status == StatusBudget:
@@ -709,9 +808,16 @@ func (r Runner) judgePending(ctx context.Context, runEnv run.Env, lock Lock, run
 // environment, each task's full specification, and the schedule.
 func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (Lock, error) {
 	p := r.Project
-	l := Lock{Method: MethodVersion, Agentium: r.Version, LockedAt: r.Now().UTC(), ClaudeCode: version,
+	l := Lock{Method: d.LockMethod(), Agentium: r.Version, LockedAt: r.Now().UTC(), ClaudeCode: version,
 		ClaudePath: cli, SignIn: r.SignIn, Host: runtime.GOOS + "/" + runtime.GOARCH, PriceTable: pricing.Date, Design: d,
 		Schedule: Schedule(d), MaxAttempts: MaxAttempts}
+	if d.Sequential() {
+		seq, err := NewSequential(len(d.Tasks), !d.NoFutility)
+		if err != nil {
+			return l, err
+		}
+		l.Sequential, l.Schedule = &seq, seq.stage(l.Schedule)
+	}
 	for _, a := range d.Arms {
 		locked := LockedArm{Arm: a}
 		if a.Snapshot != "" {

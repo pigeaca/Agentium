@@ -47,7 +47,7 @@ func lockFor(goal string, tasks, repeats int) Lock {
 	for i := range tasks {
 		d.Tasks = append(d.Tasks, fmt.Sprintf("t%02d", i))
 	}
-	return Lock{Method: MethodVersion, Design: d}
+	return Lock{Method: MethodV2, Design: d}
 }
 
 func result(t *testing.T, a Analysis, name string) MetricResult {

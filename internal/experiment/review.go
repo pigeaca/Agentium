@@ -10,6 +10,7 @@ import (
 	"time"
 
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -33,9 +34,18 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
+	stored, err := p.DB.ExperimentByName(ctx, p.ID, name)
+	if err != nil {
+		return Review{}, err
+	}
 	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
 	if err != nil {
 		return Review{}, err
+	}
+	if stored.Lock != nil {
+		// A locked experiment keeps the tasks it locked: whatever has happened to them since (retired, revalidated,
+		// removed) does not affect resuming, so it is not a readiness problem.
+		eligible, reasons = d.Tasks, map[string]string{}
 	}
 	est, err := p.EstimatesFor(ctx, d)
 	if err != nil {
@@ -59,26 +69,36 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	fmt.Fprintln(out, "\n"+st.Heading("Sizes (runs count both arms):"))
-	if err := r.writeSizes(out, st); err != nil {
-		return err
-	}
 	d := r.Design
+	if d.Sequential() && len(d.Tasks) > 0 {
+		fmt.Fprintln(out, "\n"+st.Heading(fmt.Sprintf("Looks (method %s; runs count both arms):", MethodSeq)))
+		if err := r.writeSequential(out, st); err != nil {
+			return err
+		}
+	} else {
+		fmt.Fprintln(out, "\n"+st.Heading("Sizes (runs count both arms):"))
+		if err := r.writeSizes(out, st); err != nil {
+			return err
+		}
+	}
 	r.writeCostBasis(out, st)
 	r.writeCalibration(out, st)
 	r.writeWorstCase(out, st)
-	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
-		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
-		"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
-		"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.",
-		SigmaLogCost, WSuccess, TauLow, TauHigh)))
-	if own := Detect(len(d.Tasks), d.Repeats); d.Goal == GoalCheaper && len(d.Tasks) > 0 && own.Guard[0] > d.SuccessMargin {
+	if !d.Sequential() {
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
+			"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
+			"the true effect across tasks τ = %.2f–%.2f (the range shown), in log cost and in success rate alike. Phase 0 measured\n"+
+			"τ only for cost; the study assumed 0.05 for success, so the success columns lean cautious.",
+			SigmaLogCost, WSuccess, TauLow, TauHigh)))
+	}
+	if own := Detect(len(d.Tasks), d.Repeats); !d.Sequential() && d.Goal == GoalCheaper && len(d.Tasks) > 0 && own.Guard[0] > d.SuccessMargin {
 		fmt.Fprintln(out, st.Note("note: "+fmt.Sprintf("at this size the no-loss guard certifies only about %s, wider than the %.0f pp success margin: expect the\n"+
 			"success verdict to be inconclusive unless there is no real difference and the noise is low.", percentRange(own.Guard, " pp"), 100*d.SuccessMargin)))
 	}
-	floors := FloorsFor(MethodVersion)
+	method := d.LockMethod()
+	floors := FloorsFor(method)
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
-		"below them a metric is exploratory.\n", MethodVersion, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
+		"below them a metric is exploratory.\n", method, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
 	WriteUsagePreview(out, st, r.Runs, 2*len(d.Tasks)*d.Repeats, signIn, DefaultUsageLimit/100, now)
 	if d.PerArmProfiles() {
 		fmt.Fprintln(out, st.Note("The usage figures above are not split by model or effort: they are measured over all earlier runs, and a larger model\nuses more of the window per run."))
@@ -86,6 +106,44 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	if !r.Readiness.Ready {
 		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}
+	return nil
+}
+
+// writeSequential prints a seq-v1 design's looks (each one's tasks, runs, estimated and worst-case spend by then, and
+// its intervals' levels) and its spend: the maximum, which the budget is sized for, and the expected spend with no true
+// change and at a PreviewCut cut.
+func (r Review) writeSequential(out io.Writer, st term.Style) error {
+	d := r.Design
+	p, err := PreviewSequential(d, r.Estimates)
+	if err != nil {
+		return err
+	}
+	usd := func(v float64) string {
+		if !p.Known {
+			return "unknown"
+		}
+		return fmt.Sprintf("$%.2f", v)
+	}
+	t := term.NewTable(st, term.Left("LOOK"), term.Right("AFTER TASKS"), term.Right("RUNS"), term.Right("EST. COST BY THEN"), term.Right("WORST CASE"),
+		term.Right("COST INTERVAL"), term.Right("EQUIVALENCE INTERVAL"))
+	for k, l := range p.Looks {
+		t.Row(fmt.Sprintf("%d of %d", k+1, len(p.Looks)), strconv.Itoa(l.Tasks), strconv.Itoa(l.Runs), usd(l.CostUSD), fmt.Sprintf("$%.2f", l.WorstUSD),
+			fmt.Sprintf("%.2f%%", 100*l.EffLevel), fmt.Sprintf("%.2f%%", 100*l.EqLevel))
+	}
+	if err := t.Write(out); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Spend: at most %s if every look runs (all %d tasks; %s if every run reaches its cap); expected about %s if nothing changed\n"+
+		"(%.1f tasks on average) and %s at a %.0f%% cut (%.1f tasks). The budget is sized for the maximum, and stops every run past it.\n",
+		usd(p.MaxUSD), len(d.Tasks), fmt.Sprintf("$%.2f", p.WorstUSD), usd(p.NoneUSD), p.TasksNone, usd(p.CutUSD), 100*PreviewCut, p.TasksCut)
+	futility := fmt.Sprintf("an interim look without one stops for futility when the chance\nof a verdict by the last look is below %.0f%%", 100*stats.SeqFutility)
+	if d.NoFutility {
+		futility = "futility stops are off"
+	}
+	fmt.Fprintln(out, st.Note(fmt.Sprintf("Cost decides at each look, at the levels shown (two-sided %.1f%% over all looks, O'Brien–Fleming-type spending); the\n"+
+		"experiment stops at the first look with a verdict, and %s. Success, time and output tokens are\n"+
+		"exploratory: one run per arm is below success's floor. Expected spend assumes σ = %.2f and τ = %.2f, the planning defaults.",
+		100*stats.SeqAlpha, futility, SigmaLogCost, TauLow)))
 	return nil
 }
 
@@ -115,6 +173,9 @@ func (r Review) writeDesign(out io.Writer, st term.Style, name string) {
 	}
 	fmt.Fprintf(out, "  goal: %s (margins: cost %.0f%%, success %.0f pp); budget $%.2f\n", goal, 100*d.CostMargin, 100*d.SuccessMargin, d.BudgetUSD)
 	fmt.Fprintf(out, "  tasks (%d, seed %d): %s\n", len(d.Tasks), d.Seed, strings.Join(d.Tasks, ", "))
+	if d.Sequential() && len(d.Tasks) > 0 {
+		fmt.Fprintf(out, "  method %s: %s\n", MethodSeq, DescribeLooks(d))
+	}
 	if d.Judge != nil {
 		fmt.Fprintf(out, "  judge: %s; each run's judgement up to $%.2f; a second opinion, it decides nothing\n", DescribeJudge(*d.Judge), d.JudgeCapUSD())
 	}
@@ -240,7 +301,7 @@ func withModel(d Design, model string) Design {
 
 // WriteCostBasis says how each of the experiment's tasks is estimated: from its own earlier runs, or from the fallback
 // for tasks without any. The tiers draw from the eligible tasks, so they average those tasks' estimates, which may
-// include tasks outside the experiment: the note shows that average.
+// include tasks outside the experiment: the note shows that average (a seq-v1 preview shows no tiers, and no note).
 func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, est Estimate) {
 	var own, other []string
 	for _, t := range d.Tasks {
@@ -261,7 +322,7 @@ func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, e
 		}
 		fmt.Fprintf(out, "  %s, without runs of their own: %s\n", strings.Join(other, ", "), fallback)
 	}
-	if mean, known := est.MeanUSD(eligible); known && slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
+	if mean, known := est.MeanUSD(eligible); known && !d.Sequential() && slices.ContainsFunc(eligible, func(t string) bool { _, ok := est.Tasks[t]; return ok }) {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("The tiers' estimates average the %d eligible task(s), each estimated the same way: $%.2f a run.", len(eligible), mean)))
 	}
 }

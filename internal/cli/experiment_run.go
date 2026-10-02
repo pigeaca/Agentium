@@ -135,8 +135,20 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 		case "wait":
 			fmt.Fprintln(out, st.Warn(fmt.Sprintf("Usage: the five-hour window is at %.0f%%; waiting for it to reset at %s (Ctrl-C stops; run it again to resume).",
 				100*e.Usage, experiment.Clock(e.Until, env.Now()))))
+		case "look":
+			if e.Look != nil {
+				fmt.Fprintln(out, st.Heading(upperFirst(experiment.DescribeLook(*e.Look, e.Looks))))
+			}
 		}
 	}
+}
+
+// upperFirst capitalizes a line's first ASCII letter.
+func upperFirst(s string) string {
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		return s
+	}
+	return string(s[0]-'a'+'A') + s[1:]
 }
 
 func experimentShow(ctx context.Context, env Env, args []string) int {

@@ -46,6 +46,9 @@ func (r Report) Markdown(w io.Writer) error {
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
+	if line := r.seqLine(); line != "" {
+		fmt.Fprintf(&b, "\n%s\n", line)
+	}
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
@@ -56,8 +59,9 @@ func (r Report) Markdown(w io.Writer) error {
 		b.WriteString(localBindingNote + "\n")
 	}
 
-	b.WriteString("\n## Metrics\n\nA and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.\n\n")
-	fmt.Fprintf(&b, "| Metric | Role | %s | %s | B vs A | 95%% bootstrap | 95%% t | Verdict |\n|---|---|---|---|---|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label())
+	bootHead, tHead := r.intervalHeads()
+	fmt.Fprintf(&b, "\n## Metrics\n\n%s\n\n", r.metricsIntro())
+	fmt.Fprintf(&b, "| Metric | Role | %s | %s | B vs A | %s | %s | Verdict |\n|---|---|---|---|---|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label(), bootHead, tHead)
 	for _, res := range r.Analysis.Results {
 		verdict := res.Verdict
 		if res.Warning != "" {
@@ -82,16 +86,23 @@ func (r Report) Markdown(w io.Writer) error {
 		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
 
+	if r.Analysis.Sequential != nil && len(r.Analysis.Sequential.Looks) > 0 {
+		fmt.Fprintf(&b, "\n## Looks\n\n%s\n\n| %s |\n|---%s|\n", r.looksIntro(), strings.Join(lookColumns, " | "), strings.Repeat("|---", len(lookColumns)-1))
+		for _, row := range r.lookRows() {
+			fmt.Fprintf(&b, "| %s |\n", strings.Join(row, " | "))
+		}
+	}
+
 	writeNoise(&b, r)
 
-	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|\n")
+	b.WriteString("\n## Context and cost per arm\n\nMeans over counted runs. The first request is what Claude Code sent first: the context overhead.\n\n| Arm | Context | Runs counted | First request (tokens) | Cost per run | Isolated-run cost | Cold-cache cost | Cache-read share |\n|---|---|---|---|---|---|---|---|\n")
 	for i, a := range r.Arms {
 		first := num(a.FirstRequest, "%.0f")
 		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
 			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s |\n", a.label(), a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
-			num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
+		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s | %s |\n", a.label(), a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
+			num(a.IsolatedCostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 
 	if desc, rows, ok := contextUse(r); ok {
@@ -291,6 +302,9 @@ func headlineParts(res experiment.MetricResult, d experiment.Design) (bold, mid,
 		}
 	case stats.Exploratory:
 		verdict = "exploratory: too few tasks or runs for a verdict"
+		if res.Note != "" { // a seq-v1 experiment before its first look
+			verdict = "exploratory: " + res.Note
+		}
 		if res.Warning != "" {
 			verdict += "; warning: " + res.Warning
 		}
