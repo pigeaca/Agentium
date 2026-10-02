@@ -90,7 +90,6 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
 Steps 3–6 keep the note's design (§1, §2, §4). Before any of them resumes, the user must settle:
 - whether reuse is worth building at all: it pays only for cuts of 35% or more, after about 10–20 reuse experiments per key within 14 days (note §6);
 - the reuse defaults: the 14-day window, the ±15% pass bound, 4 anchors, and the validation's day-effect sensitivity (its pass rate with no bias falls to 53–69% at day effects of 0.03–0.05);
-- the drift panel's size and budget;
 - approval of the real reused-against-fresh A/A (about $13–15 on samber/lo, about $140 on Agentium's tasks).
 
 The review's reuse findings are already fixed in the note's text:
@@ -105,12 +104,12 @@ The deferred steps:
 - **3. The reuse key and storage.** Risk: high.
 - **4. The reused-against-fresh A/A.** Risk: high; paid.
 - **5. Reuse in cost experiments**, with anchors and the bias allowance. Risk: high.
-- **6. The drift chart:** the self-starting CUSUM, k = 0.5, h = 6. Risk: medium.
+- **6. The drift chart:** moved, un-deferred by the user (2026-10-02), into the [watch and screen plan](2026-10-02-watch-and-screen.md) (A5), with the note's §4 design unchanged.
 
 ## Boundaries
 - **Unchanged:** phase1-v1 and phase1-v2 analysis for existing and locked experiments, `Decide`'s logic, and verdict thresholds. Only the default method of new cost experiments changes.
 - **Success:** no sequential success design.
-- **Not built:** no reuse and no drift chart in this wave.
+- **Not built:** no reuse in this wave; the drift chart is built under A5.
 - **Approvals:** no paid run beyond the approved `seq-v1` smoke check. No new Go modules.
 
 ## Verification
