@@ -20,3 +20,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [LLM judge per run](2026-10-01-llm-judge.md) — 2026-10-01 (#49, #54, #61; a real check)
 - [Refactor round: spend record, services, shared helpers, faster tests](2026-10-01-refactor-round.md) — 2026-10-01 to 2026-10-02 (#59, #64, #65, #72, #74)
 - [Model and effort comparison](2026-10-01-model-ab.md) — 2026-10-01 to 2026-10-02 (#74, #75; the first decisive verdict)
+- [Quick start: from a fresh clone to a running experiment](2026-10-02-quick-start.md) — 2026-10-02 (context lint, calibration inside `experiment run`, `agentium start`, north-star tracking; real check and README pictures)
