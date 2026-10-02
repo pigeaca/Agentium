@@ -101,6 +101,9 @@ type Env struct {
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
+	// checkoutRemoved removes what checkoutEnv gave a checkout alone in the data folder (buildtool.RemoveCheckoutCaches),
+	// once the checkout is gone.
+	checkoutRemoved func(dir string)
 	// checkoutBase is the base environment of those commands (buildtool.CheckoutEnviron), and commandBase the one
 	// commands use (nil: the process's, filtered by runner.Environ); only setup and grading set it.
 	checkoutBase, commandBase []string
@@ -268,8 +271,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			stopTools()
 		}
 		if !spec.Keep {
-			os.RemoveAll(workspace)
-			os.RemoveAll(graded)
+			env.removeCheckouts(workspace, repo, graded)
 		}
 		// Even a kept run's temp root goes: it holds only Claude Code's own temp files, in a folder shared with other users.
 		if tempRoot != "" {
@@ -411,16 +413,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	warmed, notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
-	// What the warm-up found (Python's venv) goes to the agent, and to Agentium's own commands in a checkout: the task's
+	// What the warm-up found (Python's venv and the project's metadata) goes to the agent, and to Agentium's own commands in a checkout: the task's
 	// setup in the run's, grading in its copy, with their caches in the data folder.
 	// They also lose the user's variables the agent never gets (buildtool.CheckoutEnviron: PYTHON*, PIP_*, UV_*), so the
 	// tests run with the same settings for the agent and for grading.
-	inv.Venv, inv.ImportRoot = warmed.Venv, importRoot
-	env.checkoutEnv = func(dir string) []string {
-		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Home: env.Home, Repo: dir,
-			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv, ImportRoot: importRoot})
-	}
-	env.checkoutBase = runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ()))
+	inv.Venv, inv.ProjectMetadata, inv.ImportRoot = warmed.Venv, warmed.Metadata, importRoot
+	env = env.withCheckoutTools(profiles, inv.Deps, warmed, importRoot)
 	rec.Notes = append(rec.Notes, buildtool.MissingRunners(ctx, warmed.Venv, spec.Task.Verify, env.environ())...)
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
@@ -1154,6 +1152,30 @@ func copyTree(src, dst string) (unreadable []string, err error) {
 		return nil // sockets and devices are not copied
 	})
 	return unreadable, err
+}
+
+// withCheckoutTools is env with what Agentium's own commands in a checkout get from the run's warmed tools: their
+// variables (checkoutEnv), their base environment (checkoutBase), and the removal of what they kept for one checkout
+// in the data folder (checkoutRemoved).
+func (env Env) withCheckoutTools(profiles []buildtool.Profile, deps string, warmed buildtool.Warmed, importRoot string) Env {
+	env.checkoutEnv = func(dir string) []string {
+		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Home: env.Home, Repo: dir,
+			BuildCache: env.Layout.Cache, Deps: deps, Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
+	}
+	env.checkoutRemoved = func(dir string) { buildtool.RemoveCheckoutCaches(profiles, env.Layout.Cache, dir) }
+	env.checkoutBase = runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ()))
+	return env
+}
+
+// removeCheckouts removes a run's workspace and grading copy, then what Agentium's commands kept in the data folder for
+// the run's checkout (repo, where setup ran) and the grading copy alone (Python's hypothesis databases).
+func (env Env) removeCheckouts(workspace, repo, graded string) {
+	os.RemoveAll(workspace)
+	os.RemoveAll(graded)
+	if env.checkoutRemoved != nil {
+		env.checkoutRemoved(repo)
+		env.checkoutRemoved(graded)
+	}
 }
 
 // removeStaleWorkspace removes a workspace and its temp root left by a run that no one stored, before a new run reuses

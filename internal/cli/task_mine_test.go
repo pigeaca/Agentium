@@ -584,3 +584,24 @@ func TestMineRefusesPartialClone(t *testing.T) {
 	gitIn(t, repo, "config", "--unset", "remote.origin.promisor")
 	expect(t, run("task", "mine", "--dry-run"), ExitOK, "3 candidate(s)")
 }
+
+// The scan's note names what runs the tests mining picks commits by: the tool's own command (Go's), else the verify
+// commands (Python's profile proposes none), else nothing, never an empty name.
+func TestMineScanNoteNamesTheRunner(t *testing.T) {
+	for _, c := range []struct {
+		prep mine.Prepared
+		want string
+	}{
+		{mine.Prepared{Options: mine.Options{Languages: []string{"go"}, TestCommand: "go test ./..."}, Verify: []string{"go test ./..."}},
+			"note: only commits with go tests count, as go test ./... runs them\n"},
+		{mine.Prepared{Options: mine.Options{Languages: []string{"python"}}, Verify: []string{"uv run pytest"}},
+			"note: only commits with python tests count, as uv run pytest runs them\n"},
+		{mine.Prepared{Options: mine.Options{Languages: []string{"python"}}}, "note: only commits with python tests count\n"},
+	} {
+		var out bytes.Buffer
+		printScan(Env{Stdout: &out, Plain: true}, c.prep)
+		if got := out.String(); !strings.HasSuffix(got, c.want) || strings.Contains(got, "as  runs") {
+			t.Errorf("%+v: %q, want it to end %q", c.prep.Options, got, c.want)
+		}
+	}
+}

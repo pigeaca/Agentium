@@ -1,8 +1,11 @@
 package run
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,12 +22,34 @@ import (
 	"github.com/pigeaca/agentium/internal/task"
 )
 
-// fakeUv is a host whose PATH holds only a fake uv and interpreter: uv finds the interpreter and syncs a venv (logged
-// to calls), the interpreter reports its version and path.
+// fakeWheelFile writes a project's wheel (a zip): its code and a .dist-info whose METADATA names it, besides a RECORD
+// and top_level.txt that must not reach the metadata folder.
+func fakeWheelFile(t *testing.T, path, name, version string) {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	dist := name + "-" + version + ".dist-info/"
+	for _, f := range [][2]string{{name + "/__init__.py", "X = 'wheel'\n"}, {dist + "METADATA", "Metadata-Version: 2.4\nName: " + name + "\nVersion: " + version + "\n\nThe README.\n"},
+		{dist + "RECORD", name + "/__init__.py,,\n"}, {dist + "top_level.txt", name + "\n"}} {
+		w, err := zw.Create(f[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte(f[1]))
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, path, buf.String())
+}
+
+// fakeUv is a host whose PATH holds only a fake uv and interpreter: uv finds the interpreter, syncs a venv and builds
+// the project's wheel (logged to calls), the interpreter reports its version and path.
 func fakeUv(t *testing.T) (bin, calls string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin, calls = filepath.Join(dir, "bin"), filepath.Join(dir, "calls")
+	fakeWheelFile(t, filepath.Join(dir, "x.whl"), "x", "1.0")
 	python := filepath.Join(bin, "python3")
 	writeFile(t, python, "#!/bin/sh\nprintf '3.12.13\\n%s\\n' '"+python+"'\n")
 	writeFile(t, filepath.Join(bin, "uv"), `#!/bin/sh
@@ -33,6 +58,7 @@ case "$1" in
 --version) echo 'uv 0.11.28';;
 python) echo '`+python+`';;
 sync) /bin/mkdir -p "$UV_PROJECT_ENVIRONMENT/bin" && echo 'home = /x' > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg" && /bin/ln -sf '`+python+`' "$UV_PROJECT_ENVIRONMENT/bin/python";;
+build) if [ -n "$FAKE_BUILD_FAIL" ]; then exit 1; fi; /bin/cp '`+filepath.Join(dir, "x.whl")+`' "$4/";;
 *) exit 3;;
 esac
 `)
@@ -50,7 +76,7 @@ esac
 // again, never handed a half-built venv.
 func TestPythonWarmUpThroughTheRun(t *testing.T) {
 	ctx := context.Background()
-	bare, base := bareWith(t, map[string]string{"pyproject.toml": "[project]\nname = \"x\"\nrequires-python = \">=3.10\"\n",
+	bare, base := bareWith(t, map[string]string{"pyproject.toml": "[project]\nname = \"x\"\nrequires-python = \">=3.10\"\n[build-system]\nrequires = [\"flit_core\"]\n",
 		"uv.lock": "version = 1\n", "src/x/__init__.py": ""})
 	bin, calls := fakeUv(t)
 	data := writableTempDir(t)
@@ -84,15 +110,33 @@ func TestPythonWarmUpThroughTheRun(t *testing.T) {
 	}
 	stamp := env.stampPath(deps, base, []string{"python"})
 	var inStamp buildtool.Warmed
-	if content, err := os.ReadFile(stamp); err != nil || json.Unmarshal(content, &inStamp) != nil || inStamp.Venv != warmed.Venv {
+	if content, err := os.ReadFile(stamp); err != nil || json.Unmarshal(content, &inStamp) != nil || inStamp.Venv != warmed.Venv || inStamp.Metadata != warmed.Metadata {
 		t.Errorf("the base's stamp %q: %v", content, err)
+	}
+	// The base's metadata: made in the warm-up (uv build), kept in the deps folder, named by the stamp.
+	if !buildtool.MetadataReady(warmed.Metadata) || filepath.Dir(warmed.Metadata) != filepath.Join(deps, "py-meta") ||
+		!strings.Contains(string(log), "uv build --wheel | UV_CACHE_DIR="+filepath.Join(deps, "uv-cache")) {
+		t.Errorf("metadata %q:\n%s", warmed.Metadata, log)
 	}
 	if left, _ := os.ReadDir(filepath.Join(data, "cache", "warm")); len(left) != 0 {
 		t.Errorf("the throwaway checkout is left: %v", left)
 	}
 
-	if again := prepare(); again.Venv != warmed.Venv || syncs() != 1 {
-		t.Errorf("a stamped base: venv %q, syncs %d", again.Venv, syncs())
+	builds := func() int { data, _ := os.ReadFile(calls); return strings.Count(string(data), "uv build") }
+	if again := prepare(); again.Venv != warmed.Venv || again.Metadata != warmed.Metadata || syncs() != 1 || builds() != 1 {
+		t.Errorf("a stamped base: venv %q, metadata %q, syncs %d, builds %d", again.Venv, again.Metadata, syncs(), builds())
+	}
+	// Metadata that is no longer as made (a file planted in it) is not handed to a run: the base is warmed again, and
+	// gets it made again, beside the changed folder moved aside.
+	if err := os.Chmod(warmed.Metadata, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(warmed.Metadata, "x.py"), "X = 'planted'\n")
+	if _, ok := readStamp(stamp, profiles); ok {
+		t.Error("a stamp naming changed metadata reads as warmed")
+	}
+	if again := prepare(); again.Metadata != warmed.Metadata || !buildtool.MetadataReady(again.Metadata) || builds() != 2 {
+		t.Errorf("changed metadata: %q, builds %d", again.Metadata, builds())
 	}
 	if err := os.Chmod(filepath.Dir(warmed.Venv), 0o700); err != nil { // stamped venvs are read-only, their folder too
 		t.Fatal(err)
@@ -184,12 +228,13 @@ func TestGradingUsesTheVenvInItsCopy(t *testing.T) {
 	}
 	out := filepath.Join(data, "env.txt")
 	venv := filepath.Join(data, "deps", "1", "py", "k", "venv")
+	meta := filepath.Join(data, "deps", "1", "py-meta", "0123456789abcdef")
 	user := []string{"PATH=/usr/bin:/bin", "PYTHONHOME=/host/py", "PYTHONOPTIMIZE=2", "PIP_INDEX_URL=https://x", "VIRTUAL_ENV=/host/venv"}
 	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, VerifyTimeout: 20 * time.Second, Environ: user,
 		CommandEnv: []string{"PYTHONPATH=/user/py"}}
 	env.checkoutEnv = func(dir string) []string {
 		return buildtool.CheckoutEnv(buildtool.Select([]string{"python"}), buildtool.AgentContext{Allowed: env.Environ, Repo: dir,
-			BuildCache: env.Layout.Cache, Venv: venv, ImportRoot: "src"})
+			BuildCache: env.Layout.Cache, Venv: venv, Metadata: meta, ImportRoot: "src"})
 	}
 	env.checkoutBase = runner.Environ(buildtool.CheckoutEnviron(buildtool.Select([]string{"python"}), user))
 	rec := Record{ContextHead: head, RecordsDir: records}
@@ -209,7 +254,10 @@ func TestGradingUsesTheVenvInItsCopy(t *testing.T) {
 			t.Errorf("the user's %s=%q reached grading", name, v)
 		}
 	}
-	for name, want := range map[string]string{"VIRTUAL_ENV": venv, "PYTHONPATH": filepath.Join(graded, "src"), "PYTHONPYCACHEPREFIX": filepath.Join(data, "cache", "pycache"),
+	if h := vars["HYPOTHESIS_STORAGE_DIRECTORY"]; filepath.Dir(h) != filepath.Join(data, "cache", "hypothesis") {
+		t.Errorf("grading's hypothesis database %q: not the copy's own in the data folder", h)
+	}
+	for name, want := range map[string]string{"VIRTUAL_ENV": venv, "PYTHONPATH": filepath.Join(graded, "src") + ":" + meta, "PYTHONPYCACHEPREFIX": filepath.Join(data, "cache", "pycache"),
 		"UV_CACHE_DIR": filepath.Join(data, "cache", "uv"), "UV_PROJECT_ENVIRONMENT": venv, "PIP_NO_INDEX": "1"} {
 		if vars[name] != want {
 			t.Errorf("grading's %s = %q, want %q", name, vars[name], want)
@@ -224,17 +272,19 @@ func TestGradingUsesTheVenvInItsCopy(t *testing.T) {
 }
 
 // fakePip is a host whose PATH holds a fake python3 (3.12) that makes venvs and runs a fake pip: --version, a resolve
-// that reports one package, and installs (logged to calls).
+// that reports one package, installs, and a wheel's build (logged to calls).
 func fakePip(t *testing.T) (bin, calls string) {
 	t.Helper()
 	dir := t.TempDir()
 	bin, calls = filepath.Join(dir, "bin"), filepath.Join(dir, "calls")
+	fakeWheelFile(t, filepath.Join(dir, "pkg.whl"), "pkg", "2.0")
 	python := filepath.Join(bin, "python3")
 	writeFile(t, python, `#!/bin/sh
 echo "python $*" >> '`+calls+`'
 case "$1" in -I) printf '3.12.13\n%s\n' '`+python+`'; exit 0;; esac
 if [ "$1 $2" = "-m venv" ]; then /bin/mkdir -p "$3/bin" "$3/lib/python3.12/site-packages" && echo 'home = /x' > "$3/pyvenv.cfg" && /bin/ln -s '`+python+`' "$3/bin/python"; exit $?; fi
 if [ "$1 $2 $3" = "-m pip --version" ]; then echo "pip 25.0 from /x"; exit 0; fi
+if [ "$1 $2 $3 $4 $5 $6" = "-m pip wheel --quiet --no-deps --wheel-dir" ]; then /bin/cp '`+filepath.Join(dir, "pkg.whl")+`' "$7/"; exit $?; fi
 if [ "$1 $2 $3" = "-m pip install" ]; then
   while [ $# -gt 0 ]; do
     if [ "$1" = "--report" ]; then echo '{"install":[{"metadata":{"name":"pytest","version":"8.4.0"},"download_info":{"url":"https://x","archive_info":{}}}]}' > "$2"; exit 0; fi
@@ -269,7 +319,9 @@ func TestValidationUsesTheRunsVenv(t *testing.T) {
 		Checkout: func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return CheckoutCommands(ctx, c, base, verify, logPath)
 		}}
-	result, err := v.Validate(ctx, task.Spec{Base: base, Verify: []string{"env > " + out + " && command -v python >> " + out}}, []task.Arm{{Name: "base"}})
+	// The verification fills its hypothesis database, which goes with the validation's checkout.
+	result, err := v.Validate(ctx, task.Spec{Base: base, Verify: []string{"env > " + out + " && command -v python >> " + out +
+		` && mkdir -p "$HYPOTHESIS_STORAGE_DIRECTORY/examples"`}}, []task.Arm{{Name: "base"}})
 	if err != nil || len(result.Stages) != 1 || !result.Stages[0].OK {
 		t.Fatalf("%+v %v", result, err)
 	}
@@ -289,8 +341,14 @@ func TestValidationUsesTheRunsVenv(t *testing.T) {
 	if python := lines[len(lines)-1]; python != filepath.Join(venv, "bin", "python") {
 		t.Errorf("python is %q", python)
 	}
-	if want := filepath.Join(v.WorkDir, "base-base", "src"); vars["PYTHONPATH"] != want {
-		t.Errorf("PYTHONPATH %q, want the checkout's src %q", vars["PYTHONPATH"], want)
+	meta := strings.TrimPrefix(vars["PYTHONPATH"], filepath.Join(v.WorkDir, "base-base", "src")+":")
+	if !buildtool.MetadataReady(meta) || filepath.Dir(meta) != filepath.Join(deps, "py-meta") {
+		t.Errorf("PYTHONPATH %q, want the checkout's src, then the base's metadata folder", vars["PYTHONPATH"])
+	}
+	if h := vars["HYPOTHESIS_STORAGE_DIRECTORY"]; filepath.Dir(h) != filepath.Join(layout.Cache, "hypothesis") {
+		t.Errorf("validation's hypothesis database %q", h)
+	} else if _, err := os.Stat(h); err == nil {
+		t.Errorf("validation's hypothesis database %s outlived its checkout", h)
 	}
 	for name, want := range map[string]string{"PYTHONPYCACHEPREFIX": filepath.Join(layout.Cache, "pycache"), "PIP_NO_INDEX": "1",
 		"UV_PROJECT_ENVIRONMENT": venv} {
@@ -308,8 +366,8 @@ func TestValidationUsesTheRunsVenv(t *testing.T) {
 	env := Env{Layout: layout, Bare: bare, Environ: host, VerifyTimeout: 20 * time.Second}
 	warmed, _, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
 		base, filepath.Join(data, "setup.log"), func(int) {})
-	if err != nil || warmed.Venv != venv || resolves() != 1 {
-		t.Errorf("the run's venv %q (validation's %q), resolves %d: %v", warmed.Venv, venv, resolves(), err)
+	if err != nil || warmed.Venv != venv || warmed.Metadata != meta || resolves() != 1 {
+		t.Errorf("the run's venv %q and metadata %q (validation's %q, %q), resolves %d: %v", warmed.Venv, warmed.Metadata, venv, meta, resolves(), err)
 	}
 }
 
@@ -404,5 +462,76 @@ func TestStepsMarkerWaitsForNetworkSkips(t *testing.T) {
 	before := ran()
 	if note := warm("c2", step("")); !strings.Contains(note, "1 configuration(s) not warmed: :app:conf") || ran() != before {
 		t.Errorf("note %q, steps ran again: %v", note, ran() != before)
+	}
+}
+
+// A metadata build that fails is retried by the base's next warm-ups (a download of the build backend may have
+// failed): each run that warmed still gets the venv, without metadata, and a note; the base is not stamped. The third
+// failure in a row is stamped with its note, and later runs of the base build nothing.
+func TestPythonMetadataFailureIsRetriedThroughTheRun(t *testing.T) {
+	ctx := context.Background()
+	bare, base := bareWith(t, map[string]string{"pyproject.toml": "[project]\nname = \"x\"\nrequires-python = \">=3.10\"\n[build-system]\nrequires = [\"flit_core\"]\n",
+		"uv.lock": "version = 1\n", "src/x/__init__.py": ""})
+	bin, calls := fakeUv(t)
+	data := writableTempDir(t)
+	deps := filepath.Join(data, "deps", "1")
+	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, Bare: bare, VerifyTimeout: 20 * time.Second,
+		Environ: []string{"PATH=" + bin, "HOME=/nonexistent", "FAKE_BUILD_FAIL=1"}, Now: time.Now}
+	profiles := buildtool.Select([]string{"python"})
+	builds := func() int { data, _ := os.ReadFile(calls); return strings.Count(string(data), "uv build") }
+	stamp := env.stampPath(deps, base, []string{"python"})
+	for try := 1; try <= 4; try++ {
+		warmed, notes, err := env.prepareTools(ctx, profiles, claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")}, base,
+			filepath.Join(data, "setup.log"), func(int) {})
+		if err != nil || !buildtool.VenvReady(warmed.Venv) || warmed.Metadata != "" || len(notes) != 1 {
+			t.Fatalf("try %d: %+v %q %v", try, warmed, notes, err)
+		}
+		_, stamped := readStamp(stamp, profiles)
+		switch {
+		case try < 3 && (stamped || !strings.Contains(notes[0], fmt.Sprintf("(try %d of 3)", try)) || !strings.Contains(notes[0], "not stamped")):
+			t.Errorf("try %d: stamped %v, %q", try, stamped, notes)
+		case try >= 3 && (!stamped || !strings.Contains(notes[0], "(3 tries)")):
+			t.Errorf("try %d: stamped %v, %q", try, stamped, notes)
+		}
+		if want := min(try, 3); builds() != want {
+			t.Errorf("try %d: %d builds, want %d", try, builds(), want)
+		}
+	}
+}
+
+// What Agentium's own commands kept for one checkout in the data folder (Python's hypothesis database) goes with the
+// run's checkout and its grading copy; another checkout's stays.
+func TestRemoveCheckoutsRemovesTheirHypothesisDatabases(t *testing.T) {
+	data := t.TempDir()
+	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, Environ: []string{"PATH=/usr/bin:/bin"}}
+	env = env.withCheckoutTools(buildtool.Select([]string{"python"}), filepath.Join(data, "deps"), buildtool.Warmed{}, "")
+	workspace := filepath.Join(data, "ws")
+	repo, graded, other := filepath.Join(workspace, "repo"), filepath.Join(data, "records", "r1", "verify"), filepath.Join(data, "other")
+	databases := map[string]string{}
+	for _, dir := range []string{repo, graded, other} {
+		for _, kv := range env.checkoutEnv(dir) {
+			if v, ok := strings.CutPrefix(kv, "HYPOTHESIS_STORAGE_DIRECTORY="); ok {
+				databases[dir] = v
+			}
+		}
+		if filepath.Dir(databases[dir]) != filepath.Join(data, "cache", "hypothesis") {
+			t.Fatalf("%s: database %q", dir, databases[dir])
+		}
+		if err := os.MkdirAll(filepath.Join(databases[dir], "examples"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env.removeCheckouts(workspace, repo, graded)
+	for dir, h := range databases {
+		_, err := os.Stat(h)
+		if gone := err != nil; gone != (dir != other) {
+			t.Errorf("%s: its database removed %v", dir, gone)
+		}
+	}
+	if _, err := os.Stat(graded); err == nil {
+		t.Error("the grading copy was left")
 	}
 }

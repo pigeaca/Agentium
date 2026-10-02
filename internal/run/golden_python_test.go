@@ -38,13 +38,15 @@ func TestPythonProfileGolden(t *testing.T) {
 		Deny: []string{"/golden/data/projects", "/golden/data/records", "/golden/repo"}, TempRoot: "/golden/t/ag-0123456789", UID: 4242,
 		Tools: []string{"python"}, BuildCache: "/golden/data/workspaces/r1/go-build", Deps: "/golden/data/deps/1"}
 	venv := "/golden/data/deps/1/py/0123456789abcdef/venv"
+	meta := "/golden/data/deps/1/py-meta/fedcba9876543210" // the base's metadata-only .dist-info, after the checkout
 	for _, c := range []struct {
 		name string
 		inv  func(claude.Invocation) claude.Invocation
 	}{
 		{"a venv", func(inv claude.Invocation) claude.Invocation { inv.Venv = venv; return inv }},
-		{"a venv, the src layout (decided from the base)", func(inv claude.Invocation) claude.Invocation {
+		{"a venv, the src layout (decided from the base), the project's metadata", func(inv claude.Invocation) claude.Invocation {
 			inv.Venv, inv.ImportRoot = venv, buildtool.ImportRoot([]string{"pyproject.toml", "src/click/__init__.py"})
+			inv.ProjectMetadata = meta
 			return inv
 		}},
 		{"no venv (a warm-up that failed)", func(inv claude.Invocation) claude.Invocation { return inv }},
@@ -69,10 +71,10 @@ func TestPythonProfileGolden(t *testing.T) {
 	for _, kv := range buildtool.CommandEnvFor(buildtool.Select([]string{"python"}), "/golden/data/cache") {
 		fmt.Fprintf(&out, "%s\n", kv)
 	}
-	fmt.Fprintf(&out, "== commands: CheckoutEnv (grading's copy, the src layout)\n")
+	fmt.Fprintf(&out, "== commands: CheckoutEnv (grading's copy, the src layout, the project's metadata)\n")
 	for _, kv := range buildtool.CheckoutEnv(buildtool.Select([]string{"python"}), buildtool.AgentContext{Allowed: user, Environ: user,
 		Home: "/golden/home", Repo: "/golden/data/workspaces/r1/graded", BuildCache: "/golden/data/cache", Deps: base.Deps, Venv: venv,
-		ImportRoot: "src"}) {
+		Metadata: meta, ImportRoot: "src"}) {
 		fmt.Fprintf(&out, "%s\n", kv)
 	}
 	// The base environment of setup, grading and validation: the user's, less what the agent never gets either.
