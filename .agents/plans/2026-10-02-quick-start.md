@@ -90,7 +90,26 @@ Each step is one PR with green CI and a review.
     At session start: about 3612 tokens (14.1 KB, estimated); +2 tokens against snapshot start (about 3610)
     No problems found.
     ```
-- [ ] **2. Calibration inside `experiment run`:** after the model A/B experiment step, since both change `internal/experiment` and `experiment_run.go`.
+- [x] **2. Calibration inside `experiment run`** (2026-10-02, branch `claude/feat/calibrate-in-run`, with model A/B step 2).
+  - **How it works:**
+    - `experiment.Runner.calibrate` (`internal/experiment/calibrate.go`) runs in `lockFirst`, after the readiness lines and before `buildLock`. `Project.CalibrationNeeds` lists each distinct context and model (as `CalibrationFor` finds them) without a calibration that fits: none on the model, one on another Claude Code version, or one with another sign-in. The needs are grouped by model, and `run.Calibrator` makes one run per context (the base's own context at HEAD, kept through `Runner.KeepHead`), with `run calibrate`'s limits ($0.50 and 5 minutes each). It records a healthy result as `run calibrate` does (`Project.saveCalibration`). A locked experiment never calibrates, so a resume does not repeat one; a first run that fails before locking finds the healthy calibrations in place and makes only the missing ones.
+    - **Spend:** the runs are stored as `calibration` runs with the experiment's ID, outside its slots (`Store.ExperimentRuns` leaves them out, `ExperimentCalibrationRuns` lists them). The budget counts them: `Plan.SpentUSD`, the standing, the judge's funding check, `experiment show` ("calibration $X of it") and the report's `spent` and `calibration_usd` (`Load` adds them; `Build` does not, so context goldens hold). The project's run list and the north star's spend already counted them.
+    - **Preview:** a missing calibration is an "ok" readiness line, "calibrated when the experiment runs, about $X", and a note under the sizes gives the total and the cap. The estimate is a list-price figure for an assumed token profile (`CalibrationEstimateUSD`), capped at the run's cap; the one real measurement is $0.08 on Sonnet (nine calibrations, $0.70). `DefaultBudgetWith` adds it to the default budget (`experiment new`, which does not read Claude Code's version, counts only the missing ones); the budget warning counts it. The reserve for runs in flight is unchanged: calibrations finish before any pair.
+    - **Failure:** the table `run calibrate` prints, then an error that names the failed contexts. Nothing is locked, and healthy calibrations stay.
+    - **`start`:** it needs no code to reach a runnable experiment, since readiness no longer fails. The consent names the calibrations ("first N calibration run(s) of about $X"). `--yes` or a "y" is still required before any paid run.
+    - **Real console sample** (`start` on a scratch Go repository, `AGENTIUM_HOME` in a scratch folder, no paid runs; Claude Code 2.1.285; long lines cut):
+      ```
+      Before it runs:
+        ok       Claude Code 2.1.285 at /opt/homebrew/bin/claude
+        ok       context baseline on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.09 (agentium run calibrate does it now)
+        ok       8 task(s), each valid in every arm's context
+      ...
+      Calibration: 1 context calibration(s) are made when the experiment runs, about $0.09 in all and at most $0.50 (not in the
+      table's costs; counted in the budget). A calibration that fails its checks stops the experiment before any task run.
+      ...
+      Nothing was run and nothing was spent. To run it (real Claude Code runs, first 1 calibration run(s) of about $0.09, up to $42.00): agentium experiment run quick-aa-baseline
+      ```
+    - **Tests:** `experiment_calibrate_test.go` (hermetic, with the fake Claude Code, which answers calibration prompts like `calibratingAgent`): calibrated first, recorded and counted; a failed one stops before any task run; not repeated, on resume or in a second experiment; `start --yes` without a manual calibrate (`start_test.go`).
 - [x] **3. `agentium start` and north-star tracking** (2026-10-02, branch `claude/feat/agentium-start`). How it works:
   - **Code:** `internal/cli/start.go` (the handler, the stages) and `start_tasks.go` (supplying tasks); `internal/report/northstar.go` (the measure). Only new files, plus wiring: dispatch, help, `Env.Stdin`/`StdinTerminal`, the report's line, the README and the code map.
   - **Stages**, each skipped when done and printed as one line: registered (`init`'s own output the first time); a snapshot (arm A is `baseline`, saved from HEAD if the project has none, else the newest snapshot `--b` does not name; the source commit is shown, and a note says when HEAD's context has moved on); tasks; the experiment `quick-aa-<A>` or `quick-<A>-vs-<B>` (8 tasks × 1 run per arm, a sample of the ready ones, Sonnet, budget a quarter above the estimate or `--budget`); the preview (`LoadReview` and `Review.Write`); then the run.

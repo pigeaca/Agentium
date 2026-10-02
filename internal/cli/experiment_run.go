@@ -75,13 +75,18 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 			held, err = startRuns(ctx, env, w)
 			return err
 		},
+		KeepHead:  func(ctx context.Context) (string, error) { return w.keepCommit(ctx, "HEAD") },
 		NewRunEnv: func(verifyTimeout time.Duration) (run.Env, error) { return newRunEnv(env, w, verifyTimeout) },
 		NeedsLocalBinding: func(ctx context.Context, bases []string) (needed, allowed bool, err error) {
 			needed, err = run.NeedsLocalBinding(ctx, w.bare, bases)
 			return needed, w.project.AllowLocalBinding, err
 		},
 		ExecuteRun: func(ctx context.Context, e run.Env, meta experiment.RunMeta, spec run.Spec) (run.Record, error) {
-			return executeRun(ctx, env, w, e, runMeta{Kind: "task", TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
+			kind := "task"
+			if meta.Kind == experiment.KindCalibration {
+				kind = meta.Kind
+			}
+			return executeRun(ctx, env, w, e, runMeta{Kind: kind, TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
 				Attempt: meta.Attempt}, spec)
 		},
 		WaitUntil: func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) },

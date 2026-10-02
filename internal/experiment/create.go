@@ -167,7 +167,12 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		return Created{}, err
 	}
 	if d.BudgetUSD == 0 {
-		if d.BudgetUSD = DefaultBudgetFor(d, ests); d.BudgetUSD == 0 {
+		needs, err := p.CalibrationNeeds(ctx, d, "", "") // Claude Code's version is not read here: stale ones are not counted
+		if err != nil {
+			return Created{}, err
+		}
+		calibrating, _ := CalibrationCosts(needs)
+		if d.BudgetUSD = DefaultBudgetWith(d, ests, calibrating); d.BudgetUSD == 0 {
 			return Created{}, fmt.Errorf("the cost of a run cannot be estimated (%s): set --budget", unknownBasis(d, ests))
 		}
 	}

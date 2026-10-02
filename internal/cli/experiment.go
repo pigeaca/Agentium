@@ -26,13 +26,15 @@ var experimentUsage = `Usage:
   agentium experiment new NAME --template model-ab --a MODEL[:EFFORT] --b MODEL[:EFFORT] [--context SNAPSHOT] [--run-budget-a USD]
                      [--run-budget-b USD] [...]
                      a model A/B: two Claude Code profiles (a model, and an effort level: low, medium, high, xhigh or
-                     max) on the same tasks in one context (default: base). Calibrate each arm's model first
-                     (agentium run calibrate --model MODEL); the plan lists what is missing
+                     max) on the same tasks in one context (default: base). Each arm's model is calibrated when the
+                     experiment runs, if it is not yet
   agentium experiment plan NAME
-                     the runs, the estimated cost and the effects each size can detect; what is missing before it runs
+                     the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
   agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
-                     the budget; infrastructure failures are retried. Run it again to resume; --budget raises the total.
+                     the budget; infrastructure failures are retried. First, each context without a calibration on this Claude Code
+                     and model is calibrated (a short paid run each, in the budget; a failed calibration stops the
+                     experiment before any task run). Run it again to resume; --budget raises the total.
                      With a subscription, no pair starts past --usage-limit (default 85) of the five-hour window:
                      it pauses, or with --wait waits for the window to reset
   agentium experiment show NAME

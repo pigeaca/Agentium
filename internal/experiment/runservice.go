@@ -35,6 +35,7 @@ type RunOptions struct {
 // RunMeta places a run an experiment starts: the task it is linked to (0 when the task changed after the lock), the
 // experiment, the slot and the attempt.
 type RunMeta struct {
+	Kind         string // "" for a task run, KindCalibration for a calibration run
 	TaskID       int64
 	ExperimentID int64
 	Slot         int
@@ -71,6 +72,9 @@ type Runner struct {
 	// StartRuns takes the data folder's run lock (and stores runs a dead process left behind). The caller keeps the
 	// release function and calls it when it is done with the experiment, summary included.
 	StartRuns func(ctx context.Context) error
+	// KeepHead copies the commit HEAD names in the user's repository into Agentium's bare one and returns it: the commit
+	// the base context is calibrated at.
+	KeepHead func(ctx context.Context) (string, error)
 	// NewRunEnv resolves what every run needs.
 	NewRunEnv func(verifyTimeout time.Duration) (run.Env, error)
 	// NeedsLocalBinding tells whether runs on the tasks' base commits need the sandbox's local binding (a Gradle build)
@@ -171,6 +175,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	ready.Write(out, r.Style)
 	if !ready.Ready || ctx.Err() != nil {
 		return Lock{}, errors.Join(ctx.Err(), errors.New("not ready to run: see above (agentium experiment plan "+name+")"))
+	}
+	if err := r.calibrate(ctx, stored, d, version); err != nil {
+		return Lock{}, err
 	}
 	lock, err := r.buildLock(ctx, d, cli, version)
 	if err != nil {
@@ -340,14 +347,19 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if err := p.DB.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return RunOutcome{}, err
 	}
+	calibrationSpent, err := p.CalibrationSpend(ctx, stored.ID) // before the first pair: part of the budget's spend
+	if err != nil {
+		return RunOutcome{}, err
+	}
 	x := &execution{r: r, stored: stored, lock: lock, runEnv: runEnv, storedTries: map[int]int{}, seenSubagents: SubagentModels(runs)}
 	var judgeNote string
 	var judgeErr error
 	unfunded := 0                 // runs the budget left no room to judge
 	if lock.Design.Judge != nil { // first the graded runs a stopped execution left without a verdict
-		judgeNote, unfunded, judgeErr = r.judgePending(ctx, runEnv, lock, runs)
+		judgeNote, unfunded, judgeErr = r.judgePending(ctx, runEnv, lock, runs, calibrationSpent)
 	}
 	prior, standing := x.priorAttempts(runs)
+	standing.Spent += calibrationSpent
 	x.tries = maps.Clone(x.storedTries)
 	gate, err := r.usageGate(ctx, lock, o, &standing)
 	if err != nil {
@@ -384,7 +396,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		x.judgePaused.Store(true)
 	default:
 		sum, runErr = Execute(ctx, Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
-			BudgetUSD: design.BudgetUSD, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}, x.slot)
+			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}, x.slot)
 	}
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = StatusStopped, "Agentium could not start the runs: "+runErr.Error()
@@ -600,9 +612,9 @@ func spentResult(s run.Spend) Result {
 // returns a pause note when a verdict stopped at a usage limit, and an error only when a record cannot be read or stored. A cancelled ctx ends it
 // quietly: the execution that follows sees the cancellation. Judgements that leave no verdict (a missing diff, say)
 // are reported here, not stored, so resumes do not repeat their notes.
-func (r Runner) judgePending(ctx context.Context, runEnv run.Env, lock Lock, runs []store.Run) (note string, unfunded int, err error) {
+func (r Runner) judgePending(ctx context.Context, runEnv run.Env, lock Lock, runs []store.Run, calibrationSpent float64) (note string, unfunded int, err error) {
 	design, out, st := lock.Design, r.Out, r.Style
-	spent := 0.0
+	spent := calibrationSpent
 	for _, s := range runs {
 		spent += storedSpend(s).TotalUSD()
 	}

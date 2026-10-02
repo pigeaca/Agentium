@@ -273,12 +273,16 @@ func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunCapUSD()
 func DefaultBudget(d Design, est Estimate) float64 { return DefaultBudgetFor(d, Same(est)) }
 
 // DefaultBudgetFor is DefaultBudget with each arm's own estimate.
-func DefaultBudgetFor(d Design, est ArmEstimates) float64 {
+func DefaultBudgetFor(d Design, est ArmEstimates) float64 { return DefaultBudgetWith(d, est, 0) }
+
+// DefaultBudgetWith is DefaultBudgetFor for an experiment that also makes calibrations when it runs, expected to cost
+// calibrationUSD (CalibrationCosts): they are part of its budget, so the quarter above the estimate covers them too.
+func DefaultBudgetWith(d Design, est ArmEstimates, calibrationUSD float64) float64 {
 	expected, ok := est.DesignUSD(d)
 	if !ok {
 		return 0
 	}
-	return math.Ceil(1.25*(expected+d.JudgeEstimateUSD()) + Reserve(d))
+	return math.Ceil(1.25*(expected+d.JudgeEstimateUSD()+calibrationUSD) + Reserve(d))
 }
 
 // Row is one line of a preview.

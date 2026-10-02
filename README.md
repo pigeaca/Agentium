@@ -39,7 +39,7 @@ agentium start                     # registers, snapshots, mines and validates 8
 - mines and validates tasks until 8 are ready, the cost floor;
 - creates the experiment `quick-...` at the floor, 8 tasks × 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
 - prints the preview: runs, estimated cost, detectable effect, and what is missing;
-- stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it).
+- stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it). The run first calibrates each context that lacks a calibration (a short paid run, about $0.1 to $0.2, counted in the budget and shown in the preview).
 
 Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`), so a first `start` stops there. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
 
@@ -82,11 +82,11 @@ Mined tasks verify with your build tool's test command (`go test ./...`, `./mvnw
 > These commands start real Claude Code runs. They cost money, or use your plan's limits.
 
 ```sh
-agentium run calibrate --snapshot trimmed     # short checks: sandbox, large outputs, context size, tools
+agentium run calibrate --snapshot trimmed     # optional: short checks (sandbox, large outputs, context size, tools); experiment run does it for any arm that lacks one
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
 agentium experiment new lean --b trimmed      # an A/B: each task's own context against trimmed, on a sample of valid tasks
-agentium experiment plan lean                 # runs, estimated cost, detectable effects; what is missing
-agentium experiment run lean                  # locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
+agentium experiment plan lean                 # runs, estimated cost (calibrations included), detectable effects; what is missing
+agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
@@ -94,12 +94,10 @@ agentium experiment report lean               # verdicts, intervals, per-task re
 **Templates.** `experiment new` has three: `context-ab` (the default; `--b` names the snapshot to compare with arm A's context), `aa` (one context in both arms, which must find no difference: it measures the noise) and `model-ab`, which compares two Claude Code profiles on the same tasks and one context:
 
 ```sh
-agentium run calibrate --model claude-sonnet-5    # each arm's model needs its own calibration of the context
-agentium run calibrate --model claude-opus-5-5
 agentium experiment new models --template model-ab --a claude-sonnet-5 --b claude-opus-5-5:high [--context trimmed]
 ```
 
-`--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default). The arms must differ in model or effort. Both run one context: the base's own, or `--context SNAPSHOT`. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget-a` and `--run-budget-b` give an arm its own run cap. Reports of model experiments name the arms by profile in their heading and summary; fuller per-profile reports are planned.
+`--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default). The arms must differ in model or effort. Both run one context: the base's own, or `--context SNAPSHOT`. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget-a` and `--run-budget-b` give an arm its own run cap. Each arm's model needs its own calibration of the context: `experiment run` makes the ones that are missing, once, before the first pair (`run calibrate --model MODEL` does it ahead of time). The preview counts their cost, and a calibration that fails its checks stops the experiment before any task run. Reports of model experiments name each arm by profile (model and effort) in the headlines, the metric tables and the per-task rows, with a one-line verdict such as `B (claude-sonnet-5-5) costs 48% less; success: exploratory`; the noise note says it pools both models.
 
 **Judge (second opinion).** Tests decide pass and fail. `experiment new ... --judge` also asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference solution does? The judge reads the instruction and both changes' code, never the tests; tasks whose reference solution has no code are skipped. It answers fixed, partly or no, with a one-line reason, and takes the majority of a few repeats. `--judge-model`, `--judge-effort` and `--judge-repeats` set it.
 

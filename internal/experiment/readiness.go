@@ -3,7 +3,6 @@ package experiment
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -12,8 +11,6 @@ import (
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/project"
-	"github.com/pigeaca/agentium/internal/run"
-	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -29,6 +26,9 @@ type Check struct{ Status, Text string }
 type Readiness struct {
 	Checks []Check
 	Ready  bool
+	// Calibrations are what the experiment calibrates when it runs: an arm's context and model without a calibration
+	// that fits. They are paid for from its budget (CalibrationCosts).
+	Calibrations []CalibrationNeed
 }
 
 // Write prints the checks, one per line.
@@ -58,7 +58,7 @@ func (c *checker) line(ok bool, format string, a ...any) {
 }
 
 // CheckReadiness checks what running needs: Claude Code, each context's calibration on its version and the
-// experiment's model, the snapshot commits, and every task still eligible. The report says whether all is in place.
+// experiment's model (or its cost, when the experiment will make it), the snapshot commits, and every task still eligible. The report says whether all is in place.
 func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, eligible []string, reasons map[string]string, est ArmEstimates) Readiness {
 	c := &checker{r: Readiness{Ready: true}}
 	version := c.claude(ctx, e)
@@ -71,9 +71,10 @@ func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, el
 	}
 	expected, known := est.DesignUSD(d)
 	expected += d.JudgeEstimateUSD()
-	if reserve := Reserve(d); known && d.BudgetUSD < expected+reserve {
-		c.check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f plus $%.2f held for runs in flight: expect it to stop the experiment early",
-			d.BudgetUSD, expected, reserve))
+	calibrating, _ := CalibrationCosts(c.r.Calibrations)
+	if reserve := Reserve(d); known && d.BudgetUSD < expected+calibrating+reserve {
+		c.check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f%s plus $%.2f held for runs in flight: expect it to stop the experiment early",
+			d.BudgetUSD, expected, map[bool]string{true: fmt.Sprintf(" plus $%.2f of calibration", calibrating)}[calibrating > 0], reserve))
 	}
 	return c.r
 }
@@ -105,7 +106,7 @@ func (c *checker) claude(ctx context.Context, e ReadinessEnv) string {
 }
 
 // contexts checks each distinct context (in a model-ab experiment, each context and model): its snapshot commit is
-// kept, and its calibration is on this Claude Code, this model and this sign-in.
+// kept, and its calibration is on this Claude Code, this model and this sign-in, or is made when the experiment runs.
 func (c *checker) contexts(ctx context.Context, p Project, e ReadinessEnv, d Design, version string) {
 	var seen []Arm
 	for _, a := range d.Arms {
@@ -122,54 +123,24 @@ func (c *checker) contexts(ctx context.Context, p Project, e ReadinessEnv, d Des
 				continue
 			}
 		}
-		calibrate := "agentium run calibrate --model " + d.ArmModel(a)
-		if a.Snapshot != "" {
-			calibrate += " --snapshot " + a.Context
-		}
-		c.calibrated(ctx, p, e, d, a, version, e.Style.Command(calibrate))
+		c.calibrated(ctx, p, e, d, a, version)
 	}
 }
 
-// calibrated checks arm a's latest calibration; calibrate is the command that makes a new one.
-func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d Design, a Arm, version, calibrate string) {
-	stored, err := p.CalibrationFor(ctx, d, a)
-	if errors.Is(err, store.ErrNotFound) && !d.PerArmProfiles() { // a calibration on another model: say so below
-		stored, err = p.DB.LatestCalibration(ctx, p.ID, a.Context, a.Snapshot)
-	}
-	if errors.Is(err, store.ErrNotFound) {
-		if d.PerArmProfiles() {
-			c.line(false, "context %s is not calibrated on %s (arm %s): %s", a.Context, a.Model, a.Name, calibrate)
-		} else {
-			c.line(false, "context %s is not calibrated: %s", a.Context, calibrate)
-		}
-		return
-	}
+// calibrated checks arm a's latest calibration. One that is missing or stale is not a reason to stop: the experiment
+// makes it when it runs (Runner.calibrate), and the line says what that costs.
+func (c *checker) calibrated(ctx context.Context, p Project, e ReadinessEnv, d Design, a Arm, version string) {
+	stored, cal, why, err := p.CalibrationState(ctx, d, a, version, e.SignIn)
 	if err != nil {
 		c.line(false, "context %s: %v", a.Context, err)
 		return
 	}
-	var cal run.Calibration
-	if err := json.Unmarshal(stored.Result, &cal); err != nil {
-		c.line(false, "context %s: its calibration cannot be read: %v", a.Context, err)
-		return
-	}
-	if cal.SignIn == "" { // saved before calibrations recorded it: the calibration run's record has it
-		if r, err := p.DB.RunByID(ctx, p.ID, stored.RunID); err == nil {
-			var rec struct {
-				SignIn string `json:"sign_in"`
-			}
-			if json.Unmarshal(r.Record, &rec) == nil {
-				cal.SignIn = rec.SignIn
-			}
-		}
-	}
+	label := "context " + a.Context + " on " + d.ArmModel(a)
 	switch {
-	case version != "" && cal.CLIVersion != version:
-		c.line(false, "context %s was calibrated on Claude Code %s, not %s: %s", a.Context, cal.CLIVersion, version, calibrate)
-	case cal.RequestedModel != d.ArmModel(a):
-		c.line(false, "context %s was calibrated with %s, not %s: %s", a.Context, term.OrNone(cal.RequestedModel), d.ArmModel(a), calibrate)
-	case cal.SignIn != e.SignIn:
-		c.line(false, "context %s was calibrated with sign-in %s, and runs would now use %s: %s", a.Context, term.OrNone(cal.SignIn), e.SignIn, calibrate)
+	case why != "":
+		need := CalibrationNeed{Arm: a, Model: d.ArmModel(a), Why: why}
+		c.r.Calibrations = append(c.r.Calibrations, need)
+		c.line(true, "%s %s: calibrated when the experiment runs, about $%.2f (agentium run calibrate does it now)", label, why, CalibrationEstimateUSD(need.Model))
 	case d.PerArmProfiles():
 		c.line(true, "context %s calibrated on %s %s: first request %d tokens", a.Context, a.Model, stored.CreatedAt.Format("2006-01-02 15:04"), cal.FirstRequest)
 	default:

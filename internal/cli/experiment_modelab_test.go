@@ -145,17 +145,17 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 	saveRuns(t, f, runs...)
 
 	// Per run $0.40 on Sonnet and $2.00 on Opus: 2 repeats cost $4.80, and the default budget is 1.25 × that plus 3 caps
-	// of the larger cap, $5: $21. The arms' caps are $3 and $5, so a pair's worst case is $8.
+	// of the larger cap, $5, and a quarter more of Opus's calibration ($0.18): $22. The arms' caps are $3 and $5, so a pair's worst case is $8.
 	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--repeats", "2",
-		"--run-budget-b", "5"), ExitOK, "= 4 runs, budget $21.00")
+		"--run-budget-b", "5"), ExitOK, "= 4 runs, budget $22.00")
 	plan := f.run(ctx, "experiment", "plan", "m")
 	expect(t, plan, ExitOK, "arm A: model claude-sonnet-5, effort the CLI's default, context base; each run up to $3.00",
 		"arm B: model claude-opus-5-5, effort high, context base; each run up to $5.00",
 		"Arm A: Estimated cost per run on claude-sonnet-5:", "value $0.40 (3 run(s))",
 		"Arm B: Estimated cost per run on claude-opus-5-5 at effort high:", "value $2.00 (3 run(s))",
 		"Worst case: every run reaches its cap (arm A $3.00, arm B $5.00)",
-		"MISSING  context base is not calibrated on claude-opus-5-5 (arm B): agentium run calibrate --model claude-opus-5-5",
-		"ok       context base calibrated on claude-sonnet-5", "Not ready to run")
+		"ok       context base on claude-opus-5-5 is not calibrated: calibrated when the experiment runs, about $",
+		"ok       context base calibrated on claude-sonnet-5", "Calibration: 1 context calibration(s)")
 	if !strings.Contains(plan.stdout, "This experiment     1          2     4      $4.80      $16.00") {
 		t.Errorf("this experiment's row, want $4.80 and the worst case 2 × ($3 + $5) = $16.00:\n%s", plan.stdout)
 	}
@@ -165,7 +165,7 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 	// A budget that covers one arm's estimate and the reserve but not both arms is flagged.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "2", "--budget", "12"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
-		"WARNING  the budget $12.00 is below the estimated $4.80 plus $9.00 held for runs in flight")
+		"WARNING  the budget $12.00 is below the estimated $4.80 plus $0.18 of calibration plus $9.00 held for runs in flight")
 
 	// A calibration on the other model is none for this one; once there, the arm is ready, and the base's other
 	// calibration is untouched.
@@ -250,19 +250,6 @@ func TestModelABChecksDriftPerArm(t *testing.T) {
 	expect(t, out, ExitError, "Claude Code reported model claude-sonnet-5, but arm B's calibration saw claude-opus-5-5: later runs would not compare")
 	if strings.Contains(out.stdout, "arm A's calibration") {
 		t.Errorf("arm A's runs report its own model:\n%s", out.stdout)
-	}
-}
-
-// An experiment without a calibration on arm B's model does not lock, and says what to run.
-func TestModelABRefusesToRunUncalibrated(t *testing.T) {
-	t.Parallel()
-	f, _ := experimentFixture(t)
-	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--repeats", "1", "--budget", "40"), ExitOK)
-	expect(t, f.run(ctx, "experiment", "run", "m"), ExitError, "MISSING  context base is not calibrated on claude-opus-5-5 (arm B): agentium run calibrate --model claude-opus-5-5",
-		"not ready to run")
-	if len(experimentRuns(t, f, "m")) != 0 {
-		t.Error("an uncalibrated experiment ran")
 	}
 }
 

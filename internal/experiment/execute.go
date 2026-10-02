@@ -80,6 +80,7 @@ type Plan struct {
 	// entry has RunCapUSD.
 	ArmCapUSD   map[string]float64
 	BudgetUSD   float64
+	SpentUSD    float64 // spent before the schedule's runs, outside its slots: the experiment's calibrations
 	MaxAttempts int
 	Prior       []Attempt                       // the experiment's stored runs
 	Backoff     func(attempt int) time.Duration // before retrying a slot whose attempt failed for infrastructure
@@ -168,7 +169,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		g := *p.Usage
 		gate = &g
 	}
-	var spent float64
+	spent := p.SpentUSD
 	for _, a := range p.Prior {
 		if a.Slot < 0 || a.Slot >= len(state) {
 			return Summary{}, fmt.Errorf("execute: a stored run names slot %d of %d", a.Slot, len(state))
