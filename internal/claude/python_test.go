@@ -38,15 +38,19 @@ func TestPythonVariablesNeverPass(t *testing.T) {
 	}
 }
 
-// A Python project's run: the venv (in the deps folder, read-only), the checkout on PYTHONPATH, bytecode and uv's cache
-// in the run's own cache, pip and uv offline; the deps folder's download caches and resolve reports and the user's
-// caches and venv are denied, the venv and uv's interpreters are not.
+// A Python project's run: the venv (in the deps folder, read-only), the checkout on PYTHONPATH and after it the base's
+// metadata folder (in the deps folder, read-only), bytecode, uv's cache and hypothesis's database in the run's own
+// cache, pip and uv offline; the deps folder's download caches and resolve reports and the user's caches and venv are
+// denied, the venv, the metadata and uv's interpreters are not. A metadata folder outside the deps folder, which the
+// agent might write, is refused.
 func TestPythonRunEnvironmentAndSandbox(t *testing.T) {
 	inv := toolInvocation(t, "python")
 	inv.Venv = "/data/deps/1/py/0123456789abcdef/venv"
+	inv.ProjectMetadata = "/data/deps/1/py-meta/fedcba9876543210"
 	env, settings := toolCommand(t, inv, userPython)
-	for name, want := range map[string]string{"VIRTUAL_ENV": inv.Venv, "PATH": inv.Venv + "/bin:/usr/bin:/bin", "PYTHONPATH": inv.Dir,
-		"PYTHONPYCACHEPREFIX": "/work/runs/r1/go-build/pycache", "PYTEST_ADDOPTS": "-p no:cacheprovider", "PIP_NO_INDEX": "1",
+	for name, want := range map[string]string{"VIRTUAL_ENV": inv.Venv, "PATH": inv.Venv + "/bin:/usr/bin:/bin", "PYTHONPATH": inv.Dir + ":" + inv.ProjectMetadata,
+		"HYPOTHESIS_STORAGE_DIRECTORY": "/work/runs/r1/go-build/hypothesis",
+		"PYTHONPYCACHEPREFIX":          "/work/runs/r1/go-build/pycache", "PYTEST_ADDOPTS": "-p no:cacheprovider", "PIP_NO_INDEX": "1",
 		"PIP_DISABLE_PIP_VERSION_CHECK": "1", "UV_OFFLINE": "1", "UV_NO_SYNC": "1", "UV_FROZEN": "1", "UV_PYTHON_DOWNLOADS": "never",
 		"UV_PROJECT_ENVIRONMENT": inv.Venv, "UV_CACHE_DIR": "/work/runs/r1/go-build/uv"} {
 		if env[name] != want {
@@ -72,8 +76,8 @@ func TestPythonRunEnvironmentAndSandbox(t *testing.T) {
 		}
 	}
 	for _, p := range denyRead {
-		if s := p.(string); strings.HasPrefix(inv.Venv, s) || s == "/home/u/.local/share/uv" || strings.HasPrefix(s, "/home/u/.local/share/uv/python") {
-			t.Errorf("%s is denied: the venv or its interpreter", s)
+		if s := p.(string); strings.HasPrefix(inv.Venv, s) || strings.HasPrefix(inv.ProjectMetadata, s) || s == "/home/u/.local/share/uv" || strings.HasPrefix(s, "/home/u/.local/share/uv/python") {
+			t.Errorf("%s is denied: the venv, the metadata or the interpreter", s)
 		}
 	}
 	if !slices.Contains(denyWrite, any("/data/deps/1")) || slices.ContainsFunc(fs["allowWrite"].([]any), func(p any) bool { return strings.HasPrefix(p.(string), "/data/deps") }) {
@@ -88,6 +92,17 @@ func TestPythonRunEnvironmentAndSandbox(t *testing.T) {
 	inv.Venv = "venv"
 	if _, _, err := inv.Command(userPython); err == nil {
 		t.Error("a relative venv is accepted")
+	}
+	inv.Venv = ""
+	for _, meta := range []string{"py-meta/x", "/work/runs/r1/repo/meta", "/data/deps/1", "/data/deps/10/py-meta/x", "/data/deps/1/../2/py-meta/x"} {
+		inv.ProjectMetadata = meta
+		if _, _, err := inv.Command(userPython); err == nil {
+			t.Errorf("the metadata folder %q is accepted", meta)
+		}
+	}
+	inv.ProjectMetadata, inv.Deps = "/data/deps/1/py-meta/x", ""
+	if _, _, err := inv.Command(userPython); err == nil {
+		t.Error("a metadata folder without a deps folder is accepted")
 	}
 }
 
