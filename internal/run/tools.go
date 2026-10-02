@@ -76,9 +76,11 @@ func (env Env) warmState(deps string) string {
 	return filepath.Join(env.Layout.Cache, "warm-state", filepath.Base(deps))
 }
 
-// stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set.
+// stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set by the current
+// recipe: the name holds buildtool.WarmVersion, so a stamp left by an older recipe (or from before versions) is never
+// found and the base is warmed again.
 func (env Env) stampPath(deps, base string, names []string) string {
-	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+filepath.Base(base))
+	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+"-"+filepath.Base(base))
 }
 
 // prepareTools is the build tools' part of a run's setup, before the task's own setup commands: it warms the project's
@@ -175,10 +177,25 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	if failed != "" {
 		return "dependency warm-up failed (" + failed + "): the agent may not be able to build offline; see setup.log", nil
 	}
+	// What a step could not warm (Gradle's unresolvable configurations) is a note. Mostly such skips are permanent and
+	// the base is stamped; a skip that looks like a network failure is not stamped, so the next run tries again.
+	skipped, transient := buildtool.ReadWarmSkipped(repo)
+	note := ""
+	if len(skipped) > 0 {
+		note = fmt.Sprintf("%d configuration(s) not warmed: %s", len(skipped), strings.Join(skipped[:min(len(skipped), 8)], ", "))
+		if len(skipped) > 8 {
+			note += ", ..."
+		}
+		note += "; the agent may not be able to use them offline"
+		if transient {
+			note += " (a network failure: not stamped, the next run warms again)"
+			return note, nil
+		}
+	}
 	if err := os.WriteFile(stamp, nil, 0o600); err != nil {
 		return "", fmt.Errorf("warm-up state: %w", err)
 	}
-	return "", nil
+	return note, nil
 }
 
 // lockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait); the lock goes with its holder's process.

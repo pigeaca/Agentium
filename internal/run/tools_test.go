@@ -95,6 +95,63 @@ func TestWarmToolsStampsAndNotes(t *testing.T) {
 	}
 }
 
+// A stamp from before warm-up versions (named tools-base) never matches, so a changed recipe warms existing bases again.
+func TestWarmStampsCarryTheRecipeVersion(t *testing.T) {
+	dir := t.TempDir()
+	deps, log := filepath.Join(dir, "deps"), filepath.Join(dir, "calls")
+	env := Env{VerifyTimeout: 20 * time.Second, Layout: home.Layout{Cache: filepath.Join(dir, "cache")}}
+	steps := []buildtool.WarmStep{{Command: "echo ran >> " + log}}
+	tools := []string{"gradle"}
+	state := env.warmState(deps)
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "gradle-c1"), nil, 0o600); err != nil { // the old format
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(env.stampPath(deps, "c1", tools)); err == nil {
+		t.Fatal("an old-format stamp counts")
+	}
+	for range 2 {
+		if _, err := env.warmTools(context.Background(), t.TempDir(), deps, "c1", buildtool.Select(tools), tools, steps, filepath.Join(dir, "setup.log"), func(int) {}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if data, _ := os.ReadFile(log); string(data) != "ran\n" {
+		t.Errorf("calls %q: one warm-up despite the old stamp, none after the new one", data)
+	}
+	if want := "gradle-" + buildtool.WarmVersion(buildtool.Select(tools)) + "-c1"; filepath.Base(env.stampPath(deps, "c1", tools)) != want {
+		t.Errorf("stamp %s, want %s", env.stampPath(deps, "c1", tools), want)
+	}
+}
+
+// Configurations a step could not warm are a note; a network-looking reason leaves no stamp so the next run retries.
+func TestWarmSkippedConfigurationsAreANote(t *testing.T) {
+	for _, c := range []struct {
+		reason  string
+		stamped bool
+	}{{"Could not resolve all files for configuration", true}, {"Could not GET 'https://repo.example/x.pom' | Connection reset", false}} {
+		dir := t.TempDir()
+		deps, checkout := filepath.Join(dir, "deps"), t.TempDir()
+		env := Env{VerifyTimeout: 20 * time.Second, Layout: home.Layout{Cache: filepath.Join(dir, "cache")}}
+		list := ":demoTestsRuntimeClasspath\t" + c.reason + "\n:other\t" + c.reason + "\n"
+		if err := os.WriteFile(filepath.Join(checkout, buildtool.WarmSkippedFile), []byte(list), 0o600); err != nil { // as the step would
+			t.Fatal(err)
+		}
+		steps := []buildtool.WarmStep{{Command: "true"}}
+		note, err := env.warmTools(context.Background(), checkout, deps, "c1", buildtool.Select([]string{"gradle"}), []string{"gradle"}, steps, filepath.Join(dir, "setup.log"), func(int) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(note, "2 configuration(s) not warmed: :demoTestsRuntimeClasspath, :other") {
+			t.Errorf("note %q", note)
+		}
+		if _, err := os.Stat(env.stampPath(deps, "c1", []string{"gradle"})); (err == nil) != c.stamped {
+			t.Errorf("reason %q: stamped %v, want %v", c.reason, err == nil, c.stamped)
+		}
+	}
+}
+
 // bareWith commits the files in a repository and fetches that commit into a bare one, as Agentium keeps tasks' bases.
 func bareWith(t *testing.T, files map[string]string) (bare, commit string) {
 	t.Helper()

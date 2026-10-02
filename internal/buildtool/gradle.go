@@ -63,9 +63,10 @@ func gradleProfile() Profile {
 		LocalBinding: true,
 		// Three steps: the compile classpaths, the test task with a filter that selects nothing (it fails for that
 		// reason, after resolving the test runtime classpath), then every other resolvable configuration of every
-		// project (Checkstyle, Spotless, JaCoCo, ...: the agent may run tasks that `test` does not reach). The warm-up
-		// tolerates failures.
+		// project (Checkstyle, JaCoCo, ...: the agent may run tasks that `test` does not reach), through an init script
+		// given to this step only. The warm-up tolerates failures.
 		PrepareDeps: prepareGradleDeps,
+		WarmRecipe:  noCleanupScript + resolveAllScript,
 		Warm: func(_, deps string, has func(string) bool) []WarmStep {
 			gradle := "gradle"
 			if has("gradlew") {
@@ -75,7 +76,7 @@ func gradleProfile() Profile {
 			return []WarmStep{
 				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q testClasses", Env: env},
 				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q test --tests AgentiumWarmNoSuchTest || true", Env: env},
-				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q " + resolveAllTask + " || true", Env: env},
+				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q -I '" + filepath.Join(deps, "gradle", resolveAllScriptName) + "' " + resolveAllTask + " || true", Env: env},
 			}
 		},
 		PrepareRun:      prepareGradleRun,
@@ -218,34 +219,56 @@ func prepareGradleDeps(deps string) error {
 	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(gradleHomeProps+"org.gradle.cache.cleanup=false\n"), 0o600); err != nil {
 		return err
 	}
-	script := "beforeSettings { settings ->\n    settings.caches { cleanup = Cleanup.DISABLED }\n}\n"
-	if err := os.WriteFile(filepath.Join(guh, "init.d", "agentium-no-cleanup.gradle"), []byte(script), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(guh, "init.d", "agentium-no-cleanup.gradle"), []byte(noCleanupScript), 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(guh, "init.d", "agentium-resolve-all.gradle"), []byte(resolveAllScript), 0o600)
+	os.Remove(filepath.Join(guh, "init.d", "agentium-resolve-all.gradle")) // an earlier recipe's place: it must not load in every step
+	return os.WriteFile(filepath.Join(guh, resolveAllScriptName), []byte(resolveAllScript), 0o600)
 }
+
+// noCleanupScript turns the cache cleanup off. settings.caches is Gradle 8.0+; older versions honor the property
+// (gradleHomeProps) and skip this.
+const noCleanupScript = `beforeSettings { settings ->
+    if (settings.metaClass.respondsTo(settings, "getCaches")) {
+        settings.caches { cleanup = Cleanup.DISABLED }
+    }
+}
+`
 
 // resolveAllTask is the task resolveAllScript adds to every project of the warm-up's build.
 const resolveAllTask = "agentiumResolveAll"
 
-// resolveAllScript is an init script, in the deps folder's Gradle home (so only the warm-up, which uses that home, sees
-// it), that adds resolveAllTask to every project: it resolves every resolvable configuration, which downloads the
-// artifacts into the read-only cache. Without it a build's other tasks fail offline in the agent's sandbox
-// (junit-pioneer: ":checkstyle ... No cached version of com.puppycrawl.tools:checkstyle ... offline mode").
+// resolveAllScriptName is the script's file in the deps folder's Gradle home. It is not in init.d: only the warm-up
+// step that needs it loads it (-I), so the other steps run as they always did, and no agent's home reads it.
+const resolveAllScriptName = "agentium-resolve-all.gradle"
+
+// resolveAllScript is an init script that adds resolveAllTask to every project: it resolves every resolvable
+// configuration, which downloads the artifacts into the read-only cache. Without it a build's other tasks fail offline
+// in the agent's sandbox (junit-pioneer: ":checkstyle ... No cached version of com.puppycrawl.tools:checkstyle ...").
 // A configuration that cannot be resolved here (one that needs attributes only its consumer sets, a failing
-// repository) is reported and skipped so it does not stop the others. It uses the project at execution time, so it
-// declares itself incompatible with the configuration cache where Gradle knows that call.
+// repository) is skipped so it does not stop the others, and listed with its reason in WarmSkippedFile at the
+// build's root (read by the run's setup). The configurations are taken at configuration time, not through
+// Task.project at execution time; the task still declares itself incompatible with the configuration cache, where
+// Gradle knows that call, since resolving at execution is not something it can store.
 const resolveAllScript = `allprojects {
+    def confs = project.configurations
+    def projectPath = project.path
+    def skipped = new File(rootProject.projectDir, "` + WarmSkippedFile + `")
     tasks.register("agentiumResolveAll") {
         if (it.respondsTo("notCompatibleWithConfigurationCache", String)) {
             it.notCompatibleWithConfigurationCache("resolves every configuration of the project")
         }
         doLast {
-            project.configurations.matching { it.canBeResolved }.all { conf ->
+            confs.matching { it.canBeResolved }.all { conf ->
                 try {
                     conf.resolve()
                 } catch (Exception e) {
-                    println "agentium: skipped ${project.path}:${conf.name}: ${e.message?.readLines()?.getAt(0)}"
+                    def reasons = []
+                    for (Throwable t = e; t != null && reasons.size() < 6; t = t.cause) {
+                        reasons << String.valueOf(t.message).replaceAll("\\s+", " ")
+                    }
+                    println "agentium: skipped ${projectPath}:${conf.name}"
+                    skipped << "${projectPath}:${conf.name}\t${reasons.join(' | ')}\n"
                 }
             }
         }
