@@ -20,16 +20,28 @@ func TestRunsFollowTheRepositorysBuildTool(t *testing.T) {
 		warmVar, warmWant, verifyWant string
 		calls                         int
 		binding                       bool
+		// extra are more files the base commit holds; absent are variable names the agent must not get.
+		extra, absent []string
+		// setupCache is where the task's setup builds Go ("" not checked): the agent's own cache when Go's agent side is
+		// on, so setup warms its builds, else the data folder's cache.
+		setupCache string
 	}{
 		{tool: "gradle", marker: "build.gradle", agent: []string{"GRADLE_USER_HOME=<ws>/go-build/gradle", "GRADLE_RO_DEP_CACHE=<deps>/gradle-ro"},
 			warmVar: "GRADLE_USER_HOME", warmWant: "<deps>/gradle", verifyWant: "<cache>/gradle", calls: 3, binding: true},
 		{tool: "mvn", marker: "pom.xml", agent: []string{"MAVEN_USER_HOME=<deps>/mvnw-home",
 			"MAVEN_ARGS=-o -Dmaven.repo.local=<ws>/go-build/m2 -Dmaven.repo.local.tail=<deps>/m2 -Dmaven.build.cache.enabled=false"},
 			warmVar: "MAVEN_ARGS", warmWant: "-Dmaven.repo.local=<deps>/m2", verifyWant: "-Dmaven.repo.local=<cache>/m2", calls: 1},
+		// Without a Go file in the base, the agent gets none of Go's variables.
 		{tool: "cargo", marker: "Cargo.toml", agent: []string{"CARGO_HOME=<deps>/cargo", "CARGO_NET_OFFLINE=true"},
-			warmVar: "CARGO_HOME", warmWant: "<deps>/cargo", verifyWant: "", calls: 1},
+			warmVar: "CARGO_HOME", warmWant: "<deps>/cargo", verifyWant: "", calls: 1, absent: []string{"GOCACHE", "GOFLAGS"},
+			setupCache: "<cache>/go-build"},
+		// A Go module in a subfolder (not a detected tool) keeps them: the run's own GOCACHE above all, without which go
+		// would fall back to the user's cache, which the sandbox denies.
+		{tool: "cargo", marker: "Cargo.toml", extra: []string{"tools/foo/go.mod"},
+			agent:   []string{"CARGO_HOME=<deps>/cargo", "GOCACHE=<ws>/go-build", "GOFLAGS=-buildvcs=false"},
+			warmVar: "CARGO_HOME", warmWant: "<deps>/cargo", verifyWant: "", calls: 1, setupCache: "<ws>/go-build"},
 	} {
-		t.Run(c.tool, func(t *testing.T) { // not parallel: PATH is the test process's own
+		t.Run(strings.Join(append([]string{c.tool}, c.extra...), "+"), func(t *testing.T) { // not parallel: PATH is the test process's own
 			f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 			bin, out := t.TempDir(), t.TempDir()
 			fake := "#!/bin/sh\necho \"$" + c.warmVar + " $*\" >> " + filepath.Join(out, "tool") + "\nmkdir -p \"$GRADLE_USER_HOME/wrapper/dists/d\" 2>/dev/null && touch \"$GRADLE_USER_HOME/wrapper/dists/d/ok\"\nexit 0\n"
@@ -41,10 +53,15 @@ func TestRunsFollowTheRepositorysBuildTool(t *testing.T) {
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			writeFile(t, f.repo, c.marker, "\n")
+			for _, extra := range c.extra {
+				writeFile(t, f.repo, extra, "module foo\n")
+			}
 			gitIn(t, f.repo, "add", "-A")
 			gitIn(t, f.repo, "commit", "-q", "-m", "build file")
 			verify := `printf '%s' "$GRADLE_USER_HOME $MAVEN_ARGS" > ` + filepath.Join(out, "verify") + `; sh run_tests.sh`
-			expect(t, f.run(context.Background(), "task", "add", "tool", "--base", "HEAD", "--instruction", "Anything.", "--verify", verify), ExitOK)
+			setup := `printf '%s' "$GOCACHE" > ` + filepath.Join(out, "setup")
+			expect(t, f.run(context.Background(), "task", "add", "tool", "--base", "HEAD", "--instruction", "Anything.", "--verify", verify,
+				"--setup", setup), ExitOK)
 			f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, `printf '%s\n' "$@" > `+filepath.Join(out, "args")+`
 env > `+filepath.Join(out, "env")+`
 cat "$GRADLE_USER_HOME/gradle.properties" > `+filepath.Join(out, "props")+` 2>/dev/null
@@ -90,6 +107,14 @@ true`, false)
 			for _, want := range c.agent {
 				if !strings.Contains(agentEnv, "\n"+fill(want)+"\n") {
 					t.Errorf("the agent's environment lacks %s", fill(want))
+				}
+			}
+			if got := readString(t, filepath.Join(out, "setup")); c.setupCache != "" && got != fill(c.setupCache) {
+				t.Errorf("setup built Go into %q, want %s", got, fill(c.setupCache))
+			}
+			for _, name := range c.absent {
+				if strings.Contains(agentEnv, "\n"+name+"=") {
+					t.Errorf("the agent's environment has %s", name)
 				}
 			}
 			if c.tool == "gradle" {

@@ -71,6 +71,9 @@ type Invocation struct {
 	// apply besides. They choose the environment allowlist, the agent's environment and caches, and the sandbox's
 	// local-binding setting.
 	Tools []string
+	// AgentTools names the always-on profiles whose agent side stays on though Tools lacks them (buildtool.AgentKept of
+	// the base commit: Go, with a go.mod, go.work or .go file anywhere). See buildtool.SelectRun.
+	AgentTools []string
 	// Deps is the folder of warmed dependencies (home.Layout.Deps for the project): the agent's offline builds read it,
 	// and the sandbox keeps it read-only. It lies outside every denied folder. Empty: none.
 	Deps string
@@ -313,7 +316,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	}
 	// The build tools' own variables (Go's GOFLAGS) replace any of the same name the allowlist kept, and come right
 	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
-	profiles := buildtool.Select(inv.Tools)
+	profiles := buildtool.SelectRun(inv.Tools, inv.AgentTools)
 	allowed := EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
 		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot})

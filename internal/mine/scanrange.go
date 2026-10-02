@@ -105,7 +105,7 @@ func scanRange(ctx context.Context, in RangeInput) (RangeResult, error) {
 			rej = &Rejection{Reason: ReasonDismissed, Detail: "a mined task of it was removed"}
 		}
 		if rej == nil {
-			if rej, err = inspect(ctx, root, &cand); err != nil {
+			if rej, err = inspect(ctx, root, &cand, opts); err != nil {
 				return RangeResult{}, err
 			}
 		}

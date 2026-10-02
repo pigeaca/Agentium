@@ -397,3 +397,39 @@ func TestDeniedPathsFailClosedOnAnUnreadableBuildConfig(t *testing.T) {
 		t.Error("an experiment's pre-lock check accepts it")
 	}
 }
+
+// A Python base with a Go module in a subfolder: Go is not among its tools (no `go test ./...` for mined tasks), but
+// its agent keeps Go's side, the run's GOCACHE above all, without which go falls back to the user's denied cache and
+// fails in the sandbox. A Python base without Go gets none of it.
+func TestNestedGoModuleKeepsGoForTheAgent(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name  string
+		files map[string]string
+		goOn  bool
+	}{
+		{"a Go module in a subfolder", map[string]string{"pyproject.toml": "[project]\nname = \"p\"\n", "tools/foo/go.mod": "module foo\n", "tools/foo/main.go": "package main\n"}, true},
+		{"no Go", map[string]string{"pyproject.toml": "[project]\nname = \"p\"\n", "p/__init__.py": "\n"}, false},
+	} {
+		bare, base := bareWith(t, c.files)
+		l, err := baseLayout(ctx, bare, base)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(l.tools, []string{"python"}) || slices.Contains(l.agentTools, "go") != c.goOn {
+			t.Errorf("%s: tools %q, agent tools %q", c.name, l.tools, l.agentTools)
+		}
+		inv := claude.Invocation{CLI: "/c", Dir: "/w/repo", Prompt: "p", Model: "m", Home: "/home/u", SignIn: claude.SignInLogin,
+			TempRoot: "/t/ag-1", UID: 1, Tools: l.tools, AgentTools: l.agentTools, BuildCache: "/w/go-build"}
+		_, env, err := inv.Command([]string{"PATH=/bin", "HOME=/home/u", "GOCACHE=/home/u/gocache"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := slices.Contains(env, "GOCACHE=/w/go-build"); got != c.goOn {
+			t.Errorf("%s: the run's GOCACHE %v, want %v: %q", c.name, got, c.goOn, env)
+		}
+		if slices.Contains(env, "GOCACHE=/home/u/gocache") {
+			t.Errorf("%s: the user's GOCACHE reached the agent", c.name)
+		}
+	}
+}

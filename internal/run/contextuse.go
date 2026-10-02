@@ -47,7 +47,8 @@ func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs
 	touched := relativeAll(m.FilePaths, dirs) // files the agent worked with, through any file tool
 	read := relativeAll(m.ReadPaths, dirs)
 	used := map[string]bool{}
-	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, m.Commands, dirs) }
+	// Only Bash commands that ran: a denied `cat AGENTS.md` read nothing (claude.Metrics.RanCommands).
+	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, m.RanCommands, dirs) }
 	for _, e := range resolved.Entries {
 		switch e.Kind {
 		case claudectx.KindInstructions, claudectx.KindImport, claudectx.KindRule:

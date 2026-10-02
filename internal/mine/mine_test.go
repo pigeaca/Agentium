@@ -579,3 +579,70 @@ func texts(parts []Part) []string {
 	}
 	return out
 }
+
+// With RequireLock, a Python commit whose base pins no dependencies is set aside: its warm-up would install today's
+// versions. A base with uv.lock, or with requirement files that pin every requirement (includes and hashes too), keeps
+// its candidates; a Go project's commits are never checked. Without it (the default: the user's decision 3) every base
+// is kept.
+func TestScanUnlockedPythonBases(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.commit("Start the project", map[string]string{"pyproject.toml": "[project]\nname = \"pkg\"\n", "src/pkg/__init__.py": "\n",
+		"src/pkg/a.py": lines("# a", 3), "tests/test_a.py": lines("# t", 3)})
+	unlocked := f.commit("Parse negative numbers in pkg.a\n\nThe parser now accepts a leading minus sign.",
+		map[string]string{"src/pkg/a.py": lines("# a", 20), "tests/test_a.py": lines("# t", 15)})
+	f.commit("Lock the dependencies", map[string]string{"uv.lock": "version = 1\n"})
+	locked := f.commit("Parse hex numbers in pkg.a\n\nThe parser now accepts a 0x prefix.",
+		map[string]string{"src/pkg/a.py": lines("# a", 40), "tests/test_a.py": lines("# t", 30)})
+	required := Options{RequireLock: true}
+
+	res, err := Scan(ctx, f.root, required)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hashes(res.Candidates); !slices.Equal(got, []string{locked}) {
+		t.Fatalf("candidates %v, want only the locked base's %s", got, locked)
+	}
+	found := false
+	for _, r := range res.Rejected {
+		if r.Hash == unlocked {
+			found = r.Reason == ReasonUnlocked && strings.Contains(r.Detail, "--require-lock")
+		}
+	}
+	if !found || res.Counts()[ReasonUnlocked] != 1 {
+		t.Fatalf("the unlocked base's commit is not rejected for its lock: %+v", res.Rejected)
+	}
+	res, err = Scan(ctx, f.root, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hashes(res.Candidates); !slices.Contains(got, unlocked) || !slices.Contains(got, locked) || res.Counts()[ReasonUnlocked] != 0 {
+		t.Fatalf("the default: candidates %v, counts %v", got, res.Counts())
+	}
+
+	// pip: pinned requirement files (one included from requirements/, with hashes) are a lock; one range is not.
+	f.commit("Drop uv for pip", map[string]string{"uv.lock": "", "requirements.txt": "-r requirements/test.txt\nattrs==23.1.0  # runtime\n",
+		"requirements/test.txt": "# tests\npytest==8.0.0 \\\n    --hash=sha256:abc\n"})
+	pinned := f.commit("Parse octal numbers in pkg.a\n\nThe parser now accepts a 0o prefix.",
+		map[string]string{"src/pkg/a.py": lines("# a", 60), "tests/test_a.py": lines("# t", 45)})
+	f.commit("Loosen the test requirements", map[string]string{"requirements/test.txt": "pytest>=8\n"})
+	ranged := f.commit("Parse binary numbers in pkg.a\n\nThe parser now accepts a 0b prefix.",
+		map[string]string{"src/pkg/a.py": lines("# a", 80), "tests/test_a.py": lines("# t", 60)})
+	res, err = Scan(ctx, f.root, required)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hashes(res.Candidates); !slices.Contains(got, pinned) || slices.Contains(got, ranged) {
+		t.Fatalf("pip bases: candidates %v (pinned %s, ranged %s)", got, pinned, ranged)
+	}
+
+	// Go: no Python profile at the base, nothing to check.
+	g, h := buildHistory(t)
+	res, err = Scan(ctx, g.root, required)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(hashes(res.Candidates), h.python) || res.Counts()[ReasonUnlocked] != 0 {
+		t.Fatalf("a Go project's Python commit was checked for a lock: %v", res.Counts())
+	}
+}

@@ -605,3 +605,48 @@ func TestMineScanNoteNamesTheRunner(t *testing.T) {
 		}
 	}
 }
+
+// A Python commit whose base pins no dependencies is mined by default (the user's decision 3); --require-lock sets it
+// aside with the reason, and start passes the flag on to mining and names it when it emptied the history.
+func TestTaskMineUnlockedPython(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	commit := func(message string, files map[string]string) string {
+		for p, body := range files {
+			writeFile(t, repo, p, body)
+		}
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", message)
+		return strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	}
+	commit("Start the package", map[string]string{"pyproject.toml": "[project]\nname = \"pkg\"\n", "pkg/__init__.py": "\n",
+		"pkg/core.py": "def base():\n    return 1\n", "tests/test_core.py": "from pkg.core import base\n", "Makefile": "test:\n\ttrue\n"})
+	hash := commit("Add double to pkg.core\n\nThe double function returns twice its argument, for the reports.",
+		map[string]string{"pkg/core.py": "def base():\n    return 1\n\n\ndef double(x):\n    return 2 * x\n",
+			"tests/test_core.py": "from pkg.core import base, double\n\n\ndef test_double():\n    assert double(2) == 4\n"})
+	run := cliIn(t, repo, filepath.Join(t.TempDir(), "data"))
+	expect(t, run("init"), ExitOK)
+	dry := run("task", "mine", "--dry-run")
+	expect(t, dry, ExitOK, "1 candidate(s)", "Add double to pkg.core")
+	if !strings.Contains(dry.stdout, experiment.ShortCommit(hash)) || strings.Contains(dry.stdout, "no lock file") {
+		t.Errorf("the default:\n%s", dry.stdout)
+	}
+	expect(t, run("task", "mine", "--dry-run", "--require-lock"), ExitOK, "0 candidate(s)", "no lock file")
+
+	// start passes the flag on: its mining finds nothing, and says the flag is why.
+	started := run("start", "--require-lock", "--accept-mined")
+	expect(t, started, ExitError, "Mining: no more candidates in 2 commit(s) read; --require-lock set aside 1 Python commit(s)")
+	// The flag parses on pool update and start: a later mistake is reported, not an unknown flag.
+	for _, args := range [][]string{{"pool", "update", "--dry-run", "--require-lock", "--limit", "0"}, {"start", "--require-lock", "extra"}} {
+		got := run(args...)
+		expect(t, got, ExitUsage)
+		if strings.Contains(got.stderr, "flag provided but not defined") {
+			t.Errorf("%q: %s", args, got.stderr)
+		}
+	}
+	expect(t, run("pool", "update", "--dry-run", "--require-lock", "--limit", "0"), ExitUsage, "--limit must be at least 1")
+	// pool update passes it on to mining too: the dry run's candidate is gone with the flag.
+	expect(t, run("pool", "update", "--dry-run"), ExitOK, "2 commit(s) since the last pass, 1 candidate(s)", "Add double to pkg.core")
+	expect(t, run("pool", "update", "--dry-run", "--require-lock"), ExitOK, "2 commit(s) since the last pass, 0 candidate(s)", "No candidates.")
+}

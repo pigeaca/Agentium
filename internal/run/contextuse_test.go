@@ -69,7 +69,7 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 			"/work/repo/docs/other.md",   // a document nothing links to
 			"/elsewhere/docs/testing.md", // another folder
 		},
-		Commands:      []string{"cat docs/other.md", "echo note >> .claude/rules/sql.md", "ls .claude/agents"},
+		RanCommands:   []string{"cat docs/other.md", "echo note >> .claude/rules/sql.md", "ls .claude/agents"},
 		SkillCalls:    []string{"review", "personal-skill", "ship", "review"},
 		SubagentTypes: []string{"Explore", "investigator", "my-personal-agent"},
 	}
@@ -91,9 +91,14 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 	}
 
 	// A rule's file read directly counts too; one whose patterns nothing matched does not.
-	direct := UseOf(resolved, project, claude.Metrics{Commands: []string{"sed -n 1,20p ./.claude/rules/sql.md"}})
+	read := []string{"sed -n 1,20p ./.claude/rules/sql.md"}
+	direct := UseOf(resolved, project, claude.Metrics{Commands: read, RanCommands: read})
 	if !reflect.DeepEqual(direct.Files, []string{".claude/rules/sql.md"}) {
 		t.Errorf("a rule read with sed: %v", direct.Files)
+	}
+	// The same command denied (in Commands, not in RanCommands) read nothing.
+	if denied := UseOf(resolved, project, claude.Metrics{Commands: read}); denied.Files != nil {
+		t.Errorf("a denied sed counted as reading: %v", denied.Files)
 	}
 	// Without any use, Start is still an empty list (not null) and nothing else is set.
 	none := UseOf(resolved, project, claude.Metrics{})
