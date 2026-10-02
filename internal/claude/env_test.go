@@ -2,6 +2,7 @@ package claude
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -24,13 +25,22 @@ func TestEnvironPinned(t *testing.T) {
 	base := []string{"PATH=/bin", "HOME=/h", "LC_ALL=C", "GOFLAGS=-mod=mod", "JAVA_HOME=/j", "RUSTC_WRAPPER=w", "HTTPS_PROXY=http://p",
 		"XDG_RUNTIME_DIR=/r", "NODE_OPTIONS=x", "TERM=xterm", "GOPATH=/g", "CARGO_HOME=/c", "SHELL=/bin/zsh", "TMPDIR=/tmp"}
 	withGo := append(slices.Clone(base), "CGO_ENABLED=0")
-	cargo := append(slices.Clone(base), "RUST_BACKTRACE=1", "RUSTUP_TOOLCHAIN=stable", "CGO_ENABLED=0") // in the order of environ
+	// A Cargo project without go.mod: no GO* or CGO_* names (Go's agent side is off where only another profile is detected).
+	var cargo []string
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "GO") {
+			cargo = append(cargo, kv)
+		}
+	}
+	cargo = append(cargo, "RUST_BACKTRACE=1", "RUSTUP_TOOLCHAIN=stable") // in the order of environ
+	goCargo := append(slices.Clone(base), "RUST_BACKTRACE=1", "RUSTUP_TOOLCHAIN=stable", "CGO_ENABLED=0")
 	for name, c := range map[string]struct {
 		got, want []string
 	}{
 		"Environ":     {Environ(pinnedEnviron()), withGo},
 		"no profiles": {EnvironFor(pinnedEnviron(), buildtool.Select(nil)), withGo},
 		"cargo":       {EnvironFor(pinnedEnviron(), buildtool.Select([]string{"cargo"})), cargo},
+		"go, cargo":   {EnvironFor(pinnedEnviron(), buildtool.Select([]string{"go", "cargo"})), goCargo},
 		"empty":       {Environ(nil), nil},
 	} {
 		if !slices.Equal(c.got, c.want) || (c.want == nil) != (c.got == nil) {

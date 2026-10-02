@@ -182,3 +182,49 @@ func TestDetected(t *testing.T) {
 		}
 	}
 }
+
+// Go's agent side (allowlisted GO* and CGO_* names, GOFLAGS, the run's GOCACHE) applies where go.mod is detected, or
+// where no profile is (an unknown layout keeps Go's settings, as before profiles); a project detected as something else
+// alone (Python) gets none of it. Go's caches for Agentium's own commands stay on for every project.
+func TestGoAgentSideOnlyWhereDetected(t *testing.T) {
+	ctx := AgentContext{Allowed: []string{"PATH=/bin"}, Home: "/nonexistent-home", Repo: "/repo"}
+	goVar := func(kv string) bool { return strings.HasPrefix(kv, "GOFLAGS=") || strings.HasPrefix(kv, "GOCACHE=") }
+	for _, c := range []struct {
+		name  string
+		tools []string
+		goOn  bool
+	}{
+		{"nothing detected", nil, true},
+		{"a Go module", []string{"go"}, true},
+		{"Go and Python", []string{"go", "python"}, true},
+		{"Python alone", []string{"python"}, false},
+		{"Cargo alone", []string{"cargo"}, false},
+	} {
+		selected := Select(c.tools)
+		if !slices.ContainsFunc(selected, func(p Profile) bool { return p.Name == "go" }) {
+			t.Errorf("%s: Go's profile is not selected", c.name)
+		}
+		agent := append(AgentEnv(selected, ctx), AgentCacheEnv(selected, "/run/cache")...)
+		names, prefixes := EnvAllowlist(selected)
+		on := []bool{slices.ContainsFunc(agent, goVar), slices.Contains(AgentCacheNames(selected), "GOCACHE"),
+			slices.Contains(names, "GOFLAGS"), slices.Contains(prefixes, "CGO_")}
+		for i, got := range on {
+			if got != c.goOn {
+				t.Errorf("%s: Go's agent side %d is %v, want %v (env %q)", c.name, i, got, c.goOn, agent)
+			}
+		}
+		if c.goOn && !slices.Contains(agent, "GOCACHE=/run/cache") {
+			t.Errorf("%s: the run's GOCACHE is missing: %q", c.name, agent)
+		}
+	}
+	if py := AgentEnv(Select([]string{"go", "python"}), ctx); !slices.Contains(py, "GOFLAGS=-buildvcs=false") ||
+		!slices.ContainsFunc(py, func(kv string) bool { return strings.HasPrefix(kv, "PYTHONPATH=") }) {
+		t.Errorf("a mixed project lost one side: %q", py)
+	}
+	if !slices.Contains(CommandEnv("/data/cache", "/data/tmp"), "GOCACHE=/data/cache/go-build") {
+		t.Errorf("Agentium's own commands lost Go's cache: %q", CommandEnv("/data/cache", "/data/tmp"))
+	}
+	if WarmVersion(Select([]string{"python"})) != WarmVersion([]Profile{goProfile(), pythonProfile()}) {
+		t.Errorf("the implicit mark changed the warm-up version, which would re-warm every Python base")
+	}
+}
