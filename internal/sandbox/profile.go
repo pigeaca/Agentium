@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,7 +28,10 @@ const Version = "sandbox-v1"
 //   - reads: everything except the data folder, Denied and the credential stores, each in every form (Forms); then the
 //     writable folders and Deps are readable again, and whatever denied path lies inside them is denied again
 //     (Deps' private folders among them: buildtool.DepsDenied);
-//   - writes: only Copy, Cache, Temp and the null and standard-output devices.
+//   - writes: only Copy, Cache, Temp, /dev/null, and the file descriptors the grade already holds open for writing
+//     (/dev/fd/<n>: its standard output and error, which /dev/stdout and /dev/stderr resolve to);
+//   - POSIX IPC: semaphores only under Python multiprocessing's prefix (semaphorePrefix); no shared memory, except
+//     reading the system's notification state (notifyMemory).
 //
 // Every deny, the default and the explicit ones, carries Tag as its message, so each denial the kernel logs names the
 // grade (LogPredicate).
@@ -56,11 +60,17 @@ type Profile struct {
 	// Empty: none.
 	Deps string
 	// Loopback lets the grade bind, accept and connect on localhost (any port), which Gradle and tests that start a
-	// local server need. Known limit (the isolation plan's step 0): the bind and inbound rules for localhost also let a
-	// process listen on the wildcard address (0.0.0.0 or ::), where a connection to the machine's network address is
-	// accepted; no narrower seatbelt rule exists. Outbound connections stay limited to localhost, so a hostile build
-	// can serve but not reach the network; the firewall and NAT are the guard. Claude Code's allowLocalBinding allows
-	// the same and more.
+	// local server need. Known limit: seatbelt's "localhost" in these rules is every address of this machine, not only
+	// loopback, and no narrower rule exists (the isolation plan's step 0 tried the alternatives). So a process can
+	// listen on the wildcard address or the machine's network address and accept connections from the network, and
+	// can connect to any service listening on any of the machine's addresses. Outbound connections to other hosts stay
+	// refused: a hostile build can serve the network but not reach it directly; the firewall and NAT are the guard.
+	// Claude Code's allowLocalBinding allows the same and more.
+	//
+	// That reaches every service listening on this machine, not only the grade's own: a database, a dev server, other
+	// grades running at the same time, and, where they run, a local HTTP or SOCKS proxy (which is internet access), a
+	// browser's remote debugging port, or Docker's TCP socket. Unix sockets (Docker's default, the ssh agent's) stay
+	// denied.
 	Loopback bool
 }
 
@@ -118,9 +128,33 @@ func ioctlDevices() []string {
 	return []string{"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/dtracehelper"}
 }
 
-// writableDevices are the devices a grade may write besides its folders (not /dev/tty, as above).
+// writableDevices are the devices a grade may write besides its folders (not /dev/tty, as above). /dev/stdout and
+// /dev/stderr are not listed: the sandbox matches the path they resolve to, /dev/fd/<n>, which fdRule allows.
 func writableDevices() []string {
-	return []string{"/dev/null", "/dev/stdout", "/dev/stderr"}
+	return []string{"/dev/null"}
+}
+
+// fdRule lets the grade write through /dev/fd/<n> (what /dev/stdout, /dev/stderr and `tee /dev/stderr` open): the
+// kernel reopens a descriptor the process already holds, and refuses to open one held read-only for writing, so this
+// reaches no file the grade could not write already. A build's `>/dev/stderr` would fail the grade without it.
+const fdRule = `(allow file-write-data (regex #"^/dev/fd/[0-9]+$"))` + "\n"
+
+// semaphorePrefix is the only name prefix of POSIX semaphores a grade may use: Python multiprocessing's (its locks,
+// queues and pools; the names are /mp-<random>). Named POSIX shared memory is denied: an object outlives the grade and
+// any later process can open it by name (an agent's sandbox allows that), so a hostile build could leave the hidden
+// tests there. No step 0 fixture needs it (Python's shared_memory module does: /psm_<random>, refused). Semaphores
+// under the prefix stay a narrow channel (names and counts, which a later process must guess): a known limit.
+const semaphorePrefix = "/mp-"
+
+// notifyMemory is the shared memory notifyd publishes its state in, which every process's notification calls read
+// (one denial per process otherwise). notifyd creates it; the grade may only read it, so it carries nothing out.
+const notifyMemory = "apple.shm.notification_center"
+
+// systemFolders are folders no writable folder may be or hold (defense in depth: the other checks cover the home
+// folder, the data folder, the deps and the credential stores).
+func systemFolders() []string {
+	return []string{"/tmp", "/private/tmp", "/private", "/var", "/private/var", "/etc", "/usr", "/bin", "/sbin", "/opt",
+		"/Library", "/System", "/Applications", "/Users"}
 }
 
 // header is the fixed part of every profile, after the default deny.
@@ -132,8 +166,6 @@ const header = `
 (allow signal (target same-sandbox))
 (allow mach-priv-task-port (target same-sandbox))
 (allow user-preference-read)
-(allow ipc-posix-shm)
-(allow ipc-posix-sem)
 (allow iokit-get-properties)
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
 `
@@ -149,6 +181,10 @@ func (p Profile) Render() (string, error) {
 	fmt.Fprintf(&b, "; Agentium grading sandbox %s: deny by default; each denial is logged with this grade's tag.\n", Version)
 	b.WriteString("(deny default (with message " + quote(p.Tag) + "))\n")
 	b.WriteString(header)
+	b.WriteString("\n; POSIX IPC: semaphores under Python multiprocessing's prefix only; no shared memory but the system's\n" +
+		"; notification state, read-only.\n" +
+		"(allow ipc-posix-sem (ipc-posix-name-prefix " + quote(semaphorePrefix) + "))\n" +
+		"(allow ipc-posix-shm-read-data (ipc-posix-name " + quote(notifyMemory) + "))\n")
 
 	b.WriteString("\n; Mach services: no security server (the keychain), launch services, fonts, audio or power.\n(allow mach-lookup")
 	for _, name := range machServices() {
@@ -168,8 +204,8 @@ func (p Profile) Render() (string, error) {
 	b.WriteString("(allow file-ioctl file-read-data file-write-data (require-all (literal \"/dev/null\") (vnode-type CHARACTER-DEVICE)))\n")
 
 	if p.Loopback {
-		b.WriteString("\n; Network: loopback only. The bind and inbound rules also let a process listen on the wildcard address\n" +
-			"; (Profile.Loopback); outbound connections reach only localhost.\n" +
+		b.WriteString("\n; Network: this machine only. \"localhost\" matches every address of the machine, so a process can also\n" +
+			"; listen on its network address (Profile.Loopback); outbound connections reach no other host.\n" +
 			"(allow network-bind (local ip \"localhost:*\"))\n" +
 			"(allow network-inbound (local ip \"localhost:*\"))\n" +
 			"(allow network-outbound (remote ip \"localhost:*\"))\n")
@@ -190,6 +226,7 @@ func (p Profile) Render() (string, error) {
 	b.WriteString("\n; Writes: the grading copy, the grade's cache and temp root, and the output devices only.\n")
 	rule(&b, "allow file-write*", "subpath", writable)
 	rule(&b, "allow file-write*", "literal", writableDevices())
+	b.WriteString(fdRule)
 	tagged(&b, "deny file-write*", "subpath", inside(denied, writable), p.Tag)
 	return b.String(), nil
 }
@@ -294,8 +331,8 @@ func within(p, root string) bool {
 
 // check refuses a profile that would not hold: a bad tag; a relative, empty or unprintable path (a moved credential
 // store's among them); a writable folder
-// that holds the home folder, the data folder, Deps or a credential store, or lies inside Deps or a credential store
-// (the build could write them); Deps inside a writable folder. Everything is compared in every form.
+// that is or holds the home folder, the data folder, Deps, a credential store or a system folder (systemFolders), or
+// lies inside Deps or a credential store (the build could write them); an empty denied path. Everything is compared in every form.
 func (p Profile) check() error {
 	if !tagPattern.MatchString(p.Tag) {
 		return fmt.Errorf("sandbox tag %q: want letters, digits, dots, dashes and underscores, up to 64", p.Tag)
@@ -309,6 +346,11 @@ func (p Profile) check() error {
 	// The moved credential stores come from the environment: one that cannot be written into a profile refuses it,
 	// rather than leaving the store readable.
 	all := append([]string{p.Home, p.AccountHome, p.Data, p.Copy, p.Cache, p.Temp, p.Deps}, p.Denied...)
+	for _, path := range p.Denied {
+		if path == "" {
+			return errors.New("an empty sandbox denied path") // it would render as the current folder, denying nothing
+		}
+	}
 	for _, path := range append(all, MovedCredentials(p.Environ, p.Home)...) {
 		if path == "" {
 			continue
@@ -320,7 +362,7 @@ func (p Profile) check() error {
 			return fmt.Errorf("sandbox path %q holds a control character", path)
 		}
 	}
-	guarded := WithForms(append(nonEmpty(p.Home, p.AccountHome, p.Data, p.Deps), p.credentials()...))
+	guarded := WithForms(append(append(nonEmpty(p.Home, p.AccountHome, p.Data, p.Deps), p.credentials()...), systemFolders()...))
 	stores := WithForms(append(nonEmpty(p.Deps), p.credentials()...))
 	for _, root := range p.writable() {
 		for _, g := range guarded {

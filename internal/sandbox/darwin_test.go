@@ -3,8 +3,11 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
@@ -46,6 +49,7 @@ type grade struct {
 	dir     string
 	profile Profile
 	file    string
+	digest  string
 }
 
 func newGrade(t *testing.T, change func(*Profile)) grade {
@@ -61,10 +65,11 @@ func newGrade(t *testing.T, change func(*Profile)) grade {
 	}
 	p.Tag = tag
 	file := filepath.Join(dir, "data", "records", "r1", "sandbox.sb")
-	if _, err := p.WriteFile(file); err != nil {
+	digest, err := p.WriteFile(file)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return grade{t: t, dir: dir, profile: p, file: file}
+	return grade{t: t, dir: dir, profile: p, file: file, digest: digest}
 }
 
 // run runs args under the profile, from the grading copy, and returns the exit code and output.
@@ -98,7 +103,7 @@ func (g grade) path(name string) string { return filepath.Join(g.dir, name) }
 func TestSandboxAllowsTheGradesWork(t *testing.T) {
 	needSandbox(t)
 	g := newGrade(t, nil)
-	if err := Canary(context.Background(), g.file, g.profile); err != nil {
+	if err := Canary(context.Background(), g.file, g.digest, g.profile); err != nil {
 		t.Fatalf("the canary: %v", err)
 	}
 	for _, command := range []string{
@@ -110,6 +115,8 @@ func TestSandboxAllowsTheGradesWork(t *testing.T) {
 		"ls /usr/bin >/dev/null && cat /etc/hosts >/dev/null && echo x >/dev/null",
 		"cat " + strconv.Quote(g.path("home/.local/share/uv/python/ok")),
 		"id -un >/dev/null && uname -a >/dev/null && pwd",
+		"echo out > /dev/stdout && echo err > /dev/stderr && echo tee | tee /dev/stderr /dev/stdout >/dev/null",
+		"echo fd >&2 && echo fd > /dev/fd/1",
 	} {
 		if code, out := g.sh(command); code != 0 {
 			t.Errorf("%s: exit %d: %s", command, code, out)
@@ -138,7 +145,7 @@ func TestSandboxDeniesAHostileBuild(t *testing.T) {
 	if err := os.Symlink(other, filepath.Join(g.profile.Copy, "to-tmp")); err != nil {
 		t.Fatal(err)
 	}
-	unreadable := []string{"data/records/r1/transcript.jsonl", "data/records/r2/verify/hidden_test.x", "data/workspaces/r2/repo/f",
+	unreadable := []string{"data/cache/grading/r1/private/entry", "data/records/r1/transcript.jsonl", "data/records/r2/verify/hidden_test.x", "data/workspaces/r2/repo/f",
 		"data/cache/shared/entry", "data/agentium.db", "data/deps/1/gradle/caches/x.bin", "repo/solution.txt",
 		"home/.ssh/id_test", "home/.aws/credentials", "home/.config/gh/hosts.yml", "home/.config/pip/pip.conf", "home/.netrc",
 		"home/Library/Keychains/k"}
@@ -158,22 +165,25 @@ func TestSandboxDeniesAHostileBuild(t *testing.T) {
 		}
 	}
 	writes := map[string]string{
-		"the deps":                    "echo x >> " + strconv.Quote(g.path("data/deps/1/mod/lib.txt")),
-		"a new file in the deps":      "touch " + strconv.Quote(g.path("data/deps/1/mod/new")),
-		"the shared cache":            "echo x >> " + strconv.Quote(g.path("data/cache/shared/entry")),
-		"the data folder":             "touch " + strconv.Quote(g.path("data/planted")),
-		"its own records":             "echo x >> " + strconv.Quote(g.path("data/records/r1/transcript.jsonl")),
-		"the profile file":            "echo '(allow default)' >> " + strconv.Quote(g.file),
-		"the user's repository":       "touch " + strconv.Quote(g.path("repo/planted")),
-		"the home folder":             "touch " + strconv.Quote(g.path("home/planted")),
-		"another /tmp entry":          "touch " + strconv.Quote(filepath.Join(other, "planted")),
-		"the user's temp folder":      "touch \"$(getconf DARWIN_USER_TEMP_DIR)/agentium-sandbox-planted\"",
-		"the deps through a link":     "echo x >> to-deps/mod/lib.txt",
-		"the deps' folder via a link": "touch to-deps/mod/planted",
-		"the cache through a link":    "echo x >> to-shared/entry",
-		"the data through a link":     "touch to-data/planted",
-		"/tmp through a link":         "touch to-tmp/planted",
-		"the deps by a hard link":     "ln " + strconv.Quote(g.path("data/deps/1/mod/lib.txt")) + " hard && echo x >> hard",
+		"the deps":                     "echo x >> " + strconv.Quote(g.path("data/deps/1/mod/lib.txt")),
+		"a new file in the deps":       "touch " + strconv.Quote(g.path("data/deps/1/mod/new")),
+		"the shared cache":             "echo x >> " + strconv.Quote(g.path("data/cache/shared/entry")),
+		"the data folder":              "touch " + strconv.Quote(g.path("data/planted")),
+		"its own records":              "echo x >> " + strconv.Quote(g.path("data/records/r1/transcript.jsonl")),
+		"the profile file":             "echo '(allow default)' >> " + strconv.Quote(g.file),
+		"the user's repository":        "touch " + strconv.Quote(g.path("repo/planted")),
+		"the home folder":              "touch " + strconv.Quote(g.path("home/planted")),
+		"another /tmp entry":           "touch " + strconv.Quote(filepath.Join(other, "planted")),
+		"the user's temp folder":       "touch \"$(getconf DARWIN_USER_TEMP_DIR)/agentium-sandbox-planted\"",
+		"the deps through a link":      "echo x >> to-deps/mod/lib.txt",
+		"the deps' folder via a link":  "touch to-deps/mod/planted",
+		"the cache through a link":     "echo x >> to-shared/entry",
+		"the data through a link":      "touch to-data/planted",
+		"/tmp through a link":          "touch to-tmp/planted",
+		"the deps by a hard link":      "ln " + strconv.Quote(g.path("data/deps/1/mod/lib.txt")) + " hard && echo x >> hard",
+		"a denied path in its cache":   "echo x >> " + strconv.Quote(g.path("data/cache/grading/r1/private/entry")),
+		"a denied folder in its cache": "touch " + strconv.Quote(g.path("data/cache/grading/r1/private/new")),
+		"a read-only descriptor":       "exec 3<" + strconv.Quote(g.path("data/deps/1/mod/lib.txt")) + " && echo x > /dev/fd/3",
 	}
 	for what, command := range writes {
 		if code, _ := g.sh(command); code == 0 {
@@ -183,7 +193,10 @@ func TestSandboxDeniesAHostileBuild(t *testing.T) {
 	if data, err := os.ReadFile(g.path("data/deps/1/mod/lib.txt")); err != nil || string(data) != "dependency" {
 		t.Errorf("the deps changed: %q %v", data, err)
 	}
-	for _, p := range []string{g.path("data/planted"), g.path("data/deps/1/mod/new"), g.path("data/deps/1/mod/planted"),
+	if data, err := os.ReadFile(g.path("data/cache/grading/r1/private/entry")); err != nil || string(data) != "denied in the cache" {
+		t.Errorf("the denied path in the cache changed: %q %v", data, err)
+	}
+	for _, p := range []string{g.path("data/cache/grading/r1/private/new"), g.path("data/planted"), g.path("data/deps/1/mod/new"), g.path("data/deps/1/mod/planted"),
 		g.path("repo/planted"), g.path("home/planted"), filepath.Join(other, "planted")} {
 		if _, err := os.Lstat(p); err == nil {
 			t.Errorf("%s was written", p)
@@ -204,7 +217,7 @@ func TestSandboxDeniesAHostileBuild(t *testing.T) {
 
 // No network beyond loopback: a TCP connection to an outside address (TEST-NET-1 and -2, which route nowhere) is refused by
 // the sandbox at once, with Loopback a server on localhost works, and
-// without it even that is denied. The wildcard-bind limit (Profile.Loopback) is not tested: it is a known gap.
+// without it even that is denied.
 func TestSandboxNetwork(t *testing.T) {
 	needSandbox(t)
 	bin, err := os.Executable()
@@ -229,6 +242,22 @@ func TestSandboxNetwork(t *testing.T) {
 			t.Errorf("with loopback, a server on %s: exit %d: %s", addr, code, out)
 		}
 	}
+	// The known gap (Profile.Loopback): seatbelt's "localhost" is every address of this machine, so with loopback the
+	// grade can listen on (and accept from the network at) the machine's network address and the wildcard address, and
+	// connect to its own network address. It is logged, not asserted, so a change in macOS shows; other hosts stay
+	// refused (above).
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if ip, ok := a.(*net.IPNet); ok && !ip.IP.IsLoopback() && ip.IP.To4() != nil {
+				addr := net.JoinHostPort(ip.IP.String(), "0")
+				code, _ := probe(open, "serve", addr)
+				t.Logf("known gap: listening on and connecting to this machine's address %s: allowed %v", ip.IP, code == 0)
+				break
+			}
+		}
+	}
+	code, _ := probe(open, "listen", "0.0.0.0:0")
+	t.Logf("known gap: listening on the wildcard address: allowed %v", code == 0)
 	closed := newGrade(t, func(p *Profile) { p.Loopback = false })
 	for _, addr := range []string{"127.0.0.1:0", "[::1]:0"} {
 		if code, _ := probe(closed, "serve", addr); code == 0 {
@@ -300,25 +329,34 @@ func TestSandboxDeniesTheKeychain(t *testing.T) {
 }
 
 // The canary turns a sandbox that does not hold into ErrUnavailable, never a pass: a missing profile file, one the
-// system refuses, and one that allows everything (no deny reaches the data folder).
+// system refuses, one that allows everything (no deny reaches the data folder), ones that deny too much or too little,
+// and the right profile file changed after it was written (its digest no longer matches).
 func TestCanaryRefusesASandboxThatDoesNotHold(t *testing.T) {
 	needSandbox(t)
 	g := newGrade(t, nil)
-	write := func(name, text string) string {
+	write := func(name, text string) (string, string) {
 		path := g.path(name)
 		if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		return path
+		sum := sha256.Sum256([]byte(text))
+		return path, hex.EncodeToString(sum[:])
 	}
-	for name, file := range map[string]string{
-		"a missing file":     g.path("missing.sb"),
-		"a broken profile":   write("broken.sb", "(version 1)\n(allow nothing-at-all\n"),
-		"allow everything":   write("open.sb", "(version 1)\n(allow default)\n"),
-		"no write to temp":   write("nowrite.sb", "(version 1)\n(allow default)\n(deny file-write*)\n"),
-		"reads but no write": write("readable.sb", "(version 1)\n(allow default)\n(deny file-write* (subpath "+quote(g.profile.Data)+"))\n"),
+	type file struct{ path, digest string }
+	cases := map[string]file{"a missing file": {g.path("missing.sb"), g.digest}}
+	for name, text := range map[string]string{
+		"a broken profile":   "(version 1)\n(allow nothing-at-all\n",
+		"allow everything":   "(version 1)\n(allow default)\n",
+		"no write to temp":   "(version 1)\n(allow default)\n(deny file-write*)\n",
+		"reads but no write": "(version 1)\n(allow default)\n(deny file-write* (subpath " + quote(g.profile.Data) + "))\n",
 	} {
-		err := Canary(context.Background(), file, g.profile)
+		path, digest := write(strings.ReplaceAll(name, " ", "-")+".sb", text)
+		cases[name] = file{path, digest}
+	}
+	changed, _ := write("changed.sb", "(version 1)\n(allow default)\n")
+	cases["a changed file"] = file{changed, g.digest}
+	for name, f := range cases {
+		err := Canary(context.Background(), f.path, f.digest, g.profile)
 		if !errors.Is(err, ErrUnavailable) {
 			t.Errorf("%s: the canary returns %v, want ErrUnavailable", name, err)
 		}
@@ -328,10 +366,45 @@ func TestCanaryRefusesASandboxThatDoesNotHold(t *testing.T) {
 			t.Errorf("the canary left %s", p)
 		}
 	}
+	if err := CheckFile(g.file, g.digest); err != nil {
+		t.Errorf("the profile file as written: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := Canary(ctx, g.file, g.profile); !errors.Is(err, context.Canceled) {
+	if err := Canary(ctx, g.file, g.digest, g.profile); !errors.Is(err, context.Canceled) {
 		t.Errorf("a cancelled canary returns %v", err)
+	}
+}
+
+// POSIX IPC: Python multiprocessing's semaphores (/mp-<random>) work; any other semaphore name and every shared
+// memory object are refused, so a hostile build cannot leave the hidden tests in an object that outlives the grade.
+// The same probes succeed outside the sandbox.
+func TestSandboxLimitsPOSIXIPC(t *testing.T) {
+	needSandbox(t)
+	bin, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := newGrade(t, nil)
+	id := strconv.Itoa(os.Getpid())
+	for _, c := range []struct {
+		kind, name string
+		allowed    bool
+	}{
+		{"sem", "/mp-ag" + id, true},
+		{"sem", "/ag-leak" + id, false},
+		{"sem", "/psm_ag" + id, false},
+		{"shm", "/ag-leak" + id, false},
+		{"shm", "/psm_ag" + id, false},
+		{"shm", "/mp-ag" + id, false},
+	} {
+		if err := ipcProbe(c.kind, c.name); err != nil {
+			t.Fatalf("outside the sandbox, %s %s: %v", c.kind, c.name, err)
+		}
+		code, out := g.run([]string{"PATH=/usr/bin:/bin", helperVar + "=" + c.kind}, bin, c.name)
+		if allowed := code == 0; allowed != c.allowed {
+			t.Errorf("%s %s: allowed %v, want %v (%s)", c.kind, c.name, allowed, c.allowed, out)
+		}
 	}
 }
 

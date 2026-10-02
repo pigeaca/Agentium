@@ -20,11 +20,15 @@ func CredentialFiles() []string {
 }
 
 // graderCredentialFiles are credential stores grading profiles deny beyond CredentialFiles (relative to the home
-// folder): pip's configuration (which can hold an index URL with a token) and uv's credentials. uv's interpreters
-// (~/.local/share/uv/python) stay readable. Agent runs do not list them yet: adding them changes every run's settings
-// (a security change to the run goldens), a follow-up.
+// folder): pip's configuration (which can hold an index URL with a token) and uv's credentials; Maven's settings and
+// its master password, Gradle's gradle.properties and Cargo's registry tokens (each also inside a folder agents are
+// denied as the user's caches, buildtool.UserCaches, when the caller passes those). The grader's offline recipe reads
+// none of them: Maven runs offline from the deps' repository, and Gradle and Cargo use homes of their own. uv's
+// interpreters (~/.local/share/uv/python) stay readable. Agent runs do not list pip's and uv's yet: adding them
+// changes every run's settings (a security change to the run goldens), a follow-up.
 func graderCredentialFiles() []string {
-	return []string{".config/pip", "Library/Application Support/pip", ".config/uv", ".local/share/uv/credentials"}
+	return []string{".config/pip", "Library/Application Support/pip", ".config/uv", ".local/share/uv/credentials",
+		".m2/settings.xml", ".m2/settings-security.xml", ".gradle/gradle.properties", ".cargo/credentials", ".cargo/credentials.toml"}
 }
 
 // MachineCredentials are the machine's credential stores every sandbox denies: the System keychain's folder, which

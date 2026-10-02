@@ -9,10 +9,13 @@
 (allow signal (target same-sandbox))
 (allow mach-priv-task-port (target same-sandbox))
 (allow user-preference-read)
-(allow ipc-posix-shm)
-(allow ipc-posix-sem)
 (allow iokit-get-properties)
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
+
+; POSIX IPC: semaphores under Python multiprocessing's prefix only; no shared memory but the system's
+; notification state, read-only.
+(allow ipc-posix-sem (ipc-posix-name-prefix "/mp-"))
+(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))
 
 ; Mach services: no security server (the keychain), launch services, fonts, audio or power.
 (allow mach-lookup
@@ -93,8 +96,8 @@
   (literal "/dev/dtracehelper"))
 (allow file-ioctl file-read-data file-write-data (require-all (literal "/dev/null") (vnode-type CHARACTER-DEVICE)))
 
-; Network: loopback only. The bind and inbound rules also let a process listen on the wildcard address
-; (Profile.Loopback); outbound connections reach only localhost.
+; Network: this machine only. "localhost" matches every address of the machine, so a process can also
+; listen on its network address (Profile.Loopback); outbound connections reach no other host.
 (allow network-bind (local ip "localhost:*"))
 (allow network-inbound (local ip "localhost:*"))
 (allow network-outbound (remote ip "localhost:*"))
@@ -128,6 +131,11 @@
   (subpath "/golden/home/Library/Application Support/pip")
   (subpath "/golden/home/.config/uv")
   (subpath "/golden/home/.local/share/uv/credentials")
+  (subpath "/golden/home/.m2/settings.xml")
+  (subpath "/golden/home/.m2/settings-security.xml")
+  (subpath "/golden/home/.gradle/gradle.properties")
+  (subpath "/golden/home/.cargo/credentials")
+  (subpath "/golden/home/.cargo/credentials.toml")
   (subpath "/golden/data/deps/1/gradle")
   (subpath "/golden/data/deps/1/build-cache")
   (subpath "/golden/data/deps/1/uv-cache")
@@ -160,6 +168,5 @@
   (subpath "/golden/data/cache/grading/r1")
   (subpath "/golden/t/ag-0123456789"))
 (allow file-write*
-  (literal "/dev/null")
-  (literal "/dev/stdout")
-  (literal "/dev/stderr"))
+  (literal "/dev/null"))
+(allow file-write-data (regex #"^/dev/fd/[0-9]+$"))

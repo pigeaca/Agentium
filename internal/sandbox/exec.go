@@ -3,6 +3,8 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -23,7 +25,7 @@ const Exec = "/usr/bin/sandbox-exec"
 var ErrUnavailable = errors.New("the grading sandbox is unavailable")
 
 // Wrap returns spec run under the profile in profileFile (an absolute path, written by Profile.WriteFile):
-// `sandbox-exec -f <profileFile> /bin/sh -c <Command>`, or sandbox-exec followed by Args. Everything else is kept:
+// `sandbox-exec -f <profileFile> -- /bin/sh -c <Command>`, or sandbox-exec and -- followed by Args. Everything else is kept:
 // sandbox-exec applies the profile and then executes the command in its own process, so the process ID (Started) and
 // its process group are the command's, and runner stops the group as before. Its exit code passes through, except
 // that sandbox-exec itself exits 65 when it cannot apply the profile, which a command can also return: the canary
@@ -39,7 +41,7 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 		}
 		argv = []string{"/bin/sh", "-c", spec.Command}
 	}
-	spec.Args = append([]string{Exec, "-f", profileFile}, argv...)
+	spec.Args = append([]string{Exec, "-f", profileFile, "--"}, argv...)
 	spec.Command = ""
 	return spec, nil
 }
@@ -47,14 +49,32 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 // canaryTimeout bounds each canary probe: they start a few small system tools.
 const canaryTimeout = 30 * time.Second
 
-// Canary checks, before a grade's commands, that profileFile (p's profile, as WriteFile wrote it) really sandboxes:
-// under it /usr/bin/true succeeds, the temp root can be written, the data folder cannot be listed and cannot be
+// CheckFile reports whether profileFile still holds the profile WriteFile wrote, whose SHA-256 was digest: sandbox-exec
+// reads the file again for each command, so a grade checks it before each one (nothing sandboxed can write it, but
+// nothing else should either). A changed or unreadable file wraps ErrUnavailable.
+func CheckFile(profileFile, digest string) error {
+	data, err := os.ReadFile(profileFile)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != digest {
+		return fmt.Errorf("%w: the profile file %s changed since it was written", ErrUnavailable, profileFile)
+	}
+	return nil
+}
+
+// Canary checks, before a grade's commands, that profileFile (p's profile, as WriteFile wrote it, with the SHA-256
+// digest WriteFile returned) is unchanged (CheckFile) and really sandboxes: under it /usr/bin/true succeeds, the temp root can be written, the data folder cannot be listed and cannot be
 // written. The data folder is listed outside the sandbox first, so a denial is told from a missing folder. A failed
 // probe returns an error wrapping ErrUnavailable; cancellation returns ctx's error. Probes run with a minimal
 // environment and their output is kept only for the error message.
-func Canary(ctx context.Context, profileFile string, p Profile) error {
+func Canary(ctx context.Context, profileFile, digest string, p Profile) error {
 	if _, err := os.Stat(Exec); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	if err := CheckFile(profileFile, digest); err != nil {
+		return err
 	}
 	if _, err := os.ReadDir(p.Data); err != nil {
 		return fmt.Errorf("%w: the canary's denied folder: %v", ErrUnavailable, err)

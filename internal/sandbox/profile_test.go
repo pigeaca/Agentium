@@ -68,13 +68,18 @@ func TestProfileRules(t *testing.T) {
 		"(deny file-read*\n  (subpath \"/golden/data/deps/1/gradle\")",
 		`(subpath "/golden/home/Library/Keychains")`, `(subpath "/golden/account/Library/Keychains")`,
 		`(subpath "/Library/Keychains")`, `(subpath "/golden/home/.config/pip")`, `(subpath "/golden/xdg/gh")`,
+		`(subpath "/golden/home/.m2/settings.xml")`, `(subpath "/golden/home/.gradle/gradle.properties")`,
+		`(subpath "/golden/home/.cargo/credentials.toml")`,
+		`(allow file-write-data (regex #"^/dev/fd/[0-9]+$"))`, `(allow ipc-posix-sem (ipc-posix-name-prefix "/mp-"))`,
+		`(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the profile lacks %s", want)
 		}
 	}
 	for _, banned := range []string{"SecurityServer", "securityd", "(allow default", "(allow network*", `"*:*"`, "/dev/tty",
-		"(allow file-write* (subpath \"/golden/data\")", "launchservicesd"} {
+		"(allow file-write* (subpath \"/golden/data\")", "launchservicesd", "(allow ipc-posix-shm)", "(allow ipc-posix-shm ", "(allow ipc-posix-sem)",
+		`"/dev/stdout"`, `"/dev/stderr"`} {
 		if strings.Contains(text, banned) {
 			t.Errorf("the profile holds %s", banned)
 		}
@@ -91,8 +96,9 @@ func TestProfileRules(t *testing.T) {
 }
 
 // A profile that would not hold is refused before anything is written: a bad tag, a missing or relative folder, a
-// path with a control character, or a writable folder over the home folder, the data folder, the deps or a credential
-// store, or inside the deps or a credential store.
+// path with a control character, an empty denied path (it would render as the current folder), or a writable folder
+// that is or holds the home folder, the data folder, the deps, a credential store or a system folder, or lies inside
+// the deps or a credential store.
 func TestProfileRefusesWhatWouldNotHold(t *testing.T) {
 	for name, change := range map[string]func(*Profile){
 		"no tag":                      func(p *Profile) { p.Tag = "" },
@@ -115,6 +121,13 @@ func TestProfileRefusesWhatWouldNotHold(t *testing.T) {
 		"a copy over the keychains":   func(p *Profile) { p.Copy = "/golden/home/Library" },
 		"a cache over moved gh":       func(p *Profile) { p.Cache = "/golden/xdg" },
 		"the root as the temp folder": func(p *Profile) { p.Temp = "/" },
+		"an empty denied path":        func(p *Profile) { p.Denied = append(p.Denied, "") },
+		"/tmp as the temp root":       func(p *Profile) { p.Temp = "/tmp" },
+		"/private/tmp as the temp":    func(p *Profile) { p.Temp = "/private/tmp" },
+		"/private as the cache":       func(p *Profile) { p.Cache = "/private" },
+		"/usr as the copy":            func(p *Profile) { p.Copy = "/usr" },
+		"/Library as the cache":       func(p *Profile) { p.Cache = "/Library" },
+		"/System as the cache":        func(p *Profile) { p.Cache = "/System" },
 	} {
 		p := goldenProfile()
 		change(&p)
@@ -166,8 +179,8 @@ func TestWriteFile(t *testing.T) {
 	}
 }
 
-// tempProfile is a profile over a real fake layout in dir: the data folder with this run's grading copy, cache and
-// records, another run's records and workspace, a shared cache, the deps (with a Gradle home and a module), a
+// tempProfile is a profile over a real fake layout in dir: the data folder with this run's grading copy, cache (with a
+// denied folder inside it, which must stay denied there) and records, another run's records and workspace, a shared cache, the deps (with a Gradle home and a module), a
 // database; a fake home with credential stores; the user's repository; and a temp root. Every folder exists.
 func tempProfile(t *testing.T, dir string) Profile {
 	t.Helper()
@@ -177,6 +190,7 @@ func tempProfile(t *testing.T, dir string) Profile {
 		"data/records/r2/verify/hidden_test.x": "another run's hidden test",
 		"data/workspaces/r2/repo/f":            "another run's workspace",
 		"data/cache/grading/r1/.keep":          "",
+		"data/cache/grading/r1/private/entry":  "denied in the cache",
 		"data/cache/shared/entry":              "shared cache",
 		"data/deps/1/mod/lib.txt":              "dependency",
 		"data/deps/1/gradle/caches/x.bin":      "compiled hidden tests",
@@ -201,7 +215,7 @@ func tempProfile(t *testing.T, dir string) Profile {
 		}
 	}
 	return Profile{Tag: "agentium-test", Home: filepath.Join(dir, "home"), Environ: []string{"PATH=/usr/bin:/bin"},
-		Data: filepath.Join(dir, "data"), Denied: []string{filepath.Join(dir, "repo")},
+		Data: filepath.Join(dir, "data"), Denied: []string{filepath.Join(dir, "repo"), filepath.Join(dir, "data", "cache", "grading", "r1", "private")},
 		Copy: filepath.Join(dir, "data", "records", "r1", "verify"), Cache: filepath.Join(dir, "data", "cache", "grading", "r1"),
 		Temp: filepath.Join(dir, "t"), Deps: filepath.Join(dir, "data", "deps", "1"), Loopback: true}
 }
