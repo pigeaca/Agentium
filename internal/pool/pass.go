@@ -238,3 +238,43 @@ func lockPass(file string) (release func(), err error) {
 	}
 	return func() { f.Close() }, nil
 }
+
+// Preview is what a pass would do now (Pass.Preview): the head, the candidates it would try to import (best first; it
+// imports up to Limit of them), the watermark commits the repository no longer has, the mined tasks it would validate,
+// and the state file's problem when it is unreadable.
+type Preview[C any] struct {
+	Head        string
+	Candidates  []C
+	Unknown     []string
+	Unvalidated []store.Task
+	Unreadable  string
+}
+
+// Preview scans as Run would and writes nothing: no lock, no state change, no import (a dry run). It may disagree with
+// a pass running meanwhile.
+func (p Pass[C]) Preview(ctx context.Context) (Preview[C], error) {
+	var out Preview[C]
+	tasks, err := p.Tasks(ctx)
+	if err != nil {
+		return out, err
+	}
+	st, err := Load(p.File)
+	if err != nil {
+		return out, err
+	}
+	out.Unreadable = st.Unreadable
+	st.Reconcile(tasks, nil) // in memory only
+	if out.Head, err = p.Head(ctx); err != nil {
+		return out, err
+	}
+	r := ScanRange{Head: out.Head, Exclude: st.Watermark, Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
+	if p.Window > 0 {
+		r.Since = p.Now().Add(-p.Window)
+	}
+	scanned, err := p.Scan(ctx, r)
+	if err != nil {
+		return out, err
+	}
+	out.Unknown, out.Candidates, out.Unvalidated = scanned.Unknown, p.keep(scanned.Candidates, r.Since, st), st.Unvalidated(tasks)
+	return out, nil
+}

@@ -73,6 +73,7 @@ var jsonCommands = map[string][]string{
 	"context": {"show", "snapshot", "list", "diff", "lint"},
 	"task":    {"list", "show", "mine", "validate", "import", "add", "edit", "rm"},
 	"run":     {"once", "show", "list"},
+	"pool":    {"update", "status"},
 }
 
 // splitJSONFlag removes the bare --json flag (before any "--") from args and reports whether the command takes it.

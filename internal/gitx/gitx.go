@@ -4,6 +4,7 @@
 package gitx
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -31,6 +32,17 @@ func Output(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error
 
 // OutputEnv is Output with extra environment variables (for example GIT_INDEX_FILE).
 func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, error) {
+	cmd, stderr := command(ctx, env, args)
+	cmd.Stdin = stdin
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, failure(args, stderr, err)
+	}
+	return out, nil
+}
+
+// command is git with args, Agentium's settings and environment (plus env), and stderr captured.
+func command(ctx context.Context, env, args []string) (*exec.Cmd, *bytes.Buffer) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Env = append(Environ(os.Environ()), env...)
 	// A cancelled git is asked to stop (SIGINT) so it can remove its lock files (shallow.lock, index.lock), as Ctrl-C in
@@ -39,18 +51,63 @@ func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...strin
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) }
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
-		}
-		return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	return cmd, &stderr
+}
+
+// failure is the error of a git command that failed: its stderr when it exited with a status, else err.
+func failure(args []string, stderr *bytes.Buffer, err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
 	}
-	return out, nil
+	return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+}
+
+// maxLine bounds one line of Lines' output.
+const maxLine = 1 << 20
+
+// Lines runs git (with env added to its environment) and passes each line of its stdout, without the newline, to
+// line until line returns false or the output ends. Stopping early stops git, and is no error. complete reports
+// whether the whole output was read. Lines never hold the whole output in memory, so a caller can read a prefix of a
+// long listing (rev-list) and stop.
+func Lines(parent context.Context, env []string, line func(string) bool, args ...string) (complete bool, err error) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	cmd, stderr := command(ctx, env, args)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return false, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	if err := cmd.Start(); err != nil {
+		return false, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	scanner := bufio.NewScanner(out)
+	scanner.Buffer(make([]byte, 64<<10), maxLine)
+	stopped := false
+	for scanner.Scan() {
+		if !line(scanner.Text()) {
+			stopped = true
+			break
+		}
+	}
+	scanErr := scanner.Err()
+	if stopped || scanErr != nil {
+		cancel() // git may be blocked writing: stop it before waiting
+	}
+	waitErr := cmd.Wait()
+	switch {
+	case parent.Err() != nil:
+		return false, fmt.Errorf("git %s: %w", strings.Join(args, " "), parent.Err())
+	case stopped:
+		return false, nil // git was stopped on purpose: its exit status says nothing
+	case scanErr != nil:
+		return false, fmt.Errorf("git %s: %w", strings.Join(args, " "), scanErr)
+	case waitErr != nil:
+		return false, failure(args, stderr, waitErr)
+	}
+	return !stopped, nil
 }
 
 // PartialClone reports whether the repository at dir is a partial clone (cloned with --filter): its config names a

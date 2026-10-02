@@ -983,7 +983,11 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	return validateOne(ctx, env, w, w.validating(env, buildEnv), t, o)
+	val := w.validating(env, buildEnv)
+	if val.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
+		return fail(env, err)
+	}
+	return validateOne(ctx, env, w, val, t, o)
 }
 
 // validateOne validates t with o in the arms o names, with a live line and the stages' progress, stores the validation

@@ -63,6 +63,7 @@ const (
 	ReasonShallow      Reason = "shallow clone boundary"
 	ReasonRoot         Reason = "no parent commit"
 	ReasonImported     Reason = "already a task"
+	ReasonDismissed    Reason = "dismissed" // the task pool's: a mined task the user removed, or a rebased copy of one
 	ReasonFixup        Reason = "fixup commit"
 	ReasonRevert       Reason = "revert"
 	ReasonEmpty        Reason = "no file changes"
@@ -77,14 +78,15 @@ const (
 	ReasonTooLarge     Reason = "too large"
 	ReasonGenerated    Reason = "generated code"
 	ReasonInlineRust   Reason = "inline Rust tests"
+	ReasonCopy         Reason = "the same change as a task" // the task pool's: a rebased or cherry-picked copy
 )
 
 // ReasonOrder lists every rejection reason in the order Scan checks them, for tables that must not depend on map
 // order.
 func ReasonOrder() []Reason {
-	return []Reason{ReasonUnreadable, ReasonMerge, ReasonShallow, ReasonRoot, ReasonImported, ReasonFixup, ReasonRevert,
+	return []Reason{ReasonUnreadable, ReasonMerge, ReasonShallow, ReasonRoot, ReasonImported, ReasonDismissed, ReasonFixup, ReasonRevert,
 		ReasonEmpty, ReasonDocsOnly, ReasonNoTests, ReasonVendored, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
-		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust}
+		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust, ReasonCopy}
 }
 
 // Part is one named contribution to a candidate's score.
@@ -99,11 +101,15 @@ func (p Part) String() string { return fmt.Sprintf("%+d %s", p.Points, p.Text) }
 // files the hidden tests and its other files the reference.
 type Candidate struct {
 	Hash, Parent  string
-	Subject, Body string // Body excludes trailers such as Co-Authored-By
-	Date          time.Time
-	Tests, Code   []string
-	Docs          []string // documentation the commit also changes
-	Dependencies  []string // manifests and lockfiles the commit also changes (not counted in the limits)
+	Subject, Body string    // Body excludes trailers such as Co-Authored-By
+	Date          time.Time // committed (the committer's date)
+	// BaseDate is when the parent was committed, and Patch the change's patch ID (`git patch-id --stable`), which a
+	// rebase keeps; ScanRange sets both (Scan leaves them zero).
+	BaseDate     time.Time
+	Patch        string
+	Tests, Code  []string
+	Docs         []string // documentation the commit also changes
+	Dependencies []string // manifests and lockfiles the commit also changes (not counted in the limits)
 	// TestLines and Lines are added plus deleted lines: in test files, and in test and code files together (docs and
 	// dependencies are not counted).
 	TestLines, Lines int
@@ -299,6 +305,11 @@ func resolveRef(ctx context.Context, root, ref string) (display, head string, er
 	return "", "", fmt.Errorf("mine: %q is not a commit in %s", ref, root)
 }
 
+// DefaultBranch is the branch mining reads by default (see defaultBranch), for display, and its head commit.
+func DefaultBranch(ctx context.Context, root string) (display, head string, err error) {
+	return defaultBranch(ctx, root)
+}
+
 // defaultBranch picks the branch origin/HEAD names (the local branch or its remote, whichever contains the other;
 // the local one if they diverged), else main, else master, else HEAD.
 func defaultBranch(ctx context.Context, root string) (display, head string, err error) {
@@ -349,10 +360,7 @@ var recordStart = regexp.MustCompile(`^[0-9a-f]{40,64}` + fieldSep)
 // The global configuration is still read (gitx drops only the system one): it carries safe.directory, without which
 // git refuses a repository owned by another user.
 func readLog(ctx context.Context, root, head string, o Options) ([]commit, error) {
-	args := []string{"-C", root, "log", "--numstat", "-z", "--no-renames", "--no-relative", "--no-color",
-		"--no-show-signature", "--no-textconv", "--no-ext-diff", "--encoding=UTF-8", "--diff-algorithm=myers", "-O", "/dev/null",
-		"--format=" + recordSep + "%H" + fieldSep + "%P" + fieldSep + "%ct" + fieldSep + "%s" + fieldSep + "%b" + fieldSep,
-		"--max-count=" + strconv.Itoa(o.MaxCommits)}
+	args := append(logArgs(root), "--max-count="+strconv.Itoa(o.MaxCommits))
 	if !o.Since.IsZero() {
 		args = append(args, "--since="+o.Since.UTC().Format(time.RFC3339))
 	}
@@ -362,6 +370,13 @@ func readLog(ctx context.Context, root, head string, o Options) ([]commit, error
 		return nil, fmt.Errorf("mine: read history: %w", err)
 	}
 	return parseLog(out), nil
+}
+
+// logArgs is git log reading root's records as parseLog parses them, with nothing the configuration could change.
+func logArgs(root string) []string {
+	return []string{"-C", root, "log", "--numstat", "-z", "--no-renames", "--no-relative", "--no-color",
+		"--no-show-signature", "--no-textconv", "--no-ext-diff", "--encoding=UTF-8", "--diff-algorithm=myers", "-O", "/dev/null",
+		"--format=" + recordSep + "%H" + fieldSep + "%P" + fieldSep + "%ct" + fieldSep + "%s" + fieldSep + "%b" + fieldSep}
 }
 
 // parseLog parses readLog's output: per commit, RS, the header fields each ended by US, then NUL-terminated numstat

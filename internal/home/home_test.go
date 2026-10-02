@@ -131,6 +131,13 @@ func TestLockRunsIsExclusiveAndReleased(t *testing.T) {
 	if err := l.Ensure(); err != nil {
 		t.Fatal(err)
 	}
+	// Before any run, the lock file is missing: not busy, and the probe does not create it (a dry run writes nothing).
+	if l.RunsBusy() {
+		t.Error("RunsBusy without a lock file")
+	}
+	if _, err := os.Stat(filepath.Join(l.Root, "runs.lock")); !os.IsNotExist(err) {
+		t.Errorf("RunsBusy created the lock file: %v", err)
+	}
 	release, err := l.LockRuns()
 	if err != nil {
 		t.Fatal(err)
