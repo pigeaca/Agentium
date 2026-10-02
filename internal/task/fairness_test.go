@@ -352,3 +352,154 @@ func TestStringLiteralsLexer(t *testing.T) {
 		})
 	}
 }
+
+// The Java, Kotlin and Rust identifier check: a name the hidden test uses, the reference declares, and neither the
+// instruction nor the base has.
+func TestFairnessJVMAndRustIdentifiers(t *testing.T) {
+	const instruction = "Add the feature, exposed through Stated.stated_value()."
+	cases := map[string]struct {
+		base, solution map[string]string
+		want           []string
+	}{
+		"java static import constant": {
+			map[string]string{"src/main/java/Ext.java": "package p;\npublic class Ext { public static final String OLD_PARAMETER = \"old\"; }\n"},
+			map[string]string{
+				"src/main/java/Ext.java": "package p;\npublic class Ext {\n  public static final String OLD_PARAMETER = \"old\";\n  public static final String EXECUTION_DATE_PARAMETER = \"date\";\n}\n",
+				"src/test/java/ExtTests.java": "package p;\nimport static p.Ext.EXECUTION_DATE_PARAMETER;\nimport static p.Ext.OLD_PARAMETER;\nimport java.util.Objects;\nimport org.junit.jupiter.api.Test;\n" +
+					"class ExtTests {\n  // MISSING_IN_COMMENT\n  @Test void t() { Objects.requireNonNull(EXECUTION_DATE_PARAMETER); Objects.requireNonNull(OLD_PARAMETER); }\n}\n"},
+			[]string{"EXECUTION_DATE_PARAMETER"},
+		},
+		"java: base, JDK, test-own and stated names are fine": {
+			map[string]string{"src/main/java/Ext.java": "package p;\npublic class Ext { public static String existing() { return null; } }\n"},
+			map[string]string{
+				"src/main/java/Ext.java":      "package p;\npublic class Ext {\n  public static String existing() { return null; }\n  public static String stated_value() { return null; }\n  public String toList() { return null; }\n  public static void helperName() {}\n}\n",
+				"src/test/java/ExtTests.java": "package p;\nimport java.util.List;\nclass ExtTests {\n  static void helperName() {}\n  void t() { Ext.existing(); Ext.stated_value(); List.of(); helperName(); }\n}\n"},
+			nil,
+		},
+		"kotlin": {
+			map[string]string{"src/main/kotlin/Check.kt": "fun oldCheck() = 1\n"},
+			map[string]string{
+				"src/main/kotlin/Check.kt":     "fun oldCheck() = 1\nconst val NEW_LIMIT = 5\nfun newChecker() = 2\n",
+				"src/test/kotlin/CheckTest.kt": "import kotlin.test.assertEquals\nclass CheckTest {\n  @Test fun t() { assertEquals(5, NEW_LIMIT); assertEquals(1, oldCheck()); listOf(1).map { it } }\n}\n"},
+			[]string{"NEW_LIMIT"},
+		},
+		"rust": {
+			map[string]string{"src/lib.rs": "pub fn old_item() {}\n", "tests/t.rs": "use m::old_item;\n#[test]\nfn t() { old_item(); }\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn old_item() {}\npub mod fresh_module { pub const FRESH_LIMIT: u32 = 3; }\npub struct Config { pub fresh_field: u32 }\n",
+				"tests/t.rs": "use m::old_item;\nuse m::fresh_module::FRESH_LIMIT;\nuse serde::Serialize;\nuse std::collections::HashMap;\n#[test]\nfn t() { old_item(); let _ = FRESH_LIMIT; let _m: HashMap<u8, u8> = HashMap::new(); }\n"},
+			[]string{"FRESH_LIMIT", "fresh_module"},
+		},
+		"rust: a dependency's items and a base item are fine": {
+			map[string]string{"src/lib.rs": "pub fn shared_item() {}\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn shared_item() {}\n",
+				"tests/t.rs": "use serde_json::json;\nuse m::shared_item;\n#[test]\nfn t() { shared_item(); let _ = json!({}); }\n"},
+			nil,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gaps := fairnessGaps(t, tc.base, tc.solution, instruction)
+			var want []string
+			for _, w := range tc.want {
+				want = append(want, "identifier:"+w)
+			}
+			wantGaps(t, gaps, want...)
+		})
+	}
+}
+
+// Locals and parameters of a test never count, and overrides, switch defaults and comments or strings are not
+// declarations; annotation elements and modifier-less interface methods are.
+func TestFairnessJVMAndRustIdentifierEdgeCases(t *testing.T) {
+	cases := map[string]struct {
+		base, solution map[string]string
+		want           []string
+	}{
+		"java local colliding with a reference field": {
+			map[string]string{"src/main/java/R.java": "class R { void withDelay(long d) {} }\n"},
+			map[string]string{
+				"src/main/java/R.java":      "class R {\n  private long retryDelay;\n  void withDelay(long d) {}\n}\n",
+				"src/test/java/RTests.java": "class RTests {\n  void t() {\n    long retryDelay = 5;\n    new R().withDelay(retryDelay);\n  }\n}\n"},
+			nil,
+		},
+		"java parameter colliding with a reference field": {
+			map[string]string{"src/main/java/R.java": "class R {}\n"},
+			map[string]string{
+				"src/main/java/R.java":      "class R {\n  private int retryDelay;\n}\n",
+				"src/test/java/RTests.java": "class RTests {\n  void check(int retryDelay) { System.out.println(retryDelay); }\n}\n"},
+			nil,
+		},
+		"kotlin parameter and lambda colliding with reference names": {
+			map[string]string{"src/main/kotlin/R.kt": "fun old() = 1\n"},
+			map[string]string{
+				"src/main/kotlin/R.kt":     "fun old() = 1\nprivate val indentWidth = 2\nprivate val lineCount = 3\n",
+				"src/test/kotlin/RTest.kt": "class RTest {\n  fun check(indentWidth: Int) { listOf(1).map { lineCount -> lineCount + indentWidth } }\n}\n"},
+			nil,
+		},
+		"rust let and parameter colliding with reference names": {
+			map[string]string{"src/lib.rs": "pub fn old() {}\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn old() {}\nfn retry_delay() {}\nfn line_count() {}\n",
+				"tests/t.rs": "fn check(line_count: u32) { let mut retry_delay = 1; retry_delay += line_count; }\n#[test]\nfn t() { check(1); }\n"},
+			nil,
+		},
+		"java annotation element and interface method without a modifier": {
+			map[string]string{"src/main/java/A.java": "@interface A { int old() default 1; }\n"},
+			map[string]string{
+				"src/main/java/A.java":      "@interface A {\n  int old() default 1;\n  int jitterSeed() default 0;\n}\ninterface Shape {\n  double computeArea(int scale);\n  default String describeShape() { return \"\"; }\n}\n",
+				"src/test/java/ATests.java": "class ATests {\n  @A(jitterSeed = 3) void t(Shape s) { s.computeArea(1); s.describeShape(); }\n}\n"},
+			[]string{"Shape", "computeArea", "describeShape", "jitterSeed"},
+		},
+		"java override, switch default and statements are not declarations": {
+			map[string]string{"src/main/java/C.java": "class C {}\n"},
+			map[string]string{
+				"src/main/java/C.java":      "class C implements Comparable<C> {\n  @Override\n  public int compareTo(C other) {\n    switch (1) { default: break; }\n    return Math.max(other.hashCode(), 0);\n  }\n  public int zero() { return 0; }\n}\n",
+				"src/test/java/CTests.java": "class CTests {\n  void t() { new C().compareTo(new C()); }\n}\n"},
+			nil,
+		},
+		"kotlin override and comments and strings": {
+			map[string]string{"src/main/kotlin/C.kt": "class C\n"},
+			map[string]string{
+				"src/main/kotlin/C.kt":     "class C : Comparable<C> {\n  override fun compareTo(other: C) = 0\n  // fun commentedOut() {}\n  val s = \"fun inString() {}\"\n  /* nested /* fun inBlock() {} */ */\n}\n",
+				"src/test/kotlin/CTest.kt": "class CTest { fun t() { C().compareTo(C()); commentedOut(); inString(); inBlock() } }\n"},
+			nil,
+		},
+		"rust trait impl methods and comments and strings": {
+			map[string]string{"src/lib.rs": "pub struct S;\n"},
+			map[string]string{
+				"src/lib.rs": "pub struct S;\nimpl IntoIterator for S {\n    fn into_iter(self) -> Vec<u8> { vec![] }\n}\n// fn commented_out() {}\nconst T: &str = \"fn in_string() {}\";\n",
+				"tests/t.rs": "#[test]\nfn t() { let _ = S.into_iter(); commented_out(); in_string(); }\n"},
+			nil,
+		},
+		"a hidden test-support file is not flagged": {
+			map[string]string{"src/main/java/R.java": "class R {}\n"},
+			map[string]string{
+				"src/main/java/R.java":        "class R {}\n",
+				"src/test/java/Fixtures.java": "class Fixtures {\n  static final String FIXTURE_NAME = \"x\";\n}\n",
+				"src/test/java/RTests.java":   "class RTests {\n  void t() { System.out.println(Fixtures.FIXTURE_NAME); }\n}\n"},
+			nil,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gaps := fairnessGaps(t, tc.base, tc.solution, "")
+			var want []string
+			for _, w := range tc.want {
+				want = append(want, "identifier:"+w)
+			}
+			wantGaps(t, gaps, want...)
+		})
+	}
+}
+
+// An annotation attribute written "name = value" after another attribute is not a local variable.
+func TestFairnessJVMAnnotationAttributeIsNotALocal(t *testing.T) {
+	gaps := fairnessGaps(t,
+		map[string]string{"src/main/java/R.java": "@interface R { int maxAttempts() default 1; }\n"},
+		map[string]string{
+			"src/main/java/R.java":      "@interface R {\n  int maxAttempts() default 1;\n  int maxJitterMs() default 0;\n}\n",
+			"src/test/java/RTests.java": "class RTests {\n  @R(maxAttempts = 3, maxJitterMs = -1) void t() {}\n}\n"}, "")
+	wantGaps(t, gaps, "identifier:maxJitterMs")
+}
