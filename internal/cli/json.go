@@ -66,14 +66,16 @@ type errorBody struct {
 	Code    int    `json:"code"`
 }
 
-// jsonCommands lists the subcommands (or, with "", the whole command) that take --json in part 1.
+// jsonCommands lists the subcommands (or, with "", the whole command) that take --json (part 1, and part 1b: the experiment commands).
 var jsonCommands = map[string][]string{
 	"init":    {""},
 	"start":   {""},
 	"context": {"show", "snapshot", "list", "diff", "lint"},
 	"task":    {"list", "show", "mine", "validate", "import", "add", "edit", "rm"},
 	"run":     {"once", "show", "list"},
-	"pool":    {"update", "status"},
+	// experiment report has its own --json (the lock and every run); it is left as it is.
+	"experiment": {"new", "plan", "show", "list", "run", "rm"},
+	"pool":       {"update", "status"},
 }
 
 // splitJSONFlag removes the bare --json flag (before any "--") from args and reports whether the command takes it.

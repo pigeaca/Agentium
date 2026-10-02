@@ -16,7 +16,9 @@ import (
 //     experiment was created yet (the exit code is 1); tasks_ready and tasks_awaiting_review count them;
 //   - too_few_tasks: fewer valid, reviewed tasks than the cost floor and none waiting for a review, so no experiment was
 //     created (the exit code is 1);
-//   - finished: the experiment has finished; its report is `agentium experiment report`.
+//   - finished: the experiment has finished; its report is `agentium experiment report`;
+//   - ran: --yes ran the experiment; Run says how it ended (status done, budget, usage or stopped) and the exit code
+//     follows it as experiment run's does. NothingRun is then false.
 type startDoc struct {
 	header
 	Status         string           `json:"status"`
@@ -35,6 +37,7 @@ type startDoc struct {
 	TasksReady          *int          `json:"tasks_ready"`
 	TasksAwaitingReview *int          `json:"tasks_awaiting_review"`
 	NorthStar           *northStarDoc `json:"north_star"`
+	Run                 *runResultDoc `json:"run"` // null unless --yes ran the experiment
 	Log                 []string      `json:"log"` // the stages' text, plain
 }
 
@@ -46,6 +49,11 @@ type startExperiment struct {
 	RepeatsPerArm int     `json:"repeats_per_arm"`
 	Runs          int     `json:"runs"`
 	BudgetUSD     float64 `json:"budget_usd"` // what a run of it may spend in total
+	Method        string  `json:"method"`
+	// Looks and Spend are the plan of a seq-v1 design (spend: the maximum, the worst case and the expected spend);
+	// empty and null when the design has no looks or the experiment's preview was not made.
+	Looks []lookPlanDoc `json:"looks"`
+	Spend *spendDoc     `json:"spend"`
 }
 
 type readinessDoc struct {
@@ -78,7 +86,11 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 	}
 	if review != nil {
 		d := review.Design
-		doc.Experiment = &startExperiment{Name: name, Template: d.Template, Model: d.Model, Tasks: len(d.Tasks), RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: budget.total}
+		doc.Experiment = &startExperiment{Name: name, Template: d.Template, Model: d.Model, Tasks: len(d.Tasks), RepeatsPerArm: d.Repeats, Runs: d.Runs(),
+			BudgetUSD: budget.total, Method: d.LockMethod(), Looks: []lookPlanDoc{}}
+		if spend, looks, _, err := spendPlan(*review); err == nil {
+			doc.Experiment.Spend, doc.Experiment.Looks = &spend, looks
+		}
 		doc.Ready = review.Readiness.Ready
 		for _, c := range review.Readiness.Checks {
 			doc.Readiness = append(doc.Readiness, readinessDoc{Status: readinessStatus(c.Status), Text: clean(c.Text)})
@@ -90,7 +102,10 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 			doc.RunCommand += " --budget " + strconv.FormatFloat(s.args.budget, 'f', -1, 64)
 		}
 	} else if name != "" {
-		doc.Experiment = &startExperiment{Name: name}
+		doc.Experiment = &startExperiment{Name: name, Looks: []lookPlanDoc{}}
+	}
+	if s.ran != nil {
+		doc.Run, doc.NothingRun = s.ran, false
 	}
 	return s.env.emitCode(doc, code)
 }
