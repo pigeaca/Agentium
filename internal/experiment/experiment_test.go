@@ -214,7 +214,7 @@ func TestValidate(t *testing.T) {
 		change func(*Design)
 		want   string
 	}{
-		"same context":      {func(d *Design) { d.Arms[1] = Arm{Name: "B", Context: BaseContext} }, "aa template"},
+		"same context":      {func(d *Design) { d.Arms[1] = Arm{Name: "B", Context: BaseContext} }, "is an A/A (aa), made without --b"},
 		"aa differs":        {func(d *Design) { d.Template = TemplateAA }, "one context in both arms"},
 		"template":          {func(d *Design) { d.Template = "ab" }, "unknown template"},
 		"arm names":         {func(d *Design) { d.Arms[0].Name = "X" }, "two arms, A and B"},

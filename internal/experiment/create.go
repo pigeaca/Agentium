@@ -21,25 +21,27 @@ import (
 
 // NewOptions is what `experiment new` was asked for, as flags give it. Prepare checks it and fills the defaults.
 type NewOptions struct {
+	// Template is what --b implies (InferTemplate); `start` names one itself.
 	Template, ContextA, ContextB string
-	// ProfileA and ProfileB, for model-ab only, are the arms' MODEL[:EFFORT] (--a and --b); ContextA is then the one
-	// context both arms run (default: the base's). RunBudgetA and RunBudgetB optionally give a model-ab arm its own
-	// run cap (zero: RunBudget).
-	ProfileA, ProfileB      string
-	RunBudgetA, RunBudgetB  float64
-	Tier                    string // a tier's name, or "" (quick unless Tasks are given)
-	Tasks                   []string
-	Repeats                 int
-	Model, Effort, Goal     string
-	RunBudget, Budget       float64
-	Concurrency             int
-	Timeout, VerifyTimeout  time.Duration
-	Seed                    uint64
+	// ProfileA and ProfileB, for model-ab only, are the arms' MODEL[:EFFORT] (--a, else --model, and --b); ContextA is
+	// then the one context both arms run (default: the base's). Both arms' runs stop at RunBudget.
+	ProfileA, ProfileB     string
+	Tier                   string // a tier's name, or "" (quick unless Tasks are given)
+	Tasks                  []string
+	Repeats                int
+	Model, Effort, Goal    string
+	RunBudget, Budget      float64
+	Concurrency            int
+	Timeout, VerifyTimeout time.Duration
+	Seed                   uint64
+	// Judge has the judge decide on every graded run, on JudgeModel at JudgeEffort ("": the default judge's), with the
+	// default repeats (judge.DefaultRepeats).
 	Judge                   bool
-	JudgeModel, JudgeEffort string // both judges'
-	JudgeRepeats            int
-	// JudgePairs has the pair judge compare each pair of passing runs (Design.JudgePairs), on JudgeModel at JudgeEffort.
-	JudgePairs bool
+	JudgeModel, JudgeEffort string
+	// JudgePairs has the pair judge compare each pair of passing runs (Design.JudgePairs), on PairJudgeModel at
+	// PairJudgeEffort ("": the default judge's).
+	JudgePairs                      bool
+	PairJudgeModel, PairJudgeEffort string
 	// NoFutility turns off a cost experiment's futility stops (Design.NoFutility).
 	NoFutility bool
 
@@ -81,12 +83,6 @@ func (o *NewOptions) Prepare(name string) error {
 		return UsageError("--tier and --task both choose the tasks: use one")
 	case o.Repeats < 0:
 		return UsageError("--repeats must be positive")
-	case !o.Judge && !o.JudgePairs && (o.JudgeModel != "" || o.JudgeEffort != ""):
-		return UsageError("--judge-model and --judge-effort set the judges: add --judge or --judge-pairs")
-	case !o.Judge && o.JudgeRepeats != 0:
-		return UsageError("--judge-repeats sets the judge of each run: add --judge (the pair judge asks each order once)")
-	case o.JudgeRepeats < 0:
-		return UsageError("--judge-repeats must be positive")
 	}
 	o.tier = Tiers()[0]
 	if o.Tier != "" {
@@ -118,21 +114,18 @@ func (o *NewOptions) Prepare(name string) error {
 // prepareProfiles checks the options that only model-ab takes, and reads its profiles.
 func (o *NewOptions) prepareProfiles() error {
 	if o.Template != TemplateModelAB {
-		if o.ProfileA != "" || o.ProfileB != "" || o.RunBudgetA != 0 || o.RunBudgetB != 0 {
-			return fmt.Errorf("per-arm models and run budgets belong to the %s template: agentium experiment new NAME --template %s --a MODEL[:EFFORT] --b MODEL[:EFFORT]",
-				TemplateModelAB, TemplateModelAB)
+		if o.ProfileA != "" || o.ProfileB != "" {
+			return errors.New("per-arm models belong to a model A/B: agentium experiment new NAME --b MODEL[:EFFORT] [--a MODEL[:EFFORT]]")
 		}
 		return nil
 	}
 	switch {
 	case o.ProfileA == "" || o.ProfileB == "":
-		return fmt.Errorf("a %s experiment needs --a MODEL[:EFFORT] and --b MODEL[:EFFORT]", TemplateModelAB)
+		return errors.New("a model A/B needs arm A's MODEL[:EFFORT] (--a, or --model) and arm B's (--b)")
 	case o.ContextB != "":
-		return fmt.Errorf("a %s experiment runs one context in both arms (--context NAME); --a and --b name models", TemplateModelAB)
+		return errors.New("a model A/B runs one context in both arms (--context NAME); --a and --b name models")
 	case o.Model != "" || o.Effort != "":
-		return fmt.Errorf("a %s experiment takes each arm's model and effort from --a and --b, not --model or --effort", TemplateModelAB)
-	case o.RunBudgetA < 0 || o.RunBudgetB < 0:
-		return errors.New("--run-budget-a and --run-budget-b must be positive")
+		return errors.New("a model A/B takes each arm's model and effort from --a and --b")
 	}
 	var err error
 	if o.profA.model, o.profA.effort, err = ParseProfile(o.ProfileA); err != nil {
@@ -158,21 +151,24 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 	if !o.prepared {
 		return Created{}, errors.New("experiment: Create needs options that Prepare has checked")
 	}
+	if err := p.refuseAmbiguousB(ctx, o); err != nil {
+		return Created{}, err
+	}
 	armA, err := p.ResolveArm(ctx, "A", o.ContextA)
 	if err != nil {
-		return Created{}, err
+		return Created{}, explainMissingArm(err, "--a", o)
 	}
 	armB := armA
 	armB.Name = "B"
 	if o.Template == TemplateContextAB {
 		if armB, err = p.ResolveArm(ctx, "B", o.ContextB); err != nil {
-			return Created{}, err
+			return Created{}, explainMissingArm(err, "--b", o)
 		}
 	}
 	model, effort := o.Model, o.Effort
 	if o.Template == TemplateModelAB { // Design.Model and Effort are arm A's, for what reads one model of an experiment
-		armA.Model, armA.Effort, armA.RunBudgetUSD = o.profA.model, o.profA.effort, o.RunBudgetA
-		armB.Model, armB.Effort, armB.RunBudgetUSD = o.profB.model, o.profB.effort, o.RunBudgetB
+		armA.Model, armA.Effort = o.profA.model, o.profA.effort
+		armB.Model, armB.Effort = o.profB.model, o.profB.effort
 		model, effort = armA.Model, armA.Effort
 	}
 	d := Design{Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
@@ -181,11 +177,11 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		Method: NewMethod(o.Goal), NoFutility: o.NoFutility}
 	d.Version = d.WantVersion()
 	if o.Judge {
-		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort, Repeats: o.JudgeRepeats}.WithDefaults()
+		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort}.WithDefaults()
 		d.Judge = &s
 	}
 	if o.JudgePairs {
-		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort, Repeats: 1}.WithDefaults()
+		s := llmjudge.Settings{Model: o.PairJudgeModel, Effort: o.PairJudgeEffort, Repeats: 1}.WithDefaults()
 		d.JudgePairs = &s
 	}
 	eligible, err := p.chooseTasks(ctx, &d, o)
@@ -218,6 +214,39 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		return Created{}, err
 	}
 	return Created{Design: d, Eligible: len(eligible), Tier: o.tier, Explicit: len(o.Tasks) > 0}, nil
+}
+
+// refuseAmbiguousB refuses a model A/B whose --b is also a snapshot's name: InferTemplate read it as the model, and
+// the user may have meant the snapshot's context A/B. A MODEL:EFFORT is never a snapshot's name (no colon is allowed).
+func (p Project) refuseAmbiguousB(ctx context.Context, o NewOptions) error {
+	if o.Template != TemplateModelAB {
+		return nil
+	}
+	switch _, err := p.DB.SnapshotByName(ctx, p.ID, o.ProfileB); {
+	case errors.Is(err, store.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	}
+	return UsageError(fmt.Sprintf("--b %s names both a model and a snapshot: it was read as the model (a model A/B), and is refused "+
+		"since the snapshot would make a context A/B. To compare that context, snapshot it again under a name that is not a model's", o.ProfileB))
+}
+
+// explainMissingArm adds to a context that is not found (flag --a or --b) how the template was read from --b, when the
+// name looks like what another template takes: a model where a context was read, or a name that is neither.
+func explainMissingArm(err error, flag string, o NewOptions) error {
+	if !errors.Is(err, store.ErrNotFound) {
+		return err
+	}
+	switch {
+	case flag == "--b":
+		return fmt.Errorf("%w: --b names a snapshot (a context A/B), or a model for a model A/B: one Agentium's price table knows, or any claude-… name", err)
+	case o.Template == TemplateAA && IsModel(o.ContextA):
+		return fmt.Errorf("%w: without --b this is an A/A, whose --a names its one context; for a model A/B, give --b a model too", err)
+	case o.Template == TemplateContextAB && IsModel(o.ContextA):
+		return fmt.Errorf("%w: --b %s is a snapshot, so this is a context A/B, whose --a names a context; for a model A/B, give --b a model", err, o.ContextB)
+	}
+	return err
 }
 
 // unknownBasis says why the cost cannot be estimated: for a model-ab experiment, in which arm.
