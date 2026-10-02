@@ -60,6 +60,17 @@ const MinPreferences = 5
 // PairVersion numbers the pair judge's protocol (prompt, schema, rules) in stored pair verdicts, apart from Version.
 const PairVersion = 1
 
+// PairCallEstimateUSD is the pilot's mean cost of one pair call ($0.088 over 38 calls on claude-opus-5-5 at high
+// effort), and PairEstimateUSD a pair's, both orders: previews state it as that, not as a measure of this project.
+const (
+	PairCallEstimateUSD = 0.088
+	PairEstimateUSD     = 2 * PairCallEstimateUSD
+)
+
+// PairCalls is how many calls a pair makes at most: both orders, each asked once more after a malformed reply. Each is
+// capped at CallCapUSD, so a pair's reserve derives from both (experiment.Design.PairJudgeCapUSD).
+const PairCalls = 2 * 2
+
 // PairInput is what one pair's judgement reads: the changes of arm A and arm B on the same task.
 type PairInput struct {
 	Instruction string
