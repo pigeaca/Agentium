@@ -630,6 +630,9 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		Timeout:   design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
+	if o := rec.Overshoot; o != nil && o.Exceeded() {
+		result.Overshoot = run.OvershootNote(*o)
+	}
 	if v := rec.Judge; v != nil {
 		result.Judge = run.Describe(*v)
 		if v.Stopped == llmjudge.StoppedLimit {

@@ -155,7 +155,23 @@ type Estimate struct {
 	Known     bool                // PerRunUSD is known
 	Basis     string              // how PerRunUSD was estimated, in words
 	Tasks     map[string]TaskCost // the tasks with earlier runs of their own on the model
+	// CapUSD is the run cap of the arm estimated (Design.ArmRunBudgetUSD), zero for none: Claude Code stops a run
+	// there, so no run is expected to cost more, and TaskUSD and MeanUSD never exceed it. A default profile or a median
+	// above the cap means runs are expected to reach it; the estimate is then the cap (its overshoot is the worst
+	// case's, claude.CapOvershootUSD, not the estimate's).
+	CapUSD float64
 }
+
+// capped is v limited to the run cap, when there is one.
+func (e Estimate) capped(v float64) float64 {
+	if e.CapUSD > 0 {
+		return min(v, e.CapUSD)
+	}
+	return v
+}
+
+// Capped reports whether v is above the run cap, so that the estimate uses the cap instead.
+func (e Estimate) Capped(v float64) bool { return e.CapUSD > 0 && v > e.CapUSD }
 
 // EstimateRun estimates runs on model from the project's earlier fair task runs on it. A task with runs of its own is
 // estimated by their median. Any other task gets the median of all of them when there are at least MinPastRuns, else
@@ -206,12 +222,13 @@ func median(values []float64) float64 {
 	return m
 }
 
-// TaskUSD is one run of task: its own estimate when it has earlier runs, else PerRunUSD; false when neither is known.
+// TaskUSD is one run of task: its own estimate when it has earlier runs, else PerRunUSD, at most the run cap; false
+// when neither is known.
 func (e Estimate) TaskUSD(task string) (float64, bool) {
 	if own, ok := e.Tasks[task]; ok {
-		return own.PerRunUSD, true
+		return e.capped(own.PerRunUSD), true
 	}
-	return e.PerRunUSD, e.Known
+	return e.capped(e.PerRunUSD), e.Known
 }
 
 // DesignUSD is the expected cost of every run of d: each task's runs in every arm at its own estimate. False when a
@@ -260,7 +277,7 @@ func (e ArmEstimates) MeanUSD(tasks []string) (float64, bool) {
 // without tasks. False when a task has no estimate.
 func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
 	if len(tasks) == 0 {
-		return e.PerRunUSD, e.Known
+		return e.capped(e.PerRunUSD), e.Known
 	}
 	total := 0.0
 	for _, t := range tasks {
@@ -274,9 +291,10 @@ func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
 }
 
 // Reserve is what the budget must hold back for runs that may be in flight: a run (or a pair's two runs) starts only
-// when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it.
-// With concurrency c, at most c−1 runs are in flight when a pair's first run starts, so c+1 caps are reserved. A run's
-// cap includes its judgement's (Design.RunCapUSD).
+// when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it
+// while each run stays within its cap and overshoot allowance. With concurrency c, at most c−1 runs are in flight when
+// a pair's first run starts, so c+1 caps are reserved. A run's cap includes its overshoot (claude.CapOvershootUSD) and its
+// judgement's (Design.RunCapUSD).
 func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunCapUSD() }
 
 // DefaultBudget is a quarter above the estimate (the judge's included) plus the reserve, in whole dollars; zero when

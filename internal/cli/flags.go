@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // parseArgs parses args with fs, allowing flags between positional arguments (the flag package stops at the first
@@ -32,4 +33,23 @@ func parseArgs(env Env, fs *flag.FlagSet, args []string, usage string) (position
 		positional = append(positional, rest[0])
 		args = rest[1:]
 	}
+}
+
+// oneName returns the one positional NAME a command takes. Otherwise it prints why under the command's name (fs's),
+// then usage, to stderr, and ok is false: the command returns ExitUsage.
+func oneName(env Env, command string, rest []string, usage string) (name string, ok bool) {
+	switch len(rest) {
+	case 1:
+		return rest[0], true
+	case 0:
+		fmt.Fprintf(env.Stderr, "agentium %s: give a NAME\n\n%s", command, usage)
+	default:
+		quoted := make([]string, len(rest))
+		for i, r := range rest {
+			quoted[i] = fmt.Sprintf("%q", r)
+		}
+		fmt.Fprintf(env.Stderr, "agentium %s: expected one NAME, got %d: %s (put each flag's value right after it, and quote a value with spaces)\n\n%s",
+			command, len(rest), strings.Join(quoted, ", "), usage)
+	}
+	return "", false
 }

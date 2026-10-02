@@ -129,11 +129,10 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	name, ok := oneName(env, "experiment new", rest, experimentUsage)
+	if !ok {
 		return ExitUsage
 	}
-	name := rest[0]
 	o.Tasks = tasks
 	if err := setExperimentArms(&o, fs, a, b, contextName); err != nil {
 		return failNew(env, err)
@@ -201,8 +200,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	if _, ok := oneName(env, "experiment plan", rest, experimentUsage); !ok {
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -307,8 +305,7 @@ func experimentRemove(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	if _, ok := oneName(env, "experiment rm", rest, experimentUsage); !ok {
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)

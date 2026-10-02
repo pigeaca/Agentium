@@ -67,6 +67,8 @@ agentium task validate <name> --repeat 3           # run every stage 3 times: a 
 agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
 
+Validation also warns when a verify command's `go test` filter keeps one of the task's own hidden tests from running: a `-skip` pattern that matches a test function the solution adds or changes in a hidden `_test.go` file, or a `-run` pattern that does not. Grading would never run that test. It is a warning, not a gate: the status stays as the stages found it, and `task show` repeats it.
+
 ### The task pool
 
 Free, no agent runs: `agentium pool update` is one pass over the pool.
@@ -103,6 +105,12 @@ agentium experiment show lean                 # the lock and the progress per ar
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
+Runs use `claude-sonnet-5-5` unless `--model` says otherwise (`experiment new`, `run once` and `run calibrate`); an experiment keeps the model it was made with. Estimates come only from earlier runs on the same model (and effort), so the first experiments on Sonnet 5.5 fall back to a default task run at list prices, and their default budgets and consent prompts look high until runs on it measure the project.
+
+Each run stops at its cap (`--run-budget`, default $3). Claude Code checks the cap after each turn, so a run can pass it by the turn that crosses it (the `seq-v1` smoke check: $0.507 against $0.50). The budget therefore holds back an allowance beside the cap of every run in flight: 10% of the cap, at least $0.15 on a model whose output costs what Sonnet's does, a floor that scales with the model's output price ($0.30 on Opus 5.5, $0.375 on Opus 5, the dearest price in the table for a model without one). A judge other than the default model and effort holds the same allowance per call. The preview's worst case includes it, and a run's estimate is never above its cap. A capped run records how far it went past its cap; one that passed the allowance gets a warning in the run's progress and in the report.
+
+The report marks runs cut short, capped at their cost cap or turn limit or stopped at the timeout, in the per-task table (`1/1, 1 capped`, and a mean cost of `≥$0.507`) and counts them in a note: such a run counts as it ended, graded and at the cost it reached, which is a lower bound of what it would have cost. That makes an arm cut short more often look cheaper, so a cost verdict that favours it says so in its headline.
+
 ### How a cost experiment decides
 
 Cost experiments (`--goal cheaper`, the default) run method `seq-v1`, a group-sequential design: up to 16 tasks x 1 run per arm, in stages, with a look after 8, 12 and 16 tasks (one look after all of them with 8 to 11 tasks, two with 12 to 15).
@@ -120,7 +128,7 @@ Success and time are exploratory in cost experiments. For success verdicts use `
  `experiment new` has three: `context-ab` (the default; `--b` names the snapshot to compare with arm A's context), `aa` (one context in both arms, which must find no difference: it measures the noise) and `model-ab`, which compares two Claude Code profiles on the same tasks and one context:
 
 ```sh
-agentium experiment new models --template model-ab --a claude-sonnet-5 --b claude-opus-5-5:high [--context trimmed]
+agentium experiment new models --template model-ab --a claude-sonnet-5-5 --b claude-opus-5-5:high [--context trimmed]
 ```
 
 `--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default). The arms must differ in model or effort. Both run one context: the base's own, or `--context SNAPSHOT`. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget-a` and `--run-budget-b` give an arm its own run cap. Each arm's model needs its own calibration of the context: `experiment run` makes the ones that are missing, once, before the first pair (`run calibrate --model MODEL` does it ahead of time). The preview counts their cost, and a calibration that fails its checks stops the experiment before any task run. Reports of model experiments name each arm by profile (model and effort) in the headlines, the metric tables and the per-task rows, with a one-line verdict such as `B (claude-sonnet-5-5) costs 48% less; success: exploratory`; the noise note says it pools both models.
@@ -170,7 +178,7 @@ For `start`, read `"status"`: `preview` (everything is in place; `"run_command"`
 
 **The experiment commands** share these objects:
 - `experiment`: the design: `name`, `template` (`context-ab`, `aa`, `model-ab`), `goal`, `method` (`seq-v1` for a cost experiment), `arms[]` (`name`, `context`, `model`, `effort`), `tasks[]`, `repeats_per_arm`, `runs` (all, both arms), `budget_usd`, `run_budget_usd`, `concurrency`, `judge`.
-- `spend` (in `experiment plan` and `start`'s preview): `known` (false when a task has no estimate yet, which makes the estimates `null`), `max_usd` (every look runs), `worst_case_usd` (every run and judgement at its cap, which the budget is sized for), and for `seq-v1` `expected_usd` and `expected_tasks` (on average, if nothing changed) and `if_cut_usd` (at a 20% cut in B's cost). `looks[]` (seq-v1) lists each planned look: `tasks`, `runs`, `estimated_usd`, `worst_case_usd`, `efficacy_level`, `equivalence_level`; `sizes[]` does the same for a fixed design.
+- `spend` (in `experiment plan` and `start`'s preview): `known` (false when a task has no estimate yet, which makes the estimates `null`), `max_usd` (every look runs), `worst_case_usd` (every run and judgement at its cap, plus each cap's overshoot allowance: what the budget holds back for a run in flight), and for `seq-v1` `expected_usd` and `expected_tasks` (on average, if nothing changed) and `if_cut_usd` (at a 20% cut in B's cost). `looks[]` (seq-v1) lists each planned look: `tasks`, `runs`, `estimated_usd`, `worst_case_usd`, `efficacy_level`, `equivalence_level`; `sizes[]` does the same for a fixed design.
 - `looks[]` in `experiment show` and `experiment run` are the looks made: `look`, `tasks_planned`, `tasks_counted`, `analysed`, `level` and `interval` (`estimate`, `low`, `high`, a ratio B / A for cost, at the look's level), `verdict`, `conditional_power`, `decision` (`continue`, `stop`, `futility`, `final`). `level`, `interval` and `verdict` are `null` for a look that had too few tasks to give a verdict.
 
 `experiment new` prints the `experiment` and `plan_command`; `experiment plan` the design, `ready`, `readiness[]`, the calibrations it needs (`calibration_runs_needed`, `calibration_estimate_usd`), `eligible_tasks`, `ineligible_tasks[]` (`task`, `reason`), `spend`, and `looks` or `sizes`; `experiment show` the design, `status`, `lock` and `progress` (both `null` before the first run: slots settled, spend, per-arm counts, the looks, `ended_by`); `experiment list` `experiments[]`; `experiment rm` `removed`.

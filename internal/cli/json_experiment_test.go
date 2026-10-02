@@ -66,7 +66,7 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 	assertKeys(t, plan.get("spend"), spendKeys)
 	looks := plan.get("looks").([]any)
 	assertKeys(t, looks[0], lookPlanKeys)
-	if len(looks) != 3 || len(plan.get("sizes").([]any)) != 0 || plan.get("spend", "max_usd") == nil || plan.get("spend", "worst_case_usd") != float64(96) ||
+	if len(looks) != 3 || len(plan.get("sizes").([]any)) != 0 || plan.get("spend", "max_usd") == nil || math.Abs(plan.get("spend", "worst_case_usd").(float64)-16*2*3.3) > 1e-9 || // 16 pairs at $3 caps and their $0.30 overshoot
 		plan.get("spend", "expected_usd").(float64) >= plan.get("spend", "max_usd").(float64) {
 		t.Errorf("experiment plan, a seq-v1 design: %s", plan.stdout)
 	}

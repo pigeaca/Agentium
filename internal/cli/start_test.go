@@ -265,13 +265,13 @@ func TestStartPromptQuotesTheEffectiveBudget(t *testing.T) {
 	f, ctrl := readyFixture(t)
 	ctx := context.Background()
 	declined := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
-	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $46.00. [y/N]", "Nothing was run and nothing was spent",
-		"up to $46.00): agentium experiment run quick-aa-baseline\n")
+	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $47.00. [y/N]", "Nothing was run and nothing was spent",
+		"up to $47.00): agentium experiment run quick-aa-baseline\n")
 	raised := terminalRun(f, ctx, strings.NewReader("n\n"), "start", "--budget", "100")
-	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the design's $46.00, raised by --budget)", "spends up to $100.00. [y/N]",
+	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the design's $47.00, raised by --budget)", "spends up to $100.00. [y/N]",
 		"up to $100.00): agentium experiment run quick-aa-baseline --budget 100")
 	lower := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "10")
-	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $46.00")
+	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $47.00")
 	if strings.Contains(lower.stdout, "Run it now?") {
 		t.Errorf("a lower budget was asked about:\n%s", lower.stdout)
 	}
@@ -622,7 +622,7 @@ func TestStartQuotesAnEarlierRaiseAndEarlierRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
-	expect(t, got, ExitOK, "Budget for this run: $60.00 (the design's $46.00, raised earlier)", "spends up to $60.00. [y/N]",
+	expect(t, got, ExitOK, "Budget for this run: $60.00 (the design's $47.00, raised earlier)", "spends up to $60.00. [y/N]",
 		"Nothing was run in this command (the experiment has 1 run(s) from before)")
 	if strings.Contains(got.stdout, "nothing was spent") {
 		t.Errorf("claims nothing was spent:\n%s", got.stdout)
