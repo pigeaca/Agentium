@@ -171,9 +171,10 @@ func errorMessage(env Env, stderr string, code int) string {
 }
 
 // redact hides, in free text (messages, logs, warnings, notes), the data folder as <data>, the repository as <repo> and
-// the home folder as ~. It matches whole path names only: after a start, quote, space, = ( [ { or a backtick (or file://), and before
-// anything that does not go on a name (letters, digits, _ -, and a . with a name character after it), so /root does not touch
-// root.md or /Users/alice, and ends cleanly before a backtick, a bracket or a sentence's full stop. Content that is the
+// the home folder as ~. It matches whole path names only: after a start, quote, space, = ( [ { or a backtick (or
+// file://), and before anything that does not go on a name (letters, digits, _ -, and a . with a name character after
+// it), so /root does not touch root.md or /Users/alice, and ends cleanly before a backtick, a bracket or a sentence's
+// full stop. Content that is the
 // user's own (diffs, patches, logs, instructions, file names) is never passed through it. Documents hold no paths
 // elsewhere; this is the backstop for text that quotes one.
 func (env Env) redact(text string) string {
