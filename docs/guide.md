@@ -25,7 +25,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 
 - registers the repository (`init`) and, if the project has no snapshot, saves the committed context as `baseline` (arm A);
 - mines and validates tasks until 8 are ready, the cost floor;
-- creates the experiment `quick-...` at the floor, 8 tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
+- creates the experiment `quick-...`, a cost experiment (method `seq-v1`, below) on up to 16 of the ready tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
 - prints the preview: runs, estimated cost, detectable effect, and what is missing;
 - stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it). The run first calibrates each context that lacks a calibration (a short paid run, about $0.1 to $0.2, counted in the budget and shown in the preview).
 
@@ -78,12 +78,24 @@ Mined tasks verify with your build tool's test command (`go test ./...`, `./mvnw
 ```sh
 agentium run calibrate --snapshot trimmed     # optional: short checks (sandbox, large outputs, context size, tools); experiment run does it for any arm that lacks one
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
-agentium experiment new lean --b trimmed      # an A/B: each task's own context against trimmed, on a sample of valid tasks
+agentium experiment new lean --b trimmed      # a cost A/B: each task's own context against trimmed, on up to 16 valid tasks (method seq-v1, below)
 agentium experiment plan lean                 # runs, estimated cost (calibrations included), detectable effects; what is missing
-agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
+agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs in stages, a look after each, within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
+
+### How a cost experiment decides
+
+Cost experiments (`--goal cheaper`, the default) run method `seq-v1`, a group-sequential design: up to 16 tasks x 1 run per arm, in stages, with a look after 8, 12 and 16 tasks (one look after all of them with 8 to 11 tasks, two with 12 to 15).
+
+- **Looks.** A look comes once its stage's runs are settled, retries included, and analyses exactly the tasks of the stages so far. No run of the next stage starts before it. Each look's cost interval is wider than a fixed design's (99.84%, 98.84% and 96.88% at 8, 12 and 16 tasks): together they spend a two-sided 3.5%, O'Brien–Fleming-type, which keeps false differences at or under 5% in the simulations of the [statistics note](research/2026-10-02-wave3-statistics-note.md).
+- **Stops.** The experiment stops at the first look with a cost verdict (improved, regressed or equivalent), or for futility, when a verdict by the last look has become unlikely (below 10%); `experiment new --no-futility` turns futility stops off.
+- **Spend.** `experiment plan` shows each look's runs and spend, the maximum (every stage; the default budget covers it), and the expected spend if nothing changed and at a 20% cut.
+- **Stops between looks.** The budget, the usage limit or Ctrl-C keep the last look's verdict; `experiment run` resumes the stage, and its look comes once the stage is settled.
+- **Reading it.** The report says where the experiment stopped ("stopped at look 1 of 3") and lists each look with its interval. An early stop overstates the effect's size on average: the true change is likely smaller than the estimate.
+
+Success and time are exploratory in cost experiments. For success verdicts use `--goal better` with `--tier quick|confident` or `--task` and `--repeats` (method `phase1-v2`, one analysis at 95%). Experiments locked before keep the method they were locked under.
 
 ## Experiment templates
 
