@@ -740,10 +740,9 @@ func syncWorkTree(src, dst string) (unreadable []string, err error) {
 	return unreadable, nil
 }
 
-// within reports whether p is root or inside it.
 // insideDenied returns the first of denied (as DeniedPaths lists them) that holds p, as written or resolved. The
 // denied paths are compared as listed, not resolved again: DeniedPaths already lists each one's real form, except
-// through a link that is a name in /tmp, which may be another user's and which the sandbox does not follow either.
+// through another user's entry in /tmp, which the sandbox listing does not follow either (see claude's realForm).
 func insideDenied(p string, denied []string) (string, bool) {
 	forms := []string{filepath.Clean(p), realPath(p)}
 	for _, d := range denied {
@@ -754,6 +753,7 @@ func insideDenied(p string, denied []string) (string, bool) {
 	return "", false
 }
 
+// within reports whether p is root or inside it.
 func within(p, root string) bool {
 	rel, err := filepath.Rel(root, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
