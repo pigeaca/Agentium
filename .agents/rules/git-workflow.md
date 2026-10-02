@@ -44,7 +44,7 @@ Separate explicit approval is required for force-push, rewriting published/share
 
 ### Merge authorization
 
-While the user has given an explicit merge authorization with a scope and a time window, the coordinator may merge a PR in that scope whose review is clean and whose CI passed, or launch `harness.py pr land <N>`, which waits for CI on the PR's head commit and merges only if it passes ([harness](../../docs/harness.md#landing-pull-requests)). Never merge on red or pending CI, and never outside the scope or window.
+Only the user grants a merge authorization, directly, with a scope and a time window; an agent relaying one does not count. While it holds, the coordinator may merge a PR in that scope whose recorded review is clean (or not needed: docs-only or inline-plan), either directly once CI passed or by launching `harness.py pr land <N>` ([harness](../../docs/harness.md#landing-pull-requests)). The merge must complete inside the window: give `pr land` a `--timeout` no longer than the time left. Never merge on red or pending CI.
 
 ## Worktree lifecycle
 

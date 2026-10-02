@@ -33,7 +33,7 @@
   - from wave 2, by Agentium itself: it records the time and spend up to each project's first decisive verdict.
 
 ## How the work runs in parallel
-- **At most two feature tracks and one maintenance track per wave.** At most five agents at once, reviewers included, and at most two heavy test runs at once: `check go` takes one of two machine-wide test slots, so a third waits instead of slowing every run. At most five plans in progress; the rest are Planned, Parked, or one-line roadmap entries.
+- **At most two feature tracks and one maintenance track per wave.** At most five agents at once, reviewers included, and at most two heavy test runs at once: `check go` takes one of two per-clone test slots, so a third waits instead of slowing every run. At most five plans in progress; the rest are Planned, Parked, or one-line roadmap entries.
 - **Each code step:** an implementer in its own worktree, routed by risk ([routing](../reference/agent-setup.md#model-and-effort)), then a reviewer, fixes, and a PR. Re-review only when the fixes change behavior, and then only the changes since the last pass. Docs-only PRs need no review.
 - **Shared docs:** feature PRs edit only their own plan file. The coordinator batches ROADMAP and coordinating-plan updates once per wave, so parallel PRs don't conflict on them.
 - **Package ownership:** `internal/cli/experiment_run.go` and `internal/experiment` are hotspots, so items touching them run one after another.
