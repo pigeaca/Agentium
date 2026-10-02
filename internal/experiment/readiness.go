@@ -70,7 +70,7 @@ func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, el
 		c.check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
 	expected, known := est.DesignUSD(d)
-	expected += d.JudgeEstimateUSD()
+	expected += d.JudgingEstimateUSD()
 	calibrating, _ := CalibrationCosts(c.r.Calibrations)
 	if reserve := Reserve(d); known && d.BudgetUSD < expected+calibrating+reserve {
 		c.check("WARNING", fmt.Sprintf("the budget $%.2f is below the estimated $%.2f%s plus $%.2f held for runs in flight: expect it to stop the experiment early",

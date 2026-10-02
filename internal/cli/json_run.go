@@ -26,6 +26,7 @@ type runInfo struct {
 	Passed             *bool       `json:"passed"`
 	CostUSD            float64     `json:"cost_usd"` // the agent's; JudgeCostUSD is the judge's, when it ran
 	JudgeCostUSD       float64     `json:"judge_cost_usd"`
+	PairJudgeCostUSD   float64     `json:"pair_judge_cost_usd"` // the pair judge's, on a pair's arm-B run
 	CostEstimated      bool        `json:"cost_estimated"`
 	Turns              int         `json:"turns"`
 	DurationMS         int64       `json:"duration_ms"`
@@ -67,7 +68,7 @@ func behaviorOf(b run.Behavior) behaviorDoc {
 func runInfoOf(env Env, rec run.Record) runInfo {
 	spend := rec.Spend()
 	return runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
-		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
+		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
 		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),
 		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Started: rec.Started, Finished: rec.Finished}
