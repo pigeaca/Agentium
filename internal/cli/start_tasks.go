@@ -174,15 +174,17 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			snaps = append(snaps, name)
 		}
 	}
-	arms, err := s.w.validating(s.env, nil).Arms(ctx, s.w.project.ID, snaps)
+	arms, err := s.w.validating(s.env, nil, 0).Arms(ctx, s.w.project.ID, snaps)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(s.env.Stdout, "Validating %d task(s) in %d context(s), %d at a time\n", len(tasks), len(arms), defaultJobs)
+	settings := s.settings()
+	jobs := jobsOf(settings)
+	fmt.Fprintf(s.env.Stdout, "Validating %d task(s) in %d context(s), %d at a time\n", len(tasks), len(arms), jobs)
 	began := s.env.Now()
 	quiet := s.env
 	quiet.Stdout = io.Discard // the batch's own table is long; the summary below is what start shows
-	results, err := validateBatch(ctx, quiet, s.w, tasks, task.ValidateOptions{Arms: arms, Repeat: 1, Timeout: 10 * time.Minute}, defaultJobs)
+	results, err := validateBatch(ctx, quiet, s.w, tasks, task.ValidateOptions{Arms: arms, Repeat: 1, Timeout: verifyTimeoutOf(settings)}, jobs)
 	if err != nil {
 		return err
 	}
@@ -238,27 +240,29 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 // mineMore imports up to want more candidates from the history as tasks (unvalidated); exhausted is whether the
 // history has no more to give.
 func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err error) {
-	w, out := s.w, s.env.Stdout
+	w, out, settings := s.w, s.env.Stdout, s.settings()
 	prep, err := mine.Prepare(ctx, mine.PrepareInput{DB: w.db, ProjectID: w.project.ID, Root: w.root,
-		Options:       mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: s.args.requireLock},
-		DefaultVerify: w.defaultVerify()})
+		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: settings.RequireLock},
+		Verify:  settings.Verify, DefaultVerify: w.defaultVerify()})
 	if err != nil {
 		return false, err
 	}
+	s.lastScan = &prep.Result
 	candidates := slices.DeleteFunc(slices.Clone(prep.Result.Candidates), func(c mine.Candidate) bool { return s.dismissed[c.Hash] })
 	found := len(candidates)
 	if found == 0 {
 		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read", prep.Result.Scanned)
-		if n := prep.Result.Counts()[mine.ReasonUnlocked]; s.args.requireLock && n > 0 {
-			// The flag alone can empty a Python project's history: say so, not just "no more".
-			fmt.Fprintf(out, "; --require-lock set aside %d Python commit(s) whose base pins no dependencies (without it they are mined)", n)
+		if n := prep.Result.Counts()[mine.ReasonUnlocked]; settings.RequireLock && n > 0 {
+			// The setting alone can empty a Python project's history: say so, not just "no more".
+			fmt.Fprintf(out, "; the require-lock setting set aside %d Python commit(s) whose base pins no dependencies "+
+				"(agentium init --require-lock=false mines them)", n)
 		}
 		fmt.Fprintln(out)
 		return true, nil
 	}
 	imp := mine.Import(ctx, mine.ImportInput{Importer: w.importer(prep.Names), Candidates: candidates, Limit: want,
 		NewTask: func() store.Task {
-			return store.Task{ProjectID: w.project.ID, Verify: prep.Verify, CreatedAt: s.env.Now()}
+			return store.Task{ProjectID: w.project.ID, Verify: prep.Verify, Setup: append([]string{}, settings.Setup...), CreatedAt: s.env.Now()}
 		}})
 	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned,
 		len(imp.Tasks), imp.Tried, strings.Join(prep.Verify, "; "))
@@ -513,7 +517,26 @@ func (s *starter) explainShortage(c taskCounts, floor, target int, exhausted boo
 			st.Command("agentium task list"), st.Command("agentium task import --commit REF"))
 	}
 	if exhausted && s.reachable(c) < floor {
-		fmt.Fprintf(out, "  the history has no more candidates: %s shows why commits were set aside; add tasks with %s or %s, then run %s again\n",
-			st.Command("agentium task mine --dry-run"), st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"))
+		fmt.Fprintf(out, "  the history has no more candidates%s; add tasks with %s or %s, then run %s again "+
+			"(%s lists the pool's candidates: commits since its last pass, within 270 days)\n", s.setAsideSummary(),
+			st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"),
+			st.Command("agentium pool update --dry-run"))
 	}
+}
+
+// setAsideSummary says why start's last scan, over the whole history, set commits aside, per reason in the order the
+// scan checks them: " (12 commit(s) read; set aside: merge commit 3, tests only 2)"; "" without a scan.
+func (s *starter) setAsideSummary() string {
+	if s.lastScan == nil {
+		return ""
+	}
+	var parts []string
+	for _, r := range rejections(*s.lastScan) {
+		parts = append(parts, fmt.Sprintf("%s %d", r.reason, r.count))
+	}
+	summary := fmt.Sprintf(" (%d commit(s) read", s.lastScan.Scanned)
+	if len(parts) > 0 {
+		summary += "; set aside: " + strings.Join(parts, ", ")
+	}
+	return summary + ")"
 }

@@ -390,7 +390,7 @@ func TestPoolJSONKeys(t *testing.T) {
 	t.Parallel()
 	p := newPoolFixture(t, 2, 0)
 	const updateKeys = "accepted,candidates,candidates_found,command,commits_read,complete,dry_run,head,health,held_back,imported,interrupted,kept,outside_window,ref," +
-		"retired,revalidated,revalidations_skipped,schema,tasks,unknown_watermark,warnings,watermark_moved"
+		"retired,revalidated,revalidations_skipped,schema,set_aside,tasks,unknown_watermark,verify,warnings,watermark_moved"
 	const healthKeys = "awaiting_review,flaky,invalid,last_pass,oldest_valid_base,retired,total,unchecked,unvalidated,valid,weak"
 	run := func(code int, offset time.Duration, args ...string) jsonResult {
 		t.Helper()

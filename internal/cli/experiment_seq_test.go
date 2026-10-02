@@ -36,7 +36,7 @@ func seqFixture(t *testing.T) (runFixture, string) {
 		writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
 		expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
 		gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
-		expect(t, f.run(ctx, "task", "mine", "--limit", "16", "--jobs", "4"), ExitOK, "16 of 16 imported task(s) are valid")
+		expect(t, f.run(ctx, "pool", "update", "--limit", "16", "--jobs", "4"), ExitOK, "Imported 16 of 16 candidate(s) tried", "valid            16")
 		db, id := openFixtureDB(t, f)
 		tasks, err := db.Tasks(ctx, id)
 		if err != nil || len(tasks) != 16 {

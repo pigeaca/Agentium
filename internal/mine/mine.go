@@ -134,7 +134,7 @@ func (c Candidate) Instruction() string {
 }
 
 // CommitInstruction reads commit's message in the git repository that gitArgs select (such as "-C", root) and
-// returns the instruction a candidate of it gives (see Candidate.Instruction): task import --commit and task mine
+// returns the instruction a candidate of it gives (see Candidate.Instruction): task import --commit and mining
 // make the same instruction of the same commit.
 func CommitInstruction(ctx context.Context, commit string, gitArgs ...string) (string, error) {
 	args := append(slices.Clone(gitArgs), "log", "-1", "--no-show-signature", "--no-color", "--encoding=UTF-8",

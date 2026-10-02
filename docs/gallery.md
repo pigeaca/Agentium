@@ -3,7 +3,7 @@
 Real console output from Agentium. Back to the [README](../README.md); commands are in the [guide](guide.md).
 
 This is real output, printed by today's `agentium` (built from `main` at b6df097 on 2026-10-02) in a 120-column terminal; the pictures were redone from stored data on that date. Paths into the home folder are shortened to `~`, and `…` marks lines left out. Where the data comes from:
-- **`start` and `task mine`:** a fresh clone of [Masterminds/semver](https://github.com/Masterminds/semver), a free run that stops at the preview (Claude Code 2.1.285).
+- **`start` and `pool update --dry-run`:** a fresh clone of [Masterminds/semver](https://github.com/Masterminds/semver), free runs that stop before any agent run (Claude Code 2.1.285). The candidates picture was redone on 2026-10-03 with the build that made `pool update` the way to mine, on a new data folder: the pool reads the last 270 days, so older commits are counted as outside it.
 - **The `ab` experiment** (plan, run, report, one run): Phase 1's acceptance runs on 2026-09-29, Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. It compared today's docs (`full`) with a minimal version (`minimal`) and was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner. The event lines of the run were recorded then; everything else is re-printed from the stored data.
 - **The Judge section:** the `judge-check` experiment, 2026-10-01 (Claude Code 2.1.285).
 - **The decisive verdict:** the model A/B on samber/lo, 2026-10-02 (Claude Code 2.1.285).
@@ -12,9 +12,9 @@ This is real output, printed by today's `agentium` (built from `main` at b6df097
 
 <img src="images/console-start.svg" alt="agentium start --accept-mined on a Go library: registered, snapshot saved, tasks mined and validated, an A/A experiment created and its preview">
 
-**2. Look at the candidates:** `task mine --dry-run` ranks tasks from the git history, explains each score and lists what it set aside, without importing anything.
+**2. Look at the candidates:** `pool update --dry-run` ranks tasks from the git history, explains each score and lists what it set aside, without importing anything.
 
-<img src="images/console-mine.svg" alt="agentium task mine --dry-run: ranked commits with scores and their reasons, then the commits set aside and why">
+<img src="images/console-mine.svg" alt="agentium pool update --dry-run: ranked commits with scores and their reasons, then the commits set aside and why, and the pool's health">
 
 **3. Plan it:** what it costs and what it can detect, before anything runs.
 

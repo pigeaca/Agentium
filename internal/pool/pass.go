@@ -73,12 +73,17 @@ type Imported struct {
 //  7. Maintain (re-validate stale tasks, retire dead ones), when given. Killed here: the rules find the same tasks.
 //  8. End: record the time and, when the import tried every candidate and nothing was interrupted, move the watermark
 //     to the head (a complete scan) or add the scan's Through tips (a bounded one), unless another pass moved it
-//     meanwhile. Killed before: the next pass reads the range again, which costs a scan, never a commit.
+//     meanwhile or the pass was a re-scan (Since). Killed before: the next pass reads the range again, which costs a scan, never a commit.
 type Pass[C any] struct {
 	File   string        // StateFile
 	Limit  int           // imports per pass; Policy.Limit
 	Window time.Duration // Policy.RetireAge: commits and candidates' bases older than this are left alone; 0: none
 	Margin time.Duration // Policy.StaleAfter: a candidate whose base would retire within this is not imported either
+	// Since, when set, makes the pass a re-scan: it reads the commits committed from Since on (within the Window)
+	// whatever the watermark says, reaching commits an earlier pass set aside (under other settings, say), and it
+	// leaves the watermark where it is, since it read another range than the one after it. Commits that are tasks are
+	// still never offered.
+	Since  time.Time
 	Now    func() time.Time
 	Commit func(C) string    // a candidate's solution commit
 	Patch  func(C) string    // optional: its patch ID ("" when unknown)
@@ -130,16 +135,13 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 	if res.Head, err = p.Head(ctx); err != nil {
 		return res, err
 	}
-	r := ScanRange{Head: res.Head, Exclude: start, Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
-	if p.Window > 0 {
-		r.Since = p.Now().Add(-p.Window)
-	}
+	r, window := p.scanRange(res.Head, st)
 	scanned, err := p.Scan(ctx, r)
 	if err != nil {
 		return res, err
 	}
 	res.Unknown = scanned.Unknown
-	candidates := p.keep(scanned.Candidates, r.Since, st)
+	candidates := p.keep(scanned.Candidates, window, st)
 	res.Candidates = len(candidates)
 	imp := Imported{}
 	if len(candidates) > 0 {
@@ -181,7 +183,7 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 	// exclusions only read more), and keeps later passes from reading their history again and again.
 	known := slices.DeleteFunc(slices.Clone(start), func(c string) bool { return slices.Contains(scanned.Unknown, c) })
 	next := known
-	if !imp.Interrupted && imp.Tried == len(candidates) {
+	if p.Since.IsZero() && !imp.Interrupted && imp.Tried == len(candidates) {
 		if scanned.Complete {
 			next = []string{res.Head}
 		} else {
@@ -198,6 +200,24 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 		return nil
 	})
 	return res, err
+}
+
+// scanRange is the history a pass reads from head: the commits after the watermark within the Window or, for a
+// re-scan (Since), every commit from Since on within it. window is the Window's start (zero: none), which bounds the
+// candidates' bases (keep).
+func (p Pass[C]) scanRange(head string, st State) (r ScanRange, window time.Time) {
+	r = ScanRange{Head: head, Exclude: st.Watermark, Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
+	if p.Window > 0 {
+		window = p.Now().Add(-p.Window)
+	}
+	r.Since = window
+	if !p.Since.IsZero() {
+		r.Exclude = nil
+		if p.Since.After(window) {
+			r.Since = p.Since
+		}
+	}
+	return r, window
 }
 
 // keep drops the candidates the pool leaves alone: those whose base is older than since, or would be within Margin
@@ -267,14 +287,11 @@ func (p Pass[C]) Preview(ctx context.Context) (Preview[C], error) {
 	if out.Head, err = p.Head(ctx); err != nil {
 		return out, err
 	}
-	r := ScanRange{Head: out.Head, Exclude: st.Watermark, Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
-	if p.Window > 0 {
-		r.Since = p.Now().Add(-p.Window)
-	}
+	r, window := p.scanRange(out.Head, st)
 	scanned, err := p.Scan(ctx, r)
 	if err != nil {
 		return out, err
 	}
-	out.Unknown, out.Candidates, out.Unvalidated = scanned.Unknown, p.keep(scanned.Candidates, r.Since, st), st.Unvalidated(tasks)
+	out.Unknown, out.Candidates, out.Unvalidated = scanned.Unknown, p.keep(scanned.Candidates, window, st), st.Unvalidated(tasks)
 	return out, nil
 }

@@ -25,10 +25,9 @@ import (
 
 const contextUsage = `Usage:
   agentium context show [--ref REF]              what Claude Code loads (default: the working tree)
-  agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]... [--include-linked]
+  agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]...
                                                  save a version (default: --ref HEAD); --include adds a
-                                                 document (Markdown, rst, AsciiDoc), --include-linked every
-                                                 document the context links to
+                                                 document (Markdown, rst, AsciiDoc)
   agentium context lint [--ref REF]              free check, no agent runs: size change since the last snapshot,
                                                  broken @imports, AGENTS.md over Codex's 32 KiB limit and show's
                                                  warnings (default: the working tree); always exit 0

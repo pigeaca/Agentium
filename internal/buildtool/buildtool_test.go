@@ -167,7 +167,7 @@ func TestAllowlistAndRunners(t *testing.T) {
 	}
 }
 
-// Detected follows the Detect files, and a detected profile names the languages task mine keeps.
+// Detected follows the Detect files, and a detected profile names the languages mining keeps.
 func TestDetected(t *testing.T) {
 	if got := Detected(func(string) bool { return false }); len(got) != 0 {
 		t.Fatalf("nothing at the root detects %d profile(s)", len(got))

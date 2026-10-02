@@ -158,7 +158,7 @@ func TestStartWithTooFewTasks(t *testing.T) {
 	ctx := context.Background()
 	got := f.run(ctx, "start", "--accept-mined", "--yes")
 	expect(t, got, ExitError, "Mining: ", "5 valid of 5", "only 5 of the 8 an experiment needs are ready", "the history has no more candidates",
-		"agentium task mine --dry-run", "agentium task add")
+		"the history has no more candidates (6 commit(s) read; set aside: no parent commit 1)", "agentium pool update --dry-run lists the pool's candidates", "agentium task add")
 	if strings.Contains(got.stdout, "Experiment ") || strings.Contains(got.stdout, "Before it runs") {
 		t.Errorf("an experiment was made from too few tasks:\n%s", got.stdout)
 	}

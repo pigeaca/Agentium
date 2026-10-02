@@ -384,7 +384,7 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 
 	// Without a ticket or the flag, a solution without tests is refused as before; the error names the way out.
 	expect(t, add("plain", noTests, "--instruction", "Refuse empty carts."), ExitError, "changes no test files", "--judge-graded")
-	expect(t, add("both", noTests, "--ticket-file", jiraFile, "--instruction", "x"), ExitUsage, "--ticket-file or --instruction/--instruction-file, not both")
+	expect(t, add("both", noTests, "--ticket-file", jiraFile, "--instruction", "x"), ExitUsage, "--ticket-file or --instruction, not both")
 	expect(t, run("task", "add", "nosol", "--base", base, "--instruction", "x", "--judge-graded", "--verify", "true"), ExitUsage, "--judge-graded needs --solution")
 	expect(t, add("flagged-tests", withTests, "--instruction", "Refuse empty carts.", "--judge-graded"), ExitError, "is for solutions without tests")
 	expect(t, add("missing", noTests, "--ticket-file", filepath.Join(tickets, "nope.json")), ExitError, "read ticket")
