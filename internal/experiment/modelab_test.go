@@ -146,7 +146,7 @@ func TestArmProfilesAndCaps(t *testing.T) {
 		t.Errorf("caps: %v %v, run cap %v, pair %v, reserve %v", d.ArmRunBudgetUSD(a), d.ArmRunBudgetUSD(d.Arms[1]), d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
 	d.Judge = &judge.Settings{Model: "m", Effort: "high", Repeats: 1}
-	if d.ArmRunCapUSD(a) != 5 || d.PairCapUSD() != 12 { // each arm's judgement ($2) on top of its own cap
+	if d.ArmRunCapUSD(a) != 4 || d.PairCapUSD() != 10 { // each arm's judgement ($1) on top of its own cap
 		t.Errorf("with the judge: arm A cap %v, pair %v", d.ArmRunCapUSD(a), d.PairCapUSD())
 	}
 	if d.ModelLabel() != "A = claude-sonnet-5, B = claude-opus-5-5:high" || validDesign().ModelLabel() != "claude-sonnet-5" {

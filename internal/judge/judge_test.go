@@ -179,6 +179,8 @@ func TestParse(t *testing.T) {
 			answer{fixed: "no", reason: "r", cost: 0.03}},
 		{"error result", Reply{Stdout: []byte(`{"is_error": true, "result": "You've hit your session limit", "total_cost_usd": 0}`), ExitCode: 1},
 			answer{err: "error result: You've hit your session limit", kind: kindInfra}},
+		{"the call's budget cap", Reply{Stdout: []byte(`{"subtype": "error_max_budget_usd", "is_error": false, "result": "", "structured_output": {"fixed": "yes"}, "total_cost_usd": 0.26}`)},
+			answer{cost: 0.26, err: "over the call's budget cap: ", kind: kindInfra}},
 		{"not JSON", Reply{Stdout: []byte("API Error: 400"), ExitCode: 1}, answer{err: "exit 1, not JSON: API Error: 400", kind: kindInfra}},
 		{"nothing on stdout", Reply{Stderr: "claude: not signed in", ExitCode: 1}, answer{err: "exit 1, not JSON: claude: not signed in", kind: kindInfra}},
 		{"no verdict", Reply{Stdout: []byte(`{"result": "I cannot say", "total_cost_usd": 0.02}`)},
@@ -348,7 +350,7 @@ echo '{"structured_output": {"fixed": "partly", "reason": "misses a case"}, "tot
 	}
 	args := read("args")
 	for _, want := range []string{"[--tools]\n[]\n", "[--settings]\n[{\"autoMemoryEnabled\":false,\"disableClaudeAiConnectors\":true}]\n", "[--system-prompt]\n[" + SystemPrompt + "]\n", "[--json-schema]\n[" + Schema + "]\n",
-		"[--output-format]\n[json]\n", "[--max-budget-usd]\n[1]\n", "[--strict-mcp-config]", "[--model]\n[claude-opus-5-5]\n", "[--effort]\n[high]\n"} {
+		"[--output-format]\n[json]\n", "[--max-budget-usd]\n[0.5]\n", "[--strict-mcp-config]", "[--model]\n[claude-opus-5-5]\n", "[--effort]\n[high]\n"} {
 		if !strings.Contains(args, want) {
 			t.Errorf("args lack %q:\n%s", want, args)
 		}

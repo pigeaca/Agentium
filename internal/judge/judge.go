@@ -43,8 +43,12 @@ const (
 	DefaultRepeats = 3
 	// MaxDiffChars cuts each diff (in characters) so one huge change cannot make a call fail or cost a lot.
 	MaxDiffChars = 40000
-	// CallCapUSD is each call's --max-budget-usd. The pilot's calls cost $0.03–0.33 (the dearest wrote the prompt cache).
-	CallCapUSD = 1.0
+	// CallCapUSD is each call's --max-budget-usd, and the one number every reserve, budget check and preview derives a
+	// judgement's cap from (experiment.Design.JudgeCapUSD). The pilot's calls cost $0.03–0.33 (the dearest wrote the
+	// prompt cache); the real check's cost about $0.034; the cap clears the dearest observed call ($0.33) with margin. A call that hits it brings no answer (parseField). It is not
+	// recorded in a design or lock: they hold the repeats, and the cap is the code's, so an older experiment resumes
+	// under the current cap.
+	CallCapUSD = 0.50
 	// EstimateUSD is the pilot's mean cost of one call (176 calls on claude-opus-5-5 at high effort): previews state it as
 	// that, not as a measure of this project.
 	EstimateUSD = 0.065
@@ -276,6 +280,7 @@ func parse(r Reply) answer { return parseField(r, "fixed", []string{Yes, Partly,
 func parseField(r Reply, field string, allowed []string) answer {
 	var out struct {
 		IsError          bool            `json:"is_error"`
+		Subtype          string          `json:"subtype"`
 		Result           json.RawMessage `json:"result"`
 		TotalCostUSD     float64         `json:"total_cost_usd"`
 		StructuredOutput json.RawMessage `json:"structured_output"`
@@ -294,6 +299,9 @@ func parseField(r Reply, field string, allowed []string) answer {
 	var result string
 	if json.Unmarshal(out.Result, &result) != nil {
 		result = string(out.Result)
+	}
+	if out.Subtype == "error_max_budget_usd" { // the call cap: Claude Code stopped it, whatever is_error says
+		return answer{cost: out.TotalCostUSD, err: "over the call's budget cap: " + short(result), kind: kindInfra}
 	}
 	if out.IsError {
 		return answer{cost: out.TotalCostUSD, err: "error result: " + short(result), kind: kindInfra}
