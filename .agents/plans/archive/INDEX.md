@@ -21,3 +21,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Refactor round: spend record, services, shared helpers, faster tests](2026-10-01-refactor-round.md) — 2026-10-01 to 2026-10-02 (#59, #64, #65, #72, #74)
 - [Model and effort comparison](2026-10-01-model-ab.md) — 2026-10-01 to 2026-10-02 (#74, #75; the first decisive verdict)
 - [Quick start: from a fresh clone to a running experiment](2026-10-02-quick-start.md) — 2026-10-02 (context lint, calibration inside `experiment run`, `agentium start`, north-star tracking; real check and README pictures)
+- [Java and Rust projects](2026-09-30-java-rust.md) — 2026-09-30 to 2026-10-02 (Maven, Gradle and Cargo profiles; pilot; #77, #79, #81, #86)
