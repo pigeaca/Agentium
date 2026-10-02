@@ -298,13 +298,12 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	inv.BuildCache = filepath.Join(workspace, "go-build")
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
 	// reason that is not the agent's. So would one that holds its temp root.
-	for _, denied := range inv.DeniedPaths(env.Environ) {
-		if within(realPath(workspace), realPath(denied)) {
-			return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
-		}
-		if within(realPath(tempRoot), realPath(denied)) {
-			return rec, fmt.Errorf("the run's temp root %s lies inside %s, which runs may not read", tempRoot, denied)
-		}
+	deniedPaths := inv.DeniedPaths(env.Environ)
+	if denied, ok := insideDenied(workspace, deniedPaths); ok {
+		return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
+	}
+	if denied, ok := insideDenied(tempRoot, deniedPaths); ok {
+		return rec, fmt.Errorf("the run's temp root %s lies inside %s, which runs may not read", tempRoot, denied)
 	}
 	if err := claude.TempRootFits(tempRoot, inv.UID); err != nil {
 		return rec, err
@@ -742,6 +741,19 @@ func syncWorkTree(src, dst string) (unreadable []string, err error) {
 }
 
 // within reports whether p is root or inside it.
+// insideDenied returns the first of denied (as DeniedPaths lists them) that holds p, as written or resolved. The
+// denied paths are compared as listed, not resolved again: DeniedPaths already lists each one's real form, except
+// through a link that is a name in /tmp, which may be another user's and which the sandbox does not follow either.
+func insideDenied(p string, denied []string) (string, bool) {
+	forms := []string{filepath.Clean(p), realPath(p)}
+	for _, d := range denied {
+		if within(forms[0], d) || within(forms[1], d) {
+			return d, true
+		}
+	}
+	return "", false
+}
+
 func within(p, root string) bool {
 	rel, err := filepath.Rel(root, p)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))

@@ -963,6 +963,111 @@ func TestFormsNeverFollowALinkOutOfTmp(t *testing.T) {
 	}
 }
 
+// Below a link that is a name in /tmp, nothing is resolved either, whether the rest exists through the link or not:
+// the real form is the /private/tmp twin with the rest as written. A missing name follows only /tmp itself, and a real
+// folder in /tmp is resolved through, its own links included.
+func TestFormsNeverFollowALinkOutOfTmpBelowIt(t *testing.T) {
+	target := t.TempDir()
+	if err := os.Mkdir(filepath.Join(target, "inside"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-below-%d", os.Getpid()))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("cannot create %s: %v", link, err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	twin := filepath.Join("/private/tmp", filepath.Base(link))
+	for _, rest := range []string{"inside", "inside/missing", "missing/deeper"} {
+		p := filepath.Join(link, rest)
+		if got, want := forms(p), []string{p, filepath.Join(twin, rest)}; !slices.Equal(got, want) {
+			t.Errorf("forms(%s) = %q, want %q (never through the link to %s)", p, got, want, target)
+		}
+		if p := filepath.Join(twin, rest); !slices.Equal(forms(p), []string{p}) {
+			t.Errorf("forms(%s) = %q: the /private/tmp form follows the link", p, forms(p))
+		}
+	}
+
+	tmp, err := filepath.EvalSymlinks("/tmp") // the system's own link, /private/tmp on macOS
+	if err != nil {
+		t.Fatal(err)
+	}
+	withReal := func(p, real string) []string {
+		if real == p {
+			return []string{p}
+		}
+		return []string{p, real}
+	}
+	missing := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-missing-%d", os.Getpid()), "x")
+	if got, want := forms(missing), withReal(missing, filepath.Join(tmp, filepath.Base(filepath.Dir(missing)), "x")); !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q", missing, got, want)
+	}
+
+	dir := filepath.Join("/tmp", fmt.Sprintf("agentium-forms-real-%d", os.Getpid()))
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	p := filepath.Join(dir, "missing", "x")
+	if got, want := forms(p), withReal(p, filepath.Join(tmp, filepath.Base(dir), "missing", "x")); !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q", p, got, want)
+	}
+	own := t.TempDir()
+	if err := os.Symlink(own, filepath.Join(dir, "own")); err != nil {
+		t.Fatal(err)
+	}
+	ownReal, err := filepath.EvalSymlinks(own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = filepath.Join(dir, "own", "missing")
+	if got, want := forms(p), []string{p, filepath.Join(ownReal, "missing")}; !slices.Equal(got, want) {
+		t.Errorf("forms(%s) = %q, want %q: a link inside a real folder in /tmp is followed", p, got, want)
+	}
+}
+
+// A data folder reached through a link (AGENTIUM_HOME under /var/folders, or on a linked volume) whose deps Gradle home
+// does not exist yet when the agent starts, as in a Maven base: the sandbox matches real paths, so its real form must
+// be denied too, or a concurrent warm-up's caches (which can name hidden tests) would be readable there.
+func TestDeniedPathsResolveAMissingDepsGradleHome(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(real, "deps", "1"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	realDir, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, deps := range []string{"deps/1", "deps/2"} { // the deps folder itself missing too
+		inv := toolInvocation(t, "maven")
+		inv.Deps = filepath.Join(link, deps)
+		denied := inv.DeniedPaths(parentEnv)
+		_, settings := toolCommand(t, inv, parentEnv)
+		_, fs := sandbox(settings)
+		denyRead, _ := fs["denyRead"].([]any)
+		for _, name := range []string{"gradle", "build-cache"} {
+			for _, p := range []string{filepath.Join(inv.Deps, name), filepath.Join(realDir, deps, name)} {
+				if !slices.Contains(denied, p) || !slices.Contains(denyRead, any(p)) {
+					t.Errorf("%s is not denied: %q", p, denied)
+				}
+			}
+		}
+	}
+	// What a warm-up then creates lies where the real form said.
+	gradle := filepath.Join(link, "deps", "1", "gradle")
+	want := forms(gradle)[1]
+	if err := os.MkdirAll(filepath.Join(gradle, "caches", "9.9.9"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := filepath.EvalSymlinks(gradle); err != nil || got != want {
+		t.Errorf("the created %s resolves to %q (%v), the denied real form is %q", gradle, got, err, want)
+	}
+}
+
 // formsResolved is the plain rule outside /tmp: the path and, when different, its resolved form.
 func formsResolved(p string) []string {
 	out := []string{filepath.Clean(p)}
