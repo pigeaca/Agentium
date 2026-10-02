@@ -60,6 +60,10 @@ func TestModelABDesignIsValidated(t *testing.T) {
 		{[]string{"--a", sonnet + ":", "--b", opus}, "names no effort after the colon"},
 		{[]string{"--a", sonnet, "--b", opus, "--model", opus}, "--b claude-opus-5-5 makes a model A/B, whose arm A runs --a, else --model: give one of them"},
 		{[]string{"--a", sonnet, "--b", opus, "--context", "nope"}, `snapshot "nope": not found`},
+		// Arm A's profile must read as a model: a context in --a would become a model that calibrations pay for.
+		{[]string{"--a", "lean", "--b", opus}, "--a lean is not a model: a model A/B's context is --context"},
+		{[]string{"--a", "sonnet:high", "--b", opus}, "--a sonnet:high is not a model"},
+		{[]string{"--model", "sonnet", "--b", opus}, "--model sonnet is not a model Agentium reads as one, and arm A of this model A/B runs it"},
 	} {
 		code := ExitUsage
 		if strings.Contains(c.want, "not found") {
@@ -75,6 +79,7 @@ func TestModelABDesignIsValidated(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", "lean"), ExitError,
 		"not found: --b lean is a snapshot, so this is a context A/B, whose --a names a context; for a model A/B, give --b a model")
 	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "opus"), ExitError, `snapshot "opus": not found: --b names a snapshot (a context A/B), or a model`)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "claude-rules"), ExitError, `snapshot "claude-rules": not found: --b names a snapshot`)
 	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus, "--b", opus, "--task", "value", "--context", "base",
 		"--budget", "5"), ExitUsage, "below one pair of runs at their caps ($6.60)")
 

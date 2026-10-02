@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -219,14 +220,18 @@ func InferTemplate(b string) string {
 }
 
 // IsModel reports whether s, a MODEL[:EFFORT], names a model as experiment new reads --b: one Agentium's price table
-// knows, or any claude-… name. Aliases such as "sonnet" are not: they would read as a snapshot's name.
+// knows, or a name shaped like a Claude model ID (modelID: claude-next-9, claude-opus-6-20270101). Aliases such as
+// "sonnet" and other claude-… names such as "claude-rules" are not: they read as a snapshot's name.
 func IsModel(s string) bool {
 	model, _, _ := strings.Cut(s, ":")
 	if _, known := pricing.Lookup(model); known {
 		return true
 	}
-	return strings.HasPrefix(model, "claude-")
+	return modelID.MatchString(model)
 }
+
+// modelID is the shape of a Claude model ID: a family and a version of numbers, optionally dated.
+var modelID = regexp.MustCompile(`^claude-[a-z]+-\d+(-\d+)*(-\d{8})?$`)
 
 // SameProfile reports whether two MODEL[:EFFORT]s parse to one model and effort. One that does not parse is never the
 // same: ParseProfile's error is reported where it is read.

@@ -43,6 +43,16 @@ var designsBefore = []struct {
 		newArgs: []string{"--a", "claude-sonnet-5-5:low", "--b", "claude-opus-5-5:high", "--task", "value", "--judge=claude-sonnet-5-5:medium", "--seed", "7"},
 	},
 	{
+		// A bare --judge-pairs takes --judge's model, as the old shared --judge-model gave it to both judges.
+		name: "inherit", template: "aa",
+		design: `{"version":3,"template":"aa","arms":[{"name":"A","context":"base"},{"name":"B","context":"base"}],"tasks":["value"],"repeats":1,` +
+			`"model":"claude-sonnet-5-5","goal":"cheaper","cost_margin":0.1,"success_margin":0.15,"run_budget_usd":3,"budget_usd":35,` +
+			`"timeout":1200000000000,"verify_timeout":600000000000,"concurrency":2,"seed":7,"judge":{"model":"claude-sonnet-5-5","effort":"high","repeats":3},` +
+			`"judge_pairs":{"model":"claude-sonnet-5-5","effort":"high","repeats":1},"method":"seq-v1"}`,
+		oldArgs: []string{"--template", "aa", "--task", "value", "--judge", "--judge-pairs", "--judge-model", "claude-sonnet-5-5", "--seed", "7"},
+		newArgs: []string{"--task", "value", "--judge=claude-sonnet-5-5", "--judge-pairs", "--seed", "7"},
+	},
+	{
 		name: "def", template: "aa",
 		design: `{"version":3,"template":"aa","arms":[{"name":"A","context":"base"},{"name":"B","context":"base"}],"tasks":["value"],"repeats":1,` +
 			`"model":"claude-sonnet-5-5","goal":"cheaper","cost_margin":0.1,"success_margin":0.15,"run_budget_usd":3,"budget_usd":14,` +

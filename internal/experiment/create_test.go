@@ -41,7 +41,11 @@ func TestInferTemplate(t *testing.T) {
 		"claude-sonnet-5-5":          TemplateModelAB,
 		"claude-opus-5-5:high":       TemplateModelAB,
 		"claude-haiku-4-5-20251001":  TemplateModelAB,
-		"claude-next-9":              TemplateModelAB, // unpriced, but a claude-… name
+		"claude-next-9":              TemplateModelAB, // unpriced, but shaped like a model ID
+		"claude-opus-6-20270101":     TemplateModelAB,
+		"claude-rules":               TemplateContextAB, // a claude-… name that is no model ID: a snapshot, maybe mistyped
+		"claude-md-v2":               TemplateContextAB,
+		"claude-opus":                TemplateContextAB,
 		"claude-sonnet-5-5:huge":     TemplateModelAB, // read as a model; its effort is then refused
 		"Claude-sonnet-5-5-snapshot": TemplateContextAB,
 	} {

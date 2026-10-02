@@ -317,6 +317,9 @@ func TestExperimentNewUsage(t *testing.T) {
 		{[]string{"x", "--model", "claude-opus-5-5:huge"}, `--model "claude-opus-5-5:huge": unknown effort "huge"`},
 		{[]string{"x", "--b", "lean", "--judge=claude-opus-5-5:huge"}, `invalid boolean value "claude-opus-5-5:huge" for -judge: "claude-opus-5-5:huge": unknown effort "huge"`},
 		{[]string{"x", "--b", "lean", "--judge", "claude-opus-5-5"}, "--judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]"},
+		// Without a NAME, the model is not taken for one.
+		{[]string{"--b", "lean", "--judge", "claude-sonnet-5-5"}, "--judge and --judge-pairs take their model after an equals sign"},
+		{[]string{"--judge-pairs", "claude-sonnet-5-5"}, "--judge and --judge-pairs take their model after an equals sign"},
 		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "huge"}, `unknown tier "huge"`},
 		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "quick", "--task", "value"}, "use one"},
 		{[]string{"x", "--b", "lean", "--tier", "quick"}, "--tier sizes success experiments (--goal better); a cost experiment (--goal cheaper) runs method seq-v1"},

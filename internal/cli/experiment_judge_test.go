@@ -66,6 +66,24 @@ func TestExperimentNewJudgeFlags(t *testing.T) {
 	if d := storedDesign(t, f, "sonnet"); d.Judge == nil || *d.Judge != (llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3}) {
 		t.Errorf("stored judge settings %+v", d.Judge)
 	}
+	// A bare --judge-pairs takes --judge's model and effort; its own value overrides them.
+	for _, c := range []struct {
+		args        []string
+		judge, pair llmjudge.Settings
+	}{
+		{[]string{"--judge=claude-sonnet-5-5:max", "--judge-pairs"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "max", Repeats: 3},
+			llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "max", Repeats: 1}},
+		{[]string{"--judge-pairs", "--judge=claude-sonnet-5-5"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3},
+			llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 1}},
+		{[]string{"--judge=claude-sonnet-5-5", "--judge-pairs=claude-opus-5-5:low"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3},
+			llmjudge.Settings{Model: "claude-opus-5-5", Effort: "low", Repeats: 1}},
+	} {
+		expect(t, f.run(ctx, append([]string{"experiment", "new", "pairs", "--b", "lean", "--task", "value", "--budget", "50"}, c.args...)...), ExitOK)
+		if d := storedDesign(t, f, "pairs"); d.Judge == nil || d.JudgePairs == nil || *d.Judge != c.judge || *d.JudgePairs != c.pair {
+			t.Errorf("%v: judges %+v, %+v", c.args, d.Judge, d.JudgePairs)
+		}
+		expect(t, f.run(ctx, "experiment", "rm", "pairs"), ExitOK)
+	}
 	for _, off := range [][]string{nil, {"--judge=false"}, {"--judge=claude-opus-5-5", "--judge=false"}} {
 		expect(t, f.run(ctx, append([]string{"experiment", "new", "plain", "--b", "lean", "--task", "value", "--budget", "50"}, off...)...), ExitOK)
 		if d := storedDesign(t, f, "plain"); d.Judge != nil || d.JudgePairs != nil {

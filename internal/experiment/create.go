@@ -240,7 +240,7 @@ func explainMissingArm(err error, flag string, o NewOptions) error {
 	}
 	switch {
 	case flag == "--b":
-		return fmt.Errorf("%w: --b names a snapshot (a context A/B), or a model for a model A/B: one Agentium's price table knows, or any claude-… name", err)
+		return fmt.Errorf("%w: --b names a snapshot (a context A/B), or a model for a model A/B: one Agentium's price table knows, or a claude-… model ID", err)
 	case o.Template == TemplateAA && IsModel(o.ContextA):
 		return fmt.Errorf("%w: without --b this is an A/A, whose --a names its one context; for a model A/B, give --b a model too", err)
 	case o.Template == TemplateContextAB && IsModel(o.ContextA):

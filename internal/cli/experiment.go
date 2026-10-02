@@ -27,7 +27,7 @@ var experimentUsage = `Usage:
                        --b SNAPSHOT       a context A/B: arm A's context (--a, default base) against snapshot B
                        --b MODEL[:EFFORT] a model A/B: two Claude Code profiles, arm A's (--a, default --model) against
                                           B's, on the same tasks in one context (--context, default base). A model is
-                                          one Agentium's price table knows, or any claude-… name; an effort is low,
+                                          one Agentium's price table knows, or a claude-… model ID; an effort is low,
                                           medium, high, xhigh or max (default: the CLI's). Each arm's model is
                                           calibrated when the experiment runs, if it is not yet
                      A --b that names both a snapshot and a model is refused. --model (default ` + experiment.DefaultExperimentModel + `) is
@@ -72,13 +72,13 @@ judged and why, how often the repeats agreed, the judge's cost, and the passing 
 reasons (the first %d; --json lists them all).
 
 --judge-pairs asks the pair judge, unvalidated, which of a pair's two changes is the better fix, when both runs pass
-(a task's run in each arm with the same repeat index): in both orders, on %s at effort %s, or on
---judge-pairs=MODEL[:EFFORT]; when the orders disagree, the pair is a tie. It reads what --judge reads. Its preferences
-are exploratory: they never make a verdict. Each pair is compared beside the runs, so it holds no run's slot and no
-look; the budget holds back %d calls × $%.2f per pair for it at the default judge (another model or effort adds each
-call's overshoot allowance: experiment plan states the cap), about $%.2f a pair at the pilot's mean. A pair judge that
-hits a usage limit pauses the experiment as the judge does; queued comparisons wait while the experiment waits for the
-usage window, and a pause at the usage limit leaves them for the resume.
+(a task's run in each arm with the same repeat index): in both orders, on --judge's model (default %s at
+effort %s), or on --judge-pairs=MODEL[:EFFORT]; when the orders disagree, the pair is a tie. It reads what
+--judge reads. Its preferences are exploratory: they never make a verdict. Each pair is compared beside the runs, so
+it holds no run's slot and no look; the budget holds back %d calls × $%.2f per pair for it at the default judge
+(another model or effort adds each call's overshoot allowance: experiment plan states the cap), about $%.2f a pair at
+the pilot's mean. A pair judge that hits a usage limit pauses the experiment as the judge does; queued comparisons
+wait while the experiment waits for the usage window, and a pause at the usage limit leaves them for the resume.
 `, llmjudge.DefaultRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.DefaultRepeats, llmjudge.CallCapUSD,
 	llmjudge.DefaultRepeats*int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged, llmjudge.DefaultModel, llmjudge.DefaultEffort,
 	llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD)
@@ -158,7 +158,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	if !removed.report(env, "experiment new") {
 		return ExitUsage
 	}
-	if len(rest) > 1 && (judge.on || pairs.on) && slices.ContainsFunc(rest, experiment.IsModel) {
+	if (judge.on || pairs.on) && slices.ContainsFunc(rest, experiment.IsModel) { // a model given as a separate word
 		fmt.Fprintln(env.Stderr, "agentium experiment new: --judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]")
 		return ExitUsage
 	}
@@ -169,6 +169,9 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	o.Tasks = tasks
 	o.Judge, o.JudgeModel, o.JudgeEffort = judge.on, judge.model, judge.effort
 	o.JudgePairs, o.PairJudgeModel, o.PairJudgeEffort = pairs.on, pairs.model, pairs.effort
+	if pairs.on && pairs.model == "" { // a bare --judge-pairs takes --judge's model and effort, as one --judge-model set both
+		o.PairJudgeModel, o.PairJudgeEffort = judge.model, judge.effort
+	}
 	if err := setExperimentArms(&o, fs, a, b, contextName, model); err != nil {
 		return failNew(env, err)
 	}
@@ -205,7 +208,7 @@ func setExperimentArms(o *experiment.NewOptions, fs *flag.FlagSet, a, b, context
 			return experiment.UsageError("--context is a model A/B's one context (--b MODEL[:EFFORT]); an A/A, without --b, runs --a's context in both arms")
 		case given["context"]:
 			return experiment.UsageError(fmt.Sprintf("--context is a model A/B's one context, but --b %s is not a model (one Agentium's price table knows, "+
-				"or any claude-… name), so this is a context A/B: --a and --b name its contexts", b))
+				"or a claude-… model ID), so this is a context A/B: --a and --b name its contexts", b))
 		}
 		var err error
 		if o.Model, o.Effort, err = experiment.ParseProfile(model); err != nil {
@@ -218,6 +221,16 @@ func setExperimentArms(o *experiment.NewOptions, fs *flag.FlagSet, a, b, context
 	}
 	if a != "" && given["model"] {
 		return experiment.UsageError(fmt.Sprintf("--b %s makes a model A/B, whose arm A runs --a, else --model: give one of them", b))
+	}
+	// Arm A's profile must read as a model, as --b's did: a context name in --a (or an alias) would otherwise become a
+	// model that Claude Code is asked to run, after paid calibrations. One that does not parse is Prepare's to report.
+	if m, _, err := experiment.ParseProfile(a); a != "" && err == nil && !experiment.IsModel(m) {
+		return experiment.UsageError(fmt.Sprintf("--a %s is not a model: a model A/B's context is --context (a model is one Agentium's "+
+			"price table knows, or a claude-… model ID)", a))
+	}
+	if m, _, err := experiment.ParseProfile(model); a == "" && err == nil && !experiment.IsModel(m) {
+		return experiment.UsageError(fmt.Sprintf("--model %s is not a model Agentium reads as one, and arm A of this model A/B runs it: "+
+			"use a model the price table knows, or a claude-… model ID", model))
 	}
 	o.ProfileA, o.ProfileB, o.ContextA = a, b, contextName
 	if a == "" {
