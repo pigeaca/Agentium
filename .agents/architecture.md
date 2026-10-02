@@ -30,7 +30,7 @@ Shape:
 | `internal/cli` | Command-line parsing, dispatch and printing; each handler calls one service; `start` composes setup |
 | `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
 | `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock |
-| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments |
+| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations, experiments and the watch's state |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
 | `internal/mine` | Task candidates from git history: explained scores, rejections, import |
 | `internal/gitx` | Every git call (hooks, fsmonitor, prompts and optional index writes off; inherited `GIT_*` dropped); hook-free fetch of task bases |
@@ -48,6 +48,7 @@ Shape:
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components, detectable effects, verdict rules (§5.6), group-sequential spending and boundaries; reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, looks, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths); `Load` reads the store; the north star (time and spend to the first decisive verdict) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
+| `internal/watch` | The watch's consent (only the terminal raises), its ledger in dollars and window share (derived from runs), drift panels |
 | `internal/run` | One run or calibration: the arm's workspace with everything else denied, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`) and isolated-run cost; recovery of dead runs; its temp root |
 | `scripts/harness.py` | Standard-library entrypoint: checks, hooks, worktrees, metrics, PR merges ([harness](../docs/harness.md)) |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
