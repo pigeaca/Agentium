@@ -131,12 +131,17 @@ func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, boo
 // every run of the base repeats its notes.
 func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
 	if names := buildtool.NeedsWarming(profiles); inv.Deps != "" && len(names) > 0 {
-		note, err := env.warmInThrowaway(ctx, profiles, inv.Deps, base, logPath, running)
+		var fresh buildtool.Warmed
+		note, err := env.warmInThrowawayFor(ctx, profiles, inv.Deps, base, logPath, running, &fresh)
 		if err != nil {
 			return buildtool.Warmed{}, nil, err
 		}
 		// The stamp is the base's own (no other warm-up writes it), so it can be read after the lock is released.
-		warmed, _ = readStamp(env.stampPath(inv.Deps, base, names), profiles)
+		// Unstamped, what this warm-up made ready still serves this run (a venv whose metadata failed).
+		var ok bool
+		if warmed, ok = readStamp(env.stampPath(inv.Deps, base, names), profiles); !ok {
+			warmed = fresh
+		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
 			notes = append(notes, note)
@@ -150,6 +155,11 @@ func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, i
 
 // warmInThrowaway checks the base commit out in the data folder's cache (agents may not read it), warms, and removes it.
 func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile, deps, base, logPath string, running func(pid int)) (string, error) {
+	return env.warmInThrowawayFor(ctx, profiles, deps, base, logPath, running, &buildtool.Warmed{})
+}
+
+// warmInThrowawayFor is warmInThrowaway, which sets *fresh as warmToolsFor does.
+func (env Env) warmInThrowawayFor(ctx context.Context, profiles []buildtool.Profile, deps, base, logPath string, running func(pid int), fresh *buildtool.Warmed) (string, error) {
 	if _, ok := readStamp(env.stampPath(deps, base, buildtool.NeedsWarming(profiles)), profiles); ok {
 		return "", nil // warmed already: no checkout needed (warmTools checks again under the lock)
 	}
@@ -167,7 +177,7 @@ func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile
 		return "", fmt.Errorf("warm-up checkout: %w", err)
 	}
 	steps := buildtool.WarmSteps(profiles, checkoutDir, deps)
-	return env.warmTools(ctx, checkoutDir, deps, base, profiles, buildtool.NeedsWarming(profiles), steps, logPath, running)
+	return env.warmToolsFor(ctx, checkoutDir, deps, base, profiles, buildtool.NeedsWarming(profiles), steps, logPath, running, fresh)
 }
 
 // warmTools runs the warm-up steps in the checkout. Runs that may overlap wait for each other here (a lock file in
@@ -175,6 +185,12 @@ func (env Env) warmInThrowaway(ctx context.Context, profiles []buildtool.Profile
 // repeats. Agents of other runs may read the folder meanwhile, so a warm-up must leave what they read stable: it adds
 // files, and the Gradle profile turns the user home's cache cleanup off, which would delete them.
 func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles []buildtool.Profile, names []string, steps []buildtool.WarmStep, logPath string, running func(pid int)) (string, error) {
+	return env.warmToolsFor(ctx, repo, deps, base, profiles, names, steps, logPath, running, &buildtool.Warmed{})
+}
+
+// warmToolsFor is warmTools. When a warm-up in Go fails in a way worth another try (the base stays unstamped) but left a
+// venv that is ready (Python's metadata failed), it sets *fresh to it, for the run or validation that warmed it.
+func (env Env) warmToolsFor(ctx context.Context, repo, deps, base string, profiles []buildtool.Profile, names []string, steps []buildtool.WarmStep, logPath string, running func(pid int), fresh *buildtool.Warmed) (string, error) {
 	state := env.warmState(deps)
 	if err := os.MkdirAll(state, 0o700); err != nil {
 		return "", fmt.Errorf("warm-up state: %w", err)
@@ -245,7 +261,7 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	// Then what warms in Go (Python's venv), in the same checkout, under the same lock. A failure the repository or the
 	// host causes (no interpreter meets requires-python, uv.lock without uv) is stamped with its note, like Gradle's
 	// permanent skips, so later runs of the base say so without trying again; one a download may cause is not.
-	warmed, err := env.warmFuncs(ctx, repo, deps, profiles, logPath, running)
+	warmed, err := env.warmFuncs(ctx, repo, deps, base, profiles, logPath, running)
 	if err != nil {
 		return "", err
 	}
@@ -254,6 +270,10 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 	}
 	if warmed.Failed != "" {
 		why := "dependency warm-up failed (" + warmed.Failed + "): the agent may not be able to build offline; see setup.log"
+		if warmed.Transient && warmed.Venv != "" && buildtool.VenvReady(warmed.Venv) {
+			*fresh = buildtool.Warmed{Venv: warmed.Venv, Metadata: warmed.Metadata, Notes: warmed.Notes}
+			return warmed.Failed + "; see setup.log (not stamped: the next run tries again)", nil
+		}
 		if warmed.Transient {
 			return why + " (not stamped: the next run warms again)", nil
 		}
@@ -311,14 +331,18 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	var warmed buildtool.Warmed
 	var notes []string
 	if deps, names := env.depsFolder(), buildtool.NeedsWarming(profiles); deps != "" && len(names) > 0 {
-		note, err := env.warmInThrowaway(ctx, profiles, deps, base, logPath, func(int) {})
+		var fresh buildtool.Warmed
+		note, err := env.warmInThrowawayFor(ctx, profiles, deps, base, logPath, func(int) {}, &fresh)
 		switch {
 		case errors.Is(err, errWarmWait):
 			note = err.Error() + ": validated without the warmed dependencies"
 		case err != nil:
 			return task.CheckoutCommands{}, err
 		}
-		warmed, _ = readStamp(env.stampPath(deps, base, names), profiles)
+		var ok bool
+		if warmed, ok = readStamp(env.stampPath(deps, base, names), profiles); !ok {
+			warmed = fresh
+		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
 			notes = append(notes, note)
@@ -331,7 +355,8 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
 				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
 		},
-		Notes: notes,
+		Removed: func(dir string) { buildtool.RemoveCheckoutCaches(profiles, c.Layout.Cache, dir) },
+		Notes:   notes,
 	}, nil
 }
 
@@ -345,7 +370,7 @@ func (env Env) environ() []string {
 
 // warmFuncs runs the profiles' warm-ups that are Go code (buildtool.WarmFuncs) in the warm-up checkout repo, with the
 // environment of Agentium's own commands, their output appended to logPath.
-func (env Env) warmFuncs(ctx context.Context, repo, deps string, profiles []buildtool.Profile, logPath string, running func(pid int)) (buildtool.Warmed, error) {
+func (env Env) warmFuncs(ctx context.Context, repo, deps, base string, profiles []buildtool.Profile, logPath string, running func(pid int)) (buildtool.Warmed, error) {
 	if !slices.ContainsFunc(profiles, func(p buildtool.Profile) bool { return p.WarmFunc != nil }) {
 		return buildtool.Warmed{}, nil
 	}
@@ -359,7 +384,7 @@ func (env Env) warmFuncs(ctx context.Context, repo, deps string, profiles []buil
 		now = env.Now
 	}
 	return buildtool.WarmFuncs(ctx, profiles, buildtool.WarmInput{Dir: repo, Deps: deps, Environ: env.Environ, Env: env.CommandEnv,
-		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now()})
+		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now(), Base: base, State: env.warmState(deps)})
 }
 
 // lockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait); the lock goes with its holder's process.

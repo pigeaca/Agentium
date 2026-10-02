@@ -62,8 +62,14 @@ func pythonProfile() Profile {
 		// XDG_CACHE_HOME), and so does bytecode, which would otherwise land beside the checkout's sources.
 		CommandCaches: []CacheVar{{Name: "UV_CACHE_DIR", Dir: "uv"}, {Name: "PIP_CACHE_DIR", Dir: "pip"},
 			{Name: "PYTHONPYCACHEPREFIX", Dir: "pycache"}},
-		AgentEnv:     pythonEnv,
-		CheckoutEnv:  pythonCheckoutEnv,
+		AgentEnv:    pythonEnv,
+		CheckoutEnv: pythonCheckoutEnv,
+		CheckoutCaches: func(cache, repo string) []string {
+			if h := pythonHypothesis(cache, repo); h != "" {
+				return []string{h}
+			}
+			return nil
+		},
 		CheckoutDrop: pythonVar,
 		WarmRecipe:   pythonRecipe,
 		WarmFunc:     warmPython,
@@ -108,12 +114,17 @@ func pythonEnv(c AgentContext) []string {
 // the failing examples it saved, so a database every grading shared would test one arm with what another arm's grading
 // found.
 func pythonCheckoutEnv(c AgentContext) []string {
-	hypothesis := ""
-	if c.BuildCache != "" && c.Repo != "" {
-		sum := sha256.Sum256([]byte(filepath.Clean(c.Repo)))
-		hypothesis = filepath.Join(c.BuildCache, "hypothesis", hex.EncodeToString(sum[:8]))
+	return pythonEnvWith(c, pythonHypothesis(c.BuildCache, c.Repo))
+}
+
+// pythonHypothesis is the hypothesis database of Agentium's own commands in the checkout repo, under the data folder's
+// cache root: removed with the checkout (CheckoutCaches). "" without either.
+func pythonHypothesis(cache, repo string) string {
+	if cache == "" || repo == "" {
+		return ""
 	}
-	return pythonEnvWith(c, hypothesis)
+	sum := sha256.Sum256([]byte(filepath.Clean(repo)))
+	return filepath.Join(cache, "hypothesis", hex.EncodeToString(sum[:8]))
 }
 
 // pythonEnvWith is the environment of a command that tests a Python project in c.Repo: the agent's or one of
@@ -290,13 +301,25 @@ func venvIntact(venv string) (venvStamp, bool) {
 		return venvStamp{}, false
 	}
 	stamp, ok := readVenvStamp(filepath.Dir(venv))
-	if !ok || !venvMade(venv) {
+	if !ok || !venvMade(venv) || !venvReadOnly(venv) {
 		return venvStamp{}, false
 	}
 	if m, err := venvManifest(venv); err != nil || m != stamp.Manifest {
 		return venvStamp{}, false
 	}
 	return stamp, true
+}
+
+// venvReadOnly reports whether the stamped venv's folder, the venv and its site-packages folders are read-only, as
+// warmPython leaves them: one left writable (a crash while moving it aside opened its mode) is made again.
+func venvReadOnly(venv string) bool {
+	sites, _ := filepath.Glob(filepath.Join(venv, "lib", "python*", "site-packages"))
+	for _, p := range append([]string{filepath.Dir(venv), venv}, sites...) {
+		if info, err := os.Lstat(p); err != nil || info.Mode().Perm()&0o222 != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // venvManifest hashes the venv's layout: pyvenv.cfg, the names in bin/, in each site-packages folder every top-level
@@ -381,7 +404,7 @@ type pyInputs struct {
 	names    []string // the project's own names (pyproject's [project] or [tool.poetry] name, setup.cfg's), normalized
 	notes    []string
 	pkg      bool   // a package whose metadata a build backend makes (projectMetadata)
-	version  string // [project] version when static (one line); "" otherwise
+	version  string // the static version ([project] version, else setup.cfg's literal one); "" otherwise
 }
 
 // warmPython builds the base's venv, or finds it built: see pythonProfile. It runs under the warm-up lock (the run's),
@@ -771,6 +794,10 @@ func readPyInputs(dir string) (pyInputs, error) {
 		if data, err := readInside(dir, "setup.cfg"); err == nil {
 			if name := iniString(data, "metadata", "name"); name != "" && !slices.Contains(in.names, normalizeName(name)) {
 				in.names = append(in.names, normalizeName(name))
+			}
+			// A literal version, not one read from the code or a file (attr:, file:).
+			if v := iniString(data, "metadata", "version"); in.version == "" && v != "" && !strings.Contains(v, ":") {
+				in.version = v
 			}
 		}
 	}

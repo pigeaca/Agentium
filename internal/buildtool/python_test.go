@@ -240,15 +240,16 @@ func writeWheel(t *testing.T, path string, files map[string]string) {
 	}
 }
 
-// fakeWheel is a project's wheel as a build makes it: its code, and a .dist-info with METADATA, RECORD, top_level.txt,
-// entry_points.txt, WHEEL and a license, of which only METADATA's headers may reach the metadata folder.
-func fakeWheel(t *testing.T, path, metadata string) {
+// fakeWheel is a project's wheel of a version as a build makes it: its code, and a .dist-info with METADATA
+// (fakeMetadata), RECORD, top_level.txt, entry_points.txt, WHEEL and a license, of which only METADATA's headers may
+// reach the metadata folder.
+func fakeWheel(t *testing.T, path, version string) {
 	t.Helper()
+	dist := "fake_project-" + version + ".dist-info/"
 	writeWheel(t, path, map[string]string{"fake_project/__init__.py": "X = 'wheel'\n",
-		"fake_project-1.2.3.dist-info/METADATA": metadata, "fake_project-1.2.3.dist-info/RECORD": "fake_project/__init__.py,,\n",
-		"fake_project-1.2.3.dist-info/top_level.txt": "fake_project\n", "fake_project-1.2.3.dist-info/WHEEL": "Wheel-Version: 1.0\n",
-		"fake_project-1.2.3.dist-info/entry_points.txt": "[console_scripts]\nfake = fake_project:main\n",
-		"fake_project-1.2.3.dist-info/licenses/LICENSE": "MIT\n"})
+		dist + "METADATA": strings.Replace(fakeMetadata, "Version: 1.2.3", "Version: "+version, 1), dist + "RECORD": "fake_project/__init__.py,,\n",
+		dist + "top_level.txt": "fake_project\n", dist + "WHEEL": "Wheel-Version: 1.0\n",
+		dist + "entry_points.txt": "[console_scripts]\nfake = fake_project:main\n", dist + "licenses/LICENSE": "MIT\n"})
 }
 
 func newFakePython(t *testing.T, version string, uv bool, report string) fakePython {
@@ -259,7 +260,7 @@ func newFakePython(t *testing.T, version string, uv bool, report string) fakePyt
 	if err := os.WriteFile(filepath.Join(dir, "report.json"), []byte(report), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	fakeWheel(t, filepath.Join(dir, "default.whl"), fakeMetadata)
+	fakeWheel(t, filepath.Join(dir, "default.whl"), "1.2.3")
 	build := `build() {
   echo "build into $1 | SETUPTOOLS_SCM_PRETEND_VERSION=$SETUPTOOLS_SCM_PRETEND_VERSION PDM_BUILD_SCM_VERSION=$PDM_BUILD_SCM_VERSION" >> '` + f.calls + `'
   if [ -n "$FAKE_BUILD_FAIL" ]; then exit 1; fi
@@ -469,6 +470,10 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 		"an older recipe":   func() { os.WriteFile(stamp, []byte(`{"recipe":"python-0"}`), 0o600) },
 		"a corrupt stamp":   func() { os.WriteFile(stamp, []byte(`{`), 0o600) },
 		"no pyvenv.cfg":     func() { os.Remove(filepath.Join(w.Venv, "pyvenv.cfg")) },
+		// A crash while moving it aside leaves its folder writable: made again, never handed out half-guarded.
+		"its folder writable":      func() {},
+		"site-packages writable":   func() {},
+		"the venv folder writable": func() {},
 		"a dangling python": func() {
 			os.Remove(filepath.Join(w.Venv, "bin", "python"))
 			os.Symlink("/nonexistent/python", filepath.Join(w.Venv, "bin", "python"))
@@ -481,8 +486,17 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 		damage()
 		// The venv's folder read-only again, as a stamped one is: moving it aside must cope (macOS asks for write
 		// permission on a folder that is renamed).
-		if err := os.Chmod(filepath.Dir(w.Venv), 0o555); err != nil {
+		// Everything read-only again, as warmPython left it (so only the damage tells), then the modes some cases open.
+		if err := setWritable(filepath.Dir(w.Venv), false); err != nil {
 			t.Fatal(err)
+		}
+		switch name {
+		case "its folder writable":
+			os.Chmod(filepath.Dir(w.Venv), 0o755)
+		case "site-packages writable":
+			os.Chmod(site, 0o755)
+		case "the venv folder writable":
+			os.Chmod(w.Venv, 0o755)
 		}
 		if VenvReady(w.Venv) {
 			t.Errorf("%s: still ready", name)

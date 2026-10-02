@@ -85,6 +85,9 @@ type WarmInput struct {
 	Started      func(pid int) // learns each command's process group, as the run's other commands
 	Timeout      time.Duration // per command; 0: none beyond ctx
 	Now          time.Time     // the date a resolve without a lock file is noted with
+	// Base is the base commit being warmed, and State a folder agents cannot read where warm-ups keep what they count
+	// between runs (Python: tries at the project's metadata). Either empty: nothing is counted.
+	Base, State string
 }
 
 // Warmed is what the warm-ups of a base commit found for its runs, kept in the run's stamp (JSON) so that later runs of
@@ -97,7 +100,8 @@ type Warmed struct {
 	Notes    []string `json:"notes,omitempty"`
 	// Failed explains a warm-up that did not finish. With Transient (a download that may work later) the base is not
 	// stamped and the next run tries again; otherwise (no interpreter meets requires-python, uv.lock without uv) it is
-	// stamped with the failure as a note, so every run of the base says so without warming again.
+	// stamped with the failure as a note, so every run of the base says so without warming again. A transient failure
+	// may still come with a venv that is ready (Python's metadata failed): the run that warmed it uses it.
 	Failed    string `json:"-"`
 	Transient bool   `json:"-"`
 }

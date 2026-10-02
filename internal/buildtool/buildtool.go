@@ -112,6 +112,9 @@ type Profile struct {
 	// warmed (Python: the venv): c.Repo is the checkout (the run's, for the task's setup; the grading copy), and
 	// c.BuildCache the data folder's cache root. Later entries replace earlier ones of the same name.
 	CheckoutEnv func(c AgentContext) []string
+	// CheckoutCaches are the folders CheckoutEnv gives Agentium's own commands in the checkout repo alone (Python's
+	// hypothesis database), under the data folder's cache root: removed when the checkout is (RemoveCheckoutCaches).
+	CheckoutCaches func(cache, repo string) []string
 	// CheckoutDrop names the variables of the user's environment that Agentium's own commands in a checkout (setup,
 	// grading, validation) must not inherit, as the agent does not (CheckoutEnviron): they would change what the tests
 	// run with between the agent and grading.
@@ -381,6 +384,20 @@ func CheckoutEnv(selected []Profile, c AgentContext) []string {
 		}
 	}
 	return env
+}
+
+// RemoveCheckoutCaches removes the selected profiles' CheckoutCaches of the checkout repo, once the checkout is gone.
+func RemoveCheckoutCaches(selected []Profile, cache, repo string) error {
+	var errs []error
+	for _, p := range selected {
+		if p.CheckoutCaches == nil {
+			continue
+		}
+		for _, dir := range p.CheckoutCaches(cache, repo) {
+			errs = append(errs, os.RemoveAll(dir))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // CheckoutEnviron is environ without what the selected profiles' CheckoutDrop names: the base environment of Agentium's

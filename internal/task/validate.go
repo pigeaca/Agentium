@@ -116,6 +116,9 @@ type CheckoutCommands struct {
 	Environ []string
 	Env     func(dir string) []string
 	Notes   []string
+	// Removed, when set, removes what Env gave the checkout in dir alone (Python's hypothesis database in the data
+	// folder), once the checkout is removed.
+	Removed func(dir string)
 }
 
 // Toolchain maps a build tool ("go", "java", "cargo", ...) to its version as the tool reports it on the host.
@@ -413,7 +416,12 @@ func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string
 		return stage, err
 	}
 	if !v.Keep {
-		defer os.RemoveAll(dir)
+		defer func() {
+			os.RemoveAll(dir)
+			if v.checkout.Removed != nil {
+				v.checkout.Removed(dir)
+			}
+		}()
 	}
 	if snap != nil { // Deletes are not in the snapshot, so Write removes them.
 		if err := checkout.Write(dir, snap, append(slices.Clone(overlay.Writes), overlay.Deletes...)); err != nil {

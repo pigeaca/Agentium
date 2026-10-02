@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,14 +66,22 @@ var metadataVersion = regexp.MustCompile(`^[A-Za-z0-9.+!_]+$`)
 // metadataKey is a header's name as the core metadata format writes it.
 var metadataKey = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 
-// withMetadata adds the base's metadata folder (projectMetadata) to what the venv's warm-up found, and its note.
+// maxMetadataTries is how many warm-ups of a base try to make its metadata before the base is stamped without it.
+const maxMetadataTries = 3
+
+// withMetadata adds the base's metadata folder (projectMetadata) to what the venv's warm-up found, and its note. A
+// failure that may be worth another try is Failed and Transient, with the venv: the base is not stamped, so the next
+// warm-up tries again, while this run still gets the venv (see Warmed).
 func withMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, interp string, env []string, w Warmed) (Warmed, error) {
-	dir, note, err := projectMetadata(ctx, in, inputs, uv, interp, w.Venv, env)
+	dir, note, retry, err := projectMetadata(ctx, in, inputs, uv, interp, w.Venv, env)
 	if err != nil {
 		return Warmed{}, err
 	}
 	w.Metadata = dir
-	if note != "" {
+	switch {
+	case retry:
+		w.Failed, w.Transient = note, true
+	case note != "":
 		w.Notes = append(slices.Clone(w.Notes), note)
 	}
 	return w, nil
@@ -80,19 +89,28 @@ func withMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, interp
 
 // projectMetadata makes the base's metadata folder, or finds it made (see the top of this file): its path, or "" with
 // a note when the build or its METADATA fails (the run goes on: only tests that read the project's metadata fail). A
-// project that is no package (no build system for uv, `[tool.uv] package = false`) has none, and no note. Errors are
-// for cancellation and the deps folder's I/O. env is the venv's warm-up environment (caches in the deps folder).
-func projectMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, interp, venv string, env []string) (dir, note string, err error) {
+// failure may be a download's (the build backend), so it is retried (retry) by the next maxMetadataTries-1 warm-ups of
+// the base, counted in in.State; the last one's note is stamped. A project that is no package (no build system for uv,
+// `[tool.uv] package = false`) has none, and no note. Errors are for cancellation and the deps folder's I/O. env is the
+// venv's warm-up environment (caches in the deps folder).
+func projectMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, interp, venv string, env []string) (dir, note string, retry bool, err error) {
 	if !inputs.pkg {
-		return "", "", nil
+		return "", "", false, nil
 	}
 	scratch := filepath.Join(in.Deps, "py-resolve") // denied to agents: the wheel holds the base's code
 	if err := os.MkdirAll(scratch, 0o700); err != nil {
-		return "", "", err
+		return "", "", false, err
+	}
+	// Wheels a killed warm-up left: no other warm-up is building one (the lock is held).
+	stale, _ := filepath.Glob(filepath.Join(scratch, "wheel-*"))
+	for _, s := range stale {
+		if err := os.RemoveAll(s); err != nil {
+			return "", "", false, err
+		}
 	}
 	out, err := os.MkdirTemp(scratch, "wheel-")
 	if err != nil {
-		return "", "", err
+		return "", "", false, err
 	}
 	defer os.RemoveAll(out)
 	args := []string{uv, "build", "--wheel", "--out-dir", out, "--python", interp}
@@ -103,40 +121,73 @@ func projectMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, int
 	for _, name := range pretendVersionVars {
 		build = append(build, name+"="+pythonPretendVersion)
 	}
-	failed := func(why string) (string, string, error) {
-		return "", "the project's metadata could not be made (" + why + "): its tests cannot ask importlib.metadata for the project's version", nil
+	tries := ""
+	if in.State != "" && in.Base != "" {
+		tries = filepath.Join(in.State, filepath.Base(in.Base)+".metadata-tries")
+	}
+	failed := func(why string) (string, string, bool, error) {
+		note := "the project's metadata could not be made (" + why + "): its tests cannot ask importlib.metadata for the project's version"
+		if tries == "" {
+			return "", note, true, nil
+		}
+		n := 0
+		if data, err := os.ReadFile(tries); err == nil {
+			n, _ = strconv.Atoi(strings.TrimSpace(string(data)))
+		}
+		if n++; n >= maxMetadataTries {
+			// Stamped with the note; the count starts again, so removing the base's stamp gives it as many tries.
+			if err := os.Remove(tries); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return "", "", false, err
+			}
+			return "", fmt.Sprintf("%s (%d tries)", note, n), false, nil
+		}
+		if err := WriteFileSynced(tries, []byte(strconv.Itoa(n)), 0o600); err != nil {
+			return "", "", false, err
+		}
+		return "", fmt.Sprintf("%s (try %d of %d)", note, n, maxMetadataTries), true, nil
 	}
 	ok, err := pyRun(ctx, in, args, build)
 	if ctx.Err() != nil {
-		return "", "", ctx.Err()
+		return "", "", false, ctx.Err()
 	}
 	if err != nil || !ok {
 		return failed("the wheel's build failed: see setup.log")
 	}
-	name, version, content, err := wheelMetadata(out)
+	name, version, distInfo, content, err := wheelMetadata(out)
 	if err != nil {
 		return failed(err.Error())
 	}
-	distInfo := strings.ReplaceAll(normalizeName(name), "-", "_") + "-" + version + ".dist-info"
 	if dir, err = installMetadata(in, distInfo, content); err != nil {
-		return "", "", fmt.Errorf("the project's metadata: %w", err)
+		return "", "", false, fmt.Errorf("the project's metadata: %w", err)
+	}
+	if tries != "" {
+		if err := os.Remove(tries); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return "", "", false, err
+		}
 	}
 	fmt.Fprintf(in.Log, "[agentium] the project's metadata (%s %s, headers only): %s\n", name, version, dir)
 	if version == pythonPretendVersion && inputs.version != pythonPretendVersion {
-		note = "the project's version comes from git, which a checkout of one commit cannot tell: its metadata says " + pythonPretendVersion
+		note = "the project's version could not be read statically (a version computed from git needs history, which a checkout of " +
+			"one commit lacks): its metadata says " + pythonPretendVersion
 	}
-	return dir, note, nil
+	return dir, note, false, nil
 }
 
-// wheelMetadata reads the one wheel in dir and returns its METADATA's name, version and headers (metadataHeaders).
-func wheelMetadata(dir string) (name, version string, headers []byte, err error) {
+// distInfoName is a .dist-info folder's name: <name>-<version>.dist-info, one path segment.
+var distInfoName = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9._]*)-([A-Za-z0-9.+!_]+)\.dist-info$`)
+
+// wheelMetadata reads the one wheel in dir and returns its METADATA's name, version and headers (metadataHeaders),
+// and the wheel's own .dist-info folder name, which the metadata folder keeps as an installer would: importlib.metadata
+// finds a dotted name (zope.interface) by the form the wheel wrote, and Python 3.9 not by another. The name must be
+// one path segment of the form <name>-<version>.dist-info that matches METADATA's name and version.
+func wheelMetadata(dir string) (name, version, distInfo string, headers []byte, err error) {
 	wheels, err := filepath.Glob(filepath.Join(dir, "*.whl"))
 	if err != nil || len(wheels) != 1 {
-		return "", "", nil, fmt.Errorf("the build made %d wheels, not one", len(wheels))
+		return "", "", "", nil, fmt.Errorf("the build made %d wheels, not one", len(wheels))
 	}
 	zr, err := zip.OpenReader(wheels[0])
 	if err != nil {
-		return "", "", nil, fmt.Errorf("the wheel: %w", err)
+		return "", "", "", nil, fmt.Errorf("the wheel: %w", err)
 	}
 	defer zr.Close()
 	var found *zip.File
@@ -144,24 +195,31 @@ func wheelMetadata(dir string) (name, version string, headers []byte, err error)
 		parts := strings.Split(f.Name, "/")
 		if len(parts) == 2 && strings.HasSuffix(parts[0], ".dist-info") && parts[1] == "METADATA" {
 			if found != nil {
-				return "", "", nil, errors.New("the wheel has two METADATA files")
+				return "", "", "", nil, errors.New("the wheel has two METADATA files")
 			}
-			found = f
+			found, distInfo = f, parts[0]
 		}
 	}
 	if found == nil || found.UncompressedSize64 > maxMetadata {
-		return "", "", nil, errors.New("the wheel has no METADATA under 16 MiB")
+		return "", "", "", nil, errors.New("the wheel has no METADATA under 16 MiB")
 	}
 	rc, err := found.Open()
 	if err != nil {
-		return "", "", nil, fmt.Errorf("the wheel's METADATA: %w", err)
+		return "", "", "", nil, fmt.Errorf("the wheel's METADATA: %w", err)
 	}
 	defer rc.Close()
 	data, err := io.ReadAll(io.LimitReader(rc, maxMetadata+1))
 	if err != nil || len(data) > maxMetadata {
-		return "", "", nil, fmt.Errorf("the wheel's METADATA: %v", err)
+		return "", "", "", nil, fmt.Errorf("the wheel's METADATA: %v", err)
 	}
-	return metadataHeaders(data)
+	if name, version, headers, err = metadataHeaders(data); err != nil {
+		return "", "", "", nil, err
+	}
+	m := distInfoName.FindStringSubmatch(distInfo)
+	if m == nil || normalizeName(m[1]) != normalizeName(name) || m[2] != version {
+		return "", "", "", nil, fmt.Errorf("the wheel's folder %q does not name %s %s", distInfo, name, version)
+	}
+	return name, version, distInfo, headers, nil
 }
 
 // metadataHeaders keeps a METADATA file's headers (each with its continuation lines) but the long description: the

@@ -2,6 +2,7 @@ package buildtool
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -91,7 +92,7 @@ func TestWarmPythonMakesTheProjectsMetadata(t *testing.T) {
 		t.Errorf("again: %+v %v", again, err)
 	}
 	// A base whose metadata differs (another version): another folder, beside the first, which stays as it was.
-	fakeWheel(t, filepath.Join(f.dir, "other.whl"), strings.Replace(fakeMetadata, "Version: 1.2.3", "Version: 1.3.0", 1))
+	fakeWheel(t, filepath.Join(f.dir, "other.whl"), "1.3.0")
 	other, err := WarmFuncs(ctx, Select([]string{"python"}), f.input(repo, deps, "FAKE_WHEEL=other"))
 	if err != nil || other.Metadata == "" || other.Metadata == w.Metadata || !MetadataReady(other.Metadata) || !MetadataReady(w.Metadata) {
 		t.Errorf("other metadata: %+v %v", other, err)
@@ -173,13 +174,14 @@ func TestMetadataFolderReadiness(t *testing.T) {
 // version is 0.0.0 gets none.
 func TestProjectMetadataVersionFromGit(t *testing.T) {
 	f := newFakePython(t, "3.12.13", true, "")
-	fakeWheel(t, filepath.Join(f.dir, "scm-0.0.0.whl"), strings.Replace(fakeMetadata, "Version: 1.2.3", "Version: 0.0.0", 1))
+	fakeWheel(t, filepath.Join(f.dir, "scm-0.0.0.whl"), "0.0.0")
 	hatch := "[project]\nname = \"attrs\"\ndynamic = [\"version\"]\n[build-system]\nrequires = [\"hatchling\", \"hatch-vcs\"]\n" +
 		"build-backend = \"hatchling.build\"\n[tool.hatch.version]\nsource = \"vcs\"\n"
 	repo := t.TempDir()
 	writeFiles(t, repo, map[string]string{"pyproject.toml": hatch, "uv.lock": "version = 1\n"})
 	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, depsDir(t), "FAKE_SCM=1"))
-	if err != nil || w.Metadata == "" || !slices.Equal(w.Notes, []string{"the project's version comes from git, which a checkout of one commit cannot tell: its metadata says 0.0.0"}) {
+	if err != nil || w.Metadata == "" || !slices.Equal(w.Notes, []string{"the project's version could not be read statically (a version computed from git needs history, " +
+		"which a checkout of one commit lacks): its metadata says 0.0.0"}) {
 		t.Fatalf("%+v %v\n%s", w, err, f.log(t))
 	}
 	if got := metadataFiles(t, w.Metadata); !slices.Contains(got, "fake_project-0.0.0.dist-info/METADATA") {
@@ -189,6 +191,14 @@ func TestProjectMetadataVersionFromGit(t *testing.T) {
 	writeFiles(t, static, map[string]string{"pyproject.toml": strings.Replace(hatch, "dynamic = [\"version\"]", "version = \"0.0.0\"", 1), "uv.lock": "version = 1\n"})
 	if w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(static, depsDir(t), "FAKE_SCM=1")); err != nil || w.Metadata == "" || len(w.Notes) != 0 {
 		t.Errorf("a static 0.0.0: %+v %v", w, err)
+	}
+	// setup.cfg's literal version is static too; one read from the code (attr:) is not.
+	for cfg, note := range map[string]bool{"version = 0.0.0\n": false, "version = attr: pkg.__version__\n": true} {
+		dir := t.TempDir()
+		writeFiles(t, dir, map[string]string{"setup.cfg": "[metadata]\nname = pkg\n" + cfg, "setup.py": "", "uv.lock": "version = 1\n"})
+		if w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(dir, depsDir(t), "FAKE_SCM=1")); err != nil || w.Metadata == "" || (len(w.Notes) == 1) != note {
+			t.Errorf("setup.cfg %q: %+v %v", cfg, w, err)
+		}
 	}
 }
 
@@ -208,21 +218,25 @@ func TestProjectMetadataWithPip(t *testing.T) {
 	}
 }
 
-// What cannot be made is a note, never a failure of the warm-up: the venv is still handed to the run, which has no
-// metadata folder (only tests that read the project's metadata fail). A project that is no package has none, and
-// no note: a uv project without a build system, or with `[tool.uv] package = false`, and a pip folder of requirements.
-func TestProjectMetadataFailuresAreNotes(t *testing.T) {
+// What cannot be made never fails the venv: the warm-up's failure is transient (a download of the build backend may
+// have failed), with the venv ready, which the run that warmed it uses without metadata (only tests that read the
+// project's metadata fail), and the base stays unstamped. A project that is no package has none, and no note: a uv
+// project without a build system, or with `[tool.uv] package = false`, and a pip folder of requirements.
+func TestProjectMetadataFailuresAreTransient(t *testing.T) {
 	f := newFakePython(t, "3.12.13", true, "")
 	writeWheel(t, filepath.Join(f.dir, "nometa.whl"), map[string]string{"x/__init__.py": "", "x-1.dist-info/RECORD": ""})
 	writeWheel(t, filepath.Join(f.dir, "badversion.whl"), map[string]string{"x-1.dist-info/METADATA": "Name: x\nVersion: 1-2\n"})
+	writeWheel(t, filepath.Join(f.dir, "misnamed.whl"), map[string]string{"y-1.dist-info/METADATA": "Name: x\nVersion: 1\n"})
+	writeWheel(t, filepath.Join(f.dir, "otherversion.whl"), map[string]string{"x-2.dist-info/METADATA": "Name: x\nVersion: 1\n"})
 	ctx := context.Background()
 	repo := t.TempDir()
 	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPackage, "uv.lock": "version = 1\n"})
 	for extra, why := range map[string]string{"FAKE_BUILD_FAIL=1": "the wheel's build failed: see setup.log",
-		"FAKE_WHEEL=nometa": "the wheel has no METADATA", "FAKE_WHEEL=badversion": `version "1-2"`, "FAKE_WHEEL=none": "the build made 0 wheels, not one"} {
+		"FAKE_WHEEL=nometa": "the wheel has no METADATA", "FAKE_WHEEL=badversion": `version "1-2"`, "FAKE_WHEEL=none": "the build made 0 wheels, not one",
+		"FAKE_WHEEL=misnamed": `the wheel's folder "y-1.dist-info" does not name x 1`, "FAKE_WHEEL=otherversion": `"x-2.dist-info" does not name x 1`} {
 		w, err := WarmFuncs(ctx, Select([]string{"python"}), f.input(repo, depsDir(t), extra))
-		if err != nil || w.Failed != "" || !VenvReady(w.Venv) || w.Metadata != "" || len(w.Notes) != 1 ||
-			!strings.Contains(w.Notes[0], "the project's metadata could not be made") || !strings.Contains(w.Notes[0], why) {
+		if err != nil || !w.Transient || !VenvReady(w.Venv) || w.Metadata != "" ||
+			!strings.Contains(w.Failed, "the project's metadata could not be made") || !strings.Contains(w.Failed, why) {
 			t.Errorf("%s: %+v %v", extra, w, err)
 		}
 	}
@@ -298,5 +312,79 @@ func TestProjectMetadataWithARealInterpreter(t *testing.T) {
 	}
 	if got := run(t.TempDir()); len(got) != 2 || got[0] != "9.9" || got[1] != "ModuleNotFoundError" {
 		t.Errorf("without it: %q", got)
+	}
+	// A dotted name, in the wheel's own folder name: found by that name on every Python, 3.9 included.
+	zope, err := installMetadata(WarmInput{Deps: deps, Log: &strings.Builder{}}, "zope.interface-7.2.dist-info", []byte("Metadata-Version: 2.1\nName: zope.interface\nVersion: 7.2\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(python, "-c", "import importlib.metadata as m; print(m.version('zope.interface'))")
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "PYTHONPATH=" + zope}
+	if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "7.2" {
+		t.Errorf("zope.interface: %q %v", out, err)
+	}
+}
+
+// A failure is retried by the next warm-ups of the base, counted in the warm-up state: the third in a row is a note,
+// stamped with the base (a build that always fails is not rebuilt by every run), and the count starts again, so
+// removing the base's stamp gives it as many tries. A success clears the count. Another base counts on its own.
+func TestProjectMetadataTriesAreCounted(t *testing.T) {
+	f := newFakePython(t, "3.12.13", true, "")
+	deps, state, repo := depsDir(t), t.TempDir(), t.TempDir()
+	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPackage, "uv.lock": "version = 1\n"})
+	warm := func(base string, extra ...string) Warmed {
+		t.Helper()
+		in := f.input(repo, deps, extra...)
+		in.Base, in.State = base, state
+		w, err := WarmFuncs(context.Background(), Select([]string{"python"}), in)
+		if err != nil || !VenvReady(w.Venv) {
+			t.Fatalf("%+v %v", w, err)
+		}
+		return w
+	}
+	for try := 1; try <= 2; try++ {
+		if w := warm("c1", "FAKE_BUILD_FAIL=1"); !w.Transient || !strings.Contains(w.Failed, fmt.Sprintf("(try %d of 3)", try)) {
+			t.Errorf("try %d: %+v", try, w)
+		}
+	}
+	if w := warm("c2", "FAKE_BUILD_FAIL=1"); !strings.Contains(w.Failed, "(try 1 of 3)") {
+		t.Errorf("another base: %+v", w)
+	}
+	w := warm("c1", "FAKE_BUILD_FAIL=1")
+	if w.Failed != "" || w.Transient || w.Metadata != "" || len(w.Notes) != 1 || !strings.Contains(w.Notes[0], "could not be made (the wheel's build failed: see setup.log)") ||
+		!strings.HasSuffix(w.Notes[0], "(3 tries)") {
+		t.Errorf("the third try: %+v", w)
+	}
+	if fileExists(filepath.Join(state, "c1.metadata-tries")) {
+		t.Error("the count was kept after the note")
+	}
+	if w := warm("c1", "FAKE_BUILD_FAIL=1"); !strings.Contains(w.Failed, "(try 1 of 3)") {
+		t.Errorf("after a stamp removed by hand: %+v", w)
+	}
+	if w := warm("c1"); w.Failed != "" || !MetadataReady(w.Metadata) || fileExists(filepath.Join(state, "c1.metadata-tries")) {
+		t.Errorf("a success: %+v", w)
+	}
+	// A wheel a killed warm-up left in py-resolve is swept by the next one.
+	stale := filepath.Join(deps, "py-resolve", "wheel-123")
+	writeFiles(t, stale, map[string]string{"x-1-py3-none-any.whl": "code"})
+	warm("c3")
+	if fileExists(stale) {
+		t.Error("a killed warm-up's wheel was left")
+	}
+}
+
+// A dotted name (zope.interface): the folder keeps the wheel's own .dist-info name, which importlib.metadata finds by
+// the dotted name on every Python (3.9 does not normalize it to zope_interface).
+func TestProjectMetadataKeepsTheWheelsFolderName(t *testing.T) {
+	repo := t.TempDir()
+	writeFiles(t, repo, map[string]string{"setup.py": "from setuptools import setup; setup()\n", "requirements.txt": ""})
+	g := newFakePython(t, "3.12.13", false, `{"install":[]}`)
+	writeWheel(t, filepath.Join(g.dir, "zope.whl"), map[string]string{"zope.interface-7.2.dist-info/METADATA": "Metadata-Version: 2.1\nName: zope.interface\nVersion: 7.2\n"})
+	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), g.input(repo, depsDir(t), "FAKE_WHEEL=zope"))
+	if err != nil || w.Failed != "" || !MetadataReady(w.Metadata) {
+		t.Fatalf("%+v %v\n%s", w, err, g.log(t))
+	}
+	if got := metadataFiles(t, w.Metadata); !slices.Equal(got, []string{"zope.interface-7.2.dist-info", "zope.interface-7.2.dist-info/METADATA"}) {
+		t.Errorf("the folder holds %q", got)
 	}
 }
