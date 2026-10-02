@@ -409,3 +409,97 @@ func TestFairnessJVMAndRustIdentifiers(t *testing.T) {
 		})
 	}
 }
+
+// Locals and parameters of a test never count, and overrides, switch defaults and comments or strings are not
+// declarations; annotation elements and modifier-less interface methods are.
+func TestFairnessJVMAndRustIdentifierEdgeCases(t *testing.T) {
+	cases := map[string]struct {
+		base, solution map[string]string
+		want           []string
+	}{
+		"java local colliding with a reference field": {
+			map[string]string{"src/main/java/R.java": "class R { void withDelay(long d) {} }\n"},
+			map[string]string{
+				"src/main/java/R.java":      "class R {\n  private long retryDelay;\n  void withDelay(long d) {}\n}\n",
+				"src/test/java/RTests.java": "class RTests {\n  void t() {\n    long retryDelay = 5;\n    new R().withDelay(retryDelay);\n  }\n}\n"},
+			nil,
+		},
+		"java parameter colliding with a reference field": {
+			map[string]string{"src/main/java/R.java": "class R {}\n"},
+			map[string]string{
+				"src/main/java/R.java":      "class R {\n  private int retryDelay;\n}\n",
+				"src/test/java/RTests.java": "class RTests {\n  void check(int retryDelay) { System.out.println(retryDelay); }\n}\n"},
+			nil,
+		},
+		"kotlin parameter and lambda colliding with reference names": {
+			map[string]string{"src/main/kotlin/R.kt": "fun old() = 1\n"},
+			map[string]string{
+				"src/main/kotlin/R.kt":     "fun old() = 1\nprivate val indentWidth = 2\nprivate val lineCount = 3\n",
+				"src/test/kotlin/RTest.kt": "class RTest {\n  fun check(indentWidth: Int) { listOf(1).map { lineCount -> lineCount + indentWidth } }\n}\n"},
+			nil,
+		},
+		"rust let and parameter colliding with reference names": {
+			map[string]string{"src/lib.rs": "pub fn old() {}\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn old() {}\nfn retry_delay() {}\nfn line_count() {}\n",
+				"tests/t.rs": "fn check(line_count: u32) { let mut retry_delay = 1; retry_delay += line_count; }\n#[test]\nfn t() { check(1); }\n"},
+			nil,
+		},
+		"java annotation element and interface method without a modifier": {
+			map[string]string{"src/main/java/A.java": "@interface A { int old() default 1; }\n"},
+			map[string]string{
+				"src/main/java/A.java":      "@interface A {\n  int old() default 1;\n  int jitterSeed() default 0;\n}\ninterface Shape {\n  double computeArea(int scale);\n  default String describeShape() { return \"\"; }\n}\n",
+				"src/test/java/ATests.java": "class ATests {\n  @A(jitterSeed = 3) void t(Shape s) { s.computeArea(1); s.describeShape(); }\n}\n"},
+			[]string{"Shape", "computeArea", "describeShape", "jitterSeed"},
+		},
+		"java override, switch default and statements are not declarations": {
+			map[string]string{"src/main/java/C.java": "class C {}\n"},
+			map[string]string{
+				"src/main/java/C.java":      "class C implements Comparable<C> {\n  @Override\n  public int compareTo(C other) {\n    switch (1) { default: break; }\n    return Math.max(other.hashCode(), 0);\n  }\n  public int zero() { return 0; }\n}\n",
+				"src/test/java/CTests.java": "class CTests {\n  void t() { new C().compareTo(new C()); }\n}\n"},
+			nil,
+		},
+		"kotlin override and comments and strings": {
+			map[string]string{"src/main/kotlin/C.kt": "class C\n"},
+			map[string]string{
+				"src/main/kotlin/C.kt":     "class C : Comparable<C> {\n  override fun compareTo(other: C) = 0\n  // fun commentedOut() {}\n  val s = \"fun inString() {}\"\n  /* nested /* fun inBlock() {} */ */\n}\n",
+				"src/test/kotlin/CTest.kt": "class CTest { fun t() { C().compareTo(C()); commentedOut(); inString(); inBlock() } }\n"},
+			nil,
+		},
+		"rust trait impl methods and comments and strings": {
+			map[string]string{"src/lib.rs": "pub struct S;\n"},
+			map[string]string{
+				"src/lib.rs": "pub struct S;\nimpl IntoIterator for S {\n    fn into_iter(self) -> Vec<u8> { vec![] }\n}\n// fn commented_out() {}\nconst T: &str = \"fn in_string() {}\";\n",
+				"tests/t.rs": "#[test]\nfn t() { let _ = S.into_iter(); commented_out(); in_string(); }\n"},
+			nil,
+		},
+		"a hidden test-support file is not flagged": {
+			map[string]string{"src/main/java/R.java": "class R {}\n"},
+			map[string]string{
+				"src/main/java/R.java":        "class R {}\n",
+				"src/test/java/Fixtures.java": "class Fixtures {\n  static final String FIXTURE_NAME = \"x\";\n}\n",
+				"src/test/java/RTests.java":   "class RTests {\n  void t() { System.out.println(Fixtures.FIXTURE_NAME); }\n}\n"},
+			nil,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gaps := fairnessGaps(t, tc.base, tc.solution, "")
+			var want []string
+			for _, w := range tc.want {
+				want = append(want, "identifier:"+w)
+			}
+			wantGaps(t, gaps, want...)
+		})
+	}
+}
+
+// An annotation attribute written "name = value" after another attribute is not a local variable.
+func TestFairnessJVMAnnotationAttributeIsNotALocal(t *testing.T) {
+	gaps := fairnessGaps(t,
+		map[string]string{"src/main/java/R.java": "@interface R { int maxAttempts() default 1; }\n"},
+		map[string]string{
+			"src/main/java/R.java":      "@interface R {\n  int maxAttempts() default 1;\n  int maxJitterMs() default 0;\n}\n",
+			"src/test/java/RTests.java": "class RTests {\n  @R(maxAttempts = 3, maxJitterMs = -1) void t() {}\n}\n"}, "")
+	wantGaps(t, gaps, "identifier:maxJitterMs")
+}

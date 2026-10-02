@@ -95,9 +95,13 @@ type FairnessInput struct {
 //     object, fun, val, struct, trait, fn, const, mod, field and so on, found by pattern), that the test does not declare
 //     itself, that the instruction does not mention and that no base .java or .kt (or .rs) file contains as a word.
 //     Only names the reference declares can be flagged, so JDK, standard-library and dependency names never are.
-//     Limits: names under 4 characters are skipped; a new name equal to any old word in the base is missed; interface
-//     methods without a modifier and enum constants are not seen as declarations; no scoping, so a name the reference
-//     declares in one place and the test takes from a dependency is flagged only if the base lacks the word.
+//     Overrides (@Override, Kotlin override, methods inside a Rust "impl Trait for Type") are not declarations, and the
+//     test's own locals, parameters and lambda parameters (Java "Type name", Kotlin "name:" and "name ->", Rust
+//     "let name" and "name:") hide a name.
+//     Limits: names under 4 characters are skipped; a new name equal to any old word in the base is missed; enum
+//     constants are not seen as declarations; Kotlin generic functions with nested ">" (fun <T : List<X>> f), Kotlin
+//     constructor parameters without val or var, and Rust "pub use" re-exports are missed; no scoping, so a name the
+//     reference declares in one place and the test takes from a dependency is flagged only if the base lacks the word.
 //   - For Go: names the tests newly use as selectors (x.Name), composite-literal keys (T{Name: v}) or called functions
 //     that a changed non-test Go file declares at package level or as a struct or interface member, that the base's Go
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be
