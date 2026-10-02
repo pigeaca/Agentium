@@ -142,7 +142,7 @@ func TestDriftChart(t *testing.T) {
 		}
 		t.Logf("no change, h = %.0f, %s, σ = %.2f, day effect %.2f: false alarm within %d checks %s; median run length %s",
 			c.h, c.shape, c.sigma, c.gamma, horizon, rate(within, len(lengths)), median)
-		if share := float64(within) / float64(len(lengths)); c.h == 6 && factor >= 10 && share > 0.05 {
+		if share := float64(within) / float64(len(lengths)); c.h == 6 && factor >= gateFactor && share > 0.05 {
 			t.Errorf("h = 6, %s, σ = %.2f, day effect %.2f: false alarms within %d checks in %.1f%% of charts, above 5%%", c.shape, c.sigma, c.gamma, horizon, 100*share)
 		}
 	}

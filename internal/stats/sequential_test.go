@@ -15,8 +15,22 @@ import (
 // non-binding futility), run reuse with a bias allowance, the reused-against-fresh A/A, and the drift chart. Test-only:
 // no production code uses any of it yet, and production verdicts (Decide) are called exactly as they are.
 //
-// The default run is sized for CI under the race detector. AGENTIUM_LONG_SIM=<factor> multiplies every replicate count
-// (the note's figures come from AGENTIUM_LONG_SIM=20); run it with -v to read the figures.
+// The default run is sized for CI under the race detector, and asserts with margins of several Monte Carlo standard
+// errors. AGENTIUM_LONG_SIM=<factor> multiplies every replicate count; the note's figures and its exit gate come from
+// AGENTIUM_LONG_SIM=50 (gateFactor), and smaller factors are exploratory. Run it with -v to read the figures.
+
+// gateFactor is the replicate multiplier at which the strict thresholds of the note's exit gate apply.
+const gateFactor = 50
+
+// simDraws is the bootstrap draws a look in the simulations: 200 for the figures (factor ≥ 10), 50 in the default run
+// to keep it fast under the race detector. The default run's assertions on false differences use the t-interval alone,
+// which does not depend on the draws.
+func simDraws(factor int) int {
+	if factor >= 10 {
+		return 200
+	}
+	return 50
+}
 
 // longFactor is the replicate multiplier from AGENTIUM_LONG_SIM (1 when unset or invalid).
 func longFactor() int {
@@ -203,17 +217,35 @@ func TestGroupSequentialBounds(t *testing.T) {
 type noiseShape int
 
 const (
-	shapeNormal noiseShape = iota
-	shapeSkewed            // the standardized lognormal of TestOneRunCostVerdictsSimulation (skewness about 0.9)
-	shapeHeavy             // Student's t with 5 degrees of freedom, scaled to variance 1 (kurtosis 9)
+	shapeNormal     noiseShape = iota
+	shapeSkewed                // the standardized lognormal of TestOneRunCostVerdictsSimulation (skewness about 0.9)
+	shapeHeavy                 // Student's t with 5 degrees of freedom, scaled to variance 1 (kurtosis 9)
+	shapeSkewedLeft            // shapeSkewed mirrored (skewness about −0.9)
+	shapeStrong                // a standardized lognormal of shape 0.6 (skewness about 2.3)
+	shapeStrongLeft            // shapeStrong mirrored
 )
 
-func (s noiseShape) String() string { return [...]string{"normal", "skewed", "heavy-tailed"}[s] }
+func (s noiseShape) String() string {
+	return [...]string{"normal", "skewed", "heavy-tailed", "left-skewed", "strongly skewed", "strongly left-skewed"}[s]
+}
+
+// standardLognormal draws from a lognormal of the given shape, shifted and scaled to mean 0 and variance 1.
+func standardLognormal(r *rand.Rand, shape float64) float64 {
+	v := shape * shape
+	mean, sd := math.Exp(v/2), math.Sqrt((math.Exp(v)-1)*math.Exp(v))
+	return (math.Exp(shape*r.NormFloat64()) - mean) / sd
+}
 
 func (s noiseShape) draw(r *rand.Rand) float64 {
 	switch s {
 	case shapeSkewed:
 		return standardSkewed(r)
+	case shapeSkewedLeft:
+		return -standardSkewed(r)
+	case shapeStrong:
+		return standardLognormal(r, 0.6)
+	case shapeStrongLeft:
+		return -standardLognormal(r, 0.6)
 	case shapeHeavy:
 		chi := 0.0
 		for range 5 {
@@ -228,11 +260,22 @@ func (s noiseShape) draw(r *rand.Rand) float64 {
 // seqCell is one simulated scenario: per-run log-cost spread Sigma, a true effect of mean Effect (log ratio B/A) and
 // spread Tau across tasks, one fresh run per task and arm, unless Stored is set: then arm A is Stored stored runs per
 // task whose log cost sits Bias above a fresh run's, and verdicts use the reuse allowance Allowance.
+//   - ArmShapes gives arm B its own noise shape ShapeB, and SigmaB (when set) its own spread: the arms' mean log costs
+//     stay equal, but their difference is no longer symmetric, as two different models or contexts could make it.
+//   - Empirical, when set, replaces both runs' noise: each task's paired log difference is Effect plus a value drawn
+//     with replacement from Empirical (centered, standardized recorded differences) times Sigma.
+//   - Day is the spread of a common log-cost shift per occasion: arm A's runs share one, arm B's another (reuse: the
+//     stored runs ran on other days than the fresh ones). Interleaved fresh arms share their days, so they have none.
 type seqCell struct {
 	Sigma, Tau, Effect float64
 	Shape              noiseShape
 	Stored             int
 	Bias, Allowance    float64
+	ArmShapes          bool
+	ShapeB             noiseShape
+	SigmaB             float64
+	Empirical          []float64
+	Day                float64
 }
 
 // seqOutcome counts what reps simulated experiments concluded: with futility stops obeyed, and with them ignored
@@ -286,23 +329,36 @@ func simulateSequential(d seqDesign, c seqCell, reps, draws int, seed uint64) se
 	for i := range names {
 		names[i] = fmt.Sprintf("t%02d", i)
 	}
+	shapeB, sigmaB := c.Shape, c.Sigma
+	if c.ArmShapes {
+		shapeB = c.ShapeB
+	}
+	if c.SigmaB > 0 {
+		sigmaB = c.SigmaB
+	}
 	for range reps {
 		tb := NewTable()
 		added := 0
 		stopped, futile := false, false // futility obeyed: stopped by a verdict or a futility stop
 		tDone := false
+		dayA, dayB := c.Day*r.NormFloat64(), c.Day*r.NormFloat64()
 		for k, n := range d.Looks {
 			for ; added < n; added++ {
 				level := r.NormFloat64()
 				effect := c.Effect + c.Tau*c.Shape.draw(r)
-				if c.Stored > 0 {
+				switch {
+				case c.Empirical != nil:
+					tb.Add(names[added], "A", math.Exp(level))
+					tb.Add(names[added], "B", math.Exp(level+effect+c.Sigma*c.Empirical[r.IntN(len(c.Empirical))]))
+					continue
+				case c.Stored > 0:
 					for range c.Stored {
-						tb.Add(names[added], "A", math.Exp(level+c.Bias+c.Sigma*c.Shape.draw(r)))
+						tb.Add(names[added], "A", math.Exp(level+dayA+c.Bias+c.Sigma*c.Shape.draw(r)))
 					}
-				} else {
-					tb.Add(names[added], "A", math.Exp(level+c.Sigma*c.Shape.draw(r)))
+				default:
+					tb.Add(names[added], "A", math.Exp(level+dayA+c.Sigma*c.Shape.draw(r)))
 				}
-				tb.Add(names[added], "B", math.Exp(level+effect+c.Sigma*c.Shape.draw(r)))
+				tb.Add(names[added], "B", math.Exp(level+dayB+effect+sigmaB*shapeB.draw(r)))
 			}
 			verdict, tOnly, z := verdictAt(d, k, tb, draws, r, c.Allowance)
 			if !tDone && isDifference(tOnly) {
@@ -385,72 +441,142 @@ func runCells(d seqDesign, cells []seqCell, reps, draws int, base uint64) []seqO
 	return out
 }
 
+// recordedCosts are the per-task mean costs (A, B) of the real experiments in docs/examples: aa-report.md (an A/A, 6
+// tasks), context-ab-16-report.md (8) and model-ab-report.md (8).
+var recordedCosts = [][][2]float64{
+	{{0.510, 0.384}, {1.297, 1.121}, {0.691, 0.703}, {1.526, 1.688}, {0.896, 0.572}, {1.164, 1.662}},
+	{{0.876, 0.963}, {2.039, 1.993}, {0.696, 0.575}, {0.981, 1.408}, {0.565, 0.445}, {1.210, 1.463}, {2.010, 2.001}, {1.069, 1.352}},
+	{{0.228, 0.100}, {0.415, 0.135}, {0.463, 0.108}, {0.311, 0.111}, {0.219, 0.073}, {0.161, 0.073}, {0.236, 0.133}, {0.239, 0.092}},
+}
+
+// recordedDifferences pools the recorded per-task log differences, each experiment's centered on its own mean and
+// scaled by its own spread: a real, possibly lopsided, shape with no true difference.
+func recordedDifferences() []float64 {
+	var out []float64
+	for _, experiment := range recordedCosts {
+		var d []float64
+		for _, pair := range experiment {
+			d = append(d, math.Log(pair[1])-math.Log(pair[0]))
+		}
+		m, sd := Mean(d), math.Sqrt(Variance(d))
+		for _, v := range d {
+			out = append(out, (v-m)/sd)
+		}
+	}
+	return out
+}
+
 // TestGroupSequentialFalseVerdicts is the trust guard's evidence for the note's design: looks after 8, 12 and 16
 // tasks × 1 run per arm, O'Brien–Fleming-type spending of a two-sided 4.5% (efficacy: seqAlpha) and of a one-sided 5%
 // per side (equivalence), Decide at each look's nominal levels (bootstrap and t-interval must agree), non-binding
-// futility at conditional power below 10%. With no true mean difference (an A/A, τ = 0; and a zero mean with τ = 0.10
-// or 0.25), for σ = 0.19 and 0.35, under normal, skewed and heavy-tailed noise, false differences (improved,
-// regressed) are counted ignoring futility stops (the non-binding worst case). It requires:
-//   - always: at most 5.0% pooled over every null scenario, and at most 6.0% per noise shape (a regression check: the
-//     default run has 2,400 experiments a shape, about ±0.9 points at 95%);
-//   - in the long run (AGENTIUM_LONG_SIM ≥ 10): per noise shape, at most 5.0% with its Wilson 95% upper bound at most
-//     5.0% too. This is the wave-3 exit gate's simulation half.
+// futility at conditional power below 10%. With no true mean difference, false differences (improved, regressed) are
+// counted ignoring futility stops (the non-binding worst case), in five groups of scenarios:
+//   - normal, skewed and heavy-tailed noise alike in both arms (σ = 0.19 and 0.35; an A/A, τ = 0, and a zero mean with
+//     τ = 0.10 or 0.25). With one run per arm and the same noise in both, each task's difference is symmetric whatever
+//     the shape, so these test the tails more than the skew;
+//   - arm-specific shapes: the arms' noise differs in shape (skewed against normal or mirrored, up to skewness 2.3) and
+//     in one scenario in spread (0.19 against 0.35), with equal mean log cost, so the differences are lopsided;
+//   - recorded differences: the 22 per-task differences of the three real experiments, centered and resampled.
+//
+// The assertions use the t-interval-alone count, an upper bound on the widest-interval rule's (that interval contains
+// the t-interval) that does not depend on the bootstrap's draws. They require, per group:
+//   - always (a regression check, with margins of about 3 Monte Carlo standard errors over the long run's rates): at
+//     most 7.0% per group, and at most 5.5% pooled over every group;
+//   - at AGENTIUM_LONG_SIM ≥ gateFactor (the wave-3 exit gate's simulation half): at most 5.0% with its Wilson 95%
+//     upper bound at most 5.0% too.
+//
+// At the time of writing the long run fails that gate for the arm-specific shapes (5.66% [5.53, 5.79]; up to 7.6%
+// when both arms are strongly and oppositely skewed) and, by its upper bound only, for the recorded differences (4.90%
+// [4.78, 5.03]); see the note. phase1-v2's fixed 8-task design, logged for comparison, does worse on the same
+// arm-specific scenarios.
 //
 // It also checks "equivalent" at a true +10% (the margin): at most 5%. Bootstrap draws are 200 a look, not the
 // analysis's 10,000: with one run per cell the bootstrap resamples tasks only and its percentile interval is narrower
-// than the t-interval at these sizes, so the widest-interval rule is decided by the t-interval almost always; the
-// t-only count, an upper bound on false differences, is logged too.
+// than the t-interval at these sizes, so the widest-interval rule is decided by the t-interval almost always.
 func TestGroupSequentialFalseVerdicts(t *testing.T) {
 	factor := longFactor()
-	reps, draws := 400*factor, 200
+	reps, draws := 400*factor, simDraws(factor)
 	d := newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0.10)
-	var cells []seqCell
-	for _, shape := range []noiseShape{shapeNormal, shapeSkewed, shapeHeavy} {
+	type group struct {
+		name  string
+		cells []seqCell
+		base  uint64
+	}
+	var alike []group
+	for i, shape := range []noiseShape{shapeNormal, shapeSkewed, shapeHeavy} {
+		g := group{name: shape.String(), base: 1000 + uint64(6*i)}
 		for _, sigma := range []float64{0.19, 0.35} {
 			for _, tau := range []float64{0, 0.10, 0.25} {
-				cells = append(cells, seqCell{Sigma: sigma, Tau: tau, Shape: shape})
+				g.cells = append(g.cells, seqCell{Sigma: sigma, Tau: tau, Shape: shape})
 			}
 		}
+		alike = append(alike, g)
 	}
-	results := runCells(d, cells, reps, draws, 1000)
-	pooled := map[noiseShape]*seqOutcome{}
-	aa := map[noiseShape]*seqOutcome{}
-	for i, c := range cells {
-		o := results[i]
-		t.Logf("null, %s, σ = %.2f, τ = %.2f: false differences %s (futility obeyed %s; t alone %s); tasks used %.1f (%.1f without futility)",
-			c.Shape, c.Sigma, c.Tau, rate(o.differencesNoFutility, o.reps), rate(o.differences, o.reps), rate(o.differencesTOnly, o.reps),
-			float64(o.tasks)/float64(o.reps), float64(o.tasksNoFutility)/float64(o.reps))
-		if pooled[c.Shape] == nil {
-			pooled[c.Shape], aa[c.Shape] = &seqOutcome{}, &seqOutcome{}
-		}
-		pooled[c.Shape].add(o)
-		if c.Tau == 0 {
-			aa[c.Shape].add(o)
-		}
+	arms := group{name: "arm-specific shapes", base: 1100, cells: []seqCell{
+		{Sigma: 0.19, Shape: shapeSkewed, ArmShapes: true, ShapeB: shapeNormal},
+		{Sigma: 0.19, Shape: shapeSkewed, ArmShapes: true, ShapeB: shapeSkewedLeft},
+		{Sigma: 0.19, Shape: shapeStrong, ArmShapes: true, ShapeB: shapeNormal},
+		{Sigma: 0.19, Shape: shapeStrong, ArmShapes: true, ShapeB: shapeStrongLeft},
+		{Sigma: 0.19, Shape: shapeStrong, ArmShapes: true, ShapeB: shapeNormal, SigmaB: 0.35},
+		{Sigma: 0.19, Tau: 0.10, Shape: shapeStrong, ArmShapes: true, ShapeB: shapeStrongLeft},
+	}}
+	recorded := group{name: "recorded differences", base: 1200}
+	for range 6 {
+		recorded.cells = append(recorded.cells, seqCell{Sigma: 0.25, Empirical: recordedDifferences()})
 	}
-	all, allAA := seqOutcome{}, seqOutcome{}
-	for _, shape := range []noiseShape{shapeNormal, shapeSkewed, shapeHeavy} {
-		p := pooled[shape]
-		all.add(*p)
-		allAA.add(*aa[shape])
-		t.Logf("null, %s, pooled over %d experiments: false differences %s ignoring futility, %s obeying it, %s on the t-interval alone; A/A only (τ = 0): %s",
-			shape, p.reps, rate(p.differencesNoFutility, p.reps), rate(p.differences, p.reps), rate(p.differencesTOnly, p.reps),
-			rate(aa[shape].differencesNoFutility, aa[shape].reps))
-		limit := 0.06
-		if factor >= 10 {
+	groups := append(alike, arms, recorded)
+	var all, allAA seqOutcome
+	for _, g := range groups {
+		results := runCells(d, g.cells, reps, draws, g.base)
+		var p, aa seqOutcome
+		for i, c := range g.cells {
+			o := results[i]
+			shape := c.Shape.String()
+			switch {
+			case c.Empirical != nil:
+				shape = "recorded"
+			case c.ArmShapes:
+				shape = fmt.Sprintf("%s (σ %.2f) against %s (σ %.2f)", c.Shape, c.Sigma, c.ShapeB, math.Max(c.Sigma, c.SigmaB))
+			}
+			t.Logf("null, %s, σ = %.2f, τ = %.2f: false differences %s (futility obeyed %s; t alone %s); tasks used %.1f (%.1f without futility)",
+				shape, c.Sigma, c.Tau, rate(o.differencesNoFutility, o.reps), rate(o.differences, o.reps), rate(o.differencesTOnly, o.reps),
+				float64(o.tasks)/float64(o.reps), float64(o.tasksNoFutility)/float64(o.reps))
+			p.add(o)
+			if c.Tau == 0 && !c.ArmShapes && c.Empirical == nil {
+				aa.add(o)
+			}
+		}
+		all.add(p)
+		line := fmt.Sprintf("null, %s, pooled over %d experiments: false differences %s ignoring futility, %s obeying it, %s on the t-interval alone",
+			g.name, p.reps, rate(p.differencesNoFutility, p.reps), rate(p.differences, p.reps), rate(p.differencesTOnly, p.reps))
+		if aa.reps > 0 {
+			allAA.add(aa)
+			line += "; A/A only (τ = 0): " + rate(aa.differencesNoFutility, aa.reps)
+		}
+		t.Log(line)
+		limit := 0.07
+		if factor >= gateFactor {
 			limit = 0.05
 		}
-		if r := float64(p.differencesNoFutility) / float64(p.reps); r > limit {
-			t.Errorf("%s: false differences in %.2f%% of experiments without a true difference, above %.0f%%", shape, 100*r, 100*limit)
+		if r := float64(p.differencesTOnly) / float64(p.reps); r > limit {
+			t.Errorf("%s: false differences (t alone) in %.2f%% of experiments without a true difference, above %.1f%%", g.name, 100*r, 100*limit)
 		}
-		if _, hi := Wilson(p.differencesNoFutility, p.reps); factor >= 10 && hi > 0.05 {
-			t.Errorf("%s: the false-difference rate's 95%% upper bound is %.2f%%, above 5%%", shape, 100*hi)
+		if _, hi := Wilson(p.differencesTOnly, p.reps); factor >= gateFactor && hi > 0.05 {
+			t.Errorf("%s: the false-difference rate's (t alone) 95%% upper bound is %.2f%%, above 5%%", g.name, 100*hi)
 		}
 	}
-	t.Logf("null, all shapes, pooled over %d experiments: false differences %s ignoring futility; A/A only: %s; stops at looks %v (futility obeyed)",
-		all.reps, rate(all.differencesNoFutility, all.reps), rate(allAA.differencesNoFutility, allAA.reps), all.stopsAt)
-	if r := float64(all.differencesNoFutility) / float64(all.reps); r > 0.05 {
-		t.Errorf("false differences in %.2f%% of all experiments without a true difference, above 5%%", 100*r)
+	// For comparison, not asserted: phase1-v2's fixed design (one look at 8 tasks, 95% and 90% intervals) on the
+	// arm-specific shapes.
+	var fixed seqOutcome
+	for _, o := range runCells(newSeqDesign([]int{8}, 0.05, 0.05, 0), arms.cells, reps, draws, 1300) {
+		fixed.add(o)
+	}
+	t.Logf("phase1-v2's fixed 8 tasks on the arm-specific shapes, %d experiments: false differences %s (t alone %s)",
+		fixed.reps, rate(fixed.differencesNoFutility, fixed.reps), rate(fixed.differencesTOnly, fixed.reps))
+	t.Logf("null, all groups, pooled over %d experiments: false differences %s ignoring futility (t alone %s); A/A only: %s; stops at looks %v (futility obeyed)",
+		all.reps, rate(all.differencesNoFutility, all.reps), rate(all.differencesTOnly, all.reps), rate(allAA.differencesNoFutility, allAA.reps), all.stopsAt)
+	if r := float64(all.differencesTOnly) / float64(all.reps); r > 0.055 {
+		t.Errorf("false differences (t alone) in %.2f%% of all experiments without a true difference, above 5.5%%", 100*r)
 	}
 
 	// Equivalence at the margin: a true +10% (log 1.1) must be called equivalent at most 5% of the time.
@@ -477,7 +603,7 @@ func TestGroupSequentialFalseVerdicts(t *testing.T) {
 // fixed 8-task design, and uses fewer tasks on average than the fixed 16-task design.
 func TestGroupSequentialPower(t *testing.T) {
 	factor := longFactor()
-	reps, draws := 100*factor, 200
+	reps, draws := 100*factor, simDraws(factor)
 	designs := []struct {
 		name string
 		d    seqDesign
@@ -531,26 +657,37 @@ func TestGroupSequentialPower(t *testing.T) {
 //  2. after a pass, a reuse experiment with the same true bias: arm A 4 stored runs a task, arm B 1 fresh run, the
 //     sequential looks (no futility), and a difference only beyond ±allowance; no true effect, then true reductions.
 //
-// It requires, for true biases within ±5%, false differences at most 5% among experiments that ran (after a pass),
-// and logs the pass rate and power.
+// Scenarios: true biases of 0, ±5%, +10% and ±12% (log 0.12, about 12.7%), normal and skewed noise, without day
+// effects; and, with normal noise, biases of 0 and +5% with a day effect of 0.03 or 0.05: every occasion (the
+// validation's stored side, its fresh side, and each experiment's stored and fresh arms) shares a common log-cost shift
+// of that spread, which within-experiment intervals do not see. It logs the pass rate, how often a passing key's bias
+// exceeds its allowance, false differences and power, and requires false differences at most 5% among experiments
+// that ran (after a pass) for biases within ±5% without day effects.
 func TestReuseValidationAndAllowance(t *testing.T) {
 	factor := longFactor()
-	reps, draws := 100*factor, 200
+	reps, draws := 100*factor, simDraws(factor)
 	d := newSeqDesign([]int{8, 12, 16}, seqAlpha, 0.05, 0)
 	limit := math.Log(1.15)
 	type res struct {
 		pass, falseDiff, improved20, improved35, improved63, runs int
 		tasks20, tasks35, tasks63                                 int
+		exceeds                                                   int // passes whose |bias| is above the allowance
 		allowance                                                 float64
 	}
 	type scenario struct {
 		bias  float64
 		shape noiseShape
+		day   float64
 	}
 	var scenarios []scenario
 	for _, shape := range []noiseShape{shapeNormal, shapeSkewed} {
-		for _, bias := range []float64{0, -0.05, 0.05, 0.10} {
-			scenarios = append(scenarios, scenario{bias, shape})
+		for _, bias := range []float64{0, -0.05, 0.05, 0.10, -0.12, 0.12} {
+			scenarios = append(scenarios, scenario{bias, shape, 0})
+		}
+	}
+	for _, day := range []float64{0.03, 0.05} {
+		for _, bias := range []float64{0, 0.05} {
+			scenarios = append(scenarios, scenario{bias, shapeNormal, day})
 		}
 	}
 	results := make([]res, len(scenarios))
@@ -562,12 +699,13 @@ func TestReuseValidationAndAllowance(t *testing.T) {
 			for range reps {
 				// The validation: stored (biased) against fresh, both 4 runs a task.
 				tb := NewTable()
+				dayStored, dayFresh := sc.day*r.NormFloat64(), sc.day*r.NormFloat64()
 				for i := range 16 {
 					name := fmt.Sprintf("t%02d", i)
 					level := r.NormFloat64()
 					for range 4 {
-						tb.Add(name, "A", math.Exp(level+sc.bias+0.19*sc.shape.draw(r)))
-						tb.Add(name, "B", math.Exp(level+0.19*sc.shape.draw(r)))
+						tb.Add(name, "A", math.Exp(level+dayStored+sc.bias+0.19*sc.shape.draw(r)))
+						tb.Add(name, "B", math.Exp(level+dayFresh+0.19*sc.shape.draw(r)))
 					}
 				}
 				boot, _ := NewBootstrap(tb, "A", "B", math.Log, draws, r)
@@ -579,9 +717,12 @@ func TestReuseValidationAndAllowance(t *testing.T) {
 				}
 				out.pass++
 				out.allowance += allowance
+				if math.Abs(sc.bias) > allowance {
+					out.exceeds++
+				}
 				// Reuse experiments under the same bias, with this allowance.
 				for _, effect := range []float64{0, 0.20, 0.35, 0.63} {
-					c := seqCell{Sigma: 0.19, Tau: 0.10, Effect: math.Log(1 - effect), Shape: sc.shape, Stored: 4, Bias: sc.bias, Allowance: allowance}
+					c := seqCell{Sigma: 0.19, Tau: 0.10, Effect: math.Log(1 - effect), Shape: sc.shape, Stored: 4, Bias: sc.bias, Allowance: allowance, Day: sc.day}
 					o := simulateSequential(d, c, 1, draws, r.Uint64())
 					switch effect {
 					case 0:
@@ -606,14 +747,14 @@ func TestReuseValidationAndAllowance(t *testing.T) {
 	for si, sc := range scenarios {
 		o := results[si]
 		if o.pass == 0 {
-			t.Logf("bias %+.0f%%, %s: the validation never passed in %d tries", 100*sc.bias, sc.shape, reps)
+			t.Logf("bias %+.0f%%, %s, day effect %.2f: the validation never passed in %d tries", 100*sc.bias, sc.shape, sc.day, reps)
 			continue
 		}
 		per := func(n int) float64 { return float64(n) / float64(o.pass) }
-		t.Logf("bias %+.0f%% (stored against fresh), %s: validation passed %s; mean allowance %.3f; after a pass, with no true effect, false differences %s, fresh runs %.1f; improved at a true 20%% %s (fresh runs %.1f), 35%% %s (%.1f), 63%% %s (%.1f)",
-			100*sc.bias, sc.shape, rate(o.pass, reps), o.allowance/float64(o.pass), rate(o.falseDiff, o.pass), per(o.runs),
+		t.Logf("bias %+.1f%% (log %+.2f, stored against fresh), %s, day effect %.2f: validation passed %s; mean allowance %.3f; bias beyond the allowance %s of passes; after a pass, with no true effect, false differences %s, fresh runs %.1f; improved at a true 20%% %s (fresh runs %.1f), 35%% %s (%.1f), 63%% %s (%.1f)",
+			100*(math.Exp(sc.bias)-1), sc.bias, sc.shape, sc.day, rate(o.pass, reps), o.allowance/float64(o.pass), rate(o.exceeds, o.pass), rate(o.falseDiff, o.pass), per(o.runs),
 			rate(o.improved20, o.pass), per(o.tasks20), rate(o.improved35, o.pass), per(o.tasks35), rate(o.improved63, o.pass), per(o.tasks63))
-		if math.Abs(sc.bias) <= 0.05 && float64(o.falseDiff)/float64(o.pass) > 0.05 {
+		if sc.day == 0 && math.Abs(sc.bias) <= 0.05 && float64(o.falseDiff)/float64(o.pass) > 0.05 {
 			t.Errorf("bias %+.2f, %s: false differences in %.2f%% of reuse experiments, above 5%%", sc.bias, sc.shape, 100*float64(o.falseDiff)/float64(o.pass))
 		}
 	}
