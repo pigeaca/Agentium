@@ -259,7 +259,8 @@ func TestFetchCommitReleasesItsLock(t *testing.T) {
 	}
 	free("after a failed fetch")
 
-	// Cancelled while git runs: the fetch stops and lets go.
+	// Cancelled before it starts: the fetch fails and leaves no lock behind (a cancel during the fetch releases it through
+	// the same deferred unlock).
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()
 	if err := FetchCommit(cancelled, source, ids[0], SourceRef(ids[0]), "--git-dir", bare); err == nil {
