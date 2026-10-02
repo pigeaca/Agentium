@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -50,19 +51,45 @@ type Arm struct {
 }
 
 // DesignVersion is the version of a context experiment's stored form. A model-ab design is stored as
-// DesignVersionModelAB: an older Agentium, which would run both arms on arm A's model, refuses it.
+// DesignVersionModelAB: an older Agentium, which would run both arms on arm A's model, refuses it. A seq-v1 design, of
+// any template, is stored as DesignVersionSeq: an older Agentium, which would run its 16 tasks as one fixed design at
+// 95%, refuses it.
 const (
 	DesignVersion        = 1
 	DesignVersionModelAB = 2
+	DesignVersionSeq     = 3
 )
 
-// WantVersion is the stored version a design of its template carries.
+// WantVersion is the stored version a design of its template and method carries.
 func (d Design) WantVersion() int {
-	if d.Template == TemplateModelAB {
+	switch {
+	case d.Method == MethodSeq:
+		return DesignVersionSeq
+	case d.Template == TemplateModelAB:
 		return DesignVersionModelAB
 	}
 	return DesignVersion
 }
+
+// NewMethod is the method a new experiment with goal is made under: seq-v1 for a cost experiment (cheaper), phase1-v2
+// for a success experiment (better), since seq-v1 has no sequential success design.
+func NewMethod(goal string) string {
+	if goal == GoalCheaper {
+		return MethodSeq
+	}
+	return MethodV2
+}
+
+// LockMethod is the method d is locked under: its own, or phase1-v2 for a design stored before designs named one.
+func (d Design) LockMethod() string {
+	if d.Method == "" {
+		return MethodV2
+	}
+	return d.Method
+}
+
+// Sequential reports whether d runs as a seq-v1 design.
+func (d Design) Sequential() bool { return d.Method == MethodSeq }
 
 // MaxSeed bounds seeds to 53 bits, which JSON numbers carry exactly, even in readers that use doubles (JavaScript, jq).
 const MaxSeed = 1<<53 - 1
@@ -89,6 +116,11 @@ type Design struct {
 	// and decide nothing; its cost counts against BudgetUSD but never toward an arm's cost. Omitted when off, so designs
 	// and locks made before the judge read and encode as they did.
 	Judge *judge.Settings `json:"judge,omitempty"`
+	// Method is the method the design is made for (NewMethod); empty in designs stored before, which lock under
+	// phase1-v2 (LockMethod). A seq-v1 design has one run per task and arm and at most 16 tasks.
+	Method string `json:"method,omitempty"`
+	// NoFutility turns a seq-v1 design's futility stops off (they are on by default, and non-binding either way).
+	NoFutility bool `json:"no_futility,omitempty"`
 }
 
 // Default margins (the study's §5.6).
@@ -273,6 +305,7 @@ func (d Design) Validate() error {
 	if d.Seed > MaxSeed {
 		errs = append(errs, fmt.Errorf("the seed must be at most %d", uint64(MaxSeed)))
 	}
+	errs = append(errs, d.validateMethod()...)
 	if j := d.Judge; j != nil {
 		if j.Repeats < 1 || j.Repeats > MaxJudgeRepeats {
 			errs = append(errs, fmt.Errorf("the judge's repeats must be 1 to %d", MaxJudgeRepeats))
@@ -282,6 +315,32 @@ func (d Design) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// validateMethod checks the design against its method: a seq-v1 design is a cost experiment of one run per task and
+// arm, with at most stats.SeqMaxTasks tasks.
+func (d Design) validateMethod() []error {
+	switch d.Method {
+	case "", MethodV2:
+		if d.NoFutility {
+			return []error{fmt.Errorf("futility stops belong to method %s", MethodSeq)}
+		}
+		return nil
+	case MethodSeq:
+	default:
+		return []error{fmt.Errorf("unknown method %q (new experiments use %s or %s)", d.Method, MethodSeq, MethodV2)}
+	}
+	var errs []error
+	if d.Goal != GoalCheaper {
+		errs = append(errs, fmt.Errorf("method %s is for cost experiments (goal %s); success experiments use %s", MethodSeq, GoalCheaper, MethodV2))
+	}
+	if d.Repeats != 1 {
+		errs = append(errs, fmt.Errorf("method %s runs each task once per arm, not %d times", MethodSeq, d.Repeats))
+	}
+	if len(d.Tasks) > stats.SeqMaxTasks {
+		errs = append(errs, fmt.Errorf("method %s takes at most %d tasks, not %d", MethodSeq, stats.SeqMaxTasks, len(d.Tasks)))
+	}
+	return errs
 }
 
 // validateProfiles checks the arms' own profiles: a model-ab experiment gives each arm a model, the profiles differ,

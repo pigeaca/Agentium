@@ -12,7 +12,10 @@ import (
 // startDoc is start's --json document. Status says where it stopped, always before any paid run:
 //   - preview: the experiment exists and everything it needs is in place; run_command starts it (spending money);
 //   - not_ready: it exists, but something is missing (readiness lists what; mined tasks may await review);
-//   - too_few_tasks: fewer valid, reviewed tasks than the cost floor, so no experiment was created (the exit code is 1);
+//   - awaiting_review: tasks start mined wait for a person's review (task show, then task edit --reviewed), so no
+//     experiment was created yet (the exit code is 1); tasks_ready and tasks_awaiting_review count them;
+//   - too_few_tasks: fewer valid, reviewed tasks than the cost floor and none waiting for a review, so no experiment was
+//     created (the exit code is 1);
 //   - finished: the experiment has finished; its report is `agentium experiment report`.
 type startDoc struct {
 	header
@@ -27,8 +30,12 @@ type startDoc struct {
 	Calibrations   int              `json:"calibration_runs_needed"`
 	CalibrationUSD float64          `json:"calibration_estimate_usd"`
 	RunCommand     string           `json:"run_command"`
-	NorthStar      *northStarDoc    `json:"north_star"`
-	Log            []string         `json:"log"` // the stages' text, plain
+	// TasksReady and TasksAwaitingReview are the task stage's counts: valid tasks ready for the experiment, and valid
+	// tasks waiting for a person's review. Null when the stage was skipped (the experiment existed).
+	TasksReady          *int          `json:"tasks_ready"`
+	TasksAwaitingReview *int          `json:"tasks_awaiting_review"`
+	NorthStar           *northStarDoc `json:"north_star"`
+	Log                 []string      `json:"log"` // the stages' text, plain
 }
 
 type startExperiment struct {
@@ -61,6 +68,10 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 			text = strings.ReplaceAll(text, cli, "claude")
 		}
 		return s.env.redact(text)
+	}
+	if c := s.counts; c != nil {
+		ready, waiting := len(c.ready), len(c.waiting)
+		doc.TasksReady, doc.TasksAwaitingReview = &ready, &waiting
 	}
 	if text := strings.TrimRight(clean(s.log.String()), "\n"); text != "" {
 		doc.Log = strings.Split(text, "\n")

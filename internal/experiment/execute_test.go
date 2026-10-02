@@ -327,7 +327,7 @@ func TestCounting(t *testing.T) {
 }
 
 func TestLockCheckAndTaskDigest(t *testing.T) {
-	l := Lock{Method: MethodVersion, ClaudeCode: "2.1.281", SignIn: "login"}
+	l := Lock{Method: MethodV2, ClaudeCode: "2.1.281", SignIn: "login"}
 	if err := l.Check("2.1.281", "login"); err != nil {
 		t.Errorf("same machine: %v", err)
 	}

@@ -53,6 +53,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, st.Status(r.Status), r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
+	if line := r.seqLine(); line != "" {
+		fmt.Fprintf(&b, "\n%s\n", st.Heading(line))
+	}
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
 	}
@@ -63,8 +66,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		b.WriteString(st.Warn(localBindingNote) + "\n")
 	}
 
-	section("Metrics", "A and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.")
-	t := table(term.Left("Metric"), term.Left("Role"), term.Right(r.Arms[0].label()), term.Right(r.Arms[1].label()), term.Right("B vs A"), term.Right("95% bootstrap"), term.Right("95% t"), term.Left("Verdict"))
+	section("Metrics", r.metricsIntro())
+	bootHead, tHead := r.intervalHeads()
+	t := table(term.Left("Metric"), term.Left("Role"), term.Right(r.Arms[0].label()), term.Right(r.Arms[1].label()), term.Right("B vs A"), term.Right(bootHead), term.Right(tHead), term.Left("Verdict"))
 	for _, res := range r.Analysis.Results {
 		verdict := verdictStyle(st, res.Verdict, res.Verdict)
 		if res.Warning != "" {
@@ -90,6 +94,19 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n",
 		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
+
+	if r.Analysis.Sequential != nil && len(r.Analysis.Sequential.Looks) > 0 {
+		section("Looks", r.looksIntro())
+		lt := table(term.Left(lookColumns[0]), term.Right(lookColumns[1]), term.Right(lookColumns[2]), term.Right(lookColumns[3]), term.Right(lookColumns[4]),
+			term.Left(lookColumns[5]), term.Right(lookColumns[6]), term.Left(lookColumns[7]))
+		for _, row := range r.lookRows() {
+			row[5] = verdictStyle(st, row[5], row[5])
+			lt.Row(row...)
+		}
+		if err := lt.Write(&b); err != nil {
+			return err
+		}
+	}
 
 	if n, ok := noiseOf(r); ok {
 		section("Noise", n.intro)

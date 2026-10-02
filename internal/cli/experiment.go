@@ -16,9 +16,9 @@ import (
 
 // experimentUsage is the help of experiment's subcommands. It is computed once from constants and never changed.
 var experimentUsage = `Usage:
-  agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--tier quick|confident | --task NAME...] [--repeats N]
-                     [--model MODEL] [--effort LEVEL] [--goal cheaper|better] [--run-budget USD] [--budget USD]
-                     [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
+  agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--task NAME...] [--model MODEL] [--effort LEVEL]
+                     [--goal cheaper|better [--tier quick|confident] [--repeats N]] [--no-futility] [--run-budget USD]
+                     [--budget USD] [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
                      [--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]
                      a context A/B: arm A (default: base, each task's own context) against snapshot B
   agentium experiment new NAME --template aa [--a CONTEXT] [...]
@@ -46,8 +46,11 @@ var experimentUsage = `Usage:
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
 
-Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT). A tier
-samples them: quick is 12 tasks × 3 runs per arm, confident 23 × 5; --task picks them instead (repeatable).
+Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT); --task picks
+them (repeatable), else a seeded sample does. A cost experiment (--goal cheaper, the default) runs method seq-v1: up to
+16 tasks × 1 run per arm in stages, with a look after 8, 12 and 16 tasks; it stops at the first look with a cost
+verdict, or when one has become unlikely (futility; --no-futility turns that off). A success experiment (--goal better)
+samples a tier: quick is 12 tasks × 3 runs per arm, confident 23 × 5.
 
 ` + fmt.Sprintf(`--judge asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference
 solution does? It reads the instruction and both changes' code (never the tests), --judge-repeats times (default %d,
@@ -100,10 +103,11 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs.StringVar(&contextName, "context", "", "model-ab only: the context both arms run: base (default) or a snapshot")
 	fs.Float64Var(&o.RunBudgetA, "run-budget-a", 0, "model-ab only: stop arm A's runs at this cost in USD (default --run-budget)")
 	fs.Float64Var(&o.RunBudgetB, "run-budget-b", 0, "model-ab only: stop arm B's runs at this cost in USD (default --run-budget)")
-	fs.StringVar(&o.Tier, "tier", "", "quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
+	fs.StringVar(&o.Tier, "tier", "", "--goal better: quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
 	var tasks stringList
-	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a tier)")
-	fs.IntVar(&o.Repeats, "repeats", 0, "runs per task per arm (default: the tier's, or 3)")
+	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a sample)")
+	fs.IntVar(&o.Repeats, "repeats", 0, "--goal better: runs per task per arm (default: the tier's, or 3); a cost experiment runs 1")
+	fs.BoolVar(&o.NoFutility, "no-futility", false, "a cost experiment: no futility stops (it then runs to a verdict or its last look)")
 	fs.StringVar(&o.Model, "model", experiment.DefaultExperimentModel, "the model")
 	fs.StringVar(&o.Effort, "effort", "", "the effort level (default: the CLI's)")
 	fs.StringVar(&o.Goal, "goal", experiment.GoalCheaper, "cheaper (cost, with success as the guard) or better (success)")

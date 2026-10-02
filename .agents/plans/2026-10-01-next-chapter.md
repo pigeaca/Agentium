@@ -47,6 +47,7 @@
 | 3 Cheaper verdicts | The [statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md), then group-sequential stopping (`seq-v1`, α 3.5%) and the isolated-run cost; run reuse and the drift chart deferred by the user ([plan](2026-10-02-cheaper-verdicts.md)) | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The long simulation on production `seq-v1` shows at most 5% false verdicts, and a real `seq-v1` A/A smoke check runs (about $3, approved) |
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) | A Python or TypeScript smoke test ([plan](2026-10-02-python-ts.md)); the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
 | Judge (no gate) | [Judge pairs](2026-10-01-judge-pairs.md) (1b) and [ticket grading](2026-10-01-ticket-tasks.md) (step 2), after `seq-v1`, labeled unvalidated and exploratory (the user, 2026-10-02) | `seq-v1` | — |
+| Isolation | [Isolation](2026-10-02-isolation.md): sandboxed grading on macOS (on by default), then a container mode driving Docker directly (the user, 2026-10-02) | — | — |
 | Later | a Claude Code skill; autopilot; [Codex](archive/2026-10-01-phase2-agents-codex.md); hosted CI; live Jira; positioning against `claude plugin eval` and Promptfoo's CI | | |
 
 ## Wave 3 requirement: a statistics note before any code

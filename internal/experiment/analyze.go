@@ -39,6 +39,9 @@ const (
 	RoleSecondary = "secondary"
 )
 
+// NoteNoLook is a seq-v1 primary metric's note before its first look: no verdict yet, whatever the runs show.
+const NoteNoLook = "no look yet: the first comes once its stage is settled"
+
 // BootstrapDraws is the number of bootstrap draws per metric.
 const BootstrapDraws = 10000
 
@@ -55,12 +58,16 @@ type MetricResult struct {
 	FloorTasks   int `json:"floor_tasks"`
 	FloorRepeats int `json:"floor_repeats"`
 	// A and B are each arm's level: the success rate, or the geometric mean; nil when the arm has no value.
-	A       *float64       `json:"a"`
-	B       *float64       `json:"b"`
+	A *float64 `json:"a"`
+	B *float64 `json:"b"`
+	// Boot95 and T95 are at 95%, and Boot90 and T90 at 90%, unless Level and EqLevel are set: a seq-v1 look's primary
+	// metric has them at the look's efficacy and equivalence levels.
 	Boot95  stats.Interval `json:"bootstrap_95"`
 	T95     stats.Interval `json:"t_95"`
 	Boot90  stats.Interval `json:"bootstrap_90"`
 	T90     stats.Interval `json:"t_90"`
+	Level   float64        `json:"level,omitempty"`
+	EqLevel float64        `json:"equivalence_level,omitempty"`
 	Verdict string         `json:"verdict"`
 	Warning string         `json:"warning,omitempty"` // a regression shown below the floors
 	Note    string         `json:"note,omitempty"`    // why there is no result
@@ -110,6 +117,9 @@ type Analysis struct {
 	PassAll           map[string]float64 `json:"pass_all"` // pass^k: tasks whose every counted run succeeded
 	NotDiscriminating []string           `json:"not_discriminating,omitempty"`
 	Noise             *Noise             `json:"noise,omitempty"`
+	// Sequential is a seq-v1 experiment's looks. Every other field then describes the runs of the reported look's
+	// stages only (or every run, before any look was analysed).
+	Sequential *SeqStatus `json:"sequential,omitempty"`
 }
 
 type metric struct {
@@ -121,10 +131,28 @@ type metric struct {
 // Analyze compares the experiment's arms (B against A) on its fair runs, as the lock's design declares: the goal's
 // primary metric and the success guard get verdicts (stats.Decide) with the design's margins and the floors of the
 // lock's method; the others are exploratory. A pass graded with changed runner configuration counts as a failure.
+// A seq-v1 experiment is analysed look by look (analyzeSequential).
 func Analyze(l Lock, runs []RunData) (Analysis, error) {
 	if len(l.Design.Arms) != 2 {
 		return Analysis{}, errors.New("analyze: the lock has no two arms")
 	}
+	if l.Method == MethodSeq {
+		return analyzeSequential(l, runs)
+	}
+	out, _, err := analyze(l, runs, lookLevels{})
+	return out, err
+}
+
+// lookLevels are the primary metric's levels at a seq-v1 look. The zero value is a fixed design's: 95% and 90%, and
+// the bootstrap streams the analysis has always used.
+type lookLevels struct {
+	eff, eq   float64
+	look      int  // from 1: each look draws its own bootstrap streams
+	noVerdict bool // no look was analysed: the primary metric gets no verdict
+}
+
+// analyze is Analyze at lv's levels; it also returns the primary metric's t-statistic (0 without one).
+func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
 	metrics := []metric{
 		{MetricSuccess, false, func(r RunData) (float64, bool) {
@@ -159,6 +187,7 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 	if l.Design.Goal == GoalBetter {
 		primary = MetricSuccess
 	}
+	primaryZ := 0.0
 	for i, m := range metrics {
 		res := MetricResult{Metric: m.name, Role: RoleSecondary, Ratio: m.ratio}
 		switch {
@@ -186,25 +215,31 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 			out.Results = append(out.Results, res)
 			continue
 		}
-		boot, err := stats.NewBootstrap(table, a, b, transform, BootstrapDraws, rand.New(rand.NewPCG(l.Design.Seed, uint64(3+i))))
-		if err != nil {
-			return Analysis{}, err
+		effLevel, eqLevel := 0.95, 0.90
+		sequential := lv.eff > 0 && res.Role == RolePrimary
+		if sequential {
+			effLevel, eqLevel, res.Level, res.EqLevel = lv.eff, lv.eq, lv.eff, lv.eq
 		}
-		t95, err := stats.TInterval(diffs, 0.95)
+		src := rand.New(rand.NewPCG(l.Design.Seed, uint64(3+i)+100*uint64(lv.look)))
+		evidence, z, err := stats.LookEvidence(table, a, b, transform, BootstrapDraws, src, effLevel, eqLevel)
 		if err != nil {
-			return Analysis{}, err
+			return Analysis{}, 0, err
 		}
-		t90, _ := stats.TInterval(diffs, 0.90)
-		evidence := stats.Evidence{Boot95: boot.Percentile(0.95), T95: t95, Boot90: boot.Percentile(0.90), T90: t90}
-		res.Boot95, res.T95, res.Boot90, res.T90 = evidence.Boot95.Map(back), t95.Map(back), evidence.Boot90.Map(back), t90.Map(back)
+		if res.Role == RolePrimary {
+			primaryZ = z
+		}
+		res.Boot95, res.T95, res.Boot90, res.T90 = evidence.Boot95.Map(back), evidence.T95.Map(back), evidence.Boot90.Map(back), evidence.T90.Map(back)
 		belowFloor := res.FullTasks < res.FloorTasks // enough tasks with the floor's runs per arm
 		if res.Role == RoleSecondary {
 			res.Verdict = stats.Exploratory // no verdict: one primary metric, and the guard
 			out.Results = append(out.Results, res)
 			continue
 		}
-		res.Verdict, res.Warning = stats.Decide(evidence, dir, margin, res.Role == RoleGuard, belowFloor)
-		if res.Verdict == stats.Inconclusive {
+		res.Verdict, res.Warning = stats.Decide(evidence, dir, margin, res.Role == RoleGuard, belowFloor || sequential && lv.noVerdict)
+		if sequential && lv.noVerdict { // not too small: its first look has not come yet
+			res.Warning, res.Note = "", NoteNoLook
+		}
+		if res.Verdict == stats.Inconclusive && lv.eff == 0 { // a sequential design runs no more than its maximum
 			wide := math.Max(halfWidth(evidence.Boot95), halfWidth(evidence.T95))
 			res.TasksToResolve, _ = stats.TasksToResolve(res.Tasks, wide, math.Min(margin.Better, margin.Worse))
 		}
@@ -219,7 +254,7 @@ func Analyze(l Lock, runs []RunData) (Analysis, error) {
 	}
 	out.NotDiscriminating = stats.NotDiscriminating(success, a, b)
 	out.Noise = noise(tables[MetricCost], success, a, b, l.Design)
-	return out, nil
+	return out, primaryZ, nil
 }
 
 func halfWidth(i stats.Interval) float64 { return (i.High - i.Low) / 2 }
