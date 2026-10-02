@@ -116,9 +116,10 @@ func prepareSeed(ctx context.Context, profiles []buildtool.Profile, deps, seed s
 		return fmt.Errorf("grading seed: %w", err)
 	}
 	if err := fillSeed(ctx, profiles, deps, tmp, warm); err != nil {
-		return errors.Join(err, stopUsing(profiles, tmp), removeTree(tmp))
+		_, stopErr := stopUsing(profiles, tmp)
+		return errors.Join(err, stopErr, removeTree(tmp))
 	}
-	if err := stopUsing(profiles, tmp); err != nil {
+	if _, err := stopUsing(profiles, tmp); err != nil {
 		return errors.Join(fmt.Errorf("grading seed: %w", err), removeTree(tmp))
 	}
 	if err := os.Rename(tmp, seed); err != nil {
@@ -158,12 +159,16 @@ func seedReady(seed string) (bool, error) {
 // gradingInput is what a grade's folders and environment are made from.
 type gradingInput struct {
 	// Root is the grade's own folder (a run's: <records>/<id>/grading). It must not exist: it is created here,
-	// owner-only, and holds the cache, the temp root and the sandbox profile file. Its parent is created when missing.
+	// owner-only, and holds the copy, the cache, the temp root and the sandbox profile file. Its parent is created when
+	// missing.
 	Root string
 	// Seed is the seed the cache is cloned from (gradingSeed, made by prepareSeed). Empty: the cache is made fresh by
 	// the profiles' PrepareRun hooks, as a seed is.
 	Seed string
-	// Copy is the grading copy, which must exist: the grade's working folder.
+	// Copy is the grading copy, which must exist, outside Root and on its volume: it is moved into Root (Root/copy),
+	// the grade's working folder there, and goes with Root. Nested in a folder of Agentium's own, it can always be moved
+	// into the quarantine whole, whatever the grade does to the copy itself (an access list on it denying deletion
+	// blocks a rename of the copy, not of the folder above it). On a failure to prepare, it is moved back.
 	Copy string
 	// Agent is the run's agent invocation, or one with the same Tools, AgentTools, Home, Deps, JavaHome, Venv,
 	// ProjectMetadata and ImportRoot: the grade gets the agent's recipe (buildtool.GraderEnv). Its folders (Dir,
@@ -180,7 +185,7 @@ type gradingInput struct {
 // grading is one grade's own folders and environment.
 type grading struct {
 	Root  string // holds the rest; removed whole (remove)
-	Copy  string // the grading copy (not under Root; the caller removes it)
+	Copy  string // the grading copy: Root/copy, moved there from gradingInput.Copy
 	Cache string // the grade's build cache: Root/cache, a clone of the seed
 	Temp  string // the grade's temp root: Root/tmp (TMPDIR, java.io.tmpdir)
 	Deps  string // the deps folder the grade reads, the agent's
@@ -192,8 +197,9 @@ type grading struct {
 	profiles []buildtool.Profile
 }
 
-// prepareGrading makes a grade's folders and environment: Root, created exclusively; the cache, cloned from the seed
-// (or prepared fresh without one); the temp root; then the environment. On an error nothing is left: Root is removed.
+// prepareGrading makes a grade's folders and environment: Root, created exclusively; the copy, moved into it; the cache,
+// cloned from the seed (or prepared fresh without one); the temp root; then the environment. On an error the copy is
+// moved back and Root is removed.
 func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error) {
 	for name, p := range map[string]string{"folder": in.Root, "copy": in.Copy} {
 		if !filepath.IsAbs(p) {
@@ -202,6 +208,9 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 	}
 	if info, err := os.Lstat(in.Copy); err != nil || !info.IsDir() {
 		return grading{}, fmt.Errorf("the grading copy %s is not a folder (%v)", in.Copy, err)
+	}
+	if within(filepath.Clean(in.Copy), filepath.Clean(in.Root)) || within(filepath.Clean(in.Root), filepath.Clean(in.Copy)) {
+		return grading{}, fmt.Errorf("the grading copy %s and the grade's folder %s overlap", in.Copy, in.Root)
 	}
 	if in.Seed != "" {
 		if ready, err := seedReady(in.Seed); err != nil {
@@ -218,13 +227,22 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 	if err := os.Mkdir(in.Root, 0o700); err != nil {
 		return grading{}, fmt.Errorf("the grade's folder: %w", err)
 	}
-	g = grading{Root: in.Root, Copy: in.Copy, Cache: filepath.Join(in.Root, "cache"), Temp: filepath.Join(in.Root, "tmp"), Deps: in.Agent.Deps}
+	g = grading{Root: in.Root, Copy: filepath.Join(in.Root, "copy"), Cache: filepath.Join(in.Root, "cache"), Temp: filepath.Join(in.Root, "tmp"),
+		Deps: in.Agent.Deps}
+	moved := false
 	defer func() {
 		if err != nil {
+			if moved {
+				err = errors.Join(err, os.Rename(g.Copy, in.Copy))
+			}
 			err = errors.Join(err, removeTree(in.Root))
 			g = grading{}
 		}
 	}()
+	if err = os.Rename(in.Copy, g.Copy); err != nil {
+		return g, fmt.Errorf("the grading copy: %w", err)
+	}
+	moved = true
 	profiles := buildtool.SelectRun(in.Agent.Tools, in.Agent.AgentTools)
 	g.profiles = profiles
 	if in.Seed != "" {
@@ -245,7 +263,7 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 	}
 	inv := in.Agent
 	allowed := claude.EnvironFor(in.Environ, profiles)
-	g.Environ, err = buildtool.GraderEnv(profiles, allowed, buildtool.AgentContext{Environ: in.Environ, Home: inv.Home, Repo: in.Copy,
+	g.Environ, err = buildtool.GraderEnv(profiles, allowed, buildtool.AgentContext{Environ: in.Environ, Home: inv.Home, Repo: g.Copy,
 		BuildCache: g.Cache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot}, g.Temp)
 	if err != nil {
 		return g, err
@@ -253,15 +271,17 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 	return g, nil
 }
 
-// remove stops what the grade left running (stopGrade), then removes the grade's folder: its cache, temp root and
-// profile file (not the grading copy). It needs no context: it runs on cancellation too.
+// remove stops what the grade left running (stop), then removes the grade's folder: its copy, cache, temp root and
+// profile file. It needs no context: it runs on cancellation too.
 func (g grading) remove() error {
-	return errors.Join(g.stop(), removeTree(g.Root))
+	_, err := g.stop()
+	return errors.Join(err, removeTree(g.Root))
 }
 
-// stop ends what the grade left running (stopUsing): over the grade's folder and its copy, where its processes work.
-func (g grading) stop() error {
-	return stopUsing(g.profiles, g.Cache, g.Root, g.Copy)
+// stop ends what the grade left running (stopUsing) in the grade's folder, where its copy is and its processes work.
+// It returns what it killed, one line each.
+func (g grading) stop() ([]string, error) {
+	return stopUsing(g.profiles, g.Cache, g.Root)
 }
 
 // profileFile is where WriteProfile writes the grade's sandbox profile: in Root, outside the folders the grade writes
@@ -292,14 +312,21 @@ func withGrading(ctx context.Context, in gradingInput, grade func(g grading) err
 	if err != nil {
 		return err
 	}
+	warn := func(string) {}
+	if in.Warn != nil {
+		warn = in.Warn
+	}
 	defer func() {
-		stopErr := g.stop()
-		warning, rmErr := removeOrQuarantine(g.Root, in.Quarantine)
-		if warning != "" && in.Warn != nil {
-			in.Warn(warning)
+		killed, stopErr := g.stop()
+		for _, k := range killed {
+			warn("the grade left a process running; it was stopped: " + k)
 		}
-		if stopErr != nil && in.Warn != nil {
-			in.Warn("the grade left processes that could not all be stopped: " + stopErr.Error())
+		if stopErr != nil {
+			warn("the grade left processes that could not all be stopped: " + stopErr.Error())
+		}
+		warning, rmErr := removeOrQuarantine(g.Root, in.Quarantine)
+		if warning != "" {
+			warn(warning)
 		}
 		if rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the grade's folder: %w", rmErr))
@@ -309,9 +336,9 @@ func withGrading(ctx context.Context, in gradingInput, grade func(g grading) err
 }
 
 // stopUsing ends what is left running in folders: the profiles' StopRun on the first (the build cache: Gradle's
-// daemons), then every process of the user that still uses any of them (stopProcessesUnder, macOS). It needs no
-// context: it runs after a cancellation too, within half a minute.
-func stopUsing(profiles []buildtool.Profile, folders ...string) error {
+// daemons), then every process of the user that still uses any of them (stopProcessesUnder, macOS), which it returns,
+// one line each (process ID and command). It needs no context: it runs after a cancellation too, within half a minute.
+func stopUsing(profiles []buildtool.Profile, folders ...string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var errs []error
@@ -320,15 +347,16 @@ func stopUsing(profiles []buildtool.Profile, folders ...string) error {
 			errs = append(errs, err)
 		}
 	}
-	if _, err := stopProcessesUnder(folders); err != nil {
+	killed, err := stopProcessesUnder(folders)
+	if err != nil {
 		errs = append(errs, err)
 	}
-	return errors.Join(errs...)
+	return killed, errors.Join(errs...)
 }
 
 // removeTree removes root, whose contents a grade (the agent's code) wrote and may still be changing. os.RemoveAll comes
 // first (it never follows a link); when what the grade left resists it (a folder without permissions, the owner's
-// immutable or append-only flag on a file, a folder or a link), removeTreeAt clears that and removes, entry by entry
+// immutable or append-only flag or an access list on a file, a folder or a link), removeTreeAt clears that and removes, entry by entry
 // through folder descriptors, never following a link or resolving a path the grade can swap. A missing root is not an
 // error. root's parent must be Agentium's own folder, which no grade can write.
 func removeTree(root string) error {
@@ -347,7 +375,12 @@ func removeTree(root string) error {
 // in the data folder's cache, out of every agent's and grade's reach; recovery tries to remove them again
 // (emptyQuarantine). The error is for a folder that could be neither removed nor moved.
 func removeOrQuarantine(root, dir string) (warning string, err error) {
-	rmErr := removeTree(root)
+	return quarantineAfter(root, dir, removeTree)
+}
+
+// quarantineAfter is removeOrQuarantine with the removal given (tests make it fail).
+func quarantineAfter(root, dir string, remove func(string) error) (warning string, err error) {
+	rmErr := remove(root)
 	if rmErr == nil {
 		return "", nil
 	}
@@ -356,12 +389,13 @@ func removeOrQuarantine(root, dir string) (warning string, err error) {
 	}
 	moved, err := moveAside(root, dir)
 	if err != nil {
-		return "", errors.Join(rmErr, fmt.Errorf("and it could not be moved aside: %w", err))
+		return "", fmt.Errorf("%w; and it could not be moved aside: %v", rmErr, err) // one line: it becomes a warning
 	}
 	return fmt.Sprintf("%s could not be removed (%v); it was moved to %s: inspect it, then remove it (chmod -RN may be needed)", root, rmErr, moved), nil
 }
 
-// moveAside renames root into dir, as <name>-<random>.
+// moveAside renames root into dir, as <parent>-<name>-<random>: a run's grade folder (<records>/<id>/grading) is named
+// after its run.
 func moveAside(root, dir string) (string, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
@@ -370,7 +404,7 @@ func moveAside(root, dir string) (string, error) {
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	moved := filepath.Join(dir, filepath.Base(root)+"-"+hex.EncodeToString(b))
+	moved := filepath.Join(dir, filepath.Base(filepath.Dir(root))+"-"+filepath.Base(root)+"-"+hex.EncodeToString(b))
 	if err := os.Rename(root, moved); err != nil {
 		return "", err
 	}

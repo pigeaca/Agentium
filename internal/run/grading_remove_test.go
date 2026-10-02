@@ -2,6 +2,8 @@ package run
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,14 +15,17 @@ import (
 	"time"
 )
 
-// UF_IMMUTABLE and UF_APPEND (chflags uchg, uappnd).
+// UF_IMMUTABLE and UF_APPEND (chflags uchg, uappnd), and UF_COMPRESSED.
 const (
-	ufImmutable = 0x2
-	ufAppend    = 0x4
+	ufImmutable  = 0x2
+	ufAppend     = 0x4
+	ufCompressed = 0x20
 )
 
-// outsideTargets are the user's files a hostile grade aims at through links: a folder (mode 0o500) and, on macOS, a
-// file with the user's immutable flag. check reports any change to them.
+// outsideTargets are the user's files a hostile grade aims at through links: a writable folder (0o700) holding a file,
+// a read-only subfolder (0o500) with a file and, on macOS, a file with the user's immutable flag; and a file of its own
+// (immutable on macOS). A removal that followed a link into the folder could delete, chmod or unflag all of them, so
+// check reports any change.
 type outsideTargets struct {
 	dir, file string
 }
@@ -28,37 +33,47 @@ type outsideTargets struct {
 func newOutsideTargets(t *testing.T, parent string) outsideTargets {
 	t.Helper()
 	o := outsideTargets{dir: filepath.Join(parent, "outside", "dir"), file: filepath.Join(parent, "outside", "file")}
-	must(t, os.MkdirAll(o.dir, 0o700))
+	must(t, os.MkdirAll(filepath.Join(o.dir, "sub"), 0o700))
 	must(t, os.WriteFile(filepath.Join(o.dir, "keep"), []byte("the user's"), 0o600))
+	must(t, os.WriteFile(filepath.Join(o.dir, "sub", "keep"), []byte("the user's"), 0o600))
+	must(t, os.WriteFile(filepath.Join(o.dir, "immutable"), []byte("the user's"), 0o600))
 	must(t, os.WriteFile(o.file, []byte("the user's"), 0o600))
-	must(t, os.Chmod(o.dir, 0o500))
+	must(t, os.Chmod(filepath.Join(o.dir, "sub"), 0o500))
 	if runtime.GOOS == "darwin" {
 		must(t, setFlags(o.file, ufImmutable))
+		must(t, setFlags(filepath.Join(o.dir, "immutable"), ufImmutable))
 	}
 	t.Cleanup(func() {
 		if runtime.GOOS == "darwin" {
 			setFlags(o.file, 0)
+			setFlags(filepath.Join(o.dir, "immutable"), 0)
 		}
-		os.Chmod(o.dir, 0o700)
+		os.Chmod(filepath.Join(o.dir, "sub"), 0o700)
 	})
 	return o
 }
 
 func (o outsideTargets) check(t *testing.T) {
 	t.Helper()
-	if info, err := os.Lstat(o.dir); err != nil || info.Mode().Perm() != 0o500 {
-		t.Errorf("the user's folder changed: %v", modeOf(info, err))
+	for path, mode := range map[string]os.FileMode{o.dir: 0o700, filepath.Join(o.dir, "sub"): 0o500} {
+		if info, err := os.Lstat(path); err != nil || info.Mode().Perm() != mode {
+			t.Errorf("the user's folder %s changed: %v", path, modeOf(info, err))
+		}
 	}
-	if data, err := os.ReadFile(filepath.Join(o.dir, "keep")); err != nil || string(data) != "the user's" {
-		t.Errorf("the user's folder lost its file: %q, %v", data, err)
+	for _, name := range []string{filepath.Join(o.dir, "keep"), filepath.Join(o.dir, "sub", "keep"), filepath.Join(o.dir, "immutable"), o.file} {
+		if data, err := os.ReadFile(name); err != nil || string(data) != "the user's" {
+			t.Errorf("the user's file %s changed: %q, %v", name, data, err)
+		}
 	}
-	info, err := os.Lstat(o.file)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Errorf("the user's file changed: %v", modeOf(info, err))
-		return
-	}
-	if runtime.GOOS == "darwin" && fileFlags(info)&ufImmutable == 0 {
-		t.Error("the user's file lost its immutable flag")
+	for _, name := range []string{filepath.Join(o.dir, "immutable"), o.file} {
+		info, err := os.Lstat(name)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("the user's file %s changed: %v", name, modeOf(info, err))
+			continue
+		}
+		if runtime.GOOS == "darwin" && fileFlags(info)&ufImmutable == 0 {
+			t.Errorf("the user's file %s lost its immutable flag", name)
+		}
 	}
 }
 
@@ -197,6 +212,9 @@ func TestRemoveTreeSwapRace(t *testing.T) {
 // the grade swaps it for a link to the user's folder or file. What the removal then changes is the link, never what it
 // points to.
 func TestRemoveTreeSwapAfterTheLook(t *testing.T) {
+	if !removeWalks {
+		t.Skip("the removal walks folders (and calls the hook) only with cgo")
+	}
 	f := newGradeFixture(t)
 	o := newOutsideTargets(t, f.dir)
 	for _, target := range []string{o.dir, o.file} {
@@ -232,69 +250,154 @@ func TestRemoveTreeSwapAfterTheLook(t *testing.T) {
 	}
 }
 
-// F2: a folder a grade made unremovable (an access list denying deletion) is moved into the quarantine with a warning,
-// never an error: withGrading and recovery go on, and a later recovery removes it once it can be removed.
-func TestUnremovableGradeIsQuarantined(t *testing.T) {
+// aclDeny adds an access list entry to path (chmod +a), macOS only.
+func aclDeny(t *testing.T, rights, path string) {
+	t.Helper()
+	if out, err := exec.Command("/bin/chmod", "+a", "everyone deny "+rights, path).CombinedOutput(); err != nil {
+		t.Fatalf("chmod +a %s %s: %v %s", rights, path, err, out)
+	}
+}
+
+// resistByACL makes dir and a file in it refuse deletion by access lists, as a grade can (the sandbox allows it): the
+// folder denies deletion of itself and of its entries, the file of itself.
+func resistByACL(t *testing.T, dir string) {
+	t.Helper()
+	must(t, os.WriteFile(filepath.Join(dir, "stuck"), nil, 0o600))
+	aclDeny(t, "delete", filepath.Join(dir, "stuck"))
+	aclDeny(t, "delete,delete_child,writesecurity", dir)
+}
+
+// F-C: access lists a grade sets (on its copy itself, its entries, its cache) are cleared by the removal: the grade's
+// folder goes, after withGrading and in recovery, with no quarantine and no warning. So does a host grade's copy with one.
+func TestAccessListsAreCleared(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("macOS access lists")
 	}
 	f := newGradeFixture(t)
-	acl := func(t *testing.T, args ...string) {
-		t.Helper()
-		if out, err := exec.Command("/bin/chmod", args...).CombinedOutput(); err != nil {
-			t.Fatalf("chmod %v: %v %s", args, err, out)
-		}
-	}
-	deny := func(dir string) {
-		must(t, os.WriteFile(filepath.Join(dir, "stuck"), nil, 0o600))
-		acl(t, "+a", "everyone deny delete", filepath.Join(dir, "stuck"))
-		acl(t, "+a", "everyone deny delete_child", dir)
-	}
-	q := quarantine(f.env.Layout)
 	t.Cleanup(func() { exec.Command("/bin/chmod", "-RN", f.dir).Run() })
+	q := quarantine(f.env.Layout)
 	var warnings []string
 	in := f.input(f.root, "", "go")
 	in.Quarantine, in.Warn = q, func(w string) { warnings = append(warnings, w) }
-	if err := withGrading(context.Background(), in, func(g grading) error { deny(g.Cache); return nil }); err != nil {
-		t.Fatalf("withGrading: %v", err)
+	if err := withGrading(context.Background(), in, func(g grading) error {
+		resistByACL(t, g.Copy)
+		resistByACL(t, g.Cache)
+		must(t, os.Symlink("/nonexistent", filepath.Join(g.Temp, "link")))
+		if out, err := exec.Command("/bin/chmod", "-h", "+a", "everyone deny delete", filepath.Join(g.Temp, "link")).CombinedOutput(); err != nil {
+			t.Fatalf("chmod -h +a: %v %s", err, out)
+		}
+		// Without the clearing, the copy itself could not even be moved aside.
+		if err := os.Rename(g.Copy, g.Copy+"-moved"); err == nil {
+			t.Error("a copy that denies deletion was renamed")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(f.root); err == nil {
+		t.Error("the grade's folder is still there")
+	}
+	if len(warnings) > 0 {
+		t.Errorf("warnings = %q", warnings)
+	}
+	if entries, _ := os.ReadDir(q); len(entries) != 0 {
+		t.Errorf("quarantine = %v", entries)
+	}
+
+	// Recovery of a dead run whose grade folder and host-mode copy deny deletion.
+	dir := filepath.Join(f.env.Layout.Records, "r9")
+	for _, sub := range []string{filepath.Join(gradingFolder, "copy"), "verify"} {
+		must(t, os.MkdirAll(filepath.Join(dir, sub), 0o700))
+		resistByACL(t, filepath.Join(dir, sub))
+	}
+	aclDeny(t, "delete,delete_child", filepath.Join(dir, gradingFolder))
+	must(t, (Env{}).writeStart(start{Record: Record{ID: "r9", RecordsDir: dir}, Workspace: filepath.Join(f.env.Layout.Workspaces, "r9"), AgentStarted: true}))
+	orphans, err := RecoverWarn(context.Background(), f.env.Layout, func(string) (bool, error) { return false, nil }, "", time.Now(),
+		func(w string) { warnings = append(warnings, w) })
+	if err != nil || len(orphans) != 1 || len(warnings) > 0 {
+		t.Fatalf("RecoverWarn = %v, %v, warnings %q", orphans, err, warnings)
+	}
+	for _, gone := range []string{filepath.Join(dir, gradingFolder), filepath.Join(dir, "verify")} {
+		if _, err := os.Lstat(gone); err == nil {
+			t.Errorf("%s is still there", gone)
+		}
+	}
+}
+
+// F2 and F-C: a grade folder that still resists removal is moved into the quarantine whole, with a warning naming its
+// run, never an error: the copy nested in it moves with it even when the copy itself denies being moved. A later
+// recovery removes it.
+func TestResistingGradeIsQuarantined(t *testing.T) {
+	f := newGradeFixture(t)
+	t.Cleanup(func() { exec.Command("/bin/chmod", "-RN", f.dir).Run() })
+	q := quarantine(f.env.Layout)
+	g, err := prepareGrading(context.Background(), f.input(f.root, "", "go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		resistByACL(t, g.Copy)
+	}
+	fails := func(string) error { return errors.New("it resists") }
+	warning, err := quarantineAfter(f.root, q, fails)
+	if err != nil || !strings.Contains(warning, "it resists") || !strings.Contains(warning, filepath.Join(q, "r1-"+gradingFolder+"-")) {
+		t.Fatalf("quarantineAfter = %q, %v", warning, err)
 	}
 	if _, err := os.Lstat(f.root); err == nil {
 		t.Error("the grade's folder is still in the records")
 	}
-	if len(warnings) != 1 || !strings.Contains(warnings[0], q) {
-		t.Errorf("warnings = %q", warnings)
+	entries, _ := os.ReadDir(q)
+	if len(entries) != 1 {
+		t.Fatalf("quarantine = %v", entries)
 	}
-	if entries, _ := os.ReadDir(q); len(entries) != 1 {
-		t.Errorf("quarantine = %v", entries)
+	if _, err := os.Lstat(filepath.Join(q, entries[0].Name(), "copy", "main.go")); err != nil {
+		t.Errorf("the copy did not move with its folder: %v", err)
 	}
-
-	// Recovery: a dead run's grade folder that cannot be removed does not stop it.
-	dir := filepath.Join(f.env.Layout.Records, "r9")
-	must(t, os.MkdirAll(filepath.Join(dir, gradingFolder, "cache"), 0o700))
-	deny(filepath.Join(dir, gradingFolder, "cache"))
-	must(t, (Env{}).writeStart(start{Record: Record{ID: "r9", RecordsDir: dir}, Workspace: filepath.Join(f.env.Layout.Workspaces, "r9"), AgentStarted: true}))
-	warnings = nil
-	orphans, err := RecoverWarn(context.Background(), f.env.Layout, func(string) (bool, error) { return false, nil }, "", time.Now(),
-		func(w string) { warnings = append(warnings, w) })
-	if err != nil || len(orphans) != 1 {
-		t.Fatalf("RecoverWarn = %v, %v", orphans, err)
+	// Neither removed nor movable (no quarantine folder): an error, which callers turn into a warning.
+	other := filepath.Join(f.env.Layout.Records, "r2", gradingFolder)
+	must(t, os.MkdirAll(other, 0o700))
+	if _, err := quarantineAfter(other, "", fails); err == nil {
+		t.Error("no quarantine and no removal: no error")
 	}
-	if _, err := os.Lstat(filepath.Join(dir, gradingFolder)); err == nil {
-		t.Error("recovery left the grade's folder in the records")
-	}
-	// The quarantine's first folder still resists; its second (recovery's) is now there too.
-	if !strings.Contains(strings.Join(warnings, "\n"), "could not be removed") {
-		t.Errorf("warnings = %q", warnings)
-	}
-	// Once the access lists are gone, the next recovery empties the quarantine without a word.
-	acl(t, "-RN", q)
-	warnings = nil
-	if _, err := RecoverWarn(context.Background(), f.env.Layout, func(string) (bool, error) { return true, nil }, "", time.Now(),
-		func(w string) { warnings = append(warnings, w) }); err != nil || len(warnings) != 0 {
-		t.Errorf("RecoverWarn = %v, warnings %q", err, warnings)
+	// A later recovery empties the quarantine: the removal clears the access lists.
+	if w := emptyQuarantine(q); w != "" {
+		t.Errorf("emptyQuarantine = %q", w)
 	}
 	if entries, _ := os.ReadDir(q); len(entries) != 0 {
-		t.Errorf("quarantine after recovery = %v", entries)
+		t.Errorf("quarantine after emptying = %v", entries)
+	}
+}
+
+// F-D: however many entries resist, the error (and the warning made of it) stays one bounded line: the first error
+// and a count.
+func TestRemovalErrorsAreBounded(t *testing.T) {
+	if !removeWalks {
+		t.Skip("the removal walks folders only with cgo")
+	}
+	f := newGradeFixture(t)
+	cache := filepath.Join(f.root, "cache")
+	must(t, os.MkdirAll(cache, 0o700))
+	for i := 0; i < 300; i++ {
+		must(t, os.WriteFile(filepath.Join(cache, fmt.Sprintf("f%03d", i)), nil, 0o600))
+	}
+	must(t, os.Chmod(cache, 0o500)) // os.RemoveAll fails; the walk runs
+	// Each file becomes a folder with an entry once looked at: unlinking it as a file fails.
+	remove := func(root string) error {
+		return removeTreeRacing(root, func(name string) {
+			if strings.HasPrefix(name, "f") {
+				p := filepath.Join(cache, name)
+				os.Remove(p)
+				os.MkdirAll(filepath.Join(p, "x"), 0o700)
+			}
+		})
+	}
+	err := remove(f.root)
+	if err == nil || !strings.Contains(err.Error(), "(and 299 more)") || len(err.Error()) > 1000 {
+		t.Fatalf("error = %v", err)
+	}
+	warning, qErr := quarantineAfter(f.root, quarantine(f.env.Layout), func(string) error { return err })
+	if qErr != nil || len(warning) > 1500 || !strings.Contains(warning, "more)") {
+		t.Errorf("warning (%d bytes) = %q, %v", len(warning), warning, qErr)
 	}
 }
 
@@ -336,7 +439,10 @@ func TestLeftoverProcessesAreStopped(t *testing.T) {
 	}
 	f := newGradeFixture(t)
 	var inCopy, holding <-chan struct{}
-	if err := withGrading(context.Background(), f.input(f.root, "", "go"), func(g grading) error {
+	var warnings []string
+	in := f.input(f.root, "", "go")
+	in.Warn = func(w string) { warnings = append(warnings, w) }
+	if err := withGrading(context.Background(), in, func(g grading) error {
 		_, inCopy = leftover(t, g.Copy, "")
 		_, holding = leftover(t, "/", filepath.Join(g.Cache, "held"))
 		return nil
@@ -345,6 +451,10 @@ func TestLeftoverProcessesAreStopped(t *testing.T) {
 	}
 	endsSoon(t, "a process working in the copy", inCopy)
 	endsSoon(t, "a process holding a file in the cache", holding)
+	// Each killed process is reported (F-E), by ID and command.
+	if n := strings.Count(strings.Join(warnings, "\n"), "it was stopped: "); n != 2 || !strings.Contains(strings.Join(warnings, "\n"), " sleep") {
+		t.Errorf("warnings = %q", warnings)
+	}
 
 	// Recovery, for a run whose Agentium died while its grade ran.
 	dir := filepath.Join(f.env.Layout.Records, "r8")
@@ -368,4 +478,39 @@ func TestLeftoverProcessesAreStopped(t *testing.T) {
 		t.Fatal(err)
 	}
 	endsSoon(t, "a warm step's process", warmLeft)
+}
+
+// F-F: the removal clears only the flags that block it (uchg, uappnd). A grade may hard-link one of the user's
+// compressed files into its folder and flag it: clearing every flag would clear UF_COMPRESSED too and leave the user's
+// file without its data.
+func TestRemoveTreeKeepsOtherFlags(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("macOS file flags and compression")
+	}
+	f := newGradeFixture(t)
+	plain := filepath.Join(f.dir, "plain")
+	must(t, os.WriteFile(plain, []byte(strings.Repeat("a", 200000)), 0o600))
+	users := filepath.Join(f.dir, "users-compressed")
+	if out, err := exec.Command("/usr/bin/ditto", "--hfsCompression", plain, users).CombinedOutput(); err != nil {
+		t.Skipf("ditto --hfsCompression: %v %s", err, out)
+	}
+	info, err := os.Lstat(users)
+	if err != nil || fileFlags(info)&ufCompressed == 0 {
+		t.Skip("this file system did not compress the file")
+	}
+	cache := filepath.Join(f.root, "cache")
+	must(t, os.MkdirAll(cache, 0o700))
+	must(t, os.Link(users, filepath.Join(cache, "hard")))
+	must(t, setFlags(filepath.Join(cache, "hard"), int(fileFlags(info))|ufImmutable))
+	t.Cleanup(func() { setFlags(users, 0) })
+	if err := removeTree(f.root); err != nil {
+		t.Fatal(err)
+	}
+	info, err = os.Lstat(users)
+	if err != nil || fileFlags(info)&ufCompressed == 0 {
+		t.Errorf("the user's file lost UF_COMPRESSED: %v", err)
+	}
+	if data, err := os.ReadFile(users); err != nil || string(data) != strings.Repeat("a", 200000) {
+		t.Errorf("the user's compressed file lost its data (%d bytes, %v)", len(data), err)
+	}
 }

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -75,9 +74,24 @@ func (f gradeFixture) seedFor(t *testing.T, profiles []buildtool.Profile, base s
 	return seed
 }
 
-// input is a grade of the fixture's copy for the agent tools, cloned from seed ("" for none), in root.
+// newCopy makes a fresh grading copy beside root (prepareGrading moves its copy into the grade's folder).
+func (f gradeFixture) newCopy(root string) string {
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		panic(err)
+	}
+	copy, err := os.MkdirTemp(filepath.Dir(root), "verify-")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(filepath.Join(copy, "main.go"), []byte("package main\n"), 0o600); err != nil {
+		panic(err)
+	}
+	return copy
+}
+
+// input is a grade of a fresh copy (newCopy) for the agent tools, cloned from seed ("" for none), in root.
 func (f gradeFixture) input(root, seed string, tools ...string) gradingInput {
-	return gradingInput{Root: root, Seed: seed, Copy: f.copy, Environ: []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(f.dir, "home")},
+	return gradingInput{Root: root, Seed: seed, Copy: f.newCopy(root), Environ: []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(f.dir, "home")},
 		Agent: claude.Invocation{Tools: tools, Home: filepath.Join(f.dir, "home"), Deps: f.deps}}
 }
 
@@ -218,7 +232,7 @@ func TestPrepareGradingClonesTheSeed(t *testing.T) {
 	if runtime.GOOS == "darwin" && g.Made != buildtool.CloneFile {
 		t.Errorf("made by %q", g.Made)
 	}
-	if g.Cache != filepath.Join(f.root, "cache") || g.Temp != filepath.Join(f.root, "tmp") || g.Copy != f.copy || g.Deps != f.deps {
+	if g.Cache != filepath.Join(f.root, "cache") || g.Temp != filepath.Join(f.root, "tmp") || g.Copy != filepath.Join(f.root, "copy") || g.Deps != f.deps {
 		t.Errorf("grading = %+v", g)
 	}
 	env := envMapOf(g.Environ)
@@ -354,8 +368,8 @@ func TestWithGradingRemovesTheGrade(t *testing.T) {
 		if runtime.GOOS == "darwin" {
 			immutable := filepath.Join(g.Temp, "immutable")
 			must(t, os.WriteFile(immutable, nil, 0o600))
-			must(t, syscall.Chflags(immutable, 0x2)) // UF_IMMUTABLE (chflags uchg)
-			must(t, syscall.Chflags(g.Temp, 0x4))    // UF_APPEND on the folder: no entry can be removed
+			must(t, setFlags(immutable, ufImmutable))
+			must(t, setFlags(g.Temp, ufAppend)) // on the folder: no entry can be removed
 			// A link to the seed: removal never follows it.
 			must(t, os.Symlink(f.seed, filepath.Join(g.Cache, "to-seed")))
 		}
@@ -463,7 +477,7 @@ func TestGradingEnvIsTheAgentsRecipe(t *testing.T) {
 	} {
 		t.Run(strings.Join(append(tc.tools, tc.kept...), "+"), func(t *testing.T) {
 			root := filepath.Join(f.env.Layout.Records, "r-"+strings.Join(append(tc.tools, tc.kept...), "-"), gradingFolder)
-			in := gradingInput{Root: root, Copy: f.copy, Environ: environ, Agent: claude.Invocation{Tools: tc.tools, AgentTools: tc.kept,
+			in := gradingInput{Root: root, Copy: f.newCopy(root), Environ: environ, Agent: claude.Invocation{Tools: tc.tools, AgentTools: tc.kept,
 				Home: filepath.Join(f.dir, "home"), Deps: f.deps, JavaHome: "/jdk/Contents/Home", Venv: venv, ProjectMetadata: meta, ImportRoot: "src"}}
 			g, err := prepareGrading(context.Background(), in)
 			if err != nil {
@@ -471,7 +485,7 @@ func TestGradingEnvIsTheAgentsRecipe(t *testing.T) {
 			}
 			defer g.remove()
 			agent := in.Agent
-			agent.CLI, agent.Dir, agent.Prompt, agent.Model, agent.BuildCache = "/bin/claude", f.copy, "fix it", "claude-sonnet-5", g.Cache
+			agent.CLI, agent.Dir, agent.Prompt, agent.Model, agent.BuildCache = "/bin/claude", g.Copy, "fix it", "claude-sonnet-5", g.Cache
 			agent.SignIn, agent.Secret, agent.ConfigDir, agent.AllowLocalBinding = claude.SignInAPIKey, "sk-secret", filepath.Join(f.dir, "config"), true
 			_, agentEnv, err := agent.Command(environ)
 			if err != nil {

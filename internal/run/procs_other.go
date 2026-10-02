@@ -7,4 +7,4 @@ package run
 func processesUnder([]string) ([]int, error) { return nil, nil }
 
 // stopProcessesUnder stops nothing outside macOS (see processesUnder).
-func stopProcessesUnder([]string) (int, error) { return 0, nil }
+func stopProcessesUnder([]string) ([]string, error) { return nil, nil }

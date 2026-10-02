@@ -10,6 +10,9 @@ func removeTreeAt(root string) error {
 	return os.RemoveAll(root)
 }
 
+// removeWalks says the removal walks folder descriptors: not without cgo (removeTreeRacing never calls its hook).
+const removeWalks = false
+
 // removeTreeRacing is removeTreeAt; raced is never called (see the cgo build).
 func removeTreeRacing(root string, raced func(name string)) error {
 	return os.RemoveAll(root)

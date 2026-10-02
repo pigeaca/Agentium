@@ -7,6 +7,7 @@ package run
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #ifdef __APPLE__
@@ -46,6 +47,34 @@ static int ag_setflagsat(int dfd, const char *name, uint32_t flags) {
 	return 0;
 }
 
+// ag_noaclat removes a name's access list without following a link: setattrlistat(ATTR_CMN_EXTENDED_SECURITY,
+// FSOPT_NOFOLLOW) with a file security header that holds no list (kauth_filesec with KAUTH_FILESEC_NOACL; the kernel's
+// struct is not in the user headers, so its header part is spelled out). An owner can always do this, even when the
+// list denies everyone "writesecurity", and a list that denies "delete" or "delete_child" would otherwise block
+// removal, and a rename into the quarantine too. Elsewhere there is nothing to do: Linux's lists do not block the owner.
+static int ag_noaclat(int dfd, const char *name) {
+#ifdef __APPLE__
+	struct ag_filesec {
+		uint32_t magic;           // KAUTH_FILESEC_MAGIC
+		unsigned char owner[16];  // guid_t: zero, unchanged
+		unsigned char group[16];
+		uint32_t entrycount;      // KAUTH_FILESEC_NOACL: no list
+		uint32_t flags;
+	};
+	struct __attribute__((packed)) { attrreference_t ref; struct ag_filesec fs; } buf;
+	memset(&buf, 0, sizeof(buf));
+	buf.ref.attr_dataoffset = sizeof(attrreference_t);
+	buf.ref.attr_length = sizeof(struct ag_filesec);
+	buf.fs.magic = 0x012cc16d;
+	buf.fs.entrycount = (uint32_t)-1;
+	struct attrlist al = {0};
+	al.bitmapcount = ATTR_BIT_MAP_COUNT;
+	al.commonattr = ATTR_CMN_EXTENDED_SECURITY;
+	if (setattrlistat(dfd, name, &al, &buf, sizeof(buf), FSOPT_NOFOLLOW) != 0) return -errno;
+#endif
+	return 0;
+}
+
 static int ag_chmodat(int dfd, const char *name, uint32_t mode) {
 	return fchmodat(dfd, name, (mode_t)mode, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : -errno;
 }
@@ -66,9 +95,13 @@ import (
 	"unsafe"
 )
 
-// userFlags are the file flags an owner may set and clear (UF_SETTABLE): uchg and uappnd among them, which make
-// removal fail. The system's own (SF_*) need the superuser and are kept.
-const userFlags = 0x0000ffff
+// blockingFlags are the owner's file flags that make removal fail: UF_IMMUTABLE and UF_APPEND (uchg, uappnd). Only
+// they are cleared: the others carry meaning (UF_COMPRESSED clears to a file with no data, and a grade may hard-link
+// one of the user's compressed files into its folders), and the system's (SF_*) need the superuser.
+const blockingFlags = 0x2 | 0x4
+
+// removeWalks says the removal walks folder descriptors (removeTreeRacing calls its hook): with cgo, on macOS and Linux.
+const removeWalks = true
 
 func errnoOf(r C.int) error {
 	if r >= 0 {
@@ -78,8 +111,8 @@ func errnoOf(r C.int) error {
 }
 
 // removeTreeAt removes root by walking it through folder descriptors, one name at a time, never following a link and
-// never resolving a path the grade can change: it clears what resists removal on each entry (the owner's flags on any
-// entry, links included; the owner's permissions on folders) by name in its parent's descriptor, opens each folder
+// never resolving a path the grade can change: it clears what resists removal on each entry (the blocking flags and
+// the access list on any entry, links included; the owner's permissions on folders) by name in its parent's descriptor, opens each folder
 // with O_NOFOLLOW|O_DIRECTORY, and removes from the bottom up. A swap of any entry for a link at any moment changes
 // only what that link itself is: its flags or mode may be cleared and the link removed, never its target. Paths deeper
 // than PATH_MAX are no limit, since each call names one entry. root's parent folder (Agentium's own, which a grade
@@ -96,56 +129,96 @@ func removeTreeRacing(root string, raced func(name string)) error {
 		return fmt.Errorf("remove %s: %w", root, err)
 	}
 	defer syscall.Close(parent)
-	if err := removeAt(parent, filepath.Base(root), raced); err != nil {
+	var errs firstErrors
+	removeAt(parent, filepath.Base(root), raced, &errs)
+	if err := errs.err(); err != nil {
 		return fmt.Errorf("remove %s: %w", root, err)
 	}
 	return nil
 }
 
-// removeAt removes the entry name of the folder dfd, and what is under it (raced: see removeTreeRacing).
-func removeAt(dfd int, name string, raced func(name string)) error {
+// firstErrors keeps the first error and counts the rest: a grade can make any number of entries resist, and a warning
+// must stay one line.
+type firstErrors struct {
+	first error
+	more  int
+}
+
+func (e *firstErrors) add(err error) {
+	switch {
+	case err == nil:
+	case e.first == nil:
+		e.first = err
+	default:
+		e.more++
+	}
+}
+
+func (e *firstErrors) err() error {
+	if e.first == nil || e.more == 0 {
+		return e.first
+	}
+	return fmt.Errorf("%w (and %d more)", e.first, e.more)
+}
+
+// removeAt removes the entry name of the folder dfd, and what is under it (raced: see removeTreeRacing). What cannot
+// be removed is added to errs, named by its path below root.
+func removeAt(dfd int, name string, raced func(name string), errs *firstErrors) {
 	cname := C.CString(name)
 	defer C.free(unsafe.Pointer(cname))
+	failed := func(err error) { errs.add(fmt.Errorf("%s: %w", name, err)) }
 	var mode, flags C.uint32_t
 	if err := errnoOf(C.ag_lstatat(C.int(dfd), cname, &mode, &flags)); errors.Is(err, fs.ErrNotExist) {
-		return nil
+		return
 	} else if err != nil {
-		return err
+		failed(err)
+		return
 	}
 	if raced != nil {
 		raced(name)
 	}
-	if flags&userFlags != 0 {
-		if err := errnoOf(C.ag_setflagsat(C.int(dfd), cname, flags&^userFlags)); err != nil {
-			return fmt.Errorf("%s: clear its flags: %w", name, err)
+	if flags&blockingFlags != 0 {
+		if err := errnoOf(C.ag_setflagsat(C.int(dfd), cname, flags&^blockingFlags)); err != nil {
+			failed(fmt.Errorf("clear its flags: %w", err))
+			return
 		}
 	}
+	// Best effort: not every file system keeps access lists, and if a list was not cleared the removal below fails
+	// and says so.
+	C.ag_noaclat(C.int(dfd), cname)
 	if uint32(mode)&syscall.S_IFMT != syscall.S_IFDIR {
-		return errnoOf(C.ag_unlinkat(C.int(dfd), cname, 0))
+		if err := errnoOf(C.ag_unlinkat(C.int(dfd), cname, 0)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			failed(err)
+		}
+		return
 	}
 	if perm := uint32(mode) & 0o7777; perm&0o700 != 0o700 {
 		if err := errnoOf(C.ag_chmodat(C.int(dfd), cname, C.uint32_t(perm|0o700))); err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+			failed(err)
+			return
 		}
 	}
 	fd := C.ag_openat_dir(C.int(dfd), cname)
 	if err := errnoOf(fd); err != nil {
-		return fmt.Errorf("%s: %w", name, err)
+		failed(err)
+		return
 	}
 	dir := os.NewFile(uintptr(fd), name) // owns fd: closed below
 	names, err := dir.Readdirnames(-1)
-	var errs []error
 	if err != nil {
-		errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		failed(err)
 	}
+	var below firstErrors
 	for _, child := range names {
-		if err := removeAt(int(fd), child, raced); err != nil {
-			errs = append(errs, fmt.Errorf("%s/%w", name, err))
-		}
+		removeAt(int(fd), child, raced, &below)
 	}
 	dir.Close()
-	if err := errors.Join(errs...); err != nil {
-		return err
+	if below.first != nil {
+		errs.add(fmt.Errorf("%s/%w", name, below.first))
+		errs.more += below.more
+		return
 	}
-	return errnoOf(C.ag_unlinkat(C.int(dfd), cname, 1))
+	if err := errnoOf(C.ag_unlinkat(C.int(dfd), cname, 1)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		failed(err)
+	}
 }

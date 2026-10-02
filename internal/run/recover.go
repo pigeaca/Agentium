@@ -429,7 +429,11 @@ func cleanGrade(layout home.Layout, dir string, warn func(string)) {
 			return
 		}
 	}
-	if err := stopUsing(buildtool.Profiles(), filepath.Join(grade, "cache"), grade, verify); err != nil {
+	killed, err := stopUsing(buildtool.Profiles(), filepath.Join(grade, "cache"), grade, verify)
+	for _, k := range killed {
+		warn(fmt.Sprintf("run %s: its grade left a process running; it was stopped: %s", filepath.Base(dir), k))
+	}
+	if err != nil {
 		warn(fmt.Sprintf("run %s: %v", filepath.Base(dir), err))
 	}
 	for _, folder := range []string{verify, grade} {
