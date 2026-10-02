@@ -34,6 +34,7 @@ Shape:
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
 | `internal/mine` | Task candidates from git history: explained scores, rejections, import |
 | `internal/gitx` | Every git call (hooks, fsmonitor, prompts and optional index writes off; inherited `GIT_*` dropped); hook-free fetch of task bases |
+| `internal/ghx` | GitHub through the user's own `gh` (never inside a run): the open pull request of a commit, one marked comment edited in place (only the user's own), a warn-only commit status; the repository from the git remote |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
 | `internal/claudectx` | Which files Claude Code loads in experiments (instructions, `@` imports, rules, skill/subagent/command descriptions, harness files, linked documents); warnings; lint and its hook |
 | `internal/snapshot` | Context versions as parentless commits in the data folder's `projects/<id>/repo.git`; diffs; overlays that refuse code or configuration changes and report harness changes |

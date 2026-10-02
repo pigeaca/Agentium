@@ -100,7 +100,7 @@ One check is 8 runs: about $0.80 on small tasks and $9 on Agentium-sized ones. O
   - Classify a pushed range: read context, harness, or neither; refuse harness.
   - *Threats:* a hostile pull request (a symlink, a rename or a deletion of a harness file; settings under another name that Claude Code still loads, from `claudectx`'s own list; an `agentium.toml` change counts as harness).
   - *Acceptance:* table tests over fixture repositories, including each harness kind and a rename.
-- [ ] **3. `gh` adapter** (new `internal/ghx`). **Risk: high** (credentials, external writes).
+- [x] **3. `gh` adapter** (new `internal/ghx`). **Risk: high** (credentials, external writes). Done 2026-10-02: the lookup is `GET repos/{o}/{r}/commits/{sha}/pulls`, filtered to open pull requests headed by the commit (search lags and matches text); statuses are only `pending`, `success` or `error` (commit statuses have no `neutral`); review pending.
   - Find the pull request of a commit, upsert one marked comment, set a status. Everything runs through `runner`, with a timeout and the user's environment, never inside a run.
   - *Threats:* credentials (`GH_TOKEN` is already dropped by `IsCredential`, and `.config/gh` is denied to agents; a test fixes both); text from the pull request is data (the comment is built only from Agentium's report, redacted).
   - *Acceptance:* tests with a fake `gh` on the `PATH` that record arguments; no network in tests.
