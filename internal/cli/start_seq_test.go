@@ -2,6 +2,9 @@ package cli
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -59,5 +62,94 @@ func TestStartResumedDoesNotMineAgain(t *testing.T) {
 	expect(t, again, ExitOK, "Accepted 11 mined instruction(s)", "Tasks: 11 ready", "created, 11 task(s)")
 	if strings.Contains(again.stdout, "imported") || strings.Contains(again.stdout, "Validating") || len(storedTasks(t, f.data)) != 11 {
 		t.Errorf("the resumed start mined or validated again:\n%s", again.stdout)
+	}
+}
+
+// start --json tells a start waiting for reviews from one with too few tasks: 10 ready and 6 of its mined tasks
+// waiting is awaiting_review, with both counts, not too_few_tasks.
+func TestJSONStartAwaitingReview(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 16)
+	first := jsonRun(t, f, ExitError, "start")
+	if first.get("status") != "awaiting_review" || first.get("tasks_ready") != float64(0) || first.get("tasks_awaiting_review") != float64(16) {
+		t.Errorf("all 16 waiting: %s", first.stdout)
+	}
+	for _, task := range storedTasks(t, f.data)[:10] {
+		expect(t, f.run(context.Background(), "task", "edit", task.Name, "--reviewed"), ExitOK)
+	}
+	got := jsonRun(t, f, ExitError, "start")
+	if got.get("status") != "awaiting_review" || got.get("tasks_ready") != float64(10) || got.get("tasks_awaiting_review") != float64(6) ||
+		got.get("experiment") != nil {
+		t.Errorf("10 ready, 6 waiting: %s", got.stdout)
+	}
+	short := jsonRun(t, startFixtureOnly(t, 2), ExitError, "start", "--accept-mined")
+	if short.get("status") != "too_few_tasks" || short.get("tasks_ready") != float64(2) || short.get("tasks_awaiting_review") != float64(0) {
+		t.Errorf("2 tasks: %s", short.stdout)
+	}
+}
+
+// startFixtureOnly is startFixture's project alone.
+func startFixtureOnly(t *testing.T, features int) runFixture {
+	t.Helper()
+	f, _ := startFixture(t, features)
+	return f
+}
+
+// A task the user imported and left waiting for review is theirs: it does not hold start back once 8 or more are
+// ready and none of start's own mined tasks waits.
+func TestStartIsNotHeldBackByTasksItDidNotMine(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	head := strings.TrimSpace(gitIn(t, f.repo, "rev-parse", "HEAD"))
+	expect(t, f.run(ctx, "task", "import", "--commit", head, "--name", "by-hand", "--verify", "make test"), ExitOK)
+	expect(t, f.run(ctx, "start"), ExitError, "wait for your review")
+	for _, task := range storedTasks(t, f.data) {
+		if task.Name != "by-hand" {
+			expect(t, f.run(ctx, "task", "edit", task.Name, "--reviewed"), ExitOK)
+		}
+	}
+	got := f.run(ctx, "start")
+	expect(t, got, ExitOK, "Tasks: 8 ready (aims for 16;", "Experiment quick-aa-baseline: created, 8 task(s)")
+	for _, task := range storedTasks(t, f.data) {
+		if task.Name == "by-hand" && !task.NeedsReview {
+			t.Error("the hand-imported task was marked reviewed")
+		}
+	}
+}
+
+// Small mining rounds add up for the stop rule: with 14 tasks ready and every candidate left invalid, start mines two
+// rounds of 2, stops after those 4 invalid tasks (the rule's sample is 3), and takes the 14, instead of mining round
+// after round up to its cap.
+func TestStartStopsMiningAfterInvalidRoundsAddUp(t *testing.T) {
+	t.Parallel()
+	f := runFixtureAt(startRepo(t, 14), filepath.Join(t.TempDir(), "data"), t.TempDir())
+	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, t.TempDir())
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	expect(t, f.run(ctx, "task", "mine", "--limit", "14"), ExitOK, "14 of 14 imported task(s) are valid")
+	for _, task := range storedTasks(t, f.data) {
+		expect(t, f.run(ctx, "task", "edit", task.Name, "--reviewed"), ExitOK)
+	}
+	for i := 1; i <= 20; i++ { // each such commit's test already passes on its base: the task is invalid
+		lib, err := os.ReadFile(filepath.Join(f.repo, "lib.sh"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, f.repo, "lib.sh", "# note "+strconv.Itoa(i)+"\n"+string(lib))
+		writeFile(t, f.repo, "tests/b"+strconv.Itoa(i)+"_test.sh", ". ./lib.sh\n[ \"$(base)\" = base ]\n")
+		gitIn(t, f.repo, "add", "-A")
+		gitIn(t, f.repo, "commit", "-q", "-m", "Explain base again, "+strconv.Itoa(i)+"\n\nA comment says what base prints.")
+	}
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "imported 2 of 2 tried", "0 valid of 2",
+		"Tasks: 14 ready (aims for 16; the last 4 tasks mined are all invalid, so mining more would likely repeat that)",
+		"Experiment quick-aa-baseline: created, 14 task(s)")
+	if n := strings.Count(got.stdout, "Mining:"); n != 2 {
+		t.Errorf("start mined %d rounds, want 2:\n%s", n, got.stdout)
+	}
+	if n := len(storedTasks(t, f.data)); n != 18 {
+		t.Errorf("%d tasks, want the 14 and 4 invalid ones", n)
 	}
 }

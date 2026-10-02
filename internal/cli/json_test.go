@@ -238,7 +238,10 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 	if got.get("status") != "preview" && got.get("status") != "not_ready" {
 		t.Errorf("start status: %s", got.stdout)
 	}
-	assertKeys(t, got.doc, "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run_command,schema,status")
+	assertKeys(t, got.doc, "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run_command,schema,status,tasks_awaiting_review,tasks_ready")
+	if got.get("tasks_ready") != float64(9) || got.get("tasks_awaiting_review") != float64(0) {
+		t.Errorf("task counts: %s", got.stdout)
+	}
 	assertKeys(t, got.doc["experiment"], "budget_usd,model,name,repeats_per_arm,runs,tasks,template")
 	assertKeys(t, got.doc["project"], "id,name")
 	assertKeys(t, got.doc["north_star"], "decisive,experiment,metric,seconds,spent_usd,verdict")
@@ -254,8 +257,8 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 		t.Errorf("start --json ran the agent: %d stored, %d started", stored, started)
 	}
 	again := jsonRun(t, f, ExitOK, "start", "--accept-mined")
-	if again.get("experiment", "name") != "quick-aa-baseline" {
-		t.Errorf("a second start resumes: %s", again.stdout)
+	if again.get("experiment", "name") != "quick-aa-baseline" || again.get("tasks_ready") != nil || again.get("tasks_awaiting_review") != nil {
+		t.Errorf("a second start resumes, without counting tasks: %s", again.stdout)
 	}
 
 	// --yes would run the experiment, whose output is not JSON in part 1.

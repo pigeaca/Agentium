@@ -135,7 +135,7 @@ func TestSequentialExpectedTasks(t *testing.T) {
 // seqGolden is every seq-v1 design size's looks as this code computes them (tasks, look's tasks, efficacy z,
 // equivalence z, efficacy level, equivalence level). Locks record the levels, and a resume refuses a lock whose levels
 // this build computes more than 1e-6 apart (experiment's checkSequential): a change that moves them that far is a new
-// method (seq-v2), not a fix, and this test fails first.
+// method (seq-v2), not a fix. The values are pinned at 1e-8, so this test fails well before a resume would.
 var seqGolden = [][6]float64{
 	{1, 1, 2.108358399, 1.644853627, 0.965000000, 0.900000000},
 	{8, 8, 2.108358399, 1.644853627, 0.965000000, 0.900000000},
@@ -166,7 +166,7 @@ func TestSeqLevelsGolden(t *testing.T) {
 		for k, w := range want {
 			got := []float64{float64(looks[k].Tasks), looks[k].EffBound, looks[k].EqBound, looks[k].EffLevel, looks[k].EqLevel}
 			for i, g := range got {
-				if math.Abs(g-w[i+1]) > 1e-6 {
+				if math.Abs(g-w[i+1]) > 1e-8 { // well inside the resume's 1e-6, so a drift fails here first
 					t.Errorf("%d tasks, look %d: field %d is %.9f, the golden value %.9f", n, k+1, i, g, w[i+1])
 				}
 			}

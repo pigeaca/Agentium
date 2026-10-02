@@ -40,7 +40,7 @@ it asks instead. --budget raises the experiment's total in USD. Mined tasks wait
 solution leaks (agentium task show NAME, then agentium task edit NAME --reviewed). --accept-mined accepts, without
 your review, the tasks start itself mined: it checks only solution headings, reference-file names and unstated test
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
-accepted. --json prints one JSON document (status preview, not_ready, too_few_tasks or finished) and never asks; it
+accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks or finished) and never asks; it
 cannot be combined with --yes yet. Without a terminal on stdin, start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget.
 `
 
@@ -92,9 +92,11 @@ func runStart(ctx context.Context, env Env, args []string) int {
 			return ExitUsage
 		}
 		return failNew(env, err) // tasks that cannot be in the experiment, listed with their reasons
-	case name == "" && s.log != nil: // fewer tasks than the floor: the log says why
+	case name == "" && s.log != nil && s.awaitingReview: // tasks wait for a person's review: the log lists them
+		return s.emitJSON(ctx, "awaiting_review", ExitError, "", nil, budgetPlan{})
+	case name == "" && s.log != nil: // fewer ready tasks than the floor, and none waiting for a review: the log says why
 		return s.emitJSON(ctx, "too_few_tasks", ExitError, "", nil, budgetPlan{})
-	case name == "": // fewer tasks than the floor: said already
+	case name == "": // too few tasks, or tasks waiting for a review: said already
 		return ExitError
 	}
 	return s.finish(ctx, name)
@@ -118,6 +120,12 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
+	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).
+	invalidStreak int
+	// counts is the task stage's last count (nil when the stage was skipped); awaitingReview says it stopped because
+	// tasks wait for a person's review rather than because too few exist.
+	counts         *taskCounts
+	awaitingReview bool
 }
 
 // notRegisteredError is openProject's failure for a repository that was not registered with init.
@@ -133,7 +141,8 @@ func (s *starter) close() {
 	}
 }
 
-// prepare runs the stages up to the experiment's creation and returns the experiment's name; "" means too few tasks.
+// prepare runs the stages up to the experiment's creation and returns the experiment's name; "" means too few tasks
+// are ready, or tasks wait for a review (s.awaitingReview).
 // An experiment that exists already needs no tasks, so that stage is skipped then.
 func (s *starter) prepare(ctx context.Context) (string, error) {
 	if err := s.register(ctx); err != nil {

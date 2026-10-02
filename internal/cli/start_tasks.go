@@ -80,12 +80,13 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 	return c, nil
 }
 
-// reachable counts the tasks that are ready or can become so without a person: the waiting ones too, unless
-// --accept-mined is the way they are accepted, when only those start mined and the checks did not hold back count.
+// reachable counts the tasks that are ready or that start's own review gate is waiting for: the ready ones and the
+// waiting ones start itself mined (with --accept-mined, only those its checks did not hold back). Tasks the user
+// brought in (task import, pull requests, tickets) and left waiting are theirs to review: they never hold start back.
 func (s *starter) reachable(c taskCounts) int {
 	n := len(c.ready)
 	for _, name := range c.waiting {
-		if !s.args.acceptMined || (s.mined[name] && s.held[name] == "") {
+		if s.mined[name] && (!s.args.acceptMined || s.held[name] == "") {
 			n++
 		}
 	}
@@ -122,6 +123,7 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		s.counts = &c
 		took := " (skipped)"
 		if worked {
 			took = ", in " + s.env.Now().Sub(started).Round(time.Second).String()
@@ -156,7 +158,8 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 			fmt.Fprintf(out, "Tasks: %d ready (aims for %d; %s)%s: the experiment takes them all, %s\n", len(c.ready), target, why, took,
 				experiment.DescribeLooks(experiment.Design{Tasks: c.ready}))
 			return true, nil
-		default:
+		default: // fewer than the floor are ready, or start's own mined tasks wait for a review that would add to them
+			s.awaitingReview = len(c.waiting) > 0
 			s.explainShortage(c, floor, target, exhausted)
 			return false, nil
 		}
@@ -212,10 +215,22 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 	}
 	fmt.Fprintln(s.env.Stdout, line)
 	// Only tasks this run mined say anything about mining: a broken task someone added by hand does not stop it. A round
-	// of one or two tasks says too little (mining then tops up the last few, best candidates first, so an unlucky pick
-	// would stop it short of the floor); the maxMineFactor cap still bounds the rounds.
-	if mined >= minStopSample && minedValid == 0 {
+	// of one or two tasks says too little on its own (mining then tops up the last few, best candidates first, so an
+	// unlucky pick would stop it short), so small rounds add up: mining stops once the tasks mined in this run since its
+	// last valid one reach minStopSample, all invalid, in one round or across several. The maxMineFactor cap still
+	// bounds the rounds.
+	switch {
+	case mined == 0:
+	case minedValid > 0:
+		s.invalidStreak = 0
+	default:
+		s.invalidStreak += mined
+	}
+	switch {
+	case mined >= minStopSample && minedValid == 0:
 		s.stopped = fmt.Sprintf("none of the %d tasks just mined is valid, so mining more would likely repeat that", mined)
+	case s.invalidStreak >= minStopSample:
+		s.stopped = fmt.Sprintf("the last %d tasks mined are all invalid, so mining more would likely repeat that", s.invalidStreak)
 	}
 	return nil
 }
@@ -266,7 +281,8 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 // validation.
 const maxMineFactor = 3
 
-// minStopSample is the smallest mining round whose tasks, all invalid, stop start from mining more.
+// minStopSample is how many tasks mined in a row, in one round or across several, all invalid, stop start from mining
+// more.
 const minStopSample = 3
 
 // acceptMined marks waiting tasks that start itself mined (now or in an earlier run: minedFile) as reviewed when the
