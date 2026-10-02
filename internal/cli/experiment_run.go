@@ -35,7 +35,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	}
 	name := rest[0]
 	if env.JSON && !yes { // a script's consent is its flag: nothing is opened, locked or spent without it
-		return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: refusedRun(name, o.Budget)}, ExitError)
+		return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: refusedRun(name, o)}, ExitError)
 	}
 	res, code := executeExperiment(ctx, env, name, o, env.JSON)
 	if res == nil {
@@ -60,20 +60,31 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 	}
 	defer w.Close()
 	runner, release := experimentRunner(env, w, live)
+	runner.Quiet = asJSON
 	defer release() // the run lock is held until the summary is printed
 	outcome, err := runner.Run(ctx, name, o)
 	var usage experiment.UsageError
 	if errors.As(err, &usage) {
-		fmt.Fprintf(env.Stderr, "agentium experiment run: %s\n", usage)
+		prefix := "agentium experiment run"
+		if env.json != nil && env.json.command == "start" { // start --json --yes: the document is start's
+			prefix = "agentium start"
+		}
+		fmt.Fprintf(env.Stderr, "%s: %s\n", prefix, usage)
 		return nil, ExitUsage
 	} else if err != nil {
 		return nil, fail(env, err)
 	}
-	if outcome.Err != nil {
+	if outcome.Err != nil && !(asJSON && outcome.Status != "") {
 		return nil, fail(env, outcome.Err)
 	}
 	if asJSON {
-		res, err := runResultOf(ctx, env, w, name, outcome)
+		// The run spent money: its document is written whatever stopped it, an interrupt or an error included, from
+		// what is stored (a cancelled ctx would fail those reads). The error is its note, and the exit code is 1.
+		if outcome.Err != nil {
+			fail(env, outcome.Err) // for stderr; the document below is the result
+			outcome.Status, outcome.Note = experiment.StatusStopped, outcome.Err.Error()
+		}
+		res, err := runResultOf(context.WithoutCancel(ctx), env, w, name, outcome)
 		if err != nil {
 			return nil, fail(env, err)
 		}

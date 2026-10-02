@@ -3,10 +3,17 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"math"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/stats"
 )
 
 const (
@@ -47,7 +54,14 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 		t.Errorf("experiment new: %s", created.stdout)
 	}
 
+	// A task waiting for review is not eligible: the plan says so, with its reason.
+	expect(t, f.run(context.Background(), "task", "import", "--commit", "HEAD", "--name", "by-hand", "--verify", "true"), ExitOK)
 	plan := jsonRun(t, f, ExitOK, "experiment", "plan", "lean-seq")
+	if ineligible, _ := plan.get("ineligible_tasks").([]any); len(ineligible) == 0 {
+		t.Errorf("an unreviewed task is eligible: %s", plan.stdout)
+	} else {
+		assertKeys(t, ineligible[0], "reason,task")
+	}
 	assertKeys(t, plan.doc, "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend")
 	assertKeys(t, plan.get("spend"), spendKeys)
 	looks := plan.get("looks").([]any)
@@ -84,10 +98,15 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 	assertKeys(t, run.get("run", "looks").([]any)[0].(map[string]any)["interval"], intervalKeys)
 	assertKeys(t, run.get("run", "verdict"), verdictKeys)
 	assertKeys(t, run.get("run", "verdict", "metrics").([]any)[0], metricKeys)
-	assertKeys(t, run.get("run", "runs"), "pending,settled,total")
+	for _, m := range run.get("run", "verdict", "metrics").([]any) {
+		if m.(map[string]any)["interval"] != nil {
+			assertKeys(t, m.(map[string]any)["interval"], intervalKeys)
+		}
+	}
+	assertKeys(t, run.get("run", "runs"), "pending,settled,skipped,total")
 	assertKeys(t, run.get("run", "north_star"), "decisive,experiment,metric,seconds,spent_usd,verdict")
 	if run.get("run", "status") != "done" || run.get("run", "ended_by") != "stop" || run.get("run", "stopped_at_look") != float64(1) ||
-		run.get("run", "method") != "seq-v1" || run.get("run", "runs", "settled") != float64(16) || run.get("run", "runs", "pending") != float64(16) ||
+		run.get("run", "method") != "seq-v1" || run.get("run", "runs", "settled") != float64(16) || run.get("run", "runs", "pending") != float64(0) || run.get("run", "runs", "skipped") != float64(16) ||
 		run.get("run", "runs", "total") != float64(32) || run.get("run", "verdict", "decisive") != true || run.get("run", "north_star", "decisive") != true ||
 		run.get("run", "next_command") != "agentium experiment report lean-seq" || run.get("run", "resume_at") != nil {
 		t.Errorf("experiment run: %s", run.stdout)
@@ -219,11 +238,22 @@ func TestJSONExperimentRunBudgetStop(t *testing.T) {
 	if !strings.Contains(lower.get("error", "message").(string), "can only be raised") {
 		t.Errorf("a lower budget: %s", lower.stdout)
 	}
+	refusedBudget := jsonRun(t, f, ExitError, "experiment", "run", "short", "--budget", "12")
+	if refusedBudget.get("run", "next_command") != "agentium experiment run short --yes --json --budget 12" || refusedBudget.get("run", "spent_usd") != nil ||
+		refusedBudget.get("run", "budget_usd") != nil || refusedBudget.get("run", "runs") != nil || refusedBudget.get("run", "method") != nil {
+		t.Errorf("a refused run: unknown fields are null and the flags go into next_command: %s", refusedBudget.stdout)
+	}
 	resumed := jsonRun(t, f, ExitOK, "experiment", "run", "short", "--yes", "--budget", "30")
 	if resumed.get("run", "status") != "done" || resumed.get("run", "ended_by") != "final" || resumed.get("run", "stopped_at_look") != nil ||
-		resumed.get("run", "runs", "pending") != float64(0) || len(resumed.get("run", "looks").([]any)) != 3 || resumed.get("run", "budget_usd") != float64(30) {
+		resumed.get("run", "runs", "pending") != float64(0) || resumed.get("run", "runs", "skipped") != float64(0) || len(resumed.get("run", "looks").([]any)) != 3 || resumed.get("run", "budget_usd") != float64(30) {
 		t.Errorf("the resumed run: %s", resumed.stdout)
 	}
+	shown := jsonRun(t, f, ExitOK, "experiment", "show", "short")
+	changes, _ := shown.get("lock", "budget_changes").([]any)
+	if len(changes) != 1 {
+		t.Fatalf("the budget raise is not in the lock: %s", shown.stdout)
+	}
+	assertKeys(t, changes[0], "at,from_usd,to_usd")
 }
 
 // start --json --yes runs the experiment and answers with start's document and the run's result; without --yes it
@@ -280,5 +310,124 @@ func TestJSONStartYesWhileNotReadyFails(t *testing.T) {
 	}
 	if again := jsonRun(t, f, ExitOK, "start"); again.get("status") != "not_ready" {
 		t.Errorf("without --yes, not ready is a preview with exit 0: %s", again.stdout)
+	}
+}
+
+// An interrupted run that spent money still gets its document: status stopped, exit 1, the spend and counts, and the
+// reason in note; a resume finishes it. (A run error after some runs, outcome.Err, takes the same path.)
+func TestJSONExperimentRunInterrupted(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	expect(t, f.run(context.Background(), "experiment", "new", "stop", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1"), ExitOK)
+	writeFile(t, ctrl, "hang", "s1-t1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		waitFor(t, "the second run's agent", func() bool {
+			_, err := os.Stat(filepath.Join(ctrl, "hanging-e1-s1-t1"))
+			return err == nil
+		})
+		cancel()
+	}()
+	res := checkJSON(t, f, f.run(ctx, "experiment", "run", "stop", "--yes", "--json"), ExitError, []string{"experiment", "run"})
+	assertKeys(t, res.get("run"), runResultKeys)
+	if res.get("run", "status") != "stopped" || res.get("run", "runs", "settled") != float64(1) || res.get("run", "runs", "pending") != float64(1) ||
+		res.get("run", "spent_usd") == nil || res.get("run", "spent_usd").(float64) <= 0 || res.get("run", "note") != "interrupted" ||
+		res.get("error") != nil {
+		t.Errorf("an interrupted run: %s", res.stdout)
+	}
+	os.Remove(filepath.Join(ctrl, "hang"))
+	done := jsonRun(t, f, ExitOK, "experiment", "run", "stop", "--yes")
+	if done.get("run", "status") != "done" || done.get("run", "runs", "settled") != float64(2) {
+		t.Errorf("the resume: %s", done.stdout)
+	}
+}
+
+// start --json --yes whose run is interrupted still answers with start's document and the run's stopped result.
+func TestJSONStartYesInterrupted(t *testing.T) {
+	t.Parallel()
+	f, ctrl := readyFixture(t)
+	writeFile(t, ctrl, "hang", "s1-t1\ns2-t1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		waitFor(t, "a hanging agent", func() bool {
+			m, _ := filepath.Glob(filepath.Join(ctrl, "hanging-*"))
+			return len(m) > 0
+		})
+		cancel()
+	}()
+	res := checkJSON(t, f, f.run(ctx, "start", "--yes", "--json"), ExitError, []string{"start", "--yes"})
+	assertKeys(t, res.doc, startKeys)
+	if res.get("status") != "ran" || res.get("run", "status") != "stopped" || res.get("nothing_was_run") != false || res.get("run", "spent_usd") == nil {
+		t.Errorf("start --yes, interrupted: %s", res.stdout)
+	}
+}
+
+// A pause before the usage limit is a result (exit 0): resume_at says when the window resets, and the looks so far stay.
+func TestJSONExperimentRunUsagePause(t *testing.T) {
+	t.Parallel()
+	f, ctrl := seqFixture(t)
+	resets := time.Now().Add(time.Hour).Truncate(time.Second)
+	control(t, ctrl, map[string]string{"cost-jitter": "", "usage": "0.00 0.045 " + strconv.FormatInt(resets.Unix(), 10) + "\n"})
+	jsonRun(t, f, ExitOK, "experiment", "new", "window", "--b", "lean", "--no-futility", "--concurrency", "1", "--seed", "3")
+	paused := jsonRun(t, f, ExitOK, "experiment", "run", "window", "--yes")
+	assertKeys(t, paused.get("run"), runResultKeys)
+	at, _ := time.Parse(time.RFC3339, paused.get("run", "resume_at").(string))
+	if paused.get("run", "status") != "usage" || !at.Equal(resets) || paused.get("run", "judge_paused") != false || len(paused.get("run", "looks").([]any)) != 1 ||
+		paused.get("run", "runs", "pending").(float64) <= 0 || paused.get("run", "runs", "skipped") != float64(0) ||
+		paused.get("run", "next_command") != "agentium experiment run window" {
+		t.Errorf("a usage pause: %s", paused.stdout)
+	}
+}
+
+// A person's own run needs no --yes, and --yes changes nothing there: human text, no JSON.
+func TestExperimentRunYesIsANoOpWithoutJSON(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	for _, name := range []string{"plain", "yes"} {
+		expect(t, f.run(ctx, "experiment", "new", name, "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	}
+	plain := f.run(ctx, "experiment", "run", "plain")
+	withYes := f.run(ctx, "experiment", "run", "yes", "--yes")
+	expect(t, withYes, ExitOK, "Experiment yes: done", "2 of 2 runs settled", "The report: agentium experiment report yes")
+	if plain.code != withYes.code || strings.HasPrefix(strings.TrimSpace(withYes.stdout), "{") || withYes.stderr != plain.stderr ||
+		strings.Count(withYes.stdout, "\n") != strings.Count(plain.stdout, "\n") {
+		t.Errorf("--yes changed human mode:\n%s\nvs\n%s", plain.stdout, withYes.stdout)
+	}
+}
+
+// A number JSON cannot hold (NaN, Inf) becomes null: the document is written after the money was spent.
+func TestRunDocumentSurvivesNonFiniteNumbers(t *testing.T) {
+	t.Parallel()
+	nan, inf := math.NaN(), math.Inf(1)
+	env := Env{Getenv: func(string) string { return "" }}
+	analysis := experiment.Analysis{Results: []experiment.MetricResult{{Metric: "cost", Role: experiment.RolePrimary, Tasks: 3, A: &nan, B: &inf, Level: math.NaN(),
+		Boot95: stats.Interval{Estimate: nan, Low: 1, High: inf}, T95: stats.Interval{Estimate: 1, Low: 0, High: 2}, Verdict: stats.Inconclusive}},
+		Sequential: &experiment.SeqStatus{Looks: []experiment.Look{{Look: 1, Analysed: true, EffLevel: nan, Verdict: stats.Inconclusive,
+			Interval: &stats.Interval{Estimate: 1, Low: nan, High: 2}, ConditionalPower: &nan, Decision: experiment.LookContinue}}}}
+	doc := runResultDoc{Status: "done", Looks: looksOf(analysis.Sequential), Verdict: verdictOf(env, analysis), SpentUSD: finiteOf(nan)}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("a non-finite number failed the document: %v", err)
+	}
+	var back runResultDoc
+	if err := json.Unmarshal(data, &back); err != nil || back.SpentUSD != nil || back.Verdict.Metrics[0].A != nil || back.Verdict.Metrics[0].Interval != nil ||
+		back.Looks[0].Level != nil || back.Looks[0].Interval != nil || back.Looks[0].ConditionalPower != nil {
+		t.Errorf("non-finite numbers are not null: %v\n%s", err, data)
+	}
+}
+
+// Not ready: the error does not point at checks a JSON run never shows.
+func TestJSONExperimentRunNotReadyMessage(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "unready", "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "task", "edit", "value", "--setup", "true"), ExitOK) // a changed task waits for its review again
+	human := f.run(ctx, "experiment", "run", "unready")
+	expect(t, human, ExitError, "not ready to run: see above")
+	got := jsonRun(t, f, ExitError, "experiment", "run", "unready", "--yes")
+	if msg, _ := got.get("error", "message").(string); !strings.Contains(msg, "not ready to run (agentium experiment plan unready)") || strings.Contains(msg, "see above") {
+		t.Errorf("experiment run --json, not ready: %s", got.stdout)
 	}
 }

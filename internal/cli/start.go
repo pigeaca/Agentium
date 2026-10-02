@@ -409,8 +409,8 @@ func (s *starter) runJSON(ctx context.Context, name string, review *experiment.R
 		return code
 	}
 	s.ran = res
-	s.w, _ = openProject(ctx, s.env) // for the document's project and north star; without it they are null
-	return s.emitJSON(ctx, "ran", code, name, review, budget)
+	s.w, _ = openProject(context.WithoutCancel(ctx), s.env)                          // for the document's project and north star; without it they are null
+	return s.emitJSON(context.WithoutCancel(ctx), "ran", code, name, review, budget) // the run's money is spent: report it
 }
 
 // failStart reports an error from the stages after the preview's start: a usage error as one, the rest as failures.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -58,8 +59,20 @@ type intervalDoc struct {
 	High     float64 `json:"high"`
 }
 
+// finite is v, or null when it is NaN or infinite: a document is written after the money was spent, so a number JSON
+// cannot hold must never make its encoding fail.
+func finite(v *float64) *float64 {
+	if v == nil || math.IsNaN(*v) || math.IsInf(*v, 0) {
+		return nil
+	}
+	return v
+}
+
+func finiteOf(v float64) *float64 { return finite(&v) }
+
+// intervalOf is the interval, or null when any of its numbers is not finite.
 func intervalOf(i *stats.Interval) *intervalDoc {
-	if i == nil {
+	if i == nil || finite(&i.Estimate) == nil || finite(&i.Low) == nil || finite(&i.High) == nil {
 		return nil
 	}
 	return &intervalDoc{Estimate: i.Estimate, Low: i.Low, High: i.High}
@@ -87,10 +100,10 @@ func looksOf(s *experiment.SeqStatus) []lookDoc {
 	}
 	for _, l := range s.Looks {
 		d := lookDoc{Look: l.Look, TasksPlanned: l.Planned, TasksCounted: l.Counted, Analysed: l.Analysed, Decision: l.Decision, Note: l.Note,
-			ConditionalPower: l.ConditionalPower}
+			ConditionalPower: finite(l.ConditionalPower)}
 		if l.Analysed {
-			level, verdict := l.LevelOfVerdict(), l.Verdict
-			d.Level, d.Verdict, d.Interval = &level, &verdict, intervalOf(l.IntervalOfVerdict())
+			verdict := l.Verdict
+			d.Level, d.Verdict, d.Interval = finiteOf(l.LevelOfVerdict()), &verdict, intervalOf(l.IntervalOfVerdict())
 		}
 		out = append(out, d)
 	}
@@ -361,12 +374,12 @@ type experimentRemoveDoc struct {
 
 // --- experiment run ---
 
-// runCountsDoc counts an experiment's slots (one run of a pair each): Pending are those without a settled run, the ones
-// a seq-v1 experiment never ran after stopping early and those that ran out of attempts included.
+// runCountsDoc counts an experiment's slots (one run of a pair each): Total is Settled + Pending + Skipped.
 type runCountsDoc struct {
 	Total   int `json:"total"`
 	Settled int `json:"settled"`
-	Pending int `json:"pending"`
+	Pending int `json:"pending"` // would run on a resume
+	Skipped int `json:"skipped"` // will not run: the experiment ended (at a look, or every slot is done or out of attempts)
 }
 
 // metricDoc is one metric's comparison of arm B with arm A: a difference for success, a ratio for the others.
@@ -413,10 +426,10 @@ func verdictOf(env Env, a experiment.Analysis) *verdictDoc {
 		doc.Summary = env.redact(a.Sequential.Describe())
 	}
 	for _, r := range a.Results {
-		m := metricDoc{Metric: r.Metric, Role: r.Role, Verdict: r.Verdict, Decisive: report.Decisive(r.Verdict), Tasks: r.Tasks, A: r.A, B: r.B, Note: env.redact(r.Note)}
+		m := metricDoc{Metric: r.Metric, Role: r.Role, Verdict: r.Verdict, Decisive: report.Decisive(r.Verdict), Tasks: r.Tasks, A: finite(r.A), B: finite(r.B), Note: env.redact(r.Note)}
 		if r.Tasks >= 2 { // with fewer, there is no interval
 			i, level := verdictInterval(r)
-			m.Interval, m.Level = intervalOf(&i), &level
+			m.Interval, m.Level = intervalOf(&i), finiteOf(level)
 		}
 		if m.Decisive && r.Role != experiment.RoleSecondary {
 			doc.Decisive = true
@@ -431,19 +444,20 @@ func verdictOf(env Env, a experiment.Analysis) *verdictDoc {
 //   - budget: the next run would not fit the budget; a higher --budget continues it;
 //   - usage: paused before the subscription's usage limit (or the judge hit it); ResumeAt says when it resets;
 //   - stopped: interrupted, repeated infrastructure failures, a changed environment, or an error (exit 1);
-//   - refused: nothing ran, because `--json` needs `--yes` to spend money (exit 1).
+//   - refused: nothing ran, because `--json` needs `--yes` to spend money (exit 1). Only Status, Note and NextCommand
+//     mean anything then: the rest is null or empty.
 //
 // Looks, Verdict, the counts and the spend are the experiment's, as stored when the command ended.
 type runResultDoc struct {
 	Status        string        `json:"status"`
 	Note          string        `json:"note"` // human text
-	Method        string        `json:"method"`
+	Method        *string       `json:"method"`
 	EndedBy       *string       `json:"ended_by"`        // seq-v1: stop | futility | final once it has ended
 	StoppedAtLook *int          `json:"stopped_at_look"` // when it ended early at a look (stop or futility)
 	Looks         []lookDoc     `json:"looks"`
-	SpentUSD      float64       `json:"spent_usd"` // all the budget counts, calibrations and the judge included
-	BudgetUSD     float64       `json:"budget_usd"`
-	Runs          runCountsDoc  `json:"runs"`
+	SpentUSD      *float64      `json:"spent_usd"` // all the budget counts, calibrations and the judge included
+	BudgetUSD     *float64      `json:"budget_usd"`
+	Runs          *runCountsDoc `json:"runs"`
 	ResumeAt      *time.Time    `json:"resume_at"` // status usage: when the window resets
 	JudgePaused   bool          `json:"judge_paused"`
 	Verdict       *verdictDoc   `json:"verdict"`      // null when nothing was analysed (no runs)
@@ -457,12 +471,27 @@ type experimentRunDoc struct {
 	Run        runResultDoc `json:"run"`
 }
 
-func refusedRun(name string, budget float64) runResultDoc {
+// refusedRun is the result of an `experiment run --json` without --yes: next_command is the command that would run,
+// with the flags it was given.
+func refusedRun(name string, o experiment.RunOptions) runResultDoc {
+	next := "agentium experiment run " + name + " --yes --json"
+	if o.Budget > 0 {
+		next += " --budget " + strconv.FormatFloat(o.Budget, 'f', -1, 64)
+	}
+	if o.UsageLimit != experiment.DefaultUsageLimit {
+		next += " --usage-limit " + strconv.FormatFloat(o.UsageLimit, 'f', -1, 64)
+	}
+	if o.Wait {
+		next += " --wait"
+	}
 	return runResultDoc{Status: "refused", Note: "--json never asks and starts no paid run without --yes: add --yes to run the experiment (real Claude Code runs, within its budget)",
-		Looks: []lookDoc{}, BudgetUSD: budget, NextCommand: "agentium experiment run " + name + " --yes --json"}
+		Looks: []lookDoc{}, NextCommand: next}
 }
 
 // runResultOf describes how an execution ended, from what is stored.
+//
+// It runs after the money was spent, even after an interrupt: callers pass a context that is not cancelled, and what
+// cannot be analysed leaves the verdict null instead of failing the document.
 func runResultOf(ctx context.Context, env Env, w *workspace, name string, out experiment.RunOutcome) (runResultDoc, error) {
 	stored, err := w.db.ExperimentByName(ctx, w.project.ID, name)
 	if err != nil {
@@ -476,9 +505,9 @@ func runResultOf(ctx context.Context, env Env, w *workspace, name string, out ex
 	if err != nil {
 		return runResultDoc{}, err
 	}
-	res := runResultDoc{Status: out.Status, Note: env.redact(out.Note), Method: lock.Method, Looks: looksOf(progress.Sequential), SpentUSD: progress.SpentUSD,
-		BudgetUSD: progress.BudgetUSD, Runs: runCountsDoc{Total: progress.Slots, Settled: progress.Settled, Pending: progress.Slots - progress.Settled},
-		JudgePaused: out.JudgePaused, NextCommand: "agentium experiment run " + name}
+	runs := runCountsDoc{Total: progress.Slots, Settled: progress.Settled, Pending: progress.Slots - progress.Settled}
+	res := runResultDoc{Status: out.Status, Note: env.redact(out.Note), Method: &lock.Method, Looks: looksOf(progress.Sequential), SpentUSD: finiteOf(progress.SpentUSD),
+		BudgetUSD: finiteOf(progress.BudgetUSD), Runs: &runs, JudgePaused: out.JudgePaused, NextCommand: "agentium experiment run " + name}
 	if !out.ResumeAt.IsZero() {
 		res.ResumeAt = &out.ResumeAt
 	}
@@ -488,26 +517,23 @@ func runResultOf(ctx context.Context, env Env, w *workspace, name string, out ex
 			res.StoppedAtLook = &l.Look
 		}
 	}
-	switch out.Status {
-	case experiment.StatusDone:
+	if out.Status == experiment.StatusDone || res.EndedBy != nil { // nothing more will run: what is left is skipped, not pending
+		runs.Skipped, runs.Pending = runs.Pending, 0
+	}
+	switch {
+	case out.Status == experiment.StatusDone:
 		res.NextCommand = "agentium experiment report " + name
-	case experiment.StatusBudget:
+	case out.Status == experiment.StatusBudget:
 		res.NextCommand += " --budget USD"
+	case out.Status == experiment.StatusUsage && out.ResumeAt.IsZero() && !out.JudgePaused:
+		res.NextCommand += " --usage-limit PCT" // a pair needs more of the window than the limit allows
 	}
-	runs, err := w.db.ExperimentRuns(ctx, stored.ID)
-	if err != nil {
-		return runResultDoc{}, err
-	}
-	if len(runs) > 0 {
-		data, err := experiment.RunDataOfStored(runs)
-		if err != nil {
-			return runResultDoc{}, err
+	if stored, err := w.db.ExperimentRuns(ctx, stored.ID); err == nil && len(stored) > 0 {
+		if data, err := experiment.RunDataOfStored(stored); err == nil {
+			if analysis, err := experiment.Analyze(lock, data); err == nil {
+				res.Verdict = verdictOf(env, analysis)
+			}
 		}
-		analysis, err := experiment.Analyze(lock, data)
-		if err != nil {
-			return runResultDoc{}, fmt.Errorf("experiment %s: %w", name, err)
-		}
-		res.Verdict = verdictOf(env, analysis)
 	}
 	if star, err := report.LoadNorthStar(ctx, w.service()); err == nil {
 		res.NorthStar = northStarOf(star)
