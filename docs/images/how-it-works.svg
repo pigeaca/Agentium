@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="972" height="208" viewBox="0 0 972 208" role="img" aria-label="How Agentium works: mine tasks, pick two arms, run in isolation, get a verdict" font-family="-apple-system, BlinkMacSystemFont, &quot;Segoe UI&quot;, Helvetica, Arial, sans-serif">
+<style>
+.card{fill:#ffffff;stroke:#d0d7de} .title{fill:#1f2328} .body{fill:#59636e} .arrow{stroke:#8c959f;fill:none} .head{fill:#8c959f} .label{fill:#59636e}
+.a1{fill:#0969da}.s1{stroke:#0969da}.t1{fill:#0969da}.a2{fill:#8250df}.s2{stroke:#8250df}.t2{fill:#8250df}.a3{fill:#1a7f37}.s3{stroke:#1a7f37}.t3{fill:#1a7f37}.a4{fill:#bc4c00}.s4{stroke:#bc4c00}.t4{fill:#bc4c00}
+@media (prefers-color-scheme: dark) {
+.card{fill:#161b22;stroke:#30363d} .title{fill:#e6edf3} .body{fill:#9198a1} .arrow{stroke:#6e7681} .head{fill:#6e7681} .label{fill:#9198a1}
+.a1{fill:#4493f8}.s1{stroke:#4493f8}.t1{fill:#4493f8}.a2{fill:#ab7df8}.s2{stroke:#ab7df8}.t2{fill:#ab7df8}.a3{fill:#3fb950}.s3{stroke:#3fb950}.t3{fill:#3fb950}.a4{fill:#f0883e}.s4{stroke:#f0883e}.t4{fill:#f0883e}
+}
+</style>
+<rect class="card" x="8" y="8" width="200" height="192" rx="14" stroke-width="1"/>
+<circle class="a1" cx="48" cy="50" r="22" opacity="0.13"/>
+<g class="s1" transform="translate(48,50)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><line x1="-13" y1="0" x2="-6" y2="0"/><circle r="6" fill="none"/><line x1="6" y1="0" x2="13" y2="0"/></g>
+<text class="t1" x="82" y="54" font-size="11.5" font-weight="700" letter-spacing="1.4">STEP 1</text>
+<text class="title" x="28" y="102" font-size="17" font-weight="650">Mine tasks</text>
+<text class="body" x="28" y="128" font-size="14">Past commits become</text>
+<text class="body" x="28" y="149" font-size="14">tasks; their tests</text>
+<text class="body" x="28" y="170" font-size="14">stay hidden.</text>
+<rect class="card" x="260" y="8" width="200" height="192" rx="14" stroke-width="1"/>
+<circle class="a2" cx="300" cy="50" r="22" opacity="0.13"/>
+<g class="s2" transform="translate(300,50)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><rect x="-13" y="-8" width="11" height="16" rx="3" fill="none"/><rect x="2" y="-8" width="11" height="16" rx="3" fill="none"/></g>
+<text class="t2" x="334" y="54" font-size="11.5" font-weight="700" letter-spacing="1.4">STEP 2</text>
+<text class="title" x="280" y="102" font-size="17" font-weight="650">Pick two arms</text>
+<text class="body" x="280" y="128" font-size="14">Two versions of your</text>
+<text class="body" x="280" y="149" font-size="14">AI context, or two</text>
+<text class="body" x="280" y="170" font-size="14">models.</text>
+<line class="arrow" x1="220" y1="104.0" x2="241" y2="104.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M248,104.0 L239,98.5 L239,109.5 Z"/>
+<rect class="card" x="512" y="8" width="200" height="192" rx="14" stroke-width="1"/>
+<circle class="a3" cx="552" cy="50" r="22" opacity="0.13"/>
+<g class="s3" transform="translate(552,50)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M0,-12 L10,-8 V-1 C10,6 5,10 0,12 C-5,10 -10,6 -10,-1 V-8 Z" fill="none"/><polyline points="-4,0 -1,3 5,-4" fill="none"/></g>
+<text class="t3" x="586" y="54" font-size="11.5" font-weight="700" letter-spacing="1.4">STEP 3</text>
+<text class="title" x="532" y="102" font-size="17" font-weight="650">Run in isolation</text>
+<text class="body" x="532" y="128" font-size="14">The same fresh</text>
+<text class="body" x="532" y="149" font-size="14">checkout, in a sandbox</text>
+<text class="body" x="532" y="170" font-size="14">with no network.</text>
+<line class="arrow" x1="472" y1="104.0" x2="493" y2="104.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M500,104.0 L491,98.5 L491,109.5 Z"/>
+<rect class="card" x="764" y="8" width="200" height="192" rx="14" stroke-width="1"/>
+<circle class="a4" cx="804" cy="50" r="22" opacity="0.13"/>
+<g class="s4" transform="translate(804,50)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"><circle r="11" fill="none"/><polyline points="-5,0 -1.5,4 5.5,-4" fill="none"/></g>
+<text class="t4" x="838" y="54" font-size="11.5" font-weight="700" letter-spacing="1.4">STEP 4</text>
+<text class="title" x="784" y="102" font-size="17" font-weight="650">Get a verdict</text>
+<text class="body" x="784" y="128" font-size="14">Improved, regressed,</text>
+<text class="body" x="784" y="149" font-size="14">no loss or inconclusive;</text>
+<text class="body" x="784" y="170" font-size="14">stops once it is clear.</text>
+<line class="arrow" x1="724" y1="104.0" x2="745" y2="104.0" stroke-width="2" stroke-linecap="round"/><path class="head" d="M752,104.0 L743,98.5 L743,109.5 Z"/>
+</svg>

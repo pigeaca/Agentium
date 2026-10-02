@@ -19,48 +19,14 @@ Success was exploratory at 8 tasks. [Full report](docs/examples/model-ab-report.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    hist["Your git history"] -->|task mine| tasks["Tasks<br/>base commit + hidden tests"]
-    ctx["Your AI context<br/>CLAUDE.md, rules, skills"] -->|context snapshot| arms["Arms<br/>context versions or models"]
-    tasks --> exp["Experiment<br/>design locked"]
-    arms --> exp
-    exp --> runs["Paired runs<br/>each task in both arms"]
-    runs --> grade["Hidden tests<br/>grade every run"]
-    grade --> verdict["Verdict<br/>improved, regressed,<br/>no loss or inconclusive"]
-```
+<img src="docs/images/how-it-works.svg" alt="How Agentium works: mine tasks from past commits, pick two arms, run them in isolation, get a verdict">
 
 - **Your tasks, not a benchmark.** A past commit becomes a task: its parent is the start, its test changes are hidden tests.
 - **Context versions as arms.** Snapshot `CLAUDE.md`, rules and skills, change them, compare head to head.
 - **Fair, isolated runs.** Every arm gets the same fresh checkout and the same sandbox ([below](#safety-and-isolation)).
-- **Plain verdicts.** Paired runs: improved, regressed, no loss beyond the margin, or inconclusive, with intervals. Cost experiments look after 8, 12 and 16 tasks and stop as soon as the answer is clear (or can't become clear):
-
-```mermaid
-flowchart LR
-    s1["8 tasks"] --> l1{"Look 1"}
-    l1 -->|not yet clear| s2["+4 tasks"] --> l2{"Look 2"}
-    l2 -->|not yet clear| s3["+4 tasks"] --> l3{"Look 3<br/>final"}
-    l1 -->|settled| stop(["Stop with a verdict,<br/>or inconclusive if it<br/>can't become clear"])
-    l2 -->|settled| stop
-    l3 --> stop
-```
+- **Plain verdicts.** Paired runs: improved, regressed, no loss beyond the margin, or inconclusive, with intervals. Cost experiments look after 8, 12 and 16 tasks and stop as soon as the answer is clear (or can't become clear).
 
 ## Safety and isolation
-
-One run, today:
-
-```mermaid
-flowchart LR
-    subgraph sandbox["Claude Code sandbox: no network, your credentials denied"]
-        agent["Claude Code"] -->|edits| ws["Fresh checkout<br/>base commit + the arm's context"]
-    end
-    subgraph data["Agentium's data folder: denied to the agent"]
-        hidden["Hidden tests"]
-    end
-    ws -->|the agent's changes| copy["Grading copy"]
-    hidden --> copy
-    copy -->|your build tool| rec["Run record<br/>pass or fail, cost, time, tokens"]
-```
 
 | | Today | Next |
 |---|---|---|
@@ -125,18 +91,7 @@ A report: verdicts in words, metrics with intervals, per-task results. More in t
 
 Agentium is built by AI coding agents (Claude Code and Codex) under shared rules in [`.agents/`](.agents/README.md):
 
-```mermaid
-flowchart LR
-    plan["Plan<br/>acceptance criteria"] --> wt["Own worktree<br/>and branch"]
-    wt --> impl["Implementer agent"]
-    impl --> guard["Pre-commit guard"]
-    guard --> pr["Pull request"]
-    pr --> rev{"Independent<br/>reviewer"}
-    rev -->|changes requested| impl
-    rev -->|approved| ci{"CI green?"}
-    ci -->|no| impl
-    ci -->|yes| land["Merged,<br/>plan archived"]
-```
+<img src="docs/images/dev-loop.svg" alt="How Agentium is built: plan, build, review, merge; a review that requests changes sends the work back to build">
 
 Paid runs, such as pilots and real checks, need the maintainer's approval with an estimate first.
 
