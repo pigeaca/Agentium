@@ -1,0 +1,35 @@
+[1mChecking experiment ab before its first run:[0m
+  [32mok      [0m Claude Code 2.1.281 at ~/Library/Application Support/Claude/claude-code/2.1.281/claude.app/Contents/MacOS/claude
+  [32mok      [0m context full calibrated 2026-09-29 16:22: first request 31087 tokens
+  [32mok      [0m context minimal calibrated 2026-09-29 16:22: first request 26564 tokens
+  [32mok      [0m 6 task(s), each valid in every arm's context
+Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 12 runs in a seeded order (seed 1919198069636433), prices of 2026-09-29.
+Running up to 2 at a time; each run up to $2.00 and 20m0s; budget $24.00. Ctrl-C stops it; run it again to resume.
+[1/12] scrub-whole-paths, arm B, repeat 1: started
+[2/12] scrub-whole-paths, arm A, repeat 1: started
+[2/12] scrub-whole-paths, arm A, repeat 1: [32mok[0m, $0.51 (spent $0.51 of $24.00)
+[3/12] deny-login-file, arm B, repeat 1: started
+[1/12] scrub-whole-paths, arm B, repeat 1: [32mok[0m, $0.60 (spent $1.11 of $24.00)
+[4/12] deny-login-file, arm A, repeat 1: started
+[4/12] deny-login-file, arm A, repeat 1: [32mok[0m, $0.27 (spent $1.38 of $24.00)
+[5/12] documents-filter, arm A, repeat 1: started
+[3/12] deny-login-file, arm B, repeat 1: [32mok[0m, $0.48 (spent $1.86 of $24.00)
+[6/12] documents-filter, arm B, repeat 1: started
+[6/12] documents-filter, arm B, repeat 1: [32mok[0m, $0.71 (spent $2.57 of $24.00)
+[7/12] run-survives-erase, arm A, repeat 1: started
+[5/12] documents-filter, arm A, repeat 1: [32mok[0m, $1.13 (spent $3.70 of $24.00)
+[8/12] run-survives-erase, arm B, repeat 1: started
+[7/12] run-survives-erase, arm A, repeat 1: [32mok[0m, $1.22 (spent $4.92 of $24.00)
+[9/12] unreadable-files, arm B, repeat 1: started
+[8/12] run-survives-erase, arm B, repeat 1: [32mok[0m, $1.38 (spent $6.30 of $24.00)
+[10/12] unreadable-files, arm A, repeat 1: started
+[10/12] unreadable-files, arm A, repeat 1: [33mcancelled[0m, $0.32 (spent $6.61 of $24.00)
+[9/12] unreadable-files, arm B, repeat 1: [33mcancelled[0m, $0.71 (spent $7.33 of $24.00)
+
+[1mExperiment ab:[0m [1m[33mstopped: interrupted[0m
+  8 of 12 runs settled; spent $7.33 of $24.00
+[1mARM[0m  [1mCONTEXT[0m  [1mSETTLED[0m  [1mFAIR[0m  [1mSUCCESSES[0m  [1mUNFAIR[0m  [1mINFRA[0m  [1mCANCELLED[0m   [1mCOST[0m
+A    full         4/6     4          4       0      0          1  $3.45
+B    minimal      4/6     4          3       0      0          1  $3.88
+[2mSuccesses need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted.[0m
+[33mStopped.[0m To continue: [36magentium experiment run ab[0m
