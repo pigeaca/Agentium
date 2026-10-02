@@ -48,7 +48,7 @@ func TestKeychainsAreDeniedToEveryAgent(t *testing.T) {
 			}
 			denied := inv.DeniedPaths(environ)
 			_, settings := toolCommand(t, inv, environ)
-			_, fs := sandbox(settings)
+			_, fs := sandboxOf(settings)
 			denyRead := toStrings(fs["denyRead"])
 			rules := toStrings(settings["permissions"].(map[string]any)["deny"])
 			for _, p := range []string{login, filepath.Join(realDir, "home", "Library", "Keychains"), "/Library/Keychains"} {
@@ -96,7 +96,7 @@ func TestAccountKeychainIsDeniedWhenHomeIsRedirected(t *testing.T) {
 		inv.Home, inv.AccountHome = home, link
 		denied := inv.DeniedPaths(environ)
 		_, settings := toolCommand(t, inv, environ)
-		_, fs := sandbox(settings)
+		_, fs := sandboxOf(settings)
 		denyRead := toStrings(fs["denyRead"])
 		rules := toStrings(settings["permissions"].(map[string]any)["deny"])
 		for _, p := range []string{account, filepath.Join(realDir, "Library", "Keychains"), filepath.Join(home, "Library", "Keychains")} {
@@ -191,7 +191,7 @@ func TestKeychainDenyHoldsInASandbox(t *testing.T) {
 	// profile is the run's settings for inv as a sandbox-exec profile.
 	profile := func(inv Invocation) string {
 		_, settings := toolCommand(t, inv, []string{"PATH=/usr/bin:/bin", "HOME=" + inv.Home})
-		_, fs := sandbox(settings)
+		_, fs := sandboxOf(settings)
 		var b strings.Builder
 		b.WriteString("(version 1)\n(allow default)\n")
 		for _, p := range toStrings(fs["denyRead"]) {

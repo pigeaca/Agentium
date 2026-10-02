@@ -63,7 +63,7 @@ func TestPythonRunEnvironmentAndSandbox(t *testing.T) {
 			t.Errorf("%s=%q reaches the agent", name, v)
 		}
 	}
-	network, fs := sandbox(settings)
+	network, fs := sandboxOf(settings)
 	if network["allowLocalBinding"] != nil || len(network["allowedDomains"].([]any)) != 0 {
 		t.Errorf("network %v", network)
 	}
@@ -129,7 +129,7 @@ func TestDeniedPathsResolveMissingPythonFolders(t *testing.T) {
 	inv := toolInvocation(t, "python")
 	inv.Deps, inv.Home = filepath.Join(link, "deps", "1"), filepath.Join(link, "home")
 	_, settings := toolCommand(t, inv, []string{"PATH=/usr/bin", "HOME=" + inv.Home})
-	_, fs := sandbox(settings)
+	_, fs := sandboxOf(settings)
 	denyRead := fs["denyRead"].([]any)
 	for _, rel := range []string{"deps/1/uv-cache", "deps/1/pip-cache", "deps/1/py-resolve", "home/.cache/uv", "home/Library/Caches/pip", "home/.npm"} {
 		for _, p := range []string{filepath.Join(link, rel), filepath.Join(realDir, rel)} {
@@ -165,7 +165,7 @@ func TestPythonCredentialFilesAreDeniedToEveryAgent(t *testing.T) {
 		inv.Home = home
 		denied := inv.DeniedPaths(environ)
 		_, settings := toolCommand(t, inv, environ)
-		_, fs := sandbox(settings)
+		_, fs := sandboxOf(settings)
 		denyRead := fs["denyRead"].([]any)
 		var rules []string
 		for _, r := range settings["permissions"].(map[string]any)["deny"].([]any) {
