@@ -8,7 +8,7 @@
 - Scope: sections 2 and 3 of the [automation plan](2026-10-01-automation.md), redesigned by **the user's decisions (2026-10-02, "plan all")**:
   - ~~**The drift chart is un-deferred** for A5.~~ Cancelled with the watch; the [cheaper verdicts plan's](2026-10-02-cheaper-verdicts.md) step 6 is cancelled too.
   - **A4 runs without run reuse,** which stays deferred: fresh runs under `seq-v1`, with a small cap per check.
-- Builds on: `seq-v1` (cheaper verdicts step 1, in review), the isolated-run cost (merged), A1 part 1 (`--json`, exit codes; [plan](2026-10-02-headless.md) on its branch), and A2's pool, queue and `hooks print git` ([plan](2026-10-02-task-pool.md)).
+- Builds on: `seq-v1` and the isolated-run cost (merged), A1 (`--json`, exit codes; [plan](2026-10-02-headless.md)), and A2's foreground pool ([plan](2026-10-02-task-pool.md)); A2's queue and its git hooks are parked by the user's no-background rule.
 
 ## Outcome and boundaries
 
@@ -111,8 +111,8 @@ Power was simulated with the note's model (100,000 experiments per row). At 5% i
 - [ ] ~~**5. `watch --once`, `watch enable|add|status`, `hooks print launchd`**~~ **Cancelled by the user (2026-10-02)** before it started.
 - [ ] **6. The screen** (`internal/screen`, `internal/cli/screen.go`, the `pre-push` hook in `hooks print git`). **Risk: high.** After steps 2 and 3, and a per-call budget design the user approves (the watch's weekly caps and nightly pass are gone).
   - *Redesign first:* `screen run` in the foreground, with its own preview and consent per call (or per repository), a hard cap per check in dollars and window share, and posting in the same call; a hook may call it but never leaves it running in the background.
-  - *Threats:* the refusal; budget (the per-check cap inside the weekly budget); hidden tests (unchanged: pool tasks through today's checkouts); a hostile agent (unchanged run isolation).
-  - *Acceptance:* the automation plan's acceptance 4, with a fake `gh` and a fake Claude Code; the honesty sentence fixed by a test; posting only after `screen enable --post`; a check paused by its share cap resumes on the next pass; the comment shows dollars and window share (dollars only with an API key).
+  - *Threats:* the refusal; budget (the per-check cap of the new per-call design); hidden tests (unchanged: pool tasks through today's checkouts); a hostile agent (unchanged run isolation).
+  - *Acceptance:* the automation plan's acceptance 4, with a fake `gh` and a fake Claude Code; the honesty sentence fixed by a test; posting only after `screen enable --post`; a check that reaches its dollar or share cap stops in the same call and reports inconclusive (a later explicit call may continue it); the comment shows dollars and window share (dollars only with an API key).
 - [ ] **7. Harness probe** (paid, small; approval). A scratch repository whose `.claude/settings.json` sets a hook and an `env` value, run once; it records only whether each took effect (never a credential's value). About $0.20–1. It must run before any teammate's push is screened.
 - [ ] **8. Real checks, docs, review** (paid; approval), with a recorded review per step and a second review from the other client for steps 3, 5 and 6.
   - ~~**Watch:** a pass on samber/lo with drift points.~~ Cancelled with the watch.
