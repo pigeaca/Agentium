@@ -183,11 +183,8 @@ func testCommands(root string) []string {
 			commands = append(commands, "npm test")
 		}
 	}
-	for _, name := range []string{"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"} {
-		if fileContains(filepath.Join(root, name), "pytest") || (name == "pytest.ini" && fileExists(filepath.Join(root, name))) {
-			commands = append(commands, "python3 -m pytest")
-			break
-		}
+	if usesPytest(root) {
+		commands = append(commands, pytestCommand(root))
 	}
 	if makefileHasTarget(filepath.Join(root, "Makefile"), "test") {
 		commands = append(commands, "make test")
@@ -196,6 +193,26 @@ func testCommands(root string) []string {
 		commands = append(commands, "python3 scripts/harness.py check ci")
 	}
 	return commands
+}
+
+// usesPytest reports whether the repository's files name pytest: its configuration, or a locked dependency on it.
+func usesPytest(root string) bool {
+	for _, name := range []string{"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"} {
+		if fileContains(filepath.Join(root, name), "pytest") || (name == "pytest.ini" && fileExists(filepath.Join(root, name))) {
+			return true
+		}
+	}
+	return fileContains(filepath.Join(root, "uv.lock"), `name = "pytest"`)
+}
+
+// pytestCommand runs pytest in the project's venv, which a run's warm-up builds (internal/buildtool's Python profile):
+// with uv.lock through uv (`uv run` then uses that venv and syncs nothing), otherwise with python3, which the venv puts
+// first on PATH (and which is what a host without the venv has).
+func pytestCommand(root string) string {
+	if fileExists(filepath.Join(root, "uv.lock")) {
+		return "uv run pytest"
+	}
+	return "python3 -m pytest"
 }
 
 func npmTestScript(file string) bool {

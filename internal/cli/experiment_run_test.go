@@ -26,7 +26,9 @@ import (
 // Called as the judge (--json-schema), it keeps its prompt and folder in ctrl ("judge-prompt-PID", "judge-dir-PID") and
 // answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
 // numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON. "cost" sets what a run
-// reports it cost (default 0.30). "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
+// reports it cost (default 0.30), "cost-lean" what a run in the lean context (CLAUDE.md says "Keep it short") reports,
+// "cost-MODEL" what a run on that model reports,
+// and with "cost-jitter" each slot's cost is scaled by 1 + (slot × 7 mod 11)/40, so tasks' differences vary. "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
 // "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl, and
@@ -84,6 +86,9 @@ if [ -f "$CTRL/usage" ]; then
   used=$(awk "BEGIN{print $used + $step}"); echo "$used $step $resets" > "$CTRL/usage"; limit "$used"
 fi
 cost=0.30; [ -f "$CTRL/cost" ] && cost=$(cat "$CTRL/cost")
+[ -f "$CTRL/cost-lean" ] && grep -q "Keep it short" CLAUDE.md 2>/dev/null && cost=$(cat "$CTRL/cost-lean")
+[ -f "$CTRL/cost-$model" ] && cost=$(cat "$CTRL/cost-$model")
+if [ -f "$CTRL/cost-jitter" ]; then slot=${key%%-*}; slot=${slot#s}; cost=$(awk "BEGIN{print $cost*(1+($slot*7%11)/40)}"); fi
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":'"$cost"',"num_turns":2,"duration_ms":1000,"modelUsage":{}}'
 `
 	cli := filepath.Join(t.TempDir(), "claude")
@@ -161,7 +166,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--seed", "5"), ExitOK)
 	first := f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30")
 	expect(t, first, ExitOK, "Budget raised to $30.00 (recorded in the lock)", "Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 6 runs in a seeded order (seed 5)",
 		"Running up to 2 at a time", "[1/6] value, arm ", "[6/6] value, arm ", "ok, $0.30", "spent $1.80 of $",
@@ -230,7 +235,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 
 	// The report: one task only, so no intervals; the counts and notes are there.
 	report := f.run(ctx, "experiment", "report", "lean-ab")
-	expect(t, report, ExitOK, "# Experiment lean-ab", "Context A/B: A = `base`, B = `lean`", "**Cost**: no result (fewer than two tasks",
+	expect(t, report, ExitOK, "# Experiment lean-ab", "Context A/B: A = `base`, B = `lean`", "**Success**: no result (fewer than two tasks",
 		"6 of 6 runs settled (done); spent $1.80", "| value | ●●● 3/3 | ●●● 3/3 | $0.300 → $0.300 |", "## Notes")
 	out := filepath.Join(t.TempDir(), "report.json")
 	expect(t, f.run(ctx, "experiment", "report", "lean-ab", "--json", "--out", out), ExitOK, "Wrote the report of lean-ab to "+out)
@@ -240,7 +245,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean", "--task", "value"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "report", "later"), ExitError, "has not run yet")
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "lean-ab", "done")
-	expect(t, f.run(ctx, "experiment", "show", "lean-ab"), ExitOK, "Locked ", "Claude Code 2.1.281, sign-in login", "method "+experiment.MethodVersion,
+	expect(t, f.run(ctx, "experiment", "show", "lean-ab"), ExitOK, "Locked ", "Claude Code 2.1.281, sign-in login", "method "+experiment.MethodV2,
 		"Budget raised ", "$22.00 to $30.00")
 }
 
@@ -250,7 +255,7 @@ func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
 	ctx := context.Background()
 	// Runs cost $0.30 at a $1 cap, 2 at a time: a pair starts only while the spend so far and the caps of the runs in
 	// flight leave room for both of its caps in the $3 budget, so the third pair never starts.
-	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--repeats", "3", "--run-budget", "1", "--budget", "3"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "3"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "tight"), ExitOK,
 		"Experiment tight: budget: the next run would not fit the $3.00 budget ($1.20 spent, $1.00 per run at most)",
 		"4 of 6 runs settled", "--budget USD (a higher total)")
@@ -282,7 +287,7 @@ func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
 	emptyWorkspaces(t, f)
 
 	// Claude Code reporting another version during a run stops the experiment: later runs would not compare.
-	expect(t, f.run(ctx, "experiment", "new", "drift", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "drift", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1"), ExitOK)
 	if err := os.WriteFile(filepath.Join(ctrl, "init-version"), []byte("2.1.300"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +325,7 @@ func TestExperimentSurvivesAKill(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "kill", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "kill", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1"), ExitOK)
 	if err := os.WriteFile(filepath.Join(ctrl, "hang"), []byte("s2-t1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -472,7 +477,7 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "unreadable", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "unreadable", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1"), ExitOK)
 	dir := filepath.Join(f.data, "records", "r-old")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -501,4 +506,47 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "started.json.corrupt")); err != nil {
 		t.Error(err)
 	}
+}
+
+// A retired task leaves new designs and previews with its reason, but an experiment that locked it carries on: eligibility
+// is checked only before the lock. The locked experiment is paused by its budget with runs left, the task is retired, and
+// resume executes the rest, plans without a readiness complaint, and reports.
+func TestRetiredTaskLeavesDesignsButNotLockedExperiments(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "3", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "unlocked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK, "Experiment locked: budget", "4 of 6 runs settled")
+
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tk, err := db.TaskByName(ctx, projects[0].ID, "value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired, err := db.RetireTask(ctx, tk.ID, "its file is gone from the default branch", time.Now()); err != nil || !retired {
+		t.Fatalf("retire: %v, %v", retired, err)
+	}
+	db.Close()
+
+	const why = "it is retired: its file is gone from the default branch"
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean"), ExitError, "no task can be in this experiment yet", "value: "+why)
+	expect(t, f.run(ctx, "experiment", "new", "later", "--b", "lean", "--task", "value"), ExitError, "task value cannot be in this experiment: "+why)
+	expect(t, f.run(ctx, "experiment", "plan", "unlocked"), ExitOK, "task value: "+why)
+	expect(t, f.run(ctx, "experiment", "run", "unlocked"), ExitError, "not ready to run", why)
+
+	// The locked experiment: its plan does not list the retired task as a problem, and resume runs what is left.
+	plan := f.run(ctx, "experiment", "plan", "locked")
+	if strings.Contains(plan.stdout, "retired") || strings.Contains(plan.stderr, "retired") {
+		t.Errorf("the plan of a locked experiment names the retired task:\n%s%s", plan.stdout, plan.stderr)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "locked", "--budget", "10"), ExitOK, "Resuming experiment locked", "6 of 6 runs settled")
+	expect(t, f.run(ctx, "experiment", "report", "locked"), ExitOK, "# Experiment locked", "| value |")
 }

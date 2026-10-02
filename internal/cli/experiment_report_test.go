@@ -20,15 +20,15 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--repeats", "3", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--seed", "5"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30"), ExitOK)
 
 	piped := f.run(ctx, "experiment", "report", "lean-ab")
-	expect(t, piped, ExitOK, "# Experiment lean-ab", "**Cost**: no result", "| value | ●●● 3/3 | ●●● 3/3 | $0.300 → $0.300 |")
+	expect(t, piped, ExitOK, "# Experiment lean-ab", "**Success**: no result", "| value | ●●● 3/3 | ●●● 3/3 | $0.300 → $0.300 |")
 
 	*f.terminal = true
 	colored := f.run(ctx, "experiment", "report", "lean-ab")
-	expect(t, cliResult{colored.code, term.Plain(colored.stdout), colored.stderr}, ExitOK, "Experiment lean-ab", "Cost: no result (fewer than two tasks", "6 of 6 runs settled")
+	expect(t, cliResult{colored.code, term.Plain(colored.stdout), colored.stderr}, ExitOK, "Experiment lean-ab", "Success: no result (fewer than two tasks", "6 of 6 runs settled")
 	if !strings.Contains(colored.stdout, "\x1b[") {
 		t.Errorf("a terminal report has no styles:\n%s", colored.stdout)
 	}
@@ -80,7 +80,7 @@ func TestExperimentReportContextUse(t *testing.T) {
 	f.vars["AGENTIUM_CLAUDE"] = agent
 	writeFile(t, ctrl, "subagent", "s1-t1 claude-sonnet-5\n") // slot 1's run starts an investigator, which the project lacks
 	writeFile(t, ctrl, "read-value", "")
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "rules", "--task", "value", "--repeats", "2", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "rules", "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30"), ExitOK)
 
 	runs := experimentRuns(t, f, "lean-ab")

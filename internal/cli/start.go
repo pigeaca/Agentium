@@ -27,11 +27,12 @@ Goes from a repository to a previewed experiment, skipping every stage that is a
   1. registers the repository (as init);
   2. saves the committed context as the snapshot "baseline", if the project has none; arm A is "baseline" when it
      exists, else the newest snapshot that --b does not name;
-  3. mines and validates tasks until 8 are ready, the experiment's cost floor, or the candidates run out;
-  4. creates the experiment "quick-..." at the cost floor: 8 tasks × 1 run per arm. With --b it compares the context
-     with that snapshot; without it, it is an A/A calibration of the context (both arms the same, which must find no
-     difference: it measures this repository's noise, it does not compare contexts);
-  5. prints its preview: runs, estimated cost, detectable effect and what is missing.
+  3. mines and validates tasks until 16 are ready; when the candidates run out, 8 or more will do (the cost floor);
+  4. creates the experiment "quick-...", a cost experiment (method seq-v1) on those tasks × 1 run per arm, with a look
+     after 8, 12 and 16 tasks (fewer looks with fewer tasks). With --b it compares the context with that snapshot;
+     without it, it is an A/A calibration of the context (both arms the same, which must find no difference: it
+     measures this repository's noise, it does not compare contexts);
+  5. prints its preview: the looks, the maximum and expected spend, and what is missing.
 
 It stops before any paid run. --yes runs the experiment (as agentium experiment run NAME), which first calibrates each
 context that lacks a calibration on this Claude Code and model (a paid run each, counted in the budget); on a terminal,
@@ -39,7 +40,7 @@ it asks instead. --budget raises the experiment's total in USD. Mined tasks wait
 solution leaks (agentium task show NAME, then agentium task edit NAME --reviewed). --accept-mined accepts, without
 your review, the tasks start itself mined: it checks only solution headings, reference-file names and unstated test
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
-accepted. --json prints one JSON document (status preview, not_ready, too_few_tasks or finished) and never asks; it
+accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks or finished) and never asks; it
 cannot be combined with --yes yet. Without a terminal on stdin, start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget.
 `
 
@@ -91,9 +92,11 @@ func runStart(ctx context.Context, env Env, args []string) int {
 			return ExitUsage
 		}
 		return failNew(env, err) // tasks that cannot be in the experiment, listed with their reasons
-	case name == "" && s.log != nil: // fewer tasks than the floor: the log says why
+	case name == "" && s.log != nil && s.awaitingReview: // tasks wait for a person's review: the log lists them
+		return s.emitJSON(ctx, "awaiting_review", ExitError, "", nil, budgetPlan{})
+	case name == "" && s.log != nil: // fewer ready tasks than the floor, and none waiting for a review: the log says why
 		return s.emitJSON(ctx, "too_few_tasks", ExitError, "", nil, budgetPlan{})
-	case name == "": // fewer tasks than the floor: said already
+	case name == "": // too few tasks, or tasks waiting for a review: said already
 		return ExitError
 	}
 	return s.finish(ctx, name)
@@ -117,6 +120,12 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
+	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).
+	invalidStreak int
+	// counts is the task stage's last count (nil when the stage was skipped); awaitingReview says it stopped because
+	// tasks wait for a person's review rather than because too few exist.
+	counts         *taskCounts
+	awaitingReview bool
 }
 
 // notRegisteredError is openProject's failure for a repository that was not registered with init.
@@ -132,7 +141,8 @@ func (s *starter) close() {
 	}
 }
 
-// prepare runs the stages up to the experiment's creation and returns the experiment's name; "" means too few tasks.
+// prepare runs the stages up to the experiment's creation and returns the experiment's name; "" means too few tasks
+// are ready, or tasks wait for a review (s.awaitingReview).
 // An experiment that exists already needs no tasks, so that stage is skipped then.
 func (s *starter) prepare(ctx context.Context) (string, error) {
 	if err := s.register(ctx); err != nil {
@@ -275,7 +285,7 @@ func (s *starter) experimentName() string {
 	return "quick-" + s.a + "-vs-" + s.b
 }
 
-// createExperiment stores the cost-floor experiment unless it exists.
+// createExperiment stores the cost experiment (method seq-v1) on up to its maximum of tasks unless it exists.
 func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	w, out, name := s.w, s.env.Stdout, s.experimentName()
 	floor := experiment.FloorsFor(experiment.MethodVersion)
@@ -296,13 +306,14 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	o.Tasks = experiment.Sample(eligible, floor.CostTasks, o.Seed)
+	o.Tasks = experiment.Sample(eligible, experiment.SeqTier().Tasks, o.Seed) // a cost experiment: up to its maximum, at least the floor
 	created, err := experiment.Create(ctx, w.service(), name, o, s.env.Now())
 	if err != nil {
 		return "", err
 	}
 	d := created.Design
-	fmt.Fprintf(out, "Experiment %s: created, %d task(s) × %d run per arm = %d runs, budget $%.2f\n", name, len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
+	fmt.Fprintf(out, "Experiment %s: created, %d task(s) × %d run per arm = %d runs at most, budget $%.2f; %s\n", name, len(d.Tasks), d.Repeats,
+		d.Runs(), d.BudgetUSD, experiment.DescribeLooks(d))
 	return name, nil
 }
 

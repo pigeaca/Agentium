@@ -856,6 +856,7 @@
       "first_request_tokens": 30000,
       "cost_usd": 0.3969,
       "cold_cost_usd": 1.9169000000000003,
+      "isolated_cost_usd": 0.41689999999999994,
       "cache_read_share": 0.9301244041390536,
       "behavior": {
         "tests_changed": 30,
@@ -895,6 +896,7 @@
       "first_request_tokens": 27000,
       "cost_usd": 0.31986206896551717,
       "cold_cost_usd": 1.839862068965518,
+      "isolated_cost_usd": 0.3398620689655173,
       "cache_read_share": 0.9301244041390536,
       "behavior": {
         "tests_changed": 0,
@@ -1379,7 +1381,8 @@
     "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-4, task-8. They stay in for cost.",
     "Success is exploratory: 9 of 10 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
     "Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%.",
-    "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29."
+    "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.",
+    "Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request and of each subagent launch that could not have read this run's own cache (a type's first, a parallel one, or one after its prefix expired) are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of 2026-09-29. Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. Verdicts use the actual cost."
   ],
   "runs": [
     {

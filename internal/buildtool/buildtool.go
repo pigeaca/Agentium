@@ -18,7 +18,8 @@
 // tools. UserCaches stay global, whatever the project: a user's cache of any tool may hold hidden tests that an earlier
 // build compiled, and an agent in any repository could read it.
 //
-// Dependencies offline (Cargo, Maven and Gradle; the recipes were proved in real sessions, see the Java and Rust plan):
+// Dependencies offline (Cargo, Maven, Gradle and Python; the recipes were proved in real sessions, see the Java and Rust
+// plan and the Python and TypeScript plan):
 // the agent's sandbox has no network and writes only its checkout and its run's own build cache. Dependencies come
 // from a deps folder in the data folder (home.Layout.Deps) that agents may read and not write. Only a run's setup
 // writes it, in a checkout of the task's base, where its own hidden tests do not exist (Profile.Warm). A later task's
@@ -101,6 +102,19 @@ type Profile struct {
 	StopRun func(ctx context.Context, buildCache string, host Host) error
 	// PrepareCommands makes what Agentium's own commands need under the data folder's cache root (see CommandCaches).
 	PrepareCommands func(cache string) error
+	// WarmFunc warms what fixed commands (Warm) cannot: Python finds an interpreter on the host and builds a venv per
+	// set of dependency inputs, whose path the agent's environment then names (Warmed.Venv). It runs where Warm's steps
+	// do (a throwaway checkout of the base, with network, under the warm-up lock). A failure it can explain is
+	// Warmed.Failed, a note that leaves the base unstamped; errors are for cancellation and I/O.
+	WarmFunc func(ctx context.Context, in WarmInput) (Warmed, error)
+	// CheckoutEnv returns the variables Agentium's own commands need in a checkout of the project once its tools are
+	// warmed (Python: the venv): c.Repo is the checkout (the run's, for the task's setup; the grading copy), and
+	// c.BuildCache the data folder's cache root. Later entries replace earlier ones of the same name.
+	CheckoutEnv func(c AgentContext) []string
+	// CheckoutDrop names the variables of the user's environment that Agentium's own commands in a checkout (setup,
+	// grading, validation) must not inherit, as the agent does not (CheckoutEnviron): they would change what the tests
+	// run with between the agent and grading.
+	CheckoutDrop func(name string) bool
 	// UserCaches are the user's own caches of this tool, which the agent may not read: they hold what earlier builds
 	// compiled, the hidden tests of validations and gradings included. Only absolute paths count.
 	UserCaches func(environ []string, home string) []string
@@ -127,7 +141,7 @@ func (c CacheVar) Value(root string) string {
 
 // Profiles is the table, in the order discovery proposes test commands. It returns a fresh copy each call.
 func Profiles() []Profile {
-	return []Profile{goProfile(), mavenProfile(), gradleProfile(), cargoProfile()}
+	return []Profile{goProfile(), mavenProfile(), gradleProfile(), cargoProfile(), pythonProfile(), nodeProfile()}
 }
 
 // AgentContext is what a profile's AgentEnv may use.
@@ -138,6 +152,10 @@ type AgentContext struct {
 	BuildCache       string   // the run's own build cache; "" without one
 	Deps             string   // the deps folder agents read; "" without one
 	JavaHome         string   // a JDK resolved on the host (ResolveJavaHome); "" when none was found
+	Venv             string   // the Python venv the run's warm-up chose (Warmed.Venv); "" without one
+	// ImportRoot is where the project's code imports from, relative to Repo ("src", or "" for Repo itself), decided once
+	// from the base commit (ImportRoot), so the agent, setup, grading and validation agree whatever the agent changes.
+	ImportRoot string
 }
 
 // WarmStep is a command that fetches dependencies, with the variables it needs added to the environment.
@@ -351,6 +369,40 @@ func AgentEnv(selected []Profile, c AgentContext) []string {
 	return env
 }
 
+// CheckoutEnv is the selected profiles' CheckoutEnv, in table order: what Agentium's own commands in a checkout need
+// from the warmed tools (see Profile.CheckoutEnv).
+func CheckoutEnv(selected []Profile, c AgentContext) []string {
+	var env []string
+	for _, p := range selected {
+		if p.CheckoutEnv != nil {
+			env = append(env, p.CheckoutEnv(c)...)
+		}
+	}
+	return env
+}
+
+// CheckoutEnviron is environ without what the selected profiles' CheckoutDrop names: the base environment of Agentium's
+// own commands in a checkout.
+func CheckoutEnviron(selected []Profile, environ []string) []string {
+	var drops []func(string) bool
+	for _, p := range selected {
+		if p.CheckoutDrop != nil {
+			drops = append(drops, p.CheckoutDrop)
+		}
+	}
+	if len(drops) == 0 {
+		return environ
+	}
+	out := []string{}
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.ContainsFunc(drops, func(drop func(string) bool) bool { return drop(name) }) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // UserCaches is every profile's UserCaches, in table order: global, whatever the repository (see the package
 // documentation).
 func UserCaches(environ []string, home string) []string {
@@ -384,15 +436,22 @@ func CheckConfigs(environ []string, home string, roots []string) error {
 	return err
 }
 
-// DepsDenied are the folders under deps agents may not read:
+// DepsDenied are the folders under deps agents may not read, each whole (a folder a later warm-up adds inside one is
+// denied too, which a list of its entries made when the agent started would miss):
 //   - the deps folder's whole Gradle home: its caches record what warm-ups compiled in each base, whose later tasks'
 //     hidden tests are there (javaCompile/classAnalysis.bin names their classes), and a warm-up running another Gradle
 //     version adds a caches/<version> folder at any time, while agents of other runs work. So nothing in it is listed:
 //     it is denied whole, and what agents need of it lives outside it (gradleShared: gradleRO, which
 //     GRADLE_RO_DEP_CACHE reads and holds only modules-2, and gradleJDKs);
-//   - build-cache, a build cache's folder: warm-ups run with every build cache off, so it should not exist.
+//   - build-cache, a build cache's folder: warm-ups run with every build cache off, so it should not exist;
+//   - Python's download caches and resolve reports (pythonPrivate): agents need only the venvs, and uv's or pip's
+//     cache would hold the project's own build had anything ever installed it.
 func DepsDenied(deps string) []string {
-	return []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}
+	paths := []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}
+	for _, name := range pythonPrivate {
+		paths = append(paths, filepath.Join(deps, name))
+	}
+	return paths
 }
 
 // EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.

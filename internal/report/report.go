@@ -80,11 +80,14 @@ type Arm struct {
 	Profile string `json:"profile,omitempty"`
 	Counted int    `json:"counted"`
 	// FirstRequest is the mean measured size of the first request: the context overhead Claude Code saw.
-	FirstRequest   *float64 `json:"first_request_tokens"`
-	CostUSD        *float64 `json:"cost_usd"`         // mean reported cost
-	ColdCostUSD    *float64 `json:"cold_cost_usd"`    // mean with every cached read repriced as a one-hour cache write
-	CacheReadShare *float64 `json:"cache_read_share"` // of all input tokens
-	Behavior       Behavior `json:"behavior"`
+	FirstRequest *float64 `json:"first_request_tokens"`
+	CostUSD      *float64 `json:"cost_usd"`      // mean reported cost
+	ColdCostUSD  *float64 `json:"cold_cost_usd"` // mean with every cached read repriced as a one-hour cache write
+	// IsolatedCostUSD is the mean cost had no other run warmed the prompt cache (run.Record.IsolatedCostUSD); nil unless
+	// every counted run has one. Verdicts use CostUSD.
+	IsolatedCostUSD *float64 `json:"isolated_cost_usd"`
+	CacheReadShare  *float64 `json:"cache_read_share"` // of all input tokens
+	Behavior        Behavior `json:"behavior"`
 	// ContextUse counts what the counted runs used of their context.
 	ContextUse ArmContextUse `json:"context_use"`
 }
@@ -171,7 +174,7 @@ func Build(in Input) (Report, error) {
 	l := in.Lock
 	var data []experiment.RunData
 	for _, r := range in.Runs {
-		data = append(data, runData(r.Slot, r.Record))
+		data = append(data, experiment.RunDataOf(r.Slot, r.Record))
 	}
 	analysis, err := experiment.Analyze(l, data)
 	if err != nil {
@@ -285,7 +288,7 @@ func redactLock(l experiment.Lock) experiment.Lock {
 
 func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	arm := Arm{Name: a.Name, Context: a.Context, Snapshot: a.Snapshot}
-	var first, cost, cold, files, lines, bash []float64
+	var first, cost, cold, isolated, files, lines, bash []float64
 	var cacheRead, input float64
 	for _, r := range runs {
 		rec := r.Record
@@ -300,6 +303,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		cost = append(cost, rec.Spend().AgentUSD)
 		if c, ok := coldCost(rec); ok {
 			cold = append(cold, c)
+		}
+		if rec.IsolatedCostUSD != nil {
+			isolated = append(isolated, *rec.IsolatedCostUSD)
 		}
 		cacheRead += float64(m.CacheReadTokens)
 		input += float64(m.InputTokens + m.CacheReadTokens + m.CacheWriteTokens)
@@ -346,6 +352,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	arm.FirstRequest, arm.CostUSD = mean(first), mean(cost)
 	if len(cold) == len(cost) { // every counted run could be repriced
 		arm.ColdCostUSD = mean(cold)
+	}
+	if len(isolated) == len(cost) { // every counted run has one
+		arm.IsolatedCostUSD = mean(isolated)
 	}
 	arm.Behavior.FilesChanged, arm.Behavior.LinesChanged, arm.Behavior.BashCommands = mean(files), mean(lines), mean(bash)
 	if input > 0 {
@@ -464,8 +473,13 @@ func notes(rep Report, in Input) []string {
 		if rep.StatusNote != "" {
 			status += ": " + in.scrub(rep.StatusNote)
 		}
-		out = append(out, fmt.Sprintf("The experiment is not finished (%s): %d of %d runs settled, and the results cover those.", status, rep.Settled, rep.Slots))
+		covers := "and the results cover those"
+		if rep.Analysis.Sequential != nil {
+			covers = "and the results are its last look's"
+		}
+		out = append(out, fmt.Sprintf("The experiment is not finished (%s): %d of %d runs settled, %s.", status, rep.Settled, rep.Slots, covers))
 	}
+	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
 		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, claude.OutcomeCancelled}
@@ -487,7 +501,7 @@ func notes(rep Report, in Input) []string {
 		out = append(out, "Runs not counted: "+strings.Join(parts, ", ")+". Their spend is in the total.")
 	}
 	var drift, harness []string
-	estimated, stopped, finished, unpriced, unrepriced := 0, 0, 0, 0, 0
+	estimated, stopped, finished, unpriced, unrepriced, noIsolated := 0, 0, 0, 0, 0, 0
 	for _, r := range in.Runs {
 		rec := r.Record
 		if rec.Outcome == claude.OutcomeUnfair {
@@ -516,6 +530,9 @@ func notes(rep Report, in Input) []string {
 		}
 		if _, ok := coldCost(rec); !ok && experiment.Fair(rec.Outcome) {
 			unrepriced++
+		}
+		if rec.IsolatedCostUSD == nil && experiment.Fair(rec.Outcome) {
+			noIsolated++
 		}
 	}
 	if len(drift) > 0 {
@@ -554,27 +571,48 @@ func notes(rep Report, in Input) []string {
 		}
 		decided = append(decided, fmt.Sprintf("%s (%s)", strings.ToLower(title(r.Metric)), r.Role))
 		switch {
-		case r.Verdict == stats.Exploratory && r.Warning == "" && r.Note == "":
+		case r.Verdict == stats.Exploratory && r.Warning == "" && r.Note == "" && r.FullTasks < r.FloorTasks:
 			out = append(out, fmt.Sprintf("%s is exploratory: %d of %d task(s) have %d or more counted %s in both arms, below the floor of %d tasks (method %s).",
 				title(r.Metric), r.FullTasks, r.Tasks, r.FloorRepeats, plural(r.FloorRepeats, "run"), r.FloorTasks, rep.Lock.Method))
-		case r.Verdict != stats.Exploratory && r.FloorRepeats < experiment.MinRepeats && r.Repeats < experiment.MinRepeats:
+		case r.Verdict != stats.Exploratory && r.FloorRepeats < experiment.MinRepeats && r.Repeats < experiment.MinRepeats && a.Sequential == nil:
 			out = append(out, fmt.Sprintf("%s's verdict rests on tasks with fewer than %d runs per arm, as method %s allows: each task's difference "+
 				"carries the run-to-run noise, and %s decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) "+
 				"checked it: false differences in at most %.0f%% of experiments without a true difference, and 95%% intervals that cover the true effect at least %.0f%% of the time.",
 				title(r.Metric), experiment.MinRepeats, rep.Lock.Method, wider(r.T95, r.Boot95), 100*stats.OneRunMaxFalseDifferences, 100*stats.OneRunMinCoverage))
 		}
 	}
-	out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
-		"the intervals in the summary are the wider of the two, at 95%%, or at 90%% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%%.",
-		strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	if a.Sequential != nil {
+		out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
+			"the intervals in the summary are the wider of the two, cost's at its look's levels (\"equivalent\" is two one-sided tests at the look's "+
+			"equivalence level), the others' at 95%%, or at 90%% for \"no loss\".", strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	} else {
+		out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
+			"the intervals in the summary are the wider of the two, at 95%%, or at 90%% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%%.",
+			strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	}
 	if rep.Template == experiment.TemplateAA {
-		out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		if rep.Lock.Sequential != nil {
+			out = append(out, fmt.Sprintf("Both arms use the same context, so any difference is noise. Method %s spends %.1f%% over all its looks: "+
+				"about one experiment in thirty shows a difference by chance.", experiment.MethodSeq, 100*rep.Lock.Sequential.Alpha))
+		} else {
+			out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		}
 	}
 	cold := fmt.Sprintf("Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of %s.", rep.Lock.PriceTable)
 	if unrepriced > 0 {
 		cold += fmt.Sprintf(" %d counted run(s) use a model without a list price, so their arm has no cold-cache cost.", unrepriced)
 	}
-	return append(out, cold)
+	isolatedNote := fmt.Sprintf("Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request "+
+		"and of each subagent launch that could not have read this run's own cache (a type's first, a parallel one, or one after its prefix expired) are repriced "+
+		"as cache writes, at the time to live the run wrote with, at Agentium's list prices of %s. "+
+		"Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. "+
+		"It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. "+
+		"Verdicts use the actual cost.", rep.Lock.PriceTable)
+	if noIsolated > 0 {
+		isolatedNote += fmt.Sprintf(" %d counted run(s) have no isolated-run cost (recorded before Agentium kept it, no reported cost, a model without a list price, "+
+			"a subagent request without a model, or a subagent of unknown type), so their arm shows none.", noIsolated)
+	}
+	return append(out, cold, isolatedNote)
 }
 
 func plural(n int, noun string) string {
@@ -590,11 +628,18 @@ func title(metric string) string {
 }
 
 // verdictInterval is the interval a verdict rests on: the wider of the bootstrap and the t-interval, at 90% for "no
-// loss" and "equivalent" (one-sided tests at 5%) and at 95% otherwise.
+// loss" and "equivalent" (one-sided tests at 5%) and at 95% otherwise; a seq-v1 look's primary metric at the look's
+// equivalence and efficacy levels.
 func verdictInterval(r experiment.MetricResult) (stats.Interval, string) {
 	a, b, level := r.Boot95, r.T95, "95%"
+	if r.Level > 0 {
+		level = fmt.Sprintf("%.2f%%", 100*r.Level)
+	}
 	if r.Verdict == stats.NoLoss || r.Verdict == stats.Equivalent {
 		a, b, level = r.Boot90, r.T90, "90%"
+		if r.EqLevel > 0 {
+			level = fmt.Sprintf("%.2f%%", 100*r.EqLevel)
+		}
 	}
 	return stats.Interval{Estimate: a.Estimate, Low: math.Min(a.Low, b.Low), High: math.Max(a.High, b.High)}, level
 }

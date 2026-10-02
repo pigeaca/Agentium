@@ -42,12 +42,26 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean"), ExitError, "value: not validated in context lean")
 	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean", "--repeat", "3"), ExitOK)
 
-	// The default: the Quick tier's sample of what is eligible, and a budget a quarter above the estimate (6 runs at
-	// the default profile's $1.612 on claude-sonnet-5) plus 3 caps of $3 held for runs in flight, rounded up.
-	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--seed", "7"), ExitOK,
+	// A success experiment: the Quick tier's sample of what is eligible, and a budget a quarter above the estimate (6
+	// runs at the default profile's $1.612 on claude-sonnet-5) plus 3 caps of $3 held for runs in flight, rounded up.
+	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--goal", "better", "--seed", "7"), ExitOK,
 		"Created experiment lean-ab: context A/B, A = base, B = lean, 1 task(s) × 3 run(s) per arm = 6 runs, budget $22.00",
 		"note: the Quick tier asks for 12 tasks; only 1 can be in it", "agentium experiment plan lean-ab")
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean"), ExitError, "already exists")
+	// A cost experiment, the default: method seq-v1, one run per task and arm on up to 16 tasks, its budget sized for
+	// all of them (2 runs at $1.612, a quarter above, plus 3 caps of $3).
+	expect(t, f.run(ctx, "experiment", "new", "cost-ab", "--b", "lean", "--seed", "7"), ExitOK,
+		"Created experiment cost-ab: context A/B, A = base, B = lean, 1 task(s) × 1 run(s) per arm = 2 runs, budget $14.00",
+		"Method seq-v1: one look, after all 1 task(s), below the cost floor of 8: cost stays exploratory.", "note: a cost experiment takes up to 16 tasks; only 1 can be in it")
+	cost := f.run(ctx, "experiment", "plan", "cost-ab")
+	expect(t, cost, ExitOK, "method seq-v1: one look, after all 1 task(s), below the cost floor of 8", "Looks (method seq-v1; runs count both arms):", "1 of 1", "$3.22", "$6.00",
+		"96.50%", "90.00%", "Spend: at most $3.22 if every look runs (all 1 tasks; $6.00 if every run reaches its cap)",
+		"Cost decides at each look", "Floors (method seq-v1)")
+	for _, tiers := range []string{"Quick", "Confident", "Detectable effects"} {
+		if strings.Contains(cost.stdout, tiers) {
+			t.Errorf("a seq-v1 preview shows %q:\n%s", tiers, cost.stdout)
+		}
+	}
 
 	notReady := f.run(ctx, "experiment", "plan", "lean-ab")
 	expect(t, notReady, ExitOK, "Experiment lean-ab: context A/B, A = base, B = lean", "tasks (1, seed 7): value",
@@ -57,8 +71,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 		"Quick", "Confident", "This experiment", "$9.67", "$18.00", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
 		"* only 1 task(s) can be in this experiment", "Estimated cost per run on claude-sonnet-5:",
 		"value, without runs of their own: $1.61, a default task run's tokens at claude-sonnet-5's list prices of 2026-09-29",
-		"τ = 0.10–0.25", "the study assumed 0.05 for success",
-		"note: at this size the no-loss guard certifies only about 94–100+ pp, wider than the 15 pp success margin")
+		"τ = 0.10–0.25", "the study assumed 0.05 for success")
 	if strings.Contains(notReady.stdout, "MISSING") || strings.Contains(notReady.stdout, "Not ready") {
 		t.Errorf("an uncalibrated experiment is ready to run (it calibrates itself):\n%s", notReady.stdout)
 	}
@@ -99,9 +112,9 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// A/A: one context in both arms, checked once.
 	aa := f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitError, `experiment "noise": not found`)
-	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--repeats", "2", "--budget", "5"), ExitUsage,
+	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "5"), ExitUsage,
 		"the budget $5.00 is below one pair of runs at their caps ($6.00)")
-	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--repeats", "2", "--budget", "8"), ExitOK,
+	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "8"), ExitOK,
 		"A/A calibration of context lean, 1 task(s) × 2 run(s) per arm = 4 runs, budget $8.00")
 	aa = f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitOK, "arm A: context lean", "arm B: context lean",
@@ -240,7 +253,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 
 	// value $0.40 and costly $1.80 a run, 2 runs each: $4.40, so 1.25 × $4.40 + 3 caps of $3 held for runs in flight,
 	// rounded up. The project's median alone gave $1.60 and a budget of $11.
-	expect(t, f.run(ctx, "experiment", "new", "mixed", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1"), ExitOK,
+	expect(t, f.run(ctx, "experiment", "new", "mixed", "--b", "lean", "--task", "value", "--task", "costly", "--goal", "better", "--repeats", "1"), ExitOK,
 		"2 task(s) × 1 run(s) per arm = 4 runs, budget $15.00")
 	plan := f.run(ctx, "experiment", "plan", "mixed")
 	expect(t, plan, ExitOK, "Estimated cost per run on claude-sonnet-5:",
@@ -258,13 +271,14 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
 	}
 	// The tiers draw from every eligible task, also those outside the experiment: the note shows the average they use.
-	expect(t, f.run(ctx, "experiment", "new", "solo", "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "solo", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1"), ExitOK)
 	solo := f.run(ctx, "experiment", "plan", "solo")
 	expect(t, solo, ExitOK, "value, without runs of their own: $0.40", "average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
 	if strings.Contains(solo.stdout, "costly $1.80") {
 		t.Errorf("only the experiment's own tasks are listed:\n%s", solo.stdout)
 	}
-	// A budget set by hand below the tasks' estimates plus the reserve is flagged.
+	// A budget set by hand below the tasks' estimates plus the reserve is flagged: for a cost experiment (seq-v1), below
+	// its maximum, every task.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1", "--budget", "12"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
 		"WARNING  the budget $12.00 is below the estimated $4.40 plus $9.00 held for runs in flight")
@@ -282,8 +296,12 @@ func TestExperimentNewUsage(t *testing.T) {
 	}{
 		{[]string{"lean-ab"}, "a context A/B needs --b SNAPSHOT"},
 		{[]string{"noise", "--template", "aa", "--b", "lean"}, "drop --b"},
-		{[]string{"x", "--b", "lean", "--tier", "huge"}, `unknown tier "huge"`},
-		{[]string{"x", "--b", "lean", "--tier", "quick", "--task", "value"}, "use one"},
+		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "huge"}, `unknown tier "huge"`},
+		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "quick", "--task", "value"}, "use one"},
+		{[]string{"x", "--b", "lean", "--tier", "quick"}, "--tier sizes success experiments (--goal better); a cost experiment (--goal cheaper) runs method seq-v1"},
+		{[]string{"x", "--b", "lean", "--repeats", "3"}, "--repeats is for success experiments"},
+		{[]string{"x", "--b", "lean", "--goal", "better", "--no-futility"}, "--no-futility belongs to cost experiments"},
+		{append([]string{"x", "--b", "lean"}, strings.Split(strings.Repeat("--task t ", 17), " ")[:34]...), "17 tasks are too many"},
 		{[]string{"bad name", "--b", "lean"}, "cannot name an experiment"},
 		{[]string{"x", "--b", "lean", "--repeats", "-1"}, "--repeats must be positive"},
 	} {

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,84 @@ func ReadWarmSkipped(dir string) (names []string, transient bool) {
 	return names, transient
 }
 
+// WarmInput is what a profile's WarmFunc works with.
+type WarmInput struct {
+	Dir  string // the throwaway checkout of the base commit
+	Deps string // the project's deps folder
+	// Environ is the base environment of the commands (the user's; runner.Environ filters it), whose PATH finds the
+	// host's tools, and Env Agentium's command environment, added to it (CommandEnv, CommandEnvFor).
+	Environ, Env []string
+	Log          io.Writer     // the commands' output (setup.log)
+	Started      func(pid int) // learns each command's process group, as the run's other commands
+	Timeout      time.Duration // per command; 0: none beyond ctx
+	Now          time.Time     // the date a resolve without a lock file is noted with
+}
+
+// Warmed is what the warm-ups of a base commit found for its runs, kept in the run's stamp (JSON) so that later runs of
+// the same base get the same: the venv, and notes every run of it repeats (a resolve without a lock file).
+type Warmed struct {
+	Venv  string   `json:"venv,omitempty"`
+	Notes []string `json:"notes,omitempty"`
+	// Failed explains a warm-up that did not finish. With Transient (a download that may work later) the base is not
+	// stamped and the next run tries again; otherwise (no interpreter meets requires-python, uv.lock without uv) it is
+	// stamped with the failure as a note, so every run of the base says so without warming again.
+	Failed    string `json:"-"`
+	Transient bool   `json:"-"`
+}
+
+// WarmFuncs runs the selected profiles' WarmFunc hooks and joins what they found: the first failure stops the rest.
+func WarmFuncs(ctx context.Context, selected []Profile, in WarmInput) (Warmed, error) {
+	var all Warmed
+	for _, p := range selected {
+		if p.WarmFunc == nil {
+			continue
+		}
+		w, err := p.WarmFunc(ctx, in)
+		if err != nil {
+			return Warmed{}, fmt.Errorf("%s: warm-up: %w", p.Name, err)
+		}
+		if w.Venv != "" {
+			all.Venv = w.Venv
+		}
+		all.Notes = append(all.Notes, w.Notes...)
+		if w.Failed != "" {
+			all.Failed, all.Transient = p.Name+": "+w.Failed, w.Transient
+			return all, nil
+		}
+	}
+	return all, nil
+}
+
+// WriteFileSynced writes data to path whole or not at all, and durably: a temporary file, synced, renamed over path,
+// then the folder synced, so a crash never leaves a stamp cut short or one that names what is not on disk yet.
+func WriteFileSynced(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
 // PrepareDeps runs the selected profiles' PrepareDeps hooks.
 func PrepareDeps(selected []Profile, deps string) error {
 	for _, p := range selected {
@@ -89,7 +168,7 @@ func PrepareDeps(selected []Profile, deps string) error {
 func NeedsWarming(selected []Profile) []string {
 	var names []string
 	for _, p := range selected {
-		if p.Warm != nil {
+		if p.Warm != nil || p.WarmFunc != nil {
 			names = append(names, p.Name)
 		}
 	}
