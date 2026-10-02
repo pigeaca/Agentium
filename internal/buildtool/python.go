@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -332,7 +333,7 @@ func pipVenv(ctx context.Context, in WarmInput, inputs pyInputs, interp, venv, k
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("pip's report: %w", err)
 	}
-	pinned, skipped, err := pinnedFromReport(data)
+	pinned, skipped, err := pinnedFromReport(data, in.Dir)
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -380,10 +381,10 @@ var (
 )
 
 // pinnedFromReport turns pip's report into requirement lines: name==version from an index, name @ url for a direct
-// archive or a VCS commit. Local folders (dir_info: the project, a path dependency) are skipped and named: installing
-// them would put the warm-up checkout's code into the venv. Every value is checked, so a line can be nothing but a
-// requirement (no option, no second line).
-func pinnedFromReport(data []byte) (pinned, skipped []string, err error) {
+// archive or a VCS commit. Local folders (dir_info: the project, a path dependency) are skipped: installing them would
+// put the warm-up checkout's code into the venv. Those other than the project itself (the folder dir) are named. Every
+// value is checked, so a line can be nothing but a requirement (no option, no second line).
+func pinnedFromReport(data []byte, dir string) (pinned, skipped []string, err error) {
 	var r pipReport
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, nil, fmt.Errorf("pip's report: %w", err)
@@ -396,7 +397,9 @@ func pinnedFromReport(data []byte) (pinned, skipped []string, err error) {
 		url := d.URL
 		switch {
 		case len(d.DirInfo) > 0 && string(d.DirInfo) != "null":
-			skipped = append(skipped, name)
+			if !sameFolder(d.URL, dir) {
+				skipped = append(skipped, name)
+			}
 			continue
 		case d.VCSInfo != nil:
 			url = d.VCSInfo.VCS + "+" + url + "@" + d.VCSInfo.CommitID
@@ -414,6 +417,21 @@ func pinnedFromReport(data []byte) (pinned, skipped []string, err error) {
 	}
 	slices.Sort(pinned)
 	return pinned, skipped, nil
+}
+
+// sameFolder reports whether a file: URL names the folder dir (either may be reached through links).
+func sameFolder(fileURL, dir string) bool {
+	u, err := url.Parse(fileURL)
+	if err != nil || u.Scheme != "file" || dir == "" {
+		return false
+	}
+	real := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	return real(u.Path) == real(dir)
 }
 
 // pinLine is a requirement pinned to one version: name==version (or ===), no wildcard.

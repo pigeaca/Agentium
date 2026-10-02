@@ -398,11 +398,14 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 func TestWarmPythonWithPip(t *testing.T) {
 	report := `{"version":"1","install":[
  {"metadata":{"name":"more-itertools","version":"10.9.0"},"is_direct":true,"download_info":{"url":"file:///w/repo","dir_info":{}}},
+ {"metadata":{"name":"subpkg","version":"0.1"},"is_direct":true,"download_info":{"url":"file:///elsewhere/subpkg","dir_info":{"editable":true}}},
  {"metadata":{"name":"coverage","version":"7.16.2"},"is_direct":false,"download_info":{"url":"https://files/coverage.whl","archive_info":{}}},
  {"metadata":{"name":"ruff","version":"0.16.10"},"is_direct":false,"download_info":{"url":"https://files/ruff.whl","archive_info":{}}},
  {"metadata":{"name":"helper","version":"1.0"},"is_direct":true,"download_info":{"url":"https://github.com/o/helper","vcs_info":{"vcs":"git","commit_id":"abc123"}}}]}`
-	f := newFakePython(t, "3.12.13", false, report)
 	deps, repo := t.TempDir(), t.TempDir()
+	// The project is the folder being warmed (the warm-up checkout); a path dependency is another folder.
+	report = strings.Replace(report, "file:///w/repo", "file://"+repo, 1)
+	f := newFakePython(t, "3.12.13", false, report)
 	writeFiles(t, repo, map[string]string{
 		"pyproject.toml":           "[project]\nname = \"more-itertools\"\nrequires-python = \">=3.10\"\n\n[project.optional-dependencies]\ntests = [\"coverage\"]\n",
 		"requirements/testing.txt": "-r base.txt\ncoverage\nruff\n",
@@ -434,7 +437,7 @@ func TestWarmPythonWithPip(t *testing.T) {
 		!slices.Equal(s.Inputs, []string{"pyproject.toml", "requirements.txt", "requirements/testing.txt", "requirements/base.txt"}) {
 		t.Errorf("stamp %+v", s)
 	}
-	wantNotes := []string{"local packages not installed (the checkout is on PYTHONPATH): more-itertools",
+	wantNotes := []string{"local packages not installed (the checkout is on PYTHONPATH): subpkg",
 		"no lock file: dependencies resolved at warm-up on 2026-10-02 (3 packages, pinned in the venv's stamp)"}
 	if !slices.Equal(w.Notes, wantNotes) || !slices.Equal(s.Notes, wantNotes) {
 		t.Errorf("notes %q, stamp %q", w.Notes, s.Notes)
@@ -528,7 +531,7 @@ func TestPinnedFromReportRefusesOddValues(t *testing.T) {
 		`{"install":[{"metadata":{"name":"ok","version":"1"},"is_direct":true,"download_info":{"url":"https://x y"}}]}`,
 		`{"install":[{"metadata":{"name":"ok","version":"1"},"is_direct":true,"download_info":{"url":""}}]}`,
 	} {
-		if pinned, _, err := pinnedFromReport([]byte(report)); err == nil {
+		if pinned, _, err := pinnedFromReport([]byte(report), "/repo"); err == nil {
 			t.Errorf("%s gave %q", report, pinned)
 		}
 	}
