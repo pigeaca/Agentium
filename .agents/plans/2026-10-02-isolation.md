@@ -1,7 +1,7 @@
 # Isolation: sandboxed grading on macOS, then a container mode
 
 - Date: 2026-10-02
-- Status: In progress (2026-10-02): the user answered the open questions (see Decisions). Step 0, the free spike, is done; step 1 is next.
+- Status: In progress (2026-10-02): the user answered the open questions (see Decisions). Step 0, the free spike, and step 1, `internal/sandbox`, are done; step 2 is next.
 - Scope: the user's "plan all" (2026-10-02). Part 1 comes first; part 2 is its own later track, planned here in shape only. It closes the [Java and Rust plan](archive/2026-09-30-java-rust.md)'s open threat and the [Python plan](2026-10-02-python-ts.md)'s decision 5.
 
 ## The threat today (from the code)
@@ -152,10 +152,45 @@
     - the loopback rule above.
 
     Our profile closed every gap found in Claude Code's: the security server and the keychain files denied, loopback for every project, pip's and uv's credential stores denied. The grader's environment adds the two variables under Design.
-- [ ] **1. `internal/sandbox`:** the profile generator, the moved `forms`, the canary, and a wrapper that turns a `runner.Spec` into a sandboxed one. **Risk: high** (sandbox, credentials and network).
+- [x] **1. `internal/sandbox`:** the profile generator, the moved `forms`, the canary, and a wrapper that turns a `runner.Spec` into a sandboxed one. **Risk: high** (sandbox, credentials and network).
   - *Threats:* a hostile agent (a grading copy holding links to deps, the data folder or `/tmp` entries is written through to the real path and denied); credentials (keychain, token file, `~/.ssh`); concurrent runs (each grade has its own profile file, cache and temp root).
   - *Acceptance:* golden profile tests, plus darwin-only tests that really run `sandbox-exec` for each deny; the moved `forms` keeps its tests.
   - *Packages:* `internal/sandbox`, `internal/claude` (uses the moved code).
+  - **Done 2026-10-02** (branch `claude/feat/sandbox-profile`; nothing wired into grading or validation).
+    - *Moved, unchanged:* `Forms`, `WithForms`, `RealForm` with the `/tmp` owner rule, and the credential stores (`CredentialFiles`, `MachineCredentials`, `CredentialPaths`, `MovedCredentials`). `internal/claude` calls them; its settings and the run goldens are unchanged. Its test helper `sandbox()` became `sandboxOf()`, which the package name now shadows.
+    - *The profile* (`Profile.Render`, `Version` `sandbox-v1`):
+      - deny by default; the default and every explicit deny carry the grade's tag (`NewTag`, `LogPredicate`). Found: an explicit deny without `(with message ...)` is logged untagged, so a credential or data-folder denial would be missed;
+      - Claude Code's process, sysctl and `/dev/null` rules; process information, signals and task ports only within the sandbox;
+      - Mach lookups as step 0 recommended (no security server); no `iokit-open`, no distributed notifications; `/dev/tty` neither controlled (no `TIOCSTI` into the user's shell) nor written;
+      - loopback by step 0's three rules, or no network (`Loopback`);
+      - reads and writes as designed: the data folder, `Denied`, the credential stores (plus pip's and uv's) and the deps' private folders denied in every form; the grading copy, cache, temp root and deps readable again; denied paths inside them denied again; metadata only of the denied folders above them; writes to the copy, cache, temp root and output devices only.
+    - *Refused:* a writable folder that holds the home folder, the data folder, the deps or a credential store, or lies inside the deps or a credential store; a relative path or a control character; a profile file inside a writable folder (a build could rewrite it, and the grade's next command would run unsandboxed); an existing profile file (`WriteFile`: new, owner-only, returns the text's SHA-256).
+    - *`Wrap`* turns a `runner.Spec` into `/usr/bin/sandbox-exec -f <file> /bin/sh -c <command>` (or the arguments); the process and its group stay the command's.
+    - *`Canary`* runs `/usr/bin/true`, writes the temp root, and must fail to list and to write the data folder; any other result, a missing `sandbox-exec`, a refused or nested profile, is `ErrUnavailable`.
+    - *Tests:* goldens (`testdata/*.sb`) and refusals, plus darwin-only tests that run `sandbox-exec`:
+      - a hostile build cannot read its own records, other runs' records and workspaces, the shared cache, the database, the deps' Gradle home, the user's repository or the credential stores;
+      - it cannot write the deps, the data folder, the profile file, the home folder, the user's temp folder or another `/tmp` entry, directly, through planted links, or by a hard link;
+      - it cannot signal a process outside the sandbox;
+      - TEST-NET addresses are refused by the sandbox at once; loopback servers work only with `Loopback`;
+      - the real account's keychain cannot be listed, opened by path or found in the search list (probes only);
+      - the log shows the security server's lookup and a credential read denied under the tag;
+      - the canary refuses a missing, broken, permissive or partial profile;
+      - `go test` with an `httptest` server, and `javac` and `java` with a `::1` server, run under the profile.
+      Each deny test was checked against a weakened profile (writes, network or signals allowed, the inner denies or credential stores dropped, the security server allowed): each one fails.
+    - *Limits:*
+      - the wildcard-bind gap stays, as step 0 found (`Profile.Loopback` records it);
+      - loopback is shared with every local process, concurrent grades included;
+      - Unix sockets are denied, so tests that bind one fail;
+      - every process's `/dev/dtracehelper` write and `security`'s analytics lookups are logged denials unrelated to the grade, so step 3 must ignore them;
+      - the rest of the machine stays readable;
+      - pip's and uv's credential stores are not denied to agents yet, since that changes the run goldens: a follow-up;
+      - Maven, Gradle, Cargo and pytest were not rerun under the generated profile (step 0 ran its hand-written equivalent); step 4 reruns them.
+    - *For steps 2 and 3:*
+      - write the profile file outside every writable folder (for example in the run's records), after the copy, cache and temp root exist;
+      - pass the agent's `DeniedPaths` and `run.Env.denied` as `Denied`: the grade's own folders are re-allowed as roots;
+      - run the canary before each grade;
+      - exit 65 is ambiguous after the canary (a test can return it);
+      - the lock names `Version`, not the per-run digest (paths differ per run).
 - [ ] **2. The grading environment:** the per-run grading cache from a clone of the seed, and the agent's recipe for the grader. **Risk: high** (hidden tests, concurrent runs).
   - *Threats:* the seed is written only by validation and warm-ups, never by a grade; two grades never share a writable cache; the clone is removed even on cancel.
   - *Packages:* `internal/buildtool`, `internal/run`.
