@@ -283,7 +283,7 @@ func TestModelABEstimatesByEffort(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "e", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
 		"--budget", "40"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "e"), ExitOK, "value $1.00 (3 run(s))", "value $3.00 (3 run(s))", "$4.00",
-		"not split by model or effort")
+		"The usage figures above are per model, not per effort")
 }
 
 // Runs from before efforts were recorded have an unknown effort: they fill in for an arm only while fewer than 3 runs

@@ -112,3 +112,27 @@ func TestExecuteOvershootStaysWithinTheBudget(t *testing.T) {
 		t.Errorf("reserving the bare $0.50 cap spent $%.2f: the test no longer shows the overshoot it guards against", old.SpentUSD)
 	}
 }
+
+// An estimate says what it rests on: with no runs on the model, a default run's tokens, or the cap when they come to
+// more (the smoke rerun's $0.30 a run against $0.09 real), so the preview can say the estimate assumes every run
+// reaches its cap; with runs, their median.
+func TestEstimateBasisWithoutHistory(t *testing.T) {
+	t.Parallel()
+	est := EstimateRun("claude-sonnet-5-5", nil)
+	if est.Runs != 0 || !est.NoHistory() || est.Model != "claude-sonnet-5-5" || est.EstimateBasis() != BasisDefault {
+		t.Errorf("no runs, no cap: %+v, basis %s", est, est.EstimateBasis())
+	}
+	est.CapUSD = 0.30
+	if est.EstimateBasis() != BasisCap {
+		t.Errorf("no runs, a cap below the default run: basis %s", est.EstimateBasis())
+	}
+	past := []PastRun{{Task: "a", CostUSD: 0.09}, {Task: "b", CostUSD: 0.08}, {Task: "c", CostUSD: 0.10}}
+	est = EstimateRun("claude-sonnet-5-5", past)
+	est.CapUSD = 0.30
+	if est.Runs != 3 || est.NoHistory() || est.EstimateBasis() != BasisHistory {
+		t.Errorf("three runs: %+v, basis %s", est, est.EstimateBasis())
+	}
+	if est := EstimateRun("unpriced-model", nil); est.EstimateBasis() != BasisUnknown {
+		t.Errorf("no list price, no runs: basis %s", est.EstimateBasis())
+	}
+}

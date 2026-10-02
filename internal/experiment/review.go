@@ -83,6 +83,7 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 		}
 	}
 	r.writeCostBasis(out, st)
+	r.writeNoHistory(out, st)
 	r.writeCalibration(out, st)
 	r.writeWorstCase(out, st)
 	if !d.Sequential() {
@@ -100,14 +101,25 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	floors := FloorsFor(method)
 	fmt.Fprintf(out, "Floors (method %s): verdicts on cost need %d tasks with %d or more runs per arm, and on success %d tasks with %d or more;\n"+
 		"below them a metric is exploratory.\n", method, floors.CostTasks, floors.CostRepeats, floors.SuccessTasks, floors.SuccessRepeats)
-	WriteUsagePreview(out, st, r.Runs, 2*len(d.Tasks)*d.Repeats, signIn, DefaultUsageLimit/100, now)
-	if d.PerArmProfiles() {
-		fmt.Fprintln(out, st.Note("The usage figures above are not split by model or effort: they are measured over all earlier runs, and a larger model\nuses more of the window per run."))
+	r.Usage(signIn, now).Write(out, st, now)
+	if d.PerArmProfiles() && d.ArmModel(d.Arms[0]) == d.ArmModel(d.Arms[1]) {
+		fmt.Fprintln(out, st.Note("The usage figures above are per model, not per effort: a higher effort uses more of the window per run."))
 	}
 	if !r.Readiness.Ready {
 		fmt.Fprintln(out, st.Bad("Not ready to run: see above."))
 	}
 	return nil
+}
+
+// Usage previews the experiment's use of the subscription's five-hour window, each arm's runs on its own model, at the
+// default --usage-limit; signIn is the sign-in runs would use.
+func (r Review) Usage(signIn string, now time.Time) UsagePreview {
+	d := r.Design
+	var arms []UsageModel
+	for _, a := range d.Arms {
+		arms = append(arms, UsageModel{UsageRate: UsageRate{Model: d.ArmModel(a)}, PlannedRuns: len(d.Tasks) * d.Repeats})
+	}
+	return PlanUsage(r.Runs, arms, signIn, DefaultUsageLimit/100, now)
 }
 
 // writeSequential prints a seq-v1 design's looks (each one's tasks, runs, estimated and worst-case spend by then, and
@@ -147,6 +159,22 @@ func (r Review) writeSequential(out io.Writer, st term.Style) error {
 		"exploratory: one run per arm is below success's floor. Expected spend assumes σ = %.2f and τ = %.2f, the planning defaults.",
 		100*stats.SeqAlpha, futility, SigmaLogCost, TauLow)))
 	return nil
+}
+
+// writeNoHistory warns, for each arm model without earlier task runs whose estimate is the run cap, that the estimated
+// and expected spend assume every run reaches it: safe for the budget, but often several times the real spend (the
+// seq-v1 smoke rerun's $0.30 cap against $0.09 a run).
+func (r Review) writeNoHistory(out io.Writer, st term.Style) {
+	var models []string
+	for _, e := range r.Estimates {
+		if e.NoHistory() && e.EstimateBasis() == BasisCap && !slices.Contains(models, e.Model) {
+			models = append(models, e.Model)
+		}
+	}
+	for _, m := range models {
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("No runs on %s yet: the estimated spend above assumes each run reaches its cap, so\n"+
+			"it is likely high (safe for the budget); the experiment's first runs measure the real cost.", m)))
+	}
 }
 
 // writeDesign prints the experiment's arms, model, goal, tasks and judge.
@@ -331,6 +359,9 @@ func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, e
 	if len(other) > 0 {
 		fallback := "no estimate (" + est.Basis + ")"
 		switch {
+		case est.Known && est.Capped(est.PerRunUSD) && est.NoHistory():
+			fallback = fmt.Sprintf("$%.2f, the run cap: no runs on this model yet: the estimate assumes each run reaches its cap ($%.2f\n"+
+				"    from %s)", est.CapUSD, est.PerRunUSD, est.Basis)
 		case est.Known && est.Capped(est.PerRunUSD):
 			fallback = fmt.Sprintf("$%.2f, the run cap: runs are expected to reach it ($%.2f from %s)", est.CapUSD, est.PerRunUSD, est.Basis)
 		case est.Known:

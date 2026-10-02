@@ -155,6 +155,10 @@ type Estimate struct {
 	Known     bool                // PerRunUSD is known
 	Basis     string              // how PerRunUSD was estimated, in words
 	Tasks     map[string]TaskCost // the tasks with earlier runs of their own on the model
+	// Model is the model estimated, and Runs how many earlier task runs on it (at the effort) the estimate learnt from:
+	// with none, every task falls back to the default profile, or the cap above it.
+	Model string
+	Runs  int
 	// CapUSD is the run cap of the arm estimated (Design.ArmRunBudgetUSD), zero for none: Claude Code stops a run
 	// there, so no run is expected to cost more, and TaskUSD and MeanUSD never exceed it. A default profile or a median
 	// above the cap means runs are expected to reach it; the estimate is then the cap (its overshoot is the worst
@@ -173,6 +177,32 @@ func (e Estimate) capped(v float64) float64 {
 // Capped reports whether v is above the run cap, so that the estimate uses the cap instead.
 func (e Estimate) Capped(v float64) bool { return e.CapUSD > 0 && v > e.CapUSD }
 
+// Basis kinds: what an arm's estimate for a task without runs of its own rests on (EstimateBasis).
+const (
+	BasisHistory = "history"         // the median of earlier runs on the model
+	BasisDefault = "default_profile" // a default task run's tokens at the model's list prices
+	BasisCap     = "cap"             // the run cap: the default profile, or the median, is above it
+	BasisUnknown = "unknown"         // no list price and too few earlier runs
+)
+
+// EstimateBasis is what the estimate of a task without runs of its own rests on: one of the Basis kinds.
+func (e Estimate) EstimateBasis() string {
+	switch {
+	case !e.Known:
+		return BasisUnknown
+	case e.Capped(e.PerRunUSD):
+		return BasisCap
+	case e.Runs >= MinPastRuns:
+		return BasisHistory
+	default:
+		return BasisDefault
+	}
+}
+
+// NoHistory reports whether no earlier task run on the model taught the estimate anything: every run is then priced
+// by the default profile, or at the cap.
+func (e Estimate) NoHistory() bool { return e.Runs == 0 }
+
 // EstimateRun estimates runs on model from the project's earlier fair task runs on it. A task with runs of its own is
 // estimated by their median. Any other task gets the median of all of them when there are at least MinPastRuns, else
 // the default profile at list price, else no estimate.
@@ -185,7 +215,7 @@ func EstimateRunAt(model, effort string, past []PastRun, unrecorded int) Estimat
 	if effort != "" {
 		label += " at effort " + effort
 	}
-	est := Estimate{Tasks: map[string]TaskCost{}}
+	est := Estimate{Tasks: map[string]TaskCost{}, Model: model, Runs: len(past)}
 	byTask := map[string][]float64{}
 	var all []float64
 	for _, r := range past {
