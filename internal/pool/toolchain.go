@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,26 +13,30 @@ import (
 	"github.com/pigeaca/agentium/internal/task"
 )
 
-// versionCommand is how a tool reports its version: the first non-empty line of its output.
+// versionCommand is how a tool reports its version: the first line of its output that matches line. Tools print
+// other lines first at times (java's "Picked up JAVA_TOOL_OPTIONS: ...", Maven's "WARNING: ..." lines), which must not
+// be taken for a version.
 type versionCommand struct {
 	tool string
 	args []string
+	line *regexp.Regexp
 }
 
 // versionCommands are the tools whose versions a validation records, per build-tool profile (buildtool.Profile.Name).
 // Gradle itself is not asked: its wrapper pins it per commit, which the task's base fixes; the JDK under it is the
 // host's. Maven is asked as well as the JDK, as projects without a wrapper build with the host's.
 func versionCommands(profile string) []versionCommand {
-	java := versionCommand{"java", []string{"java", "-version"}} // prints to stderr
+	java := versionCommand{"java", []string{"java", "-version"}, regexp.MustCompile(`\bversion "[^"]+"`)} // prints to stderr
 	switch profile {
 	case "go":
-		return []versionCommand{{"go", []string{"go", "env", "GOVERSION"}}}
+		return []versionCommand{{"go", []string{"go", "env", "GOVERSION"}, regexp.MustCompile(`^go\d`)}}
 	case "maven":
-		return []versionCommand{{"maven", []string{"mvn", "--version"}}, java}
+		return []versionCommand{{"maven", []string{"mvn", "--version"}, regexp.MustCompile(`^Apache Maven \d`)}, java}
 	case "gradle":
 		return []versionCommand{java}
 	case "cargo":
-		return []versionCommand{{"cargo", []string{"cargo", "--version"}}, {"rustc", []string{"rustc", "--version"}}}
+		return []versionCommand{{"cargo", []string{"cargo", "--version"}, regexp.MustCompile(`^cargo \d`)},
+			{"rustc", []string{"rustc", "--version"}, regexp.MustCompile(`^rustc \d`)}}
 	}
 	return nil
 }
@@ -59,7 +64,7 @@ func DetectToolchain(ctx context.Context, profiles []string, run VersionOutput) 
 			if err != nil {
 				continue
 			}
-			if v := firstLine(out); v != "" {
+			if v := versionLine(out, c.line); v != "" {
 				found[c.tool] = v
 			}
 		}
@@ -67,10 +72,11 @@ func DetectToolchain(ctx context.Context, profiles []string, run VersionOutput) 
 	return found, nil
 }
 
-// firstLine is the first non-empty line of out, trimmed, cut to maxVersion bytes on a rune boundary.
-func firstLine(out string) string {
+// versionLine is the first line of out that matches pattern, trimmed, cut to maxVersion bytes on a rune boundary; ""
+// when none does.
+func versionLine(out string, pattern *regexp.Regexp) string {
 	for line := range strings.Lines(out) {
-		if line = strings.TrimSpace(line); line != "" {
+		if line = strings.TrimSpace(line); pattern.MatchString(line) {
 			return strings.ToValidUTF8(line[:min(len(line), maxVersion)], "") // a rune cut in two is dropped
 		}
 	}
@@ -82,12 +88,13 @@ const versionTimeout = 30 * time.Second
 
 // HostVersions is a VersionOutput running commands on the host as Agentium's own commands run (runner.Run: its own
 // process group, credentials dropped from environ, a timeout), in dir, which should be a folder of Agentium's (not a
-// checkout: wrappers and a go.mod there could pick or download other tools). GOTOOLCHAIN=local keeps Go from fetching
-// a toolchain to answer.
+// checkout: wrappers and a go.mod there could pick or download other tools). GOTOOLCHAIN=local keeps Go, and
+// RUSTUP_AUTO_INSTALL=0 rustup, from fetching a toolchain to answer. The versions are the host's: a toolchain a
+// checkout pins (go.mod's toolchain line, rust-toolchain.toml) is not seen, which is a known limit.
 func HostVersions(dir string, environ []string) VersionOutput {
 	return func(ctx context.Context, args []string) (string, error) {
 		var out limitedBuffer
-		res, err := runner.Run(ctx, runner.Spec{Dir: dir, Args: args, Environ: runner.Environ(environ), Env: []string{"GOTOOLCHAIN=local"},
+		res, err := runner.Run(ctx, runner.Spec{Dir: dir, Args: args, Environ: runner.Environ(environ), Env: []string{"GOTOOLCHAIN=local", "RUSTUP_AUTO_INSTALL=0"},
 			Timeout: versionTimeout, Output: &out})
 		if err != nil {
 			return "", err

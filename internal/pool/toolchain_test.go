@@ -11,9 +11,12 @@ func TestDetectToolchainAsksEachToolOnce(t *testing.T) {
 	var asked []string
 	outputs := map[string]string{
 		"go env GOVERSION": "\ngo1.27.1\n",
-		"java -version":    "openjdk version \"21.0.4\" 2024-07-16\nOpenJDK Runtime Environment\n",
-		"mvn --version":    "Apache Maven 3.9.9 (8e8579a9e76f7d015ee5ec7bfcdc97d260186937)\nMaven home: /opt/maven\n",
-		"rustc --version":  strings.Repeat("é", 150) + "\n", // 300 bytes: cut to 200, on a rune boundary
+		// Lines before the version (JAVA_TOOL_OPTIONS, Maven's warnings) are not taken for it.
+		"java -version": "Picked up JAVA_TOOL_OPTIONS: -Dfile.encoding=UTF-8 -Dversion=1.2\nopenjdk version \"21.0.4\" 2024-07-16\nOpenJDK Runtime Environment\n",
+		"mvn --version": "WARNING: A terminally deprecated method in sun.misc.Unsafe has been called\nWARNING: version 3.1 of x\n" +
+			"Apache Maven 3.9.9 (8e8579a9e76f7d015ee5ec7bfcdc97d260186937)\nMaven home: /opt/maven\n",
+		"cargo --version": "error: no such command\n",                    // no version line: left out
+		"rustc --version": "rustc 1.0" + strings.Repeat("é", 150) + "\n", // 309 bytes: cut to 200, mid-rune
 	}
 	run := func(_ context.Context, args []string) (string, error) {
 		key := strings.Join(args, " ")
@@ -33,7 +36,7 @@ func TestDetectToolchainAsksEachToolOnce(t *testing.T) {
 	if _, ok := got["cargo"]; ok {
 		t.Errorf("a tool that failed is recorded: %q", got)
 	}
-	if r := got["rustc"]; len(r) != 200 || r != strings.Repeat("é", 100) {
+	if r := got["rustc"]; len(r) != 199 || r != "rustc 1.0"+strings.Repeat("é", 95) { // the cut rune is dropped
 		t.Errorf("a long version: %d bytes", len(r))
 	}
 	if want := "go env GOVERSION,mvn --version,java -version,cargo --version,rustc --version"; strings.Join(asked, ",") != want {
@@ -52,8 +55,8 @@ func TestDetectToolchainAsksEachToolOnce(t *testing.T) {
 func TestHostVersions(t *testing.T) {
 	run := HostVersions(t.TempDir(), []string{"PATH=/usr/bin:/bin", "GITHUB_TOKEN=secret", "GOTOOLCHAIN=auto"})
 	ctx := context.Background()
-	out, err := run(ctx, []string{"sh", "-c", `echo "out $GOTOOLCHAIN ${GITHUB_TOKEN:-none}"; echo err >&2`})
-	if err != nil || out != "out local none\nerr\n" {
+	out, err := run(ctx, []string{"sh", "-c", `echo "out $GOTOOLCHAIN $RUSTUP_AUTO_INSTALL ${GITHUB_TOKEN:-none}"; echo err >&2`})
+	if err != nil || out != "out local 0 none\nerr\n" {
 		t.Errorf("output %q, %v", out, err)
 	}
 	if _, err := run(ctx, []string{"sh", "-c", "exit 3"}); err == nil {
