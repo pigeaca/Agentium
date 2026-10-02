@@ -33,9 +33,9 @@ Context and cost per arm
 
 Means over counted runs. The first request is what Claude Code sent first: the context overhead.
 
-Arm  Context  Runs counted  First request (tokens)  Cost per run  Cold-cache cost  Cache-read share
-A    base               30                   30000        $0.397           $1.917               93%
-B    base               29           27000 (-3000)        $0.320           $1.840               93%
+Arm  Context  Runs counted  First request (tokens)  Cost per run  Isolated-run cost  Cold-cache cost  Cache-read share
+A    base               30                   30000        $0.397             $0.417           $1.917               93%
+B    base               29           27000 (-3000)        $0.320             $0.340           $1.840               93%
 
 Context use
 
@@ -96,3 +96,4 @@ Notes
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.
+- Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request and of each subagent type's first launch are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of 2026-09-29. Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. Verdicts use the actual cost.

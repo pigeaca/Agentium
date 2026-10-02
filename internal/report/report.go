@@ -80,11 +80,14 @@ type Arm struct {
 	Profile string `json:"profile,omitempty"`
 	Counted int    `json:"counted"`
 	// FirstRequest is the mean measured size of the first request: the context overhead Claude Code saw.
-	FirstRequest   *float64 `json:"first_request_tokens"`
-	CostUSD        *float64 `json:"cost_usd"`         // mean reported cost
-	ColdCostUSD    *float64 `json:"cold_cost_usd"`    // mean with every cached read repriced as a one-hour cache write
-	CacheReadShare *float64 `json:"cache_read_share"` // of all input tokens
-	Behavior       Behavior `json:"behavior"`
+	FirstRequest *float64 `json:"first_request_tokens"`
+	CostUSD      *float64 `json:"cost_usd"`      // mean reported cost
+	ColdCostUSD  *float64 `json:"cold_cost_usd"` // mean with every cached read repriced as a one-hour cache write
+	// IsolatedCostUSD is the mean cost had no other run warmed the prompt cache (run.Record.IsolatedCostUSD); nil unless
+	// every counted run has one. Verdicts use CostUSD.
+	IsolatedCostUSD *float64 `json:"isolated_cost_usd"`
+	CacheReadShare  *float64 `json:"cache_read_share"` // of all input tokens
+	Behavior        Behavior `json:"behavior"`
 	// ContextUse counts what the counted runs used of their context.
 	ContextUse ArmContextUse `json:"context_use"`
 }
@@ -285,7 +288,7 @@ func redactLock(l experiment.Lock) experiment.Lock {
 
 func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	arm := Arm{Name: a.Name, Context: a.Context, Snapshot: a.Snapshot}
-	var first, cost, cold, files, lines, bash []float64
+	var first, cost, cold, isolated, files, lines, bash []float64
 	var cacheRead, input float64
 	for _, r := range runs {
 		rec := r.Record
@@ -300,6 +303,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		cost = append(cost, rec.Spend().AgentUSD)
 		if c, ok := coldCost(rec); ok {
 			cold = append(cold, c)
+		}
+		if rec.IsolatedCostUSD != nil {
+			isolated = append(isolated, *rec.IsolatedCostUSD)
 		}
 		cacheRead += float64(m.CacheReadTokens)
 		input += float64(m.InputTokens + m.CacheReadTokens + m.CacheWriteTokens)
@@ -346,6 +352,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	arm.FirstRequest, arm.CostUSD = mean(first), mean(cost)
 	if len(cold) == len(cost) { // every counted run could be repriced
 		arm.ColdCostUSD = mean(cold)
+	}
+	if len(isolated) == len(cost) { // every counted run has one
+		arm.IsolatedCostUSD = mean(isolated)
 	}
 	arm.Behavior.FilesChanged, arm.Behavior.LinesChanged, arm.Behavior.BashCommands = mean(files), mean(lines), mean(bash)
 	if input > 0 {
@@ -492,7 +501,7 @@ func notes(rep Report, in Input) []string {
 		out = append(out, "Runs not counted: "+strings.Join(parts, ", ")+". Their spend is in the total.")
 	}
 	var drift, harness []string
-	estimated, stopped, finished, unpriced, unrepriced := 0, 0, 0, 0, 0
+	estimated, stopped, finished, unpriced, unrepriced, noIsolated := 0, 0, 0, 0, 0, 0
 	for _, r := range in.Runs {
 		rec := r.Record
 		if rec.Outcome == claude.OutcomeUnfair {
@@ -521,6 +530,9 @@ func notes(rep Report, in Input) []string {
 		}
 		if _, ok := coldCost(rec); !ok && experiment.Fair(rec.Outcome) {
 			unrepriced++
+		}
+		if rec.IsolatedCostUSD == nil && experiment.Fair(rec.Outcome) {
+			noIsolated++
 		}
 	}
 	if len(drift) > 0 {
@@ -590,7 +602,16 @@ func notes(rep Report, in Input) []string {
 	if unrepriced > 0 {
 		cold += fmt.Sprintf(" %d counted run(s) use a model without a list price, so their arm has no cold-cache cost.", unrepriced)
 	}
-	return append(out, cold)
+	isolatedNote := fmt.Sprintf("Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request "+
+		"and of each subagent type's first launch are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of %s. "+
+		"Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. "+
+		"It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. "+
+		"Verdicts use the actual cost.", rep.Lock.PriceTable)
+	if noIsolated > 0 {
+		isolatedNote += fmt.Sprintf(" %d counted run(s) have no isolated-run cost (recorded before Agentium kept it, a model without a list price, "+
+			"or a subagent of unknown type), so their arm shows none.", noIsolated)
+	}
+	return append(out, cold, isolatedNote)
 }
 
 func plural(n int, noun string) string {

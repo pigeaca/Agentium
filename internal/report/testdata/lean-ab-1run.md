@@ -34,10 +34,10 @@ What the runs show, for planning later experiments: 10 task(s), 1.0 run(s) per t
 
 Means over counted runs. The first request is what Claude Code sent first: the context overhead.
 
-| Arm | Context | Runs counted | First request (tokens) | Cost per run | Cold-cache cost | Cache-read share |
-|---|---|---|---|---|---|---|
-| A | `base` | 10 | 30000 | $0.368 | $1.888 | 93% |
-| B | `lean` | 10 | 30000 (+0) | $0.293 | $1.813 | 93% |
+| Arm | Context | Runs counted | First request (tokens) | Cost per run | Isolated-run cost | Cold-cache cost | Cache-read share |
+|---|---|---|---|---|---|---|---|
+| A | `base` | 10 | 30000 | $0.368 | - | $1.888 | 93% |
+| B | `lean` | 10 | 30000 (+0) | $0.293 | - | $1.813 | 93% |
 
 ## Behavior
 
@@ -81,3 +81,4 @@ Runs counted in each arm, unless a total.
 - Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows: each task's difference carries the run-to-run noise, and the t-interval across tasks, the wider of the two here, decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) checked it: false differences in at most 6% of experiments without a true difference, and 95% intervals that cover the true effect at least 93% of the time.
 - Verdicts are given for success (guard) and cost (primary); time and output tokens are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for "no loss" and "equivalent", which are one-sided tests at 5%.
 - Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.
+- Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request and of each subagent type's first launch are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of 2026-09-29. Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. Verdicts use the actual cost. 20 counted run(s) have no isolated-run cost (recorded before Agentium kept it, a model without a list price, or a subagent of unknown type), so their arm shows none.

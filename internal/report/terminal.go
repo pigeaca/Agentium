@@ -130,13 +130,13 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 
 	section("Context and cost per arm", "Means over counted runs. The first request is what Claude Code sent first: the context overhead.")
 	t = table(term.Left("Arm"), term.Left("Context"), term.Right("Runs counted"), term.Right("First request (tokens)"), term.Right("Cost per run"),
-		term.Right("Cold-cache cost"), term.Right("Cache-read share"))
+		term.Right("Isolated-run cost"), term.Right("Cold-cache cost"), term.Right("Cache-read share"))
 	for i, a := range r.Arms {
 		first := num(a.FirstRequest, "%.0f")
 		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
 			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		t.Row(a.label(), a.Context, fmt.Sprint(a.Counted), first, num(a.CostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
+		t.Row(a.label(), a.Context, fmt.Sprint(a.Counted), first, num(a.CostUSD, "$%.3f"), num(a.IsolatedCostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 	if err := t.Write(&b); err != nil {
 		return err

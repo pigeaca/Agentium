@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -59,8 +60,9 @@ func fixture() Input {
 		if (ti+s.Repeat)%4 == 0 {
 			passed = &no
 		}
+		isolated := cost + 0.02 // the first request's reads repriced as writes: a little above the actual cost
 		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, SignIn: claude.SignInLogin,
-			Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", RecordsDir: "/home/someone/.agentium/records/x",
+			IsolatedCostUSD: &isolated, Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", RecordsDir: "/home/someone/.agentium/records/x",
 			Started: at.Add(time.Duration(s.Position) * time.Minute), Finished: at.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
 			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
 				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: first, SawInit: true, SawResult: true},
@@ -469,7 +471,7 @@ func TestReportArmWithoutCountedRuns(t *testing.T) {
 	if err := rep.JSON(&js); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"| B | `lean` | 0 | - | - | - | - |", "→ - |", "**Cost**: no result"} {
+	for _, want := range []string{"| B | `lean` | 0 | - | - | - | - | - |", "→ - |", "**Cost**: no result"} {
 		if !strings.Contains(md.String(), want) {
 			t.Errorf("Markdown lacks %q", want)
 		}
@@ -590,5 +592,123 @@ func TestReportShowsLocalBinding(t *testing.T) {
 	plain.Markdown(&out)
 	if strings.Contains(out.String(), "local binding") {
 		t.Error("a note without local binding")
+	}
+}
+
+// isolatedCells returns the Isolated-run cost cell of each arm's row in the three renderings.
+func isolatedCells(t *testing.T, rep Report) (md, txt, js []string) {
+	t.Helper()
+	var m, p, j bytes.Buffer
+	if err := rep.Markdown(&m); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.Terminal(&p, term.Style{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rep.JSON(&j); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(m.String(), "\n") {
+		if cells := strings.Split(line, " | "); strings.HasPrefix(line, "| A |") || strings.HasPrefix(line, "| B |") {
+			if len(cells) == 8 { // the cost table: arm, context, counted, first, cost, isolated, cold, share
+				md = append(md, cells[5])
+			}
+		}
+	}
+	lines := strings.Split(p.String(), "\n")
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "Arm  Context  Runs counted") {
+			continue
+		}
+		for _, row := range lines[i+1:] {
+			if strings.TrimSpace(row) == "" {
+				break
+			}
+			// Columns are separated by two spaces; the cost columns are the 5th to 7th of the row ("27000 (-3000)" has one).
+			cells := regexp.MustCompile(`  +`).Split(strings.TrimSpace(row), -1)
+			txt = append(txt, cells[5])
+		}
+		break
+	}
+	var out struct {
+		Arms []struct {
+			Isolated *float64 `json:"isolated_cost_usd"`
+		} `json:"arms"`
+	}
+	if err := json.Unmarshal(j.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range out.Arms {
+		if a.Isolated == nil {
+			js = append(js, "null")
+		} else {
+			js = append(js, fmt.Sprintf("$%.3f", *a.Isolated))
+		}
+	}
+	return
+}
+
+// The isolated-run cost is the mean over counted runs when every one has it, beside the actual cost; the table and the
+// JSON agree, and the verdicts do not move.
+func TestReportIsolatedCost(t *testing.T) {
+	base, err := Build(fixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range base.Arms {
+		if a.IsolatedCostUSD == nil || a.CostUSD == nil || math.Abs(*a.IsolatedCostUSD-*a.CostUSD-0.02) > 1e-9 {
+			t.Fatalf("arm %s: isolated %v, actual %v; want actual + 0.02", a.Name, a.IsolatedCostUSD, a.CostUSD)
+		}
+	}
+	md, txt, js := isolatedCells(t, base)
+	if len(md) != 2 || !reflect.DeepEqual(md, js) || !reflect.DeepEqual(txt, js) {
+		t.Errorf("renderings disagree: markdown %v, terminal %v, JSON %v", md, txt, js)
+	}
+	var out bytes.Buffer
+	base.Markdown(&out)
+	if !strings.Contains(out.String(), "Isolated-run cost is each run's cost had no other run warmed the prompt cache") ||
+		!strings.Contains(out.String(), "Verdicts use the actual cost.") || strings.Contains(out.String(), "have no isolated-run cost") {
+		t.Error("the note is missing, or it names missing values when there are none")
+	}
+}
+
+// One counted run without a value leaves its arm without a mean (never a mean of the others) and says how many; an
+// arm whose runs all lack it shows "-" and null. Verdicts are the same either way.
+func TestReportIsolatedCostMissing(t *testing.T) {
+	base, _ := Build(fixture())
+	in := fixture()
+	missing, droppedA := 0, false
+	for i := range in.Runs {
+		rec := &in.Runs[i].Record
+		switch {
+		case rec.Arm == "B":
+			rec.IsolatedCostUSD = nil
+			if experiment.Fair(rec.Outcome) {
+				missing++
+			}
+		case rec.Arm == "A" && !droppedA && experiment.Fair(rec.Outcome): // one counted run of arm A
+			rec.IsolatedCostUSD, droppedA = nil, true
+			missing++
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Arms[0].IsolatedCostUSD != nil || rep.Arms[1].IsolatedCostUSD != nil {
+		t.Errorf("an arm with a missing run shows %v and %v", rep.Arms[0].IsolatedCostUSD, rep.Arms[1].IsolatedCostUSD)
+	}
+	md, txt, js := isolatedCells(t, rep)
+	if !reflect.DeepEqual(md, []string{"-", "-"}) || !reflect.DeepEqual(txt, md) || !reflect.DeepEqual(js, []string{"null", "null"}) {
+		t.Errorf("cells: markdown %v, terminal %v, JSON %v", md, txt, js)
+	}
+	var out bytes.Buffer
+	rep.Markdown(&out)
+	want := fmt.Sprintf("%d counted run(s) have no isolated-run cost (recorded before Agentium kept it, a model without a list price, or a subagent of unknown type), so their arm shows none.", missing)
+	if !strings.Contains(out.String(), want) {
+		t.Errorf("Markdown lacks %q", want)
+	}
+	if !reflect.DeepEqual(rep.Analysis, base.Analysis) {
+		t.Error("the isolated-run cost changed a verdict")
 	}
 }
