@@ -33,8 +33,8 @@ func TestUsageFromStoredRecords(t *testing.T) {
 		runs = append(runs, store.Run{Record: r})
 	}
 	samples := UsageSamples(runs)
-	if per, n := UsagePerRun(samples); n != 3 || per < 0.0599 || per > 0.0601 {
-		t.Errorf("per run %v over %d runs", per, n)
+	if r := UsagePerRun(samples, ""); r.Runs != 3 || r.PerRun < 0.0599 || r.PerRun > 0.0601 {
+		t.Errorf("per run %+v", r)
 	}
 	seen := SubagentModels(runs)[""] // per arm; the earliest run wins: later ones must match it
 	if got := seen["investigator"]; len(got) != 1 || got[0] != "claude-sonnet-5" || len(seen["Explore"]) != 1 {
