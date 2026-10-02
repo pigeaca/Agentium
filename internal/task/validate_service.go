@@ -33,6 +33,9 @@ type ValidateOptions struct {
 	MaxHunks int
 	Timeout  time.Duration
 	Keep     bool
+	// KeepWeakTests carries a task's last weak-tests result into a validation made without that check (Batch), so a
+	// re-validation does not drop it: the result depends only on the task's reference and hidden tests, which are fixed.
+	KeepWeakTests bool
 }
 
 // Validating is what validating tasks needs: the project's database and Agentium's repository, where checkouts and logs
@@ -259,6 +262,9 @@ func (v Validating) Batch(ctx context.Context, out BatchOutput, tasks []store.Ta
 		r := &results[oc.i]
 		r.Started = oc.started
 		if oc.err == nil {
+			if o.KeepWeakTests && !o.Weak && oc.result.WeakTests == nil {
+				oc.result.WeakTests = ValidationOf(r.Task).WeakTests
+			}
 			if r.Task, oc.err = v.StoreValidation(ctx, r.Task, oc.result, v.Now()); oc.err == nil {
 				r.Validated = true
 			}

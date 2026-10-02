@@ -16,9 +16,10 @@ import (
 var ErrBusy = errors.New("another Agentium process is running agents with this data folder")
 
 // RunsBusy reports whether a process holds the run lock now (its runs are in progress). It probes with a shared lock
-// on a file of its own, which never changes the lock file; LockRuns waits out such a probe.
+// on a file of its own, which never changes the lock file; LockRuns waits out such a probe. It creates nothing: a
+// missing lock file means no run ever held it, so none is in progress.
 func (l Layout) RunsBusy() bool {
-	f, err := os.OpenFile(filepath.Join(l.Root, "runs.lock"), os.O_RDONLY|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(filepath.Join(l.Root, "runs.lock"), os.O_RDONLY, 0)
 	if err != nil {
 		return false
 	}

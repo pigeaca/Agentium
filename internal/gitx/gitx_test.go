@@ -286,3 +286,27 @@ func TestFetchCommitReleasesItsLock(t *testing.T) {
 		t.Fatalf("after the holder let go: %v", err)
 	}
 }
+
+// Lines streams a listing: stopping early stops git without an error and reports an incomplete read; reading to the
+// end is complete; a failing git is an error.
+func TestLinesStreamsAndStops(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	git(t, dir, "init", "-q", "-b", "main")
+	for i := range 5 {
+		git(t, dir, "commit", "-q", "--allow-empty", "-m", fmt.Sprint("c", i))
+	}
+	var got []string
+	complete, err := Lines(ctx, nil, func(line string) bool { got = append(got, line); return len(got) < 2 }, "-C", dir, "rev-list", "--reverse", "HEAD")
+	if err != nil || complete || len(got) != 2 {
+		t.Errorf("stopped: complete %v, %v, lines %v", complete, err, got)
+	}
+	got = nil
+	complete, err = Lines(ctx, nil, func(line string) bool { got = append(got, line); return true }, "-C", dir, "rev-list", "HEAD")
+	if err != nil || !complete || len(got) != 5 {
+		t.Errorf("whole: complete %v, %v, lines %v", complete, err, got)
+	}
+	if _, err := Lines(ctx, nil, func(string) bool { return true }, "-C", dir, "rev-list", "no-such-ref"); err == nil {
+		t.Error("a failing git is no error")
+	}
+}
