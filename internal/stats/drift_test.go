@@ -319,3 +319,65 @@ func TestDriftClimbStart(t *testing.T) {
 		t.Errorf("a first-point alarm starts at %d, want %d", got, DriftRefChecks)
 	}
 }
+
+// Constants that float rounding makes inexact must not accumulate: 52 identical (or one-ulp-apart) values used to
+// score a stable ±0.8–0.95 and alarm in about 9 of 10 charts.
+func TestDriftChartNearConstantDoesNotAlarm(t *testing.T) {
+	for _, v := range []float64{math.Log(3.7), 0.1 * 7, 0, 1234.5678} {
+		same := make([]float64, 52)
+		jitter := make([]float64, 52)
+		tiny := make([]float64, 52)
+		r := rand.New(rand.NewPCG(5, 5))
+		for i := range same {
+			same[i] = v
+			jitter[i] = v
+			if i%2 == 1 {
+				jitter[i] = math.Nextafter(v, math.Inf(1))
+			}
+			tiny[i] = v + 1e-12*r.NormFloat64() // below driftEps: suppressed as no variation
+		}
+		for name, pts := range map[string][]float64{"identical": same, "one-ulp jitter": jitter, "1e-12 noise": tiny} {
+			if res, err := DriftChart(pts); err != nil || res.Alarm != 0 {
+				t.Errorf("%s at %v: %+v, %v; want no alarm", name, v, res, err)
+			}
+		}
+		moved := append(slices.Clone(same[:20]), v+0.01, v+0.01)
+		if res, err := DriftChart(moved); err != nil || res.Alarm != 1 || res.AlarmAt != 20 {
+			t.Errorf("constant %v then +0.01: %+v, %v; want an upward alarm at point 20", v, res, err)
+		}
+	}
+	if u := DriftScore([]float64{1}, 2); !math.IsNaN(u) {
+		t.Errorf("one baseline point scores %v, want NaN", u)
+	}
+}
+
+// A hand-computed chart (t(3) and t(4) distribution functions in closed form, checked outside this package) pins
+// which points form each baseline: the first point is in it, and a non-alarming point joins it.
+func TestDriftChartHandComputed(t *testing.T) {
+	res, err := DriftChart([]float64{1, 2, 3, 4, 4.5, 5.5})
+	if err != nil || res.Alarm != 0 || len(res.Scores) != 2 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	for i, want := range []float64{1.1266267021801661, 1.3635216197594962} {
+		if math.Abs(res.Scores[i]-want) > 1e-9 {
+			t.Errorf("score %d = %.12f, want %.12f", i, res.Scores[i], want)
+		}
+	}
+	for i, want := range []float64{0.6266267021801661, 1.4901483219396623} {
+		if math.Abs(res.Up[i]-want) > 1e-9 || res.Down[i] != 0 {
+			t.Errorf("sums %d = (%.12f, %v), want (%.12f, 0)", i, res.Up[i], res.Down[i], want)
+		}
+	}
+}
+
+func TestDriftScoreClamp(t *testing.T) {
+	if u := DriftScore([]float64{2, 2, 2, 2}, 3); math.Abs(u-7.9414444874) > 1e-6 {
+		t.Errorf("clamped score = %.10f, want Φ⁻¹(1−1e-15) = 7.9414444874", u)
+	}
+}
+
+func TestDriftAlarmTie(t *testing.T) {
+	if got := DriftAlarm(7, 7); got != 1 {
+		t.Errorf("DriftAlarm(7, 7) = %d, want 1 (a tie goes up)", got)
+	}
+}

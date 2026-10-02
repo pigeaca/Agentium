@@ -27,25 +27,39 @@ const (
 // ErrNonFinite is returned for a NaN or infinite point.
 var ErrNonFinite = errors.New("stats: drift point is NaN or infinite")
 
-// DriftScore is U for the point y against the in-control baseline (at least DriftRefChecks finite points, which is not
-// checked here but by DriftChart). A constant baseline has no spread: y equal to it scores 0, any other y the most
-// extreme score the clamp allows (about ±7.9), so a cost that never varied and then moved still alarms.
+// DriftScore is U for the point y against the in-control baseline. DriftChart guarantees at least DriftRefChecks
+// finite points; a direct caller passing fewer than 2 gets NaN (no spread to standardize by).
+//
+// A baseline whose spread is within driftEps of zero counts as constant, whatever float rounding left of it (the mean of
+// identical floats is often a hair off them): y within driftEps of the mean scores 0, and any other y the most extreme
+// score the clamp allows (about ±7.9), so a cost that never varied and then moved still alarms. The epsilon suppresses
+// variation below 1e-9 (relative, for costs above 1): without it a repeated cost, such as zero or a cached one, would
+// score a stable ±0.8–0.95 at every check and false-alarm in most charts.
 func DriftScore(baseline []float64, y float64) float64 {
 	m := len(baseline)
+	if m < 2 {
+		return math.NaN()
+	}
 	mean, s := Mean(baseline), math.Sqrt(Variance(baseline))
+	eps := driftEps * math.Max(1, math.Abs(mean))
 	var p float64
 	switch {
-	case s == 0 && y == mean:
+	case s <= eps && math.Abs(y-mean) <= eps:
 		return 0
-	case s == 0 && y > mean:
+	case s <= eps && y > mean:
 		p = 1
-	case s == 0:
+	case s <= eps:
 		p = 0
 	default:
 		p = tCDFSigned((y-mean)/(s*math.Sqrt(1+1/float64(m))), m-1)
 	}
-	return NormalQuantile(math.Min(math.Max(p, 1e-15), 1-1e-15))
+	return NormalQuantile(math.Min(math.Max(p, driftClamp), 1-driftClamp))
 }
+
+const (
+	driftEps   = 1e-9  // scale of "no variation", relative to max(1, |mean|)
+	driftClamp = 1e-15 // probabilities are kept this far from 0 and 1
+)
 
 // tCDFSigned is Student's t distribution function on the whole line.
 func tCDFSigned(x float64, df int) float64 {
@@ -80,7 +94,7 @@ type DriftResult struct {
 	Up, Down   []float64 // S⁺ and S⁻ after each scored point, same indexing as Scores
 	Alarm      int       // +1 up, -1 down, 0 none
 	AlarmAt    int       // index of the alarming point; -1 without an alarm
-	ClimbStart int       // index of the point where the run of increments that led to the alarm began; -1 without one
+	ClimbStart int       // index of the point where the run of increments that led to the alarm began: where the CUSUM started climbing, not an estimate of the change point; -1 without one
 }
 
 // DriftChart reads the points in order, stopping at the first alarm (later points are ignored and not counted in
