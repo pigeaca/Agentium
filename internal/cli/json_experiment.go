@@ -8,6 +8,7 @@ import (
 	"math"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -374,12 +375,13 @@ type experimentRemoveDoc struct {
 
 // --- experiment run ---
 
-// runCountsDoc counts an experiment's slots (one run of a pair each): Total is Settled + Pending + Skipped.
+// runCountsDoc counts an experiment's slots (one run of a pair each): Total is Settled + Pending + Skipped + Failed.
 type runCountsDoc struct {
 	Total   int `json:"total"`
 	Settled int `json:"settled"`
 	Pending int `json:"pending"` // would run on a resume
-	Skipped int `json:"skipped"` // will not run: the experiment ended (at a look, or every slot is done or out of attempts)
+	Skipped int `json:"skipped"` // a seq-v1 experiment chose not to run them: it ended at a look
+	Failed  int `json:"failed"`  // out of attempts: a resume does not retry them
 }
 
 // metricDoc is one metric's comparison of arm B with arm A: a difference for success, a ratio for the others.
@@ -505,7 +507,7 @@ func runResultOf(ctx context.Context, env Env, w *workspace, name string, out ex
 	if err != nil {
 		return runResultDoc{}, err
 	}
-	runs := runCountsDoc{Total: progress.Slots, Settled: progress.Settled, Pending: progress.Slots - progress.Settled}
+	runs := runCountsDoc{Total: progress.Slots, Settled: progress.Settled, Failed: progress.Failed, Pending: progress.Slots - progress.Settled - progress.Failed}
 	res := runResultDoc{Status: out.Status, Note: env.redact(out.Note), Method: &lock.Method, Looks: looksOf(progress.Sequential), SpentUSD: finiteOf(progress.SpentUSD),
 		BudgetUSD: finiteOf(progress.BudgetUSD), Runs: &runs, JudgePaused: out.JudgePaused, NextCommand: "agentium experiment run " + name}
 	if !out.ResumeAt.IsZero() {
@@ -517,7 +519,7 @@ func runResultOf(ctx context.Context, env Env, w *workspace, name string, out ex
 			res.StoppedAtLook = &l.Look
 		}
 	}
-	if out.Status == experiment.StatusDone || res.EndedBy != nil { // nothing more will run: what is left is skipped, not pending
+	if res.EndedBy != nil { // the experiment ended at a look: what is left was skipped, not pending
 		runs.Skipped, runs.Pending = runs.Pending, 0
 	}
 	switch {
@@ -528,11 +530,23 @@ func runResultOf(ctx context.Context, env Env, w *workspace, name string, out ex
 	case out.Status == experiment.StatusUsage && out.ResumeAt.IsZero() && !out.JudgePaused:
 		res.NextCommand += " --usage-limit PCT" // a pair needs more of the window than the limit allows
 	}
-	if stored, err := w.db.ExperimentRuns(ctx, stored.ID); err == nil && len(stored) > 0 {
-		if data, err := experiment.RunDataOfStored(stored); err == nil {
-			if analysis, err := experiment.Analyze(lock, data); err == nil {
+	// What cannot be analysed leaves the verdict null, and the note says why: the money was spent, the document is written.
+	noVerdict := func(err error) {
+		res.Note = strings.TrimSpace(res.Note + "; the verdict could not be computed: " + env.redact(err.Error()))
+		res.Note = strings.TrimPrefix(res.Note, "; ")
+	}
+	if stored, err := w.db.ExperimentRuns(ctx, stored.ID); err != nil {
+		noVerdict(err)
+	} else if len(stored) > 0 {
+		data, err := experiment.RunDataOfStored(stored)
+		if err == nil {
+			var analysis experiment.Analysis
+			if analysis, err = experiment.Analyze(lock, data); err == nil {
 				res.Verdict = verdictOf(env, analysis)
 			}
+		}
+		if err != nil {
+			noVerdict(err)
 		}
 	}
 	if star, err := report.LoadNorthStar(ctx, w.service()); err == nil {

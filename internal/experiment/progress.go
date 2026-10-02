@@ -26,6 +26,7 @@ type Progress struct {
 	StatusNote     string
 	Slots          int // the schedule's runs
 	Settled        int // slots with a settled run
+	Failed         int // slots out of attempts: a resume does not retry them
 	SpentUSD       float64
 	JudgeUSD       float64 // of SpentUSD
 	CalibrationUSD float64 // of SpentUSD
@@ -54,6 +55,7 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 		counts[a.Name] = &ArmProgress{Name: a.Name, Context: a.Context}
 	}
 	settled := map[int]bool{}
+	attempts := map[int]int{} // infrastructure failures per slot (cancelled runs are not attempts), as Execute counts them
 	for _, r := range runs {
 		c := counts[r.Arm]
 		if c == nil {
@@ -86,12 +88,20 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 		default:
 			c.Infra++
 		}
+		if !Settles(r.Outcome) && r.Outcome != "cancelled" {
+			attempts[r.Slot]++
+		}
 		if Settles(r.Outcome) && !settled[r.Slot] {
 			settled[r.Slot] = true
 			c.Settled++
 		}
 	}
 	out.Settled = len(settled)
+	for slot, n := range attempts {
+		if !settled[slot] && n >= lock.MaxAttempts && slot >= 0 && slot < out.Slots {
+			out.Failed++
+		}
+	}
 	if stored.Status == store.StatusRunning && !p.Layout.RunsBusy() {
 		out.Orphaned = true
 	}

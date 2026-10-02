@@ -79,16 +79,18 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 	}
 	if asJSON {
 		// The run spent money: its document is written whatever stopped it, an interrupt or an error included, from
-		// what is stored (a cancelled ctx would fail those reads). The error is its note, and the exit code is 1.
+		// what is stored (a cancelled ctx would fail those reads). Its stored status stays; the error is the note, and
+		// the exit code is 1 whatever the status.
+		code := runExitCode(outcome.Status)
 		if outcome.Err != nil {
 			fail(env, outcome.Err) // for stderr; the document below is the result
-			outcome.Status, outcome.Note = experiment.StatusStopped, outcome.Err.Error()
+			outcome.Note, code = outcome.Err.Error(), ExitError
 		}
 		res, err := runResultOf(context.WithoutCancel(ctx), env, w, name, outcome)
 		if err != nil {
 			return nil, fail(env, err)
 		}
-		return &res, runExitCode(outcome.Status)
+		return &res, code
 	}
 	if !outcome.Conclude(env.Stdout, env.style(), name, env.Now()) {
 		return nil, ExitError

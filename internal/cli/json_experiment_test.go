@@ -103,7 +103,7 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 			assertKeys(t, m.(map[string]any)["interval"], intervalKeys)
 		}
 	}
-	assertKeys(t, run.get("run", "runs"), "pending,settled,skipped,total")
+	assertKeys(t, run.get("run", "runs"), "failed,pending,settled,skipped,total")
 	assertKeys(t, run.get("run", "north_star"), "decisive,experiment,metric,seconds,spent_usd,verdict")
 	if run.get("run", "status") != "done" || run.get("run", "ended_by") != "stop" || run.get("run", "stopped_at_look") != float64(1) ||
 		run.get("run", "method") != "seq-v1" || run.get("run", "runs", "settled") != float64(16) || run.get("run", "runs", "pending") != float64(0) || run.get("run", "runs", "skipped") != float64(16) ||
@@ -429,5 +429,21 @@ func TestJSONExperimentRunNotReadyMessage(t *testing.T) {
 	got := jsonRun(t, f, ExitError, "experiment", "run", "unready", "--yes")
 	if msg, _ := got.get("error", "message").(string); !strings.Contains(msg, "not ready to run (agentium experiment plan unready)") || strings.Contains(msg, "see above") {
 		t.Errorf("experiment run --json, not ready: %s", got.stdout)
+	}
+}
+
+// A slot out of attempts is failed, not pending: a resume does not retry it. total = settled + pending + skipped + failed,
+// in a result that stopped at the budget.
+func TestJSONExperimentRunCountsFailedSlots(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	control(t, ctrl, map[string]string{"infra": "s0-t1\ns0-t2\ns0-t3\n"}) // slot 0 fails all 3 of its attempts
+	jsonRun(t, f, ExitOK, "experiment", "new", "flaky", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "2.5", "--concurrency", "1")
+	got := jsonRun(t, f, ExitOK, "experiment", "run", "flaky", "--yes")
+	n := func(k string) int { return int(got.get("run", "runs", k).(float64)) }
+	t.Log("runs:", got.get("run", "runs"))
+	if got.get("run", "status") != "budget" || n("failed") != 1 || n("pending") <= 0 || n("skipped") != 0 || n("total") != 6 ||
+		n("settled")+n("pending")+n("skipped")+n("failed") != n("total") {
+		t.Errorf("a failed slot in a budget stop: %s", got.stdout)
 	}
 }
