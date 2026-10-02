@@ -506,6 +506,29 @@ func TestFirstPassStopsAtTheRetireWindow(t *testing.T) {
 	}
 }
 
+// A candidate whose base would retire within the margin is not imported: its import and validation would cost a build
+// for a task the next passes retire.
+func TestNoImportOfATaskThatWouldRetireSoon(t *testing.T) {
+	w := newWorld(t, 0)
+	day := func(n int) time.Time { return w.clock.Add(-time.Duration(n) * Day) }
+	w.add("c1", day(265))
+	w.add("c2", day(250), "c1") // base c1: 265 days, retires within 30 days
+	w.add("c3", day(200), "c2") // base c2: 250 days, also within the margin
+	w.add("c4", day(10), "c3")  // base c3: 200 days, kept
+	w.head = "c4"
+	for _, c := range []string{"c2", "c3", "c4"} {
+		w.candidate[c] = true
+	}
+	p := w.pass(10)
+	p.Margin = DefaultPolicy().StaleAfter
+	if _, err := p.Run(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if seen := w.taskCommits(); seen["c2"] != 0 || seen["c3"] != 0 || seen["c4"] != 1 {
+		t.Errorf("tasks %v", seen)
+	}
+}
+
 // After a force-push (or a rebase, then gc) the watermark names commits the repository no longer has: the pass reads
 // the window again and says so, instead of failing every time. The rebased copies of mined and dismissed changes keep
 // their patch IDs and are not imported again; a genuinely new commit is.

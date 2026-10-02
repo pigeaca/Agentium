@@ -78,6 +78,7 @@ type Pass[C any] struct {
 	File   string        // StateFile
 	Limit  int           // imports per pass; Policy.Limit
 	Window time.Duration // Policy.RetireAge: commits and candidates' bases older than this are left alone; 0: none
+	Margin time.Duration // Policy.StaleAfter: a candidate whose base would retire within this is not imported either
 	Now    func() time.Time
 	Commit func(C) string    // a candidate's solution commit
 	Patch  func(C) string    // optional: its patch ID ("" when unknown)
@@ -199,12 +200,14 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 	return res, err
 }
 
-// keep drops the candidates the pool leaves alone: those whose base is older than since (they would retire at once),
-// and those whose patch ID is dismissed or already a mined task's (the same change, given a new commit by a rebase).
+// keep drops the candidates the pool leaves alone: those whose base is older than since, or would be within Margin
+// (they would retire at once or soon after an import and validation that cost a build), and those whose patch ID is
+// dismissed or already a mined task's (the same change, given a new commit by a rebase).
 func (p Pass[C]) keep(candidates []C, since time.Time, st State) []C {
+	cutoff := since.Add(p.Margin)
 	return slices.DeleteFunc(slices.Clone(candidates), func(c C) bool {
 		if p.Base != nil && !since.IsZero() {
-			if base := p.Base(c); !base.IsZero() && base.Before(since) {
+			if base := p.Base(c); !base.IsZero() && base.Before(cutoff) {
 				return true
 			}
 		}
