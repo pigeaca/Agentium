@@ -1,4 +1,4 @@
-> A real report from Phase 1's acceptance runs, printed by `agentium experiment report aa2` at commit `871e6ae` and not edited. Both arms use the same context, so a difference here is noise. The experiment was stopped after 12 of 36 runs to fit one usage window, so it is exploratory. See the [README](../../README.md#example-results).
+> A real report from Phase 1's acceptance runs, printed by `agentium experiment report aa2` at commit `871e6ae` and not edited. Both arms use the same context, so a difference here is noise. The experiment was stopped after 12 of 36 runs to fit one usage window, so it is exploratory. See the [gallery](../gallery.md).
 
 ---
 # Experiment aa2
