@@ -149,24 +149,23 @@ func (s Service) Revoke(ctx context.Context, by, version string) (bool, error) {
 	return true, nil
 }
 
-// SetLoops records what the watch may do in a project. Turning a loop on needs a confirmation, as raising a cap does;
-// turning loops off does not (nil). The store refuses an unconfirmed loop on its own as well.
+// SetLoops records what the watch may do in a project. Turning a loop on needs a confirmation for this project that
+// names that loop (ConfirmAtTerminal with ProjectLoops), as raising a cap does; turning loops off does not (nil). The
+// store refuses an unconfirmed loop on its own as well.
 func (s Service) SetLoops(ctx context.Context, projectID int64, loops Loops, by string, confirm *TerminalConfirmation) error {
 	if strings.TrimSpace(by) == "" {
 		return errors.New("the watch's loops: no user named as setting them")
 	}
+	current, err := s.Loops(ctx, projectID)
+	if err != nil {
+		return err
+	}
 	if confirm != nil {
-		if !confirm.valid {
-			return ErrNotConfirmed
-		}
-	} else {
-		current, err := s.Loops(ctx, projectID)
-		if err != nil {
+		if err := confirm.coversLoops(projectID, current, loops); err != nil {
 			return err
 		}
-		if raised := loopRaises(current, loops); len(raised) > 0 {
-			return fmt.Errorf("it would turn on %s: %w", strings.Join(raised, ", "), ErrRaise)
-		}
+	} else if raised := loopRaises(current, loops); len(raised) > 0 {
+		return fmt.Errorf("it would turn on %s: %w", strings.Join(raised, ", "), ErrRaise)
 	}
 	return s.DB.SetWatchLoops(ctx, store.WatchLoops{ProjectID: projectID, Experiments: loops.Experiments, Drift: loops.Drift,
 		Screens: loops.Screens, Confirmed: confirm != nil, SetBy: by, SetAt: s.Now()})

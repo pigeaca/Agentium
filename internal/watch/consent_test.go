@@ -22,8 +22,14 @@ func grant(caps Caps, signIn SignIn) Grant {
 // confirmed is a confirmation made through ConfirmAtTerminal, with the weekly amount typed back.
 func confirmed(t *testing.T, s Service, caps Caps, signIn SignIn) *TerminalConfirmation {
 	t.Helper()
+	return confirmedLoops(t, s, caps, signIn, nil)
+}
+
+// confirmedLoops is a confirmation of the caps and, when project is not nil, of its loops.
+func confirmedLoops(t *testing.T, s Service, caps Caps, signIn SignIn, project *ProjectLoops) *TerminalConfirmation {
+	t.Helper()
 	s, _ = withTTY(s, fmt.Sprintf("%.2f\n", caps.WeeklyUSD))
-	c, err := s.ConfirmAtTerminal(context.Background(), caps, signIn)
+	c, err := s.ConfirmAtTerminal(context.Background(), caps, signIn, project)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +239,7 @@ func TestLoopsOnlyTheTerminalTurnsOn(t *testing.T) {
 		}
 	}
 	all := Loops{Experiments: true, Drift: true, Screens: true}
-	if err := s.SetLoops(ctx, app.ID, all, "ana", confirmed(t, s, DefaultCaps(), login)); err != nil {
+	if err := s.SetLoops(ctx, app.ID, all, "ana", confirmedLoops(t, s, DefaultCaps(), login, &ProjectLoops{ProjectID: app.ID, Name: "app", Loops: all})); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetLoops(ctx, app.ID, Loops{Drift: true}, "ana", nil); err != nil {
@@ -247,5 +253,37 @@ func TestLoopsOnlyTheTerminalTurnsOn(t *testing.T) {
 	}
 	if loops, _ := s.Loops(ctx, other.ID); loops != (Loops{}) {
 		t.Errorf("another project's loops = %+v; want none", loops)
+	}
+}
+
+// A confirmation of loops covers only its project and the loops it named: not another project, not a loop it left
+// out, and a confirmation of the caps alone covers no loop. Loops already on need no new confirmation.
+func TestALoopConfirmationCoversItsProjectAndLoops(t *testing.T) {
+	ctx := context.Background()
+	s, c, app := newService(t, time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC))
+	other, err := s.DB.SaveProject(ctx, "/work/other", "other", []byte(`{}`), c.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drift := confirmedLoops(t, s, DefaultCaps(), login, &ProjectLoops{ProjectID: app.ID, Name: "app", Loops: Loops{Drift: true}})
+	if err := s.SetLoops(ctx, other.ID, Loops{Drift: true}, "ana", drift); !errors.Is(err, ErrNotConfirmed) {
+		t.Errorf("another project's confirmation: %v, want ErrNotConfirmed", err)
+	}
+	if err := s.SetLoops(ctx, app.ID, Loops{Drift: true, Screens: true}, "ana", drift); !errors.Is(err, ErrNotConfirmed) ||
+		!strings.Contains(err.Error(), "the screens loop") {
+		t.Errorf("a loop the confirmation left out: %v, want ErrNotConfirmed naming it", err)
+	}
+	if err := s.SetLoops(ctx, app.ID, Loops{Drift: true}, "ana", confirmed(t, s, DefaultCaps(), login)); !errors.Is(err, ErrNotConfirmed) {
+		t.Errorf("a confirmation of the caps alone: %v, want ErrNotConfirmed", err)
+	}
+	if loops, _ := s.Loops(ctx, app.ID); loops != (Loops{}) {
+		t.Fatalf("loops after refusals = %+v", loops)
+	}
+	if err := s.SetLoops(ctx, app.ID, Loops{Drift: true}, "ana", drift); err != nil {
+		t.Fatalf("the confirmed loop: %v", err)
+	}
+	screens := confirmedLoops(t, s, DefaultCaps(), login, &ProjectLoops{ProjectID: app.ID, Name: "app", Loops: Loops{Screens: true}})
+	if err := s.SetLoops(ctx, app.ID, Loops{Drift: true, Screens: true}, "ana", screens); err != nil {
+		t.Errorf("adding a confirmed loop beside one already on: %v", err)
 	}
 }

@@ -52,7 +52,7 @@ func TestConfirmAtTerminal(t *testing.T) {
 	s, _, _ := newService(t, time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC))
 	for _, typed := range []string{"20\n", "$20.00\n", "  20.0  \n", "20"} {
 		withTerminal, tty := withTTY(s, typed)
-		proof, err := withTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login)
+		proof, err := withTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login, nil)
 		if err != nil || proof == nil || !proof.valid || proof.caps != DefaultCaps() || proof.signIn != login {
 			t.Errorf("typing %q = %+v, %v", typed, proof, err)
 		}
@@ -67,9 +67,17 @@ func TestConfirmAtTerminal(t *testing.T) {
 			t.Error("the terminal was left open")
 		}
 	}
+	withTerminal, tty := withTTY(s, "20\n")
+	if _, err := withTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login, &ProjectLoops{ProjectID: 7, Name: "samber/lo",
+		Loops: Loops{Experiments: true, Screens: true}}); err != nil {
+		t.Fatal(err)
+	}
+	if want := "In project samber/lo, the watch may: continue enrolled experiments, run queued cost screens.\n"; !strings.Contains(tty.out.String(), want) {
+		t.Errorf("the prompt lacks the project's loops:\n%s", tty.out.String())
+	}
 	for _, typed := range []string{"200\n", "19.99\n", "yes\n", "\n", "", "NaN\n"} {
 		withTerminal, tty := withTTY(s, typed)
-		if proof, err := withTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login); !errors.Is(err, ErrNotConfirmed) || proof != nil {
+		if proof, err := withTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login, nil); !errors.Is(err, ErrNotConfirmed) || proof != nil {
 			t.Errorf("typing %q = %+v, %v; want ErrNotConfirmed", typed, proof, err)
 		}
 		if !strings.Contains(tty.out.String(), "Not confirmed: nothing changed.") {
@@ -80,7 +88,7 @@ func TestConfirmAtTerminal(t *testing.T) {
 	noTerminal.openTTY = func() (io.ReadWriteCloser, error) {
 		return nil, &fs.PathError{Op: "open", Path: "/dev/tty", Err: syscall.ENXIO}
 	}
-	if _, err := noTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login); !errors.Is(err, ErrNotConfirmed) || !strings.Contains(err.Error(), "needs a terminal") {
+	if _, err := noTerminal.ConfirmAtTerminal(ctx, DefaultCaps(), login, nil); !errors.Is(err, ErrNotConfirmed) || !strings.Contains(err.Error(), "needs a terminal") {
 		t.Errorf("without a terminal: %v", err)
 	}
 	waiting, _ := io.Pipe() // the user never types
@@ -88,7 +96,7 @@ func TestConfirmAtTerminal(t *testing.T) {
 	blocked.openTTY = func() (io.ReadWriteCloser, error) { return &fakeTTY{in: waiting}, nil }
 	cancelled, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer cancel()
-	if _, err := blocked.ConfirmAtTerminal(cancelled, DefaultCaps(), login); !errors.Is(err, context.DeadlineExceeded) {
+	if _, err := blocked.ConfirmAtTerminal(cancelled, DefaultCaps(), login, nil); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("a cancelled wait: %v, want the context's error", err)
 	}
 }
@@ -98,7 +106,7 @@ func TestConfirmAtTerminal(t *testing.T) {
 func TestNoControllingTerminalConfirmsNothing(t *testing.T) {
 	if os.Getenv("AGENTIUM_WATCH_TTY_CHILD") == "1" {
 		s := Service{Now: time.Now}
-		if _, err := s.ConfirmAtTerminal(context.Background(), DefaultCaps(), login); errors.Is(err, ErrNotConfirmed) {
+		if _, err := s.ConfirmAtTerminal(context.Background(), DefaultCaps(), login, nil); errors.Is(err, ErrNotConfirmed) {
 			os.Exit(0)
 		}
 		os.Exit(3)
@@ -120,8 +128,9 @@ func TestNoControllingTerminalConfirmsNothing(t *testing.T) {
 }
 
 // Only the future `agentium watch enable` command may confirm at a terminal: outside tests, no file but
-// internal/cli/watch_enable*.go may call ConfirmAtTerminal, and none but this package's own may write a
-// TerminalConfirmation literal (a zero one would be refused, but it should not be written at all).
+// internal/cli/watch_enable*.go may call ConfirmAtTerminal, none but this package's own may write a
+// TerminalConfirmation literal (a zero one would be refused, but it should not be written at all), and none outside
+// this package may call the store's AddWatchConsent or SetWatchLoops, whose Confirmed flag bypasses the proof.
 func TestOnlyTheEnableCommandConfirms(t *testing.T) {
 	root := moduleRoot(t)
 	found, err := confirmers(root)
@@ -134,12 +143,16 @@ func TestOnlyTheEnableCommandConfirms(t *testing.T) {
 	// The scan itself finds both kinds, so a clean module is not a broken scanner.
 	fake := t.TempDir()
 	for name, body := range map[string]string{
-		"internal/pool/sneak.go":            "package pool\nfunc f(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}) }\n",
-		"internal/cli/watch_status.go":      "package cli\nvar c = &watch.TerminalConfirmation{}\n",
-		"internal/cli/watch_enable.go":      "package cli\nfunc g(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}) }\n",
-		"internal/cli/watch_enable_test.go": "package cli\nfunc h(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}) }\n",
-		"internal/watch/terminal.go":        "package watch\nfunc k() *TerminalConfirmation { return &TerminalConfirmation{valid: true} }\n",
-		"internal/watch/elsewhere.go":       "package watch\nfunc m(s Service) { s.ConfirmAtTerminal(nil, Caps{}, SignIn{}) }\n",
+		"internal/pool/sneak.go":             "package pool\nfunc f(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}, nil) }\n",
+		"internal/cli/watch_status.go":       "package cli\nvar c = &watch.TerminalConfirmation{}\n",
+		"internal/cli/watch_enable.go":       "package cli\nfunc g(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}, nil) }\n",
+		"internal/cli/watch_enable_test.go":  "package cli\nfunc h(s watch.Service) { s.ConfirmAtTerminal(nil, watch.Caps{}, watch.SignIn{}, nil) }\n",
+		"internal/watch/terminal.go":         "package watch\nfunc k() *TerminalConfirmation { return &TerminalConfirmation{valid: true} }\n",
+		"internal/watch/elsewhere.go":        "package watch\nfunc m(s Service) { s.ConfirmAtTerminal(nil, Caps{}, SignIn{}, nil) }\n",
+		"internal/cli/watch_enable_store.go": "package cli\nfunc n(db *store.Store) { db.AddWatchConsent(nil, store.WatchConsent{Confirmed: true}) }\n",
+		"internal/pool/loops.go":             "package pool\nfunc o(db *store.Store) { db.SetWatchLoops(nil, store.WatchLoops{Confirmed: true}) }\n",
+		"internal/watch/consent.go":          "package watch\nfunc p(s Service) { s.DB.AddWatchConsent(nil, store.WatchConsent{}); s.DB.SetWatchLoops(nil, store.WatchLoops{}) }\n",
+		"internal/store/watch_test.go":       "package store\nfunc q(s *Store) { s.AddWatchConsent(nil, WatchConsent{Confirmed: true}) }\n",
 	} {
 		file := filepath.Join(fake, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(file), 0o755); err != nil {
@@ -150,15 +163,16 @@ func TestOnlyTheEnableCommandConfirms(t *testing.T) {
 		}
 	}
 	found, err = confirmers(fake)
-	want := []string{"internal/cli/watch_status.go: TerminalConfirmation literal", "internal/pool/sneak.go: ConfirmAtTerminal",
-		"internal/watch/elsewhere.go: ConfirmAtTerminal"}
+	want := []string{"internal/cli/watch_enable_store.go: AddWatchConsent", "internal/cli/watch_status.go: TerminalConfirmation literal",
+		"internal/pool/loops.go: SetWatchLoops", "internal/pool/sneak.go: ConfirmAtTerminal", "internal/watch/elsewhere.go: ConfirmAtTerminal"}
 	if err != nil || !slices.Equal(found, want) {
 		t.Errorf("the scan of a planted module = %v, %v; want %v", found, err, want)
 	}
 }
 
 // confirmers lists the Go files under root (tests excepted) that call ConfirmAtTerminal outside the enable command,
-// or write a TerminalConfirmation literal outside terminal.go, sorted.
+// write a TerminalConfirmation literal outside terminal.go, or call the store's consent writers outside this package,
+// sorted.
 func confirmers(root string) ([]string, error) {
 	var found []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -186,6 +200,10 @@ func confirmers(root string) ([]string, error) {
 			case *ast.SelectorExpr:
 				if n.Sel.Name == "ConfirmAtTerminal" && !enable {
 					found = append(found, rel+": ConfirmAtTerminal")
+				}
+				// The store's writers take a Confirmed flag on trust: only this package, after checking the proof, calls them.
+				if (n.Sel.Name == "AddWatchConsent" || n.Sel.Name == "SetWatchLoops") && !strings.HasPrefix(rel, "internal/watch/") {
+					found = append(found, rel+": "+n.Sel.Name)
 				}
 			case *ast.CompositeLit:
 				if named(n.Type, "TerminalConfirmation") && rel != "internal/watch/terminal.go" {
