@@ -341,7 +341,7 @@ func TestWaitedOutWarmUpClonesNothing(t *testing.T) {
 	}
 	defer hold()
 	inv := claude.Invocation{Deps: deps, BuildCache: run}
-	_, err = env.prepareTools(ctx, buildtool.Select([]string{"gradle"}), inv, base, filepath.Join(data, "log"), func(int) {})
+	_, _, err = env.prepareTools(ctx, buildtool.Select([]string{"gradle"}), inv, base, filepath.Join(data, "log"), func(int) {})
 	if !errors.Is(err, errWarmWait) {
 		t.Fatalf("prepareTools: %v", err)
 	}
