@@ -211,8 +211,10 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 		line += "; set aside: " + strings.Join(bad, ", ")
 	}
 	fmt.Fprintln(s.env.Stdout, line)
-	// Only tasks this run mined say anything about mining: a broken task someone added by hand does not stop it.
-	if mined > 0 && minedValid == 0 {
+	// Only tasks this run mined say anything about mining: a broken task someone added by hand does not stop it. A round
+	// of one or two tasks says too little (mining then tops up the last few, best candidates first, so an unlucky pick
+	// would stop it short of the floor); the maxMineFactor cap still bounds the rounds.
+	if mined >= minStopSample && minedValid == 0 {
 		s.stopped = fmt.Sprintf("none of the %d tasks just mined is valid, so mining more would likely repeat that", mined)
 	}
 	return nil
@@ -263,6 +265,9 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 // maxMineFactor caps how many tasks start imports, as a multiple of the experiment's most tasks, when many fail
 // validation.
 const maxMineFactor = 3
+
+// minStopSample is the smallest mining round whose tasks, all invalid, stop start from mining more.
+const minStopSample = 3
 
 // acceptMined marks waiting tasks that start itself mined (now or in an earlier run: minedFile) as reviewed when the
 // automatic checks find nothing: no section that may give the solution away, no reference-file name in the
