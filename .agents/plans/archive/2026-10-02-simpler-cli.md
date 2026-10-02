@@ -1,7 +1,7 @@
 # A simpler command line
 
 - Date: 2026-10-02
-- Status: Planned (2026-10-02). The user asked "Simplify everything that you found" after the flag investigation; this plan records that scope.
+- Status: Done (2026-10-03): steps 1–3 merged (#128, #129). Visible flags 66 → 40 (all usage texts, distinct names, counted the same way before and after); `experiment new` 24 → 10, `run once` 7 → 3. The user asked "Simplify everything that you found" after the flag investigation; this plan records that scope.
 - Scope: Agentium's commands and flags. Today there are about 30 commands with 67 distinct flags (111 definitions), and `experiment new` alone has 24 (25 with `--judge-pairs`, #126). The everyday path (`start`, `start --yes`, `experiment report`) uses almost none of them, and the same per-project settings repeat across commands (`--verify` and `--setup` on 4 commands, timeouts in 5 places, `--require-lock`, `--jobs` and `--accept-mined` on 2–3).
 
 ## Outcome
@@ -43,9 +43,31 @@ About 35 visible flags instead of 67, with `experiment new` at about 10. Nothing
 - Compatibility: Agentium is early and has no external scripts to keep. Removed flags fail loudly with a pointer rather than staying as silent aliases.
 
 ## Work
-- [ ] **1. Experiment and run flags** (derive, the judge, hide). Risk: medium (the experiment design and lock inputs).
+- [x] **1. Experiment and run flags** (derive, the judge, hide). Risk: medium (the experiment design and lock inputs). Done (#129):
+  - **Template from `--b`:** `--template` is gone. Model names are those the price table knows, or names shaped like a model ID (`claude-<family>-<version>`, an optional date). A `--b` that is both a snapshot and a model is refused, and `context snapshot` refuses model-like names. A model A/B refuses an `--a` that is not a model.
+  - **Folded flags:** `--model MODEL[:EFFORT]` replaces `--effort`; `--judge[=MODEL[:EFFORT]]` and `--judge-pairs[=…]` replace the judge's model, effort and repeats flags (a bare `--judge-pairs` inherits `--judge`'s model). One `--run-budget` replaces the per-arm caps.
+  - **Hidden, still working:** `run calibrate` and the expert flags.
+  - **Compatibility:** an independent rebuild of the old binary gave byte-identical stored designs for 16 old-flag cases, and old designs with per-arm caps and 2 judge repeats still preview, lock, resume and report.
+  - **Review:** changes requested (an `--a` misread as a model could spend on calibrations; `claude-…` typos read as models; the duplicate removed-flag helper; untested removed-flag entries). All fixed, and each mutation now fails a test.
 - [x] **2. Project settings, one way to mine, the task and init flags** (hide). Risk: medium-high (a migration; mining's entry points). Done: migration 0012 adds the settings to `projects`; `init` stores and prints them (text and JSON); `pool update`, `start`, `task import`, `task add` and `task validate` read them, with hidden per-call overrides; `task mine`, `--no-allow-local-binding` and `--instruction-file` fail with exit 2 and name their replacements; `pool update --dry-run` shows the scores and the commits set aside, and `--since` re-scans without moving the watermark. Visible flags in the usage texts of init, task, pool, start and context: 42 before, 34 after (all usage texts: 68 to 61).
-- [ ] **3. Docs and the count**: README, guide, help texts; the visible-flag count recorded.
+- [x] **3. Docs and the count**: README, guide, help texts; the visible-flag count recorded. Done (#129): one "Advanced flags" table and one "Renamed and removed" list in the guide. To reach the 40 target, six rarely used flags were hidden too: `--include`, `--print-hook`, `--patch`, `--status`, `--no-setup`, `--judge-graded`. `--working-tree` stays visible (snapshotting uncommitted context edits is common).
+  - Count: 66 distinct flag names in all usage texts before, 40 after. Gone from the help: `--concurrency`, `--effort`, `--include-linked`, `--instruction-file`, `--judge-effort`, `--judge-model`, `--judge-repeats`, `--keep`, `--max-files`, `--max-hunks`, `--max-lines`, `--no-allow-local-binding`, `--no-futility`, `--repeats`, `--run-budget-a`, `--run-budget-b`, `--seed`, `--since`, `--template`, `--tier`, `--timeout`, and the six above. New: `--judge-pairs` (#126).
+  - Console sample (the real binary on a clone of this repository, 2026-10-03):
+    ```
+    $ agentium init --jobs 1 --verify "go test ./internal/stats/..."
+    Settings (in the data folder; agentium init --FLAG VALUE changes one, the others stay)
+      verify          go test ./internal/stats/...
+      setup           none (default)
+      require lock    off (default)
+      jobs            1
+      verify timeout  10m (default)
+    $ agentium experiment new x --template model-ab
+    agentium experiment new: --template was removed: --b decides it: no --b for an A/A, --b SNAPSHOT for a context A/B, --b MODEL[:EFFORT] for a model A/B
+    $ agentium task mine
+    agentium task mine: removed: agentium pool update mines and validates tasks from history; agentium pool update --dry-run lists the candidates with their scores and why other commits were set aside
+    $ agentium experiment new x --effort high
+    agentium experiment new: --effort was removed: put the effort in --model: --model MODEL:EFFORT
+    ```
 
 ## Verification
 - Per step: `python3 scripts/harness.py check changed`, the CLI tests of the touched commands, and a review.
@@ -53,8 +75,8 @@ About 35 visible flags instead of 67, with `experiment new` at about 10. Nothing
 - A real console sample of `init` showing the settings, `experiment new … --b claude-sonnet-5-5` inferring a model A/B, and a removed flag's error.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code desktop / claude-opus-5-5 / high (coordinator, implementers, reviewers)
+- Elapsed: about 3 hours of wall clock (2026-10-02 evening to 2026-10-03), the two steps in parallel
+- Check-fix loops: 2 (one review round per step)
+- User corrections: 0
+- Review: step 2 changes requested (untested watermark guard and settings use), fixed; step 1 changes requested (arm A misread as a model, model-like typos, the duplicate helper), fixed

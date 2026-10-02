@@ -268,6 +268,12 @@ These flags still work but are left out of the commands' usage texts. A per-call
 | `--max-hunks N` | `task validate --weak-tests` | 20 | How many hunks of the reference to try removing, in file and line order. |
 | `--keep` | `task validate` | off | Keep the validation's checkouts for inspection. |
 | `--include-linked` | `context snapshot` | off | Also capture every document the context links to (`--include PATH` adds one). |
+| `--include PATH`... | `context snapshot` | none | Add one linked document (Markdown, rst, AsciiDoc) to the snapshot. |
+| `--print-hook` | `context lint` | — | Print the Claude Code hook that runs the lint after you edit context files (you add it to `~/.claude/settings.json`; Agentium never does). |
+| `--patch` | `context diff` | off | Show the full patch between two saved versions, not only the summary. |
+| `--status STATUS` | `task validate --all` | every status | Validate only the tasks with this status. |
+| `--no-setup` | `task edit` | — | Remove the task's setup commands. |
+| `--judge-graded` | `task add` | off | Accept a `--solution` that changes no test files; the task is graded by the judge (exploratory). |
 | `--tier quick\|confident` | `experiment new` | `quick`, unless `--task` names the tasks | A success experiment's (`--goal better`) sample: 12 tasks x 3 runs per arm, or 23 x 5 |
 | `--repeats N` | `experiment new` | the tier's (3 with `--task`) | Runs per task per arm in a success experiment; a cost experiment runs 1 |
 | `--no-futility` | `experiment new` | off | A cost experiment makes no futility stop: it runs to a verdict or its last look |

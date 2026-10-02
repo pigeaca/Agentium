@@ -156,8 +156,8 @@ func TestRemovedFlagsAndInstructionFiles(t *testing.T) {
 var hiddenFlags = map[string][]string{
 	"pool":    {"--verify", "--setup", "--require-lock", "--jobs", "--verify-timeout", "--since", "--max-files", "--max-lines"},
 	"start":   {"--require-lock"},
-	"task":    {"--max-hunks", "--keep", "--jobs", "--timeout", "--require-lock", "--since", "--max-files", "--max-lines"},
-	"context": {"--include-linked"},
+	"task":    {"--max-hunks", "--keep", "--jobs", "--timeout", "--require-lock", "--since", "--max-files", "--max-lines", "--judge-graded", "--no-setup", "--status"},
+	"context": {"--include-linked", "--include", "--print-hook", "--patch"},
 }
 
 // removedFlags are flags that no longer exist; no usage text names them.

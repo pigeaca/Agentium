@@ -25,18 +25,15 @@ import (
 
 const contextUsage = `Usage:
   agentium context show [--ref REF]              what Claude Code loads (default: the working tree)
-  agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]...
-                                                 save a version (default: --ref HEAD); --include adds a
-                                                 document (Markdown, rst, AsciiDoc)
+  agentium context snapshot NAME [--ref REF | --working-tree]
+                                                 save a version (default: --ref HEAD)
   agentium context lint [--ref REF]              free check, no agent runs: size change since the last snapshot,
                                                  broken @imports, AGENTS.md over Codex's 32 KiB limit and show's
                                                  warnings (default: the working tree); always exit 0
-  agentium context lint --print-hook             the Claude Code hook that runs it after you edit context files
-                                                 (you add it to ~/.claude/settings.json; Agentium never does)
   agentium context list                          saved versions
   agentium context show|snapshot|list|diff|lint ... --json
                                                  one JSON document instead of text (docs/guide.md, "Scripting and automation")
-  agentium context diff A B [--patch]            compare two saved versions
+  agentium context diff A B                      compare two saved versions
 `
 
 func runContext(ctx context.Context, env Env, args []string) int {
