@@ -351,9 +351,10 @@ func HarnessFrontmatter(data []byte) HarnessFields {
 // yamlBreaks are the characters YAML 1.2 reads as line breaks, besides LF (and the CR of CRLF, already joined).
 const yamlBreaks = "\r\u0085\u2028\u2029"
 
-// blockScalar matches a value that starts a block scalar: | or >, with optional chomping and indentation indicators,
-// and an optional comment.
-var blockScalar = regexp.MustCompile(`^[|>][-+0-9]*(?:[ \t]+#.*)?$`)
+// blockScalar matches a value that starts a block scalar: | or >, with an optional chomping indicator and an optional
+// comment. An explicit indentation indicator (a digit) is left out on purpose: it can claim more indentation than the
+// text has, so its lines are scanned as keys instead (fail closed).
+var blockScalar = regexp.MustCompile(`^[|>][-+]?(?:[ \t]+#.*)?$`)
 
 // scan reads one frontmatter line for a key. When the key's value starts a block scalar, it returns the key's column,
 // so the caller reads the more indented lines that follow as text; otherwise it returns -1.
