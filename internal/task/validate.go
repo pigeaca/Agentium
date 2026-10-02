@@ -103,6 +103,19 @@ type Validation struct {
 	// Toolchain is the build tools' versions the stages ran with (Validator.Toolchain). Absent: unknown (validations
 	// before it was recorded, judge-graded tasks, callers that do not detect it), which never makes a validation stale.
 	Toolchain Toolchain `json:"toolchain,omitempty"`
+	// Notes are what preparing the build tools said (Validator.Checkout): a venv resolved without a lock file, a test
+	// runner it lacks, a warm-up that failed.
+	Notes []string `json:"notes,omitempty"`
+}
+
+// CheckoutCommands is how Agentium's own commands run in a checkout of a base commit once its build tools are warmed
+// (run.CheckoutCommands, as setup and grading run in a run): Environ, when not nil, replaces their base environment
+// (the user's, less what the agent never gets either, such as PYTHON*), Env(dir) is added after Validator.Env and the
+// tools' caches (Python's venv, its PYTHONPATH in dir), and Notes go to the validation.
+type CheckoutCommands struct {
+	Environ []string
+	Env     func(dir string) []string
+	Notes   []string
 }
 
 // Toolchain maps a build tool ("go", "java", "cargo", ...) to its version as the tool reports it on the host.
@@ -135,6 +148,12 @@ type Validator struct {
 	// Toolchain, when set, is recorded in every validation made: the build tools' versions on this host, detected once
 	// by the caller (internal/pool's DetectToolchain), which compares them later to find stale validations.
 	Toolchain Toolchain
+	// Checkout, when set, warms the base's build tools once per validation, before any stage, as a run's setup does
+	// (the same deps folder, lock and stamp: run.CheckoutCommands), so validation runs the verification with the same
+	// interpreter, dependencies and variables as grading. logPath gets the warm-up's commands.
+	Checkout func(ctx context.Context, base string, verify []string, logPath string) (CheckoutCommands, error)
+	// checkout is what Checkout returned, for this validation's commands.
+	checkout CheckoutCommands
 }
 
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
@@ -148,6 +167,18 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 	}
 	if err := os.MkdirAll(v.LogDir, 0o700); err != nil {
 		return Validation{}, fmt.Errorf("validation logs: %w", err)
+	}
+	if v.Checkout != nil {
+		cc, err := v.Checkout(ctx, spec.Base, spec.Verify, filepath.Join(v.LogDir, "warm.log"))
+		if err != nil {
+			return Validation{}, fmt.Errorf("prepare the build tools: %w", err)
+		}
+		v.checkout, result.Notes = cc, cc.Notes
+		for _, n := range cc.Notes {
+			if v.Progress != nil {
+				fmt.Fprintln(v.Progress, "  note: "+n)
+			}
+		}
 	}
 	var solution source.Source
 	if spec.Solution != "" {
@@ -437,19 +468,25 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 	fmt.Fprintln(v.Progress, line)
 }
 
-// envFor is Env plus the caches of the build tools the checkout in dir uses (see Cache).
+// envFor is Env plus the caches of the build tools the checkout in dir uses (see Cache), then what the warmed tools add
+// in dir (Checkout: Python's venv).
 func (v Validator) envFor(dir string) []string {
-	if v.Cache == "" {
-		return v.Env
+	env := v.Env
+	if v.Cache != "" {
+		env = append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(dir)), v.Cache)...)
 	}
-	return append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(dir)), v.Cache)...)
+	if v.checkout.Env != nil {
+		env = append(slices.Clone(env), v.checkout.Env(dir)...)
+	}
+	return env
 }
 
 // run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.
 func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir)})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir),
+			Environ: v.checkout.Environ})
 		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
