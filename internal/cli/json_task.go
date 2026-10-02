@@ -15,13 +15,13 @@ import (
 
 // taskInfo is a task as list, add, import, edit and the batches show it.
 type taskInfo struct {
-	Name           string `json:"name"`
-	Source         string `json:"source"`
-	BaseCommit     string `json:"base_commit"`
-	SolutionCommit string `json:"solution_commit,omitempty"`
-	GradedBy       string `json:"graded_by"` // tests | judge
-	HiddenTests    int    `json:"hidden_test_files"`
-	Reference      int    `json:"reference_files"`
+	Name           string  `json:"name"`
+	Source         string  `json:"source"`
+	BaseCommit     string  `json:"base_commit"`
+	SolutionCommit *string `json:"solution_commit"` // null for a task without a solution
+	GradedBy       string  `json:"graded_by"`       // tests | judge
+	HiddenTests    int     `json:"hidden_test_files"`
+	Reference      int     `json:"reference_files"`
 	// Status is the stored validation's: valid, invalid, flaky, unchecked, or unvalidated; StatusSummary says why in words.
 	Status        string `json:"status"`
 	StatusSummary string `json:"status_summary"`
@@ -32,9 +32,12 @@ type taskInfo struct {
 }
 
 func taskInfoOf(ctx context.Context, fair *task.Fairness, t store.Task) taskInfo {
-	info := taskInfo{Name: t.Name, Source: t.Source, BaseCommit: t.BaseCommit, SolutionCommit: t.SolutionCommit, GradedBy: grading(t),
+	info := taskInfo{Name: t.Name, Source: t.Source, BaseCommit: t.BaseCommit, GradedBy: grading(t),
 		HiddenTests: len(t.HiddenTests), Reference: len(t.Reference), Status: task.StatusOf(t), StatusSummary: validationStatus(t),
 		NeedsReview: t.NeedsReview, UntestedHunks: untestedCount(t)}
+	if t.SolutionCommit != "" {
+		info.SolutionCommit = &t.SolutionCommit
+	}
 	if gaps, err := task.Gaps(ctx, fair, t); err == nil {
 		n := len(gaps)
 		info.UnstatedRequirements = &n
@@ -72,7 +75,7 @@ type weakTestsDoc struct {
 	Skipped  int      `json:"skipped"`
 	Untested []string `json:"untested"`
 	TimedOut int      `json:"timed_out"`
-	Reason   string   `json:"reason,omitempty"` // why nothing was checked
+	Reason   string   `json:"reason"` // why nothing was checked
 }
 
 func weakTestsOf(w *task.WeakTests) *weakTestsDoc {
@@ -90,20 +93,20 @@ type taskShowDoc struct {
 	header
 	taskInfo
 	Instruction string        `json:"instruction"`
-	Review      string        `json:"review,omitempty"` // ticket | history: why the instruction needs a review; empty when it does not
+	Review      string        `json:"review"` // ticket | history: why the instruction needs a review; empty when it does not
 	Setup       []string      `json:"setup"`
 	Verify      []string      `json:"verify"`
 	HiddenTests []string      `json:"hidden_tests"`
 	Reference   []string      `json:"reference"`
 	WeakTests   *weakTestsDoc `json:"weak_tests"`
-	Gaps        []task.Gap    `json:"unstated_requirement_details"`
+	Gaps        []gapDoc      `json:"unstated_requirement_details"`
 	// InstructionNamesFiles lists reference files the instruction names: it tells the agent where the fix goes.
 	InstructionNamesFiles []string `json:"instruction_names_reference_files"`
 }
 
 func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) taskShowDoc {
 	doc := taskShowDoc{header: env.hdr(), taskInfo: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Instruction: t.Instruction,
-		Setup: list(t.Setup), Verify: list(t.Verify), HiddenTests: list(t.HiddenTests), Reference: list(t.Reference), Gaps: []task.Gap{},
+		Setup: list(t.Setup), Verify: list(t.Verify), HiddenTests: list(t.HiddenTests), Reference: list(t.Reference), Gaps: []gapDoc{},
 		InstructionNamesFiles: []string{}}
 	switch {
 	case t.NeedsReview && isTicket(t):
@@ -116,7 +119,7 @@ func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) 
 		doc.WeakTests = weakTestsOf(stored.WeakTests)
 	}
 	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err == nil {
-		doc.Gaps = list(gaps)
+		doc.Gaps = gapDocs(gaps)
 	}
 	for _, p := range t.Reference {
 		if strings.Contains(t.Instruction, p) || strings.Contains(t.Instruction, filepath.Base(p)) {
@@ -124,6 +127,21 @@ func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) 
 		}
 	}
 	return doc
+}
+
+// gapDoc is task.Gap as the public schema has it: something a hidden test needs that nothing states.
+type gapDoc struct {
+	Kind string `json:"kind"`
+	Text string `json:"text"`
+	File string `json:"file"` // the hidden test file that needs it
+}
+
+func gapDocs(gaps []task.Gap) []gapDoc {
+	docs := []gapDoc{}
+	for _, g := range gaps {
+		docs = append(docs, gapDoc{Kind: g.Kind, Text: g.Text, File: g.File})
+	}
+	return docs
 }
 
 // validationExit is task validate's exit code for a result: a task that cannot be trusted is a failure.
@@ -149,7 +167,7 @@ type validatedDoc struct {
 	Arms           []string            `json:"arms"`
 	Repeats        int                 `json:"repeats"`
 	NeedsReview    bool                `json:"needs_review"`
-	Gaps           []task.Gap          `json:"unstated_requirement_details"`
+	Gaps           []gapDoc            `json:"unstated_requirement_details"`
 	HarnessChanged map[string][]string `json:"harness_changed"` // per arm: settings, hooks or MCP the arm changes
 	WeakTests      *weakTestsDoc       `json:"weak_tests"`
 	Judge          *judgeCheckDoc      `json:"judge"` // judge-graded tasks only
@@ -157,7 +175,7 @@ type validatedDoc struct {
 
 func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task, o task.ValidateOptions, result task.Validation) validatedDoc {
 	doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), Arms: []string{}, Repeats: result.RepeatCount(),
-		NeedsReview: t.NeedsReview, Gaps: []task.Gap{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests)}
+		NeedsReview: t.NeedsReview, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests)}
 	for _, a := range o.Arms {
 		doc.Arms = append(doc.Arms, a.Name)
 	}
@@ -165,7 +183,7 @@ func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task,
 		doc.HarnessChanged[arm] = list(files)
 	}
 	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err == nil {
-		doc.Gaps = list(gaps)
+		doc.Gaps = gapDocs(gaps)
 	}
 	return doc
 }
@@ -174,8 +192,8 @@ func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task,
 type batchRowDoc struct {
 	Name    string    `json:"name"`
 	Commit  string    `json:"commit"`
-	Problem string    `json:"problem,omitempty"` // why it was not imported or validated
-	Task    *taskInfo `json:"task"`              // null when the commit did not become a task
+	Problem string    `json:"problem"` // why it was not imported or validated
+	Task    *taskInfo `json:"task"`    // null when the commit did not become a task
 }
 
 func batchRowDocs(ctx context.Context, w *workspace, rows []batchRow) []batchRowDoc {

@@ -154,7 +154,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if env.JSON {
-		return env.emit(runOnceDoc{header: hdr("run once"), Run: runInfoOf(rec)})
+		return env.emit(runOnceDoc{header: hdr("run once"), Run: runInfoOf(env, rec)})
 	}
 	printRun(env, rec)
 	return ExitOK
@@ -424,7 +424,7 @@ func runShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, fmt.Errorf("run %s: %w", stored.ID, err))
 	}
 	if env.JSON {
-		return env.emit(runShowDocument(ctx, w, stored, rec, *diff, *logs))
+		return env.emit(runShowDocument(ctx, env, w, stored, rec, *diff, *logs))
 	}
 	printRun(env, rec)
 	if stored.ExperimentID != 0 {

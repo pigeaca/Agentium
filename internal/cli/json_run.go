@@ -23,31 +23,54 @@ type runInfo struct {
 	SignIn  string `json:"sign_in"`
 	Outcome string `json:"outcome"`
 	// Passed is the hidden verification's result; null when it did not run.
-	Passed             *bool        `json:"passed"`
-	CostUSD            float64      `json:"cost_usd"` // the agent's; JudgeCostUSD is the judge's, when it ran
-	JudgeCostUSD       float64      `json:"judge_cost_usd"`
-	CostEstimated      bool         `json:"cost_estimated"`
-	Turns              int          `json:"turns"`
-	DurationMS         int64        `json:"duration_ms"`
-	FirstRequestTokens int64        `json:"first_request_tokens"`
-	CLIVersion         string       `json:"cli_version"`
-	PermissionMode     string       `json:"permission_mode"`
-	Tools              int          `json:"tools"`
-	Skills             int          `json:"skills"`
-	Behavior           run.Behavior `json:"behavior"`
-	Drift              []string     `json:"drift"`
-	Notes              []string     `json:"notes"`
-	Started            time.Time    `json:"started"`
-	Finished           time.Time    `json:"finished"`
+	Passed             *bool       `json:"passed"`
+	CostUSD            float64     `json:"cost_usd"` // the agent's; JudgeCostUSD is the judge's, when it ran
+	JudgeCostUSD       float64     `json:"judge_cost_usd"`
+	CostEstimated      bool        `json:"cost_estimated"`
+	Turns              int         `json:"turns"`
+	DurationMS         int64       `json:"duration_ms"`
+	FirstRequestTokens int64       `json:"first_request_tokens"`
+	CLIVersion         string      `json:"cli_version"`
+	PermissionMode     string      `json:"permission_mode"`
+	Tools              int         `json:"tools"`
+	Skills             int         `json:"skills"`
+	Behavior           behaviorDoc `json:"behavior"`
+	Drift              []string    `json:"drift"`
+	Notes              []string    `json:"notes"`
+	Started            time.Time   `json:"started"`
+	Finished           time.Time   `json:"finished"`
 }
 
-func runInfoOf(rec run.Record) runInfo {
+// behaviorDoc is run.Behavior as the public schema has it, owned here so that a storage change cannot change the schema.
+type behaviorDoc struct {
+	FilesChanged  int      `json:"files_changed"`
+	LinesAdded    int      `json:"lines_added"`
+	LinesRemoved  int      `json:"lines_removed"`
+	TestsChanged  bool     `json:"tests_changed"`
+	TestsRemoved  int      `json:"tests_removed"`
+	ChecksChanged []string `json:"checks_changed"` // verification scripts and test-runner configuration the agent changed
+	ConfigChanged []string `json:"config_changed"` // of those, the configuration the reference solution does not change
+	RanTests      bool     `json:"ran_tests"`
+	RanChecks     bool     `json:"ran_checks"`
+	Commits       int      `json:"commits"`
+	BashCommands  int      `json:"bash_commands"`
+	Denials       int      `json:"denials"`
+	OutsideReads  int      `json:"outside_reads"`
+}
+
+func behaviorOf(b run.Behavior) behaviorDoc {
+	return behaviorDoc{FilesChanged: b.FilesChanged, LinesAdded: b.LinesAdded, LinesRemoved: b.LinesRemoved, TestsChanged: b.TestsChanged,
+		TestsRemoved: b.TestsRemoved, ChecksChanged: list(b.ChecksChanged), ConfigChanged: list(b.ConfigChanged), RanTests: b.RanTests, RanChecks: b.RanChecks,
+		Commits: b.Commits, BashCommands: b.BashCommands, Denials: b.Denials, OutsideReads: b.OutsideReads}
+}
+
+func runInfoOf(env Env, rec run.Record) runInfo {
 	spend := rec.Spend()
 	return runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
 		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
-		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: rec.Behavior,
-		Drift: list(rec.Drift), Notes: list(rec.Notes), Started: rec.Started, Finished: rec.Finished}
+		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),
+		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Started: rec.Started, Finished: rec.Finished}
 }
 
 type runOnceDoc struct {
@@ -65,10 +88,11 @@ type runShowDoc struct {
 		Attempt int    `json:"attempt"`
 	} `json:"experiment"`
 	Files []string `json:"files"` // the record's file names
-	// Diff, SetupLog and VerifyLog are set by --diff and --log: the file's text, or null when the file does not exist.
-	Diff      *string `json:"diff,omitempty"`
-	SetupLog  *string `json:"setup_log,omitempty"`
-	VerifyLog *string `json:"verify_log,omitempty"`
+	// Diff, SetupLog and VerifyLog are set by --diff and --log: the file's text. They are null when not asked for, and
+	// when the file does not exist.
+	Diff      *string `json:"diff"`
+	SetupLog  *string `json:"setup_log"`
+	VerifyLog *string `json:"verify_log"`
 }
 
 type runListEntry struct {
@@ -88,8 +112,8 @@ type runListDoc struct {
 }
 
 // runShowDocument describes a stored run; with diff or logs it adds those files' text.
-func runShowDocument(ctx context.Context, w *workspace, stored store.Run, rec run.Record, diff, logs bool) runShowDoc {
-	doc := runShowDoc{header: hdr("run show"), Run: runInfoOf(rec), Kind: stored.Kind, Files: []string{}}
+func runShowDocument(ctx context.Context, env Env, w *workspace, stored store.Run, rec run.Record, diff, logs bool) runShowDoc {
+	doc := runShowDoc{header: hdr("run show"), Run: runInfoOf(env, rec), Kind: stored.Kind, Files: []string{}}
 	if doc.Kind == "" {
 		doc.Kind = "task"
 	}

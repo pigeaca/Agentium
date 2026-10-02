@@ -116,12 +116,14 @@ Its limits:
 
 For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|list|diff|lint`, `task list|show|mine|validate|import|add|edit|rm`, `run once|show|list` and `start`. The experiment commands follow in part 1b (`experiment report --json` exists already, with its own shape).
 
-**`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off.
-- Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case, and lists are `[]`, never `null`. A field that can be unknown is `null`.
-- Failure: `{"schema": 1, "command": "...", "error": {"message": "...", "code": 1}}`. `code` is the exit code. Usage errors say only that the arguments are invalid. Messages show the home folder as `~`, the working folder as `<repo>` and the data folder as `<data>`.
+**`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off. Put it after the subcommand: `task list --json`. `task --json list` is deliberately not recognized.
+- Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case. Lists are `[]`, never `null`, and every field is always present: one that can be unknown or not asked for is `null` (`solution_commit`, `unstated_requirements`, `passed`, `diff`, `patch`, the logs of `run show`).
+- Failure: `{"schema": 1, "command": "...", "error": {"message": "...", "code": 1}}`. `code` is the exit code. `message` is the command's own error sentence, for example `task "nope": not found`, or `agentium task edit: give NAME and at least one of ...` for a usage error; when the arguments are wrong in a way that has no sentence, `invalid arguments: run the command with -h for its usage`. The usage text and earlier warnings are never part of it.
 - A result that is bad rather than broken keeps its normal document and exit 1: an invalid or flaky task (`task validate`), `start` with too few tasks (`"status": "too_few_tasks"`).
-- No ANSI escape ever, whatever `NO_COLOR`, `FORCE_COLOR` or the terminal say. Documents name no absolute path (repository, data folder, records, Claude Code), no user name and no secret, as reports do; repository files appear as relative paths.
-- Warnings for a person may still appear on stderr. `--json` with `-h` prints the usage as text. `context lint --hook` and `--print-hook` already print Claude Code's JSON and refuse `--json`.
+- **Unstable human text:** `log`, `status_summary`, `summary`, `message`, `warnings`, `notes`, `problems` and `readiness[].text` are for people. Their wording changes; do not parse it. Branch on the other fields, and on `status` values.
+- **`readiness[].status`** is one of `ok`, `missing` or `warning`, mapped from the labels the text shows, so a change of label does not change JSON.
+- No ANSI escape ever, whatever `NO_COLOR`, `FORCE_COLOR` or the terminal say. Documents name no absolute path (repository, data folder, records, Claude Code), no user name and no secret, as reports do; repository files appear as relative paths. In free text (messages, logs, warnings, notes) the data folder is shown as `<data>`, the repository as `<repo>` and the home folder as `~`, at whole path names only. Content that is yours (diffs, patches, logs of verification, instructions, file names) is never rewritten.
+- Warnings for a person may still appear on stderr. `--json` with `-h`, `-help` or `--help` prints the usage as text. `context lint --hook` and `--print-hook` already print Claude Code's JSON and refuse `--json`.
 
 **Exit codes**
 

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/pigeaca/agentium/internal/home"
 )
 
 // The --json contract (docs/guide.md, "Scripting and automation"): one JSON document on stdout, a top-level "schema"
@@ -39,6 +41,18 @@ type jsonState struct {
 	out     io.Writer
 	command string // "task list": what the handler's documents are headed with when it does not know its own name
 	written bool
+	// err is the last error reported through fail: the message of an error document, so an earlier warning on stderr
+	// cannot take its place.
+	err string
+	// roots are the repository's folders the command learned of (openProject, init, lint): free text names them <repo>.
+	roots []string
+}
+
+// noteRoot records the repository folder so that redact can hide it, wherever it is.
+func (env Env) noteRoot(root string) {
+	if env.json != nil && root != "" {
+		env.json.roots = append(env.json.roots, root)
+	}
 }
 
 // errorDoc is a failed command's document.
@@ -80,7 +94,7 @@ func splitJSONFlag(command string, args []string) (rest []string, want bool) {
 		switch a {
 		case "--json", "-json":
 			found = true
-		case "-h", "--help", "-help", "help":
+		case "-h", "--help", "-help": // a bare "help" is a subcommand, which never reaches here (or a name, which is not help)
 			help = true
 		}
 	}
@@ -125,15 +139,30 @@ func commandName(command string, args []string) string {
 	return command
 }
 
-// errorMessage turns what a failed command wrote to stderr into one message: the first paragraph (a usage text
-// follows it), the data and home folders shown as <data> and ~.
+// errorMessage is a failed command's message: the error fail recorded, else the last "agentium ..." line of stderr (a
+// usage error's own sentence; the usage text and earlier warnings are not part of it). Paths are redacted.
 func errorMessage(env Env, stderr string, code int) string {
-	text := strings.TrimSpace(stderr)
-	if strings.HasPrefix(text, "Usage:") {
-		text = "invalid arguments: run the command with -h for its usage"
+	text := ""
+	if env.json != nil {
+		text = env.json.err
 	}
-	text, _, _ = strings.Cut(text, "\n\n")
-	text = env.redact(strings.TrimPrefix(text, "agentium: "))
+	if text == "" {
+		stderr, _, _ = strings.Cut(strings.TrimSpace(stderr), "\n\nUsage:")
+		lines := strings.Split(strings.TrimSpace(stderr), "\n")
+		for i := len(lines) - 1; i >= 0; i-- {
+			if strings.HasPrefix(lines[i], "agentium") {
+				text = lines[i]
+				break
+			}
+		}
+		if text == "" && !strings.HasPrefix(strings.TrimSpace(stderr), "Usage:") && len(lines) > 0 {
+			text = lines[len(lines)-1]
+		}
+		if text == "" {
+			text = "invalid arguments: run the command with -h for its usage"
+		}
+	}
+	text = env.redact(strings.TrimPrefix(strings.TrimSpace(text), "agentium: "))
 	text = strings.Join(strings.Fields(strings.ReplaceAll(text, "\n", "; ")), " ")
 	if text == "" {
 		text = fmt.Sprintf("the command failed (exit %d)", code)
@@ -141,23 +170,69 @@ func errorMessage(env Env, stderr string, code int) string {
 	return text
 }
 
-// redact is the backstop of the documents' own care not to hold paths: the data folder, the working folder and the home
-// folder, in that order (they nest), are shown as <data>, <repo> and ~. A path of another spelling (a resolved
-// symbolic link) is not recognized, which is why documents are built without paths in the first place.
+// redact hides, in free text (messages, logs, warnings, notes), the data folder as <data>, the repository as <repo> and
+// the home folder as ~. It matches whole path names only: after a start, quote, space, = ( or a backtick, and before a
+// "/", quote, space, : , ; ) or the end, so /root does not touch root.md or /Users/alice. Content that is the
+// user's own (diffs, patches, logs, instructions, file names) is never passed through it. Documents hold no paths
+// elsewhere; this is the backstop for text that quotes one.
 func (env Env) redact(text string) string {
-	for _, r := range [][2]string{{env.Getenv("AGENTIUM_HOME"), "<data>"}, {env.Dir, "<repo>"}, {env.Getenv("HOME"), "~"}} {
-		if len(r[0]) < 2 {
-			continue
+	type spelling struct{ path, repl string }
+	var all []spelling
+	add := func(path, repl string) {
+		if path = strings.TrimRight(path, "/"); len(path) < 2 {
+			return
 		}
-		spellings := []string{r[0]}
-		if real, err := filepath.EvalSymlinks(r[0]); err == nil && real != r[0] {
-			spellings = []string{real, r[0]} // the resolved one first: it can contain the other (/private/var/x holds /var/x's tail)
-		}
-		for _, spelling := range spellings {
-			text = strings.ReplaceAll(text, strings.TrimSuffix(spelling, "/"), r[1])
+		all = append(all, spelling{path, repl})
+		if real, err := filepath.EvalSymlinks(path); err == nil && real != path {
+			all = append(all, spelling{real, repl})
 		}
 	}
+	if layout, err := home.Resolve(env.Getenv); err == nil {
+		add(layout.Root, "<data>")
+	}
+	add(env.Dir, "<repo>")
+	if env.json != nil {
+		for _, root := range env.json.roots {
+			add(root, "<repo>")
+		}
+	}
+	add(env.Getenv("HOME"), "~")
+	slices.SortStableFunc(all, func(a, b spelling) int { return len(b.path) - len(a.path) }) // nested folders first
+	for _, sp := range all {
+		text = replacePath(text, sp.path, sp.repl)
+	}
 	return text
+}
+
+// redactAll is redact for each text of a list.
+func (env Env) redactAll(texts []string) []string {
+	out := make([]string, len(texts))
+	for i, t := range texts {
+		out[i] = env.redact(t)
+	}
+	return out
+}
+
+// replacePath replaces path in text where it is a whole path name (see redact).
+func replacePath(text, path, repl string) string {
+	var out strings.Builder
+	for {
+		i := strings.Index(text, path)
+		if i < 0 {
+			break
+		}
+		end := i + len(path)
+		startOK := i == 0 || strings.IndexByte(" \t\r\n\"'=(`", text[i-1]) >= 0
+		endOK := end == len(text) || strings.IndexByte("/\"' \t\r\n:,;)", text[end]) >= 0
+		if startOK && endOK {
+			out.WriteString(text[:i] + repl)
+		} else {
+			out.WriteString(text[:end])
+		}
+		text = text[end:]
+	}
+	out.WriteString(text)
+	return out.String()
 }
 
 func (env Env) emitError(command string, code int, message string) {
@@ -193,7 +268,7 @@ func (env Env) emitTo(doc any) error {
 		return err
 	}
 	env.json.written = true
-	_, err := io.WriteString(env.json.out, env.redact(buf.String()))
+	_, err := env.json.out.Write(buf.Bytes())
 	return err
 }
 

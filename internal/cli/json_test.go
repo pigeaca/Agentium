@@ -238,6 +238,10 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 	if got.get("status") != "preview" && got.get("status") != "not_ready" {
 		t.Errorf("start status: %s", got.stdout)
 	}
+	assertKeys(t, got.doc, "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run_command,schema,status")
+	assertKeys(t, got.doc["experiment"], "budget_usd,model,name,repeats_per_arm,runs,tasks,template")
+	assertKeys(t, got.doc["project"], "id,name")
+	assertKeys(t, got.doc["readiness"].([]any)[0], "status,text")
 	if got.get("nothing_was_run") != true || got.get("experiment", "name") != "quick-aa-baseline" || got.get("experiment", "runs") != float64(16) ||
 		got.get("project", "name") == nil || got.get("run_command") != "agentium experiment run quick-aa-baseline" {
 		t.Errorf("start: %s", got.stdout)
@@ -409,6 +413,11 @@ func TestSplitJSONFlag(t *testing.T) {
 		{"experiment", []string{"report", "--json"}, []string{"report", "--json"}, false},
 		{"run", []string{"calibrate", "--json"}, []string{"calibrate", "--json"}, false},
 		{"context", []string{"lint", "-json"}, []string{"lint"}, true},
+		{"context", []string{"snapshot", "help", "--json"}, []string{"snapshot", "help"}, true}, // "help" is a name here
+		{"task", []string{"show", "help", "--json"}, []string{"show", "help"}, true},
+		{"task", []string{"add", "n", "--include", "help", "--json"}, []string{"add", "n", "--include", "help"}, true},
+		{"task", []string{"show", "x", "--json", "--help"}, []string{"show", "x", "--help"}, false},
+		{"task", []string{"show", "x", "--json", "-help"}, []string{"show", "x", "-help"}, false},
 		{"task", []string{"add", "n", "--instruction", "--", "--json"}, []string{"add", "n", "--instruction", "--", "--json"}, false},
 	}
 	for _, c := range cases {

@@ -64,6 +64,7 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	env.noteRoot(info.Root)
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
 		return fail(env, err)
@@ -102,7 +103,9 @@ func runInit(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if env.JSON {
-		return env.emit(initDocument(saved, info, resolved))
+		doc := initDocument(saved, info, resolved)
+		doc.Warnings = env.redactAll(doc.Warnings)
+		return env.emit(doc)
 	}
 	printInit(env, saved, info, layout, resolved)
 	return ExitOK

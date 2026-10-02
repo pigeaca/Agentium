@@ -88,6 +88,7 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 	if root, err = filepath.EvalSymlinks(root); err != nil {
 		return nil, fmt.Errorf("resolve repository root: %w", err)
 	}
+	env.noteRoot(root)
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
 		return nil, err
@@ -173,7 +174,7 @@ func contextShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if env.JSON {
-		return env.emit(contextShowDocument(w.project.Name, src.Describe(), resolved, len(aboveRepository(w.root))))
+		return env.emit(contextShowDocument(env, w.project.Name, src.Describe(), resolved, len(aboveRepository(w.root))))
 	}
 	st := env.style()
 	if err := printContext(env.Stdout, st, w.project.Name, src.Describe(), resolved); err != nil {
@@ -260,7 +261,7 @@ type contextEntryDoc struct {
 	Kind         string `json:"kind"`
 	Bytes        int    `json:"bytes"`
 	StartupBytes int    `json:"startup_bytes"`
-	Via          string `json:"via,omitempty"`
+	Via          string `json:"via"`
 }
 
 type contextShowDoc struct {
@@ -275,9 +276,9 @@ type contextShowDoc struct {
 	AboveRepository int `json:"above_repository_files"`
 }
 
-func contextShowDocument(name, where string, resolved claudectx.Context, above int) contextShowDoc {
+func contextShowDocument(env Env, name, where string, resolved claudectx.Context, above int) contextShowDoc {
 	doc := contextShowDoc{header: hdr("context show"), Project: name, Where: where, Context: contextSize(resolved), Entries: []contextEntryDoc{},
-		Linked: list(resolved.Linked), Warnings: list(resolved.Warnings), AboveRepository: above}
+		Linked: list(resolved.Linked), Warnings: env.redactAll(resolved.Warnings), AboveRepository: above}
 	for _, e := range resolved.Entries {
 		doc.Entries = append(doc.Entries, contextEntryDoc{Path: e.Path, Kind: e.Kind, Bytes: e.Bytes, StartupBytes: e.StartupBytes, Via: e.Via})
 	}
@@ -296,6 +297,10 @@ type snapshotInfo struct {
 type snapshotDoc struct {
 	header
 	snapshotInfo
+	// NotIncludedLinked are documents the context links to that this snapshot lacks (add them with --include).
+	NotIncludedLinked []string `json:"not_included_linked"`
+	// UncapturedChanges are changed files that are not context and so not in a --working-tree snapshot; always empty without it.
+	UncapturedChanges []string `json:"uncaptured_changes"`
 }
 
 type snapshotListDoc struct {
@@ -312,7 +317,7 @@ type diffDoc struct {
 	DeltaTokens int     `json:"delta_tokens_estimated"`
 	Changed     bool    `json:"changed"`
 	Stat        string  `json:"stat"`
-	Patch       *string `json:"patch,omitempty"` // with --patch
+	Patch       *string `json:"patch"` // with --patch, else null
 }
 
 // stringList is a repeatable string flag.
@@ -376,8 +381,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	if env.JSON {
-		return env.emit(snapshotDoc{header: hdr("context snapshot"), snapshotInfo: snapshotInfo{Name: name, Source: label, Commit: commit,
-			Files: len(manifest.Files), StartupTokens: claudectx.EstimateTokens(manifest.StartupBytes), Warnings: list(manifest.Warnings)}})
+		return snapshotJSON(ctx, env, w, src, manifest, snapshotInfo{Name: name, Source: label, Commit: commit}, *workingTree)
 	}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
@@ -398,6 +402,20 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, warning(st, w))
 	}
 	return ExitOK
+}
+
+// snapshotJSON prints context snapshot's --json document: what the text reports, and warns about.
+func snapshotJSON(ctx context.Context, env Env, w *workspace, src source.Source, manifest snapshot.Manifest, info snapshotInfo, workingTree bool) int {
+	info.Files, info.StartupTokens, info.Warnings = len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes), env.redactAll(manifest.Warnings)
+	doc := snapshotDoc{header: hdr("context snapshot"), snapshotInfo: info, NotIncludedLinked: list(notIncluded(src, manifest)), UncapturedChanges: []string{}}
+	if workingTree {
+		changes, err := snapshot.UncapturedChanges(ctx, w.root, manifest.Paths())
+		if err != nil {
+			return fail(env, err)
+		}
+		doc.UncapturedChanges = list(changes)
+	}
+	return env.emit(doc)
 }
 
 // saveSnapshot builds the snapshot's commit in Agentium's repository and records it under name.
@@ -469,7 +487,7 @@ func contextList(ctx context.Context, env Env, args []string) int {
 				return fail(env, fmt.Errorf("snapshot %s: %w", snap.Name, err))
 			}
 			doc.Snapshots = append(doc.Snapshots, snapshotInfo{Name: snap.Name, Source: snap.Source, Commit: snap.SourceCommit, Files: len(manifest.Files),
-				StartupTokens: claudectx.EstimateTokens(manifest.StartupBytes), Warnings: list(manifest.Warnings)})
+				StartupTokens: claudectx.EstimateTokens(manifest.StartupBytes), Warnings: env.redactAll(manifest.Warnings)})
 		}
 		return env.emit(doc)
 	}

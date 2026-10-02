@@ -42,7 +42,7 @@ type startExperiment struct {
 }
 
 type readinessDoc struct {
-	Status string `json:"status"` // ok, MISSING, or a warning's label
+	Status string `json:"status"` // ok | missing | warning (a fixed set, whatever the text's label says)
 	Text   string `json:"text"`
 }
 
@@ -60,7 +60,7 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 		if cli, err := claudePath(s.env); err == nil {
 			text = strings.ReplaceAll(text, cli, "claude")
 		}
-		return text
+		return s.env.redact(text)
 	}
 	if text := strings.TrimRight(clean(s.log.String()), "\n"); text != "" {
 		doc.Log = strings.Split(text, "\n")
@@ -70,7 +70,7 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 		doc.Experiment = &startExperiment{Name: name, Template: d.Template, Model: d.Model, Tasks: len(d.Tasks), RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: budget.total}
 		doc.Ready = review.Readiness.Ready
 		for _, c := range review.Readiness.Checks {
-			doc.Readiness = append(doc.Readiness, readinessDoc{Status: c.Status, Text: clean(c.Text)})
+			doc.Readiness = append(doc.Readiness, readinessDoc{Status: readinessStatus(c.Status), Text: clean(c.Text)})
 		}
 		doc.Calibrations = len(review.Readiness.Calibrations)
 		doc.CalibrationUSD, _ = experiment.CalibrationCosts(review.Readiness.Calibrations)
@@ -82,4 +82,16 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 		doc.Experiment = &startExperiment{Name: name}
 	}
 	return s.env.emitCode(doc, code)
+}
+
+// readinessStatus maps the readiness label shown to people ("ok", "MISSING", "WARNING") to the fixed set of the schema;
+// a label it does not know is a warning, which never blocks.
+func readinessStatus(label string) string {
+	switch strings.ToLower(label) {
+	case "ok":
+		return "ok"
+	case "missing":
+		return "missing"
+	}
+	return "warning"
 }

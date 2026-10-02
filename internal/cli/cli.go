@@ -116,6 +116,9 @@ func dispatch(ctx context.Context, env Env, command string, args []string) int {
 
 // fail reports a runtime error and returns ExitError.
 func fail(env Env, err error) int {
+	if env.json != nil {
+		env.json.err = err.Error()
+	}
 	fmt.Fprintf(env.Stderr, "agentium: %v\n", err)
 	return ExitError
 }
