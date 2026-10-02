@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -409,27 +410,78 @@ func (inv Invocation) deniedWrites(userConfig string, environ []string) []string
 	return withForms(paths)
 }
 
-// forms are p cleaned and, when it exists, its symlink-resolved form: the sandbox matches the real path.
-//
-// A name directly in /tmp is the exception. Another local user can create any name there that is not taken yet, as a
-// link too (/tmp/claude and /tmp/cc-socks carry no uid), and following such a link would deny its target: anything the
-// other user chose, which can make a run refuse to start. So for /tmp only the system's own /tmp → /private/tmp link is
-// followed; for any other target the /private/tmp twin is listed instead.
+// forms are p cleaned and, when different, its real form (realForm): the sandbox matches real paths, the Read tool the
+// path as written.
 func forms(p string) []string {
 	out := []string{filepath.Clean(p)}
-	resolved, err := filepath.EvalSymlinks(p)
-	if err != nil || resolved == out[0] {
-		return out
+	if real := realForm(out[0]); real != out[0] {
+		out = append(out, real)
 	}
-	if dir := filepath.Dir(out[0]); dir == "/tmp" || dir == "/private/tmp" {
-		if twin := filepath.Join("/private/tmp", filepath.Base(out[0])); resolved != twin {
-			if twin != out[0] {
-				out = append(out, twin)
-			}
-			return out
+	return out
+}
+
+// realForm is p as the macOS sandbox matches it: symbolic links resolved in the longest existing prefix, and the
+// missing tail appended as written, so a denied path that a warm-up or another run creates after the agent starts is
+// still denied where it will lie (Claude Code itself lists only the unresolved form of a path that does not exist, or
+// of one that resolves elsewhere, and the sandbox ignores a deny on a form that is not the real one).
+//
+// Below /tmp (or /private/tmp) the entry directly in it decides, by its owner (tmpForm). /tmp is sticky: only an
+// entry's owner (or root) can remove or replace it, but any local user can create a name not taken yet, as a link too
+// (/tmp/claude and /tmp/cc-socks carry no uid). Following another user's link would deny its target, anything they
+// chose, which can make a run refuse to start; resolving through another user's folder races them swapping it for
+// such a link between two looks. So only the user's own entries and root's are resolved through.
+func realForm(p string) string {
+	for _, tmp := range []string{"/tmp", "/private/tmp"} {
+		rel, err := filepath.Rel(tmp, p)
+		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
 		}
+		name, rest, _ := strings.Cut(rel, string(filepath.Separator))
+		owner, exists := entryOwner(filepath.Join(tmp, name))
+		return tmpForm(p, tmp, name, rest, exists, owner, os.Getuid())
 	}
-	return append(out, resolved)
+	return resolvedPrefix(p)
+}
+
+// tmpForm is the real form of p, the entry name in tmp (/tmp or /private/tmp) followed by rest, given who owns the
+// entry: the user uid's own entry or root's is resolved through, like any path (its owner alone can replace it); for
+// another user's entry, or a missing one, only tmp itself (the system's /tmp → /private/tmp link) is resolved, and the
+// rest is kept as written, so neither a link that user made nor one they make after this look is followed.
+func tmpForm(p, tmp, name, rest string, exists bool, owner uint32, uid int) string {
+	if exists && (owner == 0 || int64(owner) == int64(uid)) {
+		return resolvedPrefix(p)
+	}
+	return filepath.Join(resolvedPrefix(tmp), name, rest)
+}
+
+// entryOwner is the uid owning path itself (a link is not followed), and whether it exists. An entry whose owner
+// cannot be told is reported missing, so it is not resolved through.
+func entryOwner(path string) (uint32, bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return 0, false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return st.Uid, true
+}
+
+// resolvedPrefix resolves symbolic links in the longest existing prefix of p and appends the rest as written.
+func resolvedPrefix(p string) string {
+	var missing []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Join(append([]string{p}, missing...)...)
+		}
+		missing = append([]string{filepath.Base(p)}, missing...)
+		p = parent
+	}
 }
 
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).

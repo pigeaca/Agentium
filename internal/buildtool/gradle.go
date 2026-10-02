@@ -19,7 +19,9 @@ import (
 // with network. The agent's GRADLE_USER_HOME is its own, in the run cache, because Gradle writes there; the run's
 // preparation clones the wrapper's distribution into it (copy-on-write where the file system can) and writes
 // org.gradle.daemon=false to its gradle.properties, which beats the project's. Dependencies come from the deps folder's
-// read-only cache (GRADLE_RO_DEP_CACHE). Gradle's file-lock service binds a local UDP socket, so Gradle projects need the
+// read-only cache (GRADLE_RO_DEP_CACHE, gradleRO), which holds nothing but modules-2: agents are denied the deps
+// folder's whole Gradle home (DepsDenied), whose other caches record what warm-ups compiled (see prepareGradleDeps for
+// the layout). Gradle's file-lock service binds a local UDP socket, so Gradle projects need the
 // sandbox's allowLocalBinding, which grants more than binding: any local port, inbound, and outbound to localhost
 // (claude.LocalBindingRefusal). It is opt-in per project (agentium init --allow-local-binding); without it, agent runs
 // on a Gradle project do not start.
@@ -56,7 +58,7 @@ func gradleProfile() Profile {
 				env = append(env, "GRADLE_USER_HOME="+filepath.Join(c.BuildCache, "gradle"))
 			}
 			if c.Deps != "" {
-				env = append(env, "GRADLE_RO_DEP_CACHE="+filepath.Join(c.Deps, "gradle", "caches"))
+				env = append(env, "GRADLE_RO_DEP_CACHE="+filepath.Join(c.Deps, gradleRO))
 			}
 			return env
 		},
@@ -66,7 +68,7 @@ func gradleProfile() Profile {
 		// project (Checkstyle, JaCoCo, ...: the agent may run tasks that `test` does not reach), through an init script
 		// given to this step only. The warm-up tolerates failures.
 		PrepareDeps: prepareGradleDeps,
-		WarmRecipe:  noCleanupScript + resolveAllScript,
+		WarmRecipe:  noCleanupScript + resolveAllScript + gradleLayout,
 		Warm: func(_, deps string, has func(string) bool) []WarmStep {
 			gradle := "gradle"
 			if has("gradlew") {
@@ -105,10 +107,17 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 	}
 	props := gradleHomeProps
 	if deps != "" {
-		// Toolchain JDKs the warm-up downloaded live in the deps folder's Gradle home, not in this run's: point Gradle
-		// there, and never let it download one (the sandbox has no network anyway).
-		props += "org.gradle.java.installations.paths=" + filepath.Join(deps, "gradle", "jdks") + "\n" +
-			"org.gradle.java.installations.auto-download=false\n"
+		// Toolchain JDKs the warm-up downloaded live in the deps folder (gradleJDKs, outside its Gradle home, which the
+		// agent may not read), not in this run's home: point Gradle at each, and never let it download one (the sandbox
+		// has no network anyway).
+		jdks, err := provisionedJDKs(filepath.Join(deps, gradleJDKs))
+		if err != nil {
+			return err
+		}
+		if len(jdks) > 0 {
+			props += "org.gradle.java.installations.paths=" + strings.Join(jdks, ",") + "\n"
+		}
+		props += "org.gradle.java.installations.auto-download=false\n"
 	}
 	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(props), 0o600); err != nil {
 		return err
@@ -134,6 +143,77 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 		return fmt.Errorf("clone the wrapper distribution: %w", err)
 	}
 	return nil
+}
+
+// provisionedJDKs lists the Java homes of the toolchain JDKs Gradle provisioned into dir, for
+// org.gradle.java.installations.paths: Gradle takes each entry as one installation, so dir itself lists nothing (Gradle
+// 8.10, checked offline; so does dir/<name>). Gradle unpacks a JDK to <name>/<jdk> (Contents/Home within it on macOS),
+// or straight into <name>, and marks it provisioned when done (provisioned.ok in <name>/<jdk>, .ready in <name>); an
+// unmarked one may still be unpacking. Only real folders inside dir are listed, never a link out of it, nor a path
+// with a comma (the list's separator). A missing dir lists nothing.
+func provisionedJDKs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("toolchain JDKs: %w", err)
+	}
+	realDir := func(path string) bool {
+		info, err := os.Lstat(path)
+		return err == nil && info.IsDir()
+	}
+	marked := func(path string) bool {
+		for _, marker := range []string{".ready", "provisioned.ok"} {
+			if info, err := os.Lstat(filepath.Join(path, marker)); err == nil && info.Mode().IsRegular() {
+				return true
+			}
+		}
+		return false
+	}
+	// home is jdk's Java home (jdk itself, or Contents/Home in it): every folder down to bin a real one, bin/java a file.
+	home := func(jdk string) (string, bool) {
+		for _, sub := range [][]string{nil, {"Contents", "Home"}} {
+			path, ok := jdk, true
+			for _, part := range append(sub, "bin") {
+				path = filepath.Join(path, part)
+				ok = ok && realDir(path)
+			}
+			if info, err := os.Lstat(filepath.Join(path, "java")); ok && err == nil && info.Mode().IsRegular() {
+				return filepath.Dir(path), true
+			}
+		}
+		return "", false
+	}
+	var homes []string
+	add := func(h string) {
+		if !strings.Contains(h, ",") && !slices.Contains(homes, h) {
+			homes = append(homes, h)
+		}
+	}
+	for _, e := range entries {
+		root := filepath.Join(dir, e.Name())
+		if !e.IsDir() || !realDir(root) { // ReadDir does not follow links: a link is not a folder here
+			continue
+		}
+		if h, ok := home(root); ok && marked(root) {
+			add(h)
+			continue
+		}
+		inner, err := os.ReadDir(root)
+		if err != nil {
+			return nil, fmt.Errorf("toolchain JDKs: %w", err)
+		}
+		for _, j := range inner {
+			jdk := filepath.Join(root, j.Name())
+			if !j.IsDir() || !realDir(jdk) || !(marked(jdk) || marked(root)) {
+				continue
+			}
+			if h, ok := home(jdk); ok {
+				add(h)
+			}
+		}
+	}
+	return homes, nil
 }
 
 // stopGradleDaemons ends the Gradle daemons the run started. It starts from the machine's own process list (the user's
@@ -208,13 +288,18 @@ func daemonLog(root, file, name string) bool {
 	return len(parts) == 3 && parts[0] == "daemon" && parts[1] != ".." && parts[2] == name
 }
 
-// prepareGradleDeps turns the cache cleanup of the deps folder's Gradle home off, both as a property and as an init
-// script (which one a Gradle version honors varies): cleanup deletes cache entries that a build has not used for a
-// while, and agents read these files while later warm-ups run.
+// prepareGradleDeps lays out the deps folder's Gradle home (gradleLayout), then turns its cache cleanup off, both as a
+// property and as an init script (which one a Gradle version honors varies): cleanup deletes cache entries that a build
+// has not used for a while, and agents read these files while later warm-ups run. It runs under the warm-up lock.
 func prepareGradleDeps(deps string) error {
 	guh := filepath.Join(deps, "gradle")
 	if err := os.MkdirAll(filepath.Join(guh, "init.d"), 0o700); err != nil {
 		return err
+	}
+	for _, s := range gradleShared {
+		if err := linkOutside(filepath.Join(guh, s.inHome), filepath.Join(deps, s.outside)); err != nil {
+			return fmt.Errorf("lay out the Gradle home: %w", err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(gradleHomeProps+"org.gradle.cache.cleanup=false\n"), 0o600); err != nil {
 		return err
@@ -224,6 +309,101 @@ func prepareGradleDeps(deps string) error {
 	}
 	os.Remove(filepath.Join(guh, "init.d", "agentium-resolve-all.gradle")) // an earlier recipe's place: it must not load in every step
 	return os.WriteFile(filepath.Join(guh, resolveAllScriptName), []byte(resolveAllScript), 0o600)
+}
+
+// gradleRO is the deps folder's read-only dependency cache for agents (GRADLE_RO_DEP_CACHE), and gradleJDKs its
+// toolchain JDKs (org.gradle.java.installations.paths): both outside its Gradle home, deps/gradle, which agents may not
+// read at all (DepsDenied).
+const (
+	gradleRO   = "gradle-ro"
+	gradleJDKs = "gradle-jdks"
+)
+
+// gradleShared are the folders of the deps Gradle home that agents need (inHome, relative to it), each kept outside the
+// home (outside, relative to the deps folder) with a symbolic link in its place, so warm-ups write them where Gradle
+// expects and agents read them where nothing else is.
+//
+// Why links from the home out, and not the other way round: the sandbox matches a file's real path, so a link from
+// gradle-ro into the denied home would be denied too; a copy refreshed after each warm-up would cost time and space per
+// warm-up (a full copy where the file system cannot clone) and old copies could not be removed while a build reads
+// them. With the links, gradle-ro holds only modules-2 by construction, whatever a later warm-up adds to the home (a
+// new Gradle version's caches/<version>, transforms, jars), and stays current with no refresh. Gradle asks that a
+// read-only cache not change while builds use it; warm-ups only add files to modules-2, with cleanup off, as they did
+// when agents read caches/modules-2 itself.
+var gradleShared = []struct{ inHome, outside string }{
+	{filepath.Join("caches", "modules-2"), filepath.Join(gradleRO, "modules-2")},
+	{"jdks", gradleJDKs},
+}
+
+// gradleLayout states the layout in the warm-up's recipe (WarmRecipe): a deps folder laid out before it is laid out
+// again, since only a warm-up, under its lock, makes the links, and the stamps of the earlier recipe are not found.
+const gradleLayout = "layout: caches/modules-2 -> ../../gradle-ro/modules-2, jdks -> ../gradle-jdks\n"
+
+// linkOutside makes link a relative symbolic link to the folder outside, creating the folder when missing. A folder at
+// link (an earlier layout) is moved to outside in one rename, so an agent of an earlier Agentium reading through link
+// finds it again once the link is made. It refuses, changing nothing, when both are folders (which one is current is
+// unknown: a person removes one), or when either is something else: only Agentium writes the deps folder, so these mean it was
+// changed by hand. It runs under the warm-up lock; a crash between the rename and the link leaves a state the next call
+// completes.
+func linkOutside(link, outside string) error {
+	target, err := filepath.Rel(filepath.Dir(link), outside)
+	if err != nil {
+		return err
+	}
+	isDir := func(path string) (bool, error) {
+		info, err := os.Lstat(path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return false, nil
+		case err != nil:
+			return false, err
+		case !info.IsDir():
+			return false, fmt.Errorf("%s is not a folder", path)
+		}
+		return true, nil
+	}
+	info, err := os.Lstat(link)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return err
+	case info.Mode()&os.ModeSymlink != 0:
+		if got, err := os.Readlink(link); err == nil && got == target {
+			if ok, err := isDir(outside); ok || err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(link); err != nil { // another target, or a dangling link: made again below
+			return err
+		}
+	case info.IsDir():
+		if ok, err := isDir(outside); err != nil {
+			return err
+		} else if ok {
+			// Gradle 9.7.1 downloads through the link, and 8.10 kept it in an offline build that locked the cache; a
+			// version that replaced it with a folder would leave this state after one warm-up, and setup then fails
+			// closed until a person removes one.
+			return fmt.Errorf("%s and %s are both folders (a Gradle version may have replaced the link with a folder): remove one by hand, then set up again; the deps folder holds only downloads, and the next warm-up fetches what is missing and makes the link again", link, outside)
+		}
+		if err := os.MkdirAll(filepath.Dir(outside), 0o700); err != nil {
+			return err
+		}
+		if err := os.Rename(link, outside); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("%s is not a folder or a link", link)
+	}
+	if _, err := isDir(outside); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(link), 0o700); err != nil {
+		return err
+	}
+	return os.Symlink(target, link)
 }
 
 // noCleanupScript turns the cache cleanup off. settings.caches is Gradle 8.0+; older versions honor the property
