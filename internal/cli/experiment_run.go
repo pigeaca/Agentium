@@ -164,6 +164,11 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	out := env.Stdout
 	if stored.Lock == nil {
 		fmt.Fprintf(out, "Experiment %s: %s; not run yet. Preview: %s\n", rest[0], experiment.DescribeArms(d), env.style().Command("agentium experiment plan "+rest[0]))
+		if spent, err := w.service().CalibrationSpend(ctx, stored.ID); err != nil {
+			return fail(env, err)
+		} else if spent > 0 {
+			fmt.Fprintf(out, "Calibration runs so far: $%.2f (in its budget)\n", spent)
+		}
 		return ExitOK
 	}
 	var lock experiment.Lock

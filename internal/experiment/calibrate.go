@@ -143,6 +143,17 @@ func (r Runner) calibrate(ctx context.Context, stored store.Experiment, d Design
 	if err != nil || len(needs) == 0 {
 		return err
 	}
+	// The calibrations count against the budget, and the experiment must still fit a pair after them: refuse before
+	// spending, with nothing locked.
+	prior, err := p.CalibrationSpend(ctx, stored.ID)
+	if err != nil {
+		return err
+	}
+	_, capUSD := CalibrationCosts(needs)
+	if need := prior + capUSD + d.PairCapUSD(); need > d.BudgetUSD+1e-9 {
+		return UsageError(fmt.Sprintf("the budget $%.2f cannot hold the calibrations this experiment needs (up to $%.2f, with $%.2f already spent on earlier ones) and one pair of runs at their caps ($%.2f): "+
+			"raise it with --budget, or calibrate ahead with agentium run calibrate", d.BudgetUSD, capUSD, prior, d.PairCapUSD()))
+	}
 	head, err := r.KeepHead(ctx)
 	if err != nil {
 		return err

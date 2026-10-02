@@ -414,7 +414,11 @@ func runShow(ctx context.Context, env Env, args []string) int {
 				}
 			}
 		}
-		fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
+		if stored.Kind == "calibration" {
+			fmt.Fprintf(env.Stdout, "  experiment   %s (a calibration before its first pair)\n", name)
+		} else {
+			fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
+		}
 	}
 	if entries, err := os.ReadDir(rec.RecordsDir); err == nil {
 		var names []string

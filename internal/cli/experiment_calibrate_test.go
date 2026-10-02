@@ -155,8 +155,7 @@ func TestFailedCalibrationStopsTheExperimentBeforeAnyTaskRun(t *testing.T) {
 	}
 }
 
-// A model A/B calibrates each model once, however many of its arms there are, and a budget that cannot hold the
-// calibrations is refused before anything is spent.
+// A model A/B calibrates each model once, however many of its arms there are.
 func TestModelABCalibratesBothModels(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
@@ -211,4 +210,103 @@ func TestRunOnceUsesItsOwnModelsCalibration(t *testing.T) {
 	expect(t, f.run(ctx, "run", "once", "value", "--model", sonnet), ExitOK, "outcome      unfair", "tools differ (added Monitor; missing none)")
 	// Without a calibration on its model, the newest of any is used with the note that says so, as before.
 	expect(t, f.run(ctx, "run", "once", "value", "--model", "claude-haiku-5"), ExitOK, "note: the calibration used "+opus+", this run claude-haiku-5")
+}
+
+// A budget that cannot hold the calibrations and one pair at its caps is refused before anything is spent, naming the
+// remedies; calibrations that failed earlier count, so a retried calibration is paid from the same budget.
+func TestExperimentRefusesABudgetBelowItsCalibrations(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	// The pair's caps are $6; two Opus calibrations may cost up to $1.00 more.
+	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--model", opus, "--task", "value", "--repeats", "1", "--budget", "6.5",
+		"--concurrency", "1"), ExitOK)
+	got := f.run(ctx, "experiment", "run", "ctx")
+	expect(t, got, ExitUsage, "the budget $6.50 cannot hold the calibrations this experiment needs (up to $1.00", "one pair of runs at their caps ($6.00)",
+		"--budget", "agentium run calibrate")
+	if log := calibrationsLog(t, ctrl); len(log) != 0 {
+		t.Errorf("a refused experiment spent on calibrations: %v", log)
+	}
+	expect(t, f.run(ctx, "experiment", "show", "ctx"), ExitOK, "not run yet")
+
+	// Raised, it goes on: a calibration that fails costs money, and the retry counts the failed runs too.
+	if err := os.WriteFile(filepath.Join(ctrl, "calibration-fail"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitError, "failed its checks")
+	show := f.run(ctx, "experiment", "show", "ctx")
+	expect(t, show, ExitOK, "Calibration runs so far: $0.04 (in its budget)")
+	if err := os.Remove(filepath.Join(ctrl, "calibration-fail")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "ctx", "--budget", "8"), ExitOK, "Calibrating 2 context(s)", "calibration $0.08 of it")
+	// The failed and the healthy calibration runs all count in the budget.
+	db, id := openFixtureDB(t, f)
+	e, _ := db.ExperimentByName(ctx, id, "ctx")
+	if calRuns, err := db.ExperimentCalibrationRuns(ctx, e.ID); err != nil || len(calRuns) != 4 {
+		t.Errorf("calibration runs: %d, %v; want 2 failed and 2 healthy", len(calRuns), err)
+	}
+	run := f.run(ctx, "run", "list")
+	var calID string
+	for _, line := range strings.Split(run.stdout, "\n") {
+		if strings.Contains(line, "(calibration)") {
+			calID = strings.Fields(line)[0]
+		}
+	}
+	expect(t, f.run(ctx, "run", "show", calID), ExitOK, "experiment   ctx (a calibration before its first pair)")
+}
+
+// A refusal that needs no calibration (here a Gradle project without the opt-in) comes before any calibration is paid for.
+func TestRefusedExperimentSpendsNothingOnCalibrations(t *testing.T) {
+	f, ctrl := experimentFixture(t) // not parallel: PATH is the test process's own
+	ctx := context.Background()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gradle"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeFile(t, f.repo, "build.gradle", "\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "build file")
+	writeFile(t, f.repo, "tests/tool_test.sh", "grep -q second value.txt\n")
+	writeFile(t, f.repo, "value.txt", "new second\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value second")
+	expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", "tool", "--verify", "sh run_tests.sh"), ExitOK)
+	expect(t, f.run(ctx, "task", "edit", "tool", "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "tool", "--snapshot", "lean"), ExitOK, "valid")
+	expect(t, f.run(ctx, "experiment", "new", "g", "--b", "lean", "--model", opus, "--task", "tool", "--repeats", "1", "--budget", "40"), ExitOK)
+	before, _ := paidRuns(t, f, ctrl)
+	expect(t, f.run(ctx, "experiment", "run", "g"), ExitError, "agentium init --allow-local-binding")
+	if log := calibrationsLog(t, ctrl); len(log) != 0 {
+		t.Errorf("a refused experiment calibrated: %v", log)
+	}
+	if n, _ := paidRuns(t, f, ctrl); n != before {
+		t.Errorf("%d run(s) stored by a refused experiment", n-before)
+	}
+}
+
+// A calibration run that cannot finish (an error from the calibrator, not an unhealthy result) also stops the experiment
+// before it locks; the experiment is not left half-run, and a later run calibrates and goes on.
+func TestCalibrationErrorStopsTheExperimentBeforeTheLock(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "ctx", "--b", "lean", "--model", opus, "--task", "value", "--repeats", "1", "--seed", "5",
+		"--budget", "40", "--concurrency", "1"), ExitOK)
+	if err := os.WriteFile(filepath.Join(ctrl, "calibration-crash"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := f.run(ctx, "experiment", "run", "ctx")
+	if got.code != ExitError || strings.Contains(got.stdout, "Locked:") || strings.Contains(got.stdout, "[1/2]") {
+		t.Errorf("exit %d after a calibration that could not finish:\n%s\n%s", got.code, got.stdout, got.stderr)
+	}
+	expect(t, f.run(ctx, "experiment", "show", "ctx"), ExitOK, "not run yet")
+	if models := storedCalibrations(t, f, "base", ""); slices.Contains(models, opus) || len(experimentRuns(t, f, "ctx")) != 0 {
+		t.Errorf("a calibration was saved or a task ran after the error: %v", models)
+	}
+	if err := os.Remove(filepath.Join(ctrl, "calibration-crash")); err != nil {
+		t.Fatal(err)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "ctx"), ExitOK, "Calibrating 2 context(s)", "Locked:")
 }

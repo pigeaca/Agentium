@@ -32,7 +32,7 @@ import (
 // "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl, and
 // its --model and --effort ("args-e1-s0-t1": "MODEL EFFORT"); it reports the model it was given, or the one in
 // "report-model". Called for a calibration run (its prompt is an environment check), it logs its model to "calibrations"
-// and answers as calibratingAgent does, on that model; with "calibration-fail" its sandbox check fails.
+// and answers as calibratingAgent does, on that model; with "calibration-fail" its sandbox check fails, and with "calibration-crash" it exits without a transcript.
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
 	sonnetCal := calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "")
@@ -52,6 +52,7 @@ esac
 case "$2" in *"This is an environment check"*) # a calibration run: the calibrating agent's transcript, on the model asked for
   model=claude-sonnet-5; prev=""; for a in "$@"; do [ "$prev" = "--model" ] && model=$a; prev=$a; done
   echo "$model" >> "$CTRL/calibrations"
+  [ -f "$CTRL/calibration-crash" ] && exit 1
   [ -f "$CTRL/calibration-fail" ] && exec ` + failingCal + ` "$@"
   sed "s/\"model\":\"claude-sonnet-5\"/\"model\":\"$model\"/" ` + sonnetCal + ` > "$CTRL/calibrator-$$"; chmod +x "$CTRL/calibrator-$$"
   exec "$CTRL/calibrator-$$" "$@";;

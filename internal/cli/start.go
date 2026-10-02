@@ -375,10 +375,17 @@ func (s *starter) spentBefore(ctx context.Context, experimentID int64) string {
 	if err != nil {
 		return " in this command" // what the experiment spent before is not known: claim nothing about it
 	}
-	if len(runs) == 0 {
-		return " and nothing was spent"
+	calibrations, err := s.w.db.ExperimentCalibrationRuns(ctx, experimentID)
+	if err != nil {
+		return " in this command"
 	}
-	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs))
+	switch {
+	case len(runs)+len(calibrations) == 0:
+		return " and nothing was spent"
+	case len(runs) == 0:
+		return fmt.Sprintf(" in this command (the experiment has %d calibration run(s) from before)", len(calibrations))
+	}
+	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs)+len(calibrations))
 }
 
 // budgetPlan is what a run of the experiment may spend in total.

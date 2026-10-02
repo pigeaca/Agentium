@@ -176,6 +176,11 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if !ready.Ready || ctx.Err() != nil {
 		return Lock{}, errors.Join(ctx.Err(), errors.New("not ready to run: see above (agentium experiment plan "+name+")"))
 	}
+	// Everything that can refuse the experiment without a calibration comes first: a refused run spends nothing on them.
+	localBinding, err := r.checkRefusals(ctx, d)
+	if err != nil {
+		return Lock{}, err
+	}
 	if err := r.calibrate(ctx, stored, d, version); err != nil {
 		return Lock{}, err
 	}
@@ -183,18 +188,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if err != nil {
 		return Lock{}, err
 	}
+	lock.LocalBinding = localBinding
 	if raised != nil {
 		lock.BudgetChanges = append(lock.BudgetChanges, *raised)
-	}
-	if lock.LocalBinding, err = r.checkLocalBinding(ctx, lock); err != nil {
-		return Lock{}, err
-	}
-	if r.NewRunEnv != nil {
-		if runEnv, envErr := r.NewRunEnv(d.VerifyTimeout); envErr == nil { // its own errors surface when the runs start
-			if err := runEnv.CheckBuildConfigs(ctx); err != nil { // every run would refuse: stop before locking
-				return Lock{}, err
-			}
-		}
 	}
 	encoded, err := json.Marshal(lock)
 	if err != nil {
@@ -214,15 +210,58 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	return lock, nil
 }
 
+// checkRefusals runs the checks that need no calibration, before anything is spent: each snapshot still names the
+// commit the design holds, the tasks' bases need no local binding the user has not allowed, and no build configuration
+// would make every run refuse. It returns whether the runs get local binding (recorded in the lock).
+func (r Runner) checkRefusals(ctx context.Context, d Design) (bool, error) {
+	p := r.Project
+	for _, a := range d.Arms {
+		if _, err := p.snapshotOf(ctx, a); err != nil {
+			return false, err
+		}
+	}
+	bases := make([]string, len(d.Tasks))
+	for i, name := range d.Tasks {
+		t, err := p.DB.TaskByName(ctx, p.ID, name)
+		if err != nil {
+			return false, err
+		}
+		bases[i] = t.BaseCommit
+	}
+	binding, err := r.checkLocalBinding(ctx, bases)
+	if err != nil {
+		return false, err
+	}
+	if r.NewRunEnv != nil {
+		if runEnv, envErr := r.NewRunEnv(d.VerifyTimeout); envErr == nil { // its own errors surface when the runs start
+			if err := runEnv.CheckBuildConfigs(ctx); err != nil { // every run would refuse: stop before locking
+				return false, err
+			}
+		}
+	}
+	return binding, nil
+}
+
+// snapshotOf reads arm a's snapshot (none for the base) and checks that its name still means the commit the design holds.
+func (p Project) snapshotOf(ctx context.Context, a Arm) (store.Snapshot, error) {
+	if a.Snapshot == "" {
+		return store.Snapshot{}, nil
+	}
+	snap, err := p.DB.SnapshotByName(ctx, p.ID, a.Context)
+	if err != nil {
+		return snap, err
+	}
+	if snap.CommitID != a.Snapshot {
+		return snap, fmt.Errorf("snapshot %s now names commit %s, not the experiment's %s", a.Context, ShortCommit(snap.CommitID), ShortCommit(a.Snapshot))
+	}
+	return snap, nil
+}
+
 // checkLocalBinding refuses an experiment whose runs need the sandbox's local binding without the user's opt-in, before
 // anything is locked or spent, and returns whether the runs get it (recorded in the lock, and shown by the report).
-func (r Runner) checkLocalBinding(ctx context.Context, lock Lock) (bool, error) {
+func (r Runner) checkLocalBinding(ctx context.Context, bases []string) (bool, error) {
 	if r.NeedsLocalBinding == nil {
 		return false, nil
-	}
-	bases := make([]string, len(lock.Tasks))
-	for i, t := range lock.Tasks {
-		bases[i] = t.Base
 	}
 	needed, allowed, err := r.NeedsLocalBinding(ctx, bases)
 	if err != nil {
@@ -676,12 +715,9 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 	for _, a := range d.Arms {
 		locked := LockedArm{Arm: a}
 		if a.Snapshot != "" {
-			snap, err := p.DB.SnapshotByName(ctx, p.ID, a.Context)
+			snap, err := p.snapshotOf(ctx, a)
 			if err != nil {
 				return l, err
-			}
-			if snap.CommitID != a.Snapshot {
-				return l, fmt.Errorf("snapshot %s now names commit %s, not the experiment's %s", a.Context, ShortCommit(snap.CommitID), ShortCommit(a.Snapshot))
 			}
 			var manifest snapshot.Manifest
 			if err := json.Unmarshal(snap.Manifest, &manifest); err != nil {

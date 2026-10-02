@@ -10,14 +10,14 @@ import (
 // An experiment on a Gradle project is refused before it locks or spends anything unless the user opted in; with the
 // opt-in the lock records it, and a project that does not need it records nothing.
 func TestCheckLocalBinding(t *testing.T) {
-	lock := Lock{Tasks: []LockedTask{{Base: "c1"}, {Base: "c2"}}}
+	bases := []string{"c1", "c2"}
 	check := func(needed, allowed bool, err error) (bool, error) {
 		var asked []string
 		r := Runner{NeedsLocalBinding: func(_ context.Context, bases []string) (bool, bool, error) {
 			asked = bases
 			return needed, allowed, err
 		}}
-		got, gotErr := r.checkLocalBinding(context.Background(), lock)
+		got, gotErr := r.checkLocalBinding(context.Background(), bases)
 		if len(asked) != 2 || asked[0] != "c1" || asked[1] != "c2" {
 			t.Errorf("asked about %v", asked)
 		}
@@ -35,7 +35,7 @@ func TestCheckLocalBinding(t *testing.T) {
 	if _, err := check(false, false, errors.New("boom")); err == nil {
 		t.Error("an error is lost")
 	}
-	if got, err := (Runner{}).checkLocalBinding(context.Background(), lock); err != nil || got {
+	if got, err := (Runner{}).checkLocalBinding(context.Background(), bases); err != nil || got {
 		t.Errorf("no check wired: %v, %v", got, err)
 	}
 }
