@@ -1,21 +1,22 @@
 # Harness
 
-Run `python3 scripts/harness.py <command>` from the repository root, or use the absolute script path from another directory. The harness uses only the Python standard library (3.9+) and Git. It is the single entrypoint for process checks, the pre-commit guard, task worktrees and plan metrics.
+Run `python3 scripts/harness.py <command>` from the repository root, or use the absolute script path from another directory. The harness uses only the Python standard library (3.9+) and Git. It is the single entrypoint for process checks, the pre-commit guard, task worktrees, landing PRs and plan metrics.
 
 | Command | Purpose | When to use |
 |---|---|---|
 | `doctor` | Show Python, git, gh, corepack, and the Go toolchain resolved for `go.mod` | Environment diagnosis |
 | `check docs` | Doc links, Claude imports, skill and subagent adapters, context size, plan archive | Documentation change |
 | `check harness` | Harness regression tests (temporary fixtures only) | Harness change |
-| `check go` | Go code: gofmt (listing), `go vet ./...`, `go test -race -count=1 ./...` (from `check changed`: only affected packages) | Go change |
+| `check go` | Go code: gofmt (listing), `go vet ./...`, `go test -race -count=1 ./...` (from `check changed`: only affected packages), the tests holding one of two [machine-wide test slots](#test-slots) | Go change |
 | `check vuln` | govulncheck at the pinned version (reads the online Go vulnerability database). Locally only when the tool is already cached | `go.mod`/`go.sum` change; CI |
 | `check ci` (also plain `check`) | `docs` + `harness` + `go` (when `go.mod` exists); what CI runs, followed there by `check vuln` | Before opening a PR |
-| `check changed [--dry-run] [base]` | Select and run the checks for everything changed since the merge base with the remote default branch | Before committing or opening a PR |
+| `check changed [--dry-run] [base]` | Select and run the checks for everything changed since the merge base with the remote default branch; like `check ci`, ends with `[harness] exit=<code>` | Before committing or opening a PR |
 | `check staged` | Index-only guard: whitespace, credential-shaped additions, env/key files, staged Go formatting when present, docs | Pre-commit hook |
 | `hooks` | Point `core.hooksPath` at the tracked `.githooks/` for all local worktrees | Once per clone |
 | `worktree new <branch> [--base REF]` | Task worktree from the fetched remote default branch, without upstream, with offline dependency install | Starting any task |
 | `worktree deps` | Offline install of locked dependencies into the current checkout | Existing worktree without dependencies |
 | `worktree remove <branch>` | Remove a merged, clean task worktree and delete its local branch (never forced) | After the PR is merged |
+| `pr land <N> [--dry-run] [--timeout MINUTES]` | Wait for CI on PR N's head commit, then merge it; never on red or pending CI ([details](#landing-pull-requests)) | Under a user's merge authorization |
 | `metrics` | Summarize archived plans' Metrics blocks by client/model/effort | Reviewing model routing |
 
 ## Boundaries
@@ -65,6 +66,24 @@ A fake credential in a test may carry `secret-scan: allow` on the same line. Whe
 - every package whose test binary depends on one of those, according to `go list -test`.
 
 It tests every package when `go.mod` or `go.sum` changed, when `go list` fails, or when a changed path maps to no package: a deleted package, or a file outside `cmd/` and `internal/` that tests read, such as the judge pilot's script. It assumes a test that reads another package's files also imports that package, as every such test here does. `--dry-run` also prints the packages it would test. `check go` on its own, `check ci` and CI always test every package.
+
+## Test slots
+
+Parallel worktrees running `go test -race` at once starve each other: three at once slowed one package's tests from 25 s to several minutes. So `check go`, whether run directly, from `check changed` or from `check ci`, takes one of two machine-wide slots before its race tests. The slots are `agentium-test-slot-<n>.lock` files in the git common dir (`git rev-parse --git-common-dir`), which every worktree of the clone shares, held with `flock`. Each slot is tried without blocking; when both are taken, the harness prints `[harness] waiting for a test slot (another worktree is running tests)` once and blocks on one. The kernel releases a slot when the process exits for any reason, including Ctrl-C, so there is never a stale lock. gofmt and `go vet` run without a slot.
+
+## Exit line
+
+`check changed` and `check ci` (and plain `check`) end with `[harness] exit=<code>`: 0 on success, otherwise the failing code, also for a usage error. Report that line; an exit status read through a pipe such as `| tail` is the pipe's, not the check's.
+
+## Landing pull requests
+
+`pr land <N>` is the harness's auto-merge (GitHub's own can't wait for CI on this private, free-plan repository without branch protection). It calls `gh` with `--repo <owner>/<name>` taken from the `origin` remote (HTTPS or SSH) and:
+1. refuses at once, with exit 1 and the reason, a PR that is not open, is a draft, or has conflicts;
+2. reads the PR's head commit and polls the Actions API (`actions/runs?head_sha=<sha>`, or `branch=<head>` if that filter fails) every 20 s, up to `--timeout` minutes (default 40), until every run of the workflow named `CI` for that commit has completed;
+3. merges with `gh pr merge <N> --merge --match-head-commit <sha>` when they all passed, so GitHub refuses the merge if another commit arrived in between;
+4. exits 1 naming the run's URL on failure or cancellation, and on timeout; it never merges then.
+
+The PR is re-read on every poll: a new head commit restarts the wait on that commit within the same deadline (its old CI run, cancelled by the push, doesn't count), and a PR that becomes closed, draft or conflicting is refused. `--dry-run` reports the PR, its head and CI state and what it would do, without waiting or merging. It never pushes, edits branches or touches the default branch directly. Use it only under the user's [merge authorization](../.agents/rules/git-workflow.md#merge-authorization).
 
 ## Adding stack checks
 

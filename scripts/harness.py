@@ -6,12 +6,17 @@ The stack is Go + SQLite with no web UI (see .agents/decisions).
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
+import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+import time
+from typing import Any, Callable, Iterator
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ENTRYPOINTS = ("AGENTS.md", ".agents/README.md", ".agents/rules/core.md", ".agents/architecture.md", ".agents/ROADMAP.md")
@@ -44,6 +49,8 @@ OFFLINE_INSTALLERS = {
     "pnpm-lock.yaml": (["corepack", "pnpm", "install", "--frozen-lockfile", "--offline"], {"COREPACK_ENABLE_NETWORK": "0", "npm_config_update_notifier": "false"}),
 }
 # Ignored path components that tools recreate; any other ignored file blocks `worktree remove`.
+# Machine-wide slots for heavy test runs (go test -race), shared by every worktree through the git common dir.
+TEST_SLOTS = 2
 REGENERABLE = {"node_modules", "__pycache__", "dist", "build", "target", ".venv", ".pytest_cache", "coverage.out", "test-results", "playwright-report", ".DS_Store"}
 
 
@@ -236,6 +243,47 @@ def go_test_targets(go: Path, paths: list[str]) -> list[str] | None:
     return sorted(name for name, deps in binaries.items() if name in changed or deps & changed)
 
 
+def slot_directory() -> Path:
+    """Where test-slot lock files live: the git common dir, which every worktree of this clone shares."""
+    return Path(git_output("rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+
+
+@contextlib.contextmanager
+def test_slot(directory: Path | None = None, slots: int = TEST_SLOTS) -> Iterator[int]:
+    """Hold one of `slots` machine-wide slots for a heavy test run; yields the slot number.
+
+    Every slot is tried without blocking first. When all are taken it says so once, then blocks on one slot (chosen
+    by process id, to spread waiters). The lock is an flock on an open file, so the kernel releases it whenever the
+    file is closed or the process dies, including on Ctrl-C or a crash; there is no stale lock to clean up."""
+    directory = directory or slot_directory()
+    paths = [directory / f"agentium-test-slot-{index}.lock" for index in range(slots)]
+    held = None
+    for index, path in enumerate(paths):
+        handle = open(path, "a")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            continue
+        held = (index, handle)
+        break
+    if held is None:
+        print("[harness] waiting for a test slot (another worktree is running tests)", flush=True)
+        index = os.getpid() % slots
+        handle = open(paths[index], "a")
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        except BaseException:
+            handle.close()
+            raise
+        held = (index, handle)
+    index, handle = held
+    try:
+        yield index
+    finally:
+        handle.close()  # closing the file releases the flock
+
+
 def check_go(changed: list[str] | None = None) -> None:
     """gofmt, vet and race tests. With `changed` (from check changed), only the packages those paths affect are
     tested; CI and `check go` test every package."""
@@ -252,13 +300,14 @@ def check_go(changed: list[str] | None = None) -> None:
             raise ValueError(f"Not gofmt-formatted: {', '.join(result.stdout.split())} (run gofmt -w on them).")
     run(str(go), "vet", "./...", extra_env=offline_go_env())
     targets = go_test_targets(go, changed) if changed is not None else None
-    if targets is None:
-        run(str(go), "test", "-race", "-count=1", "./...", extra_env=offline_go_env())
-    elif targets:
-        print(f"\n[harness] testing the {len(targets)} package(s) the change can affect; CI tests them all", flush=True)
-        run(str(go), "test", "-race", "-count=1", *targets, extra_env=offline_go_env())
-    else:
+    if targets is not None and not targets:
         print("\n[harness] no package with tests is affected by the change; CI tests them all", flush=True)
+        return
+    if targets:
+        print(f"\n[harness] testing the {len(targets)} package(s) the change can affect; CI tests them all", flush=True)
+    # Only the race tests take a slot: vet and gofmt are light enough to run unthrottled.
+    with test_slot():
+        run(str(go), "test", "-race", "-count=1", *(targets or ["./..."]), extra_env=offline_go_env())
 
 
 def check_vuln() -> None:
@@ -542,6 +591,136 @@ def worktree_remove(branch: str) -> None:
     run("git", "branch", "-d", branch)
 
 
+# --- Landing pull requests --------------------------------------------------------------------
+
+CI_WORKFLOW = "CI"
+LAND_POLL_SECONDS = 20
+LAND_TIMEOUT_MINUTES = 40
+LAND_USAGE = "Usage: pr land <number> [--dry-run] [--timeout MINUTES]"
+
+
+def github_repo() -> str:
+    """owner/name of the `origin` remote (HTTPS or SSH GitHub URL), so every gh call names its repository."""
+    url = git_output("remote", "get-url", "origin").strip()
+    match = re.match(r"^(?:https://(?:[^@/]+@)?github\.com/+|(?:ssh://)?git@github\.com[:/]+)([\w.-]+)/([\w.-]+?)(?:\.git)?/?$", url)
+    if not match:
+        raise ValueError(f"origin is not a GitHub remote: {url}")
+    return f"{match[1]}/{match[2]}"
+
+
+def gh(*args: str) -> str:
+    """Run gh; a failure becomes a ValueError carrying gh's own message."""
+    result = subprocess.run(["gh", *args], cwd=ROOT, capture_output=True, text=True, env=ENV)
+    if result.returncode:
+        raise ValueError(f"gh {' '.join(args[:2])} failed: {(result.stderr or result.stdout).strip()}")
+    return result.stdout
+
+
+def pull_request(repo: str, number: int) -> dict[str, Any]:
+    fields = "number,state,isDraft,mergeable,headRefOid,headRefName,url"
+    return json.loads(gh("pr", "view", str(number), "--repo", repo, "--json", fields))
+
+
+def landing_refusal(pr: dict[str, Any]) -> str | None:
+    """Why a PR cannot be landed at all, or None. An UNKNOWN mergeable state (GitHub still computing) is not refused."""
+    number = pr.get("number")
+    if pr.get("state") != "OPEN":
+        return f"PR #{number} is {str(pr.get('state')).lower()}, not open; nothing to land."
+    if pr.get("isDraft"):
+        return f"PR #{number} is a draft; mark it ready first."
+    if pr.get("mergeable") == "CONFLICTING":
+        return f"PR #{number} has merge conflicts; resolve them on its branch first."
+    return None
+
+
+def ci_runs(repo: str, sha: str, branch: str) -> list[dict[str, Any]]:
+    """The CI workflow's runs for exactly `sha`: filtered by head_sha, or by branch when that filter fails."""
+    try:
+        listing = gh("api", f"repos/{repo}/actions/runs?head_sha={sha}&per_page=100")
+    except ValueError:
+        listing = gh("api", f"repos/{repo}/actions/runs?branch={branch}&per_page=100")
+    runs = json.loads(listing).get("workflow_runs", [])
+    return [run for run in runs if run.get("name") == CI_WORKFLOW and run.get("head_sha") == sha]
+
+
+def ci_state(runs: list[dict[str, Any]]) -> tuple[str, str]:
+    """('pending' | 'success' | 'failure', detail) over every CI run of one commit: any failed run fails it, and any
+    unfinished run keeps it pending. No run yet is pending (CI may not have started)."""
+    failed = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") != "success"]
+    if failed:
+        return "failure", f"CI {failed[0].get('conclusion')}: {failed[0].get('html_url')}"
+    if not runs:
+        return "pending", "no CI run yet"
+    unfinished = [run for run in runs if run.get("status") != "completed"]
+    if unfinished:
+        return "pending", f"CI {unfinished[0].get('status')}: {unfinished[0].get('html_url')}"
+    return "success", f"CI passed: {runs[-1].get('html_url')}"
+
+
+def pr_land(number: int, dry_run: bool = False, timeout_minutes: float = LAND_TIMEOUT_MINUTES,
+            sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
+    """Merge PR `number` once the CI workflow passes on its current head commit, never otherwise.
+
+    It refuses at once a PR that is not open, is a draft or conflicts; polls CI every LAND_POLL_SECONDS; restarts the
+    wait when the head commit changes; and merges with --match-head-commit, so GitHub itself rejects the merge if a
+    commit lands in between. It never pushes, edits branches or touches the default branch directly."""
+    repo = github_repo()
+    pr = pull_request(repo, number)
+    if refusal := landing_refusal(pr):
+        raise ValueError(refusal)
+    sha, branch = pr["headRefOid"], pr["headRefName"]
+    if dry_run:
+        state, detail = ci_state(ci_runs(repo, sha, branch))
+        action = {"success": "merge it now", "failure": "refuse: CI did not pass",
+                  "pending": f"wait up to {timeout_minutes:g} min for CI, then merge only if it passes"}[state]
+        print(f"[harness] dry run: PR #{number} ({pr.get('url')}) head {sha[:12]} on {branch}; {detail}.\n"
+              f"[harness] would {action}" + (f": gh pr merge {number} --repo {repo} --merge --match-head-commit {sha}"
+                                              if state != "failure" else "") + ".")
+        if state == "failure":
+            raise ValueError(f"PR #{number}: {detail}")
+        return
+    deadline = clock() + timeout_minutes * 60
+    print(f"[harness] PR #{number}: waiting for CI on {sha[:12]} (up to {timeout_minutes:g} min)", flush=True)
+    while True:
+        # The PR first: a new push cancels the old commit's CI, which must restart the wait, not fail it.
+        current = pull_request(repo, number)
+        if refusal := landing_refusal(current):
+            raise ValueError(refusal)
+        if current["headRefOid"] != sha:
+            sha, branch = current["headRefOid"], current["headRefName"]
+            print(f"[harness] PR #{number}: head changed to {sha[:12]}; waiting for CI on the new commit (same deadline)", flush=True)
+        state, detail = ci_state(ci_runs(repo, sha, branch))
+        if state == "failure":
+            raise ValueError(f"PR #{number} not merged: {detail}")
+        if state == "success":
+            break
+        if clock() >= deadline:
+            raise ValueError(f"PR #{number} not merged: timed out after {timeout_minutes:g} min ({detail})")
+        sleep(LAND_POLL_SECONDS)
+    print(f"[harness] PR #{number}: {detail}; merging {sha[:12]}", flush=True)
+    output = gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", sha)
+    print(output.strip() or f"[harness] PR #{number} merged.")
+
+
+def pr_command(args: list[str]) -> None:
+    action, *values = args or [""]
+    dry_run = "--dry-run" in values
+    values = [value for value in values if value != "--dry-run"]
+    timeout = LAND_TIMEOUT_MINUTES
+    if "--timeout" in values:
+        at = values.index("--timeout")
+        try:
+            timeout = float(values[at + 1])
+        except (IndexError, ValueError):
+            raise ValueError(LAND_USAGE) from None
+        if timeout <= 0:
+            raise ValueError(LAND_USAGE)
+        del values[at:at + 2]
+    if action != "land" or len(values) != 1 or not values[0].isdigit():
+        raise ValueError(LAND_USAGE)
+    pr_land(int(values[0]), dry_run=dry_run, timeout_minutes=timeout)
+
+
 # --- Metrics ----------------------------------------------------------------------------------
 
 def plan_metrics(text: str) -> dict | None:
@@ -588,10 +767,13 @@ HELP = """Agentium harness (Python standard library)
                              Task worktree from the remote default branch, offline dependency install
   worktree deps              Offline-install locked dependencies in this checkout
   worktree remove <branch>   Remove a merged, clean task worktree and its local branch
+  pr land <N> [--dry-run] [--timeout MINUTES]
+                             Merge PR N once CI passes on its head commit (default wait 40 min); refuses
+                             closed, draft or conflicting PRs and never merges on red or pending CI
   metrics                    Summarize archived plans' Metrics blocks by agent and model
 
-ci = docs + harness tests + go. go = gofmt, vet, race tests. vuln = pinned govulncheck (online DB).
-staged = pre-commit checks on the index. Go runs at the go.mod version with GOTOOLCHAIN=local.
+ci = docs + harness tests + go. go = gofmt, vet, race tests (at most two race runs per machine at once). vuln = pinned govulncheck (online DB).
+changed and ci end with "[harness] exit=<code>". staged = pre-commit checks on the index. Go runs at the go.mod version with GOTOOLCHAIN=local.
 No toolchains, modules or tools are downloaded locally; worktree setup installs locked dependencies only from the
 local cache. check vuln reads the online vulnerability database, and in CI may download its pinned version.
 """
@@ -641,19 +823,32 @@ def main(args: list[str]) -> None:
             worktree_remove(values[0])
         else:
             raise ValueError("Usage: worktree new <branch> [--base REF] | worktree deps | worktree remove <branch>")
+    elif command == "pr":
+        pr_command(rest)
     elif command == "metrics":
         metrics_report()
     else:
         raise ValueError(f"Unknown command: {command}. Run python3 scripts/harness.py help.")
 
 
-if __name__ == "__main__":
+def exit_code(args: list[str]) -> int:
+    """Run a command and return its exit code. `check changed` and `check ci` (plain `check` too) end with
+    `[harness] exit=<code>`, so a caller reading only the tail of the output still sees the real result."""
     try:
-        main(sys.argv[1:])
+        main(args)
+        code = 0
     except subprocess.CalledProcessError as error:
-        sys.exit(error.returncode or 1)
+        code = error.returncode or 1
     except (OSError, ValueError) as error:
         print(f"[harness] {error}", file=sys.stderr)
-        sys.exit(1)
+        code = 1
     except KeyboardInterrupt:
-        sys.exit(130)
+        code = 130
+    if args[:1] == ["check"] and (args[1:2] in (["changed"], ["ci"], [])):
+        sys.stderr.flush()
+        print(f"[harness] exit={code}", flush=True)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(exit_code(sys.argv[1:]))
