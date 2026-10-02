@@ -315,7 +315,7 @@ func TestExperimentNewUsage(t *testing.T) {
 		{[]string{"x", "--b", "lean", "--effort", "high"}, "--effort was removed: put the effort in --model: --model MODEL:EFFORT"},
 		{[]string{"x", "--b", "lean", "--judge", "--judge-model", "claude-opus-5-5"}, "--judge-model was removed: name the judge in its flag: --judge=MODEL[:EFFORT]"},
 		{[]string{"x", "--model", "claude-opus-5-5:huge"}, `--model "claude-opus-5-5:huge": unknown effort "huge"`},
-		{[]string{"x", "--b", "lean", "--judge=claude-opus-5-5:huge"}, `invalid boolean value "claude-opus-5-5:huge" for -judge: "claude-opus-5-5:huge": unknown effort "huge"`},
+		{[]string{"x", "--b", "lean", "--judge=claude-opus-5-5:huge"}, `agentium experiment new: --judge=claude-opus-5-5:huge: unknown effort "huge"`},
 		{[]string{"x", "--b", "lean", "--judge", "claude-opus-5-5"}, "--judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]"},
 		// Without a NAME, the model is not taken for one.
 		{[]string{"--b", "lean", "--judge", "claude-sonnet-5-5"}, "--judge and --judge-pairs take their model after an equals sign"},

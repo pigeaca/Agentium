@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -189,11 +190,23 @@ func TestExperimentNewInfersTheTemplate(t *testing.T) {
 		}
 	}
 
-	// A snapshot named as a model is ambiguous as --b: refused, saying it was read as the model. Its MODEL:EFFORT
-	// form cannot be a snapshot's name, so it stays a model A/B.
-	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nBe brief.\n")
-	expect(t, f.run(ctx, "context", "snapshot", "claude-opus-5-5", "--working-tree"), ExitOK)
-	gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
+	// context snapshot refuses a name that reads as a model, but one made before it did is ambiguous as --b: refused,
+	// saying it was read as the model. Its MODEL:EFFORT form cannot be a snapshot's name, so it stays a model A/B.
+	for _, name := range []string{"claude-opus-5-5", "claude-next-9", "claude-haiku-4-5-20251001"} {
+		expect(t, f.run(ctx, "context", "snapshot", name, "--working-tree"), ExitUsage, fmt.Sprintf("%q reads as a model to experiment new --b", name))
+	}
+	expect(t, f.run(ctx, "context", "snapshot", "claude-rules", "--working-tree"), ExitOK) // no model ID: a context A/B's --b
+	expect(t, f.run(ctx, "experiment", "new", "rules", "--b", "claude-rules", "--task", "value", "--budget", "40"), ExitError, "cannot be in this experiment")
+	db, id := openFixtureDB(t, f)
+	lean, err := db.SnapshotByName(ctx, id, "lean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lean.ID, lean.Name = 0, "claude-opus-5-5"
+	if _, err := db.SaveSnapshot(ctx, lean); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
 	expect(t, f.run(ctx, "experiment", "new", "ambiguous", "--b", "claude-opus-5-5", "--task", "value", "--budget", "40"), ExitUsage,
 		"agentium experiment new: --b claude-opus-5-5 names both a model and a snapshot: it was read as the model (a model A/B), and is refused")
 	expect(t, f.run(ctx, "experiment", "show", "ambiguous"), ExitError, "not found")
@@ -333,5 +346,53 @@ func TestHiddenFlagsStillWork(t *testing.T) {
 	expect(t, f.run(ctx, "run", "calibrate", "--model", opus+":high"), ExitOK, "Calibrating 1 arm(s)", "(claude-opus-5-5, sign-in")
 	if models := storedCalibrations(t, f, "base", ""); !slices.Contains(models, opus) {
 		t.Errorf("calibrations of base on %v, want one on %s", models, opus)
+	}
+}
+
+// Every removed flag of experiment new and run once fails with exit 2 and its own replacement, given with a value,
+// with one after "=", or alone.
+func TestRemovedFlagsNameTheirReplacement(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	ctx := context.Background()
+	// The removed flags are listed here, not read from the maps, so a flag dropped from a map fails as unknown.
+	for _, c := range []struct {
+		command []string
+		removed map[string]string
+		points  map[string]string // each removed flag, and a word of its replacement
+	}{
+		{[]string{"experiment", "new", "x"}, experimentRemoved, map[string]string{"template": "--b decides it", "effort": "--model MODEL:EFFORT",
+			"run-budget-a": "--run-budget stops", "run-budget-b": "--run-budget stops", "judge-model": "--judge=MODEL[:EFFORT]",
+			"judge-effort": "--judge=MODEL:EFFORT", "judge-repeats": "3 times per run"}},
+		{[]string{"run", "once", "value"}, runOnceRemoved, map[string]string{"effort": "--model MODEL:EFFORT"}},
+	} {
+		if len(c.removed) != len(c.points) {
+			t.Errorf("%v removes %d flags, want %d", c.command, len(c.removed), len(c.points))
+		}
+		for name, point := range c.points {
+			instead := c.removed[name]
+			if !strings.Contains(instead, point) {
+				t.Errorf("--%s's replacement %q lacks %q", name, instead, point)
+			}
+			for _, given := range [][]string{{"--" + name, "2"}, {"--" + name + "=2"}, {"--" + name}} {
+				args := append(slices.Clone(c.command), given...)
+				got := f.run(ctx, args...)
+				want := "agentium " + strings.Join(c.command[:2], " ") + ": --" + name + " was removed: " + instead + "\n"
+				if got.code != ExitUsage || got.stderr != want {
+					t.Errorf("%v: exit %d, stderr %q; want exit 2 and %q", args, got.code, got.stderr, want)
+				}
+			}
+		}
+	}
+	// A judge's bad value says why under its own flag, not the flag package's "invalid boolean value".
+	for given, want := range map[string]string{
+		"--judge=claude-opus-5-5:huge":   `agentium experiment new: --judge=claude-opus-5-5:huge: unknown effort "huge" (use low, medium, high, xhigh, max)`,
+		"--judge=":                       "agentium experiment new: --judge=: names no model (write MODEL or MODEL:EFFORT)",
+		"--judge-pairs=claude-opus-5-5:": "agentium experiment new: --judge-pairs=claude-opus-5-5:: names no effort after the colon",
+	} {
+		got := f.run(ctx, "experiment", "new", "x", given)
+		if got.code != ExitUsage || !strings.HasPrefix(got.stderr, want) || strings.Contains(got.stderr, "invalid boolean") {
+			t.Errorf("%s: exit %d, stderr %q; want exit 2 and %q", given, got.code, got.stderr, want)
+		}
 	}
 }

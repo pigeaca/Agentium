@@ -337,6 +337,18 @@ type stringList []string
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
 func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
+// reservedSnapshotName says why a valid name cannot name a snapshot: "base" names each task's own context, and a name
+// that reads as a model would make experiment new --b a model A/B (and be refused there as ambiguous). "" when it can.
+func reservedSnapshotName(name string) string {
+	switch {
+	case name == experiment.BaseContext:
+		return `"base" names each task's own context`
+	case experiment.IsModel(name):
+		return fmt.Sprintf("%q reads as a model to experiment new --b (a model A/B)", name)
+	}
+	return ""
+}
+
 func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("context snapshot", flag.ContinueOnError)
 	ref := fs.String("ref", "", "snapshot the context at this commit (default HEAD)")
@@ -357,8 +369,8 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "agentium context snapshot: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63; no \"..\", no trailing \".\" or \".lock\")\n", name)
 		return ExitUsage
 	}
-	if name == "base" {
-		fmt.Fprintln(env.Stderr, `agentium context snapshot: "base" names each task's own context; choose another name`)
+	if why := reservedSnapshotName(name); why != "" {
+		fmt.Fprintf(env.Stderr, "agentium context snapshot: %s; choose another name\n", why)
 		return ExitUsage
 	}
 	if !*workingTree && *ref == "" {

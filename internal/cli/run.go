@@ -103,13 +103,10 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop the run after this long")
 	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
 	keep := fs.Bool("keep", false, "keep the workspace and the verification copy")
-	removed := removeFlags(fs, runOnceRemoved)
+	removeFlags(fs, runOnceRemoved)
 	rest, code, ok := parseArgs(env, fs, args, runUsage)
 	if !ok {
 		return code
-	}
-	if !removed.report(env, "run once") {
-		return ExitUsage
 	}
 	if len(rest) != 1 || *budget <= 0 || *timeout <= 0 {
 		fmt.Fprint(env.Stderr, runUsage)

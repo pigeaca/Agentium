@@ -12,7 +12,6 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 - [Experiment templates](#experiment-templates)
 - [The judge](#the-judge-second-opinion)
 - [Scripting and automation](#scripting-and-automation)
-- [Advanced flags](#advanced-flags) and [renamed and removed](#renamed-and-removed)
 - [Data folder and environment](#data-folder-and-environment)
 - [Advanced flags](#advanced-flags), and [renamed and removed](#renamed-and-removed) flags and commands
 
@@ -166,7 +165,7 @@ agentium experiment new models --b claude-opus-5-5:high          # a model A/B: 
 agentium experiment new efforts --a claude-sonnet-5-5:low --b claude-sonnet-5-5:high --context trimmed
 ```
 
-A model is one Agentium's price table knows (`claude-sonnet-5-5`, `claude-opus-5-5`, a dated ID such as `claude-haiku-4-5-20251001`) or a name shaped like a Claude model ID (`claude-next-9`: a family, then version numbers, optionally a date); an alias such as `sonnet`, or a name such as `claude-rules`, reads as a snapshot's name. A `--b` that names both a model and a snapshot is refused, saying it was read as the model: snapshot that context again under another name to compare it. The stored design, `experiment list` and the JSON keep the template's name.
+A model is one Agentium's price table knows (`claude-sonnet-5-5`, `claude-opus-5-5`, a dated ID such as `claude-haiku-4-5-20251001`) or a name shaped like a Claude model ID (`claude-next-9`: a family, then version numbers, optionally a date); an alias such as `sonnet`, or a name such as `claude-rules`, reads as a snapshot's name. `context snapshot` refuses a name that reads as a model; a snapshot made with one before is refused as `--b`, saying it was read as the model: snapshot that context again under another name to compare it. The stored design, `experiment list` and the JSON keep the template's name.
 
 In a model A/B, `--a` and `--b` are `MODEL` or `MODEL:EFFORT` (low, medium, high, xhigh or max; without one, the CLI's default), and `--a` and `--model` both set arm A, so give one of them. The arms must differ in model or effort. The plan estimates each arm from your earlier runs on its model (or from a default run at list prices), flags a model without a list price, and covers both arms in the budget; `--run-budget` caps each run in both arms. Each arm's model needs its own calibration of the context: `experiment run` makes the ones that are missing, once, before the first pair. The preview counts their cost, and a calibration that fails its checks stops the experiment before any task run. Reports of model experiments name each arm by profile (model and effort) in the headlines, the metric tables and the per-task rows, with a one-line verdict such as `B (claude-sonnet-5-5) costs 48% less; success: exploratory`; the noise note says it pools both models.
 
@@ -240,35 +239,6 @@ The result also has `note` and `method` (human text, and the experiment's method
 
 Planned (part 2): a committed `agentium.toml` that Agentium reads and never writes, for budgets and consent to spend. Per-project task settings are `agentium init`'s already ([project settings](#project-settings)), kept in the data folder rather than in a file a commit could change. See the [plan](../.agents/plans/2026-10-02-headless.md).
 
-## Advanced flags
-
-Expert flags still work but are left out of the commands' help.
-
-| Flag | Command | Default | What it does |
-|---|---|---|---|
-| `--tier quick\|confident` | `experiment new` | `quick`, unless `--task` names the tasks | A success experiment's (`--goal better`) sample: 12 tasks x 3 runs per arm, or 23 x 5 |
-| `--repeats N` | `experiment new` | the tier's (3 with `--task`) | Runs per task per arm in a success experiment; a cost experiment runs 1 |
-| `--no-futility` | `experiment new` | off | A cost experiment makes no futility stop: it runs to a verdict or its last look |
-| `--concurrency N` | `experiment new` | 2 (at most 8) | Runs at a time |
-| `--timeout DURATION` | `experiment new`, `run once` | `20m` | Stops each run after this long |
-| `--verify-timeout DURATION` | `experiment new`, `run once` | `10m` | Time limit for each setup or verification command |
-| `--seed N` | `experiment new` | random | The seed of the task sample and the run order |
-| `--keep` | `run once` | off | Keeps the run's workspace and verification copy |
-
-`agentium run calibrate [--snapshot NAME]... [--model MODEL[:EFFORT]] [--budget USD] [--timeout DURATION]` (default $0.50 and `5m` per run) also still works, though its help is gone: it makes ahead of time the short calibration runs that `experiment run` makes for any arm that lacks one. A calibration is of a context on a model, so an effort in `--model` is accepted and not used.
-
-## Renamed and removed
-
-Each of these fails with a usage error (exit 2) that names its replacement.
-
-- `experiment new --template`: `--b` decides it (none for an A/A, a snapshot for a context A/B, `MODEL[:EFFORT]` for a model A/B).
-- `--effort` (`experiment new`, `run once`): `--model MODEL:EFFORT`.
-- `experiment new --run-budget-a` and `--run-budget-b`: `--run-budget` caps each run in both arms.
-- `experiment new --judge-model` and `--judge-effort`: `--judge=MODEL[:EFFORT]` and `--judge-pairs=MODEL[:EFFORT]`.
-- `experiment new --judge-repeats`: none; the judge asks 3 times per run.
-
-Experiments made with them keep their designs: they load, resume and report as before.
-
 ## Data folder and environment
 
 Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off, and `FORCE_COLOR=1` keeps it through a pipe (for `less -R`).
@@ -298,6 +268,16 @@ These flags still work but are left out of the commands' usage texts. A per-call
 | `--max-hunks N` | `task validate --weak-tests` | 20 | How many hunks of the reference to try removing, in file and line order. |
 | `--keep` | `task validate` | off | Keep the validation's checkouts for inspection. |
 | `--include-linked` | `context snapshot` | off | Also capture every document the context links to (`--include PATH` adds one). |
+| `--tier quick\|confident` | `experiment new` | `quick`, unless `--task` names the tasks | A success experiment's (`--goal better`) sample: 12 tasks x 3 runs per arm, or 23 x 5 |
+| `--repeats N` | `experiment new` | the tier's (3 with `--task`) | Runs per task per arm in a success experiment; a cost experiment runs 1 |
+| `--no-futility` | `experiment new` | off | A cost experiment makes no futility stop: it runs to a verdict or its last look |
+| `--concurrency N` | `experiment new` | 2 (at most 8) | Runs at a time |
+| `--timeout DURATION` | `experiment new`, `run once` | `20m` | Stops each run after this long |
+| `--verify-timeout DURATION` | `experiment new`, `run once` | `10m` | Time limit for each setup or verification command |
+| `--seed N` | `experiment new` | random | The seed of the task sample and the run order |
+| `--keep` | `run once` | off | Keeps the run's workspace and verification copy |
+
+`agentium run calibrate [--snapshot NAME]... [--model MODEL[:EFFORT]] [--budget USD] [--timeout DURATION]` (default $0.50 and `5m` per run) also still works, though its help is gone: it makes ahead of time the short calibration runs that `experiment run` makes for any arm that lacks one. A calibration is of a context on a model, so an effort in `--model` is accepted and not used.
 
 ## Renamed and removed
 
@@ -306,3 +286,10 @@ Each fails with a usage error (exit 2) that names its replacement.
 - `task mine`: `pool update` mines and validates; `pool update --dry-run` lists the candidates with their scores and why other commits were set aside. `task mine --verify`, `--setup`, `--require-lock`, `--jobs` and `--timeout` became `agentium init` settings (or `pool update`'s own flags above); `--since`, `--max-files` and `--max-lines` are `pool update`'s.
 - `init --no-allow-local-binding`: `init --allow-local-binding=false`.
 - `task add|edit --instruction-file FILE`: `--instruction @FILE` (`@@` starts a text with `@`).
+- `experiment new --template`: `--b` decides it (none for an A/A, a snapshot for a context A/B, `MODEL[:EFFORT]` for a model A/B).
+- `--effort` (`experiment new`, `run once`): `--model MODEL:EFFORT`.
+- `experiment new --run-budget-a` and `--run-budget-b`: `--run-budget` caps each run in both arms.
+- `experiment new --judge-model` and `--judge-effort`: `--judge=MODEL[:EFFORT]` and `--judge-pairs=MODEL[:EFFORT]`.
+- `experiment new --judge-repeats`: none; the judge asks 3 times per run.
+
+Experiments made with the removed experiment flags keep their designs: they load, resume and report as before.

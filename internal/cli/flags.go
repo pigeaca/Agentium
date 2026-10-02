@@ -23,6 +23,10 @@ func parseArgs(env Env, fs *flag.FlagSet, args []string, usage string) (position
 			fmt.Fprintf(env.Stderr, "agentium %s: %s\n", fs.Name(), instead)
 			return nil, ExitUsage, false
 		}
+		if why := badValue(fs); err != nil && why != "" { // a value that says why itself, without the whole usage
+			fmt.Fprintf(env.Stderr, "agentium %s: %s\n", fs.Name(), why)
+			return nil, ExitUsage, false
+		}
 		if err != nil {
 			fmt.Fprintf(env.Stderr, "agentium %s: %v\n\n%s", fs.Name(), err, usage)
 			return nil, ExitUsage, false

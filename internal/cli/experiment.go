@@ -139,7 +139,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs.StringVar(&o.Goal, "goal", experiment.GoalCheaper, "cheaper (cost, with success as the guard) or better (success)")
 	fs.Float64Var(&o.RunBudget, "run-budget", experiment.DefaultRunBudgetUSD, "stop each run at this cost in USD")
 	fs.Float64Var(&o.Budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
-	var judge, pairs judgeFlag
+	judge, pairs := judgeFlag{name: "judge"}, judgeFlag{name: "judge-pairs"}
 	fs.Var(&judge, "judge", "ask the LLM judge about every graded run, on its default model or MODEL[:EFFORT] (a second opinion)")
 	fs.Var(&pairs, "judge-pairs", "ask the pair judge which arm fixed each task better, when both pass (unvalidated, exploratory)")
 	// Hidden (experimentHidden): the guide's "Advanced flags".
@@ -150,13 +150,10 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs.DurationVar(&o.Timeout, "timeout", experiment.DefaultRunTimeout, "stop each run after this long")
 	fs.DurationVar(&o.VerifyTimeout, "verify-timeout", experiment.DefaultVerifyTimeout, "time limit for each setup or verification command")
 	fs.Uint64Var(&o.Seed, "seed", 0, "the seed for the task sample and the run order (default: random)")
-	removed := removeFlags(fs, experimentRemoved)
+	removeFlags(fs, experimentRemoved)
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
-	}
-	if !removed.report(env, "experiment new") {
-		return ExitUsage
 	}
 	if (judge.on || pairs.on) && slices.ContainsFunc(rest, experiment.IsModel) { // a model given as a separate word
 		fmt.Fprintln(env.Stderr, "agentium experiment new: --judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]")
