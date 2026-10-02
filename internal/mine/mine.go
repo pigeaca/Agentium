@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/task"
@@ -51,6 +52,11 @@ type Options struct {
 	Languages []string
 	// TestCommand names the verify commands in that rejection's detail (for example "go test"); optional.
 	TestCommand string
+	// AllowUnlocked keeps Python candidates whose base pins no dependencies (no uv.lock, no fully pinned requirement
+	// files: buildtool.PythonLocked). Without it they are rejected (ReasonUnlocked): the warm-up would resolve today's
+	// versions, not those the commit was tested with, and the base's tests can fail for that alone (the Python pilot's
+	// attrs base under today's mypy).
+	AllowUnlocked bool
 }
 
 // Reason says why a commit is not a candidate.
@@ -78,6 +84,7 @@ const (
 	ReasonTooLarge     Reason = "too large"
 	ReasonGenerated    Reason = "generated code"
 	ReasonInlineRust   Reason = "inline Rust tests"
+	ReasonUnlocked     Reason = "no lock file"              // a Python base that pins no dependencies (Options.AllowUnlocked)
 	ReasonCopy         Reason = "the same change as a task" // the task pool's: a rebased or cherry-picked copy
 )
 
@@ -86,7 +93,7 @@ const (
 func ReasonOrder() []Reason {
 	return []Reason{ReasonUnreadable, ReasonMerge, ReasonShallow, ReasonRoot, ReasonImported, ReasonDismissed, ReasonFixup, ReasonRevert,
 		ReasonEmpty, ReasonDocsOnly, ReasonNoTests, ReasonVendored, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
-		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust, ReasonCopy}
+		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust, ReasonUnlocked, ReasonCopy}
 }
 
 // Part is one named contribution to a candidate's score.
@@ -235,7 +242,7 @@ func scan(ctx context.Context, root string, opts Options) (Result, error) {
 	for _, c := range commits {
 		cand, rej := classify(c, opts, res.Shallow)
 		if rej == nil {
-			if rej, err = inspect(ctx, root, &cand); err != nil {
+			if rej, err = inspect(ctx, root, &cand, opts); err != nil {
 				return Result{}, err
 			}
 		}
@@ -655,13 +662,23 @@ func testLanguage(c Candidate, langs []string) string {
 }
 
 // inspect applies the checks that read file contents, for a commit that passed classify.
-func inspect(ctx context.Context, root string, c *Candidate) (*Rejection, error) {
+func inspect(ctx context.Context, root string, c *Candidate, o Options) (*Rejection, error) {
 	generated, err := generatedFiles(ctx, root, c.Hash, c.Code)
 	if err != nil {
 		return nil, err
 	}
 	if len(generated) > 0 {
 		return &Rejection{Reason: ReasonGenerated, Detail: strings.Join(generated, ", ")}, nil
+	}
+	if !o.AllowUnlocked && touchesPython(*c) {
+		python, locked, err := baseLock(ctx, root, c.Parent)
+		if err != nil {
+			return nil, err
+		}
+		if python && !locked {
+			return &Rejection{Reason: ReasonUnlocked, Detail: "the base has no uv.lock or fully pinned requirement files, so its " +
+				"dependencies would be today's versions; --allow-unlocked keeps it"}, nil
+		}
 	}
 	if !slices.ContainsFunc(c.Code, func(p string) bool { return path.Ext(p) == ".rs" }) {
 		return nil, nil
@@ -674,6 +691,78 @@ func inspect(ctx context.Context, root string, c *Candidate) (*Rejection, error)
 		return &Rejection{Reason: ReasonInlineRust, Detail: strings.Join(inline, ", ")}, nil
 	}
 	return nil, nil
+}
+
+// touchesPython reports whether a candidate's tests or code are Python.
+func touchesPython(c Candidate) bool {
+	python := func(p string) bool { return language(p) == "python" }
+	return slices.ContainsFunc(c.Tests, python) || slices.ContainsFunc(c.Code, python)
+}
+
+// baseLock reports whether commit is a Python project (the Python profile detects it at its root) and whether it pins
+// its dependencies (buildtool.PythonLocked), reading only its root and requirements/ listings and requirement files.
+func baseLock(ctx context.Context, root, commit string) (python, locked bool, err error) {
+	files, err := treeNames(ctx, root, commit, "")
+	if err != nil {
+		return false, false, err
+	}
+	detected := buildtool.DetectedNames(func(name string) bool { return slices.Contains(files, name) })
+	if !slices.Contains(detected, "python") {
+		return false, false, nil
+	}
+	if slices.Contains(files, "requirements") {
+		more, err := treeNames(ctx, root, commit, "requirements/")
+		if err != nil {
+			return false, false, err
+		}
+		files = append(files, more...)
+	}
+	var reqs []string
+	for _, f := range files {
+		if strings.HasSuffix(f, ".txt") {
+			reqs = append(reqs, f)
+		}
+	}
+	contents := map[string][]byte{}
+	if _, err := batch(ctx, root, commit, reqs, "--batch", func(p string, content []byte) { contents[p] = content }); err != nil {
+		return false, false, err
+	}
+	locked = buildtool.PythonLocked(files, func(p string) ([]byte, bool) {
+		if data, ok := contents[p]; ok {
+			return data, true
+		}
+		// An included file outside the listings read above.
+		if strings.Contains(p, "\n") {
+			return nil, false
+		}
+		got := map[string][]byte{}
+		if _, err := batch(ctx, root, commit, []string{p}, "--batch", func(p string, content []byte) { got[p] = content }); err != nil {
+			return nil, false
+		}
+		data, ok := got[p]
+		return data, ok
+	})
+	return true, locked, nil
+}
+
+// treeNames lists the entries of folder dir ("" for the root, else ending in "/") in commit, as paths from the root.
+// Detection needs regular files, but a listing is enough here: a folder named like a marker file is rare.
+func treeNames(ctx context.Context, root, commit, dir string) ([]string, error) {
+	args := []string{"-C", root, "ls-tree", "-z", "--name-only", "--full-tree", commit}
+	if dir != "" {
+		args = append(args, "--", dir)
+	}
+	out, err := gitx.Output(ctx, nil, args...)
+	if err != nil {
+		return nil, fmt.Errorf("mine: list the files of %s: %w", commit, err)
+	}
+	var names []string
+	for _, name := range strings.Split(string(out), "\x00") {
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 // generatedHeader is the standard marker of generated files (https://go.dev/s/generatedcode), in any line comment

@@ -605,3 +605,35 @@ func TestMineScanNoteNamesTheRunner(t *testing.T) {
 		}
 	}
 }
+
+// task mine sets aside a Python commit whose base pins no dependencies, saying why, and keeps it with --allow-unlocked.
+func TestTaskMineUnlockedPython(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	commit := func(message string, files map[string]string) string {
+		for p, body := range files {
+			writeFile(t, repo, p, body)
+		}
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", message)
+		return strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	}
+	commit("Start the package", map[string]string{"pyproject.toml": "[project]\nname = \"pkg\"\n", "pkg/__init__.py": "\n",
+		"pkg/core.py": "def base():\n    return 1\n", "tests/test_core.py": "from pkg.core import base\n"})
+	hash := commit("Add double to pkg.core\n\nThe double function returns twice its argument, for the reports.",
+		map[string]string{"pkg/core.py": "def base():\n    return 1\n\n\ndef double(x):\n    return 2 * x\n",
+			"tests/test_core.py": "from pkg.core import base, double\n\n\ndef test_double():\n    assert double(2) == 4\n"})
+	run := cliIn(t, repo, filepath.Join(t.TempDir(), "data"))
+	expect(t, run("init"), ExitOK)
+	dry := run("task", "mine", "--dry-run")
+	expect(t, dry, ExitOK, "0 candidate(s)", "no lock file")
+	allowed := run("task", "mine", "--dry-run", "--allow-unlocked")
+	expect(t, allowed, ExitOK, "1 candidate(s)", "Add double to pkg.core")
+	if !strings.Contains(allowed.stdout, experiment.ShortCommit(hash)) || strings.Contains(allowed.stdout, "no lock file") {
+		t.Errorf("--allow-unlocked:\n%s", allowed.stdout)
+	}
+	// start and pool update take the flag too (a later mistake shows it parsed).
+	expect(t, run("pool", "update", "--dry-run", "--allow-unlocked", "--limit", "0"), ExitUsage, "--limit must be at least 1")
+	expect(t, run("start", "--allow-unlocked", "extra"), ExitUsage, "[--allow-unlocked]")
+}

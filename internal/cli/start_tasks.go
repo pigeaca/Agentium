@@ -240,7 +240,8 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err error) {
 	w, out := s.w, s.env.Stdout
 	prep, err := mine.Prepare(ctx, mine.PrepareInput{DB: w.db, ProjectID: w.project.ID, Root: w.root,
-		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines}, DefaultVerify: w.defaultVerify()})
+		Options:       mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, AllowUnlocked: s.args.allowUnlocked},
+		DefaultVerify: w.defaultVerify()})
 	if err != nil {
 		return false, err
 	}
