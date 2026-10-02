@@ -353,7 +353,15 @@ func TestCanaryRefusesASandboxThatDoesNotHold(t *testing.T) {
 		path, digest := write(strings.ReplaceAll(name, " ", "-")+".sb", text)
 		cases[name] = file{path, digest}
 	}
-	changed, _ := write("changed.sb", "(version 1)\n(allow default)\n")
+	// The real profile with one more comment: a working profile that only the digest tells apart.
+	real, err := os.ReadFile(g.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, changedDigest := write("changed.sb", string(real)+"; changed\n")
+	if err := Canary(context.Background(), changed, changedDigest, g.profile); err != nil {
+		t.Fatalf("the changed profile does not work with its own digest: %v", err)
+	}
 	cases["a changed file"] = file{changed, g.digest}
 	for name, f := range cases {
 		err := Canary(context.Background(), f.path, f.digest, g.profile)

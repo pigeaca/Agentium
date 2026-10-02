@@ -142,8 +142,13 @@ const fdRule = `(allow file-write-data (regex #"^/dev/fd/[0-9]+$"))` + "\n"
 // semaphorePrefix is the only name prefix of POSIX semaphores a grade may use: Python multiprocessing's (its locks,
 // queues and pools; the names are /mp-<random>). Named POSIX shared memory is denied: an object outlives the grade and
 // any later process can open it by name (an agent's sandbox allows that), so a hostile build could leave the hidden
-// tests there. No step 0 fixture needs it (Python's shared_memory module does: /psm_<random>, refused). Semaphores
-// under the prefix stay a narrow channel (names and counts, which a later process must guess): a known limit.
+// tests there. No step 0 fixture needs it (Python's shared_memory module does: /psm_<random>, refused).
+//
+// Known limit: semaphores under the prefix are a channel out of the grade. A build can create /mp-<name> semaphores
+// and encode data in their counts (about 15 bits each, up to kern.posix.sem.max, 10,000 by default: some 10-20 KB),
+// and they last until reboot; any later process that knows the names reads them back, an agent's included. Since the
+// hostile build and a later agent can be the same model, it needs no guessing, only the model colluding with itself
+// across runs. Python multiprocessing needs the prefix, so it stays; container mode (Part 2) closes the channel.
 const semaphorePrefix = "/mp-"
 
 // notifyMemory is the shared memory notifyd publishes its state in, which every process's notification calls read

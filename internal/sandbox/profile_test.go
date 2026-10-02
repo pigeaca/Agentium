@@ -1,11 +1,15 @@
 package sandbox
 
 import (
+	"errors"
 	"flag"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/pigeaca/agentium/internal/runner"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -218,4 +222,61 @@ func tempProfile(t *testing.T, dir string) Profile {
 		Data: filepath.Join(dir, "data"), Denied: []string{filepath.Join(dir, "repo"), filepath.Join(dir, "data", "cache", "grading", "r1", "private")},
 		Copy: filepath.Join(dir, "data", "records", "r1", "verify"), Cache: filepath.Join(dir, "data", "cache", "grading", "r1"),
 		Temp: filepath.Join(dir, "t"), Deps: filepath.Join(dir, "data", "deps", "1"), Loopback: true}
+}
+
+// CheckFile accepts the file only with the digest WriteFile returned: another digest, or a changed file, wraps
+// ErrUnavailable.
+func TestCheckFile(t *testing.T) {
+	dir := t.TempDir()
+	p := tempProfile(t, dir)
+	file := filepath.Join(dir, "p.sb")
+	digest, err := p.WriteFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckFile(file, digest); err != nil {
+		t.Fatalf("the file as written: %v", err)
+	}
+	other := strings.Repeat("0", 64)
+	if err := CheckFile(file, other); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("another digest: %v, want ErrUnavailable", err)
+	}
+	if err := os.WriteFile(file, []byte("; changed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckFile(file, digest); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("a changed file: %v, want ErrUnavailable", err)
+	}
+	if err := CheckFile(filepath.Join(dir, "missing.sb"), digest); !errors.Is(err, ErrUnavailable) {
+		t.Errorf("a missing file: %v, want ErrUnavailable", err)
+	}
+}
+
+// Wrap runs a shell command or arguments through sandbox-exec by its absolute path, with the profile file and `--`
+// before the command, and keeps the rest of the spec.
+func TestWrapArgv(t *testing.T) {
+	started := func(int) {}
+	for _, c := range []struct {
+		spec runner.Spec
+		want []string
+	}{
+		{runner.Spec{Dir: "/w", Command: "go test ./...", Environ: []string{"A=1"}, Started: started},
+			[]string{"/usr/bin/sandbox-exec", "-f", "/p/grade.sb", "--", "/bin/sh", "-c", "go test ./..."}},
+		{runner.Spec{Dir: "/w", Args: []string{"-x", "y"}}, []string{"/usr/bin/sandbox-exec", "-f", "/p/grade.sb", "--", "-x", "y"}},
+	} {
+		got, err := Wrap(c.spec, "/p/grade.sb")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(got.Args, c.want) || got.Command != "" || got.Dir != c.spec.Dir || !slices.Equal(got.Environ, c.spec.Environ) ||
+			(c.spec.Started != nil) != (got.Started != nil) {
+			t.Errorf("Wrap(%+v) = %+v, want args %q", c.spec, got, c.want)
+		}
+	}
+	if _, err := Wrap(runner.Spec{Command: "true"}, "grade.sb"); err == nil {
+		t.Error("a relative profile file was wrapped")
+	}
+	if _, err := Wrap(runner.Spec{}, "/p/grade.sb"); err == nil {
+		t.Error("a spec without a command was wrapped")
+	}
 }
