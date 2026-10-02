@@ -91,6 +91,16 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
       - the note on an unfinished `seq-v1` experiment no longer claims a look that was never made;
       - `experiment` subcommands say why a bad argument was refused;
       - validation warns when the verify commands' `go test -skip`/`-run` patterns keep a hidden test from running (the smoke tasks' `-skip '<timing tests>'`).
+    - **Smoke check rerun (2026-10-02, at `80c7f9b`, [report](../../docs/examples/seq-v1-smoke-55-report.md)): stopped at look 2 of 3 for futility, with no cost verdict, as an A/A should end. The gate's smoke check has now run with real looks.**
+      - **Setup:** the same 16 tasks and seed on `claude-sonnet-5-5` (sign-in login), `--run-budget 0.30 --budget 5`.
+      - **Preview:** with every run assumed at its cap, look 1 plus calibration came to $4.89, within $5.
+      - **Look 1** (8 tasks): cost +11%, [-28%, +71%] at 99.84%, inconclusive. Conditional power was 27%, so it continued.
+      - **Look 2** (12 tasks): cost +4%, [-16%, +28%] at 98.84%, inconclusive. Conditional power was 0%, so it stopped for futility.
+      - **Stage barrier:** it held. Look 1 came after stage 1's last two runs had settled (15:34:43Z), and stage 2's first pair started at 15:34:44Z.
+      - **Spend:** $2.25 at list price: $0.08 on calibration and $2.17 on 24 runs. Runs cost $0.05 to $0.17, and none was capped. Success was 92% in both arms; `feature-intersect-by` failed in both. Since `init`, both attempts together spent $4.87.
+      - **Time:** look 1 came 4 min 46 s after `experiment run` began (calibration included), and the run ended at 7 min 05 s.
+      - **Usage:** the five-hour window went from 59% to 64%, about 0.2% per run.
+      - **The preview's estimates were far off:** $0.30 per run (the cap; there were no Sonnet 5.5 runs yet) against $0.09 actual. It gave 2% of the window per run, measured on the first attempt's `claude-sonnet-5` runs in a window other work shared. It also quoted a window reading from about two hours before.
   - Update the docs, then the next chapter's wave-3 results (by the coordinator).
   - Archive this plan.
   - *Acceptance:* the exit gate is recorded, passed or failed, with its evidence.
