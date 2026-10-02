@@ -657,8 +657,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	}
 	rec.Behavior.BashCommands = len(rec.Metrics.Commands)
 	rec.Behavior.Denials = rec.Metrics.Denials
-	rec.Behavior.RanTests = ranTests(rec.Metrics.Commands)
-	rec.Behavior.RanChecks = ranChecks(rec.Metrics.Commands, spec.Task.Verify)
+	rec.Behavior.RanTests, rec.Behavior.RanChecks = commandFlags(rec.Metrics, spec.Task.Verify)
 	for _, p := range changed {
 		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
 	}
@@ -1086,6 +1085,12 @@ func measure(numstat string, b *Behavior) []string {
 // Python), then other runners.
 var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(),
 	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
+
+// commandFlags are the behavior flags "ran tests" and "ran the checks" (verify): from the agent's Bash commands that
+// ran, not those Claude Code denied (claude.Metrics.RanCommands), which never started.
+func commandFlags(m claude.Metrics, verify []string) (tests, checks bool) {
+	return ranTests(m.RanCommands), ranChecks(m.RanCommands, verify)
+}
 
 func ranTests(commands []string) bool {
 	for _, c := range commands {

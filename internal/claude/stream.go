@@ -52,9 +52,13 @@ type Metrics struct {
 	SawInit       bool   `json:"saw_init"`
 	SawResult     bool   `json:"saw_result"`
 
-	Commands  []string `json:"-"` // Bash commands, in order: behavior flags come from them
-	FilePaths []string `json:"-"` // paths the file tools touched
-	ReadPaths []string `json:"-"` // paths the Read tool read: what the agent looked at, not what it wrote
+	Commands []string `json:"-"` // Bash commands, in order, denied ones included
+	// RanCommands are Commands less the calls the result event lists as denied (permission_denials: Claude Code's
+	// permission checks and the sandbox's refusals), which never ran: "ran tests" and "ran the checks" come from them.
+	// A transcript without a result event (a run killed at its timeout) lists no denials, so all of Commands.
+	RanCommands []string `json:"-"`
+	FilePaths   []string `json:"-"` // paths the file tools touched
+	ReadPaths   []string `json:"-"` // paths the Read tool read: what the agent looked at, not what it wrote
 	// CWD is the folder Claude Code started in, from its init event: file tools name paths under it. A local path.
 	CWD string `json:"-"`
 	// SkillCalls are the skills the agent invoked through the Skill tool, in order. Names can be personal: compared,
@@ -213,6 +217,8 @@ func Parse(r io.Reader) (Metrics, error) {
 	launches := newLaunchLog()        // the isolated-run cost's first reads
 	lineNo := 0
 	subagentTypes := map[string]string{} // Agent (Task) tool calls by ID: the subagent type their messages run as
+	var commandIDs []string              // the tool call ID of each of m.Commands
+	denied := map[string]bool{}          // tool call IDs in the result's permission_denials
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024) // tool results can be large
 	for scanner.Scan() {
@@ -317,7 +323,7 @@ func Parse(r io.Reader) (Metrics, error) {
 				switch {
 				case block.Name == "Bash":
 					if command, ok := block.Input["command"].(string); ok {
-						m.Commands = append(m.Commands, command)
+						m.Commands, commandIDs = append(m.Commands, command), append(commandIDs, block.ID)
 					}
 				case block.Name == "Skill":
 					if name := skillName(block.Input); name != "" {
@@ -342,6 +348,15 @@ func Parse(r io.Reader) (Metrics, error) {
 			m.CostUSD, m.Turns = result.TotalCostUSD, int(result.NumTurns)
 			m.DurationMS, m.APIDurationMS = int64(result.DurationMS), int64(result.DurationAPIMS)
 			m.Denials = len(result.PermissionDenials)
+			clear(denied)
+			for _, raw := range result.PermissionDenials {
+				var d struct {
+					ToolUseID string `json:"tool_use_id"`
+				}
+				if json.Unmarshal(raw, &d) == nil && d.ToolUseID != "" {
+					denied[d.ToolUseID] = true
+				}
+			}
 			m.ResultExcerpt = excerpt(result.Result, 300)
 			m.InputTokens, m.OutputTokens, m.CacheReadTokens, m.CacheWriteTokens = 0, 0, 0, 0
 			for _, raw := range result.ModelUsage {
@@ -357,6 +372,11 @@ func Parse(r io.Reader) (Metrics, error) {
 		}
 	}
 	m.FirstReads, m.UnmatchedLaunches = launches.firstReads()
+	for i, command := range m.Commands {
+		if !denied[commandIDs[i]] {
+			m.RanCommands = append(m.RanCommands, command)
+		}
+	}
 	for _, req := range requests {
 		model := req.model
 		if model == "" {
