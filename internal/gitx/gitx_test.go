@@ -2,6 +2,7 @@ package gitx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/home"
 )
 
 func git(t *testing.T, dir string, args ...string) string {
@@ -185,5 +188,100 @@ func TestPartialClone(t *testing.T) {
 		if want := name == "extension" || name == "promisor remote"; got != want {
 			t.Errorf("%s: partial = %v, want %v", name, got, want)
 		}
+	}
+}
+
+// commits makes n commits in a new repository and returns it with their IDs, oldest first.
+func commits(t *testing.T, n int) (string, []string) {
+	t.Helper()
+	source := t.TempDir()
+	git(t, source, "init", "-q", "-b", "main")
+	var ids []string
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(source, "a.txt"), []byte(fmt.Sprintf("%d\n", i)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		git(t, source, "add", "a.txt")
+		git(t, source, "commit", "-q", "-m", fmt.Sprintf("c%d", i))
+		ids = append(ids, git(t, source, "rev-parse", "HEAD"))
+	}
+	return source, ids
+}
+
+// Shallow fetches rewrite the bare repository's shallow file; git refuses one whose file changed under it ("shallow
+// file has changed since we read it"), so concurrent imports into one project's repository used to fail at random.
+func TestFetchCommitConcurrentlyIntoOneRepository(t *testing.T) {
+	ctx := context.Background()
+	source, ids := commits(t, 10)
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	if err := InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	errs := make(chan error, len(ids))
+	for _, id := range ids {
+		go func() { errs <- FetchCommit(ctx, source, id, SourceRef(id), "--git-dir", bare) }()
+	}
+	for range ids {
+		if err := <-errs; err != nil {
+			t.Error(err)
+		}
+	}
+	for _, id := range ids {
+		if got, err := Run(ctx, "--git-dir", bare, "rev-parse", SourceRef(id)); err != nil || got != id {
+			t.Errorf("ref for %s = %q, %v", id, got, err)
+		}
+	}
+}
+
+// A failed or cancelled fetch never keeps the repository's fetch lock, and a fetch waiting for the lock stops when its
+// context ends.
+func TestFetchCommitReleasesItsLock(t *testing.T) {
+	ctx := context.Background()
+	source, ids := commits(t, 1)
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	if err := InitBare(ctx, bare); err != nil {
+		t.Fatal(err)
+	}
+	lockPath := filepath.Join(bare, FetchLock)
+	free := func(when string) {
+		t.Helper()
+		short, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		unlock, err := home.LockFile(short, lockPath, nil)
+		if err != nil {
+			t.Fatalf("%s: the fetch lock is still held: %v", when, err)
+		}
+		unlock()
+	}
+
+	if err := FetchCommit(ctx, source, strings.Repeat("0", 40), "", "--git-dir", bare); err == nil {
+		t.Fatal("fetching a missing commit succeeded")
+	}
+	free("after a failed fetch")
+
+	// Cancelled while git runs: the fetch stops and lets go.
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := FetchCommit(cancelled, source, ids[0], SourceRef(ids[0]), "--git-dir", bare); err == nil {
+		t.Fatal("a cancelled fetch succeeded")
+	}
+	free("after a cancelled fetch")
+
+	// Cancelled while waiting for another holder: it gives up with the context's error, and fetches nothing.
+	unlock, err := home.LockFile(ctx, lockPath, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waiting, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	if err := FetchCommit(waiting, source, ids[0], SourceRef(ids[0]), "--git-dir", bare); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("fetch while the lock is held: err = %v, want the context's deadline", err)
+	}
+	if _, err := Run(ctx, "--git-dir", bare, "rev-parse", "--verify", "--quiet", SourceRef(ids[0])); err == nil {
+		t.Error("the fetch ran without the lock")
+	}
+	unlock()
+	if err := FetchCommit(ctx, source, ids[0], SourceRef(ids[0]), "--git-dir", bare); err != nil {
+		t.Fatalf("after the holder let go: %v", err)
 	}
 }

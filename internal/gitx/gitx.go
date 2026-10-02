@@ -11,10 +11,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/runner"
 )
 
@@ -94,16 +96,33 @@ func InitBare(ctx context.Context, dir string) error {
 // dest, and keeps it under ref when ref is not empty (so it is never garbage-collected). Only upload-pack runs in the
 // source repository: no push, no hooks, nothing written there. allowAnySHA1InWant lets a commit that no ref points at
 // be fetched. dest is a --git-dir for bare repositories or a -C folder for checkouts, as given by where.
+//
+// Fetches into one repository run one at a time, across goroutines and processes: a shallow fetch rewrites the
+// repository's shallow file, and git fails one whose file changed while it ran ("shallow file has changed since we
+// read it", or shallow.lock exists), so concurrent imports into a project's repository used to lose tasks at random.
+// The lock is FetchLock in the repository's git folder, held for the fetch only and waited for until ctx ends.
 func FetchCommit(ctx context.Context, source, commit, ref string, where ...string) error {
+	gitDir, err := Run(ctx, append(append([]string{}, where...), "rev-parse", "--absolute-git-dir")...)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", commit, err)
+	}
+	unlock, err := home.LockFile(ctx, filepath.Join(gitDir, FetchLock), nil)
+	if err != nil {
+		return fmt.Errorf("fetch %s: lock %s: %w", commit, gitDir, err)
+	}
+	defer unlock()
 	refspec := commit
 	if ref != "" {
 		refspec += ":" + ref
 	}
 	args := append(append([]string{}, where...), "fetch", "--quiet", "--no-tags", "--depth=1",
 		"--upload-pack=git -c uploadpack.allowAnySHA1InWant=true upload-pack", "--end-of-options", source, refspec)
-	_, err := Run(ctx, args...)
+	_, err = Run(ctx, args...)
 	return err
 }
+
+// FetchLock is the file, in a repository's git folder, that FetchCommit locks while it fetches into that repository.
+const FetchLock = "agentium-fetch.lock"
 
 // SourceRef is where FetchCommit keeps a user's commit in Agentium's bare repository.
 func SourceRef(commit string) string { return "refs/agentium/sources/" + commit }

@@ -1,6 +1,7 @@
 package home
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -62,4 +63,34 @@ func (l Layout) LockRuns() (release func(), err error) {
 		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 		f.Close()
 	}, nil
+}
+
+// LockFile takes an exclusive lock on path, waiting for it until ctx ends (onWait, if set, is called once when it must wait).
+// The lock belongs to the open file, so it excludes other processes and other goroutines of this one alike, and the
+// operating system drops it when its holder's process ends. unlock releases it and closes the file.
+func LockFile(ctx context.Context, path string, onWait func()) (unlock func(), err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+		}
+		if err != syscall.EWOULDBLOCK {
+			f.Close()
+			return nil, err
+		}
+		if onWait != nil {
+			onWait()
+			onWait = nil // once
+		}
+		select {
+		case <-ctx.Done():
+			f.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond): // a cheap probe; short waits (one shallow fetch) should not round up much
+		}
+	}
 }
