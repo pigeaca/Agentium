@@ -188,4 +188,18 @@ func TestCopyTreeSaysHow(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(src, "a", "f")); string(data) != "seed" {
 		t.Errorf("the source changed: %q", data)
 	}
+	// A destination someone else made is refused and never removed, by copyTree or by CloneFolder's fallback.
+	theirs := filepath.Join(t.TempDir(), "theirs")
+	must(t, os.MkdirAll(theirs, 0o700))
+	must(t, os.WriteFile(filepath.Join(theirs, "f"), []byte("theirs"), 0o600))
+	if _, err := copyTree(t.Context(), src, theirs); err == nil {
+		t.Error("copyTree copied into an existing folder")
+	}
+	if data, _ := os.ReadFile(filepath.Join(theirs, "f")); string(data) != "theirs" {
+		t.Errorf("an existing folder changed: %q", data)
+	}
+	// A copy that fails removes only what it made.
+	if _, err := copyTree(t.Context(), filepath.Join(src, "missing"), filepath.Join(t.TempDir(), "failed")); err == nil {
+		t.Error("copied a missing folder")
+	}
 }

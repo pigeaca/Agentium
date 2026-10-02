@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/pricing"
@@ -146,12 +147,27 @@ func (e *AliveError) runsText() string {
 //     reported in an *AliveError, along with the runs that were recovered.
 //
 // The workspaces, temp roots, grading copies and grade folders (gradingFolder: a grade's cache clone) of recovered runs
-// are removed, and a stored run's leftover grade folder too. A run's temp root is found from its
+// are removed, and a stored run's leftover grade folder too, after what their grades left running is stopped; what
+// resists removal is moved into the quarantine with a warning (cleanGrade, RecoverWarn). A run's temp root is found from its
 // workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
 //
 // A stored run's records keep nothing to recover, but a pair's comparison (Env.JudgePair) that Agentium died in leaves
 // its folder there, with a config folder that may hold the sign-in: with the run lock held none is running, so it goes.
 func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
+	return RecoverWarn(ctx, layout, stored, secret, now, nil)
+}
+
+// RecoverWarn is Recover, and tells warn (when set) what it could not clean up but did not let stop it: a grading copy
+// or grade folder that resisted removal was moved into the quarantine (removeOrQuarantine), or could not even be moved;
+// processes a grade left that could not be stopped; quarantined folders that still cannot be removed. What a grade
+// wrote never stops recovery, so it never blocks later runs.
+func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time, warn func(string)) ([]Orphan, error) {
+	if warn == nil {
+		warn = func(string) {}
+	}
+	if w := emptyQuarantine(quarantine(layout)); w != "" {
+		warn(w)
+	}
 	entries, err := os.ReadDir(layout.Records)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -176,10 +192,8 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			if err := os.RemoveAll(filepath.Join(layout.Records, e.Name(), pairJudgeFolder)); err != nil {
 				return orphans, fmt.Errorf("remove the pair judge folder of %s: %w", e.Name(), err)
 			}
-			// A grade's folder a failed removal left (removeTree reports it, the run is stored anyway).
-			if err := removeTree(filepath.Join(layout.Records, e.Name(), gradingFolder)); err != nil {
-				return orphans, fmt.Errorf("remove the grade's folder of %s: %w", e.Name(), err)
-			}
+			// A grade's folder a failed removal left (the run is stored anyway).
+			cleanGrade(layout, filepath.Join(layout.Records, e.Name()), warn)
 			continue
 		}
 		dir := filepath.Join(layout.Records, e.Name())
@@ -211,7 +225,7 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 				// Valid JSON of another shape (a newer version's file, say) is not damage: fail loudly, touch nothing.
 				return orphans, fmt.Errorf("run %s: start file: %w", e.Name(), parseErr)
 			}
-			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), data, parseErr, secret, now)
+			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), data, parseErr, secret, now, warn)
 			if err != nil {
 				return orphans, err
 			}
@@ -238,14 +252,8 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		if err := removeRunTemp(layout.RunTemp(filepath.Base(s.Workspace))); err != nil {
 			return orphans, fmt.Errorf("run %s: %w", e.Name(), err)
 		}
-		// The grading copy and the grade's own folder (its cache clone, temp root and profile): what a grade wrote there
-		// may resist a plain removal (removeTree).
-		if err := removeTree(filepath.Join(dir, "verify")); err != nil {
-			return orphans, fmt.Errorf("remove the grading copy of %s: %w", e.Name(), err)
-		}
-		if err := removeTree(filepath.Join(dir, gradingFolder)); err != nil {
-			return orphans, fmt.Errorf("remove the grade's folder of %s: %w", e.Name(), err)
-		}
+		// The grading copy and the grade's own folder (its cache clone, temp root and profile).
+		cleanGrade(layout, dir, warn)
 		if s.Finished && s.Record.Outcome != "" {
 			// Its judge may have been cut short: the judge's folder (a config folder with the sign-in, for an API key or
 			// a token) goes, and the records are redacted again, as for a stopped run.
@@ -331,7 +339,7 @@ var pgidInTruncated = regexp.MustCompile(`"pgid":\s*(\d+)[,}]`)
 //     and found by no one, so Once removes a stale one before its checkout.
 //
 // The judge's per-call cost lives only in the start file and may be missing from the spend.
-func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr error, secret string, now time.Time) (orphan *Orphan, aliveNote string, err error) {
+func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr error, secret string, now time.Time, warn func(string)) (orphan *Orphan, aliveNote string, err error) {
 	startPath := filepath.Join(dir, startFile)
 	transcript := filepath.Join(dir, "stream.jsonl")
 	info, statErr := os.Stat(transcript)
@@ -382,8 +390,10 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 		}
 		return nil, "", nil
 	}
-	for _, sub := range []string{"verify", gradingFolder, "judge", pairJudgeFolder} { // hidden tests; the sign-in config folders
-		if err := removeTree(filepath.Join(dir, sub)); err != nil {
+	// The hidden tests (what a grade wrote never stops recovery), then the sign-in config folders.
+	cleanGrade(layout, dir, warn)
+	for _, sub := range []string{"judge", pairJudgeFolder} {
+		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
 			return nil, "", fmt.Errorf("remove the %s folder of %s: %w", sub, id, err)
 		}
 	}
@@ -407,4 +417,28 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	rec.IsolatedCostUSD = isolatedCost(rec)
 	rec.Notes = append(rec.Notes, fmt.Sprintf("start file unreadable (%v): moved to %s; judge spend, if any, is not included", parseErr, aside))
 	return &Orphan{Record: rec, Unreadable: aside}, "", nil
+}
+
+// cleanGrade stops what a dead run's grade left running, then removes its grading copy and grade folder in the run's
+// records dir, moving into the quarantine what resists removal. Nothing here returns an error: a grade controls what
+// these folders hold, so a failure is a warning (warn), never a reason to stop recovery and block every later run.
+func cleanGrade(layout home.Layout, dir string, warn func(string)) {
+	verify, grade := filepath.Join(dir, "verify"), filepath.Join(dir, gradingFolder)
+	if _, err := os.Lstat(verify); errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Lstat(grade); errors.Is(err, os.ErrNotExist) {
+			return
+		}
+	}
+	if err := stopUsing(buildtool.Profiles(), filepath.Join(grade, "cache"), grade, verify); err != nil {
+		warn(fmt.Sprintf("run %s: %v", filepath.Base(dir), err))
+	}
+	for _, folder := range []string{verify, grade} {
+		warning, err := removeOrQuarantine(folder, quarantine(layout))
+		if warning != "" {
+			warn(warning)
+		}
+		if err != nil {
+			warn(fmt.Sprintf("run %s: %v; recovery tries again next time", filepath.Base(dir), err))
+		}
+	}
 }

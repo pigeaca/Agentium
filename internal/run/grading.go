@@ -2,13 +2,18 @@ package run
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
@@ -29,29 +34,51 @@ import (
 //     caller's warm step may build the base (whose tests the base's agents see anyway), never hidden tests or a
 //     reference solution. A base holds earlier tasks' solutions and hidden tests as ordinary files, so a seed warmed on
 //     one base must never serve a grade of another (an earlier task's grade would find its own reference compiled).
-//     What a grade adds to its clone (the hidden tests' builds) goes with the clone.
+//     What a grade adds to its clone (the hidden tests' builds) goes with the clone;
+//   - seeds are for sandboxed grades only. A host-mode grade runs unsandboxed and could write the seed itself, so it is
+//     never offered one (step 3 gates seed use on the sandbox mode);
+//   - what a grade left running is stopped before its folders go (stopGrade), and the removal never follows a link
+//     (removeTree): a grade's process may still swap any entry for a link to the user's files. What cannot be removed is
+//     moved aside into the quarantine (removeOrQuarantine), so a hostile grade can never block later runs.
 //
 // A grade's environment is the agent's recipe (buildtool.GraderEnv), its writable folders the grading copy, the cache
 // and the temp root (Grading.WriteProfile).
 
-// Names in a run's records: the grade's folder, and the seed folders in the data folder's cache.
+// Names: the grade's folder in a run's records; the seed folders and the quarantine in the data folder's cache, which
+// agents and grades may not read.
 const (
-	gradingFolder = "grading"
-	seedsFolder   = "grading-seed"
+	gradingFolder    = "grading"
+	seedsFolder      = "grading-seed"
+	quarantineFolder = "quarantine"
 )
 
+// fullCommit is a resolved commit ID: SHA-1 or SHA-256, in full.
+var fullCommit = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
 // gradingSeed is the seed of the grading caches of runs on base with the selected profiles:
-// <cache>/grading-seed/<project>/<buildtool.SeedKey>-<base>, or "" when the layout names no cache folder. The project is
-// the deps folder's (depsFolder): the bare repository's project folder.
-func (env Env) gradingSeed(profiles []buildtool.Profile, base string) string {
+// <cache>/grading-seed/<project>/<buildtool.SeedKey>-<base>. The project is the deps folder's (depsFolder): the bare
+// repository's project folder. base must be a full, resolved commit ID: a seed holds what one commit's files make, and
+// a branch name or a short ID could name another commit later.
+func (env Env) gradingSeed(profiles []buildtool.Profile, base string) (string, error) {
 	if env.Layout.Cache == "" {
-		return ""
+		return "", errors.New("the data folder's layout names no cache folder for grading seeds")
+	}
+	if !fullCommit.MatchString(base) {
+		return "", fmt.Errorf("grading seed: %q is not a full commit ID", base)
 	}
 	project := "default"
 	if env.Bare != "" {
 		project = filepath.Base(filepath.Dir(env.Bare))
 	}
-	return filepath.Join(env.Layout.Cache, seedsFolder, project, buildtool.SeedKey(profiles)+"-"+filepath.Base(base))
+	return filepath.Join(env.Layout.Cache, seedsFolder, project, buildtool.SeedKey(profiles)+"-"+base), nil
+}
+
+// quarantine is where removeOrQuarantine moves what it cannot remove: in the data folder's cache.
+func quarantine(layout home.Layout) string {
+	if layout.Cache == "" {
+		return ""
+	}
+	return filepath.Join(layout.Cache, quarantineFolder)
 }
 
 // prepareSeed makes the seed folder once, if it is not there yet: the selected profiles' PrepareRun hooks (Gradle's
@@ -60,8 +87,9 @@ func (env Env) gradingSeed(profiles []buildtool.Profile, base string) string {
 // validation's base stage), never anything that holds hidden tests or a reference solution, and never a grade.
 //
 // It is published whole by a rename, under a lock beside it (seed+".lock"), and never changed after: concurrent runs
-// wait for one maker, and a folder that exists is a finished seed. What a dead maker left (seed+".tmp") is removed under
-// the lock before the next one starts.
+// wait for one maker, and a folder that exists is a finished seed. Before the rename, what the warm step left running
+// is stopped (the profiles' StopRun, then every process still using the folder), so nothing writes the seed once it is
+// published. What a dead maker left (seed+".tmp") is removed under the lock before the next one starts.
 func prepareSeed(ctx context.Context, profiles []buildtool.Profile, deps, seed string, warm func(ctx context.Context, dir string) error) error {
 	if !filepath.IsAbs(seed) {
 		return fmt.Errorf("the grading seed %q is not absolute", seed)
@@ -88,7 +116,10 @@ func prepareSeed(ctx context.Context, profiles []buildtool.Profile, deps, seed s
 		return fmt.Errorf("grading seed: %w", err)
 	}
 	if err := fillSeed(ctx, profiles, deps, tmp, warm); err != nil {
-		return errors.Join(err, removeTree(tmp))
+		return errors.Join(err, stopUsing(profiles, tmp), removeTree(tmp))
+	}
+	if err := stopUsing(profiles, tmp); err != nil {
+		return errors.Join(fmt.Errorf("grading seed: %w", err), removeTree(tmp))
 	}
 	if err := os.Rename(tmp, seed); err != nil {
 		return errors.Join(fmt.Errorf("grading seed: %w", err), removeTree(tmp))
@@ -140,6 +171,10 @@ type gradingInput struct {
 	Agent claude.Invocation
 	// Environ is the user's environment, which the agent's allowlist filters (claude.EnvironFor).
 	Environ []string
+	// Quarantine is where a grade's folder that cannot be removed is moved (quarantine of the layout); Warn, when set,
+	// is told when that happens.
+	Quarantine string
+	Warn       func(string)
 }
 
 // grading is one grade's own folders and environment.
@@ -153,6 +188,8 @@ type grading struct {
 	Environ []string
 	// Made says how the cache was made: buildtool.CloneFile, a cp command, or "prepared" (no seed).
 	Made string
+	// profiles are the run's (buildtool.SelectRun): their StopRun ends what the grade's build tools left running.
+	profiles []buildtool.Profile
 }
 
 // prepareGrading makes a grade's folders and environment: Root, created exclusively; the cache, cloned from the seed
@@ -189,6 +226,7 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 		}
 	}()
 	profiles := buildtool.SelectRun(in.Agent.Tools, in.Agent.AgentTools)
+	g.profiles = profiles
 	if in.Seed != "" {
 		if g.Made, err = buildtool.CloneFolder(ctx, in.Seed, g.Cache); err != nil {
 			return g, fmt.Errorf("the grade's cache: %w", err)
@@ -215,10 +253,15 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 	return g, nil
 }
 
-// remove removes the grade's folder: its cache, temp root and profile file (not the grading copy). It needs no
-// context: it runs on cancellation too.
+// remove stops what the grade left running (stopGrade), then removes the grade's folder: its cache, temp root and
+// profile file (not the grading copy). It needs no context: it runs on cancellation too.
 func (g grading) remove() error {
-	return removeTree(g.Root)
+	return errors.Join(g.stop(), removeTree(g.Root))
+}
+
+// stop ends what the grade left running (stopUsing): over the grade's folder and its copy, where its processes work.
+func (g grading) stop() error {
+	return stopUsing(g.profiles, g.Cache, g.Root, g.Copy)
 }
 
 // profileFile is where WriteProfile writes the grade's sandbox profile: in Root, outside the folders the grade writes
@@ -241,29 +284,53 @@ func (g grading) writeProfile(p sandbox.Profile) (written sandbox.Profile, file,
 	return p, file, digest, nil
 }
 
-// withGrading prepares a grade (prepareGrading), runs grade with it, and removes it whatever happens: on success, on
-// an error, on cancellation, and when grade panics. A removal that fails is returned with grade's error.
+// withGrading prepares a grade (prepareGrading), runs grade with it, then stops what it left running and removes it,
+// whatever happens: on success, on an error, on cancellation, and when grade panics. A folder that cannot be removed
+// is moved into in.Quarantine with a warning (removeOrQuarantine); only when that fails too is it an error.
 func withGrading(ctx context.Context, in gradingInput, grade func(g grading) error) (err error) {
 	g, err := prepareGrading(ctx, in)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if rmErr := g.remove(); rmErr != nil {
+		stopErr := g.stop()
+		warning, rmErr := removeOrQuarantine(g.Root, in.Quarantine)
+		if warning != "" && in.Warn != nil {
+			in.Warn(warning)
+		}
+		if stopErr != nil && in.Warn != nil {
+			in.Warn("the grade left processes that could not all be stopped: " + stopErr.Error())
+		}
+		if rmErr != nil {
 			err = errors.Join(err, fmt.Errorf("remove the grade's folder: %w", rmErr))
 		}
 	}()
 	return grade(g)
 }
 
-// removeTree removes root as os.RemoveAll does, and also when what a grade (the agent's code) left in it resists: a
-// folder without permissions (chmod 000) or a file or folder with the user's immutable or append-only flag (chflags
-// uchg), both within a grade's power over its own folders. It then clears those on what it finds, never through a link,
-// and tries again. A missing root is not an error.
-//
-// Known limit: the clearing pass checks each path (not a link) before it changes it; a process still writing the
-// folder could swap a path for a link in between. It runs after the grade's processes ended (step 3 makes sure of
-// that for processes that left the process group: the plan's F7).
+// stopUsing ends what is left running in folders: the profiles' StopRun on the first (the build cache: Gradle's
+// daemons), then every process of the user that still uses any of them (stopProcessesUnder, macOS). It needs no
+// context: it runs after a cancellation too, within half a minute.
+func stopUsing(profiles []buildtool.Profile, folders ...string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	var errs []error
+	if len(folders) > 0 && folders[0] != "" {
+		if err := buildtool.StopRun(ctx, profiles, folders[0], buildtool.SystemHost()); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if _, err := stopProcessesUnder(folders); err != nil {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+// removeTree removes root, whose contents a grade (the agent's code) wrote and may still be changing. os.RemoveAll comes
+// first (it never follows a link); when what the grade left resists it (a folder without permissions, the owner's
+// immutable or append-only flag on a file, a folder or a link), removeTreeAt clears that and removes, entry by entry
+// through folder descriptors, never following a link or resolving a path the grade can swap. A missing root is not an
+// error. root's parent must be Agentium's own folder, which no grade can write.
 func removeTree(root string) error {
 	if root == "" {
 		return nil
@@ -271,29 +338,59 @@ func removeTree(root string) error {
 	if err := os.RemoveAll(root); err == nil {
 		return nil
 	}
-	unlockTree(root)
-	if err := os.RemoveAll(root); err != nil {
-		return fmt.Errorf("remove %s: %w", root, err)
-	}
-	return nil
+	return removeTreeAt(root)
 }
 
-// unlockTree clears the flags (clearFlags) of p and of what is under it, and gives its folders back their owner's
-// permissions, never following a link.
-func unlockTree(p string) {
-	info, err := os.Lstat(p)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
-		return
+// removeOrQuarantine removes root (removeTree); when that fails, it moves root into the quarantine folder dir, under a
+// fresh name, and returns a warning instead of an error: what a grade can make unremovable (an access list that denies
+// deletion, a tree deeper than the descriptors allow) must never block later runs or recovery. Quarantined folders lie
+// in the data folder's cache, out of every agent's and grade's reach; recovery tries to remove them again
+// (emptyQuarantine). The error is for a folder that could be neither removed nor moved.
+func removeOrQuarantine(root, dir string) (warning string, err error) {
+	rmErr := removeTree(root)
+	if rmErr == nil {
+		return "", nil
 	}
-	clearFlags(p, info)
-	if !info.IsDir() {
-		return
+	if dir == "" {
+		return "", rmErr
 	}
-	if info.Mode().Perm()&0o700 != 0o700 {
-		os.Chmod(p, info.Mode().Perm()|0o700)
+	moved, err := moveAside(root, dir)
+	if err != nil {
+		return "", errors.Join(rmErr, fmt.Errorf("and it could not be moved aside: %w", err))
 	}
-	entries, _ := os.ReadDir(p)
+	return fmt.Sprintf("%s could not be removed (%v); it was moved to %s: inspect it, then remove it (chmod -RN may be needed)", root, rmErr, moved), nil
+}
+
+// moveAside renames root into dir, as <name>-<random>.
+func moveAside(root, dir string) (string, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	moved := filepath.Join(dir, filepath.Base(root)+"-"+hex.EncodeToString(b))
+	if err := os.Rename(root, moved); err != nil {
+		return "", err
+	}
+	return moved, nil
+}
+
+// emptyQuarantine tries to remove what the quarantine folder dir holds, and returns a warning for what is still there.
+func emptyQuarantine(dir string) string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	var left []string
 	for _, e := range entries {
-		unlockTree(filepath.Join(p, e.Name()))
+		if err := removeTree(filepath.Join(dir, e.Name())); err != nil {
+			left = append(left, e.Name())
+		}
 	}
+	if len(left) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d folder(s) in %s could not be removed (a grade left them unremovable): inspect them, then remove them (chmod -RN may be needed)", len(left), dir)
 }

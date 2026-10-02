@@ -245,7 +245,9 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 		release()
 		return nil, err
 	}
-	orphans, recoverErr := run.Recover(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now())
+	// What a dead run's grade left that cannot be cleaned up is a warning, never a reason to stop (run.RecoverWarn).
+	warn := func(msg string) { fmt.Fprintf(env.Stdout, "%s\n", env.style().Warn("warning: "+msg)) }
+	orphans, recoverErr := run.RecoverWarn(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now(), warn)
 	for _, o := range orphans {
 		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored
 			fmt.Fprintf(env.Stdout, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+

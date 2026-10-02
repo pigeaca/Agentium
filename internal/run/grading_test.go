@@ -26,7 +26,7 @@ type gradeFixture struct {
 	copy   string // <records>/r1/verify
 	root   string // <records>/r1/grading
 	deps   string
-	seed   string // the seed path for Go's profile and base "abc123" (not made)
+	seed   string // the seed path for Go's profile and base commitA (not made)
 	golang []buildtool.Profile
 }
 
@@ -46,7 +46,7 @@ func newGradeFixture(t *testing.T) gradeFixture {
 	f := gradeFixture{dir: dir, env: Env{Layout: layout, Bare: filepath.Join(layout.Root, "projects", "7", "repo.git")},
 		copy: filepath.Join(layout.Records, "r1", "verify"), root: filepath.Join(layout.Records, "r1", gradingFolder),
 		deps: filepath.Join(layout.Deps, "7"), golang: buildtool.Select([]string{"go"})}
-	f.seed = f.env.gradingSeed(f.golang, "abc123")
+	f.seed = f.seedFor(t, f.golang, commitA)
 	for _, d := range []string{f.copy, f.deps} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -56,6 +56,23 @@ func newGradeFixture(t *testing.T) gradeFixture {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// Full commit IDs, as a seed needs.
+const (
+	commitA = "0123456789abcdef0123456789abcdef01234567"
+	commitB = "89abcdef0123456789abcdef0123456789abcdef"
+	commitC = "fedcba9876543210fedcba9876543210fedcba98"
+)
+
+// seedFor is the seed path of the fixture's project for profiles and base.
+func (f gradeFixture) seedFor(t *testing.T, profiles []buildtool.Profile, base string) string {
+	t.Helper()
+	seed, err := f.env.gradingSeed(profiles, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return seed
 }
 
 // input is a grade of the fixture's copy for the agent tools, cloned from seed ("" for none), in root.
@@ -87,19 +104,27 @@ func tree(t *testing.T, root string) map[string]string {
 // serves another base's grades, whose earlier tasks' solutions it may hold.
 func TestGradingSeedIsPerProjectToolsAndBase(t *testing.T) {
 	f := newGradeFixture(t)
-	if !strings.HasPrefix(f.seed, filepath.Join(f.env.Layout.Cache, seedsFolder, "7")+string(filepath.Separator)) || !strings.HasSuffix(f.seed, "-abc123") {
+	if !strings.HasPrefix(f.seed, filepath.Join(f.env.Layout.Cache, seedsFolder, "7")+string(filepath.Separator)) || !strings.HasSuffix(f.seed, "-"+commitA) {
 		t.Errorf("seed = %s", f.seed)
 	}
+	other8 := gradeFixture{env: Env{Layout: f.env.Layout, Bare: filepath.Join(f.env.Layout.Root, "projects", "8", "repo.git")}}
 	seeds := map[string]bool{f.seed: true}
-	for _, other := range []string{f.env.gradingSeed(f.golang, "def456"), f.env.gradingSeed(buildtool.SelectRun([]string{"gradle"}, nil), "abc123"),
-		Env{Layout: f.env.Layout, Bare: filepath.Join(f.env.Layout.Root, "projects", "8", "repo.git")}.gradingSeed(f.golang, "abc123")} {
+	for _, other := range []string{f.seedFor(t, f.golang, commitB), f.seedFor(t, buildtool.SelectRun([]string{"gradle"}, nil), commitA),
+		other8.seedFor(t, f.golang, commitA), f.seedFor(t, f.golang, strings.Repeat("ab", 32))} {
 		if seeds[other] {
 			t.Errorf("two seeds share %s", other)
 		}
 		seeds[other] = true
 	}
-	if (Env{}).gradingSeed(f.golang, "abc123") != "" {
+	if _, err := (Env{}).gradingSeed(f.golang, commitA); err == nil {
 		t.Error("a layout without a cache folder names a seed")
+	}
+	// Only a full, resolved commit ID names a seed: a branch, a short or upper-case ID, or a path never does.
+	for _, base := range []string{"", "main", "HEAD", "0123456", commitA[:39], commitA + "0", strings.ToUpper(commitA), "../" + commitA[3:],
+		commitA[:20] + "/" + commitA[21:], strings.Repeat("g", 40)} {
+		if seed, err := f.env.gradingSeed(f.golang, base); err == nil {
+			t.Errorf("base %q names the seed %s", base, seed)
+		}
 	}
 }
 
@@ -109,7 +134,7 @@ func TestGradingSeedIsPerProjectToolsAndBase(t *testing.T) {
 func TestPrepareSeed(t *testing.T) {
 	f := newGradeFixture(t)
 	gradle := buildtool.SelectRun([]string{"gradle"}, nil)
-	seed := f.env.gradingSeed(gradle, "abc123")
+	seed := f.seedFor(t, gradle, commitA)
 	// A dead maker's partial seed.
 	if err := os.MkdirAll(filepath.Join(seed+".tmp", "half"), 0o700); err != nil {
 		t.Fatal(err)
@@ -151,7 +176,7 @@ func TestPrepareSeed(t *testing.T) {
 	}
 
 	// A failed warm step publishes nothing and leaves nothing.
-	other := f.env.gradingSeed(f.golang, "def456")
+	other := f.seedFor(t, f.golang, commitB)
 	if err := prepareSeed(context.Background(), f.golang, f.deps, other, func(_ context.Context, dir string) error {
 		os.WriteFile(filepath.Join(dir, "partial"), nil, 0o600)
 		return errors.New("the base did not build")
@@ -164,7 +189,7 @@ func TestPrepareSeed(t *testing.T) {
 		}
 	}
 	// Something at the seed's place that is not a folder is never taken for a seed.
-	link := f.env.gradingSeed(f.golang, "ghi789")
+	link := f.seedFor(t, f.golang, commitC)
 	if err := os.Symlink(f.copy, link); err != nil {
 		t.Fatal(err)
 	}

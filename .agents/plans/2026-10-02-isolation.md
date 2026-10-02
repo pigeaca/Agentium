@@ -217,8 +217,18 @@
       - Go: `GOPROXY=off` (Design: a module the agent added fails at once, saying so).
 
       Each name appears once; Claude Code's variables and the sign-in never do. A temp root with white space is refused: `JAVA_TOOL_OPTIONS` cannot quote it. A test checks the recipe against `claude.Invocation.Command` for each profile, so the two cannot drift apart.
-    - *The seed* (`run.Env.gradingSeed`, `prepareSeed`): `<cache>/grading-seed/<project>/<tools>-<hash>-<base>`, one per project, tool set (`buildtool.SeedKey`) and **base commit**. A base holds earlier tasks' solutions and hidden tests as ordinary files, so a seed warmed on one base must never serve another base's grades. It is made once, under a lock beside it, by the profiles' `PrepareRun` and an optional trusted warm step of the caller's. It is then published whole by a rename and never written again. A dead maker's `.tmp` is removed under the lock. It lies in the data folder's cache, which the grading profile denies.
-    - *The grade's folders* (`prepareGrading`, `withGrading`): the grade's folder is created exclusively (`<records>/<id>/grading`). It holds the cache, cloned from the seed (`buildtool.CloneFolder`: one `clonefile(2)` call, made through `syscall.Syscall6` with `SYS_CLONEFILEAT` 462, no new module). Without a seed, the cache is made by `PrepareRun`. The folder also holds the temp root and the profile file (`writeProfile`), which lies outside the writable folders and is written after they exist. `withGrading` removes the folder on success, on error, on cancel and on a panic. `Recover` removes it for dead runs and for stored runs a failed removal left behind. `removeTree` (also used now for `verify/` in `Recover`) clears what a hostile grade can set to resist removal: `chmod 000` folders and the user's immutable and append-only flags. It never follows a link.
+    - *The seed* (`run.Env.gradingSeed`, `prepareSeed`): `<cache>/grading-seed/<project>/<tools>-<hash>-<base>`, one per project, tool set (`buildtool.SeedKey`) and **base commit**. The base must be a full commit ID (40 or 64 lower-case hex digits); anything else is refused. A base holds earlier tasks' solutions and hidden tests as ordinary files, so a seed warmed on one base must never serve another base's grades. It is made once, under a lock beside it, by the profiles' `PrepareRun` and an optional trusted warm step of the caller's. Before it is published, what the warm step left running is stopped (`StopRun` on the folder, then the process sweep below), so nothing writes the seed after the rename. It is then published whole by a rename and never written again. A dead maker's `.tmp` is removed under the lock. It lies in the data folder's cache, which the grading profile denies.
+    - **Seeds are for sandboxed grades only** (review F6). A host-mode grade runs unsandboxed and could write the seed, so step 3 gates seed use on the sandbox mode: a host grade never gets a seed.
+    - *The grade's folders* (`prepareGrading`, `withGrading`): the grade's folder is created exclusively (`<records>/<id>/grading`). It holds the cache, cloned from the seed (`buildtool.CloneFolder`: one `clonefileat(2)` call through cgo and libSystem, which the SQLite driver already requires; no new module). Without a seed, the cache is made by `PrepareRun`. The folder also holds the temp root and the profile file (`writeProfile`), which lies outside the writable folders and is written after they exist. `withGrading` stops what the grade left running, then removes the folder, on success, on error, on cancel and on a panic. `Recover` does the same for dead runs (their grade folder and `verify/`) and for stored runs whose removal failed.
+    - *Stopping what a grade left* (`stopUsing`, review F5): the profiles' `StopRun` on the cache (Gradle's daemons), then a sweep that kills (SIGKILL) every process of the user that uses the grade's folder or its copy, until none is left (5 rounds at most). A process uses a folder if its working or root folder, its executable or any file or folder it holds open lies there. The sweep reads libproc through cgo (what lsof reads, without starting a tool). *Gap:* a process that uses nothing there at the moment of the sweep is not found: a `setsid` child that changed its working folder away and closed every file there. It can still act on the folders by path, but the removal never follows its links (below). Once the grade's folder is gone, the grading profile lets it create nothing in its place, because the folder's parent is not writable to it. Outside macOS the sweep does nothing (no sandbox there yet).
+    - *Removal* (`removeTree`, review F1–F3): `os.RemoveAll` first, which never follows a link. When what the grade left resists it, `removeTreeAt` walks the tree through folder descriptors, one name at a time:
+      - `fstatat` with `AT_SYMLINK_NOFOLLOW`;
+      - the owner's flags cleared with `setattrlistat(FSOPT_NOFOLLOW)`, links included (macOS has no `chflagsat`);
+      - folders made `u+rwx` with `fchmodat(AT_SYMLINK_NOFOLLOW)`, and opened with `O_DIRECTORY|O_NOFOLLOW`;
+      - removal from the bottom up with `unlinkat`.
+
+      Nothing resolves a path the grade can change, so swapping an entry for a link at any moment changes only the link. The first version checked each path with `Lstat` and then called path-following `chmod` and `chflags`. The reviewer's probe exploited that: a still-running grade swapped a folder for a link to a user's file between the check and the change, and the host made that file 0777 (6 of 6 runs). Depth is no limit: paths past `PATH_MAX` work.
+    - *Quarantine* (review F2): what still cannot be removed (an access list that denies deletion, a tree deeper than the descriptors allow) is renamed into `<cache>/quarantine` with a warning, never an error. Recovery (`RecoverWarn`, which `cli.startRuns` now calls with a printer) never stops on what a grade wrote. Each recovery tries to empty the quarantine and warns about what stays.
     - *Clone fallback:* where `clonefile` reports `ENOTSUP` or `EXDEV` (not APFS, two volumes, not macOS), the fallback is `cp -Rc` or `cp -R`. It is correct but slower, and the method is recorded in `grading.Made`.
     - *Tests:*
       - the recipe per profile (Go, Maven, Gradle, Gradle with Go, Cargo, Python) and both additions; the user's values replaced; refusals;
@@ -227,10 +237,28 @@
       - a seed is made once by 8 concurrent makers; a leftover is removed; a failed warm step leaves nothing;
       - 6 concurrent grades get separate clones, and 6 grades racing for one folder get it once;
       - removal on success, error, cancel and panic, against `chmod 000` and `uchg`/`uappnd` leftovers and a link to the seed;
+      - **links into the user's files** (review F1/F3) are removed as links: a folder (0o500) and an immutable file outside are reached by links from folders without permissions and with flags, including links that themselves carry `uchg`. Targets keep their mode, flags and contents;
+      - **the swap at the exact moment**: a test hook swaps an entry for a link to the user's folder or file right after the removal looked at it, and the targets stay unchanged. A 40-round stress swaps while removing;
+      - links with `uchg` (`ln -s /nonexistent imm && chflags -h uchg imm`), alone and in an append-only folder, and a tree 2,900 bytes deep with folders without permissions, are removed (review F2);
+      - a folder made unremovable by access lists is quarantined, with a warning and no error, by `withGrading` and by `RecoverWarn`. A later recovery empties the quarantine once it can;
+      - leftover processes in their own session (one working in the copy, one in `/` holding a file in the cache) die with the grade, with recovery of a dead run, and before a seed is published (review F5);
       - `Recover` removes grade folders, `chmod 000` ones included;
+      - `gradingSeed` refuses branches, short, upper-case and path-like IDs (review F4); `copyTree` refuses a destination someone else made and never removes it (review F7);
       - **under the real sandbox** (darwin), with the grade's environment and profile, the canary passes. The grade writes its clone, temp root and copy. It cannot read, append to, rewrite, remove or plant in the seed, directly, through its own symlink, through a hard link, or by replacing its cache with a link to the seed. It cannot rewrite its profile file or plant a seed. The next grade starts from the seed unchanged.
 
-      Mutations caught: removal without the clearing pass, a non-exclusive folder, `withGrading` without removal, and `Recover` without the grade folder.
+      Mutations caught:
+      - removal without the clearing pass;
+      - a non-exclusive folder;
+      - `withGrading` without removal;
+      - `Recover` without the grade folder;
+      - after review:
+        - `fstatat` and `fchmodat` following links (the reviewer's `os.Stat` mutation);
+        - `fchmodat` alone following links (caught only by the swap hook);
+        - `setattrlistat` following links;
+        - following links when opening folders;
+        - `withGrading` stopping nothing;
+        - no quarantine;
+        - a seed published with its warm step running.
     - *Clone time* (this machine, APFS, three tries each):
 
       | Seed | `clonefile` | `cp -Rc` | Removal |
@@ -241,14 +269,18 @@
       - nothing warms a seed yet. Step 3 decides the warm step (a warm-up on the base, or validation's base stage), base only: never hidden tests or a reference solution. Gradle's and Go's caches are path-independent enough to clone. Python's bytecode prefix mirrors source paths, so a seed's bytecode never hits;
       - seeds accumulate, one per base and tool set, with no collection; removing `<data>/cache/grading-seed` is safe while nothing runs;
       - removal is synchronous after the grade: under a second for 2 GB;
-      - `removeTree` checks each path before it clears flags or modes. A process still running in the folder could swap in a link in between, so step 3 must stop every grade process first (F7);
-      - a symlink carrying the immutable flag is not cleared (there is no `lchflags` in `syscall`); its removal fails and is reported, and `Recover` tries again;
-      - the raw system call number is not Apple's promised interface (libSystem is), though it has been stable since macOS 10.12.
+      - the process sweep misses a process that holds nothing in the grade's folders (above). The removal stays safe without it;
+      - a sweep kills any process of the user that works in a grade's folder or copy, a user's own shell there included;
+      - access lists are not cleared: such a folder is quarantined and stays until the user removes it (`chmod -RN`), with a warning at each recovery;
+      - a hard link the grade made to a file outside (if the sandbox allows one) could have its flags cleared by the removal. The grade can already change that file through the same link, so this adds nothing it could not do;
+      - without cgo the removal is `os.RemoveAll` alone (no clearing), and anything that resists is quarantined; Agentium needs cgo for SQLite anyway.
     - *For step 3:*
       - call `withGrading` with the run's `claude.Invocation` (the same tools, deps, JDK, venv, metadata and import root as the agent) and `Root` at `<records>/<id>/grading`;
       - write the profile with `writeProfile`, passing `Tag`, `Home`, `AccountHome`, `Environ`, `Data`, `Denied` and `Loopback`; it fills the folders and returns the profile for `Canary`;
       - run each command with `Environ: g.Environ`, which is the whole environment, and `Env` nil;
-      - `prepareSeed` before the grade (with `gradingSeed(profiles, base)`), and for validation a root per stage.
+      - `prepareSeed` before the grade (with `gradingSeed(profiles, base)` and the base resolved to a full commit ID), only in sandbox mode, and for validation a root per stage;
+      - pass `Quarantine: quarantine(layout)` and a `Warn` into `gradingInput`;
+      - F7 from step 1 is covered by `stopUsing` with the gap above. Step 3 still needs a test that a `setsid` child of a real sandboxed grade dies with it.
 - [ ] **3. Wiring and records:** sandboxed grading in `run.Once` and sandboxed validation in `task.Validator`; `grader` in records, validations and the lock; readiness refuses tasks validated in another mode; canary outcomes and flagged denials; report lines; a `--grader` flag. **Risk: high** (hidden tests, persistence, concurrent runs).
   - *Acceptance:* tests for resuming an old lock, for a mixed-mode refusal, for the canary turning into infrastructure, and for a hidden-test pass staying a pass.
   - *Packages:* `internal/run`, `internal/task`, `internal/experiment`, `internal/report`, `internal/cli`.

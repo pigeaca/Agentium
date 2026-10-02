@@ -24,7 +24,7 @@ const CloneFile = "clonefile"
 // macOS) the fallback is copyTree's cp: correct, only slower.
 //
 // src must be a real folder, not a link to one (the link itself is never followed). dst's parent folder is created,
-// owner-only, when missing. A dst that exists is refused and left alone. On a failure dst is removed: it did not exist.
+// owner-only, when missing. A dst that exists, or that someone else makes meanwhile, is refused and never removed.
 func CloneFolder(ctx context.Context, src, dst string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -54,12 +54,11 @@ func CloneFolder(ctx context.Context, src, dst string) (string, error) {
 	case errors.Is(err, os.ErrExist): // made meanwhile by someone else: never replaced
 		return "", fmt.Errorf("clone %s: %s exists", src, dst)
 	case err != nil && !errors.Is(err, errCloneUnsupported):
-		os.RemoveAll(dst) // a clone that failed part way (out of space) may leave a part
+		// Not removed: dst may not be this call's (what a clone that failed part way left goes with the caller's folder).
 		return "", fmt.Errorf("clone %s: %w", src, err)
 	}
-	how, err := copyTree(ctx, src, dst)
+	how, err := copyTree(ctx, src, dst) // creates dst exclusively, and removes only what it made
 	if err != nil {
-		os.RemoveAll(dst)
 		return "", fmt.Errorf("clone %s: %w", src, err)
 	}
 	return how, nil
