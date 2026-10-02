@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // ghEnviron is a user's environment logged in to GitHub every way gh reads: token variables for github.com and for
@@ -25,8 +27,8 @@ var ghTokens = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITH
 // would point the agent at a config folder elsewhere, does not pass either. This covers the default folder only: denying
 // a non-default one ($GH_CONFIG_DIR, $XDG_CONFIG_HOME/gh) belongs to the Python profile branch's change to this package.
 func TestGHLoginNeverReachesTheAgent(t *testing.T) {
-	if !slices.Contains(credentialFiles(), ".config/gh") {
-		t.Fatalf("credential files %q do not include .config/gh", credentialFiles())
+	if !slices.Contains(sandbox.CredentialFiles(), ".config/gh") {
+		t.Fatalf("credential files %q do not include .config/gh", sandbox.CredentialFiles())
 	}
 	// A real home folder: paths under /home/u make each command resolve missing paths slowly on macOS.
 	home := t.TempDir()

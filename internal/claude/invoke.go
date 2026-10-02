@@ -14,11 +14,11 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/runner"
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // Sign-in modes (the same names as project discovery reports).
@@ -46,7 +46,7 @@ type Invocation struct {
 	Home      string  // the user's home folder
 	// AccountHome is the account's home folder in the user database (user.Current), when known. HOME (Home) can point
 	// elsewhere, but the account's login keychain stays in the real home folder, where an explicit path opens it, so
-	// that folder is denied too (credentialPaths). Empty: only Home's.
+	// that folder is denied too (sandbox.CredentialPaths). Empty: only Home's.
 	AccountHome string
 	// Deny lists absolute paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data
 	// (other runs, hidden tests, the database), the user's repository, and verification copies.
@@ -119,7 +119,7 @@ const (
 // falling back to the shared folders. Both root as written and its symlink-resolved form (/tmp is /private/tmp on
 // macOS) must fit: Claude Code checks the path as given, and a resolved form that fits is the safe side.
 func TempRootFits(root string, uid int) error {
-	measured := []string{filepath.Clean(root)} // measured, not denied: any link is followed (forms would not, in /tmp)
+	measured := []string{filepath.Clean(root)} // measured, not denied: any link is followed (sandbox.Forms would not, in /tmp)
 	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != measured[0] {
 		measured = append(measured, resolved)
 	}
@@ -151,7 +151,7 @@ func SharedTempDirs(environ []string, uid int) []string {
 		}
 	}
 	// Each name in both forms, side by side: the order stays the same whether /tmp/<name> exists (and its resolved form
-	// is added after it, see forms) or not.
+	// is added after it, see sandbox.Forms) or not.
 	for _, name := range []string{"claude-" + id, "claude", "cc-socks", "cc-socks-" + id, "cc-daemon-" + id} {
 		add(filepath.Join("/tmp", name))
 		add(filepath.Join("/private/tmp", name))
@@ -202,63 +202,6 @@ func UserConfigDir(environ []string, home string) string {
 func DisallowedTools() []string {
 	return []string{"WebSearch", "WebFetch", "Artifact", "DesignSync", "CronCreate", "CronDelete", "ScheduleWakeup", "Workflow",
 		"SendMessage", "EnterWorktree", "ExitWorktree", "ArtifactComments", "ArtifactData", "Monitor", "PushNotification", "RemoteTrigger"}
-}
-
-// credentialFiles are the user's credential stores the sandbox denies (relative to the home folder). Library/Keychains
-// holds the macOS login keychain: Claude Code's sandbox (2.1.285) allows the security server's Mach lookups
-// (com.apple.SecurityServer, com.apple.securityd.xpc), and its settings offer no way to deny them, only to allow more
-// (network.allowMachLookup). With the folder readable, `security` inside the agent's shell searches the login keychain,
-// where Claude Code and gh keep their tokens, stored through /usr/bin/security and so likely readable by it without a
-// prompt. Denied, the keychain file cannot be opened even by an explicit path (the security client fails with
-// "Operation not permitted"), and the login keychain leaves the shell's search list. Claude Code reads its own login
-// outside the sandbox, which covers only its tools' commands, so sign-in is unaffected.
-func credentialFiles() []string {
-	return []string{".ssh", ".codex", ".config/gh", ".config/agentium", ".netrc", ".git-credentials", ".aws", ".docker",
-		".npmrc", ".pypirc", ".kube", ".gnupg", "Library/Keychains"}
-}
-
-// machineCredentials are the machine's credential stores the sandbox denies: the System keychain's folder, which holds
-// no user secrets but which no agent needs (TLS trust is trustd's, outside the sandbox, and the network is off). It is
-// listed on every system, so the settings do not depend on the machine; denying a missing path is harmless.
-func machineCredentials() []string {
-	return []string{"/Library/Keychains"}
-}
-
-// credentialPaths are every credential store the sandbox denies, as absolute paths: the user's (credentialFiles) under
-// home; the account's own login keychain folder when accountHome (Invocation.AccountHome) is set and is not home (HOME
-// redirected: the login keychain stays in the account's real home folder, and an explicit path opens it); then the
-// machine's.
-func credentialPaths(home, accountHome string) []string {
-	var paths []string
-	for _, name := range credentialFiles() {
-		paths = append(paths, filepath.Join(home, name))
-	}
-	if accountHome != "" && filepath.Clean(accountHome) != filepath.Clean(home) {
-		paths = append(paths, filepath.Join(accountHome, "Library", "Keychains"))
-	}
-	return append(paths, machineCredentials()...)
-}
-
-// movedCredentials are credential stores the user's environment moves out of credentialFiles' places: gh's config
-// (GH_CONFIG_DIR, else $XDG_CONFIG_HOME/gh), which can hold a plain-text token. Only absolute values count, and never
-// the home folder or one above it (a misconfigured variable would deny everything).
-func movedCredentials(environ []string, home string) []string {
-	var paths []string
-	add := func(p string) {
-		if !filepath.IsAbs(p) {
-			return
-		}
-		p = filepath.Clean(p)
-		if rel, err := filepath.Rel(p, home); err == nil && filepath.IsLocal(rel) {
-			return
-		}
-		paths = append(paths, p)
-	}
-	add(lookup(environ, "GH_CONFIG_DIR"))
-	if x := lookup(environ, "XDG_CONFIG_HOME"); filepath.IsAbs(x) {
-		add(filepath.Join(x, "gh"))
-	}
-	return paths
 }
 
 // Command returns the arguments and environment for the run. environ is the parent's environment (os.Environ()),
@@ -409,7 +352,7 @@ func SessionFolders(configDir string) []string {
 //     its history paths: Claude Code keeps working files there that its Bash tool reads, such as the shell snapshot.
 //     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
-//   - credential stores (credentialPaths: the login and System keychains among them) and the token file's folder;
+//   - credential stores (sandbox.CredentialPaths: the login and System keychains among them) and the token file's folder;
 //   - the build tools' caches of the user (buildtool.UserCaches: Go's build caches), which hold hidden tests compiled
 //     before Agentium kept its own;
 //   - with a temp root of the run's own, the user's shared Claude Code temp folders (SharedTempDirs);
@@ -435,8 +378,8 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	if inv.TokenFile != "" {
 		paths = append(paths, filepath.Dir(inv.TokenFile))
 	}
-	paths = append(paths, credentialPaths(inv.Home, inv.AccountHome)...)
-	paths = append(paths, movedCredentials(environ, inv.Home)...)
+	paths = append(paths, sandbox.CredentialPaths(inv.Home, inv.AccountHome)...)
+	paths = append(paths, sandbox.MovedCredentials(environ, inv.Home)...)
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	if inv.Deps != "" {
 		paths = append(paths, buildtool.DepsDenied(inv.Deps)...)
@@ -445,22 +388,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
 	}
 	paths = append(paths, inv.sharedLogDirs(userConfig)...)
-	return withForms(paths)
-}
-
-// withForms lists every path's forms (see forms), each once, in order.
-func withForms(paths []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, p := range paths {
-		for _, form := range forms(p) {
-			if !seen[form] {
-				seen[form] = true
-				out = append(out, form)
-			}
-		}
-	}
-	return out
+	return sandbox.WithForms(paths)
 }
 
 // deniedWrites are the paths the sandbox must stop the agent writing, beyond its default (only the checkout and the
@@ -477,81 +405,7 @@ func (inv Invocation) deniedWrites(userConfig string, environ []string) []string
 		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
 	}
 	paths = append(paths, inv.sharedLogDirs(userConfig)...)
-	return withForms(paths)
-}
-
-// forms are p cleaned and, when different, its real form (realForm): the sandbox matches real paths, the Read tool the
-// path as written.
-func forms(p string) []string {
-	out := []string{filepath.Clean(p)}
-	if real := realForm(out[0]); real != out[0] {
-		out = append(out, real)
-	}
-	return out
-}
-
-// realForm is p as the macOS sandbox matches it: symbolic links resolved in the longest existing prefix, and the
-// missing tail appended as written, so a denied path that a warm-up or another run creates after the agent starts is
-// still denied where it will lie (Claude Code itself lists only the unresolved form of a path that does not exist, or
-// of one that resolves elsewhere, and the sandbox ignores a deny on a form that is not the real one).
-//
-// Below /tmp (or /private/tmp) the entry directly in it decides, by its owner (tmpForm). /tmp is sticky: only an
-// entry's owner (or root) can remove or replace it, but any local user can create a name not taken yet, as a link too
-// (/tmp/claude and /tmp/cc-socks carry no uid). Following another user's link would deny its target, anything they
-// chose, which can make a run refuse to start; resolving through another user's folder races them swapping it for
-// such a link between two looks. So only the user's own entries and root's are resolved through.
-func realForm(p string) string {
-	for _, tmp := range []string{"/tmp", "/private/tmp"} {
-		rel, err := filepath.Rel(tmp, p)
-		if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			continue
-		}
-		name, rest, _ := strings.Cut(rel, string(filepath.Separator))
-		owner, exists := entryOwner(filepath.Join(tmp, name))
-		return tmpForm(p, tmp, name, rest, exists, owner, os.Getuid())
-	}
-	return resolvedPrefix(p)
-}
-
-// tmpForm is the real form of p, the entry name in tmp (/tmp or /private/tmp) followed by rest, given who owns the
-// entry: the user uid's own entry or root's is resolved through, like any path (its owner alone can replace it); for
-// another user's entry, or a missing one, only tmp itself (the system's /tmp → /private/tmp link) is resolved, and the
-// rest is kept as written, so neither a link that user made nor one they make after this look is followed.
-func tmpForm(p, tmp, name, rest string, exists bool, owner uint32, uid int) string {
-	if exists && (owner == 0 || int64(owner) == int64(uid)) {
-		return resolvedPrefix(p)
-	}
-	return filepath.Join(resolvedPrefix(tmp), name, rest)
-}
-
-// entryOwner is the uid owning path itself (a link is not followed), and whether it exists. An entry whose owner
-// cannot be told is reported missing, so it is not resolved through.
-func entryOwner(path string) (uint32, bool) {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return 0, false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return 0, false
-	}
-	return st.Uid, true
-}
-
-// resolvedPrefix resolves symbolic links in the longest existing prefix of p and appends the rest as written.
-func resolvedPrefix(p string) string {
-	var missing []string
-	for {
-		if resolved, err := filepath.EvalSymlinks(p); err == nil {
-			return filepath.Join(append([]string{resolved}, missing...)...)
-		}
-		parent := filepath.Dir(p)
-		if parent == p {
-			return filepath.Join(append([]string{p}, missing...)...)
-		}
-		missing = append([]string{filepath.Base(p)}, missing...)
-		p = parent
-	}
+	return sandbox.WithForms(paths)
 }
 
 // DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
@@ -567,7 +421,7 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
 	}
 	var files []map[string]string
-	for _, p := range credentialPaths(inv.Home, inv.AccountHome) {
+	for _, p := range sandbox.CredentialPaths(inv.Home, inv.AccountHome) {
 		files = append(files, map[string]string{"path": p, "mode": "deny"})
 	}
 	if inv.TokenFile != "" {
@@ -578,7 +432,7 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		filesystem["denyWrite"] = writes
 	}
 	if inv.BuildCache != "" {
-		filesystem["allowWrite"] = forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
+		filesystem["allowWrite"] = sandbox.Forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
 	}
 	network := map[string]any{"strictAllowlist": true, "allowedDomains": []string{}}
 	if inv.AllowLocalBinding && buildtool.LocalBinding(buildtool.Select(inv.Tools)) {
