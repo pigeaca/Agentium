@@ -56,7 +56,7 @@ func Open(ctx context.Context, file string) (*Store, error) {
 	}
 	deadline := time.Now().Add(openRetry)
 	for wait := 10 * time.Millisecond; ; wait = min(2*wait, 250*time.Millisecond) {
-		s, err := openOnce(ctx, file)
+		s, err := openOnce(ctx, file, 0)
 		if err == nil || !isBusy(err) || time.Now().After(deadline) {
 			return s, err
 		}
@@ -73,7 +73,9 @@ func isBusy(err error) bool {
 	return errors.As(err, &sqliteErr) && (sqliteErr.Code == sqlite3.ErrBusy || sqliteErr.Code == sqlite3.ErrLocked)
 }
 
-func openOnce(ctx context.Context, file string) (*Store, error) {
+// openOnce opens the database once, applying the pending migrations below version below (all of them when it is 0:
+// tests build an older schema with it).
+func openOnce(ctx context.Context, file string, below int) (*Store, error) {
 	// _txlock=immediate: transactions take the write lock at BEGIN, so two writers wait (busy timeout) instead of one
 	// failing when it upgrades a read lock.
 	dsn := (&url.URL{Scheme: "file", Path: file, RawQuery: "_foreign_keys=on&_busy_timeout=5000&_journal_mode=WAL&_txlock=immediate"}).String()
@@ -86,7 +88,7 @@ func openOnce(ctx context.Context, file string) (*Store, error) {
 		return nil, fmt.Errorf("open database %s: %w", file, err)
 	}
 	s := &Store{db: db}
-	if err := s.migrate(ctx); err != nil {
+	if err := s.migrate(ctx, below); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -176,17 +178,29 @@ type migration struct {
 
 // latestMigration is the newest embedded migration's version, and every migration in order.
 func latestMigration() (int, []migration, error) {
-	names, err := fs.Glob(migrations, "migrations/*.sql")
+	return migrationsIn(migrations)
+}
+
+// migrationsIn lists the migrations/NNNN_name.sql files of fsys, in order, and the newest version. Two files with one
+// version are an error: parallel branches that each took the next free number must renumber when the second merges,
+// or one of the migrations would never apply on databases that recorded the other.
+func migrationsIn(fsys fs.FS) (int, []migration, error) {
+	names, err := fs.Glob(fsys, "migrations/*.sql")
 	if err != nil {
 		return 0, nil, fmt.Errorf("list migrations: %w", err)
 	}
 	latest := 0
 	all := make([]migration, len(names))
+	seen := map[int]string{}
 	for i, name := range names { // fs.Glob returns lexical order, so zero-padded versions apply in sequence
 		version, err := strconv.Atoi(strings.SplitN(path.Base(name), "_", 2)[0])
 		if err != nil {
 			return 0, nil, fmt.Errorf("migration %s: version prefix: %w", name, err)
 		}
+		if other, ok := seen[version]; ok {
+			return 0, nil, fmt.Errorf("migrations %s and %s share version %d: renumber one", other, name, version)
+		}
+		seen[version] = name
 		all[i] = migration{name, version}
 		latest = max(latest, version)
 	}
@@ -198,9 +212,10 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// migrate applies each embedded migrations/NNNN_name.sql not yet recorded, one transaction per file, in order. Each
-// transaction re-checks the record under the write lock, so concurrent processes apply a migration once.
-func (s *Store) migrate(ctx context.Context) error {
+// migrate applies each embedded migrations/NNNN_name.sql not yet recorded (below version below, unless it is 0), one
+// transaction per file, in order. Each transaction re-checks the record under the write lock, so concurrent processes
+// apply a migration once.
+func (s *Store) migrate(ctx context.Context, below int) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
 		return fmt.Errorf("prepare migrations: %w", err)
 	}
@@ -217,6 +232,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	for _, m := range all {
 		name, version := m.name, m.version
+		if below > 0 && version >= below {
+			continue
+		}
 		body, err := migrations.ReadFile(name)
 		if err != nil {
 			return fmt.Errorf("migration %d: %w", version, err)
@@ -441,6 +459,16 @@ type Task struct {
 	Validation     []byte // JSON; nil until validated
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// RetiredAt is when the task pool retired the task (zero while it is active), and RetiredReason why. A retired task
+	// keeps its row, runs and place in locked experiments; only new experiments leave it out. SaveTask and UpdateTask
+	// never write them: RetireTask and RestoreTask do.
+	RetiredAt     time.Time
+	RetiredReason string
+}
+
+// Retired reports whether the task is retired.
+func (t Task) Retired() bool {
+	return !t.RetiredAt.IsZero()
 }
 
 // SaveTask records a new task; names are unique per project (ErrExists).
@@ -513,6 +541,132 @@ func (s *Store) SetTaskValidation(ctx context.Context, id int64, verify, setup [
 	return n > 0, nil
 }
 
+// ErrTaskInUse is returned by SetTaskValidationIdle when a locked experiment that can still run uses the task.
+var ErrTaskInUse = errors.New("a locked experiment that can still run uses the task")
+
+// SetTaskValidationIdle is SetTaskValidation for the task pool's re-validations: it also stores nothing, and returns
+// ErrTaskInUse naming the experiments, while a locked experiment that can still run (any status but done) uses a task
+// of this name. The check and the write are one transaction, which holds the write lock from its start
+// (_txlock=immediate), so no experiment can lock the task between them.
+func (s *Store) SetTaskValidationIdle(ctx context.Context, id int64, verify, setup []string, validation []byte, now time.Time) (bool, error) {
+	lists, err := encodeLists(verify, setup)
+	if err != nil {
+		return false, fmt.Errorf("store validation of task %d: %w", id, err)
+	}
+	stored := false
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		var projectID int64
+		var name string
+		err := tx.QueryRowContext(ctx, `SELECT project_id, name FROM tasks WHERE id = ?`, id).Scan(&projectID, &name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // removed: nothing to store, as SetTaskValidation
+		} else if err != nil {
+			return err
+		}
+		users, err := tasksInUse(ctx, tx, projectID, name)
+		if err != nil {
+			return err
+		}
+		if len(users[name]) > 0 {
+			return fmt.Errorf("task %q: %w: %s", name, ErrTaskInUse, strings.Join(users[name], ", "))
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE tasks SET validation = ?, updated_at = ? WHERE id = ? AND verify = ? AND setup = ?`,
+			string(validation), formatTime(now), id, lists[0], lists[1])
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		stored = n > 0
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, ErrTaskInUse) {
+			return false, err
+		}
+		return false, fmt.Errorf("store validation of task %d: %w", id, err)
+	}
+	return stored, nil
+}
+
+// TasksInUse maps the names of a project's tasks that locked experiments able to run still (any status but done) use
+// to those experiments' names, sorted. Such an experiment runs its tasks as its lock fixed them, never from their rows.
+func (s *Store) TasksInUse(ctx context.Context, projectID int64) (map[string][]string, error) {
+	users, err := tasksInUse(ctx, s.db, projectID, "")
+	if err != nil {
+		return nil, fmt.Errorf("tasks in use: %w", err)
+	}
+	return users, nil
+}
+
+// queryer is what tasksInUse reads through: the database or a transaction.
+type queryer interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// tasksInUse is TasksInUse, for one task name only unless name is "". It reads the experiments' locks as
+// internal/experiment writes them: {"tasks": [{"name": ...}, ...]}. A lock that is not valid JSON names no task: such an
+// experiment cannot be resumed.
+func tasksInUse(ctx context.Context, q queryer, projectID int64, name string) (map[string][]string, error) {
+	rows, err := q.QueryContext(ctx, `
+		WITH locks AS (
+			SELECT name, CASE WHEN json_valid(lock) THEN lock ELSE '{}' END AS lock FROM experiments
+			WHERE project_id = ? AND lock IS NOT NULL AND status <> ?)
+		SELECT DISTINCT task, experiment FROM (
+			SELECT json_extract(locks.lock, j.fullkey || '.name') AS task, locks.name AS experiment
+			FROM locks, json_each(locks.lock, '$.tasks') AS j)
+		WHERE task IS NOT NULL AND (? = '' OR task = ?)
+		ORDER BY task, experiment`, projectID, StatusDone, name, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	users := map[string][]string{}
+	for rows.Next() {
+		var task, experiment string
+		if err := rows.Scan(&task, &experiment); err != nil {
+			return nil, err
+		}
+		users[task] = append(users[task], experiment)
+	}
+	return users, rows.Err()
+}
+
+// RetireTask flags the task with this id as retired, with a reason, and reports whether it did: false when the task is
+// gone or retired already (its first retirement stays). Nothing else is written.
+func (s *Store) RetireTask(ctx context.Context, id int64, reason string, now time.Time) (bool, error) {
+	if strings.TrimSpace(reason) == "" {
+		return false, fmt.Errorf("retire task %d: a reason is required", id)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET retired_at = ?, retired_reason = ? WHERE id = ? AND retired_at = ''`,
+		formatTime(now), reason, id)
+	if err != nil {
+		return false, fmt.Errorf("retire task %d: %w", id, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("retire task %d: %w", id, err)
+	}
+	return n > 0, nil
+}
+
+// RestoreTask makes a retired task of the project active again, reporting whether it was retired; ErrNotFound when
+// there is no such task.
+func (s *Store) RestoreTask(ctx context.Context, projectID int64, name string) (bool, error) {
+	t, err := s.TaskByName(ctx, projectID, name)
+	if err != nil {
+		return false, err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET retired_at = '', retired_reason = '' WHERE id = ? AND retired_at <> ''`, t.ID)
+	if err != nil {
+		return false, fmt.Errorf("restore task %q: %w", name, err)
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("restore task %q: %w", name, err)
+	}
+	return n > 0, nil
+}
+
 // TaskByName returns a project's task, or ErrNotFound.
 func (s *Store) TaskByName(ctx context.Context, projectID int64, name string) (Task, error) {
 	tasks, err := s.queryTasks(ctx, `WHERE project_id = ? AND name = ?`, projectID, name)
@@ -545,7 +699,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) er
 func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
-		       verify, setup, needs_review, grading, validation, created_at, updated_at
+		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -554,9 +708,10 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		var hidden, reference, verify, setup, validation, created, updated string
+		var hidden, reference, verify, setup, validation, created, updated, retired string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
-			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated); err != nil {
+			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated,
+			&retired, &task.RetiredReason); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {
@@ -575,6 +730,11 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		}
 		if task.UpdatedAt, err = parseTime(updated); err != nil {
 			return nil, err
+		}
+		if retired != "" {
+			if task.RetiredAt, err = parseTime(retired); err != nil {
+				return nil, err
+			}
 		}
 		tasks = append(tasks, task)
 	}

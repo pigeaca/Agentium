@@ -14,6 +14,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // startRepo is a repository for start: `make test` runs the shell tests, and features commits each add a function with
@@ -341,6 +342,43 @@ func TestStartAcceptMinedLeavesOtherTasksAlone(t *testing.T) {
 	for _, task := range storedTasks(t, f.data) {
 		if (task.Name == "by-hand") != task.NeedsReview {
 			t.Errorf("task %s needs review = %v", task.Name, task.NeedsReview)
+		}
+	}
+}
+
+// A mined task that validation sets aside is not listed as accepted: it appears only on the "set aside:" line.
+func TestStartAcceptMinedSkipsSetAsideTasks(t *testing.T) {
+	t.Parallel()
+	repo := startRepo(t, 8)
+	for i := 1; i <= 4; i++ { // each such commit's test already passes on its base, so validation finds the task invalid
+		writeFile(t, repo, "lib.sh", fmt.Sprintf("# change %d\nbase() { echo base; }\n", i))
+		writeFile(t, repo, fmt.Sprintf("tests/b%d_test.sh", i), ". ./lib.sh\n[ \"$(base)\" = base ]\n")
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", fmt.Sprintf("Explain base again, %d\n\nA comment says what base prints.", i))
+	}
+	f := runFixtureAt(repo, filepath.Join(t.TempDir(), "data"), t.TempDir())
+	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, t.TempDir())
+	got := f.run(context.Background(), "start", "--accept-mined")
+	expect(t, got, ExitOK, "set aside: ", "Accepted ")
+	var invalid []string
+	for _, tk := range storedTasks(t, f.data) {
+		if task.ValidationOf(tk).Status != task.StatusValid {
+			invalid = append(invalid, tk.Name)
+			if !tk.NeedsReview {
+				t.Errorf("set-aside task %s was marked reviewed", tk.Name)
+			}
+		}
+	}
+	if len(invalid) == 0 {
+		t.Fatalf("no task was set aside:\n%s", got.stdout)
+	}
+	for _, line := range strings.Split(got.stdout, "\n") {
+		if strings.HasPrefix(line, "Accepted ") {
+			for _, name := range invalid {
+				if strings.Contains(line, name) {
+					t.Errorf("set-aside task %s listed as accepted: %s", name, line)
+				}
+			}
 		}
 	}
 }

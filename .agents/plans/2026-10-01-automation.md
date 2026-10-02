@@ -28,7 +28,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 - **Does:** a quick context check with no agent runs: the size change against the last snapshot, broken imports, an `AGENTS.md` over Codex's 32 KiB limit, and the warnings `context show` already gives.
 - **Cost:** none. It shows its result in the session.
 
-### 1. Supply: a task pool that keeps itself fresh (wave 4)
+### 1. Supply: a task pool that keeps itself fresh (wave 4; [plan](2026-10-02-task-pool.md))
 - **Triggers:**
   - git `post-merge` (after `git pull`) and `post-rewrite` (`pull --rebase` does not fire `post-merge`);
   - the scheduled pass.
@@ -95,7 +95,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 |---|---|---|---|
 | Lint hook | 2 | The free context check on edits, through a Claude Code hook | quick start |
 | A1 Headless | 3 | `--json`, exit codes, `start --yes`, `agentium.toml` | quick start |
-| A2 Supply | 4 | `pool update --background`, pool health, the git hooks, the queue | task mining, A1 |
+| [A2 Supply](2026-10-02-task-pool.md) | 4 | `pool update --background`, pool health, the git hooks, the queue | task mining, A1 |
 | A3 Linux runs | Later | A short paid spike, only for hosted runners | temp isolation |
 | A4 Cost screen | 4 | The warn-only screen, honest broken-task listing, the harness-settings refusal and its probe, deferred comments, commit status | A1, A2, run reuse |
 | A5 Deep watch | 4 | `watch --once` from launchd, sequential continuation, drift control chart, digest | A1, the statistics note |
