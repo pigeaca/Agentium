@@ -87,19 +87,22 @@ func (p Policy) Stale(t store.Task, now time.Time, current task.Toolchain) Stale
 	return out
 }
 
-// Head is what the retirement rules read of the default branch's head: whether it has a file, and whether its history
-// contains a commit.
+// Head is what the retirement rules read of the repository: whether the default branch's head has a file, whether
+// its history contains a commit, and whether a commit's tree has a file.
 type Head struct {
 	Has      func(path string) bool
 	Contains func(commit string) bool
+	InCommit func(commit, path string) bool
 }
 
 // Retire says why t should retire at now, or "" when it should not (or is retired already). base is its base commit's
-// time (zero when unknown, which disables that rule); head may have nil functions, which disables the file rule.
+// time (zero when unknown, which disables that rule); a nil function in head disables the file rule.
 //   - Its base commit is at least RetireAge old (exactly RetireAge retires).
-//   - A file it names (a hidden test or a reference file) is gone from the default branch's head. This applies only
-//     when the head's history contains the task's solution commit: a task taken from a branch that was never merged
-//     has files the default branch never had, which is no sign the code moved on.
+//   - A file it names (a hidden test or a reference file) that the solution commit has is gone from the default
+//     branch's head. The task's lists come from `git diff --name-only --no-renames base solution`, so they also name
+//     the files the solution deleted and the old path of every rename: those were never meant to exist after it, and
+//     count for nothing. The rule applies only when the head's history contains the solution commit: a task taken
+//     from a branch that was never merged has files the default branch never had, which is no sign the code moved on.
 func (p Policy) Retire(t store.Task, now, base time.Time, head Head) string {
 	if t.Retired() {
 		return ""
@@ -109,12 +112,12 @@ func (p Policy) Retire(t store.Task, now, base time.Time, head Head) string {
 			return fmt.Sprintf("its base commit is %d days old (%d or more retire)", days(age), days(p.RetireAge))
 		}
 	}
-	if head.Has == nil || head.Contains == nil || t.SolutionCommit == "" || !head.Contains(t.SolutionCommit) {
+	if head.Has == nil || head.Contains == nil || head.InCommit == nil || t.SolutionCommit == "" || !head.Contains(t.SolutionCommit) {
 		return ""
 	}
 	var gone []string
 	for _, f := range append(slices.Clone(t.HiddenTests), t.Reference...) {
-		if !head.Has(f) {
+		if head.InCommit(t.SolutionCommit, f) && !head.Has(f) {
 			gone = append(gone, f)
 		}
 	}

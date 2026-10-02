@@ -145,8 +145,10 @@ func TestRetireWhenANamedFileIsGone(t *testing.T) {
 	p := DefaultPolicy()
 	tk := store.Task{Name: "fix", SolutionCommit: "sol", HiddenTests: []string{"p/p_test.go"}, Reference: []string{"p/p.go", "p/q.go"}}
 	files := map[string]bool{"p/p_test.go": true, "p/p.go": true, "p/q.go": true}
+	solution := map[string]bool{"p/p_test.go": true, "p/p.go": true, "p/q.go": true}
 	merged := func(c string) bool { return c == "sol" }
-	head := Head{Has: func(f string) bool { return files[f] }, Contains: merged}
+	head := Head{Has: func(f string) bool { return files[f] }, Contains: merged,
+		InCommit: func(c, f string) bool { return c == "sol" && solution[f] }}
 	recent := now.Add(-10 * Day)
 	if got := p.Retire(tk, now, recent, head); got != "" {
 		t.Errorf("every file present: %q", got)
@@ -160,12 +162,39 @@ func TestRetireWhenANamedFileIsGone(t *testing.T) {
 		t.Errorf("a deleted hidden test too: %q", got)
 	}
 	// A task from a branch the default branch never merged: its files were never there.
-	head.Contains = func(string) bool { return false }
-	if got := p.Retire(tk, now, recent, head); got != "" {
+	unmerged := head
+	unmerged.Contains = func(string) bool { return false }
+	if got := p.Retire(tk, now, recent, unmerged); got != "" {
 		t.Errorf("an unmerged solution: %q", got)
 	}
-	if got := p.Retire(store.Task{Name: "manual"}, now, recent, Head{Has: func(string) bool { return false }, Contains: merged}); got != "" {
+	if got := p.Retire(store.Task{Name: "manual"}, now, recent, Head{Has: func(string) bool { return false }, Contains: merged,
+		InCommit: func(string, string) bool { return true }}); got != "" {
 		t.Errorf("a task without a solution: %q", got)
+	}
+}
+
+// The task's lists name the files its solution deleted and the old path of each rename (git diff --no-renames): they
+// are absent from the solution too, so their absence at the head retires nothing. A file the solution has and the head
+// lost still does.
+func TestRetireIgnoresFilesTheSolutionDeletedOrRenamed(t *testing.T) {
+	p := DefaultPolicy()
+	tk := store.Task{Name: "fix", SolutionCommit: "sol",
+		HiddenTests: []string{"p/old_test.go", "p/new_test.go"}, // the solution renamed old_test.go to new_test.go
+		Reference:   []string{"p/p.go", "p/legacy.go"}}          // and deleted legacy.go
+	solution := map[string]bool{"p/new_test.go": true, "p/p.go": true}
+	files := map[string]bool{"p/new_test.go": true, "p/p.go": true}
+	head := Head{Has: func(f string) bool { return files[f] }, Contains: func(string) bool { return true },
+		InCommit: func(c, f string) bool { return c == "sol" && solution[f] }}
+	if got := p.Retire(tk, now, now.Add(-Day), head); got != "" {
+		t.Errorf("a deleted and a renamed file: %q, want no retirement", got)
+	}
+	delete(files, "p/new_test.go")
+	if got := p.Retire(tk, now, now.Add(-Day), head); got != "p/new_test.go is gone from the default branch" {
+		t.Errorf("the renamed test, then deleted at the head: %q", got)
+	}
+	head.InCommit = nil
+	if got := p.Retire(tk, now, now.Add(-Day), head); got != "" {
+		t.Errorf("without the solution's tree the file rule is off: %q", got)
 	}
 }
 
