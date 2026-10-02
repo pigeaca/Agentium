@@ -128,6 +128,44 @@ func (c *commitSource) ReadFile(p string) ([]byte, error) {
 	return nil, fmt.Errorf("%s: too many symbolic links", p)
 }
 
+// Link reports whether p is a symbolic link in src and, if it is, the target as stored: not cleaned, not followed and
+// possibly outside the repository. Sources that do not record links (in-memory test sources) report false. Only the
+// link itself is read, through git for a commit, so a hostile target is data, never opened.
+func Link(src Source, p string) (target string, ok bool, err error) {
+	if l, isLinker := src.(linker); isLinker && Has(src, p) {
+		return l.link(p)
+	}
+	return "", false, nil
+}
+
+// linker is a Source that knows which of its files are symbolic links.
+type linker interface {
+	link(p string) (string, bool, error)
+}
+
+func (c *commitSource) link(p string) (string, bool, error) {
+	if c.modes[p] != "120000" {
+		return "", false, nil
+	}
+	data, err := gitx.Output(c.ctx, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+	if err != nil {
+		return "", true, fmt.Errorf("read the symbolic link %s: %w", p, err)
+	}
+	return string(data), true, nil
+}
+
+func (w *workingTree) link(p string) (string, bool, error) {
+	full := filepath.Join(w.root, filepath.FromSlash(p))
+	if info, err := os.Lstat(full); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return "", false, nil
+	}
+	target, err := os.Readlink(full)
+	if err != nil {
+		return "", true, fmt.Errorf("read the symbolic link %s: %w", p, err)
+	}
+	return filepath.ToSlash(target), true, nil
+}
+
 // Has reports whether p is a file in src.
 func Has(src Source, p string) bool {
 	paths := src.Paths()

@@ -162,3 +162,33 @@ func TestWorkingTreeSymlinksNeverReachPersonalFiles(t *testing.T) {
 		t.Errorf("ignored file: err = %v, want ErrNotExist", err)
 	}
 }
+
+func TestLinkReportsStoredTargetsWithoutFollowingThem(t *testing.T) {
+	root, head := fixture(t)
+	committed, err := Commit(context.Background(), head, "-C", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := WorkingTree(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []Source{committed, tree} {
+		cases := []struct {
+			path, target string
+			link         bool
+		}{
+			{"AGENTS.md", "docs/rules.md", true},
+			{"docs/escape.md", "../../outside.md", true}, // reported as stored, never opened
+			{"CLAUDE.md", "", false},
+			{"docs", "", false},       // a folder is not a file of the source
+			{"missing.md", "", false}, // nor is a missing path
+		}
+		for _, c := range cases {
+			target, ok, err := Link(src, c.path)
+			if err != nil || ok != c.link || target != c.target {
+				t.Errorf("%s: Link(%s) = %q, %v, %v; want %q, %v", src.Describe(), c.path, target, ok, err, c.target, c.link)
+			}
+		}
+	}
+}

@@ -292,3 +292,38 @@ func TestGlobMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestIsHarnessIsWhatResolveClassifiesAsHarness(t *testing.T) {
+	files := memSource{
+		".claude/settings.json": "{}", ".mcp.json": "{}", ".claude/hooks/pre.sh": "#!/bin/sh\n", ".claude/hooks/lib/x.py": "",
+		".claude/settings.local.json": "{}", ".claude/rules/a.md": "rule\n", "pkg/.mcp.json": "{}", "CLAUDE.md": "hi\n",
+	}
+	ctx := resolve(t, files)
+	for p := range files {
+		if got, want := IsHarness(p), kinds(ctx)[p] == KindHarness; got != want {
+			t.Errorf("IsHarness(%s) = %v, but Resolve's kind is %q", p, got, kinds(ctx)[p])
+		}
+	}
+	for _, p := range []string{".Claude/settings.json", ".claude/hooks", "pkg/.claude/settings.json"} {
+		if IsHarness(p) {
+			t.Errorf("IsHarness(%s) = true; the exact paths only (callers fold variants)", p)
+		}
+	}
+}
+
+func TestHarnessFrontmatter(t *testing.T) {
+	cases := map[string][]string{
+		"---\nname: a\ndescription: b\n---\nhooks: in the body is prose\n":                   nil,
+		"---\nname: a\nhooks:\n  PreToolUse:\n    - command: ./x.sh\n---\n":                  {"hooks"},
+		"---\r\nallowed-tools: Bash(curl:*)\r\npermissionMode: bypassPermissions\r\n---\r\n": {"allowedtools", "permissionmode"},
+		"\ufeff---\n\"mcpServers\": {}\n---\n":                                               {"mcpservers"},
+		"---\ntools: Read\nmodel: opus\n---\n":                                               nil,
+		"no frontmatter\nhooks: x\n":                                                         nil,
+		"---\nnested:\n  allowed_tools: x\n---\n":                                            {"allowedtools"},
+	}
+	for text, want := range cases {
+		if got := HarnessFrontmatter([]byte(text)); !slices.Equal(got, want) {
+			t.Errorf("HarnessFrontmatter(%q) = %v, want %v", text, got, want)
+		}
+	}
+}

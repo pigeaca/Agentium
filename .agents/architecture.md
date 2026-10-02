@@ -44,6 +44,7 @@ Shape:
 | `internal/task` | Tasks (base, instruction, verification; a solution split into hidden tests and reference by test-file rules), validation (per arm, batch; flaky, weak-test checks), and unstated-requirement gaps |
 | `internal/experiment` | Designs (context A/B and A/A, eligible tasks, caps, margins, seed), services for `new`, `plan`, readiness, `run` (window, budget, usage pauses, retries, stop rules, resume); the lock and schedule; counting and analysis (roles, floors, verdicts, noise) |
 | `internal/judge` | The opt-in LLM judge, which decides nothing: the pilot's prompts, code-only diffs, majority of repeats, pairs in both orders |
+| `internal/screen` | The pull-request cost screen: `Classify` reads a pushed range (and the merge base with the default branch) through `gitx`, `source` and `claudectx`, and calls it read context (a candidate), harness (refused in automated mode) or neither |
 | `internal/stats` | Paired analysis: the two-stage cluster bootstrap, t-intervals, variance components with ranges, detectable effects and verdict rules (§5.6); reproduces the Phase 0 spike |
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths); `Load` reads the store; the north star (time and spend to the first decisive verdict) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |

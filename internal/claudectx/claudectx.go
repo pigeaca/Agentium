@@ -248,7 +248,7 @@ func (r *resolver) classify(p string) {
 		if data, ok := r.read(p); ok {
 			r.add(p, KindCommand, data, descriptionBytes(data), "")
 		}
-	case p == ".claude/settings.json" || p == ".mcp.json" || strings.HasPrefix(p, ".claude/hooks/"):
+	case IsHarness(p):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindHarness, data, 0, "")
 		}
@@ -258,6 +258,39 @@ func (r *resolver) classify(p string) {
 			r.importers = append(r.importers, importer{p, data, false})
 		}
 	}
+}
+
+// IsHarness reports whether Claude Code reads the file at p, a repository path, to decide what runs rather than as
+// text for the model: project settings (hooks, env, permissions, helpers), hook scripts and MCP servers. Resolve
+// classifies with it, and the pull-request screen refuses changes to these files. The paths are lower case and exact;
+// a caller that must also catch variants a case-insensitive file system would load folds the path first.
+func IsHarness(p string) bool {
+	return p == ".claude/settings.json" || p == ".mcp.json" || strings.HasPrefix(p, ".claude/hooks/")
+}
+
+// harnessFields are frontmatter fields of skills, subagents and commands that change what runs rather than what the
+// model reads (Claude Code's skills and subagents docs, CLI 2.1): hooks run commands outside the Bash sandbox,
+// mcpServers start servers, and allowed-tools and permissionMode grant tools without asking. They are compared
+// normalized: lower case, without "-" or "_".
+var harnessFields = []string{"hooks", "mcpservers", "allowedtools", "permissionmode"}
+
+// HarnessFrontmatter lists the harness fields (normalized, see harnessFields) that the frontmatter of a skill, subagent
+// or command declares, at any nesting level, so a change to such a file can be treated as a harness change. It errs
+// toward finding a field: a byte-order mark before the frontmatter, quoted keys and list items count too.
+func HarnessFrontmatter(data []byte) []string {
+	var found []string
+	for _, line := range frontmatter(bytes.TrimPrefix(data, []byte("\ufeff"))) {
+		key, _, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(strings.TrimLeft(strings.TrimSpace(key), "-{ "))
+		key = strings.ToLower(strings.NewReplacer("-", "", "_", "", `"`, "", "'", "").Replace(key))
+		if slices.Contains(harnessFields, key) && !slices.Contains(found, key) {
+			found = append(found, key)
+		}
+	}
+	return found
 }
 
 // LoadsByPresence reports whether a file at p is context just by existing (instruction files, .claude, .mcp.json), as
