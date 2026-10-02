@@ -3,6 +3,7 @@ package run
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 )
@@ -339,5 +341,44 @@ func TestPredictedFolders(t *testing.T) {
 	key := Env{Layout: layout, SignIn: "api-key", Home: "/home/u"}
 	if got := key.Predicted("e1-s2-t1"); !slices.Equal(got, want[:len(want)-1]) {
 		t.Errorf("with a key, the session lives in the workspace's own config: %v", got)
+	}
+}
+
+// The refusal compares the denied paths as DeniedPaths lists them (each with its real form), without resolving them
+// again. Another user's entry in /tmp is listed unresolved (claude's realForm), and resolving it here would let them
+// make every run refuse: a list in that shape holds no workspace reached only through the entry's target. The user's
+// own link in /tmp is resolved, so a workspace in its target is refused, however it is spelled.
+func TestInsideDeniedFollowsOnlyWhatDeniedPathsResolved(t *testing.T) {
+	data := t.TempDir()
+	workspace := filepath.Join(data, "workspaces", "r1")
+	if err := os.MkdirAll(workspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join("/tmp", fmt.Sprintf("agentium-inside-denied-%d", os.Getpid()))
+	if err := os.Symlink(data, planted); err != nil {
+		t.Skipf("cannot create %s: %v", planted, err)
+	}
+	t.Cleanup(func() { os.Remove(planted) })
+	// As DeniedPaths lists another user's entry: the path and its /private/tmp spelling, neither through the link.
+	if d, ok := insideDenied(workspace, []string{planted, filepath.Join("/private/tmp", filepath.Base(planted))}); ok {
+		t.Errorf("the workspace %s lies inside %s through another user's link", workspace, d)
+	}
+
+	// The test's own link in /tmp, and an own link elsewhere: the real form denied holds the workspace.
+	real, err := filepath.EvalSymlinks(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "data")
+	if err := os.Symlink(data, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, via := range []string{planted, link} {
+		denied := claude.Invocation{Home: "/home/u", Deny: []string{via}}.DeniedPaths(nil)
+		for _, p := range []string{workspace, filepath.Join(real, "workspaces", "r1"), filepath.Join(via, "workspaces", "r1", "missing")} {
+			if _, ok := insideDenied(p, denied); !ok {
+				t.Errorf("%s is not found inside the denied %q", p, denied)
+			}
+		}
 	}
 }

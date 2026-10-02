@@ -46,11 +46,12 @@ func NeedsLocalBinding(ctx context.Context, bare string, commits []string) (bool
 //
 // Agents read it and cannot write it: the sandbox lets them write only their checkout and their run's build cache,
 // and Invocation.Deps is denied for writing besides. It lies in the data folder but outside the folders runs may not
-// read (projects, records, artifacts, cache, the database), because offline builds must read it. So it must never hold
-// anything compiled from hidden tests, and only a run's setup writes it (warmTools), in a checkout
-// of the task's base: the hidden tests are added to a separate copy at grading. Build caches are off in every warm-up
-// and denied to agents besides (buildtool.DepsDenied). One folder per project (the bare
-// repository's folder name), shared by its tasks and runs; it only grows.
+// read (projects, records, artifacts, cache, the database), because offline builds must read it. So what agents may
+// read of it must never hold anything compiled from hidden tests, and only a run's setup writes it (warmTools), in a
+// checkout of the task's base: the hidden tests are added to a separate copy at grading. A later task's base holds
+// earlier tasks' hidden tests as ordinary tests, and its warm-up compiles them, so what a tool records of its builds
+// there (Gradle's whole home) and build caches (off in every warm-up) are denied to agents (buildtool.DepsDenied). One
+// folder per project (the bare repository's folder name), shared by its tasks and runs; it only grows.
 func (env Env) depsFolder() string {
 	if env.Layout.Deps == "" || env.Layout.Cache == "" { // warm-up state lives in the cache, which agents cannot read
 		return ""

@@ -43,7 +43,7 @@
 |---|---|---|---|
 | 0 (done) | The judge in experiments (#54); tasks from tickets (#55) | — | merged |
 | 1 Finish | [Task mining](archive/2026-10-01-task-mine.md); [judge](archive/2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](archive/2026-10-01-run-temp-isolation.md), then [refactor](archive/2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
-| 2 First decisive verdict | [Quick start](archive/2026-10-02-quick-start.md) (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](archive/2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
+| 2 First decisive verdict | [Quick start](archive/2026-10-02-quick-start.md) (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](archive/2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](archive/2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
 | 3 Cheaper verdicts | The [statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md), then group-sequential stopping (`seq-v1`, α 3.5%) and the isolated-run cost; run reuse and the drift chart deferred by the user ([plan](2026-10-02-cheaper-verdicts.md)) | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The long simulation on production `seq-v1` shows at most 5% false verdicts, and a real `seq-v1` A/A smoke check runs (about $3, approved) |
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) | A Python or TypeScript smoke test; the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
 | Later | The judge gate, then [judge pairs](archive/2026-10-01-judge-pairs.md) (1b) and [ticket grading](archive/2026-10-01-ticket-tasks.md) (step 2); a Claude Code skill; autopilot; [Codex](archive/2026-10-01-phase2-agents-codex.md); hosted CI; live Jira; positioning against `claude plugin eval` and Promptfoo's CI | | |
@@ -82,7 +82,7 @@ The note must fix these before any code:
   - **Verdict:** cost improved by −63% (95%: −70% to −53%). Success (50% → 75%) is exploratory at this size.
   - **North star:** 1 h 5 min and $3.34, from `init` to the verdict. The target was within a day and $40 or less.
   - **Spend:** the experiment's estimate was $36, but it spent $3.10 for 16 runs plus $0.24 for calibrations.
-- **Java and Rust pilot** (paid, approved; [plan](2026-09-30-java-rust.md) step 5): 8 runs, $5.16. Cargo (bytes) passed 2 of 3 and Maven (jackson-core) 1 of 3, both building offline in the sandbox. Gradle (junit-pioneer) passed 0 of 2, because the warm-up missed Checkstyle. A fix is in progress.
+- **Java and Rust pilot** (paid, approved; [plan](archive/2026-09-30-java-rust.md) step 5): 8 runs, $5.16. Cargo (bytes) passed 2 of 3 and Maven (jackson-core) 1 of 3, both building offline in the sandbox. Gradle (junit-pioneer) passed 0 of 2, because the warm-up missed Checkstyle. A fix is in progress.
 - **Lessons:**
   - Partial clones (`--filter`) can't be mined; a fix is suggested.
   - Maven projects with a snapshot parent can only use recent commits.
