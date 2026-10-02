@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
 	discover "github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/runner"
 )
 
 // TestPythonProfileGolden pins what a Python project's runs depend on from its profile: the agent's environment and
@@ -24,9 +26,6 @@ import (
 func TestPythonProfileGolden(t *testing.T) {
 	var out bytes.Buffer
 	scratch := t.TempDir()
-	srcRepo := filepath.Join(scratch, "src-layout")
-	writeFile(t, filepath.Join(srcRepo, "src", "click", "__init__.py"), "")
-	replace := map[string]string{srcRepo: "<SRC-LAYOUT-CHECKOUT>"}
 
 	user := []string{"PATH=/usr/local/bin:/usr/bin:/bin", "HOME=/golden/home", "USER=u", "SHELL=/bin/zsh", "TMPDIR=/golden/tmp", "LANG=en_US.UTF-8",
 		"PYTHONPATH=/golden/py", "PYTHONHOME=/golden/pyhome", "PYTHONDONTWRITEBYTECODE=1", "PYTHONSTARTUP=/golden/home/.pythonrc",
@@ -44,7 +43,10 @@ func TestPythonProfileGolden(t *testing.T) {
 		inv  func(claude.Invocation) claude.Invocation
 	}{
 		{"a venv", func(inv claude.Invocation) claude.Invocation { inv.Venv = venv; return inv }},
-		{"a venv, the src layout", func(inv claude.Invocation) claude.Invocation { inv.Venv, inv.Dir = venv, srcRepo; return inv }},
+		{"a venv, the src layout (decided from the base)", func(inv claude.Invocation) claude.Invocation {
+			inv.Venv, inv.ImportRoot = venv, buildtool.ImportRoot([]string{"pyproject.toml", "src/click/__init__.py"})
+			return inv
+		}},
 		{"no venv (a warm-up that failed)", func(inv claude.Invocation) claude.Invocation { return inv }},
 	} {
 		inv := c.inv(base)
@@ -67,9 +69,16 @@ func TestPythonProfileGolden(t *testing.T) {
 	for _, kv := range buildtool.CommandEnvFor(buildtool.Select([]string{"python"}), "/golden/data/cache") {
 		fmt.Fprintf(&out, "%s\n", kv)
 	}
-	fmt.Fprintf(&out, "== commands: CheckoutEnv (grading's copy)\n")
+	fmt.Fprintf(&out, "== commands: CheckoutEnv (grading's copy, the src layout)\n")
 	for _, kv := range buildtool.CheckoutEnv(buildtool.Select([]string{"python"}), buildtool.AgentContext{Allowed: user, Environ: user,
-		Home: "/golden/home", Repo: "/golden/data/workspaces/r1/graded", BuildCache: "/golden/data/cache", Deps: base.Deps, Venv: venv}) {
+		Home: "/golden/home", Repo: "/golden/data/workspaces/r1/graded", BuildCache: "/golden/data/cache", Deps: base.Deps, Venv: venv,
+		ImportRoot: "src"}) {
+		fmt.Fprintf(&out, "%s\n", kv)
+	}
+	// The base environment of setup, grading and validation: the user's, less what the agent never gets either.
+	fmt.Fprintf(&out, "== commands: CheckoutEnviron (their base environment)\n")
+	for _, kv := range runner.Environ(buildtool.CheckoutEnviron(buildtool.Select([]string{"python"}), append(slices.Clone(user),
+		"PYTHONOPTIMIZE=2", "PYTHONWARNINGS=error", "PYTHONHASHSEED=0", "PYTHONSAFEPATH=1", "PIP_NO_DEPS=1", "UV_EXCLUDE_NEWER=2020-01-01"))) {
 		fmt.Fprintf(&out, "%s\n", kv)
 	}
 
@@ -110,9 +119,6 @@ func TestPythonProfileGolden(t *testing.T) {
 	}
 
 	got := out.String()
-	for k, v := range replace {
-		got = strings.ReplaceAll(got, k, v)
-	}
 	if strings.Contains(got, scratch) {
 		t.Fatalf("a temporary path is left in the output:\n%s", got)
 	}

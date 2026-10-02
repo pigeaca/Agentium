@@ -92,8 +92,11 @@ type WarmInput struct {
 type Warmed struct {
 	Venv  string   `json:"venv,omitempty"`
 	Notes []string `json:"notes,omitempty"`
-	// Failed explains a warm-up that did not finish; the base is not stamped, and the next run tries again.
-	Failed string `json:"-"`
+	// Failed explains a warm-up that did not finish. With Transient (a download that may work later) the base is not
+	// stamped and the next run tries again; otherwise (no interpreter meets requires-python, uv.lock without uv) it is
+	// stamped with the failure as a note, so every run of the base says so without warming again.
+	Failed    string `json:"-"`
+	Transient bool   `json:"-"`
 }
 
 // WarmFuncs runs the selected profiles' WarmFunc hooks and joins what they found: the first failure stops the rest.
@@ -112,11 +115,41 @@ func WarmFuncs(ctx context.Context, selected []Profile, in WarmInput) (Warmed, e
 		}
 		all.Notes = append(all.Notes, w.Notes...)
 		if w.Failed != "" {
-			all.Failed = p.Name + ": " + w.Failed
+			all.Failed, all.Transient = p.Name+": "+w.Failed, w.Transient
 			return all, nil
 		}
 	}
 	return all, nil
+}
+
+// WriteFileSynced writes data to path whole or not at all, and durably: a temporary file, synced, renamed over path,
+// then the folder synced, so a crash never leaves a stamp cut short or one that names what is not on disk yet.
+func WriteFileSynced(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 // PrepareDeps runs the selected profiles' PrepareDeps hooks.

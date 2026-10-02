@@ -85,6 +85,21 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/pipc
 /golden/poetry
 /golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
 /golden/home/.npm
 /golden/home/Library/pnpm/store
 /golden/home/.local/share/pnpm/store
@@ -105,7 +120,7 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /private/tmp/cc-daemon-4242
 /golden/home/.npm/_logs
 /golden/home/.claude/debug
-== agent: a venv, the src layout
+== agent: a venv, the src layout (decided from the base)
 -- env
 HOME=/golden/home
 USER=u
@@ -116,7 +131,7 @@ XDG_CACHE_HOME=/golden/home/xdg
 GOFLAGS=-buildvcs=false
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
-PYTHONPATH=<SRC-LAYOUT-CHECKOUT>/src
+PYTHONPATH=/golden/data/workspaces/r1/repo/src
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
@@ -192,6 +207,21 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/pipc
 /golden/poetry
 /golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
 /golden/home/.npm
 /golden/home/Library/pnpm/store
 /golden/home/.local/share/pnpm/store
@@ -297,6 +327,21 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/pipc
 /golden/poetry
 /golden/home/proj/.venv
+/golden/home/.config/pip
+/golden/home/Library/Application Support/pip
+/golden/home/.pip
+/golden/home/.config/uv/uv.toml
+/golden/home/.local/share/uv/credentials
+/golden/home/.config/pypoetry/auth.toml
+/golden/home/Library/Application Support/pypoetry/auth.toml
+/golden/home/.local/share/python_keyring
+/etc/pip.conf
+/private/etc/pip.conf
+/etc/xdg/pip/pip.conf
+/private/etc/xdg/pip/pip.conf
+/etc/uv/uv.toml
+/private/etc/uv/uv.toml
+/Library/Application Support/pip/pip.conf
 /golden/home/.npm
 /golden/home/Library/pnpm/store
 /golden/home/.local/share/pnpm/store
@@ -321,10 +366,10 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 UV_CACHE_DIR=/golden/data/cache/uv
 PIP_CACHE_DIR=/golden/data/cache/pip
 PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
-== commands: CheckoutEnv (grading's copy)
+== commands: CheckoutEnv (grading's copy, the src layout)
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
-PYTHONPATH=/golden/data/workspaces/r1/graded
+PYTHONPATH=/golden/data/workspaces/r1/graded/src
 PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
 PYTEST_ADDOPTS=-p no:cacheprovider
 PIP_NO_INDEX=1
@@ -335,6 +380,15 @@ UV_FROZEN=1
 UV_PYTHON_DOWNLOADS=never
 UV_PROJECT_ENVIRONMENT=/golden/data/deps/1/py/0123456789abcdef/venv
 UV_CACHE_DIR=/golden/data/cache/uv
+== commands: CheckoutEnviron (their base environment)
+PATH=/usr/local/bin:/usr/bin:/bin
+HOME=/golden/home
+USER=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+POETRY_CACHE_DIR=/golden/poetry
+XDG_CACHE_HOME=/golden/home/xdg
 == discovery: uv (click)
 ["uv run pytest"]
 == discovery: pip with pytest configured

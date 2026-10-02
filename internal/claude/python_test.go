@@ -72,7 +72,7 @@ func TestPythonRunEnvironmentAndSandbox(t *testing.T) {
 		}
 	}
 	for _, p := range denyRead {
-		if s := p.(string); strings.HasPrefix(inv.Venv, s) || strings.HasPrefix(s, "/home/u/.local/share/uv") {
+		if s := p.(string); strings.HasPrefix(inv.Venv, s) || s == "/home/u/.local/share/uv" || strings.HasPrefix(s, "/home/u/.local/share/uv/python") {
 			t.Errorf("%s is denied: the venv or its interpreter", s)
 		}
 	}
@@ -120,6 +120,58 @@ func TestDeniedPathsResolveMissingPythonFolders(t *testing.T) {
 		for _, p := range []string{filepath.Join(link, rel), filepath.Join(realDir, rel)} {
 			if !slices.Contains(denyRead, any(p)) {
 				t.Errorf("%s is not denied", p)
+			}
+		}
+	}
+}
+
+// The files where pip, uv, poetry and keyring keep index settings and credentials are denied to every project's agent,
+// the Read tool and the sandbox alike: at their defaults, where the user's variables name them (NETRC, PIP_CONFIG_FILE,
+// UV_CONFIG_FILE) and the machine's own; each also in its real form when it lies behind a link, missing or not.
+func TestPythonCredentialFilesAreDeniedToEveryAgent(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(filepath.Join(real, "home"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	realDir, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := filepath.Join(link, "home")
+	environ := []string{"PATH=/usr/bin", "HOME=" + home, "NETRC=" + filepath.Join(link, "secrets", "netrc"),
+		"PIP_CONFIG_FILE=" + filepath.Join(link, "conf", "pip.conf"), "UV_CONFIG_FILE=/opt/uv/uv.toml"}
+	for _, tools := range [][]string{nil, {"python"}, {"cargo"}} {
+		inv := toolInvocation(t, tools...)
+		inv.Home = home
+		denied := inv.DeniedPaths(environ)
+		_, settings := toolCommand(t, inv, environ)
+		_, fs := sandbox(settings)
+		denyRead := fs["denyRead"].([]any)
+		var rules []string
+		for _, r := range settings["permissions"].(map[string]any)["deny"].([]any) {
+			rules = append(rules, r.(string))
+		}
+		var want []string
+		for _, rel := range []string{"home/.config/pip", "home/Library/Application Support/pip", "home/.pip", "home/.config/uv/uv.toml",
+			"home/.local/share/uv/credentials", "home/.config/pypoetry/auth.toml", "home/Library/Application Support/pypoetry/auth.toml",
+			"home/.local/share/python_keyring", "secrets/netrc", "conf/pip.conf"} {
+			want = append(want, filepath.Join(link, rel), filepath.Join(realDir, rel))
+		}
+		want = append(want, "/opt/uv/uv.toml", "/etc/pip.conf", "/private/etc/pip.conf", "/etc/xdg/pip/pip.conf", "/etc/uv/uv.toml",
+			"/Library/Application Support/pip/pip.conf")
+		for _, p := range want {
+			if !slices.Contains(denied, p) || !slices.Contains(denyRead, any(p)) || !slices.Contains(rules, "Read(/"+p+"/**)") {
+				t.Errorf("%v: %s is not denied (DeniedPaths, denyRead and the Read rule)", tools, p)
+			}
+		}
+		for _, p := range denied {
+			if p == filepath.Join(home, ".local", "share", "uv") || strings.HasPrefix(p, filepath.Join(realDir, "home", ".local", "share", "uv", "python")) {
+				t.Errorf("%v: %s is denied: uv's interpreters", tools, p)
 			}
 		}
 	}

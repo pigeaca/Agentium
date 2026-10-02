@@ -78,6 +78,9 @@ type Invocation struct {
 	// Venv is the Python venv the run's warm-up chose in Deps (buildtool.Warmed), which the Python profile's
 	// environment activates. Empty: none.
 	Venv string
+	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
+	// commit): "src", or "" for Dir itself.
+	ImportRoot string
 }
 
 // LocalBindingRefusal is why a run may not start: its tools (Gradle) need the sandbox's allowLocalBinding and the user
@@ -248,7 +251,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	profiles := buildtool.Select(inv.Tools)
 	allowed := EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
-		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv})
+		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, ImportRoot: inv.ImportRoot})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
 		name, _, _ := strings.Cut(kv, "=")

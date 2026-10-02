@@ -401,7 +401,7 @@ func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Tas
 	env, live := liveEnv(env)
 	defer live.Stop()
 	out := task.BatchOutput{Out: env.Stdout, Style: env.style(), Show: live.Show, RunsBusy: w.layout.RunsBusy()}
-	return w.validating(buildEnv, env.Now).Batch(ctx, out, tasks, o, jobs), nil
+	return w.validating(env, buildEnv).Batch(ctx, out, tasks, o, jobs), nil
 }
 
 // batchRow is a row of the table task mine and task validate --all end with: a task, or a commit that did not

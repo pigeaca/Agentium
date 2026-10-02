@@ -111,6 +111,10 @@ type Profile struct {
 	// warmed (Python: the venv): c.Repo is the checkout (the run's, for the task's setup; the grading copy), and
 	// c.BuildCache the data folder's cache root. Later entries replace earlier ones of the same name.
 	CheckoutEnv func(c AgentContext) []string
+	// CheckoutDrop names the variables of the user's environment that Agentium's own commands in a checkout (setup,
+	// grading, validation) must not inherit, as the agent does not (CheckoutEnviron): they would change what the tests
+	// run with between the agent and grading.
+	CheckoutDrop func(name string) bool
 	// UserCaches are the user's own caches of this tool, which the agent may not read: they hold what earlier builds
 	// compiled, the hidden tests of validations and gradings included. Only absolute paths count.
 	UserCaches func(environ []string, home string) []string
@@ -149,6 +153,9 @@ type AgentContext struct {
 	Deps             string   // the deps folder agents read; "" without one
 	JavaHome         string   // a JDK resolved on the host (ResolveJavaHome); "" when none was found
 	Venv             string   // the Python venv the run's warm-up chose (Warmed.Venv); "" without one
+	// ImportRoot is where the project's code imports from, relative to Repo ("src", or "" for Repo itself), decided once
+	// from the base commit (ImportRoot), so the agent, setup, grading and validation agree whatever the agent changes.
+	ImportRoot string
 }
 
 // WarmStep is a command that fetches dependencies, with the variables it needs added to the environment.
@@ -372,6 +379,28 @@ func CheckoutEnv(selected []Profile, c AgentContext) []string {
 		}
 	}
 	return env
+}
+
+// CheckoutEnviron is environ without what the selected profiles' CheckoutDrop names: the base environment of Agentium's
+// own commands in a checkout.
+func CheckoutEnviron(selected []Profile, environ []string) []string {
+	var drops []func(string) bool
+	for _, p := range selected {
+		if p.CheckoutDrop != nil {
+			drops = append(drops, p.CheckoutDrop)
+		}
+	}
+	if len(drops) == 0 {
+		return environ
+	}
+	out := []string{}
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if !slices.ContainsFunc(drops, func(drop func(string) bool) bool { return drop(name) }) {
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // UserCaches is every profile's UserCaches, in table order: global, whatever the repository (see the package

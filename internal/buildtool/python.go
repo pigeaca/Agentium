@@ -12,11 +12,14 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
 )
@@ -38,8 +41,8 @@ import (
 //
 // Environment: the allowlist passes no PYTHON*, PIP_*, UV_* or VIRTUAL_ENV for any project (a user's PIP_INDEX_URL may
 // carry a token; PYTHONPATH or UV_CACHE_DIR could point the agent at other code or at the user's caches); this profile
-// sets its own. Agentium's own commands (the task's setup, grading) use the same venv (CheckoutEnv) with their caches in
-// the data folder; validation, which runs before any warm-up, gets only those caches.
+// sets its own. Agentium's own commands in a checkout (the task's setup, grading, validation) use the same venv
+// (CheckoutEnv), with their caches in the data folder, and lose the same variables (CheckoutDrop).
 func pythonProfile() Profile {
 	return Profile{
 		Name:   "python",
@@ -58,25 +61,34 @@ func pythonProfile() Profile {
 		// XDG_CACHE_HOME), and so does bytecode, which would otherwise land beside the checkout's sources.
 		CommandCaches: []CacheVar{{Name: "UV_CACHE_DIR", Dir: "uv"}, {Name: "PIP_CACHE_DIR", Dir: "pip"},
 			{Name: "PYTHONPYCACHEPREFIX", Dir: "pycache"}},
-		AgentEnv:    pythonEnv,
-		CheckoutEnv: pythonEnv,
-		WarmRecipe:  pythonRecipe,
-		WarmFunc:    warmPython,
-		PrepareRun:  preparePythonRun,
-		UserCaches:  pythonCaches,
+		AgentEnv:     pythonEnv,
+		CheckoutEnv:  pythonEnv,
+		CheckoutDrop: pythonVar,
+		WarmRecipe:   pythonRecipe,
+		WarmFunc:     warmPython,
+		PrepareRun:   preparePythonRun,
+		UserCaches:   pythonCaches,
 	}
 }
 
 // pythonRecipe is the warm-up's recipe, part of WarmVersion and of every venv's key: changing what warmPython does
 // changes it, so bases and venvs made by an earlier recipe are made again.
-const pythonRecipe = "python-1: interpreter by `uv python find --system --no-project <requires-python>` (UV_PYTHON_DOWNLOADS=never) " +
-	"or python3 on PATH; venv <deps>/py/<key>/venv, stamped; uv: uv sync --frozen --no-install-project --no-install-workspace " +
-	"--no-install-local; pip: venv, then pip install --dry-run --ignore-installed --report, the set less local packages pinned " +
-	"and installed with --no-deps\n"
+const pythonRecipe = "python-2: interpreter by `uv python find --system --no-project <requires-python>` (UV_PYTHON_DOWNLOADS=never) " +
+	"or python3 on PATH; venv <deps>/py/<key>/venv, synced, read-only, its manifest in the stamp; uv: uv sync --frozen " +
+	"--no-install-project --no-install-workspace --no-install-local --no-install-package <project>; pip: venv, pip>=22.2, then " +
+	"pip install --dry-run --ignore-installed --report of the requirement files and .[test|tests|testing|dev|test-dependencies], " +
+	"the set less local packages and the project's own name pinned and installed with --no-deps; setuptools' dynamic files " +
+	"keyed\n"
 
 // pythonPrivate are the deps folder's Python folders agents may not read (DepsDenied): uv's and pip's download caches
 // and the resolve reports. Agents read only <deps>/py.
 var pythonPrivate = []string{"uv-cache", "pip-cache", "py-resolve"}
+
+// pythonVar names the variables of the user's environment that never reach a Python project's tests, the agent's or
+// Agentium's own: PYTHON*, PIP_*, UV_* and VIRTUAL_ENV (pythonEnv sets the ones it needs).
+func pythonVar(name string) bool {
+	return strings.HasPrefix(name, "PYTHON") || strings.HasPrefix(name, "PIP_") || strings.HasPrefix(name, "UV_") || name == "VIRTUAL_ENV"
+}
 
 // pythonEnv is the environment of a command that tests a Python project in c.Repo: the agent's (c.BuildCache the run's
 // own cache) or one of Agentium's own commands (c.BuildCache the data folder's cache root). With a venv (c.Venv) it is
@@ -92,7 +104,7 @@ func pythonEnv(c AgentContext) []string {
 		env = append(env, "VIRTUAL_ENV="+c.Venv, "PATH="+path)
 	}
 	if c.Repo != "" {
-		env = append(env, "PYTHONPATH="+importRoot(c.Repo))
+		env = append(env, "PYTHONPATH="+filepath.Join(c.Repo, c.ImportRoot))
 	}
 	if c.BuildCache != "" {
 		env = append(env, "PYTHONPYCACHEPREFIX="+filepath.Join(c.BuildCache, "pycache"))
@@ -112,28 +124,22 @@ func pythonEnv(c AgentContext) []string {
 	return env
 }
 
-// importRoot is the folder the project's code imports from: <repo>/src when it is a real folder holding a package or a
-// module (the src layout), else the repository itself. Links are not followed.
-func importRoot(repo string) string {
-	src := filepath.Join(repo, "src")
-	if info, err := os.Lstat(src); err != nil || !info.IsDir() {
-		return repo
-	}
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return repo
-	}
-	for _, e := range entries {
-		switch {
-		case e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".py"):
-			return src
-		case e.IsDir():
-			if info, err := os.Lstat(filepath.Join(src, e.Name(), "__init__.py")); err == nil && info.Mode().IsRegular() {
-				return src
-			}
+// ImportRoot is where a Python project's code imports from, relative to its checkout, read from the base commit's file
+// paths (slash-separated, as git lists them): "src" when src/ holds a package (src/<name>/__init__.py) or a module
+// (src/<name>.py), the src layout; else "", the checkout itself. It is decided once per run from the base, before the
+// agent starts, so a src/ folder the agent adds or removes changes neither its own PYTHONPATH nor grading's.
+func ImportRoot(paths []string) string {
+	for _, p := range paths {
+		rest, ok := strings.CutPrefix(p, "src/")
+		if !ok {
+			continue
+		}
+		parts := strings.Split(rest, "/")
+		if (len(parts) == 1 && strings.HasSuffix(parts[0], ".py")) || (len(parts) == 2 && parts[1] == "__init__.py") {
+			return "src"
 		}
 	}
-	return repo
+	return ""
 }
 
 // preparePythonRun makes the run's own bytecode and uv folders, which the agent's environment names.
@@ -169,7 +175,42 @@ func pythonCaches(environ []string, home string) []string {
 	if v := filepath.Clean(env["VIRTUAL_ENV"]); filepath.IsAbs(v) && !inside(home, v) {
 		paths = append(paths, v)
 	}
-	return paths
+	return append(paths, pythonCredentials(env, home)...)
+}
+
+// pythonCredentials are the files where pip, uv, poetry and keyring keep index settings and credentials (an index URL
+// with a token, uv's and poetry's stored logins, keyring's file backend), for the user (defaults on macOS and Linux,
+// XDG_CONFIG_HOME, XDG_DATA_HOME, and the variables naming them) and, when they exist, for the machine. Agents run pip
+// and uv offline and need none of them; pip and uv 0.11 skip a config they cannot read. uv's credentials folder is
+// denied, not the folder above it, which holds the interpreters venvs link to. The machine's own configs are listed
+// whether they exist or not: denying a missing one is harmless (the agent cannot create it), and the list then does
+// not depend on the machine.
+func pythonCredentials(env map[string]string, home string) []string {
+	config, data := filepath.Join(home, ".config"), filepath.Join(home, ".local", "share")
+	appSupport := filepath.Join(home, "Library", "Application Support")
+	paths := []string{filepath.Join(config, "pip"), filepath.Join(appSupport, "pip"), filepath.Join(home, ".pip"),
+		filepath.Join(config, "uv", "uv.toml"), filepath.Join(data, "uv", "credentials"),
+		filepath.Join(config, "pypoetry", "auth.toml"), filepath.Join(appSupport, "pypoetry", "auth.toml"),
+		filepath.Join(data, "python_keyring")}
+	if x := env["XDG_CONFIG_HOME"]; filepath.IsAbs(x) {
+		paths = append(paths, filepath.Join(x, "pip"), filepath.Join(x, "uv", "uv.toml"), filepath.Join(x, "pypoetry", "auth.toml"))
+	}
+	if x := env["XDG_DATA_HOME"]; filepath.IsAbs(x) {
+		paths = append(paths, filepath.Join(x, "uv", "credentials"), filepath.Join(x, "python_keyring"))
+	}
+	if x := env["POETRY_CONFIG_DIR"]; filepath.IsAbs(x) {
+		paths = append(paths, filepath.Join(x, "auth.toml"))
+	}
+	for _, name := range []string{"PIP_CONFIG_FILE", "UV_CONFIG_FILE", "UV_CREDENTIALS_DIR", "NETRC"} {
+		if v := env[name]; filepath.IsAbs(v) && !inside(home, filepath.Clean(v)) {
+			paths = append(paths, filepath.Clean(v))
+		}
+	}
+	// /etc is /private/etc on macOS: both forms are listed, so the list is the same on every machine.
+	for _, f := range []string{"/etc/pip.conf", "/etc/xdg/pip/pip.conf", "/etc/uv/uv.toml"} {
+		paths = append(paths, f, "/private"+f)
+	}
+	return append(paths, "/Library/Application Support/pip/pip.conf")
 }
 
 // inside reports whether p is root or inside it.
@@ -190,20 +231,104 @@ type venvStamp struct {
 	Pinned      []string `json:"pinned,omitempty"` // pip without a lock file: what the resolve chose, installed as is
 	Resolved    string   `json:"resolved,omitempty"`
 	Notes       []string `json:"notes,omitempty"`
+	// Manifest is a hash of what imports see in the venv (venvManifest), checked by VenvReady: a venv changed after
+	// its stamp (by a host-side command: the venv is read-only, and agents cannot write the deps folder) is rebuilt.
+	Manifest string `json:"manifest"`
 }
 
 const venvStampName = "stamp.json"
 
-// VenvReady reports whether venv is a complete venv of the deps folder whose interpreter still exists: its stamp is
-// there, of the current recipe, and bin/python resolves. A run's stamp naming a venv that is not ready is warmed again.
+// VenvReady reports whether venv is a complete venv of the deps folder, unchanged since it was stamped, whose
+// interpreter still exists: its stamp is there, of the current recipe, its manifest matches, and bin/python resolves.
+// A run's stamp naming a venv that is not ready is warmed again, which rebuilds the venv.
 func VenvReady(venv string) bool {
+	_, ok := venvIntact(venv)
+	return ok
+}
+
+// venvIntact is VenvReady with the venv's stamp.
+func venvIntact(venv string) (venvStamp, bool) {
 	if venv == "" {
-		return false
+		return venvStamp{}, false
 	}
-	if _, ok := readVenvStamp(filepath.Dir(venv)); !ok {
-		return false
+	stamp, ok := readVenvStamp(filepath.Dir(venv))
+	if !ok || !venvMade(venv) {
+		return venvStamp{}, false
 	}
-	return venvMade(venv)
+	if m, err := venvManifest(venv); err != nil || m != stamp.Manifest {
+		return venvStamp{}, false
+	}
+	return stamp, true
+}
+
+// venvManifest hashes what decides imports from the venv: pyvenv.cfg, the names in bin/, and in each site-packages
+// folder every top-level name with its type and size, and the content of every .pth file (which runs code at start).
+func venvManifest(venv string) (string, error) {
+	h := sha256.New()
+	cfg, err := os.ReadFile(filepath.Join(venv, "pyvenv.cfg"))
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(h, "cfg\x00%s\x00", cfg)
+	list := func(dir string, withPth bool) error {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries { // sorted by name
+			info, err := e.Info()
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(h, "%s\x00%s\x00%d\x00", e.Name(), info.Mode().Type(), info.Size())
+			if withPth && strings.HasSuffix(e.Name(), ".pth") && info.Mode().IsRegular() {
+				data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(h, "pth\x00%s\x00", data)
+			}
+		}
+		return nil
+	}
+	if err := list(filepath.Join(venv, "bin"), false); err != nil {
+		return "", err
+	}
+	sites, _ := filepath.Glob(filepath.Join(venv, "lib", "python*", "site-packages"))
+	slices.Sort(sites)
+	for _, site := range sites {
+		fmt.Fprintf(h, "site\x00%s\x00", filepath.Base(filepath.Dir(site)))
+		if err := list(site, true); err != nil {
+			return "", err
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// setWritable makes every file and folder under root (links excluded) writable by its owner, or not writable by
+// anyone: a stamped venv is made read-only, so a host-side command (the task's setup, grading, which are not
+// sandboxed) cannot change it by accident; a rebuild makes it writable again before removing it.
+func setWritable(root string, writable bool) error {
+	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode().Perm() &^ 0o222
+		if writable {
+			mode = info.Mode().Perm() | 0o200
+		}
+		return os.Chmod(p, mode)
+	})
 }
 
 // pyInputs are what decides a venv's contents, read from the warm-up checkout.
@@ -213,6 +338,7 @@ type pyInputs struct {
 	reqFiles []string // pip: the requirement files given to the resolve
 	project  string   // pip: "." or ".[extra]" when the checkout is an installable project (its dependencies); "" if not
 	spec     string   // requires-python, "" when unstated
+	names    []string // the project's own names (pyproject's [project] or [tool.poetry] name, setup.cfg's), normalized
 	notes    []string
 }
 
@@ -222,41 +348,49 @@ type pyInputs struct {
 // dependencies, and no test runs (a later base holds earlier tasks' hidden tests as ordinary tests).
 func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	// What the repository's files make impossible is a note (the run goes on without a venv), not an error.
+	// Failures the repository or the host causes (no interpreter, no uv, an input Agentium cannot key) are permanent:
+	// the base is stamped with the note. Those a download may cause are transient, and warmed again by the next run.
+	permanent := func(why string) (Warmed, error) { return Warmed{Failed: why}, nil }
+	transient := func(why string, err error) (Warmed, error) { return Warmed{Failed: why, Transient: true}, err }
 	inputs, err := readPyInputs(in.Dir)
 	if err != nil {
-		return Warmed{Failed: err.Error()}, nil
+		return permanent(err.Error())
 	}
 	path := vars(in.Environ)["PATH"]
 	uv := lookPath("uv", path)
 	if inputs.manager == "uv" && uv == "" {
-		return Warmed{Failed: "uv.lock found, but no uv on PATH: install uv (Agentium installs no tools)"}, nil
+		return permanent("uv.lock found, but no uv on PATH: install uv (Agentium installs no tools)")
 	}
 	interp, version, failed, err := findInterpreter(ctx, in, uv, inputs.spec)
-	if err != nil || failed != "" {
-		return Warmed{Failed: failed}, err
+	if err != nil {
+		return Warmed{}, err
+	}
+	if failed != "" {
+		return permanent(failed)
 	}
 	tool := ""
 	if inputs.manager == "uv" {
 		out, ok, err := pyProbe(ctx, in, []string{uv, "--version"}, nil)
-		if err != nil {
-			return Warmed{}, err
-		}
-		if !ok {
-			return Warmed{Failed: "uv --version failed: see setup.log"}, nil
+		if err != nil || !ok {
+			return transient("uv --version failed: see setup.log", err)
 		}
 		tool = strings.TrimSpace(out)
 	}
 	key, err := venvKey(in.Dir, inputs, tool, interp, version)
 	if err != nil {
-		return Warmed{Failed: err.Error()}, nil
+		return permanent(err.Error())
 	}
 	root := filepath.Join(in.Deps, "py", key)
 	venv := filepath.Join(root, "venv")
-	if stamp, ok := readVenvStamp(root); ok && venvMade(venv) {
+	if stamp, ok := venvIntact(venv); ok {
 		return Warmed{Venv: venv, Notes: stamp.Notes}, nil
 	}
-	// Unstamped: a warm-up that died or failed. Nothing reads it (only stamped venvs reach runs), so it is rebuilt from
-	// nothing, in place: a venv's scripts name its folder, so it cannot be built elsewhere and moved.
+	// Unstamped, or changed since its stamp: a warm-up that died or failed, or a venv written from the host. No run is
+	// handed it (only intact venvs are), so it is rebuilt from nothing, in place (a venv's scripts name its folder, so it
+	// cannot be built elsewhere and moved); a stamped one is read-only, so it is made writable first.
+	if err := setWritable(root, true); err != nil {
+		return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
+	}
 	if err := os.RemoveAll(root); err != nil {
 		return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
 	}
@@ -272,26 +406,67 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 		"UV_PROJECT_ENVIRONMENT="+venv, "UV_PYTHON="+interp, "UV_PYTHON_DOWNLOADS=never")
 	switch inputs.manager {
 	case "uv":
-		ok, err := pyRun(ctx, in, []string{uv, "sync", "--frozen", "--no-install-project", "--no-install-workspace", "--no-install-local",
-			"--python", interp}, env)
+		args := []string{uv, "sync", "--frozen", "--no-install-project", "--no-install-workspace", "--no-install-local", "--python", interp}
+		for _, name := range inputs.names { // a released copy of the project, pulled in by a dependency
+			args = append(args, "--no-install-package", name)
+		}
+		ok, err := pyRun(ctx, in, args, env)
 		if err != nil || !ok {
-			return Warmed{Failed: "uv sync failed: see setup.log"}, err
+			return transient("uv sync failed: see setup.log", err)
 		}
 	default:
-		pinned, notes, failed, err := pipVenv(ctx, in, inputs, interp, venv, key, env)
+		pinned, notes, failed, retry, err := pipVenv(ctx, in, inputs, interp, venv, key, env)
 		if err != nil || failed != "" {
-			return Warmed{Failed: failed}, err
+			return Warmed{Failed: failed, Transient: retry}, err
 		}
 		stamp.Pinned, stamp.Notes = pinned, append(stamp.Notes, notes...)
 		stamp.Resolved = in.Now.Format("2006-01-02")
 	}
 	if !venvMade(venv) {
-		return Warmed{Failed: "the venv was not made (no bin/python or pyvenv.cfg): see setup.log"}, nil
+		return transient("the venv was not made (no bin/python or pyvenv.cfg): see setup.log", nil)
 	}
+	// Read-only, on disk, then stamped: a crash before the stamp leaves an unstamped venv, rebuilt by the next warm-up.
+	if err := setWritable(venv, false); err != nil {
+		return Warmed{}, err
+	}
+	if stamp.Manifest, err = venvManifest(venv); err != nil {
+		return Warmed{}, err
+	}
+	syscall.Sync()
 	if err := writeVenvStamp(root, stamp); err != nil {
 		return Warmed{}, err
 	}
+	if err := setWritable(root, false); err != nil {
+		return Warmed{}, err
+	}
 	return Warmed{Venv: venv, Notes: stamp.Notes}, nil
+}
+
+// MissingRunners notes the test runners the verification commands use that are not installed in the venv (pytest,
+// tox, nox), asked through importlib.metadata, which imports nothing of the project: the verification would fail for
+// every arm. environ is the base environment of the check (its PATH is not used: the venv's python is named).
+func MissingRunners(ctx context.Context, venv string, verify []string, environ []string) []string {
+	if venv == "" {
+		return nil
+	}
+	var notes []string
+	for _, runner := range []string{"pytest", "tox", "nox"} {
+		word := regexp.MustCompile(`\b` + runner + `\b`)
+		if !slices.ContainsFunc(verify, word.MatchString) {
+			continue
+		}
+		check, cancel := context.WithTimeout(ctx, time.Minute)
+		cmd := exec.CommandContext(check, filepath.Join(venv, "bin", "python"), "-I", "-c",
+			"import importlib.metadata as m, sys; m.version(sys.argv[1])", runner)
+		cmd.Env = CheckoutEnviron([]Profile{pythonProfile()}, environ)
+		err := cmd.Run()
+		cancel()
+		if err != nil && ctx.Err() == nil {
+			notes = append(notes, fmt.Sprintf("%s is not installed in the venv, and the verification runs it: add it to the project's "+
+				"test dependencies (uv.lock's default groups, a test extra or requirement file)", runner))
+		}
+	}
+	return notes
 }
 
 // venvMade is VenvReady before the stamp is written: the venv's own files.
@@ -307,19 +482,34 @@ func venvMade(venv string) bool {
 // the project's dependencies (pip's report), then the resolved set less every local package (the project itself, a
 // path dependency) pinned and installed with --no-deps. The pinned set goes into the stamp, and every run of it gets a
 // note, unless the requirement files already pin every package (they are a lock).
-func pipVenv(ctx context.Context, in WarmInput, inputs pyInputs, interp, venv, key string, env []string) (pinned, notes []string, failed string, err error) {
+func pipVenv(ctx context.Context, in WarmInput, inputs pyInputs, interp, venv, key string, env []string) (pinned, notes []string, failed string, retry bool, err error) {
 	if ok, err := pyRun(ctx, in, []string{interp, "-m", "venv", venv}, env); err != nil || !ok {
-		return nil, nil, "python -m venv failed: see setup.log", err
+		return nil, nil, "python -m venv failed: see setup.log", true, err
 	}
 	if len(inputs.reqFiles) == 0 && inputs.project == "" {
-		return nil, []string{"no requirement files and no project dependencies: the venv holds only pip"}, "", nil
+		return nil, []string{"no requirement files and no project dependencies: the venv holds only pip"}, "", false, nil
 	}
 	private := filepath.Join(in.Deps, "py-resolve")
 	if err := os.MkdirAll(private, 0o700); err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", false, err
 	}
 	report := filepath.Join(private, key+".json")
 	python := filepath.Join(venv, "bin", "python")
+	// --report needs pip 22.2: an older interpreter's bundled pip (3.9's 21.x) is upgraded in the fresh venv first
+	// (the warm-up has network).
+	out, ok, err := pyProbe(ctx, in, []string{python, "-m", "pip", "--version"}, env[len(in.Env):]) // env is in.Env and its overrides
+	if err != nil || !ok {
+		return nil, nil, "pip --version failed in the venv: see setup.log", true, err
+	}
+	pipVersion := "" // "pip 21.1.3 from ..."
+	if fields := strings.Fields(out); len(fields) >= 2 {
+		pipVersion = fields[1]
+	}
+	if v, ok := release(pipVersion); !ok || compare(v, []int{22, 2}) < 0 {
+		if ok, err := pyRun(ctx, in, []string{python, "-m", "pip", "install", "--quiet", "pip>=22.2"}, env); err != nil || !ok {
+			return nil, nil, "upgrading pip to 22.2 (for --report) failed: see setup.log", true, err
+		}
+	}
 	args := []string{python, "-m", "pip", "install", "--quiet", "--dry-run", "--ignore-installed", "--report", report}
 	for _, f := range inputs.reqFiles {
 		args = append(args, "-r", f)
@@ -328,33 +518,37 @@ func pipVenv(ctx context.Context, in WarmInput, inputs pyInputs, interp, venv, k
 		args = append(args, inputs.project)
 	}
 	if ok, err := pyRun(ctx, in, args, env); err != nil || !ok {
-		return nil, nil, "pip's resolve failed: see setup.log", err
+		return nil, nil, "pip's resolve failed: see setup.log", true, err
 	}
 	data, err := os.ReadFile(report)
 	if err != nil {
-		return nil, nil, "", fmt.Errorf("pip's report: %w", err)
+		return nil, nil, "", false, fmt.Errorf("pip's report: %w", err)
 	}
-	pinned, skipped, err := pinnedFromReport(data, in.Dir)
+	pinned, skipped, own, err := pinnedFromReport(data, in.Dir, inputs.names)
 	if err != nil {
-		return nil, nil, err.Error(), nil
+		return nil, nil, err.Error(), false, nil
 	}
 	if len(skipped) > 0 {
 		notes = append(notes, "local packages not installed (the checkout is on PYTHONPATH): "+strings.Join(skipped, ", "))
 	}
+	if len(own) > 0 {
+		notes = append(notes, "a released copy of the project ("+strings.Join(own, ", ")+"), which a dependency asks for, is not installed: "+
+			"it could hold a later task's reference solution; the checkout is on PYTHONPATH")
+	}
 	if len(pinned) > 0 {
 		list := filepath.Join(private, key+"-pinned.txt")
 		if err := os.WriteFile(list, []byte(strings.Join(pinned, "\n")+"\n"), 0o600); err != nil {
-			return nil, nil, "", err
+			return nil, nil, "", false, err
 		}
 		if ok, err := pyRun(ctx, in, []string{python, "-m", "pip", "install", "--quiet", "--no-deps", "-r", list}, env); err != nil || !ok {
-			return nil, nil, "pip install of the pinned set failed: see setup.log", err
+			return nil, nil, "pip install of the pinned set failed: see setup.log", true, err
 		}
 	}
 	if !pinnedByFiles(in.Dir, inputs.files, pinned) {
 		notes = append(notes, fmt.Sprintf("no lock file: dependencies resolved at warm-up on %s (%d packages, pinned in the venv's stamp)",
 			in.Now.Format("2006-01-02"), len(pinned)))
 	}
-	return pinned, notes, "", nil
+	return pinned, notes, "", false, nil
 }
 
 // pipReport is the part of pip's installation report (--report) the pinned set is made from.
@@ -383,17 +577,26 @@ var (
 
 // pinnedFromReport turns pip's report into requirement lines: name==version from an index, name @ url for a direct
 // archive or a VCS commit. Local folders (dir_info: the project, a path dependency) are skipped: installing them would
-// put the warm-up checkout's code into the venv. Those other than the project itself (the folder dir) are named. Every
-// value is checked, so a line can be nothing but a requirement (no option, no second line).
-func pinnedFromReport(data []byte, dir string) (pinned, skipped []string, err error) {
+// put the warm-up checkout's code into the venv. Those other than the project itself (the folder dir) are named. A
+// package with one of the project's own names (projectNames, normalized; the folder dir's entry adds its own) is
+// dropped too and listed in own: a test dependency that depends on the project pulls its released copy, which may hold
+// a later task's reference solution. Every value is checked, so a line can be nothing but a requirement (no option, no
+// second line).
+func pinnedFromReport(data []byte, dir string, projectNames []string) (pinned, skipped, own []string, err error) {
 	var r pipReport
 	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, nil, fmt.Errorf("pip's report: %w", err)
+		return nil, nil, nil, fmt.Errorf("pip's report: %w", err)
+	}
+	names := slices.Clone(projectNames)
+	for _, item := range r.Install {
+		if d := item.DownloadInfo; len(d.DirInfo) > 0 && string(d.DirInfo) != "null" && sameFolder(d.URL, dir) {
+			names = append(names, normalizeName(item.Metadata.Name))
+		}
 	}
 	for _, item := range r.Install {
 		name, version, d := item.Metadata.Name, item.Metadata.Version, item.DownloadInfo
 		if !pyName.MatchString(name) {
-			return nil, nil, fmt.Errorf("pip's report names a package %q", name)
+			return nil, nil, nil, fmt.Errorf("pip's report names a package %q", name)
 		}
 		url := d.URL
 		switch {
@@ -402,22 +605,25 @@ func pinnedFromReport(data []byte, dir string) (pinned, skipped []string, err er
 				skipped = append(skipped, name)
 			}
 			continue
+		case slices.Contains(names, normalizeName(name)):
+			own = append(own, name)
+			continue
 		case d.VCSInfo != nil:
 			url = d.VCSInfo.VCS + "+" + url + "@" + d.VCSInfo.CommitID
 		case !item.IsDirect:
 			if !pyVersion.MatchString(version) {
-				return nil, nil, fmt.Errorf("pip's report gives %s the version %q", name, version)
+				return nil, nil, nil, fmt.Errorf("pip's report gives %s the version %q", name, version)
 			}
 			pinned = append(pinned, name+"=="+version)
 			continue
 		}
 		if url == "" || strings.ContainsAny(url, " \t\r\n#") {
-			return nil, nil, fmt.Errorf("pip's report gives %s the address %q", name, url)
+			return nil, nil, nil, fmt.Errorf("pip's report gives %s the address %q", name, url)
 		}
 		pinned = append(pinned, name+" @ "+url)
 	}
 	slices.Sort(pinned)
-	return pinned, skipped, nil
+	return pinned, skipped, own, nil
 }
 
 // sameFolder reports whether a file: URL names the folder dir (either may be reached through links).
@@ -474,8 +680,8 @@ func normalizeName(name string) string {
 // testRequirementFile names the requirement files that hold test dependencies, besides requirements.txt.
 var testRequirementFile = regexp.MustCompile(`(?i)^(requirements[-_.]?(test|tests|testing|dev)|(test|tests|testing|dev)[-_]requirements|requirements/(test|tests|testing|dev))\.txt$`)
 
-// isRequirementFile tells the requirement files among a pip venv's inputs (those given and those they include) from the
-// project's own files.
+// isRequirementFile tells the requirement files among a pip venv's inputs (those given and those they include, and
+// setuptools' dynamic files, which are requirement files too) from the project's own files.
 func isRequirementFile(f string) bool {
 	return f != "pyproject.toml" && f != "setup.cfg" && f != "setup.py"
 }
@@ -496,7 +702,20 @@ func readPyInputs(dir string) (pyInputs, error) {
 			return in, err
 		}
 		in.spec = tomlString(pyproject, "project", "requires-python")
+		for _, table := range []string{"project", "tool.poetry"} {
+			if name := tomlString(pyproject, table, "name"); name != "" {
+				in.names = append(in.names, normalizeName(name))
+			}
+		}
 	}
+	if has("setup.cfg") {
+		if data, err := readInside(dir, "setup.cfg"); err == nil {
+			if name := iniString(data, "metadata", "name"); name != "" && !slices.Contains(in.names, normalizeName(name)) {
+				in.names = append(in.names, normalizeName(name))
+			}
+		}
+	}
+	in.names = slices.DeleteFunc(in.names, func(n string) bool { return !pyName.MatchString(n) })
 	if has("uv.lock") {
 		in.manager, in.files = "uv", []string{"uv.lock"}
 		if has("pyproject.toml") {
@@ -529,20 +748,81 @@ func readPyInputs(dir string) (pyInputs, error) {
 	if err != nil {
 		return in, err
 	}
+	// Files setuptools reads dependencies from (dynamic = file = ...) decide the venv too.
+	dynamic, err := dynamicFiles(dir, pyproject)
+	if err != nil {
+		return in, err
+	}
+	for _, f := range dynamic {
+		if !slices.Contains(in.files, f) {
+			in.files = append(in.files, f)
+		}
+	}
 	in.files = append(in.files, included...)
-	if tomlTable(pyproject, "project") || has("setup.py") || (has("setup.cfg") && fileHasLine(dir, "setup.cfg", "[metadata]")) {
+	if tomlTable(pyproject, "project") || tomlTable(pyproject, "build-system") || has("setup.py") || (has("setup.cfg") && fileHasLine(dir, "setup.cfg", "[metadata]")) {
 		in.project = "."
-		for _, extra := range []string{"test", "tests", "testing"} {
+		for _, extra := range []string{"test", "tests", "testing", "dev", "test-dependencies"} {
 			if tomlKey(pyproject, "project.optional-dependencies", extra) {
 				in.project = ".[" + extra + "]"
 				break
 			}
 		}
 	}
+	if has("setup.py") {
+		in.notes = append(in.notes, "setup.py may read files the venv's key does not cover: a change to them alone reuses the venv")
+	}
 	if tomlTable(pyproject, "dependency-groups") {
 		in.notes = append(in.notes, "dependency groups ([dependency-groups]) are not installed without uv.lock")
 	}
 	return in, nil
+}
+
+// dynamicFile is a `file = "x"` or `file = ["x", "y"]` setting, as setuptools' dynamic metadata names its files.
+var dynamicFile = regexp.MustCompile(`file\s*=\s*(\[[^\]]*\]|"[^"]*"|'[^']*')`)
+
+// dynamicFiles lists the files pyproject.toml's [tool.setuptools.dynamic] tables read dependencies from (dependencies,
+// optional-dependencies), relative to the checkout; one outside it fails closed.
+func dynamicFiles(dir string, pyproject []byte) ([]string, error) {
+	var files []string
+	for table, lines := range tomlSections(pyproject) {
+		if table != "tool.setuptools.dynamic" && !strings.HasPrefix(table, "tool.setuptools.dynamic.") {
+			continue
+		}
+		for _, line := range lines {
+			for _, m := range dynamicFile.FindAllStringSubmatch(line, -1) {
+				for _, q := range regexp.MustCompile(`"([^"]*)"|'([^']*)'`).FindAllStringSubmatch(m[1], -1) {
+					f := filepath.ToSlash(filepath.Clean(q[1] + q[2]))
+					if !filepath.IsLocal(f) {
+						return nil, fmt.Errorf("pyproject.toml reads dependencies from %s, outside the repository", q[1]+q[2])
+					}
+					if _, err := readInside(dir, f); err != nil {
+						return nil, err
+					}
+					if !slices.Contains(files, f) {
+						files = append(files, f)
+					}
+				}
+			}
+		}
+	}
+	slices.Sort(files)
+	return files, nil
+}
+
+// iniString is a setup.cfg section's key's value (one line), "" when absent.
+func iniString(data []byte, section, key string) string {
+	current := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			current = strings.TrimSpace(line[1 : len(line)-1])
+			continue
+		}
+		if k, v, ok := strings.Cut(line, "="); ok && current == section && strings.TrimSpace(k) == key {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // requirementInclude is a requirement file's line that reads another file: -r, -c and their long forms.
@@ -703,17 +983,13 @@ func readVenvStamp(root string) (venvStamp, bool) {
 	return s, true
 }
 
-// writeVenvStamp writes the stamp whole or not at all (a temporary file renamed over it).
+// writeVenvStamp writes the stamp whole or not at all, and durably (WriteFileSynced).
 func writeVenvStamp(root string, s venvStamp) error {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(root, venvStampName+".tmp")
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, filepath.Join(root, venvStampName))
+	return WriteFileSynced(filepath.Join(root, venvStampName), append(data, '\n'), 0o600)
 }
 
 // findInterpreter finds an interpreter on the host that meets spec (requires-python): uv's choice among the host's

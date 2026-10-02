@@ -86,22 +86,30 @@ func TestPythonEnv(t *testing.T) {
 		t.Errorf("other tools set %q in their commands' checkouts", got)
 	}
 
-	// The src layout: a package (or a module) under src/.
-	writeFiles(t, repo, map[string]string{"src/click/__init__.py": ""})
-	if e := env(t, AgentEnv(Select([]string{"python"}), ctx)); e["PYTHONPATH"] != filepath.Join(repo, "src") {
+	// The src layout, decided from the base commit's paths (ImportRoot), not from the checkout on disk: a src/ folder the
+	// agent adds later changes nothing.
+	src := ctx
+	src.ImportRoot = "src"
+	if e := env(t, AgentEnv(Select([]string{"python"}), src)); e["PYTHONPATH"] != filepath.Join(repo, "src") {
 		t.Errorf("src layout: PYTHONPATH=%q", e["PYTHONPATH"])
 	}
-	other := t.TempDir()
-	writeFiles(t, other, map[string]string{"src/README.md": "", "src/data/x.json": "{}", "pkg/__init__.py": ""})
-	if got := importRoot(other); got != other {
-		t.Errorf("src without code: %q", got)
+	writeFiles(t, repo, map[string]string{"src/added/__init__.py": ""})
+	if e := env(t, AgentEnv(Select([]string{"python"}), ctx)); e["PYTHONPATH"] != repo {
+		t.Errorf("a src/ added in the checkout moved PYTHONPATH to %q", e["PYTHONPATH"])
 	}
-	linked := t.TempDir()
-	if err := os.Symlink(filepath.Join(repo, "src"), filepath.Join(linked, "src")); err != nil {
-		t.Fatal(err)
-	}
-	if got := importRoot(linked); got != linked {
-		t.Errorf("a linked src/ is followed: %q", got)
+	for _, c := range []struct {
+		paths []string
+		want  string
+	}{
+		{[]string{"pyproject.toml", "src/click/__init__.py", "tests/test_x.py"}, "src"},
+		{[]string{"src/mod.py"}, "src"},
+		{[]string{"src/README.md", "src/data/x.json", "pkg/__init__.py"}, ""},
+		{[]string{"src/a/b/__init__.py", "x/src/m.py"}, ""},
+		{[]string{"src"}, ""}, // a link named src
+	} {
+		if got := ImportRoot(c.paths); got != c.want {
+			t.Errorf("ImportRoot(%q) = %q, want %q", c.paths, got, c.want)
+		}
 	}
 
 	noVenv := ctx
@@ -196,16 +204,17 @@ func newFakePython(t *testing.T, version string, uv bool, report string) fakePyt
 	python := `#!/bin/sh
 echo "python $* | VIRTUAL_ENV=$VIRTUAL_ENV PIP_CACHE_DIR=$PIP_CACHE_DIR PYTHONPATH=$PYTHONPATH" >> '` + f.calls + `'
 case "$1" in
--I) printf '%s\n%s\n' '` + version + `' '` + f.interp + `'; exit 0;;
+-I) if [ -n "$4" ] && [ "$4" = "$FAKE_MISSING" ]; then exit 1; fi; printf '%s\n%s\n' '` + version + `' '` + f.interp + `'; exit 0;;
 --version) echo 'Python ` + version + `'; exit 0;;
 esac
+if [ "$1 $2 $3" = "-m pip --version" ]; then echo "pip ${FAKE_PIP:-25.0} from /x (python 3)"; exit 0; fi
 if [ "$1 $2" = "-m venv" ]; then
   /bin/mkdir -p "$3/bin" && echo 'home = /x' > "$3/pyvenv.cfg" && /bin/ln -s '` + f.interp + `' "$3/bin/python"; exit $?
 fi
 if [ "$1 $2 $3" = "-m pip install" ]; then
   report=""; list=""
   while [ $# -gt 0 ]; do
-    case "$1" in --report) report="$2"; shift;; -r) list="$2"; shift;; esac; shift
+    case "$1" in --report) report="$2"; shift;; -r) list="$2"; shift;; "pip>=22.2") echo "upgraded pip" >> '` + f.calls + `'; exit 0;; esac; shift
   done
   if [ -n "$report" ]; then /bin/cat '` + filepath.Join(dir, "report.json") + `' > "$report"; exit $?; fi
   echo "installed:" >> '` + f.calls + `'; /bin/cat "$list" >> '` + f.calls + `'; exit 0
@@ -219,12 +228,20 @@ echo "uv $* | UV_CACHE_DIR=$UV_CACHE_DIR UV_PROJECT_ENVIRONMENT=$UV_PROJECT_ENVI
 case "$1" in
 --version) echo "uv ${FAKE_UV_VERSION:-0.11.28}"; exit 0;;
 python) echo '`+f.interp+`'; exit 0;;
-sync) /bin/mkdir -p "$UV_PROJECT_ENVIRONMENT/bin" && echo 'home = /x' > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg" && /bin/ln -sf '`+f.interp+`' "$UV_PROJECT_ENVIRONMENT/bin/python"; exit $?;;
+sync) /bin/mkdir -p "$UV_PROJECT_ENVIRONMENT/bin" "$UV_PROJECT_ENVIRONMENT/lib/python3.12/site-packages/dep" && echo 'x = 1' > "$UV_PROJECT_ENVIRONMENT/lib/python3.12/site-packages/dep/__init__.py" && echo 'home = /x' > "$UV_PROJECT_ENVIRONMENT/pyvenv.cfg" && /bin/ln -sf '`+f.interp+`' "$UV_PROJECT_ENVIRONMENT/bin/python"; exit $?;;
 esac
 exit 3
 `)
 	}
 	return f
+}
+
+// depsDir is a deps folder for a test: stamped venvs are read-only, so it is made writable again before it is removed.
+func depsDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Cleanup(func() { setWritable(dir, true) })
+	return dir
 }
 
 func writeExec(t *testing.T, path, body string) {
@@ -282,7 +299,7 @@ const clickPyproject = "[project]\nname = \"click\"\nrequires-python = \">=3.10\
 // from. The same inputs reuse it without running uv sync; a changed lock, interpreter or uv version gives another.
 func TestWarmPythonWithUv(t *testing.T) {
 	f := newFakePython(t, "3.12.13", true, "")
-	deps, repo := t.TempDir(), t.TempDir()
+	deps, repo := depsDir(t), t.TempDir()
 	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPyproject, "uv.lock": "version = 1\n", "src/click/__init__.py": ""})
 	ctx := context.Background()
 	w, err := WarmFuncs(ctx, Select([]string{"python"}), f.input(repo, deps))
@@ -294,7 +311,7 @@ func TestWarmPythonWithUv(t *testing.T) {
 	}
 	log := f.log(t)
 	for _, want := range []string{"uv python find --system --no-project >=3.10 | ", "UV_PYTHON_DOWNLOADS=never",
-		"uv sync --frozen --no-install-project --no-install-workspace --no-install-local --python " + f.interp + " | UV_CACHE_DIR=" + filepath.Join(deps, "uv-cache") +
+		"uv sync --frozen --no-install-project --no-install-workspace --no-install-local --python " + f.interp + " --no-install-package click | UV_CACHE_DIR=" + filepath.Join(deps, "uv-cache") +
 			" UV_PROJECT_ENVIRONMENT=" + w.Venv + " UV_PYTHON_DOWNLOADS=never UV_PYTHON=" + f.interp + " VIRTUAL_ENV=" + w.Venv} {
 		if !strings.Contains(log, want) {
 			t.Errorf("no %q in\n%s", want, log)
@@ -348,10 +365,11 @@ func TestWarmPythonWithUv(t *testing.T) {
 }
 
 // A venv without its stamp (a warm-up that died, or failed) is removed and built again; a stamp of another recipe does
-// not count; a stamped venv whose interpreter is gone is not ready.
+// not count; a stamped venv whose interpreter is gone is not ready; nor is one whose imports changed after its stamp (a
+// .pth or a package added, a package removed: the manifest). A stamped venv is read-only, and a rebuild copes with it.
 func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 	f := newFakePython(t, "3.12.13", true, "")
-	deps, repo := t.TempDir(), t.TempDir()
+	deps, repo := depsDir(t), t.TempDir()
 	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPyproject, "uv.lock": "version = 1\n"})
 	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, deps))
 	if err != nil || w.Venv == "" {
@@ -359,17 +377,33 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 	}
 	stamp := filepath.Join(filepath.Dir(w.Venv), venvStampName)
 	leftover := filepath.Join(w.Venv, "lib", "half-installed")
-	writeFiles(t, filepath.Dir(leftover), map[string]string{"half-installed": "x"})
+	site := filepath.Join(w.Venv, "lib", "python3.12", "site-packages")
+	// Read-only once stamped, the stamp's folder too: a host-side command cannot change it by accident.
+	for _, p := range []string{w.Venv, site, filepath.Join(site, "dep", "__init__.py"), stamp, filepath.Dir(stamp)} {
+		if info, err := os.Lstat(p); err != nil || info.Mode().Perm()&0o222 != 0 {
+			t.Errorf("%s is writable after the stamp: %v %v", p, info, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(site, "evil.pth"), []byte("import os\n"), 0o644); err == nil {
+		t.Error("a .pth could be written into a stamped venv")
+	}
 	for name, damage := range map[string]func(){
-		"no stamp":        func() { os.Remove(stamp) },
-		"an older recipe": func() { os.WriteFile(stamp, []byte(`{"recipe":"python-0"}`), 0o600) },
-		"a corrupt stamp": func() { os.WriteFile(stamp, []byte(`{`), 0o600) },
-		"no pyvenv.cfg":   func() { os.Remove(filepath.Join(w.Venv, "pyvenv.cfg")) },
+		"a .pth planted":    func() { os.WriteFile(filepath.Join(site, "evil.pth"), []byte("import os\n"), 0o644) },
+		"a package added":   func() { os.MkdirAll(filepath.Join(site, "planted"), 0o755) },
+		"a package removed": func() { os.RemoveAll(filepath.Join(site, "dep")) },
+		"a .pth rewritten":  func() { os.WriteFile(filepath.Join(site, "_virtualenv.pth"), []byte("import x\n"), 0o644) },
+		"no stamp":          func() { os.Remove(stamp) },
+		"an older recipe":   func() { os.WriteFile(stamp, []byte(`{"recipe":"python-0"}`), 0o600) },
+		"a corrupt stamp":   func() { os.WriteFile(stamp, []byte(`{`), 0o600) },
+		"no pyvenv.cfg":     func() { os.Remove(filepath.Join(w.Venv, "pyvenv.cfg")) },
 		"a dangling python": func() {
 			os.Remove(filepath.Join(w.Venv, "bin", "python"))
 			os.Symlink("/nonexistent/python", filepath.Join(w.Venv, "bin", "python"))
 		},
 	} {
+		if err := setWritable(filepath.Dir(w.Venv), true); err != nil {
+			t.Fatal(err)
+		}
 		writeFiles(t, filepath.Dir(leftover), map[string]string{"half-installed": "x"})
 		damage()
 		if VenvReady(w.Venv) {
@@ -402,7 +436,7 @@ func TestWarmPythonWithPip(t *testing.T) {
  {"metadata":{"name":"coverage","version":"7.16.2"},"is_direct":false,"download_info":{"url":"https://files/coverage.whl","archive_info":{}}},
  {"metadata":{"name":"ruff","version":"0.16.10"},"is_direct":false,"download_info":{"url":"https://files/ruff.whl","archive_info":{}}},
  {"metadata":{"name":"helper","version":"1.0"},"is_direct":true,"download_info":{"url":"https://github.com/o/helper","vcs_info":{"vcs":"git","commit_id":"abc123"}}}]}`
-	deps, repo := t.TempDir(), t.TempDir()
+	deps, repo := depsDir(t), t.TempDir()
 	// The project is the folder being warmed (the warm-up checkout); a path dependency is another folder.
 	report = strings.Replace(report, "file:///w/repo", "file://"+repo, 1)
 	f := newFakePython(t, "3.12.13", false, report)
@@ -461,7 +495,7 @@ func TestWarmPythonPinnedRequirementsAreALock(t *testing.T) {
 	f := newFakePython(t, "3.12.13", false, report)
 	repo := t.TempDir()
 	writeFiles(t, repo, map[string]string{"requirements-dev.txt": "coverage==7.16.2 ; python_version >= '3.8'\nRuff==0.16.10  # linter\n"})
-	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, t.TempDir()))
+	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, depsDir(t)))
 	if err != nil || w.Failed != "" || len(w.Notes) != 0 {
 		t.Errorf("%+v %v\n%s", w, err, f.log(t))
 	}
@@ -475,23 +509,23 @@ func TestWarmPythonFailures(t *testing.T) {
 	old := newFakePython(t, "3.9.6", false, "")
 	repo := t.TempDir()
 	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPyproject})
-	w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(repo, t.TempDir()))
+	w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(repo, depsDir(t)))
 	if err != nil || !strings.Contains(w.Failed, `meets requires-python ">=3.10"`) || w.Venv != "" {
 		t.Errorf("an old interpreter: %+v %v", w, err)
 	}
 	locked := t.TempDir()
 	writeFiles(t, locked, map[string]string{"pyproject.toml": clickPyproject, "uv.lock": ""})
-	if w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(locked, t.TempDir())); err != nil || !strings.Contains(w.Failed, "no uv on PATH") {
+	if w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(locked, depsDir(t))); err != nil || !strings.Contains(w.Failed, "no uv on PATH") {
 		t.Errorf("uv.lock without uv: %+v %v", w, err)
 	}
 	outside := t.TempDir()
 	writeFiles(t, outside, map[string]string{"requirements.txt": "-r ../../shared.txt\n"})
-	if w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(outside, t.TempDir())); err != nil || !strings.Contains(w.Failed, "outside the repository") {
+	if w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(outside, depsDir(t))); err != nil || !strings.Contains(w.Failed, "outside the repository") {
 		t.Errorf("an include outside the repository: %+v %v", w, err)
 	}
 	// A failed resolve leaves no stamp.
 	failing := newFakePython(t, "3.12.13", false, "not json")
-	deps := t.TempDir()
+	deps := depsDir(t)
 	writeFiles(t, outside, map[string]string{"requirements.txt": "x\n"})
 	if w, err := WarmFuncs(ctx, Select([]string{"python"}), failing.input(outside, deps)); err != nil || !strings.Contains(w.Failed, "pip's report") {
 		t.Errorf("a report that is not JSON: %+v %v", w, err)
@@ -532,7 +566,7 @@ func TestPinnedFromReportRefusesOddValues(t *testing.T) {
 		`{"install":[{"metadata":{"name":"ok","version":"1"},"is_direct":true,"download_info":{"url":"https://x y"}}]}`,
 		`{"install":[{"metadata":{"name":"ok","version":"1"},"is_direct":true,"download_info":{"url":""}}]}`,
 	} {
-		if pinned, _, err := pinnedFromReport([]byte(report), "/repo"); err == nil {
+		if pinned, _, _, err := pinnedFromReport([]byte(report), "/repo", nil); err == nil {
 			t.Errorf("%s gave %q", report, pinned)
 		}
 	}
@@ -547,5 +581,184 @@ func TestPyprojectReading(t *testing.T) {
 	}
 	if !tomlKey(data, "project.optional-dependencies", "testing") || tomlKey(data, "project.optional-dependencies", "test") || tomlTable(data, "dependency-groups") {
 		t.Error("extras or tables misread")
+	}
+}
+
+// The files where pip, uv, poetry and keyring keep index settings and credentials are denied in every project, at
+// their defaults, under XDG folders and where variables name them, and the machine's own. uv's interpreters, beside its
+// credentials, stay readable.
+func TestPythonCredentialFilesAreDenied(t *testing.T) {
+	home := "/home/u"
+	got := UserCaches([]string{"XDG_CONFIG_HOME=/x/config", "XDG_DATA_HOME=/x/data", "PIP_CONFIG_FILE=/etc/custom/pip.conf",
+		"UV_CONFIG_FILE=/opt/uv.toml", "NETRC=/secrets/netrc", "POETRY_CONFIG_DIR=/x/poetry", "UV_CREDENTIALS_DIR=/x/uvcreds"}, home)
+	for _, want := range []string{"/home/u/.config/pip", "/home/u/Library/Application Support/pip", "/home/u/.pip",
+		"/home/u/.config/uv/uv.toml", "/home/u/.local/share/uv/credentials", "/home/u/.config/pypoetry/auth.toml",
+		"/home/u/Library/Application Support/pypoetry/auth.toml", "/home/u/.local/share/python_keyring", "/x/config/pip",
+		"/x/config/uv/uv.toml", "/x/config/pypoetry/auth.toml", "/x/data/uv/credentials", "/x/data/python_keyring",
+		"/x/poetry/auth.toml", "/etc/custom/pip.conf", "/opt/uv.toml", "/secrets/netrc", "/x/uvcreds"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s is not denied", want)
+		}
+	}
+	for _, never := range []string{"/home/u/.local/share/uv", "/home/u/.local/share/uv/python", "/home/u/.config"} {
+		if slices.Contains(got, never) {
+			t.Errorf("%s is denied", never)
+		}
+	}
+	// Machine-wide configs, whether they exist or not (the list does not depend on the machine).
+	for _, want := range []string{"/etc/pip.conf", "/etc/xdg/pip/pip.conf", "/Library/Application Support/pip/pip.conf", "/etc/uv/uv.toml"} {
+		if !slices.Contains(got, want) {
+			t.Errorf("%s is not denied", want)
+		}
+	}
+	// A variable naming the home folder (or above) denies nothing of it.
+	if slices.Contains(pythonCredentials(map[string]string{"NETRC": "/home/u"}, home), "/home/u") {
+		t.Error("NETRC=/home/u denies the home folder")
+	}
+}
+
+// Agentium's own commands in a Python checkout lose the user's Python, pip and uv settings, as the agent does; other
+// tools' commands keep the environment as it is.
+func TestCheckoutEnvironDropsPythonSettings(t *testing.T) {
+	user := []string{"PATH=/bin", "HOME=/h", "PYTHONHOME=/py", "PYTHONOPTIMIZE=2", "PYTHONWARNINGS=ignore", "PYTHONHASHSEED=1",
+		"PYTHONSAFEPATH=1", "PIP_INDEX_URL=https://x", "UV_INDEX=y", "VIRTUAL_ENV=/v", "VIRTUAL_ENV_PROMPT=p", "GOFLAGS=-x"}
+	if got := CheckoutEnviron(Select([]string{"python"}), user); !slices.Equal(got, []string{"PATH=/bin", "HOME=/h", "VIRTUAL_ENV_PROMPT=p", "GOFLAGS=-x"}) {
+		t.Errorf("python: %q", got)
+	}
+	if got := CheckoutEnviron(Select([]string{"maven", "cargo"}), user); !slices.Equal(got, user) {
+		t.Errorf("other tools: %q", got)
+	}
+}
+
+// Permanent failures (no interpreter, uv.lock without uv, an input that cannot be keyed) are not transient, so the
+// base is stamped with the note; failures a download may cause are transient. An old pip is upgraded for --report.
+func TestWarmPythonFailureKindsAndOldPip(t *testing.T) {
+	ctx := context.Background()
+	old := newFakePython(t, "3.9.6", false, "")
+	repo := t.TempDir()
+	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPyproject, "uv.lock": ""})
+	if w, _ := WarmFuncs(ctx, Select([]string{"python"}), old.input(repo, depsDir(t))); w.Failed == "" || w.Transient {
+		t.Errorf("uv.lock without uv: %+v", w)
+	}
+	os.Remove(filepath.Join(repo, "uv.lock"))
+	if w, _ := WarmFuncs(ctx, Select([]string{"python"}), old.input(repo, depsDir(t))); w.Failed == "" || w.Transient {
+		t.Errorf("no interpreter: %+v", w)
+	}
+	// pip 21 in the fresh venv: upgraded first; a resolve that fails is transient.
+	report := `{"install":[{"metadata":{"name":"ruff","version":"0.16.10"},"download_info":{"url":"https://y","archive_info":{}}}]}`
+	f := newFakePython(t, "3.12.13", false, report)
+	pip := t.TempDir()
+	writeFiles(t, pip, map[string]string{"requirements.txt": "ruff\n"})
+	w, err := WarmFuncs(ctx, Select([]string{"python"}), f.input(pip, depsDir(t), "FAKE_PIP=21.1.3"))
+	if err != nil || w.Failed != "" || !strings.Contains(f.log(t), "upgraded pip") {
+		t.Errorf("an old pip: %+v %v\n%s", w, err, f.log(t))
+	}
+	g := newFakePython(t, "3.12.13", false, report)
+	if w, _ := WarmFuncs(ctx, Select([]string{"python"}), g.input(pip, depsDir(t))); w.Failed != "" || strings.Contains(g.log(t), "upgraded pip") {
+		t.Errorf("a current pip was upgraded: %+v", w)
+	}
+	broken := newFakePython(t, "3.12.13", false, report)
+	os.Remove(filepath.Join(filepath.Dir(broken.calls), "report.json")) // the resolve's cat fails
+	if w, _ := WarmFuncs(ctx, Select([]string{"python"}), broken.input(pip, depsDir(t))); w.Failed == "" || !w.Transient {
+		t.Errorf("a failed resolve: %+v", w)
+	}
+}
+
+// A test dependency that depends on the project pulls its released copy: it is never pinned nor installed, with a
+// note; the project's names come from pyproject.toml, setup.cfg and the report's own entry.
+func TestWarmPythonNeverInstallsTheProjectsReleasedCopy(t *testing.T) {
+	report := `{"install":[
+ {"metadata":{"name":"my-lib","version":"1.0"},"is_direct":true,"download_info":{"url":"file:///REPO","dir_info":{}}},
+ {"metadata":{"name":"pytest-mylib","version":"2.0"},"download_info":{"url":"https://x","archive_info":{}}},
+ {"metadata":{"name":"My_Lib","version":"0.9"},"download_info":{"url":"https://y","archive_info":{}}},
+ {"metadata":{"name":"other-name","version":"3"},"download_info":{"url":"https://z","archive_info":{}}}]}`
+	repo := t.TempDir()
+	report = strings.Replace(report, "/REPO", repo, 1)
+	pinned, skipped, own, err := pinnedFromReport([]byte(report), repo, []string{"other-name"})
+	if err != nil || !slices.Equal(pinned, []string{"pytest-mylib==2.0"}) || len(skipped) != 0 || !slices.Equal(own, []string{"My_Lib", "other-name"}) {
+		t.Errorf("pinned %q, skipped %q, own %q, %v", pinned, skipped, own, err)
+	}
+	f := newFakePython(t, "3.12.13", false, strings.Replace(report, repo, "/elsewhere", 1))
+	writeFiles(t, repo, map[string]string{"setup.cfg": "[metadata]\nname = my.lib\n", "requirements-test.txt": "pytest-mylib\n"})
+	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, depsDir(t)))
+	if err != nil || w.Failed != "" || !slices.ContainsFunc(w.Notes, func(n string) bool { return strings.Contains(n, "a released copy of the project (My_Lib)") }) ||
+		strings.Contains(f.log(t), "My_Lib==") {
+		t.Errorf("%+v %v\n%s", w, err, f.log(t))
+	}
+}
+
+// pip's inputs: the dev extra when there is no test extra; setuptools' dynamic files are part of the key; a project
+// with setup.py is warned that its key may miss inputs; a poetry-only pyproject is still a project to resolve.
+func TestPythonPipInputs(t *testing.T) {
+	repo := t.TempDir()
+	writeFiles(t, repo, map[string]string{
+		"pyproject.toml": "[build-system]\nrequires = [\"setuptools\"]\n[project]\nname = \"p\"\ndynamic = [\"dependencies\"]\n" +
+			"[project.optional-dependencies]\ndocs = [\"x\"]\ndev = [\"pytest\"]\n" +
+			"[tool.setuptools.dynamic]\ndependencies = {file = [\"requirements/base.in\"]}\n" +
+			"[tool.setuptools.dynamic.optional-dependencies]\nextra = { file = \"extra.txt\" }\n",
+		"requirements/base.in": "click\n", "extra.txt": "rich\n", "setup.py": "from setuptools import setup; setup()\n"})
+	in, err := readPyInputs(repo)
+	if err != nil || in.project != ".[dev]" || !slices.Contains(in.files, "requirements/base.in") || !slices.Contains(in.files, "extra.txt") ||
+		!slices.ContainsFunc(in.notes, func(n string) bool { return strings.Contains(n, "setup.py may read files") }) ||
+		!slices.Equal(in.names, []string{"p"}) {
+		t.Errorf("%+v %v", in, err)
+	}
+	k1, _ := venvKey(repo, in, "", "/py", "3.12.0")
+	writeFiles(t, repo, map[string]string{"requirements/base.in": "click>=8\n"})
+	if k2, _ := venvKey(repo, in, "", "/py", "3.12.0"); k1 == k2 {
+		t.Error("a dynamic dependencies file changed, and the key did not")
+	}
+	writeFiles(t, repo, map[string]string{"pyproject.toml": "[tool.setuptools.dynamic]\ndependencies = {file = [\"../outside.txt\"]}\n"})
+	if _, err := readPyInputs(repo); err == nil {
+		t.Error("a dynamic file outside the repository")
+	}
+	poetry := t.TempDir()
+	writeFiles(t, poetry, map[string]string{"pyproject.toml": "[tool.poetry]\nname = \"Poetic\"\n[build-system]\nrequires = [\"poetry-core\"]\n"})
+	if in, err := readPyInputs(poetry); err != nil || in.project != "." || !slices.Equal(in.names, []string{"poetic"}) {
+		t.Errorf("poetry: %+v %v", in, err)
+	}
+}
+
+// A runner the verification uses but the venv lacks is a note; one it has, or one the verification does not use, is not.
+func TestMissingRunners(t *testing.T) {
+	f := newFakePython(t, "3.12.13", true, "")
+	deps, repo := depsDir(t), t.TempDir()
+	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPyproject, "uv.lock": "version = 1\n"})
+	w, err := WarmFuncs(context.Background(), Select([]string{"python"}), f.input(repo, deps))
+	if err != nil || w.Venv == "" {
+		t.Fatal(w, err)
+	}
+	ctx := context.Background()
+	if got := MissingRunners(ctx, w.Venv, []string{"uv run pytest -q"}, []string{"FAKE_MISSING=pytest"}); len(got) != 1 || !strings.Contains(got[0], "pytest is not installed") {
+		t.Errorf("missing pytest: %q", got)
+	}
+	if got := MissingRunners(ctx, w.Venv, []string{"uv run pytest -q"}, nil); len(got) != 0 {
+		t.Errorf("installed pytest: %q", got)
+	}
+	if got := MissingRunners(ctx, w.Venv, []string{"python -m unittest"}, []string{"FAKE_MISSING=pytest"}); len(got) != 0 {
+		t.Errorf("unittest needs no runner: %q", got)
+	}
+}
+
+// Stamps are written whole, through a synced temporary file renamed over the old one, and nothing is left beside them.
+func TestWriteFileSynced(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stamp")
+	for _, data := range []string{`{"venv":"/a"}`, `{"venv":"/b"}`, ""} {
+		if err := WriteFileSynced(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(path); err != nil || string(got) != data {
+			t.Errorf("%q, %v; want %q", got, err, data)
+		}
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("left beside the stamp: %v", entries)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+		t.Errorf("mode %v", info.Mode())
+	}
+	if err := WriteFileSynced(filepath.Join(dir, "missing", "stamp"), nil, 0o600); err == nil {
+		t.Error("a stamp in a missing folder")
 	}
 }

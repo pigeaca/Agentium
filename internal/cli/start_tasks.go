@@ -158,7 +158,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			snaps = append(snaps, name)
 		}
 	}
-	arms, err := s.w.validating(nil, s.env.Now).Arms(ctx, s.w.project.ID, snaps)
+	arms, err := s.w.validating(s.env, nil).Arms(ctx, s.w.project.ID, snaps)
 	if err != nil {
 		return err
 	}

@@ -100,6 +100,9 @@ type Env struct {
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
+	// checkoutBase is the base environment of those commands (buildtool.CheckoutEnviron), and commandBase the one
+	// commands use (nil: the process's, filtered by runner.Environ); only setup and grading set it.
+	checkoutBase, commandBase []string
 	// judgeSpent, when set, learns what a judgement has spent so far (its earlier verdict's included) after each call
 	// that reported a cost: Once keeps it in the start file, so a crash while judging loses none of it.
 	judgeSpent func(usd float64)
@@ -279,7 +282,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so
 	// change one arm's sandbox, warm-up or environment. A run that needs the user's opt-in for local binding stops here,
 	// before it costs anything.
-	tools, err := toolsAtBase(ctx, env.Bare, spec.Task.Base)
+	// Where Python code imports from is decided here too, once: the agent, setup and grading agree on it whatever the
+	// agent adds or removes under src/.
+	tools, importRoot, err := baseLayout(ctx, env.Bare, spec.Task.Base)
 	if err != nil {
 		return rec, err
 	}
@@ -403,11 +408,15 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec.Notes = append(rec.Notes, notes...)
 	// What the warm-up found (Python's venv) goes to the agent, and to Agentium's own commands in a checkout: the task's
 	// setup in the run's, grading in its copy, with their caches in the data folder.
-	inv.Venv = warmed.Venv
+	// They also lose the user's variables the agent never gets (buildtool.CheckoutEnviron: PYTHON*, PIP_*, UV_*), so the
+	// tests run with the same settings for the agent and for grading.
+	inv.Venv, inv.ImportRoot = warmed.Venv, importRoot
 	env.checkoutEnv = func(dir string) []string {
-		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.Environ, Environ: env.Environ, Home: env.Home, Repo: dir,
-			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv})
+		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Home: env.Home, Repo: dir,
+			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv, ImportRoot: importRoot})
 	}
+	env.checkoutBase = runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ()))
+	rec.Notes = append(rec.Notes, buildtool.MissingRunners(ctx, warmed.Venv, spec.Task.Verify, env.environ())...)
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
 		// not counted against it (an infrastructure failure is retried or left out).
@@ -424,6 +433,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		setup := env
 		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
+		setup.commandBase = env.checkoutBase
 		var ok bool
 		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
@@ -685,6 +695,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		verify := env
 		if env.checkoutEnv != nil {
 			verify.CommandEnv = append(slices.Clone(env.CommandEnv), env.checkoutEnv(graded)...)
+			verify.commandBase = env.checkoutBase
 		}
 		commands, ok, err = verify.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
@@ -810,7 +821,8 @@ func (env Env) commands(ctx context.Context, dir string, commands []string, logP
 	var results []task.Command
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running, Env: env.CommandEnv})
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: log, Started: running, Env: env.CommandEnv,
+			Environ: env.commandBase})
 		results = append(results, task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})
 		if err != nil {
