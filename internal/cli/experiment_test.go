@@ -70,7 +70,8 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "smoke", "--template", "aa", "--run-budget", "0.5", "--budget", "5", "--seed", "7"), ExitOK)
 	smoke := f.run(ctx, "experiment", "plan", "smoke")
 	expect(t, smoke, ExitOK, "1 of 1", "$1.00", "$1.30", "Spend: at most $1.00 if every look runs (all 1 tasks; $1.30 if every run reaches its cap",
-		"value, without runs of their own: $0.50, the run cap: runs are expected to reach it ($1.61 from a default task run's tokens at claude-sonnet-5-5's list prices",
+		"value, without runs of their own: $0.50, the run cap: no runs on this model yet: the estimate assumes each run reaches its cap ($1.61\n    from a default task run's tokens at claude-sonnet-5-5's list prices",
+		"No runs on claude-sonnet-5-5 yet: the estimated spend above assumes each run reaches its cap, so\nit is likely high (safe for the budget)",
 		"Worst case: every run reaches its $0.50 cap.\nClaude Code checks a cap after each turn", "at least $0.15")
 	t.Log("experiment plan, runs capped below their estimate:\n" + smoke.stdout)
 
@@ -224,7 +225,10 @@ func saveRuns(t *testing.T, f runFixture, runs ...store.Run) {
 	}
 	now := time.Now()
 	for i, r := range runs {
-		r.ID, r.ProjectID, r.Started, r.Finished = fmt.Sprintf("20260929T000000Z-%06d", len(stored)+i), projects[0].ID, now, now
+		r.ID, r.ProjectID = fmt.Sprintf("20260929T000000Z-%06d", len(stored)+i), projects[0].ID
+		if r.Started.IsZero() { // runs given no times ran now
+			r.Started, r.Finished = now, now
+		}
 		if r.Arm == "" {
 			r.Arm = "base"
 		}

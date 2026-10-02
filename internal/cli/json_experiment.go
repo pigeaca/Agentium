@@ -122,6 +122,85 @@ type spendDoc struct {
 	IfCutUSD      *float64 `json:"if_cut_usd"`
 	MaxUSD        *float64 `json:"max_usd"`
 	WorstCaseUSD  float64  `json:"worst_case_usd"`
+	// EstimateBasis says, per arm, what a run of a task without runs of its own is estimated from.
+	EstimateBasis []estimateBasisDoc `json:"estimate_basis"`
+}
+
+// estimateBasisDoc is an arm's estimate for tasks without runs of their own. Basis is history (the median of earlier
+// runs on the model), default_profile (a default run's tokens at list prices), cap (the run cap, as the other two are
+// above it: with history_runs 0 it assumes every run reaches its cap, so it is likely high) or unknown (PerRunUSD null).
+type estimateBasisDoc struct {
+	Arm         string   `json:"arm"`
+	Model       string   `json:"model"`
+	Basis       string   `json:"basis"`
+	HistoryRuns int      `json:"history_runs"` // earlier task runs on the model the estimate learnt from
+	PerRunUSD   *float64 `json:"per_run_usd"`
+}
+
+func estimateBasisOf(review experiment.Review) []estimateBasisDoc {
+	out := []estimateBasisDoc{}
+	for i, a := range review.Design.Arms[:2] {
+		e := review.Estimates[i]
+		doc := estimateBasisDoc{Arm: a.Name, Model: review.Design.ArmModel(a), Basis: e.EstimateBasis(), HistoryRuns: e.Runs}
+		if perRun, ok := e.MeanUSD(nil); ok {
+			doc.PerRunUSD = finiteOf(perRun)
+		}
+		out = append(out, doc)
+	}
+	return out
+}
+
+// usageDoc is the experiment's use of the subscription's five-hour window, as plan previews it; null with an API key.
+// Shares are fractions (0.85 is 85%).
+type usageDoc struct {
+	Limit   float64         `json:"limit"`
+	Runs    int             `json:"runs"`
+	Windows float64         `json:"windows"` // windows the runs need, filling each to the limit
+	Models  []usageModelDoc `json:"models"`
+	Latest  *usageLatestDoc `json:"latest"` // null when no run has read the window
+}
+
+// usageModelDoc is one model's expected share per run: measured over MeasuredRuns task runs on it in one window, or
+// the default (MeasuredRuns 0).
+type usageModelDoc struct {
+	Model        string  `json:"model"`
+	PerRun       float64 `json:"per_run"`
+	MeasuredRuns int     `json:"measured_runs"`
+	Runs         int     `json:"runs"` // the experiment's runs on the model
+}
+
+// usageLatestDoc is the newest reading. Current is false when the window has reset since, or the reading is older than
+// a window: Used and Fits are then null, as the current window's use is unknown.
+type usageLatestDoc struct {
+	Current    bool       `json:"current"`
+	Used       *float64   `json:"used"`
+	Fits       *int       `json:"fits"`
+	ResetsAt   time.Time  `json:"resets_at"`
+	ReadAt     *time.Time `json:"read_at"`     // when the reading was taken, at the latest; null when unknown
+	AgeSeconds *float64   `json:"age_seconds"` // null when unknown
+}
+
+func usageOf(p experiment.UsagePreview, now time.Time) *usageDoc {
+	if p.APIKey {
+		return nil
+	}
+	doc := &usageDoc{Limit: p.Limit, Runs: p.Runs, Windows: p.Windows, Models: []usageModelDoc{}}
+	for _, m := range p.Models {
+		doc.Models = append(doc.Models, usageModelDoc{Model: m.Model, PerRun: m.PerRun, MeasuredRuns: m.UsageRate.Runs, Runs: m.PlannedRuns})
+	}
+	if l := p.Latest; l != nil {
+		doc.Latest = &usageLatestDoc{Current: l.Current, ResetsAt: l.Reading.FiveHourResets}
+		if l.Current {
+			doc.Latest.Used, doc.Latest.Fits = ptr(l.Used), ptr(l.Fits)
+		}
+		if !l.ReadAt.IsZero() {
+			doc.Latest.ReadAt = ptr(l.ReadAt)
+		}
+		if age, ok := l.Age(now); ok {
+			doc.Latest.AgeSeconds = ptr(age.Round(time.Second).Seconds())
+		}
+	}
+	return doc
 }
 
 // lookPlanDoc is one planned look: what has been run and spent by then, at most.
@@ -153,6 +232,7 @@ func ptr[T any](v T) *T { return &v }
 func spendPlan(review experiment.Review) (spend spendDoc, looks []lookPlanDoc, sizes []sizePlanDoc, err error) {
 	looks, sizes = []lookPlanDoc{}, []sizePlanDoc{}
 	d := review.Design
+	defer func() { spend.EstimateBasis = estimateBasisOf(review) }()
 	if d.Sequential() && len(d.Tasks) > 0 {
 		p, err := experiment.PreviewSequential(d, review.Estimates)
 		if err != nil {
@@ -226,6 +306,7 @@ type experimentPlanDoc struct {
 	Spend          spendDoc        `json:"spend"`
 	Looks          []lookPlanDoc   `json:"looks"` // seq-v1 designs; [] for others
 	Sizes          []sizePlanDoc   `json:"sizes"` // other designs; [] for seq-v1
+	Usage          *usageDoc       `json:"usage"` // null with an API key
 }
 
 func planDocument(env Env, name string, review experiment.Review) (experimentPlanDoc, error) {
@@ -237,6 +318,8 @@ func planDocument(env Env, name string, review experiment.Review) (experimentPla
 		Readiness: []readinessDoc{}, Calibrations: len(review.Readiness.Calibrations), EligibleTasks: list(slices.Clone(review.Eligible)),
 		Ineligible: []ineligibleDoc{}, Spend: spend, Looks: looks, Sizes: sizes}
 	doc.CalibrationUSD, _ = experiment.CalibrationCosts(review.Readiness.Calibrations)
+	mode, _ := signInMode(env)
+	doc.Usage = usageOf(review.Usage(mode, env.Now()), env.Now())
 	for _, c := range review.Readiness.Checks {
 		doc.Readiness = append(doc.Readiness, readinessDoc{Status: readinessStatus(c.Status), Text: env.cleanText(c.Text)})
 	}

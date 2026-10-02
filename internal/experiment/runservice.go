@@ -575,7 +575,7 @@ func RunDataOf(slot int, rec run.Record) RunData {
 }
 
 // usageGate is the gate that pauses pairs before the subscription's usage limit; nil with an API key, whose runs use no
-// subscription. It adds the latest usage reading to standing.
+// subscription. Its rate per run is the larger of the arms' models' (UsageRateFor), each measured on its own runs. It adds the latest usage reading to standing.
 func (r Runner) usageGate(ctx context.Context, lock Lock, o RunOptions, standing *Standing) (*UsageGate, error) {
 	projectRuns, err := r.Project.DB.Runs(ctx, r.Project.ID)
 	if err != nil {
@@ -586,9 +586,10 @@ func (r Runner) usageGate(ctx context.Context, lock Lock, o RunOptions, standing
 	}
 	samples := UsageSamples(projectRuns)
 	gate := &UsageGate{Limit: o.UsageLimit / 100}
-	gate.PerRun, _ = UsagePerRun(samples)
-	var have bool
-	if gate.Latest, have = LatestUsage(samples); have {
+	d := lock.Design
+	gate.PerRun = UsageRateFor(samples, d.ArmModel(d.Arms[0]), d.ArmModel(d.Arms[1])).PerRun
+	if latest, have := LatestUsage(samples); have {
+		gate.Latest = latest.Last
 		standing.Usage, standing.HasUsage = gate.Latest, true
 	}
 	if o.Wait {

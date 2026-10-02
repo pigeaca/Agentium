@@ -1,11 +1,14 @@
 package experiment
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // The seq-v1 smoke check's preview: claude-sonnet-5's default task run is $1.61 at list prices, and each run stopped at
@@ -110,5 +113,61 @@ func TestExecuteOvershootStaysWithinTheBudget(t *testing.T) {
 	}
 	if old, _ := run(d.RunBudgetUSD); old.SpentUSD <= budget {
 		t.Errorf("reserving the bare $0.50 cap spent $%.2f: the test no longer shows the overshoot it guards against", old.SpentUSD)
+	}
+}
+
+// An estimate says what it rests on: with no runs on the model, a default run's tokens, or the cap when they come to
+// more (the smoke rerun's $0.30 a run against $0.09 real), so the preview can say the estimate assumes every run
+// reaches its cap; with runs, their median.
+func TestEstimateBasisWithoutHistory(t *testing.T) {
+	t.Parallel()
+	est := EstimateRun("claude-sonnet-5-5", nil)
+	if est.Runs != 0 || !est.FewRuns() || est.Model != "claude-sonnet-5-5" || est.EstimateBasis() != BasisDefault {
+		t.Errorf("no runs, no cap: %+v, basis %s", est, est.EstimateBasis())
+	}
+	est.CapUSD = 0.30
+	if est.EstimateBasis() != BasisCap {
+		t.Errorf("no runs, a cap below the default run: basis %s", est.EstimateBasis())
+	}
+	past := []PastRun{{Task: "a", CostUSD: 0.09}, {Task: "b", CostUSD: 0.08}, {Task: "c", CostUSD: 0.10}}
+	est = EstimateRun("claude-sonnet-5-5", past)
+	est.CapUSD = 0.30
+	if est.Runs != 3 || est.FewRuns() || est.EstimateBasis() != BasisHistory {
+		t.Errorf("three runs: %+v, basis %s", est, est.EstimateBasis())
+	}
+	if est := EstimateRun("unpriced-model", nil); est.EstimateBasis() != BasisUnknown {
+		t.Errorf("no list price, no runs: basis %s", est.EstimateBasis())
+	}
+}
+
+// With fewer than MinPastRuns runs on a model the default still stands in, held to the cap: the cost basis and the
+// warning say how few runs there are (none, or 1–2), not that runs are expected to reach the cap.
+func TestFewRunsWording(t *testing.T) {
+	t.Parallel()
+	d := Design{Model: "claude-sonnet-5-5", Tasks: []string{"value", "other"}, Repeats: 1, Arms: []Arm{{Name: "A"}, {Name: "B"}}}
+	for _, c := range []struct {
+		past []PastRun
+		want []string
+	}{
+		{nil, []string{"other, without runs of their own: $0.30, the run cap: no runs on this model yet: the estimate assumes each run reaches its cap",
+			"No runs on claude-sonnet-5-5 yet: the estimated spend above assumes each run reaches its cap"}},
+		{[]PastRun{{Task: "value", CostUSD: 0.09}, {Task: "value", CostUSD: 0.10}},
+			[]string{"other, without runs of their own: $0.30, the run cap: fewer than 3 runs on this model (2): the estimate assumes each run reaches its cap",
+				"Fewer than 3 runs on claude-sonnet-5-5 (2): the estimated spend above assumes each run reaches its cap"}},
+	} {
+		est := EstimateRun("claude-sonnet-5-5", c.past)
+		est.CapUSD = 0.30
+		var out bytes.Buffer
+		WriteCostBasis(&out, term.Style{}, d, d.Tasks, est)
+		Review{Design: d, Estimates: Same(est)}.writeNoHistory(&out, term.Style{})
+		got := out.String()
+		for _, want := range c.want {
+			if !strings.Contains(got, want) {
+				t.Errorf("%d run(s): lacks %q:\n%s", len(c.past), want, got)
+			}
+		}
+		if strings.Contains(got, "runs are expected to reach it") {
+			t.Errorf("%d run(s): says runs are expected to reach the cap:\n%s", len(c.past), got)
+		}
 	}
 }

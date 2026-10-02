@@ -23,7 +23,12 @@ const (
 	expArmKeys          = "context,effort,model,name"
 	lookKeys            = "analysed,conditional_power,decision,interval,level,look,note,tasks_counted,tasks_planned,verdict"
 	intervalKeys        = "estimate,high,low"
-	spendKeys           = "expected_tasks,expected_usd,if_cut_usd,known,max_usd,worst_case_usd"
+	spendKeys           = "estimate_basis,expected_tasks,expected_usd,if_cut_usd,known,max_usd,worst_case_usd"
+	estimateBasisKeys   = "arm,basis,history_runs,model,per_run_usd"
+	planKeys            = "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend,usage"
+	usageKeys           = "latest,limit,models,runs,windows"
+	usageModelKeys      = "measured_runs,model,per_run,runs"
+	usageLatestKeys     = "age_seconds,current,fits,read_at,resets_at,used"
 	lookPlanKeys        = "efficacy_level,equivalence_level,estimated_usd,look,runs,tasks,worst_case_usd"
 	runResultKeys       = "budget_usd,ended_by,judge_paused,looks,method,next_command,north_star,note,resume_at,runs,spent_usd,status,stopped_at_look,verdict"
 	verdictKeys         = "decisive,metrics,summary"
@@ -62,8 +67,11 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 	} else {
 		assertKeys(t, ineligible[0], "reason,task")
 	}
-	assertKeys(t, plan.doc, "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend")
+	assertKeys(t, plan.doc, planKeys)
 	assertKeys(t, plan.get("spend"), spendKeys)
+	assertKeys(t, plan.get("spend", "estimate_basis").([]any)[0], estimateBasisKeys)
+	assertKeys(t, plan.get("usage"), usageKeys)
+	assertKeys(t, plan.get("usage", "models").([]any)[0], usageModelKeys)
 	looks := plan.get("looks").([]any)
 	assertKeys(t, looks[0], lookPlanKeys)
 	if len(looks) != 3 || len(plan.get("sizes").([]any)) != 0 || plan.get("spend", "max_usd") == nil || math.Abs(plan.get("spend", "worst_case_usd").(float64)-16*2*3.3) > 1e-9 || // 16 pairs at $3 caps and their $0.30 overshoot
@@ -152,7 +160,7 @@ func TestJSONExperimentCommandKeys(t *testing.T) {
 	tasks := storedTasks(t, f.data)
 	jsonRun(t, f, ExitOK, "experiment", "new", "fixed", "--b", "lean", "--goal", "better", "--task", tasks[0].Name, "--task", tasks[1].Name)
 	fixed := jsonRun(t, f, ExitOK, "experiment", "plan", "fixed")
-	assertKeys(t, fixed.doc, "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend")
+	assertKeys(t, fixed.doc, planKeys)
 	assertKeys(t, fixed.get("sizes").([]any)[0], "cost_usd,judge_usd,name,repeats_per_arm,runs,short,tasks,worst_case_usd")
 	if len(fixed.get("looks").([]any)) != 0 || fixed.get("spend", "expected_tasks") != nil || fixed.get("experiment", "method") != "phase1-v2" {
 		t.Errorf("experiment plan, a fixed design: %s", fixed.stdout)
@@ -376,6 +384,15 @@ func TestJSONExperimentRunUsagePause(t *testing.T) {
 		paused.get("run", "runs", "pending").(float64) <= 0 || paused.get("run", "runs", "skipped") != float64(0) ||
 		paused.get("run", "next_command") != "agentium experiment run window" {
 		t.Errorf("a usage pause: %s", paused.stdout)
+	}
+	// The plan reads the window as the runs left it: a current reading with its time, and the model's own rate.
+	plan := jsonRun(t, f, ExitOK, "experiment", "plan", "window")
+	assertKeys(t, plan.get("usage"), usageKeys)
+	assertKeys(t, plan.get("usage", "latest"), usageLatestKeys)
+	model := plan.get("usage", "models").([]any)[0].(map[string]any)
+	if plan.get("usage", "latest", "current") != true || plan.get("usage", "latest", "used") == nil || plan.get("usage", "latest", "read_at") == nil ||
+		plan.get("usage", "latest", "age_seconds") == nil || model["model"] != "claude-sonnet-5-5" || model["runs"] != float64(32) {
+		t.Errorf("the plan's usage after a pause: %s", plan.stdout)
 	}
 }
 

@@ -135,29 +135,30 @@ func TestExecuteUsageEdges(t *testing.T) {
 }
 
 func TestUsagePerRunAndLatest(t *testing.T) {
+	usagePerRun := func(samples []UsageSample) (float64, int) { r := UsagePerRun(samples, ""); return r.PerRun, r.Runs }
 	w1, w2 := time.Date(2026, 9, 29, 20, 20, 0, 0, time.UTC), time.Date(2026, 9, 30, 1, 20, 0, 0, time.UTC)
 	sample := func(first, last float64, firstResets, lastResets time.Time) UsageSample {
 		return UsageSample{First: claude.UsageReading{FiveHour: first, FiveHourResets: firstResets},
 			Last: claude.UsageReading{FiveHour: last, FiveHourResets: lastResets}}
 	}
-	if per, runs := UsagePerRun(nil); per != DefaultUsagePerRun || runs != 0 {
+	if per, runs := usagePerRun(nil); per != DefaultUsagePerRun || runs != 0 {
 		t.Errorf("no runs: %v, %d", per, runs)
 	}
 	earlier := []UsageSample{sample(0.07, 0.15, w1, w1), sample(0.10, 0.22, w1, w1), sample(0.20, 0.31, w1, w1), sample(0.25, 0.37, w1, w1)}
-	if per, runs := UsagePerRun(earlier); runs != 4 || abs(per-0.075) > 1e-9 { // (0.37 − 0.07) / 4
+	if per, runs := usagePerRun(earlier); runs != 4 || abs(per-0.075) > 1e-9 { // (0.37 − 0.07) / 4
 		t.Errorf("one window: %v, %d", per, runs)
 	}
 	later := append(earlier, sample(0.05, 0.11, w2, w2), sample(0.08, 0.16, w2, w2), sample(0.12, 0.23, w2, w2),
 		sample(0.80, 0.02, w1, w2), // crossed a reset: left out
 		UsageSample{})              // no readings: left out
-	if per, runs := UsagePerRun(later); runs != 3 || abs(per-0.06) > 1e-9 { // the latest window: (0.23 − 0.05) / 3
+	if per, runs := usagePerRun(later); runs != 3 || abs(per-0.06) > 1e-9 { // the latest window: (0.23 − 0.05) / 3
 		t.Errorf("latest window: %v, %d", per, runs)
 	}
-	if per, runs := UsagePerRun(later[:6]); runs != 4 || abs(per-0.075) > 1e-9 { // w2 has only 2 runs: w1 still counts
+	if per, runs := usagePerRun(later[:6]); runs != 4 || abs(per-0.075) > 1e-9 { // w2 has only 2 runs: w1 still counts
 		t.Errorf("too few in the latest window: %v, %d", per, runs)
 	}
 	latest, ok := LatestUsage(later)
-	if !ok || latest.FiveHour != 0.23 || !latest.FiveHourResets.Equal(w2) {
+	if !ok || latest.Last.FiveHour != 0.23 || !latest.Last.FiveHourResets.Equal(w2) {
 		t.Errorf("latest = %+v, %v", latest, ok)
 	}
 
@@ -170,18 +171,18 @@ func TestUsagePerRunAndLatest(t *testing.T) {
 		return s
 	}
 	calibrations := []UsageSample{calibration(0.10, 0.11, w3), calibration(0.11, 0.12, w3), calibration(0.12, 0.13, w3), calibration(0.13, 0.14, w3)}
-	if per, runs := UsagePerRun(calibrations); per != DefaultUsagePerRun || runs != 0 {
+	if per, runs := usagePerRun(calibrations); per != DefaultUsagePerRun || runs != 0 {
 		t.Errorf("only calibration runs: %v, %d; want the default", per, runs)
 	}
-	if per, runs := UsagePerRun(append(later[:7:7], calibrations...)); runs != 3 || abs(per-0.06) > 1e-9 {
+	if per, runs := usagePerRun(append(later[:7:7], calibrations...)); runs != 3 || abs(per-0.06) > 1e-9 {
 		t.Errorf("a later window of calibration runs: %v, %d; want w2's task runs", per, runs)
 	}
-	if latest, ok := LatestUsage(append(later[:7:7], calibrations...)); !ok || latest.FiveHour != 0.14 || !latest.FiveHourResets.Equal(w3) {
+	if latest, ok := LatestUsage(append(later[:7:7], calibrations...)); !ok || latest.Last.FiveHour != 0.14 || !latest.Last.FiveHourResets.Equal(w3) {
 		t.Errorf("latest with calibration runs = %+v, %v", latest, ok)
 	}
 	// Calibrations in a window with task runs neither count as runs nor widen the rise past the task runs' readings.
 	mixed := append(calibrations[:2:2], sample(0.20, 0.26, w3, w3), sample(0.26, 0.32, w3, w3), sample(0.32, 0.38, w3, w3), calibration(0.38, 0.39, w3))
-	if per, runs := UsagePerRun(mixed); runs != 3 || abs(per-0.06) > 1e-9 { // (0.38 − 0.20) / 3
+	if per, runs := usagePerRun(mixed); runs != 3 || abs(per-0.06) > 1e-9 { // (0.38 − 0.20) / 3
 		t.Errorf("task and calibration runs in one window: %v, %d", per, runs)
 	}
 	if _, ok := LatestUsage([]UsageSample{{}}); ok {
