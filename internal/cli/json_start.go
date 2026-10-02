@@ -16,19 +16,19 @@ import (
 //   - finished: the experiment has finished; its report is `agentium experiment report`.
 type startDoc struct {
 	header
-	Status         string            `json:"status"`
-	NothingRun     bool              `json:"nothing_was_run"`
-	Project        *projectDoc       `json:"project"`
-	ContextA       string            `json:"context_a"`
-	ContextB       string            `json:"context_b"` // empty for an A/A calibration
-	Experiment     *startExperiment  `json:"experiment"`
-	Ready          bool              `json:"ready"`
-	Readiness      []readinessDoc    `json:"readiness"`
-	Calibrations   int               `json:"calibration_runs_needed"`
-	CalibrationUSD float64           `json:"calibration_estimate_usd"`
-	RunCommand     string            `json:"run_command"`
-	NorthStar      *report.NorthStar `json:"north_star"`
-	Log            []string          `json:"log"` // the stages' text, plain
+	Status         string           `json:"status"`
+	NothingRun     bool             `json:"nothing_was_run"`
+	Project        *projectDoc      `json:"project"`
+	ContextA       string           `json:"context_a"`
+	ContextB       string           `json:"context_b"` // empty for an A/A calibration
+	Experiment     *startExperiment `json:"experiment"`
+	Ready          bool             `json:"ready"`
+	Readiness      []readinessDoc   `json:"readiness"`
+	Calibrations   int              `json:"calibration_runs_needed"`
+	CalibrationUSD float64          `json:"calibration_estimate_usd"`
+	RunCommand     string           `json:"run_command"`
+	NorthStar      *northStarDoc    `json:"north_star"`
+	Log            []string         `json:"log"` // the stages' text, plain
 }
 
 type startExperiment struct {
@@ -52,7 +52,7 @@ func (s *starter) emitJSON(ctx context.Context, status string, code int, name st
 	if s.w != nil {
 		doc.Project = &projectDoc{ID: s.w.project.ID, Name: s.w.project.Name}
 		if star, err := report.LoadNorthStar(ctx, s.w.service()); err == nil {
-			doc.NorthStar = &star
+			doc.NorthStar = northStarOf(star)
 		}
 	}
 	// Claude Code's location is not the document's business (a path under the home folder is also redacted by emit).
@@ -94,4 +94,23 @@ func readinessStatus(label string) string {
 		return "missing"
 	}
 	return "warning"
+}
+
+// northStarDoc is the project's time and spend to its first decisive verdict. Experiment, Metric, Verdict and Seconds are
+// null until there is one (decisive is false).
+type northStarDoc struct {
+	Decisive   bool     `json:"decisive"`
+	Experiment *string  `json:"experiment"`
+	Metric     *string  `json:"metric"`
+	Verdict    *string  `json:"verdict"`
+	Seconds    *float64 `json:"seconds"`
+	SpentUSD   float64  `json:"spent_usd"`
+}
+
+func northStarOf(n report.NorthStar) *northStarDoc {
+	doc := &northStarDoc{Decisive: n.Decisive, SpentUSD: n.SpentUSD}
+	if n.Decisive {
+		doc.Experiment, doc.Metric, doc.Verdict, doc.Seconds = &n.Experiment, &n.Metric, &n.Verdict, &n.Seconds
+	}
+	return doc
 }

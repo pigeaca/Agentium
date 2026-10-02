@@ -80,19 +80,21 @@ type runOnceDoc struct {
 
 type runShowDoc struct {
 	header
-	Run        runInfo `json:"run"`
-	Kind       string  `json:"kind"` // task | calibration
-	Experiment *struct {
-		Name    string `json:"name"`
-		Slot    int    `json:"slot"` // from 0
-		Attempt int    `json:"attempt"`
-	} `json:"experiment"`
-	Files []string `json:"files"` // the record's file names
+	Run        runInfo           `json:"run"`
+	Kind       string            `json:"kind"`       // task | calibration
+	Experiment *runExperimentDoc `json:"experiment"` // null for a run that belongs to none
+	Files      []string          `json:"files"`      // the record's file names
 	// Diff, SetupLog and VerifyLog are set by --diff and --log: the file's text. They are null when not asked for, and
 	// when the file does not exist.
 	Diff      *string `json:"diff"`
 	SetupLog  *string `json:"setup_log"`
 	VerifyLog *string `json:"verify_log"`
+}
+
+type runExperimentDoc struct {
+	Name    string `json:"name"`
+	Slot    int    `json:"slot"` // from 0
+	Attempt int    `json:"attempt"`
 }
 
 type runListEntry struct {
@@ -126,30 +128,29 @@ func runShowDocument(ctx context.Context, env Env, w *workspace, stored store.Ru
 				}
 			}
 		}
-		doc.Experiment = &struct {
-			Name    string `json:"name"`
-			Slot    int    `json:"slot"`
-			Attempt int    `json:"attempt"`
-		}{name, stored.Slot, stored.Attempt}
+		doc.Experiment = &runExperimentDoc{Name: name, Slot: stored.Slot, Attempt: stored.Attempt}
 	}
 	if entries, err := os.ReadDir(rec.RecordsDir); err == nil {
 		for _, e := range entries {
 			doc.Files = append(doc.Files, e.Name())
 		}
 	}
-	read := func(name string) *string {
+	read := func(name string, ours bool) *string {
 		data, err := os.ReadFile(filepath.Join(rec.RecordsDir, name))
 		if err != nil {
 			return nil
 		}
 		text := string(data)
-		return &text
+		if ours { // setup and verification logs hold Agentium's own output, which can name the workspace and data folders
+			text = env.redact(text)
+		}
+		return &text // the diff is the agent's work: as it is
 	}
 	if diff {
-		doc.Diff = read("agent.diff")
+		doc.Diff = read("agent.diff", false)
 	}
 	if logs {
-		doc.SetupLog, doc.VerifyLog = read("setup.log"), read("verify.log")
+		doc.SetupLog, doc.VerifyLog = read("setup.log", true), read("verify.log", true)
 	}
 	return doc
 }

@@ -171,8 +171,9 @@ func errorMessage(env Env, stderr string, code int) string {
 }
 
 // redact hides, in free text (messages, logs, warnings, notes), the data folder as <data>, the repository as <repo> and
-// the home folder as ~. It matches whole path names only: after a start, quote, space, = ( or a backtick, and before a
-// "/", quote, space, : , ; ) or the end, so /root does not touch root.md or /Users/alice. Content that is the
+// the home folder as ~. It matches whole path names only: after a start, quote, space, = ( [ { or a backtick (or file://), and before
+// anything that does not go on a name (letters, digits, _ -, and a . with a name character after it), so /root does not touch
+// root.md or /Users/alice, and ends cleanly before a backtick, a bracket or a sentence's full stop. Content that is the
 // user's own (diffs, patches, logs, instructions, file names) is never passed through it. Documents hold no paths
 // elsewhere; this is the backstop for text that quotes one.
 func (env Env) redact(text string) string {
@@ -213,6 +214,21 @@ func (env Env) redactAll(texts []string) []string {
 	return out
 }
 
+// continuesName reports whether the byte at i goes on a path name: a letter, digit, "_" or "-", or a "." that a name
+// character follows (so "/root." ends a sentence, and "/root.md" is another name).
+func continuesName(text string, i int) bool {
+	isName := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_' || c == '-'
+	}
+	switch {
+	case i >= len(text):
+		return false
+	case text[i] == '.':
+		return i+1 < len(text) && isName(text[i+1])
+	}
+	return isName(text[i])
+}
+
 // replacePath replaces path in text where it is a whole path name (see redact).
 func replacePath(text, path, repl string) string {
 	var out strings.Builder
@@ -222,8 +238,8 @@ func replacePath(text, path, repl string) string {
 			break
 		}
 		end := i + len(path)
-		startOK := i == 0 || strings.IndexByte(" \t\r\n\"'=(`", text[i-1]) >= 0
-		endOK := end == len(text) || strings.IndexByte("/\"' \t\r\n:,;)", text[end]) >= 0
+		startOK := i == 0 || strings.IndexByte(" \t\r\n\"'=(`[{", text[i-1]) >= 0 || strings.HasSuffix(text[:i], "file://")
+		endOK := !continuesName(text, end)
 		if startOK && endOK {
 			out.WriteString(text[:i] + repl)
 		} else {

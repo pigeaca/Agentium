@@ -177,7 +177,7 @@ func finishMine(ctx context.Context, env Env, w *workspace, a mineArgs, prep min
 	}
 	if len(imp.Tasks) == 0 && env.JSON {
 		doc := env.mineDocument(prep, nil, false)
-		doc.Tried, doc.Rows = imp.Tried, batchRowDocs(ctx, w, rows)
+		doc.Tried, doc.Rows = imp.Tried, batchRowDocs(ctx, env, w, rows)
 		return env.emitCode(doc, ExitError)
 	}
 	if len(imp.Tasks) == 0 {
@@ -202,7 +202,7 @@ func finishMine(ctx context.Context, env Env, w *workspace, a mineArgs, prep min
 	if env.JSON {
 		doc := env.mineDocument(prep, nil, false)
 		doc.Tried, doc.Imported, doc.Valid, doc.Interrupted = imp.Tried, len(imp.Tasks), valid, ctx.Err() != nil
-		doc.Rows = batchRowDocs(ctx, w, append(batchRows(results), rows...))
+		doc.Rows = batchRowDocs(ctx, env, w, append(batchRows(results), rows...))
 		code := ExitOK
 		if doc.Interrupted {
 			code = ExitError
@@ -318,7 +318,7 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 		return fail(env, err)
 	}
 	if env.JSON {
-		doc := validateAllDoc{header: env.hdr(), Rows: batchRowDocs(ctx, w, batchRows(results)), Total: len(results), Interrupted: ctx.Err() != nil}
+		doc := validateAllDoc{header: env.hdr(), Rows: batchRowDocs(ctx, env, w, batchRows(results)), Total: len(results), Interrupted: ctx.Err() != nil}
 		for _, r := range results {
 			if r.Validated && task.ValidationOf(r.Task).Status == task.StatusValid {
 				doc.Valid++

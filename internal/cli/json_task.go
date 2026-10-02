@@ -196,17 +196,17 @@ type batchRowDoc struct {
 	Task    *taskInfo `json:"task"`    // null when the commit did not become a task
 }
 
-func batchRowDocs(ctx context.Context, w *workspace, rows []batchRow) []batchRowDoc {
+func batchRowDocs(ctx context.Context, env Env, w *workspace, rows []batchRow) []batchRowDoc {
 	ctx = context.WithoutCancel(ctx)
 	fair := task.NewFairness("--git-dir", w.bare)
 	docs := []batchRowDoc{}
 	for _, r := range rows {
 		if r.task == nil {
-			docs = append(docs, batchRowDoc{Name: r.name, Commit: r.commit, Problem: r.problem})
+			docs = append(docs, batchRowDoc{Name: r.name, Commit: r.commit, Problem: env.redact(r.problem)})
 			continue
 		}
 		info := taskInfoOf(ctx, fair, *r.task)
-		docs = append(docs, batchRowDoc{Name: r.task.Name, Commit: r.task.SolutionCommit, Problem: r.problem, Task: &info})
+		docs = append(docs, batchRowDoc{Name: r.task.Name, Commit: r.task.SolutionCommit, Problem: env.redact(r.problem), Task: &info})
 	}
 	return docs
 }

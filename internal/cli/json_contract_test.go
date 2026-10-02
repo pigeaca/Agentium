@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -149,6 +150,12 @@ func TestRedactMatchesWholePathNames(t *testing.T) {
 		{"/Users/al", "/Users/al/repo", "/Users/al/repo-old and /Users/al/repo/src", "~/repo-old and <repo>/src"},
 		{"/Users/al", "/Users/al/repo", `path="/Users/al/repo" and (/Users/al/repo)`, `path="<repo>" and (<repo>)`},
 		{"/Users/al", "", "x/Users/al/y", "x/Users/al/y"},
+		{"/Users/al", "", "run `chmod 700 /nowhere/data` to fix", "run `chmod 700 <data>` to fix"}, // outside HOME, before a backtick
+		{"/Users/al", "/srv/repo", "see /srv/repo.", "see <repo>."},                                // a sentence's full stop
+		{"/Users/al", "/srv/repo", "see /srv/repo.git and /srv/repo.", "see /srv/repo.git and <repo>."},
+		{"/Users/al", "/srv/repo", "[/srv/repo] {/srv/repo} (/srv/repo)", "[<repo>] {<repo>} (<repo>)"},
+		{"/Users/al", "", "file:///Users/al/x and file:///Users/al", "file://~/x and file://~"},
+		{"/Users/al", "", "/Users/al-2 and /Users/al_x and /Users/al9", "/Users/al-2 and /Users/al_x and /Users/al9"},
 	} {
 		env := Env{Dir: c.dir, Getenv: func(k string) string { return map[string]string{"HOME": c.home, "AGENTIUM_HOME": "/nowhere/data"}[k] }}
 		if got := env.redact(c.in); got != c.want {
@@ -244,5 +251,53 @@ func TestReadinessStatusIsAFixedSet(t *testing.T) {
 		if got := readinessStatus(label); got != want {
 			t.Errorf("readinessStatus(%q) = %q, want %q", label, got, want)
 		}
+	}
+}
+
+// The logs of run show are Agentium's own output and are redacted; the diff is the agent's work and is not.
+func TestJSONRunShowRedactsLogsNotTheDiff(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt", false)
+	id := jsonRun(t, f, ExitOK, "run", "once", "value").get("run", "id").(string)
+	dirs, _ := filepath.Glob(filepath.Join(f.data, "records", "*"))
+	if len(dirs) != 1 {
+		t.Fatalf("records: %v", dirs)
+	}
+	writeFile(t, dirs[0], "verify.log", "cd "+filepath.Join(f.data, "workspaces", id)+"\nok\n")
+	writeFile(t, dirs[0], "agent.diff", "+COPY . "+f.data+"/app\n")
+	res := f.run(context.Background(), "run", "show", id, "--diff", "--log", "--json") // not jsonRun: the diff holds the path on purpose
+	var got jsonResult
+	got.cliResult = res
+	if err := json.Unmarshal([]byte(res.stdout), &got.doc); err != nil || res.code != ExitOK {
+		t.Fatalf("exit %d: %v\n%s", res.code, err, res.stdout)
+	}
+	if log := got.get("verify_log").(string); !strings.Contains(log, "cd <data>/workspaces/") {
+		t.Errorf("verify_log = %q", log)
+	}
+	if diff := got.get("diff").(string); !strings.Contains(diff, f.data+"/app") {
+		t.Errorf("the diff was redacted: %q", diff)
+	}
+}
+
+func TestSmallDocumentKeys(t *testing.T) {
+	t.Parallel()
+	for name, v := range map[string]struct {
+		doc  any
+		keys string
+	}{
+		"gap":        {gapDoc{}, "file,kind,text"},
+		"experiment": {runExperimentDoc{}, "attempt,name,slot"},
+		"north star": {northStarDoc{}, "decisive,experiment,metric,seconds,spent_usd,verdict"},
+	} {
+		raw, err := json.Marshal(v.doc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatal(err)
+		}
+		t.Run(name, func(t *testing.T) { assertKeys(t, m, v.keys) })
 	}
 }
