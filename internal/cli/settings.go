@@ -82,8 +82,8 @@ func (f *settingFlags) check() error {
 	switch {
 	case f.given(settingJobs) && f.jobs < 1:
 		return errors.New("--jobs must be at least 1")
-	case f.given(settingVerifyTimeout) && f.verifyTimeout <= 0:
-		return fmt.Errorf("--%s must be more than 0", f.timeoutName)
+	case f.given(settingVerifyTimeout) && f.verifyTimeout < time.Millisecond: // stored to the millisecond, where 0 means the default
+		return fmt.Errorf("--%s must be at least 1ms", f.timeoutName)
 	}
 	return nil
 }

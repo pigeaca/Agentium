@@ -109,7 +109,7 @@ func TestPoolUpdateMinesHistory(t *testing.T) {
 	expect(t, run("pool", "update", "--since", "yesterday", "--dry-run"), ExitUsage, `--since "yesterday" is not a date`)
 	expect(t, run("pool", "update", "--jobs", "0"), ExitUsage, "--jobs must be at least 1")
 	expect(t, run("pool", "update", "--max-files", "0"), ExitUsage, "--max-files and --max-lines must be at least 1")
-	expect(t, run("pool", "update", "--verify-timeout", "0s"), ExitUsage, "--verify-timeout must be more than 0")
+	expect(t, run("pool", "update", "--verify-timeout", "0s"), ExitUsage, "--verify-timeout must be at least 1ms")
 	expect(t, run("pool", "update", "extra"), ExitUsage, "takes no arguments")
 	// No test command is detected here: without one the pass mines nothing; --verify (this call) or the setting gives one.
 	expect(t, run("pool", "update", "--dry-run"), ExitOK, "so the pass mines nothing", "agentium init --verify CMD", "0 candidate(s)")

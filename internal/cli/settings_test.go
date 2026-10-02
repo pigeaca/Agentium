@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -49,7 +51,9 @@ func TestInitStoresAndPrintsSettings(t *testing.T) {
 	}
 
 	expect(t, run("init", "--jobs", "0"), ExitUsage, "agentium init: --jobs must be at least 1")
-	expect(t, run("init", "--verify-timeout", "0s"), ExitUsage, "--verify-timeout must be more than 0")
+	expect(t, run("init", "--verify-timeout", "0s"), ExitUsage, "--verify-timeout must be at least 1ms")
+	expect(t, run("init", "--verify-timeout", "500us"), ExitUsage, "--verify-timeout must be at least 1ms") // would be stored as 0: the default
+	expect(t, run("task", "validate", "--all", "--timeout", "999us"), ExitUsage, "--timeout must be at least 1ms")
 	expect(t, run("init", "--verify-timeout", "soon"), ExitUsage, "invalid value")
 	if got := storedSettings(t, data); !settingsEqual(got, want) {
 		t.Errorf("a refused init changed the settings: %+v", got)
@@ -254,4 +258,77 @@ func equalAny(v any, want ...string) bool {
 		}
 	}
 	return true
+}
+
+// start mines, validates and creates its experiment with the project's settings: the mined tasks' verify and setup
+// commands, the jobs, and the verify timeout (in validation, and in the experiment's design).
+func TestStartUsesTheProjectSettings(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 8)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init", "--verify", "sh ./run_tests.sh", "--setup", "true", "--jobs", "1", "--verify-timeout", "7m"), ExitOK)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Mining: ", "(verify: sh ./run_tests.sh)", "Validating 8 task(s) in 2 context(s), 1 at a time", "8 valid of 8",
+		"Experiment quick-aa-baseline: created, 8 task(s)")
+	for _, task := range storedTasks(t, f.data) {
+		if !slices.Equal(task.Verify, []string{"sh ./run_tests.sh"}) || !slices.Equal(task.Setup, []string{"true"}) {
+			t.Errorf("mined task %s: verify %q, setup %q", task.Name, task.Verify, task.Setup)
+		}
+	}
+	db, project := openFixtureDB(t, f)
+	e, err := db.ExperimentByName(ctx, project, "quick-aa-baseline")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var design struct {
+		VerifyTimeout time.Duration `json:"verify_timeout"`
+	}
+	if err := json.Unmarshal(e.Design, &design); err != nil || design.VerifyTimeout != 7*time.Minute {
+		t.Errorf("the experiment's verify timeout = %s, %v; want the setting's 7m", design.VerifyTimeout, err)
+	}
+
+	// A verify timeout shorter than the setup: every validation times out.
+	short, _ := startFixture(t, 2)
+	expect(t, short.run(ctx, "init", "--setup", "sleep 2", "--verify-timeout", "300ms"), ExitOK)
+	expect(t, short.run(ctx, "start", "--accept-mined"), ExitError, "0 valid of 2", "add-f1-to-the-library-")
+	for _, task := range storedTasks(t, short.data) {
+		if !slices.Equal(task.Setup, []string{"sleep 2"}) || statusOf(task) != "invalid" {
+			t.Errorf("task %s under the short timeout: setup %q, %s", task.Name, task.Setup, statusOf(task))
+		}
+	}
+}
+
+// pool update mines and validates with the project's settings: the mined tasks' verify and setup commands, the jobs,
+// and the verify timeout.
+func TestPoolUpdateUsesTheProjectSettings(t *testing.T) {
+	t.Parallel()
+	p := newPoolFixture(t, 2, 0)
+	init := func(args ...string) { // init asks Claude Code for its version: not the canary
+		t.Helper()
+		canary := p.vars["AGENTIUM_CLAUDE"]
+		p.vars["AGENTIUM_CLAUDE"] = filepath.Join(t.TempDir(), "no-claude")
+		defer func() { p.vars["AGENTIUM_CLAUDE"] = canary }()
+		expect(t, p.at(0, append([]string{"init"}, args...)...), ExitOK)
+	}
+	init("--verify", "sh ./run_tests.sh", "--setup", "true", "--jobs", "1", "--verify-timeout", "5m")
+	expect(t, p.at(0, "pool", "update"), ExitOK, "Imported 2 of 2 candidate(s) tried (verify: sh ./run_tests.sh)", "Validating 2 mined task(s), 1 at a time")
+	for _, task := range p.tasks(t) {
+		if !slices.Equal(task.Verify, []string{"sh ./run_tests.sh"}) || !slices.Equal(task.Setup, []string{"true"}) || statusOf(task) != "valid" {
+			t.Errorf("mined task %s: verify %q, setup %q, %s", task.Name, task.Verify, task.Setup, statusOf(task))
+		}
+	}
+
+	// A verify timeout shorter than the setup: the next commit's task times out.
+	init("--setup", "sleep 2", "--verify-timeout", "300ms")
+	writeFile(t, p.repo, "lib.sh", readString(t, filepath.Join(p.repo, "lib.sh"))+"f9() { echo v9; }\n")
+	writeFile(t, p.repo, "tests/f9_test.sh", ". ./lib.sh\n[ \"$(f9)\" = v9 ]\n")
+	gitIn(t, p.repo, "add", "-A")
+	gitIn(t, p.repo, "commit", "-q", "-m", "Add f9 to the library\n\nThe f9 function prints v9 for the welcome screen.")
+	expect(t, p.at(0, "pool", "update"), ExitOK, "Imported 1 of 1 candidate(s) tried", "invalid: base/hidden-tests setup failed")
+	for _, task := range p.tasks(t) {
+		if strings.HasPrefix(task.Name, "add-f9-") && (statusOf(task) != "invalid" || !slices.Equal(task.Setup, []string{"sleep 2"})) {
+			t.Errorf("the f9 task: %s, setup %q", statusOf(task), task.Setup)
+		}
+	}
+	p.noAgent(t)
 }

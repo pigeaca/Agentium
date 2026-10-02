@@ -977,7 +977,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	o := a.opts
 	o.Timeout = verifyTimeoutOf(settings)
 	if a.all {
-		if o.Arms, err = w.validating(env, nil).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+		if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 			return fail(env, err)
 		}
 		return validateAll(ctx, env, w, a.status, o, jobsOf(settings))
@@ -1002,14 +1002,14 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	if o.Arms, err = w.validating(env, nil).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+	if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 		return fail(env, err)
 	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
 		return fail(env, err)
 	}
-	val := w.validating(env, buildEnv)
+	val := w.validating(env, buildEnv, o.Timeout)
 	if val.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
 		return fail(env, err)
 	}
@@ -1055,8 +1055,12 @@ func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating
 
 // validating is what validating w's tasks needs; buildEnv is the environment commands run in (run.BuildEnv). With
 // one, each validation warms its base's build tools as runs do (run.CheckoutCommands: Python's venv), so it runs the
-// verification as grading will.
-func (w *workspace) validating(env Env, buildEnv []string) task.Validating {
+// verification as grading will, each warm-up command within timeout: the call's verify timeout (the project's setting
+// or the command's own override; 0: the setting).
+func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration) task.Validating {
+	if timeout <= 0 {
+		timeout = verifyTimeoutOf(w.settings())
+	}
 	v := task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Cache: w.layout.Cache, Now: env.Now,
 		ReferenceDiff: func(ctx context.Context, base, solution string, reference []string) (string, error) {
 			return llmjudge.ReferenceDiff(ctx, w.bare, base, solution, reference)
@@ -1066,7 +1070,7 @@ func (w *workspace) validating(env Env, buildEnv []string) task.Validating {
 		if env.Environ != nil {
 			environ = env.Environ()
 		}
-		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: verifyTimeoutOf(w.settings()), Now: env.Now}
+		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now}
 		v.Checkout = func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return run.CheckoutCommands(ctx, c, base, verify, logPath)
 		}
@@ -1082,7 +1086,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	if len(notApplied) > 0 {
 		fmt.Fprintln(out, note(st, strings.Join(notApplied, ", ")+" do(es) not apply: nothing runs for a judge-graded task"))
 	}
-	val := w.validating(env, nil)
+	val := w.validating(env, nil, 0)
 	result, diff, err := val.Judged(ctx, t, env.Now())
 	if err != nil {
 		return fail(env, err)

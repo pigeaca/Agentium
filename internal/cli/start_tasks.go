@@ -174,7 +174,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			snaps = append(snaps, name)
 		}
 	}
-	arms, err := s.w.validating(s.env, nil).Arms(ctx, s.w.project.ID, snaps)
+	arms, err := s.w.validating(s.env, nil, 0).Arms(ctx, s.w.project.ID, snaps)
 	if err != nil {
 		return err
 	}
@@ -247,6 +247,7 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 	if err != nil {
 		return false, err
 	}
+	s.lastScan = &prep.Result
 	candidates := slices.DeleteFunc(slices.Clone(prep.Result.Candidates), func(c mine.Candidate) bool { return s.dismissed[c.Hash] })
 	found := len(candidates)
 	if found == 0 {
@@ -516,7 +517,26 @@ func (s *starter) explainShortage(c taskCounts, floor, target int, exhausted boo
 			st.Command("agentium task list"), st.Command("agentium task import --commit REF"))
 	}
 	if exhausted && s.reachable(c) < floor {
-		fmt.Fprintf(out, "  the history has no more candidates: %s shows why commits were set aside; add tasks with %s or %s, then run %s again\n",
-			st.Command("agentium pool update --dry-run"), st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"))
+		fmt.Fprintf(out, "  the history has no more candidates%s; add tasks with %s or %s, then run %s again "+
+			"(%s lists the pool's candidates: commits since its last pass, within 270 days)\n", s.setAsideSummary(),
+			st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"),
+			st.Command("agentium pool update --dry-run"))
 	}
+}
+
+// setAsideSummary says why start's last scan, over the whole history, set commits aside, per reason in the order the
+// scan checks them: " (12 commit(s) read; set aside: merge commit 3, tests only 2)"; "" without a scan.
+func (s *starter) setAsideSummary() string {
+	if s.lastScan == nil {
+		return ""
+	}
+	var parts []string
+	for _, r := range rejections(*s.lastScan) {
+		parts = append(parts, fmt.Sprintf("%s %d", r.reason, r.count))
+	}
+	summary := fmt.Sprintf(" (%d commit(s) read", s.lastScan.Scanned)
+	if len(parts) > 0 {
+		summary += "; set aside: " + strings.Join(parts, ", ")
+	}
+	return summary + ")"
 }

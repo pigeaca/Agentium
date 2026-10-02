@@ -234,7 +234,7 @@ func validateBatchWith(ctx context.Context, env Env, w *workspace, tasks []store
 	if err != nil {
 		return nil, err
 	}
-	v := w.validating(env, buildEnv)
+	v := w.validating(env, buildEnv, o.Timeout)
 	if v.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
 		return nil, err
 	}

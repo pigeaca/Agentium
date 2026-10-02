@@ -16,6 +16,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
@@ -122,6 +123,8 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
+	// lastScan is the last mining scan's result: why its commits were set aside, for the shortage message.
+	lastScan *mine.Result
 	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).
 	invalidStreak int
 	// counts is the task stage's last count (nil when the stage was skipped); awaitingReview says it stopped because

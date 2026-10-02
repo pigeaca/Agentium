@@ -712,3 +712,35 @@ func TestAKilledRescanIsRecovered(t *testing.T) {
 	}
 	w.check("after a killed re-scan")
 }
+
+// A re-scan whose date falls after commits the watermark has not reached yet must not move the watermark past them,
+// complete or bounded: otherwise the commits between the watermark and Since would never be read. (The watermark is at
+// c3, the head at c7, and c4, a candidate, is older than Since.)
+func TestARescanNeverMovesTheWatermarkPastUnreadCommits(t *testing.T) {
+	for _, bound := range []int{0, 1} {
+		t.Run(fmt.Sprintf("bound %d", bound), func(t *testing.T) {
+			w := newWorld(t, 3)
+			if res, _, err := w.run(10); err != nil || !res.Moved || !slices.Equal(w.state().Watermark, []string{"c3"}) {
+				t.Fatalf("the first pass: %+v, %v, state %+v", res, err, w.state())
+			}
+			w.commit(4)
+			w.candidate["c4"], w.candidate["c6"] = true, true
+			w.bound = bound
+			p := w.pass(10)
+			p.Since, w.ending = w.nodes["c5"].at, false
+			res, err := p.Run(w.ctx)
+			if err != nil || res.Moved || !slices.Equal(w.state().Watermark, []string{"c3"}) {
+				t.Fatalf("the re-scan: %+v, %v, state %+v", res, err, w.state())
+			}
+			if bound == 0 && (len(res.Imported) != 1 || res.Imported[0].SolutionCommit != "c6") {
+				t.Errorf("the re-scan imported %+v, want c6", res.Imported)
+			}
+			w.bound = 0
+			res, _, err = w.run(10)
+			if err != nil || !slices.ContainsFunc(res.Imported, func(t store.Task) bool { return t.SolutionCommit == "c4" }) {
+				t.Fatalf("the next plain pass: %+v, %v", res, err)
+			}
+			w.check("after the plain pass")
+		})
+	}
+}
