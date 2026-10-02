@@ -34,14 +34,17 @@ func (r Report) Markdown(w io.Writer) error {
 		fmt.Fprintf(&b, "Context A/B: A = `%s`, B = `%s`. Goal: %s.\n\n", r.Arms[0].Context, r.Arms[1].Context,
 			map[string]string{experiment.GoalCheaper: "cheaper, without losing success", experiment.GoalBetter: "more successful"}[d.Goal])
 	}
+	if r.Summary != "" {
+		fmt.Fprintf(&b, "%s\n\n", r.Summary)
+	}
 	for _, res := range r.Analysis.Results {
 		if res.Role != experiment.RoleSecondary {
-			fmt.Fprintf(&b, "- %s\n", headline(res, d))
+			fmt.Fprintf(&b, "- %s\n", r.headline(res))
 		}
 	}
 	model, effort := modelEffort(d)
-	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
-		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
+	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
+		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
@@ -54,7 +57,7 @@ func (r Report) Markdown(w io.Writer) error {
 	}
 
 	b.WriteString("\n## Metrics\n\nA and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.\n\n")
-	b.WriteString("| Metric | Role | A | B | B vs A | 95% bootstrap | 95% t | Verdict |\n|---|---|---|---|---|---|---|---|\n")
+	fmt.Fprintf(&b, "| Metric | Role | %s | %s | B vs A | 95%% bootstrap | 95%% t | Verdict |\n|---|---|---|---|---|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label())
 	for _, res := range r.Analysis.Results {
 		verdict := res.Verdict
 		if res.Warning != "" {
@@ -75,8 +78,8 @@ func (r Report) Markdown(w io.Writer) error {
 		}
 		return "-"
 	}
-	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (A) and %s (B); every run of a task passed (pass^k) in %s and %s of tasks.\n",
-		rate(r.Analysis.PassAt1, r.Arms[0].Name), rate(r.Analysis.PassAt1, r.Arms[1].Name), rate(r.Analysis.PassAll, r.Arms[0].Name),
+	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n",
+		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
 
 	writeNoise(&b, r)
@@ -87,14 +90,14 @@ func (r Report) Markdown(w io.Writer) error {
 		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
 			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s |\n", a.Name, a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
+		fmt.Fprintf(&b, "| %s | `%s` | %d | %s | %s | %s | %s |\n", a.label(), a.Context, a.Counted, first, num(a.CostUSD, "$%.3f"),
 			num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 
 	if desc, rows, ok := contextUse(r); ok {
 		fmt.Fprintf(&b, "\n## Context use\n\n%s\n\n|", desc)
 		for _, a := range r.Arms {
-			fmt.Fprintf(&b, " | %s", a.Name)
+			fmt.Fprintf(&b, " | %s", a.label())
 		}
 		b.WriteString(" |\n|---" + strings.Repeat("|---", len(r.Arms)) + "|\n")
 		for _, row := range rows {
@@ -111,17 +114,17 @@ func (r Report) Markdown(w io.Writer) error {
 				files = "`" + strings.Join(a.ContextUse.Start, "`, `") + "`"
 			}
 			sep := map[bool]string{true: "; ", false: ""}[i > 0]
-			fmt.Fprintf(&b, "%s%s, %s", sep, a.Name, files)
+			fmt.Fprintf(&b, "%s%s, %s", sep, a.label(), files)
 		}
 		b.WriteString(".\n")
 	}
 
-	b.WriteString("\n## Behavior\n\nRuns counted in each arm, unless a total.\n\n| | A | B |\n|---|---|---|\n")
+	fmt.Fprintf(&b, "\n## Behavior\n\nRuns counted in each arm, unless a total.\n\n| | %s | %s |\n|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label())
 	for _, row := range behaviorRows {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
 	}
 
-	b.WriteString("\n## Per task\n\n● success, ○ failure, × not counted; cost is the mean of counted runs.\n\n| Task | A | B | Cost A → B |\n|---|---|---|---|\n")
+	fmt.Fprintf(&b, "\n## Per task\n\n● success, ○ failure, × not counted; cost is the mean of counted runs.\n\n| Task | %s | %s | Cost A → B |\n|---|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label())
 	for _, t := range r.Tasks {
 		ca, cb := t.Arms[r.Arms[0].Name], t.Arms[r.Arms[1].Name]
 		fmt.Fprintf(&b, "| %s | %s %d/%d | %s %d/%d | %s → %s |\n", t.Task, orDash(ca.Marks), ca.Successes, ca.Counted, orDash(cb.Marks),
@@ -412,7 +415,7 @@ func noiseOf(r Report) (noise, bool) {
 	if aa {
 		out.intro += " Both arms use the same context, so this is the noise itself; compare it with the planner's defaults, which size every preview until a calibration replaces them."
 	}
-	out.intro += " Cost ranges assume normal noise in log cost; with few tasks every range is wide."
+	out.intro += " Cost ranges assume normal noise in log cost; with few tasks every range is wide." + r.noiseScope()
 	tauDefault := fmt.Sprintf("%.2f–%.2f", experiment.TauLow, experiment.TauHigh)
 	row := func(label string, c *experiment.Component, low, high float64, def, missing string) {
 		if c == nil {

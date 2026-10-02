@@ -35,6 +35,7 @@ const MaxFlagged = 10
 // JudgeArm is one arm's verdicts, split by the tests' result (experiment.Success), and what its judge cost.
 type JudgeArm struct {
 	Name      string      `json:"name"`
+	Profile   string      `json:"profile,omitempty"` // in a model-ab experiment
 	Passing   JudgeCounts `json:"passing"`
 	Failing   JudgeCounts `json:"failing"`
 	NotJudged NotJudged   `json:"not_judged"`
@@ -106,7 +107,7 @@ func judgeSummary(in Input) *Judge {
 	out := &Judge{Model: s.Model, Effort: s.Effort, Repeats: s.Repeats, Flagged: []Flagged{}}
 	byArm := map[string]*JudgeArm{}
 	for _, a := range in.Lock.Arms {
-		out.Arms = append(out.Arms, JudgeArm{Name: a.Name})
+		out.Arms = append(out.Arms, JudgeArm{Name: a.Name, Profile: armProfile(in.Lock.Design, a)})
 	}
 	for i := range out.Arms {
 		byArm[out.Arms[i].Name] = &out.Arms[i]
@@ -282,7 +283,7 @@ func (r Report) judgeView() judgeView {
 			label string
 			c     JudgeCounts
 		}{{"passed", a.Passing}, {"failed", a.Failing}} {
-			v.rows = append(v.rows, []string{a.Name, side.label, fmt.Sprint(side.c.Judged), cell(side.c.Fixed), cell(side.c.Partly), cell(side.c.No)})
+			v.rows = append(v.rows, []string{a.label(), side.label, fmt.Sprint(side.c.Judged), cell(side.c.Fixed), cell(side.c.Partly), cell(side.c.No)})
 		}
 	}
 	var missing []string
@@ -301,7 +302,7 @@ func (r Report) judgeView() judgeView {
 				why = append(why, fmt.Sprintf("%d %s", w.n, w.text))
 			}
 		}
-		missing = append(missing, fmt.Sprintf("%s %d (%s)", a.Name, n.total(), strings.Join(why, ", ")))
+		missing = append(missing, fmt.Sprintf("%s %d (%s)", a.label(), n.total(), strings.Join(why, ", ")))
 	}
 	if len(missing) == 0 {
 		v.lines = append(v.lines, "Not judged: none; the judge answered for every counted run.")
@@ -316,7 +317,7 @@ func (r Report) judgeView() judgeView {
 	}
 	var costs []string
 	for _, a := range j.Arms {
-		costs = append(costs, fmt.Sprintf("%s $%.2f", a.Name, a.CostUSD))
+		costs = append(costs, fmt.Sprintf("%s $%.2f", a.label(), a.CostUSD))
 	}
 	v.lines = append(v.lines, fmt.Sprintf("Judge cost: %s; $%.2f in total, in the spend and not in the arms' costs.", strings.Join(costs, ", "), j.CostUSD))
 	if j.Pending > 0 {
@@ -378,4 +379,12 @@ func pendingNote(rep Report, in Input) (string, bool) {
 		note += " (" + rep.Status + ": " + in.scrub(rep.StatusNote) + ")"
 	}
 	return note + ": " + judgeResume(rep) + ".", true
+}
+
+// label is the arm's name for text: with its profile in a model-ab experiment.
+func (a JudgeArm) label() string {
+	if a.Profile == "" {
+		return a.Name
+	}
+	return a.Name + " (" + a.Profile + ")"
 }

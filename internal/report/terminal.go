@@ -34,11 +34,14 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		fmt.Fprintf(&b, "Context A/B: A = %s, B = %s. Goal: %s.\n\n", r.Arms[0].Context, r.Arms[1].Context,
 			map[string]string{experiment.GoalCheaper: "cheaper, without losing success", experiment.GoalBetter: "more successful"}[d.Goal])
 	}
+	if r.Summary != "" {
+		fmt.Fprintf(&b, "%s\n\n", st.Heading(r.Summary))
+	}
 	for _, res := range r.Analysis.Results {
 		if res.Role == experiment.RoleSecondary {
 			continue
 		}
-		bold, mid, verdict := headlineParts(res, d)
+		bold, mid, verdict := r.headlineParts(res)
 		if res.Tasks < 2 {
 			verdict = st.Warn(verdict)
 		} else {
@@ -47,8 +50,8 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		fmt.Fprintf(&b, "- %s%s%s.\n", st.Heading(bold), mid, verdict)
 	}
 	model, effort := modelEffort(d)
-	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
-		r.Settled, r.Slots, st.Status(r.Status), r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
+	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
+		r.Settled, r.Slots, st.Status(r.Status), r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
@@ -61,7 +64,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	}
 
 	section("Metrics", "A and B: the success rate, or the geometric mean per run. B vs A is paired by task: a difference for success, a ratio of geometric means for the others.")
-	t := table(term.Left("Metric"), term.Left("Role"), term.Right("A"), term.Right("B"), term.Right("B vs A"), term.Right("95% bootstrap"), term.Right("95% t"), term.Left("Verdict"))
+	t := table(term.Left("Metric"), term.Left("Role"), term.Right(r.Arms[0].label()), term.Right(r.Arms[1].label()), term.Right("B vs A"), term.Right("95% bootstrap"), term.Right("95% t"), term.Left("Verdict"))
 	for _, res := range r.Analysis.Results {
 		verdict := verdictStyle(st, res.Verdict, res.Verdict)
 		if res.Warning != "" {
@@ -84,8 +87,8 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		}
 		return "-"
 	}
-	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (A) and %s (B); every run of a task passed (pass^k) in %s and %s of tasks.\n",
-		rate(r.Analysis.PassAt1, r.Arms[0].Name), rate(r.Analysis.PassAt1, r.Arms[1].Name), rate(r.Analysis.PassAll, r.Arms[0].Name),
+	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n",
+		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
 
 	if n, ok := noiseOf(r); ok {
@@ -116,7 +119,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		if base := r.Arms[0].FirstRequest; i > 0 && a.FirstRequest != nil && base != nil {
 			first += fmt.Sprintf(" (%+.0f)", *a.FirstRequest-*base)
 		}
-		t.Row(a.Name, a.Context, fmt.Sprint(a.Counted), first, num(a.CostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
+		t.Row(a.label(), a.Context, fmt.Sprint(a.Counted), first, num(a.CostUSD, "$%.3f"), num(a.ColdCostUSD, "$%.3f"), pctOf(a.CacheReadShare))
 	}
 	if err := t.Write(&b); err != nil {
 		return err
@@ -126,7 +129,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		section("Context use", desc)
 		cols := []term.Column{term.Left("")}
 		for _, a := range r.Arms {
-			cols = append(cols, term.Right(a.Name))
+			cols = append(cols, term.Right(a.label()))
 		}
 		t = table(cols...)
 		for _, row := range rows {
@@ -140,12 +143,12 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 			if len(a.ContextUse.Start) > 0 {
 				files = strings.Join(a.ContextUse.Start, ", ")
 			}
-			fmt.Fprintf(&b, "Loaded at start in %s: %s\n", a.Name, files)
+			fmt.Fprintf(&b, "Loaded at start in %s: %s\n", a.label(), files)
 		}
 	}
 
 	section("Behavior", "Runs counted in each arm, unless a total.")
-	t = table(term.Left(""), term.Right("A"), term.Right("B"))
+	t = table(term.Left(""), term.Right(r.Arms[0].label()), term.Right(r.Arms[1].label()))
 	for _, row := range behaviorRows {
 		t.Row(row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
 	}
@@ -155,7 +158,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 
 	section("Per task", "● success, ○ failure, × not counted; cost is the mean of counted runs.")
 	// Marks and counts are separate columns, so the counts line up whatever the number of marks.
-	t = table(term.Left("Task"), term.Left("A"), term.Right(""), term.Left("B"), term.Right(""), term.Right("Cost A → B"))
+	t = table(term.Left("Task"), term.Left(r.Arms[0].label()), term.Right(""), term.Left(r.Arms[1].label()), term.Right(""), term.Right("Cost A → B"))
 	for _, tr := range r.Tasks {
 		ca, cb := tr.Arms[r.Arms[0].Name], tr.Arms[r.Arms[1].Name]
 		t.Row(tr.Task, orDash(ca.Marks), fmt.Sprintf("%d/%d", ca.Successes, ca.Counted), orDash(cb.Marks), fmt.Sprintf("%d/%d", cb.Successes, cb.Counted),
