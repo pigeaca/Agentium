@@ -19,7 +19,7 @@ type PullRequest struct {
 	Number  int
 	URL     string // its page on github.com
 	HeadSHA string
-	HeadRef string // the head branch's name (in the repository itself), for the caller to match the branch it watched
+	HeadRef string // the head branch's name (in the repository itself), for the caller to match the branch it expects
 }
 
 // PullRequests returns the open pull requests of repo whose head commit is sha on a branch of repo itself, by number;
@@ -110,7 +110,7 @@ type Comment struct {
 // copy the marker, and only authorship (the API's user.login) is trusted. body is the caller's own text (Agentium's
 // redacted report); it reaches gh only on stdin, inside a JSON request. Comment.As is the login it was posted as.
 //
-// Callers must serialize upserts on a pull request (the watch holds watch.lock): it is a read, then a write, so two at
+// Callers must serialize upserts on a pull request (for example, under a lock): it is a read, then a write, so two at
 // once can both find no comment and both create one.
 func (c Client) UpsertComment(ctx context.Context, repo Repo, number int, marker, body string) (Comment, error) {
 	if err := repo.Valid(); err != nil {
