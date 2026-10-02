@@ -243,7 +243,7 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 	assertKeys(t, got.doc["project"], "id,name")
 	assertKeys(t, got.doc["north_star"], "decisive,experiment,metric,seconds,spent_usd,verdict")
 	assertKeys(t, got.doc["readiness"].([]any)[0], "status,text")
-	if got.get("nothing_was_run") != true || got.get("experiment", "name") != "quick-aa-baseline" || got.get("experiment", "runs") != float64(16) ||
+	if got.get("nothing_was_run") != true || got.get("experiment", "name") != "quick-aa-baseline" || got.get("experiment", "runs") != float64(18) || // 9 tasks, all taken (seq-v1 start aims for 16, accepts 8 or more)
 		got.get("project", "name") == nil || got.get("run_command") != "agentium experiment run quick-aa-baseline" {
 		t.Errorf("start: %s", got.stdout)
 	}
