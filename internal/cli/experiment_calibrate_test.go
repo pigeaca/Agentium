@@ -161,7 +161,7 @@ func TestModelABCalibratesBothModels(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	const sonnet5 = "claude-sonnet-5" // the fixture's calibrations are on the default model, not this one
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet5, "--b", opus, "--task", "value", "--repeats", "1", "--seed", "5",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet5, "--b", opus, "--task", "value", "--repeats", "1", "--seed", "5",
 		"--budget", "40", "--concurrency", "1"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "m"), ExitOK, "context base on "+sonnet5+" is not calibrated: calibrated when the experiment runs",
 		"context base on "+opus+" is not calibrated: calibrated when the experiment runs", "Calibration: 2 context calibration(s)")

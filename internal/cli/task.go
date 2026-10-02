@@ -31,23 +31,22 @@ import (
 
 const taskUsage = `Usage:
   agentium task add NAME --base REF (--instruction TEXT | --instruction @FILE | --ticket-file FILE)
-                         [--solution REF [--judge-graded]] [--accept-gaps] [--setup CMD]... [--verify CMD]...
+                         [--solution REF] [--accept-gaps] [--setup CMD]... [--verify CMD]...
                          a task by hand; with --solution, its test-file changes are the hidden tests.
                          --instruction @FILE reads the instruction from a file (@@ starts a text with @).
                          --ticket-file reads an exported ticket (Jira's JSON export of one issue, or Markdown: a
                          title, a description and an "Acceptance criteria" section) into the instruction, keeps its key
                          as the source (ticket ABC-123) and asks for a review of the result; its --solution may change
-                         no test files, and the task is then judge-graded. --judge-graded asks the same of a solution
-                         without a ticket (without it, such a solution is refused)
+                         no test files, and the task is then judge-graded
   agentium task import (--commit REF | --pr N) [--name NAME]
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh); a commit's
                          instruction is its subject and body, without trailers such as Co-Authored-By
   agentium task list
   agentium task show NAME
-  agentium task edit NAME [--instruction TEXT | --instruction @FILE] [--setup CMD... | --no-setup]
+  agentium task edit NAME [--instruction TEXT | --instruction @FILE] [--setup CMD]...
                          [--verify CMD]... [--reviewed] [--accept-gaps]
-  agentium task validate (NAME [--weak-tests] | --all [--status STATUS]) [--snapshot NAME]... [--repeat N]
+  agentium task validate (NAME [--weak-tests] | --all) [--snapshot NAME]... [--repeat N]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes);
                          --repeat N (1 to 20) runs every stage N times, and a stage whose runs disagree makes the
@@ -56,8 +55,7 @@ const taskUsage = `Usage:
                          checks in the base context: hunks that still pass are "not tested by the hidden tests", a
                          warning that leaves the task valid; a later task validate without --weak-tests replaces
                          the stored result, so rerun with it to keep the list;
-                         --all validates every task (--status: only the unvalidated, valid, invalid, flaky or
-                         unchecked ones), as many at a time as the project's jobs setting (default 2), and ends with
+                         --all validates every task, as many at a time as the project's jobs setting (default 2), and ends with
                          one table; an interrupt keeps the validations that finished. More than one at a time
                          assumes the project's tests can run side by side: no fixed ports, shared /tmp paths or
                          databases

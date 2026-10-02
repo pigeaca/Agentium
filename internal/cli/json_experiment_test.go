@@ -187,7 +187,7 @@ func TestJSONExperimentErrors(t *testing.T) {
 	}{
 		{[]string{"experiment", "show", "nope"}, ExitError},
 		{[]string{"experiment", "plan"}, ExitUsage},
-		{[]string{"experiment", "new", "x"}, ExitUsage}, // arm B missing
+		{[]string{"experiment", "new", "x", "--template", "aa"}, ExitUsage}, // a removed flag
 		{[]string{"experiment", "list", "extra"}, ExitUsage},
 		{[]string{"experiment", "run", "x", "--usage-limit", "0"}, ExitUsage},
 	} {

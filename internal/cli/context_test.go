@@ -123,7 +123,7 @@ func TestContextSnapshotListDiffWithoutTouchingTheRepository(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(repo, "escape.txt")); err == nil {
 		t.Error("a ref was taken as a git option")
 	}
-	expect(t, run("context", "snapshot", "-h"), ExitOK, "--include PATH")
+	expect(t, run("context", "snapshot", "-h"), ExitOK, "--working-tree")
 	expect(t, run("context", "diff", "--bogus"), ExitUsage, "flag provided but not defined")
 	expect(t, run("context", "snapshot", "x", "--ref", "HEAD", "--working-tree"), ExitUsage)
 	expect(t, run("context", "snapshot", "x", "--ref", "no-such-branch"), ExitError, `"no-such-branch" is not a commit`)

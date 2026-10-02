@@ -22,22 +22,20 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
+// runUsage is run's help. It lists neither run once's expert flags (runHidden) nor run calibrate, which still works
+// but which experiment run makes unneeded: the guide's "Advanced flags" table lists them.
 const runUsage = `Usage:
-  agentium run once TASK [--snapshot NAME] [--model MODEL] [--effort LEVEL] [--budget USD] [--timeout DURATION]
-                     [--verify-timeout DURATION] [--keep]
-                     one real Claude Code run on TASK, in the base's own context or with a snapshot applied.
+  agentium run once TASK [--snapshot NAME] [--model MODEL[:EFFORT]] [--budget USD]
+                     one real Claude Code run on TASK, in the base's own context or with a snapshot applied, on the
+                     model (default ` + experiment.DefaultExperimentModel + `) at the effort (default: the CLI's).
                      It costs money (up to --budget, default $3) or uses your plan.
-  agentium run calibrate [--snapshot NAME]... [--model MODEL] [--budget USD]
-                     one short real run per arm (the base's own context, and each snapshot): checks that
-                     sandboxed commands work and large outputs read back, compares the first request's size with
-                     Agentium's estimate, and records the tools, skills and slash commands later runs must get.
-                     Optional: experiment run calibrates any arm that lacks a calibration on its model
   agentium run list
   agentium run show ID [--diff] [--log]
                      one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
                      and verification output
 
 once, list and show take --json: one JSON document instead of text (docs/guide.md, "Scripting and automation").
+Expert flags (timeouts, keeping the workspace) are in docs/guide.md, "Advanced flags".
 
 Sign-in: ANTHROPIC_API_KEY when set, else a token file from ` + "`claude setup-token`" + ` (AGENTIUM_CLAUDE_TOKEN_FILE or
 ~/.config/agentium/claude-oauth-token), else your own login with project settings only.
@@ -90,21 +88,33 @@ func signInMode(env Env) (mode, tokenFile string) {
 	return claude.SignInLogin, ""
 }
 
+// runHidden are run once's expert flags: they parse, but runUsage leaves them out (docs/guide.md, "Advanced flags").
+var runHidden = []string{"timeout", "verify-timeout", "keep"}
+
+// runOnceRemoved are run once's removed flags, each with what replaces it.
+var runOnceRemoved = map[string]string{"effort": "put the effort in --model: --model MODEL:EFFORT"}
+
 func runOnce(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("run once", flag.ContinueOnError)
 	snapshotName := fs.String("snapshot", "", "apply this context snapshot (default: the base's own context)")
-	model := fs.String("model", experiment.DefaultExperimentModel, "the model")
-	effort := fs.String("effort", "", "the effort level (default: the CLI's)")
+	profile := fs.String("model", experiment.DefaultExperimentModel, "the model, MODEL[:EFFORT] (effort default: the CLI's)")
 	budget := fs.Float64("budget", 3, "stop the run at this cost in USD")
+	// Hidden (runHidden): the guide's "Advanced flags".
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop the run after this long")
 	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
 	keep := fs.Bool("keep", false, "keep the workspace and the verification copy")
+	removeFlags(fs, runOnceRemoved)
 	rest, code, ok := parseArgs(env, fs, args, runUsage)
 	if !ok {
 		return code
 	}
 	if len(rest) != 1 || *budget <= 0 || *timeout <= 0 {
 		fmt.Fprint(env.Stderr, runUsage)
+		return ExitUsage
+	}
+	model, effort, err := experiment.ParseProfile(*profile)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "agentium run once: --model %v\n", err)
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -134,13 +144,13 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	runEnv.Step = live.Step
-	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, *model); {
+	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, model); {
 	case err != nil:
 		return fail(env, err)
 	case cal != nil:
 		runEnv.Expect = *cal
 	}
-	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, runEnv.SignIn, *budget)
+	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, *budget)
 	release, err := startRuns(ctx, env, w)
 	if err != nil {
 		return fail(env, err)
@@ -148,7 +158,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	defer release()
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
-		Arm:  arm, Model: *model, Effort: *effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
+		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
 	live.Stop()
 	if err != nil {
 		return fail(env, err)
@@ -482,7 +492,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("run calibrate", flag.ContinueOnError)
 	var snapshots stringList
 	fs.Var(&snapshots, "snapshot", "also calibrate this snapshot's context (repeatable)")
-	model := fs.String("model", experiment.DefaultExperimentModel, "the model")
+	profile := fs.String("model", experiment.DefaultExperimentModel, "the model, MODEL[:EFFORT]")
 	budget := fs.Float64("budget", 0.5, "stop each calibration run at this cost in USD")
 	timeout := fs.Duration("timeout", 5*time.Minute, "stop each calibration run after this long")
 	rest, code, ok := parseArgs(env, fs, args, runUsage)
@@ -491,6 +501,13 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	if len(rest) != 0 || *budget <= 0 || *timeout <= 0 {
 		fmt.Fprint(env.Stderr, runUsage)
+		return ExitUsage
+	}
+	// A calibration is of a context on a model (experiment.Project.CalibrationOn): runs at any effort are checked
+	// against their model's, so an effort is accepted, as --model takes it everywhere, and not used.
+	model, _, err := experiment.ParseProfile(*profile)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "agentium run calibrate: --model %v\n", err)
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -522,8 +539,8 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	defer release()
 	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real Claude Code runs (%s, sign-in %s): up to $%.2f each.\n",
-		len(arms), experiment.ShortCommit(head), *model, runEnv.SignIn, *budget)
-	results, err := run.Calibrator{Head: head, Arms: arms, Model: *model, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn, Now: env.Now,
+		len(arms), experiment.ShortCommit(head), model, runEnv.SignIn, *budget)
+	results, err := run.Calibrator{Head: head, Arms: arms, Model: model, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn, Now: env.Now,
 		Execute: func(ctx context.Context, arm task.Arm, spec run.Spec) (run.Record, error) {
 			runEnv.Step = func(step string) { live.Step("calibrating arm " + arm.Name + ": " + step) }
 			return executeRun(ctx, env, w, runEnv, runMeta{Kind: "calibration"}, spec)

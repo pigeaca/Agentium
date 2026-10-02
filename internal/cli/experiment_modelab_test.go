@@ -50,34 +50,43 @@ func TestModelABDesignIsValidated(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"--a", sonnet}, "needs --a MODEL[:EFFORT] and --b MODEL[:EFFORT]"},
-		{[]string{"--b", opus}, "needs --a MODEL[:EFFORT] and --b MODEL[:EFFORT]"},
+		// Arm A defaults to --model (claude-sonnet-5-5): --b alone on that model compares it with itself.
+		{[]string{"--b", sonnet}, "--b claude-sonnet-5-5 is a model, so this is a model A/B, and arm A runs --model (claude-sonnet-5-5), the same profile: give arm A another with --a MODEL[:EFFORT]"},
 		{[]string{"--a", sonnet, "--b", sonnet}, "both arms run claude-sonnet-5-5"},
 		{[]string{"--a", sonnet + ":high", "--b", sonnet + ":high"}, "both arms run claude-sonnet-5-5:high"},
+		{[]string{"--model", sonnet + ":high", "--b", sonnet + ":high"}, "arm A runs --model (claude-sonnet-5-5:high), the same profile"},
 		{[]string{"--a", sonnet, "--b", opus + ":huge"}, `--b "claude-opus-5-5:huge": unknown effort "huge" (use low, medium, high, xhigh, max)`},
 		{[]string{"--a", ":high", "--b", opus}, "names no model"},
 		{[]string{"--a", sonnet + ":", "--b", opus}, "names no effort after the colon"},
-		{[]string{"--a", sonnet, "--b", opus, "--model", opus}, "not --model or --effort"},
-		{[]string{"--a", sonnet, "--b", opus, "--effort", "high"}, "not --model or --effort"},
-		{[]string{"--a", sonnet, "--b", opus, "--run-budget-a", "-1"}, "must be positive"},
+		{[]string{"--a", sonnet, "--b", opus, "--model", opus}, "--b claude-opus-5-5 makes a model A/B, whose arm A runs --a, else --model: give one of them"},
 		{[]string{"--a", sonnet, "--b", opus, "--context", "nope"}, `snapshot "nope": not found`},
+		// Arm A's profile must read as a model: a context in --a would become a model that calibrations pay for.
+		{[]string{"--a", "lean", "--b", opus}, "--a lean is not a model: a model A/B's context is --context"},
+		{[]string{"--a", "sonnet:high", "--b", opus}, "--a sonnet:high is not a model"},
+		{[]string{"--model", "sonnet", "--b", opus}, "--model sonnet is not a model Agentium reads as one, and arm A of this model A/B runs it"},
 	} {
 		code := ExitUsage
 		if strings.Contains(c.want, "not found") {
 			code = ExitError
 		}
-		expect(t, f.run(ctx, append([]string{"experiment", "new", "m", "--template", "model-ab"}, c.args...)...), code, c.want)
+		expect(t, f.run(ctx, append([]string{"experiment", "new", "m"}, c.args...)...), code, c.want)
 	}
-	// Context templates take no per-arm models, and --context belongs to model-ab alone.
-	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "lean", "--run-budget-a", "2"), ExitUsage, "belong to the model-ab template")
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "aa", "--context", "lean"), ExitUsage, "--context belongs to the model-ab template")
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--b", opus, "--task", "value", "--context", "base",
+	// --context belongs to a model A/B alone; a model in --a of a context template is a context that is not found,
+	// with how --b was read.
+	expect(t, f.run(ctx, "experiment", "new", "m", "--context", "lean"), ExitUsage, "--context is a model A/B's one context (--b MODEL[:EFFORT]); an A/A")
+	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "lean", "--context", "base"), ExitUsage, "--b lean is not a model", "so this is a context A/B")
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet), ExitError, `snapshot "claude-sonnet-5-5": not found: without --b this is an A/A`)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", "lean"), ExitError,
+		"not found: --b lean is a snapshot, so this is a context A/B, whose --a names a context; for a model A/B, give --b a model")
+	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "opus"), ExitError, `snapshot "opus": not found: --b names a snapshot (a context A/B), or a model`)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--b", "claude-rules"), ExitError, `snapshot "claude-rules": not found: --b names a snapshot`)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus, "--b", opus, "--task", "value", "--context", "base",
 		"--budget", "5"), ExitUsage, "below one pair of runs at their caps ($6.60)")
 
 	// A valid one is stored with each arm's profile, on one context (the base's, or a snapshot).
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2"),
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2"),
 		ExitOK, "Created experiment m: model A/B on context base, A = claude-sonnet-5-5, B = claude-opus-5-5:high, 1 task(s) × 2 run(s) per arm = 4 runs")
-	expect(t, f.run(ctx, "experiment", "new", "lean-m", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--context", "lean",
+	expect(t, f.run(ctx, "experiment", "new", "lean-m", "--a", opus+":medium", "--b", opus+":high", "--context", "lean",
 		"--task", "value", "--repeats", "1"), ExitOK, "model A/B on context lean, A = claude-opus-5-5:medium, B = claude-opus-5-5:high")
 	expect(t, f.run(ctx, "experiment", "list"), ExitOK, "model-ab", "base / base", "claude-sonnet-5-5 / claude-opus-5-5:high", "lean / lean")
 	d := loadDesign(t, f, "m")
@@ -148,8 +157,10 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 	// Per run $0.40 on Sonnet and $2.00 on Opus: 2 repeats cost $4.80, and the default budget is 1.25 × that plus 3 caps
 	// of the larger cap, $5 and its $0.50 overshoot, and a quarter more of Opus's calibration ($0.18): $23. The arms' caps
 	// are $3 and $5, so a pair's worst case, overshoot included, is $8.80.
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2",
-		"--run-budget-b", "5"), ExitOK, "= 4 runs, budget $23.00")
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "2"),
+		ExitOK, "= 4 runs, budget $")
+	// Arm B's own $5 cap, as --run-budget-b set it before it was removed, with the default budget that made.
+	storeAsBefore(t, f, "m", func(d *experiment.Design) { d.Arms[1].RunBudgetUSD, d.BudgetUSD = 5, 23 })
 	plan := f.run(ctx, "experiment", "plan", "m")
 	expect(t, plan, ExitOK, "arm A: model claude-sonnet-5-5, effort the CLI's default, context base; each run up to $3.00",
 		"arm B: model claude-opus-5-5, effort high, context base; each run up to $5.00",
@@ -165,7 +176,7 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 		t.Errorf("the default budget covers both arms' estimates and the reserve:\n%s", plan.stdout)
 	}
 	// A budget that covers one arm's estimate and the reserve but not both arms is flagged.
-	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "12"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "12"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
 		"WARNING  the budget $12.00 is below the estimated $4.80 plus $0.18 of calibration plus $9.90 held for runs in flight")
 
@@ -183,12 +194,12 @@ func TestModelABPreviewEstimatesEachArmOnItsModel(t *testing.T) {
 		t.Errorf("both models are calibrated:\n%s", ready.stdout)
 	}
 
-	// A model without a list price is flagged, here with no earlier runs to estimate from.
-	expect(t, f.run(ctx, "experiment", "new", "alias", "--template", "model-ab", "--a", sonnet, "--b", "opus", "--task", "value", "--budget", "30"), ExitOK)
-	expect(t, f.run(ctx, "experiment", "plan", "alias"), ExitOK, "WARNING  model opus has no list price in Agentium's table",
-		"Arm B: Estimated cost per run on opus:", "opus has no list price in Agentium's table and fewer than 3 earlier task runs", "unknown")
-	expect(t, f.run(ctx, "experiment", "new", "alias2", "--template", "model-ab", "--a", sonnet, "--b", "opus", "--task", "value"), ExitError,
-		"set --budget", "arm B: opus has no list price")
+	// A model without a list price (a claude-… name the table lacks) is flagged, here with no earlier runs to estimate from.
+	expect(t, f.run(ctx, "experiment", "new", "unpriced", "--a", sonnet, "--b", "claude-next-9", "--task", "value", "--budget", "30"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "plan", "unpriced"), ExitOK, "WARNING  model claude-next-9 has no list price in Agentium's table",
+		"Arm B: Estimated cost per run on claude-next-9:", "claude-next-9 has no list price in Agentium's table and fewer than 3 earlier task runs", "unknown")
+	expect(t, f.run(ctx, "experiment", "new", "unpriced2", "--a", sonnet, "--b", "claude-next-9", "--task", "value"), ExitError,
+		"set --budget", "arm B: claude-next-9 has no list price")
 }
 
 // Every run uses its arm's model and effort, the lock records them, and a calibration per arm is what drift is checked
@@ -198,7 +209,7 @@ func TestModelABRunsEachArmOnItsOwnProfile(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet+":low", "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "3",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet+":low", "--b", opus+":high", "--task", "value", "--goal", "better", "--repeats", "3",
 		"--seed", "5", "--budget", "40"), ExitOK)
 	out := f.run(ctx, "experiment", "run", "m")
 	expect(t, out, ExitOK, "Locked: Claude Code 2.1.281, A = claude-sonnet-5-5:low, B = claude-opus-5-5:high, sign-in login, 6 runs", "6 of 6 runs settled")
@@ -242,7 +253,7 @@ func TestModelABChecksDriftPerArm(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
 		"--budget", "40", "--concurrency", "1"), ExitOK)
 	// Every run reports Sonnet: arm B's calibration saw Opus, so its run does not compare, and the experiment stops.
 	if err := os.WriteFile(filepath.Join(ctrl, "report-model"), []byte(sonnet), 0o644); err != nil {
@@ -261,8 +272,10 @@ func TestModelABEqualArmCapsRun(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	calibrateOn(t, f, ctrl, opus)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
-		"--run-budget-a", "1", "--run-budget-b", "1", "--budget", "4"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
+		"--budget", "7"), ExitOK)
+	// Equal caps of each arm's own, as --run-budget-a and --run-budget-b set them before they were removed.
+	storeAsBefore(t, f, "m", func(d *experiment.Design) { d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 1, 4 })
 	expect(t, f.run(ctx, "experiment", "run", "m"), ExitOK, "each run up to $1.00 and", "Experiment m: done", "4 of 4 runs settled")
 }
 
@@ -281,7 +294,7 @@ func TestModelABEstimatesByEffort(t *testing.T) {
 		}
 	}
 	saveRuns(t, f, runs...)
-	expect(t, f.run(ctx, "experiment", "new", "e", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
+	expect(t, f.run(ctx, "experiment", "new", "e", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
 		"--budget", "40"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "e"), ExitOK, "value $1.00 (3 run(s))", "value $3.00 (3 run(s))", "$4.00",
 		"The usage figures above are per model, not per effort")
@@ -300,7 +313,7 @@ func TestModelABUnrecordedEffortRunsFillIn(t *testing.T) {
 	runs = append(runs, store.Run{TaskName: "gone", Outcome: "ok", CostUSD: 10,
 		Record: []byte(`{"model":"` + opus + `","effort":"high","effort_recorded":true,"metrics":{"saw_result":true}}`)})
 	saveRuns(t, f, runs...)
-	expect(t, f.run(ctx, "experiment", "new", "e", "--template", "model-ab", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
+	expect(t, f.run(ctx, "experiment", "new", "e", "--a", opus+":medium", "--b", opus+":high", "--task", "value", "--repeats", "1",
 		"--budget", "40"), ExitOK)
 	plan := f.run(ctx, "experiment", "plan", "e")
 	expect(t, plan, ExitOK, "the median of this project's 20 earlier task runs on claude-opus-5-5 at effort medium (20 of them from before runs recorded their effort",
@@ -371,7 +384,7 @@ func TestModelABUsageGateUsesTheLargerModelRate(t *testing.T) {
 			read(sonnet, now.Add(-10*time.Minute+time.Duration(i)*time.Minute), 0.774+0.002*float64(i), 0.776+0.002*float64(i)))
 	}
 	saveRuns(t, f, runs...)
-	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
+	expect(t, f.run(ctx, "experiment", "new", "m", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
 		"--budget", "40", "--concurrency", "1"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "m"), ExitOK, "about 0.2% of the five-hour window per run on claude-sonnet-5-5 (measured over 3 task run(s)",
 		"about 6% of the five-hour window per run on claude-opus-5-5 (measured over 3 task run(s)")

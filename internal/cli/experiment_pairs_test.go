@@ -61,7 +61,7 @@ func TestExperimentNewJudgePairs(t *testing.T) {
 	newArgs := []string{"experiment", "new", "x", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5"}
 	// A pair's two runs at $3.30 and its comparison's 4 calls at $0.50.
 	expect(t, f.run(ctx, append(newArgs, "--judge-pairs", "--budget", "8.5")...), ExitUsage, "below one pair of runs at their caps ($8.60)")
-	expect(t, f.run(ctx, append(newArgs, "--judge-pairs", "--judge-effort", "max")...), ExitOK,
+	expect(t, f.run(ctx, append(newArgs, "--judge-pairs=claude-opus-5-5:max")...), ExitOK,
 		"The pair judge: claude-opus-5-5 at effort max, both orders of each pair of passing runs; unvalidated, its preferences are exploratory and decide nothing.")
 	if d := storedDesign(t, f, "x"); d.Judge != nil || d.JudgePairs == nil || *d.JudgePairs != (llmjudge.Settings{Model: "claude-opus-5-5", Effort: "max", Repeats: 1}) {
 		t.Errorf("stored judges %+v, %+v", d.Judge, d.JudgePairs)
