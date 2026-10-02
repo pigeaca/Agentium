@@ -312,18 +312,65 @@ func TestIsHarnessIsWhatResolveClassifiesAsHarness(t *testing.T) {
 }
 
 func TestHarnessFrontmatter(t *testing.T) {
-	cases := map[string][]string{
-		"---\nname: a\ndescription: b\n---\nhooks: in the body is prose\n":                   nil,
-		"---\nname: a\nhooks:\n  PreToolUse:\n    - command: ./x.sh\n---\n":                  {"hooks"},
-		"---\r\nallowed-tools: Bash(curl:*)\r\npermissionMode: bypassPermissions\r\n---\r\n": {"allowedtools", "permissionmode"},
-		"\ufeff---\n\"mcpServers\": {}\n---\n":                                               {"mcpservers"},
-		"---\ntools: Read\nmodel: opus\n---\n":                                               nil,
-		"no frontmatter\nhooks: x\n":                                                         nil,
-		"---\nnested:\n  allowed_tools: x\n---\n":                                            {"allowedtools"},
+	cases := []struct {
+		name, text string
+		fields     []string
+		doubt      bool
+	}{
+		{"plain", "---\nname: a\ndescription: b\n---\nhooks: in the body is prose\n", nil, false},
+		{"hooks", "---\nname: a\nhooks:\n  PreToolUse:\n    - command: ./x.sh\n---\n", []string{"hooks"}, false},
+		{"CRLF", "---\r\nallowed-tools: Bash(curl:*)\r\npermissionMode: bypassPermissions\r\n---\r\n", []string{"allowedtools", "permissionmode"}, false},
+		{"quoted key after a BOM", "\ufeff---\n\"mcpServers\": {}\n---\n", []string{"mcpservers"}, false},
+		{"single-quoted key", "---\n'hooks': x\n---\n", []string{"hooks"}, false},
+		{"tools and model are not harness", "---\ntools: [Read, Grep]\nmodel: opus\n---\n", nil, false},
+		{"no frontmatter", "no frontmatter\nhooks: x\n", nil, false},
+		{"nested", "---\nnested:\n  allowed_tools: x\n---\n", []string{"allowedtools"}, false},
+		{"in a sequence", "---\nlist:\n  - memory: project\n---\n", []string{"memory"}, false},
+		{"opening line with a trailing space", "--- \nhooks: x\n---\n", []string{"hooks"}, false},
+		{"closing line with a trailing space", "---\nname: a\n--- \nbody\n", nil, false},
+		// Fail closed: forms a YAML parser reads as keys, but this reader does not parse.
+		{"flow mapping", "---\n{name: a, hooks: {Stop: []}}\n---\n", nil, true},
+		{"flow mapping in a sequence", "---\n- {hooks: x}\n---\n", nil, true},
+		{"escaped quoted key", "---\n\"permission\\x4dode\": bypassPermissions\n---\n", nil, true},
+		{"single-quote escape", "---\n'hoo''ks': x\n---\n", nil, true},
+		{"tag", "---\n!!str hooks: x\n---\n", nil, true},
+		{"explicit key", "---\n? hooks\n: x\n---\n", nil, true},
+		{"merge key", "---\nbase: &a\n  name: x\n<<: *a\n---\n", nil, true},
+		{"anchor at a key", "---\n&a hooks: x\n---\n", nil, true},
+		{"directive", "---\n%YAML 1.2\n---\n", nil, true},
+		{"a line that may end the frontmatter early", "---\nname: a\n---x\nhooks: x\n---\n", nil, true},
+		{"document end marker", "---\nname: a\n...\nhooks: x\n---\n", nil, true},
+		{"not closed", "---\nname: a\nhooks: x\n", []string{"hooks"}, true},
+		{"after blank lines", "\n\n---\nhooks: x\n---\n", nil, true},
+		{"--- followed by text", "---x\nhooks: x\n---\n", nil, true},
+		{"multi-line quoted key", "---\n\"hooks\n  \": x\n---\n", nil, true},
 	}
-	for text, want := range cases {
-		if got := HarnessFrontmatter([]byte(text)); !slices.Equal(got, want) {
-			t.Errorf("HarnessFrontmatter(%q) = %v, want %v", text, got, want)
+	for _, c := range cases {
+		got := HarnessFrontmatter([]byte(c.text))
+		if !slices.Equal(got.Fields, c.fields) || (got.Doubt != "") != c.doubt {
+			t.Errorf("%s: fields %v, doubt %q; want %v, doubt %v", c.name, got.Fields, got.Doubt, c.fields, c.doubt)
+		}
+		if got.Harness() != (len(c.fields) > 0 || c.doubt) {
+			t.Errorf("%s: Harness() = %v", c.name, got.Harness())
+		}
+	}
+	if got := HarnessFrontmatter([]byte("---\nhooks: {Stop: [sh run.sh]}\n---\nsee other.sh\n")); got.Text != "hooks: {Stop: [sh run.sh]}" {
+		t.Errorf("Text = %q, want the frontmatter only", got.Text)
+	}
+}
+
+func TestFrontmatterDelimiters(t *testing.T) {
+	for text, want := range map[string][]string{
+		"---\npaths: a\n---\nbody\n":         {"paths: a"},
+		"--- \t\npaths: a\n---  \nbody\n":    {"paths: a"},
+		"---\npaths: a\n---x\nb: c\n---\n":   {"paths: a", "---x", "b: c"},
+		"---x\npaths: a\n---\n":              nil,
+		"---\npaths: a\n":                    nil,
+		"text\n---\npaths: a\n---\n":         nil,
+		"---\r\npaths: a\r\n---\r\nbody\r\n": {"paths: a"},
+	} {
+		if got := frontmatter([]byte(text)); !slices.Equal(got, want) {
+			t.Errorf("frontmatter(%q) = %q, want %q", text, got, want)
 		}
 	}
 }

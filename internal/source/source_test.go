@@ -192,3 +192,27 @@ func TestLinkReportsStoredTargetsWithoutFollowingThem(t *testing.T) {
 		}
 	}
 }
+
+// TestCommitEnvReachesEveryGitCall: the extra environment is on the listing, on reads and on link reads (GIT_TRACE
+// writes a trace for each call that sees it).
+func TestCommitEnvReachesEveryGitCall(t *testing.T) {
+	root, head := fixture(t)
+	trace := filepath.Join(t.TempDir(), "trace")
+	src, err := CommitEnv(context.Background(), []string{"GIT_TRACE=" + trace}, head, "-C", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ReadFile("CLAUDE.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Link(src, "AGENTS.md"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "trace: built-in: git "); got != 3 || !strings.Contains(string(data), "ls-tree") {
+		t.Errorf("traced %d git calls, want 3 (ls-tree, cat-file, cat-file):\n%s", got, data)
+	}
+}
