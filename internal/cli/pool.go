@@ -103,6 +103,10 @@ type poolPass struct {
 	policy pool.Policy
 	opts   mine.Options
 	verify []string
+	// noMining: no test command was detected, so the pass mines nothing (newPoolPass).
+	noMining bool
+	// acceptRefused: --accept-mined accepted nothing because the state file was unreadable.
+	acceptRefused bool
 
 	ref, head string
 	scan      mine.RangeResult
@@ -115,13 +119,14 @@ type poolPass struct {
 // poolMaintenance is what the maintenance step planned and did.
 type poolMaintenance struct {
 	plan        pool.Plan
-	skipped     bool                // re-validations skipped: an experiment is running
+	skipped     bool                // some re-validations were skipped: an experiment is running
 	revalidated []task.BatchResult  // in plan.Revalidate's order
+	notRun      []bool              // per plan.Revalidate: skipped because an experiment was running
 	retired     []pool.Retirement   // those stored
 	reasons     map[string][]string // task name: why it was stale
 }
 
-func newPoolPass(env Env, w *workspace, a poolArgs) (*poolPass, error) {
+func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy()}
 	p.policy.Limit = a.limit
 	var commands []string
@@ -132,12 +137,15 @@ func newPoolPass(env Env, w *workspace, a poolArgs) (*poolPass, error) {
 	if p.verify = commands; len(p.verify) == 0 {
 		p.verify = w.defaultVerify()
 	}
-	if !a.dryRun && len(p.verify) == 0 {
-		return nil, errors.New("no test commands were detected for this project, so mined tasks would have nothing to verify with " +
-			"(agentium task mine --verify CMD imports with your own)")
-	}
-	return p, nil
+	// Without a test command, mined tasks would have nothing to verify with: the pass mines nothing (its watermark stays),
+	// and still validates, re-validates and retires.
+	p.noMining = len(p.verify) == 0
+	return p
 }
+
+// noMiningNote says why a pass mines nothing.
+const noMiningNote = "no test commands were detected for this project, so the pass mines nothing (mined tasks would have nothing to verify with); " +
+	"it still validates, re-validates and retires. agentium task mine --verify CMD imports with your own commands"
 
 // pass is the pool's pass over this project, with its steps.
 func (p *poolPass) pass() pool.Pass[mine.Candidate] {
@@ -154,6 +162,9 @@ func (p *poolPass) pass() pool.Pass[mine.Candidate] {
 			return p.head, err
 		},
 		Scan: func(ctx context.Context, r pool.ScanRange) (pool.Scanned[mine.Candidate], error) {
+			if p.noMining {
+				return pool.Scanned[mine.Candidate]{}, nil // incomplete, without tips: the watermark stays where it is
+			}
 			tasks, err := w.db.Tasks(ctx, w.project.ID)
 			if err != nil {
 				return pool.Scanned[mine.Candidate]{}, err
@@ -201,9 +212,16 @@ func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candi
 
 // validateNew validates the mined tasks without a validation (this pass's imports, and those a killed pass left) in the
 // base context, as task mine does.
+// While an experiment is running, they are validated one at a time, so its runs are slowed as little as possible (the
+// background pass waits instead; a foreground one was asked for now).
 func (p *poolPass) validateNew(ctx context.Context, tasks []store.Task) error {
-	fmt.Fprintf(p.env.Stdout, "%s, %d at a time\n", p.env.style().Heading(fmt.Sprintf("Validating %d mined task(s)", len(tasks))), p.a.jobs)
-	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: poolValidateTimeout}, p.a.jobs)
+	jobs, st := p.a.jobs, p.env.style()
+	if p.w.layout.RunsBusy() && jobs > 1 {
+		jobs = 1
+		fmt.Fprintln(p.env.Stdout, note(st, "an experiment is running: the new tasks are validated one at a time, not "+strconv.Itoa(p.a.jobs)))
+	}
+	fmt.Fprintf(p.env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Validating %d mined task(s)", len(tasks))), jobs)
+	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: poolValidateTimeout}, jobs)
 	p.validated = results
 	return err
 }
@@ -270,9 +288,9 @@ func (p *poolPass) plan(ctx context.Context) (pool.Plan, error) {
 }
 
 // maintain re-validates the stale tasks no locked experiment uses (each with the arms and repeats of its last
-// validation, keeping its weak-tests result), unless an experiment is running, and retires the dead ones.
+// validation, keeping its weak-tests result), none while an experiment is running, and retires the dead ones.
 func (p *poolPass) maintain(ctx context.Context) error {
-	env, w, st := p.env, p.w, p.env.style()
+	env, w := p.env, p.w
 	plan, err := p.plan(ctx)
 	if err != nil {
 		return err
@@ -285,20 +303,11 @@ func (p *poolPass) maintain(ctx context.Context) error {
 		fmt.Fprintf(env.Stdout, "%s: kept for experiment %s, which uses it (%s)\n", k.Task.Name, strings.Join(k.Experiments, ", "),
 			strings.Join(k.Stale.Reasons, "; "))
 	}
-	switch {
-	case len(plan.Revalidate) == 0:
-	case w.layout.RunsBusy():
-		p.maint.skipped = true
-		fmt.Fprintln(env.Stdout, warning(st, fmt.Sprintf("an experiment is running: %d stale task(s) are not re-validated now (they would slow its runs); "+
-			"the next pass re-validates them", len(plan.Revalidate))))
-	default:
-		fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Re-validating %d stale task(s)", len(plan.Revalidate))), p.a.jobs)
-		for _, r := range plan.Revalidate {
-			fmt.Fprintf(env.Stdout, "  %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
-		}
-		if p.maint.revalidated, err = p.revalidate(ctx, plan.Revalidate); err != nil {
+	if len(plan.Revalidate) > 0 {
+		if p.maint.revalidated, p.maint.notRun, err = p.revalidate(ctx, plan.Revalidate); err != nil {
 			return err
 		}
+		p.maint.skipped = slices.Contains(p.maint.notRun, true)
 	}
 	for _, r := range plan.Retire {
 		retired, err := w.db.RetireTask(context.WithoutCancel(ctx), r.Task.ID, r.Reason, env.Now())
@@ -313,37 +322,66 @@ func (p *poolPass) maintain(ctx context.Context) error {
 	return nil
 }
 
-// revalidate re-validates the tasks in groups of the same arms and repeats, keeping plan order in the results.
-func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) ([]task.BatchResult, error) {
-	results := make([]task.BatchResult, len(stale))
-	done := make([]bool, len(stale))
+// revalidate re-validates the tasks in groups of the same arms and repeats, keeping plan order in the results, --jobs
+// tasks at a time. Before each such chunk it checks for running experiments: while one runs, it starts no more (they
+// would slow its runs), and notRun marks the tasks left for the next pass.
+func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) (results []task.BatchResult, notRun []bool, err error) {
+	env, st := p.env, p.env.style()
+	results, notRun = make([]task.BatchResult, len(stale)), make([]bool, len(stale))
+	var order []int // plan indexes, grouped by arms and repeats
+	grouped := make([]bool, len(stale))
 	for i := range stale {
-		if done[i] {
-			continue
-		}
-		var group []int
 		for j := i; j < len(stale); j++ {
-			if !done[j] && slices.Equal(stale[j].Stale.Arms, stale[i].Stale.Arms) && stale[j].Stale.Repeat == stale[i].Stale.Repeat {
-				group, done[j] = append(group, j), true
+			if !grouped[j] && slices.Equal(stale[j].Stale.Arms, stale[i].Stale.Arms) && stale[j].Stale.Repeat == stale[i].Stale.Repeat {
+				order, grouped[j] = append(order, j), true
 			}
 		}
-		tasks := make([]store.Task, len(group))
-		for k, j := range group {
-			tasks[k] = stale[j].Task
+	}
+	started := 0
+	for k := 0; k < len(order); {
+		if p.w.layout.RunsBusy() {
+			for _, j := range order[k:] {
+				notRun[j] = true
+			}
+			left := len(order) - k
+			if started == 0 {
+				fmt.Fprintln(env.Stdout, warning(st, fmt.Sprintf("an experiment is running: %d stale task(s) are not re-validated now (they would slow its runs); "+
+					"the next pass re-validates them", left)))
+			} else {
+				fmt.Fprintln(env.Stdout, warning(st, fmt.Sprintf("an experiment started: %d stale task(s) are left for the next pass", left)))
+			}
+			break
 		}
-		o := task.ValidateOptions{Arms: stale[i].Stale.Arms, Repeat: stale[i].Stale.Repeat, Timeout: poolValidateTimeout, KeepWeakTests: true}
-		got, err := validateBatchWith(ctx, p.env, p.w, tasks, o, p.a.jobs, true)
+		if started == 0 {
+			fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Re-validating %d stale task(s)", len(stale))), p.a.jobs)
+			for _, r := range stale {
+				fmt.Fprintf(env.Stdout, "  %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
+			}
+		}
+		// A chunk: up to --jobs tasks of one group.
+		first := stale[order[k]].Stale
+		chunk := []int{}
+		for k < len(order) && len(chunk) < p.a.jobs && slices.Equal(stale[order[k]].Stale.Arms, first.Arms) && stale[order[k]].Stale.Repeat == first.Repeat {
+			chunk, k = append(chunk, order[k]), k+1
+		}
+		tasks := make([]store.Task, len(chunk))
+		for c, j := range chunk {
+			tasks[c] = stale[j].Task
+		}
+		o := task.ValidateOptions{Arms: first.Arms, Repeat: first.Repeat, Timeout: poolValidateTimeout, KeepWeakTests: true}
+		got, err := validateBatchWith(ctx, env, p.w, tasks, o, p.a.jobs, true)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		for k, j := range group {
-			results[j] = got[k]
+		for c, j := range chunk {
+			results[j] = got[c]
 		}
+		started += len(chunk)
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return results, nil
+	return results, notRun, nil
 }
 
 // acceptMined marks this pass's imports reviewed when start --accept-mined's checks find nothing (heldBack): only
@@ -352,6 +390,7 @@ func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) ([
 func (p *poolPass) acceptMined(ctx context.Context, res pool.PassResult) (accepted []string, held map[string]string, err error) {
 	held = map[string]string{}
 	if res.Unreadable != "" {
+		p.acceptRefused = true
 		fmt.Fprintln(p.env.Stdout, warning(p.env.style(), "the pool's state file was unreadable ("+res.Unreadable+"), so --accept-mined accepts nothing this time"))
 		return nil, held, nil
 	}
@@ -400,9 +439,9 @@ func poolUpdate(ctx context.Context, env Env, args []string) int {
 	} else if partial {
 		return fail(env, mine.ErrPartialClone)
 	}
-	p, err := newPoolPass(env, w, a)
-	if err != nil {
-		return fail(env, err)
+	p := newPoolPass(env, w, a)
+	if p.noMining {
+		fmt.Fprintln(env.Stdout, note(env.style(), noMiningNote))
 	}
 	if a.dryRun {
 		return p.dryRun(ctx)

@@ -3,6 +3,7 @@ package mine
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -217,5 +218,37 @@ func TestCommitTimesAndTreeHas(t *testing.T) {
 	has, err := TreeHas(context.Background(), c, []string{"a b.go", "*.go", "gone.go"}, "-C", f.root)
 	if err != nil || fmt.Sprint(has) != "map[*.go:true a b.go:true]" {
 		t.Errorf("has %v, %v (a literal *.go must not match a b.go twice or gone.go)", has, err)
+	}
+}
+
+// The user's repository may mark files -diff (go.sum, through info/attributes here) and show non-ASCII paths unquoted;
+// Agentium's bare repository does neither. A copy of a task's change must still match its patch ID.
+func TestScanRangeCopiesMatchDespiteAttributes(t *testing.T) {
+	f := newFixture(t)
+	root := f.commit("Initial commit", map[string]string{"parse.go": "package parse\n", "parse_test.go": "package parse\n", "go.sum": "a\n"})
+	f.git("checkout", "-q", "-b", "old")
+	original := f.commit("Add hours with a dependency\n\nThe hours helper reads one more unit of the duration syntax.", map[string]string{
+		"hours.go": "package parse\n" + lines("// hours", 20), "hours_test.go": "package parse\n" + lines("// test", 15),
+		"go.sum": "a\nb\n", "données_test.go": "package parse\n"})
+	f.git("checkout", "-q", "main")
+	f.commit("Note the unit table", map[string]string{"units.md": "# Units\n"})
+	f.day++
+	f.git("cherry-pick", original)
+	copied := f.git("rev-parse", "HEAD")
+
+	bare := filepath.Join(t.TempDir(), "repo.git")
+	f.git("clone", "-q", "--bare", f.root, bare)
+	if err := os.WriteFile(filepath.Join(f.root, ".git", "info", "attributes"), []byte("go.sum -diff\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.git("config", "core.quotePath", "false")
+	tasks := []store.Task{{Name: "hours", BaseCommit: root, SolutionCommit: original}}
+	res, err := ScanRange(context.Background(), RangeInput{Root: f.root, Bare: bare, Tasks: tasks, Range: pool.ScanRange{Head: copied}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(res.Result.Rejected, func(r Rejection) bool { return r.Hash == copied })
+	if i < 0 || res.Result.Rejected[i].Reason != ReasonCopy {
+		t.Errorf("the copy was not matched: candidates %+v, rejected %+v", res.Result.Candidates, res.Result.Rejected)
 	}
 }

@@ -191,11 +191,11 @@ func dateBounds(commits []commit) (newest, oldest time.Time) {
 	return newest, oldest
 }
 
-// listed is one commit of rev-list's output.
+// listed is one commit of rev-list's output: what working out the tips needs, and nothing more (a first scan may read
+// past a long history older than the window).
 type listed struct {
 	hash    string
 	parents []string
-	at      time.Time
 }
 
 // readRange streams the commits reachable from head and from none of exclude, oldest first in a topological order,
@@ -225,7 +225,7 @@ func readRange(ctx context.Context, root, head string, exclude []string, since t
 		if inWindow && len(window) == bound {
 			return false // the bound: this commit is the next pass's
 		}
-		read = append(read, listed{hash: fields[1], parents: fields[2:], at: at})
+		read = append(read, listed{hash: fields[1], parents: fields[2:]})
 		if inWindow {
 			window = append(window, fields[1])
 		}
@@ -359,7 +359,9 @@ func PatchIDs(ctx context.Context, pairs [][2]string, where ...string) (map[stri
 	if stdin.Len() == 0 {
 		return ids, nil
 	}
-	args := append(slices.Clone(where), "diff-tree", "--stdin", "-p", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv",
+	// core.quotePath and --text keep the configuration and attributes out of the patch: the user's repository may mark
+	// files -diff or binary (go.sum -diff), or show non-ASCII paths unquoted, where Agentium's bare repository does not.
+	args := append(append([]string{"-c", "core.quotePath=true"}, where...), "diff-tree", "--text", "--stdin", "-p", "--no-color", "--no-renames", "--no-ext-diff", "--no-textconv",
 		"--diff-algorithm=myers")
 	diff, err := gitx.OutputEnv(ctx, []string{noLazyFetch}, strings.NewReader(stdin.String()), args...)
 	if err != nil {

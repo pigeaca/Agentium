@@ -148,6 +148,9 @@ func (p *poolPass) dryRunDocument(ctx context.Context, prev pool.Preview[mine.Ca
 	if prev.Unreadable != "" {
 		doc.Warnings = append(doc.Warnings, "the pool's state file is unreadable: a pass sets it aside and starts over")
 	}
+	if p.noMining {
+		doc.Warnings = append(doc.Warnings, noMiningNote)
+	}
 	return doc
 }
 
@@ -168,7 +171,7 @@ func (p *poolPass) document(ctx context.Context, res pool.PassResult, accepted [
 	m := p.maint
 	for i, r := range m.plan.Revalidate {
 		d := staleDoc{Name: r.Task.Name, Reasons: list(r.Stale.Reasons), Experiments: []string{}}
-		if i < len(m.revalidated) && !m.skipped {
+		if i < len(m.revalidated) && (i >= len(m.notRun) || !m.notRun[i]) {
 			if br := m.revalidated[i]; br.Validated {
 				status := task.ValidationOf(br.Task).Status
 				d.Status = &status
@@ -190,7 +193,13 @@ func (p *poolPass) document(ctx context.Context, res pool.PassResult, accepted [
 		doc.Warnings = append(doc.Warnings, "the pool's state file was unreadable and was set aside")
 	}
 	if m.skipped {
-		doc.Warnings = append(doc.Warnings, "an experiment is running: stale tasks were not re-validated")
+		doc.Warnings = append(doc.Warnings, "an experiment is running: some stale tasks were not re-validated (status null, no problem); the next pass re-validates them")
+	}
+	if p.acceptRefused {
+		doc.Warnings = append(doc.Warnings, "--accept-mined accepted nothing: the pool's state file was unreadable")
+	}
+	if p.noMining {
+		doc.Warnings = append(doc.Warnings, noMiningNote)
 	}
 	return doc
 }

@@ -358,9 +358,24 @@ func TestPoolUpdateSkipsRevalidationsWhileRunsAreBusy(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
+	lib, err := os.ReadFile(filepath.Join(p.repo, "lib.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.repo, "lib.sh", string(lib)+"f9() { echo v9; }\n")
+	writeFile(t, p.repo, "tests/f9_test.sh", ". ./lib.sh\n[ \"$(f9)\" = v9 ]\n")
+	gitIn(t, p.repo, "add", "-A")
+	gitIn(t, p.repo, "commit", "-q", "-m", "Add f9 to the library\n\nThe f9 function prints v9 for the status bar.")
 	got := p.at(31*pool.Day, "pool", "update")
-	expect(t, got, ExitOK, "an experiment is running: 2 stale task(s) are not re-validated now")
-	if strings.Contains(got.stdout, "Re-validating") || !sameTimes(validatedAt(p.tasks(t)), first) {
+	expect(t, got, ExitOK, "an experiment is running: 2 stale task(s) are not re-validated now",
+		"an experiment is running: the new tasks are validated one at a time, not 2", "Validating 1 mined task(s), 1 at a time")
+	now := validatedAt(p.tasks(t))
+	for name, at := range first {
+		if !now[name].Equal(at) {
+			t.Errorf("%s re-validated while runs were busy", name)
+		}
+	}
+	if strings.Contains(got.stdout, "Re-validating") {
 		t.Errorf("re-validated while runs were busy:\n%s", got.stdout)
 	}
 	doc := checkJSON(t, p.runFixture, p.at(31*pool.Day, "pool", "update", "--json"), ExitOK, []string{"pool", "update"})
@@ -426,4 +441,63 @@ func TestTaskValidateRecordsTheToolchain(t *testing.T) {
 			t.Errorf("%s: toolchain %v", tk.Name, v.Toolchain)
 		}
 	}
+}
+
+// --accept-mined with an unreadable state file accepts nothing, and says so in text and JSON; the pass itself goes on.
+func TestPoolUpdateAcceptMinedRefusesAnUnreadableState(t *testing.T) {
+	t.Parallel()
+	p := newPoolFixture(t, 2, 0)
+	expect(t, p.at(0, "pool", "status"), ExitOK)
+	_, project := p.db(t)
+	file := pool.StateFile(filepath.Join(p.data, "projects", fmt.Sprint(project), "repo.git"))
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	doc := checkJSON(t, p.runFixture, p.at(0, "pool", "update", "--accept-mined", "--json"), ExitOK, []string{"pool", "update", "--accept-mined"})
+	warnings := fmt.Sprint(doc.get("warnings"))
+	if len(doc.get("accepted").([]any)) != 0 || len(doc.get("imported").([]any)) != 2 ||
+		!strings.Contains(warnings, "--accept-mined accepted nothing: the pool's state file was unreadable") {
+		t.Errorf("JSON: %s", doc.stdout)
+	}
+	for _, tk := range p.tasks(t) {
+		if !tk.NeedsReview {
+			t.Errorf("%s was accepted", tk.Name)
+		}
+	}
+	if err := os.WriteFile(file, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, p.repo, "tests/f9_test.sh", "true\n")
+	writeFile(t, p.repo, "lib9.sh", "f9() { :; }\n")
+	gitIn(t, p.repo, "add", "-A")
+	gitIn(t, p.repo, "commit", "-q", "-m", "Add f9, a no-op for the status bar")
+	expect(t, p.at(time.Hour, "pool", "update", "--accept-mined"), ExitOK, "unreadable", "so --accept-mined accepts nothing this time")
+	p.noAgent(t)
+}
+
+// Without a detected test command the pass mines nothing, says why, and still retires and re-validates.
+func TestPoolUpdateWithoutTestCommandsStillMaintains(t *testing.T) {
+	t.Parallel()
+	p := newPoolFixture(t, 2, 0)
+	expect(t, p.at(0, "pool", "update"), ExitOK)
+	gitIn(t, p.repo, "rm", "-q", "Makefile", "tests/f1_test.sh")
+	gitIn(t, p.repo, "commit", "-q", "-m", "Drop the Makefile and the f1 test")
+	db, _ := p.db(t)
+	projects, err := db.Projects(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SaveProject(context.Background(), projects[0].Root, projects[0].Name, []byte(`{}`), p.clock); err != nil { // no test commands found
+		t.Fatal(err)
+	}
+	got := p.at(31*pool.Day, "pool", "update")
+	expect(t, got, ExitOK, "no test commands were detected for this project, so the pass mines nothing", "Re-validating 1 stale task(s)",
+		"Retired "+p.name(t, "add-f1-")+": tests/f1_test.sh is gone from the default branch")
+	if strings.Contains(got.stdout, "Imported") {
+		t.Errorf("mined without a test command:\n%s", got.stdout)
+	}
+	p.noAgent(t)
 }
