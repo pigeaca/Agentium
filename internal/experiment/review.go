@@ -34,9 +34,18 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
+	stored, err := p.DB.ExperimentByName(ctx, p.ID, name)
+	if err != nil {
+		return Review{}, err
+	}
 	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
 	if err != nil {
 		return Review{}, err
+	}
+	if stored.Lock != nil {
+		// A locked experiment keeps the tasks it locked: whatever has happened to them since (retired, revalidated,
+		// removed) does not affect resuming, so it is not a readiness problem.
+		eligible, reasons = d.Tasks, map[string]string{}
 	}
 	est, err := p.EstimatesFor(ctx, d)
 	if err != nil {

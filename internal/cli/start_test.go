@@ -739,3 +739,39 @@ func TestStartDriftChecksIncludedDocuments(t *testing.T) {
 		t.Error("a missing included document is not drift")
 	}
 }
+
+// A retired task (the task pool's) is neither counted nor validated by start: it would only cost machine time.
+func TestStartIgnoresRetiredTasks(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	saved, err := db.SaveTask(ctx, store.Task{ProjectID: projects[0].ID, Name: "gone", Instruction: "Add f1.", Source: "test", BaseCommit: strings.TrimSpace(gitIn(t, f.repo, "rev-parse", "HEAD")),
+		Verify: []string{"make test"}, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.RetireTask(ctx, saved.ID, "its file is gone", time.Now()); err != nil || !ok {
+		t.Fatalf("retire: %v, %v", ok, err)
+	}
+	db.Close()
+
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Validating 9 task(s) in 2 context(s)", "Tasks: 9 ready")
+	if strings.Contains(got.stdout, "Validating 1 task(s)") || strings.Contains(got.stdout, "gone") {
+		t.Errorf("start validated or named the retired task:\n%s", got.stdout)
+	}
+	for _, task := range storedTasks(t, f.data) {
+		if task.Name == "gone" && (task.Validation != nil || !task.Retired()) {
+			t.Errorf("the retired task was validated or restored: %+v", task)
+		}
+	}
+}

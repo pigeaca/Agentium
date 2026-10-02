@@ -62,7 +62,7 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 		return c, err
 	}
 	for _, t := range tasks {
-		if t.Grading == task.GradingJudge {
+		if t.Grading == task.GradingJudge || t.Retired() { // a retired task is never validated, reviewed or counted
 			continue
 		}
 		v := task.ValidationOf(t)

@@ -704,11 +704,40 @@ func TestReportIsolatedCostMissing(t *testing.T) {
 	}
 	var out bytes.Buffer
 	rep.Markdown(&out)
-	want := fmt.Sprintf("%d counted run(s) have no isolated-run cost (recorded before Agentium kept it, a model without a list price, or a subagent of unknown type), so their arm shows none.", missing)
+	want := fmt.Sprintf("%d counted run(s) have no isolated-run cost (recorded before Agentium kept it, no reported cost, a model without a list price, a subagent request without a model, or a subagent of unknown type), so their arm shows none.", missing)
 	if !strings.Contains(out.String(), want) {
 		t.Errorf("Markdown lacks %q", want)
 	}
 	if !reflect.DeepEqual(rep.Analysis, base.Analysis) {
 		t.Error("the isolated-run cost changed a verdict")
+	}
+}
+
+// Only counted runs matter: an uncounted run without a value leaves the arm's mean, and the note, alone.
+func TestReportIsolatedCostIgnoresUncountedRuns(t *testing.T) {
+	in := fixture()
+	dropped := 0
+	for i := range in.Runs {
+		if rec := &in.Runs[i].Record; !experiment.Fair(rec.Outcome) {
+			rec.IsolatedCostUSD = nil
+			dropped++
+		}
+	}
+	if dropped == 0 {
+		t.Fatal("the fixture has no uncounted run")
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range rep.Arms {
+		if a.IsolatedCostUSD == nil {
+			t.Errorf("arm %s lost its isolated-run cost because of an uncounted run", a.Name)
+		}
+	}
+	var out bytes.Buffer
+	rep.Markdown(&out)
+	if strings.Contains(out.String(), "have no isolated-run cost") {
+		t.Error("the note counts uncounted runs")
 	}
 }

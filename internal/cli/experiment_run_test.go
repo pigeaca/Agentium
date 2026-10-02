@@ -508,15 +508,16 @@ func TestStartReportsAnUnreadableStartFile(t *testing.T) {
 	}
 }
 
-// A retired task leaves new designs and previews with its reason, but an experiment that locked it resumes and reports as
-// before: eligibility is checked only before the lock.
+// A retired task leaves new designs and previews with its reason, but an experiment that locked it carries on: eligibility
+// is checked only before the lock. The locked experiment is paused by its budget with runs left, the task is retired, and
+// resume executes the rest, plans without a readiness complaint, and reports.
 func TestRetiredTaskLeavesDesignsButNotLockedExperiments(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "3", "--seed", "5"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "new", "unlocked", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1"), ExitOK)
-	expect(t, f.run(ctx, "experiment", "run", "locked", "--budget", "30"), ExitOK, "Experiment locked: done")
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK, "Experiment locked: budget", "4 of 6 runs settled")
 
 	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
 	if err != nil {
@@ -541,6 +542,11 @@ func TestRetiredTaskLeavesDesignsButNotLockedExperiments(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "unlocked"), ExitOK, "task value: "+why)
 	expect(t, f.run(ctx, "experiment", "run", "unlocked"), ExitError, "not ready to run", why)
 
-	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK, "Resuming experiment locked", "2 of 2 runs settled")
+	// The locked experiment: its plan does not list the retired task as a problem, and resume runs what is left.
+	plan := f.run(ctx, "experiment", "plan", "locked")
+	if strings.Contains(plan.stdout, "retired") || strings.Contains(plan.stderr, "retired") {
+		t.Errorf("the plan of a locked experiment names the retired task:\n%s%s", plan.stdout, plan.stderr)
+	}
+	expect(t, f.run(ctx, "experiment", "run", "locked", "--budget", "10"), ExitOK, "Resuming experiment locked", "6 of 6 runs settled")
 	expect(t, f.run(ctx, "experiment", "report", "locked"), ExitOK, "# Experiment locked", "| value |")
 }

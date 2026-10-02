@@ -603,13 +603,14 @@ func notes(rep Report, in Input) []string {
 		cold += fmt.Sprintf(" %d counted run(s) use a model without a list price, so their arm has no cold-cache cost.", unrepriced)
 	}
 	isolatedNote := fmt.Sprintf("Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request "+
-		"and of each subagent type's first launch are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of %s. "+
+		"and of each subagent launch that could not have read this run's own cache (a type's first, a parallel one, or one after its prefix expired) are repriced "+
+		"as cache writes, at the time to live the run wrote with, at Agentium's list prices of %s. "+
 		"Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. "+
 		"It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. "+
 		"Verdicts use the actual cost.", rep.Lock.PriceTable)
 	if noIsolated > 0 {
-		isolatedNote += fmt.Sprintf(" %d counted run(s) have no isolated-run cost (recorded before Agentium kept it, a model without a list price, "+
-			"or a subagent of unknown type), so their arm shows none.", noIsolated)
+		isolatedNote += fmt.Sprintf(" %d counted run(s) have no isolated-run cost (recorded before Agentium kept it, no reported cost, a model without a list price, "+
+			"a subagent request without a model, or a subagent of unknown type), so their arm shows none.", noIsolated)
 	}
 	return append(out, cold, isolatedNote)
 }
