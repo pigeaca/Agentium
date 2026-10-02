@@ -34,7 +34,14 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
 
 ## Work
 - [ ] **1a. Pair core** (`internal/judge`): the pilot's pair prompt and schema, word for word, both orders, mapping back, flips counted as ties, and the preference statistics with their floor. Unit tests with a fake caller.
-- [ ] **1b. Experiments** (note from 1a's review: with repeats above 1, pairs of one task are not independent; add an honesty note or cluster by task): `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2).
+- [x] **1b. Experiments** (note from 1a's review: with repeats above 1, pairs of one task are not independent; add an honesty note or cluster by task): `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2). Done (2026-10-02, branch `claude/feat/judge-pairs-experiments`):
+  - `experiment new --judge-pairs` (with `--judge-model`/`--judge-effort`; `--judge-repeats` stays the per-run judge's) is stored as `Design.JudgePairs` (repeats 1), validated and locked with the design; `experiment show`, `plan` and `run` name it as unvalidated.
+  - Pairing: `experiment.PairsOf` pairs each arm's settled run by the schedule's `Slot.Pair` (task and repeat index); a pair is compared only when both runs count as passing (`Success`) and the task has a reference in code. The comparison (`run.PairJudgement`, the 1a core's verdict and the arm-A run's ID) is stored on the pair's arm-B run, so `run.Spend` (`PairJudgeUSD`) carries it into every total.
+  - Beside the runs: a pair judge goroutine compares one pair at a time as soon as a run completes a passing pair, so it holds no slot, no seq-v1 look and no stage barrier; the execution waits for queued comparisons only at its end. A seq-v1 experiment that ends at a look leaves its unrun slots unpaired.
+  - Money: $2.00 a pair (4 calls at $0.50, with the judge's overshoot allowance per call off the default), held by `Execute` from a pair's first run (`Plan.PairHoldUSD`) and handed to the comparison before the completing run returns; work outside the schedule is counted through `Plan.Outside`. The preview, worst case, minimum budget, reserve and default budget include it; the estimate is $0.176 a pair.
+  - Resume: each call's cost is stored as it lands as a stopped comparison; a resume compares the pairs without a comparison or with a stopped one once (funded first, else a budget stop), keeping the earlier spend. A pair judge at a usage limit pauses the experiment as the judge does.
+  - Clustering: `experiment.PairPreferenceOf` counts the preference once per task (the arm its comparisons preferred more often), and the flip rate per pair; with one run per arm both agree. Chosen over an honesty note so that the binomial test and the Wilson interval stay valid at repeats above 1. Step 2 shows it.
+  - JSON (additive): `experiment.judge_pairs`, `progress.pair_judge_usd` and `uncompared_pairs` (`judge_usd` is both judges'), a run's `pair_judge_cost_usd`.
 - [ ] **2. Report.**
 - [ ] **3. Real check (paid; approval).**
 
