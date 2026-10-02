@@ -336,7 +336,7 @@ func TestPrepareGradleRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	props, _ := os.ReadFile(filepath.Join(cache, "gradle", "gradle.properties"))
-	if want := gradleHomeProps + "org.gradle.java.installations.paths=" + filepath.Join(deps, "gradle-jdks") + "\norg.gradle.java.installations.auto-download=false\n"; string(props) != want {
+	if want := gradleHomeProps + "org.gradle.java.installations.auto-download=false\n"; string(props) != want { // no JDKs provisioned
 		t.Errorf("gradle.properties = %q, want %q", props, want)
 	}
 	if init, _ := os.ReadFile(filepath.Join(cache, "gradle", "init.d", "agentium-offline.gradle")); !strings.Contains(string(init), "startParameter.offline = true") {
@@ -739,6 +739,7 @@ func TestGradleDepsLayout(t *testing.T) {
 	}
 	// A warm-up writes through the links; a later one, with another Gradle version, adds its own caches.
 	for _, f := range []string{filepath.Join("caches", "modules-2", "files-2.1", "a.jar"), filepath.Join("jdks", "jdk-21", "release"),
+		filepath.Join("jdks", "temurin-21", "jdk-21", "bin", "java"), filepath.Join("jdks", "temurin-21", "jdk-21", "provisioned.ok"),
 		filepath.Join("caches", "9.9", "javaCompile", "classAnalysis.bin")} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(guh, f)), 0o755); err != nil {
 			t.Fatal(err)
@@ -763,8 +764,8 @@ func TestGradleDepsLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	props, _ := os.ReadFile(filepath.Join(run, "gradle", "gradle.properties"))
-	if !strings.Contains(string(props), "org.gradle.java.installations.paths="+filepath.Join(deps, gradleJDKs)+"\n") {
-		t.Errorf("the run's JDKs: %q", props)
+	if !strings.Contains(string(props), "org.gradle.java.installations.paths="+filepath.Join(deps, gradleJDKs, "temurin-21", "jdk-21")+"\n") {
+		t.Errorf("the run's JDKs: %q (the JDK a warm-up provisioned through the link)", props)
 	}
 	// Agents read only those two folders: neither is under a denied path, and everything in the Gradle home is.
 	denied := DepsDenied(deps)
@@ -822,12 +823,12 @@ func TestGradleDepsLayoutMovesAnEarlierOne(t *testing.T) {
 
 	// A crash between the rename and the link; then a link to somewhere else: both are made right.
 	link := filepath.Join(guh, "caches", "modules-2")
-	os.Remove(link)
+	must(t, os.Remove(link))
 	if err := linkOutside(link, filepath.Join(deps, gradleRO, "modules-2")); err != nil {
 		t.Fatal(err)
 	}
-	os.Remove(link)
-	os.Symlink(filepath.Join(deps, "elsewhere"), link)
+	must(t, os.Remove(link))
+	must(t, os.Symlink(filepath.Join(deps, "elsewhere"), link))
 	if err := linkOutside(link, filepath.Join(deps, gradleRO, "modules-2")); err != nil {
 		t.Fatal(err)
 	}
@@ -839,12 +840,11 @@ func TestGradleDepsLayoutMovesAnEarlierOne(t *testing.T) {
 	}
 
 	// Both a folder in the home and one outside: which is current is unknown, so nothing changes.
-	os.Remove(link)
-	if err := os.MkdirAll(filepath.Join(link, "files-2.1"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := PrepareDeps(Select([]string{"gradle"}), deps); err == nil || !strings.Contains(err.Error(), "both folders") {
-		t.Errorf("both folders: %v", err)
+	must(t, os.Remove(link))
+	must(t, os.MkdirAll(filepath.Join(link, "files-2.1"), 0o755))
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err == nil || !strings.Contains(err.Error(), "both folders") ||
+		!strings.Contains(err.Error(), "remove one by hand") {
+		t.Errorf("both folders, and what to do: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(deps, gradleRO, "modules-2", "files-2.1", "a.jar")); err != nil {
 		t.Errorf("the outside folder changed: %v", err)
@@ -854,23 +854,32 @@ func TestGradleDepsLayoutMovesAnEarlierOne(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(other, "gradle", "caches"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	os.Symlink(filepath.Join(other, "gradle"), filepath.Join(other, "gradle-jdks"))
+	must(t, os.Symlink(filepath.Join(other, "gradle"), filepath.Join(other, "gradle-jdks")))
 	if err := linkOutside(filepath.Join(other, "gradle", "jdks"), filepath.Join(other, "gradle-jdks")); err == nil {
 		t.Error("an outside folder that is a link is accepted")
 	}
-	os.WriteFile(filepath.Join(other, "gradle", "caches", "modules-2"), nil, 0o644)
+	must(t, os.WriteFile(filepath.Join(other, "gradle", "caches", "modules-2"), nil, 0o644))
 	if err := linkOutside(filepath.Join(other, "gradle", "caches", "modules-2"), filepath.Join(other, gradleRO, "modules-2")); err == nil {
 		t.Error("a file in the link's place is accepted")
 	}
 }
 
-// Agents read the read-only cache while later warm-ups lay the folder out again: modules-2 never goes missing.
+// After the migration from an earlier layout, readers keep finding modules-2's files, through GRADLE_RO_DEP_CACHE and
+// through the home's link, while later warm-ups lay the folder out again. (A reader of the earlier layout during the
+// migration itself can miss caches/modules-2 between the rename and the link: no test can rule that window out.)
 func TestGradleDepsLayoutKeepsModulesForReaders(t *testing.T) {
 	deps := t.TempDir()
+	guh := filepath.Join(deps, "gradle")
+	earlier := filepath.Join(guh, "caches", "modules-2", "files-2.1", "a.jar")
+	must(t, os.MkdirAll(filepath.Dir(earlier), 0o755))
+	must(t, os.WriteFile(earlier, []byte("x"), 0o644))
 	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
 		t.Fatal(err)
 	}
-	ro := filepath.Join(deps, gradleRO, "modules-2")
+	if info, err := os.Lstat(filepath.Join(guh, "caches", "modules-2")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("not migrated: %v %v", info, err)
+	}
+	readable := []string{filepath.Join(deps, gradleRO, "modules-2", "files-2.1", "a.jar"), earlier}
 	stop, missing := make(chan struct{}), make(chan error, 1)
 	go func() {
 		defer close(missing)
@@ -880,9 +889,11 @@ func TestGradleDepsLayoutKeepsModulesForReaders(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := os.Stat(ro); err != nil {
-				missing <- err
-				return
+			for _, f := range readable {
+				if _, err := os.ReadFile(f); err != nil {
+					missing <- err
+					return
+				}
 			}
 		}
 	}()
@@ -893,7 +904,88 @@ func TestGradleDepsLayoutKeepsModulesForReaders(t *testing.T) {
 	}
 	close(stop)
 	if err := <-missing; err != nil {
-		t.Errorf("a reader saw no modules-2: %v", err)
+		t.Errorf("a reader lost modules-2: %v", err)
+	}
+}
+
+// The run's Gradle home lists each provisioned JDK's Java home (Gradle takes each entry of
+// org.gradle.java.installations.paths as one installation): Gradle's layouts on macOS and Linux, and a JDK unpacked
+// straight into its folder. Unfinished, linked or misshapen entries are not listed.
+func TestProvisionedJDKs(t *testing.T) {
+	dir := t.TempDir()
+	file := func(rel string) {
+		t.Helper()
+		must(t, os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755))
+		must(t, os.WriteFile(filepath.Join(dir, rel), nil, 0o755))
+	}
+	if got, err := provisionedJDKs(filepath.Join(dir, "missing")); err != nil || got != nil {
+		t.Errorf("a missing folder: %q %v", got, err)
+	}
+	file("eclipse_adoptium-21-aarch64-os_x/jdk-21.0.6+7/provisioned.ok") // macOS
+	file("eclipse_adoptium-21-aarch64-os_x/jdk-21.0.6+7/Contents/Home/bin/java")
+	file("eclipse_adoptium-17-x64-linux/jdk-17.0.9+9/provisioned.ok") // Linux
+	file("eclipse_adoptium-17-x64-linux/jdk-17.0.9+9/bin/java")
+	file("azul_zulu-11-x64-linux/.ready") // unpacked into its folder, the newer marker
+	file("azul_zulu-11-x64-linux/bin/java")
+	file("amazon_corretto-8-x64-linux/.ready") // the newer marker next to the JDK's folder
+	file("amazon_corretto-8-x64-linux/jdk8u402/bin/java")
+	file("unfinished-22/jdk-22/bin/java") // no marker: may still be unpacking
+	file("no-java-23/jdk-23/provisioned.ok")
+	file("no-java-23/jdk-23/bin/javac")
+	file("with,comma/jdk-24/provisioned.ok")
+	file("with,comma/jdk-24/bin/java")
+	file("OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.6_7.tar.gz") // the archive and its lock
+	file("OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.6_7.tar.gz.lock")
+	// Links never lead out of the folder: a whole JDK, a JDK's folder, its Contents or its bin.
+	outside := t.TempDir()
+	for _, rel := range []string{"jdk/provisioned.ok", "jdk/bin/java", "jdk/Contents/Home/bin/java", "bin/java"} {
+		must(t, os.MkdirAll(filepath.Dir(filepath.Join(outside, rel)), 0o755))
+		must(t, os.WriteFile(filepath.Join(outside, rel), nil, 0o755))
+	}
+	must(t, os.Symlink(filepath.Join(outside, "jdk"), filepath.Join(dir, "linked-whole")))
+	file("linked-jdk/.ready")
+	must(t, os.Symlink(filepath.Join(outside, "jdk"), filepath.Join(dir, "linked-jdk", "jdk-25")))
+	file("linked-contents/jdk-26/provisioned.ok")
+	must(t, os.Symlink(filepath.Join(outside, "jdk", "Contents"), filepath.Join(dir, "linked-contents", "jdk-26", "Contents")))
+	file("linked-bin/jdk-27/provisioned.ok")
+	must(t, os.Symlink(filepath.Join(outside, "bin"), filepath.Join(dir, "linked-bin", "jdk-27", "bin")))
+	file("linked-java/jdk-28/provisioned.ok")
+	must(t, os.MkdirAll(filepath.Join(dir, "linked-java", "jdk-28", "bin"), 0o755))
+	must(t, os.Symlink(filepath.Join(outside, "bin", "java"), filepath.Join(dir, "linked-java", "jdk-28", "bin", "java")))
+
+	got, err := provisionedJDKs(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		filepath.Join(dir, "amazon_corretto-8-x64-linux", "jdk8u402"),
+		filepath.Join(dir, "azul_zulu-11-x64-linux"),
+		filepath.Join(dir, "eclipse_adoptium-17-x64-linux", "jdk-17.0.9+9"),
+		filepath.Join(dir, "eclipse_adoptium-21-aarch64-os_x", "jdk-21.0.6+7", "Contents", "Home"),
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("provisionedJDKs = %q, want %q", got, want)
+	}
+
+	// The run's home lists them, comma-separated.
+	deps, cache := t.TempDir(), t.TempDir()
+	must(t, os.Rename(dir, filepath.Join(deps, gradleJDKs)))
+	if err := PrepareRun(context.Background(), Select([]string{"gradle"}), deps, cache); err != nil {
+		t.Fatal(err)
+	}
+	props, _ := os.ReadFile(filepath.Join(cache, "gradle", "gradle.properties"))
+	for i := range want {
+		want[i] = filepath.Join(deps, gradleJDKs, strings.TrimPrefix(want[i], dir))
+	}
+	if line := "org.gradle.java.installations.paths=" + strings.Join(want, ",") + "\n"; !strings.Contains(string(props), line) {
+		t.Errorf("gradle.properties = %q, want the line %q", props, line)
+	}
+}
+
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

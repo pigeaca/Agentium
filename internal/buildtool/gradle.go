@@ -108,10 +108,16 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 	props := gradleHomeProps
 	if deps != "" {
 		// Toolchain JDKs the warm-up downloaded live in the deps folder (gradleJDKs, outside its Gradle home, which the
-		// agent may not read), not in this run's home: point Gradle there, and never let it download one (the sandbox
+		// agent may not read), not in this run's home: point Gradle at each, and never let it download one (the sandbox
 		// has no network anyway).
-		props += "org.gradle.java.installations.paths=" + filepath.Join(deps, gradleJDKs) + "\n" +
-			"org.gradle.java.installations.auto-download=false\n"
+		jdks, err := provisionedJDKs(filepath.Join(deps, gradleJDKs))
+		if err != nil {
+			return err
+		}
+		if len(jdks) > 0 {
+			props += "org.gradle.java.installations.paths=" + strings.Join(jdks, ",") + "\n"
+		}
+		props += "org.gradle.java.installations.auto-download=false\n"
 	}
 	if err := os.WriteFile(filepath.Join(guh, "gradle.properties"), []byte(props), 0o600); err != nil {
 		return err
@@ -137,6 +143,77 @@ func prepareGradleRun(ctx context.Context, deps, buildCache string) error {
 		return fmt.Errorf("clone the wrapper distribution: %w", err)
 	}
 	return nil
+}
+
+// provisionedJDKs lists the Java homes of the toolchain JDKs Gradle provisioned into dir, for
+// org.gradle.java.installations.paths: Gradle takes each entry as one installation, so dir itself lists nothing (Gradle
+// 8.10, checked offline; so does dir/<name>). Gradle unpacks a JDK to <name>/<jdk> (Contents/Home within it on macOS),
+// or straight into <name>, and marks it provisioned when done (provisioned.ok in <name>/<jdk>, .ready in <name>); an
+// unmarked one may still be unpacking. Only real folders inside dir are listed, never a link out of it, nor a path
+// with a comma (the list's separator). A missing dir lists nothing.
+func provisionedJDKs(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("toolchain JDKs: %w", err)
+	}
+	realDir := func(path string) bool {
+		info, err := os.Lstat(path)
+		return err == nil && info.IsDir()
+	}
+	marked := func(path string) bool {
+		for _, marker := range []string{".ready", "provisioned.ok"} {
+			if info, err := os.Lstat(filepath.Join(path, marker)); err == nil && info.Mode().IsRegular() {
+				return true
+			}
+		}
+		return false
+	}
+	// home is jdk's Java home (jdk itself, or Contents/Home in it): every folder down to bin a real one, bin/java a file.
+	home := func(jdk string) (string, bool) {
+		for _, sub := range [][]string{nil, {"Contents", "Home"}} {
+			path, ok := jdk, true
+			for _, part := range append(sub, "bin") {
+				path = filepath.Join(path, part)
+				ok = ok && realDir(path)
+			}
+			if info, err := os.Lstat(filepath.Join(path, "java")); ok && err == nil && info.Mode().IsRegular() {
+				return filepath.Dir(path), true
+			}
+		}
+		return "", false
+	}
+	var homes []string
+	add := func(h string) {
+		if !strings.Contains(h, ",") && !slices.Contains(homes, h) {
+			homes = append(homes, h)
+		}
+	}
+	for _, e := range entries {
+		root := filepath.Join(dir, e.Name())
+		if !e.IsDir() || !realDir(root) { // ReadDir does not follow links: a link is not a folder here
+			continue
+		}
+		if h, ok := home(root); ok && marked(root) {
+			add(h)
+			continue
+		}
+		inner, err := os.ReadDir(root)
+		if err != nil {
+			return nil, fmt.Errorf("toolchain JDKs: %w", err)
+		}
+		for _, j := range inner {
+			jdk := filepath.Join(root, j.Name())
+			if !j.IsDir() || !realDir(jdk) || !(marked(jdk) || marked(root)) {
+				continue
+			}
+			if h, ok := home(jdk); ok {
+				add(h)
+			}
+		}
+	}
+	return homes, nil
 }
 
 // stopGradleDaemons ends the Gradle daemons the run started. It starts from the machine's own process list (the user's
@@ -265,7 +342,7 @@ const gradleLayout = "layout: caches/modules-2 -> ../../gradle-ro/modules-2, jdk
 // linkOutside makes link a relative symbolic link to the folder outside, creating the folder when missing. A folder at
 // link (an earlier layout) is moved to outside in one rename, so an agent of an earlier Agentium reading through link
 // finds it again once the link is made. It refuses, changing nothing, when both are folders (which one is current is
-// unknown: remove one), or when either is something else: only Agentium writes the deps folder, so these mean it was
+// unknown: a person removes one), or when either is something else: only Agentium writes the deps folder, so these mean it was
 // changed by hand. It runs under the warm-up lock; a crash between the rename and the link leaves a state the next call
 // completes.
 func linkOutside(link, outside string) error {
@@ -303,7 +380,10 @@ func linkOutside(link, outside string) error {
 		if ok, err := isDir(outside); err != nil {
 			return err
 		} else if ok {
-			return fmt.Errorf("%s and %s are both folders: remove one (the deps folder holds only downloads, fetched again by the next warm-up)", link, outside)
+			// Gradle 9.7.1 downloads through the link, and 8.10 kept it in an offline build that locked the cache; a
+			// version that replaced it with a folder would leave this state after one warm-up, and setup then fails
+			// closed until a person removes one.
+			return fmt.Errorf("%s and %s are both folders (a Gradle version may have replaced the link with a folder): remove one by hand, then set up again; the deps folder holds only downloads, and the next warm-up fetches what is missing and makes the link again", link, outside)
 		}
 		if err := os.MkdirAll(filepath.Dir(outside), 0o700); err != nil {
 			return err
