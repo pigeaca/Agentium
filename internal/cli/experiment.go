@@ -30,13 +30,15 @@ var experimentUsage = `Usage:
                      experiment runs, if it is not yet
   agentium experiment plan NAME
                      the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
-  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait]
+  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
                      the budget; infrastructure failures are retried. First, each context without a calibration on this Claude Code
                      and model is calibrated (a short paid run each, in the budget; a failed calibration stops the
                      experiment before any task run). Run it again to resume; --budget raises the total.
                      With a subscription, no pair starts past --usage-limit (default 85) of the five-hour window:
-                     it pauses, or with --wait waits for the window to reset
+                     it pauses, or with --wait waits for the window to reset. --yes is consent to spend for a script:
+                     with --json (one JSON document when the run ends, no progress), a run without --yes starts
+                     nothing and exits 1; a person's own run needs no --yes
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json | --markdown] [--out FILE]
@@ -45,6 +47,8 @@ var experimentUsage = `Usage:
                      with --out or --markdown; or JSON (with the lock and every run)
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
+
+Every experiment command but report takes --json (one JSON document on stdout; see docs/guide.md, "Scripting and automation").
 
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT); --task picks
 them (repeatable), else a seeded sample does. A cost experiment (--goal cheaper, the default) runs method seq-v1: up to
@@ -145,6 +149,9 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return failNew(env, err)
 	}
+	if env.JSON {
+		return env.emit(newDocument(name, created))
+	}
 	created.Write(env.Stdout, env.style(), name)
 	return ExitOK
 }
@@ -205,6 +212,13 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		doc, err := planDocument(env, rest[0], review)
+		if err != nil {
+			return fail(env, err)
+		}
+		return env.emit(doc)
+	}
 	mode, _ := signInMode(env)
 	if err := review.Write(ctx, env.Stdout, env.style(), rest[0], mode, env.Now()); err != nil {
 		return fail(env, err)
@@ -237,11 +251,12 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	if len(all) == 0 {
+	if len(all) == 0 && !env.JSON {
 		fmt.Fprintln(env.Stdout, "No experiments yet: "+env.style().Command("agentium experiment new NAME --b SNAPSHOT"))
 		return ExitOK
 	}
 	st := env.style()
+	entries := []experimentListEntry{}
 	table := term.NewTable(st, term.Left("NAME"), term.Left("TEMPLATE"), term.Left("ARMS (A / B)"), term.Left("SIZE"), term.Left("MODEL"),
 		term.Right("BUDGET"), term.Left("STATUS"), term.Left("CREATED"))
 	for _, e := range all {
@@ -259,8 +274,17 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		if status == store.StatusRunning && !w.layout.RunsBusy() {
 			status = store.StatusStopped // its process ended without saying so
 		}
+		entry := experimentListEntry{Name: e.Name, Template: e.Template, Goal: d.Goal, Method: d.LockMethod(), Arms: []listArmDoc{}, Tasks: len(d.Tasks),
+			RepeatsPerArm: d.Repeats, Model: listModel(d), BudgetUSD: budget, Status: storedStatus(w, e), Created: e.CreatedAt}
+		for _, a := range d.Arms {
+			entry.Arms = append(entry.Arms, listArmDoc{Name: a.Name, Context: a.Context})
+		}
+		entries = append(entries, entry)
 		table.Row(e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats), listModel(d), fmt.Sprintf("$%.2f", budget),
 			st.Status(status), e.CreatedAt.Format("2006-01-02 15:04"))
+	}
+	if env.JSON {
+		return env.emit(experimentListDoc{header: hdr("experiment list"), Experiments: entries})
 	}
 	if err := table.Write(env.Stdout); err != nil {
 		return fail(env, err)
@@ -298,6 +322,9 @@ func experimentRemove(ctx context.Context, env Env, args []string) int {
 	}
 	if err := w.db.DeleteExperiment(ctx, w.project.ID, rest[0]); err != nil {
 		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(experimentRemoveDoc{header: hdr("experiment rm"), Removed: rest[0]})
 	}
 	fmt.Fprintf(env.Stdout, "Removed experiment %s.\n", rest[0])
 	return ExitOK

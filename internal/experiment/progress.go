@@ -12,44 +12,65 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// armCounts is one arm's progress.
-type armCounts struct {
+// ArmProgress is one arm's progress.
+type ArmProgress struct {
+	Name, Context                                              string
 	Fair, Successes, Passed, Unfair, Infra, Cancelled, Settled int
 	CostUSD                                                    float64
 }
 
-// WriteProgress shows where an experiment stands, per arm, from its stored runs.
-func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style, name string, id int64, lock Lock) error {
+// Progress is where an experiment stands, from its stored runs: what WriteProgress prints and the experiment commands'
+// JSON documents carry.
+type Progress struct {
+	Status         string // the stored status; a running one whose process ended reads store.StatusStopped
+	StatusNote     string
+	Slots          int // the schedule's runs
+	Settled        int // slots with a settled run
+	Failed         int // slots out of attempts: a resume does not retry them
+	SpentUSD       float64
+	JudgeUSD       float64 // of SpentUSD
+	CalibrationUSD float64 // of SpentUSD
+	BudgetUSD      float64
+	Arms           []ArmProgress
+	UnjudgedRuns   int
+	// Sequential is a seq-v1 experiment's looks; nil for other methods.
+	Sequential *SeqStatus
+	// Orphaned: a "running" status was stored by a process that is gone.
+	Orphaned bool
+}
+
+// LoadProgress reads where a locked experiment stands.
+func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock Lock) (Progress, error) {
 	stored, err := p.DB.ExperimentByName(ctx, p.ID, name)
 	if err != nil {
-		return err
+		return Progress{}, err
 	}
 	runs, err := p.DB.ExperimentRuns(ctx, id)
 	if err != nil {
-		return err
+		return Progress{}, err
 	}
-	counts := map[string]*armCounts{}
+	counts := map[string]*ArmProgress{}
+	out := Progress{Slots: len(lock.Schedule), BudgetUSD: lock.Design.BudgetUSD, Status: stored.Status, StatusNote: stored.StatusNote}
 	for _, a := range lock.Arms {
-		counts[a.Name] = &armCounts{}
+		counts[a.Name] = &ArmProgress{Name: a.Name, Context: a.Context}
 	}
 	settled := map[int]bool{}
-	spent, judgeSpent := 0.0, 0.0
-	unjudgedRuns := 0
+	attempts := map[int]int{} // infrastructure failures per slot (cancelled runs are not attempts), as Execute counts them
 	for _, r := range runs {
 		c := counts[r.Arm]
 		if c == nil {
 			continue
 		}
 		s := storedSpend(r)
-		spent += s.TotalUSD() // the budget's spend; the arm's cost is the agent's alone
-		judgeSpent += s.JudgeUSD
+		out.SpentUSD += s.TotalUSD() // the budget's spend; the arm's cost is the agent's alone
+		out.JudgeUSD += s.JudgeUSD
 		c.CostUSD += s.AgentUSD
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
-			return fmt.Errorf("run %s: %w", r.ID, err)
+			return Progress{}, fmt.Errorf("run %s: %w", r.ID, err)
 		}
 		if needsJudge(lock, r, rec) {
-			unjudgedRuns++
+			out.UnjudgedRuns++
 		}
 		switch {
 		case Fair(r.Outcome):
@@ -67,69 +88,94 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 		default:
 			c.Infra++
 		}
+		if !Settles(r.Outcome) && r.Outcome != "cancelled" {
+			attempts[r.Slot]++
+		}
 		if Settles(r.Outcome) && !settled[r.Slot] {
 			settled[r.Slot] = true
 			c.Settled++
 		}
 	}
-	status := stored.Status
-	if status == StatusUsage {
-		status = "paused at the usage limit"
-	}
-	if stored.StatusNote != "" {
-		status += ": " + stored.StatusNote
+	out.Settled = len(settled)
+	for slot, n := range attempts {
+		if !settled[slot] && n >= lock.MaxAttempts && slot >= 0 && slot < out.Slots {
+			out.Failed++
+		}
 	}
 	if stored.Status == store.StatusRunning && !p.Layout.RunsBusy() {
-		status = "stopped (its Agentium process ended; run it again to resume)"
+		out.Orphaned = true
 	}
-	fmt.Fprintf(out, "%s %s\n", st.Heading("Experiment "+name+":"), st.Heading(st.Status(status)))
-	calibrating, err := p.CalibrationSpend(ctx, id)
+	if out.CalibrationUSD, err = p.CalibrationSpend(ctx, id); err != nil {
+		return Progress{}, err
+	}
+	out.SpentUSD += out.CalibrationUSD
+	for _, a := range lock.Arms {
+		out.Arms = append(out.Arms, *counts[a.Name])
+	}
+	if lock.Method == MethodSeq {
+		data, err := RunDataOfStored(runs)
+		if err != nil {
+			return Progress{}, err
+		}
+		status, _, err := SequentialStatus(lock, data)
+		if err != nil {
+			return Progress{}, err
+		}
+		out.Sequential = &status
+	}
+	return out, nil
+}
+
+// WriteProgress shows where an experiment stands, per arm, from its stored runs.
+func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style, name string, id int64, lock Lock) error {
+	pr, err := p.LoadProgress(ctx, name, id, lock)
 	if err != nil {
 		return err
 	}
-	spent += calibrating
+	status := pr.Status
+	if status == StatusUsage {
+		status = "paused at the usage limit"
+	}
+	if pr.StatusNote != "" {
+		status += ": " + pr.StatusNote
+	}
+	if pr.Orphaned {
+		status = "stopped (its Agentium process ended; run it again to resume)"
+	}
+	fmt.Fprintf(out, "%s %s\n", st.Heading("Experiment "+name+":"), st.Heading(st.Status(status)))
 	judged := ""
-	if judgeSpent > 0 {
-		judged = fmt.Sprintf(" (the judge $%.2f of it, not in the arms' costs)", judgeSpent)
+	if pr.JudgeUSD > 0 {
+		judged = fmt.Sprintf(" (the judge $%.2f of it, not in the arms' costs)", pr.JudgeUSD)
 	}
-	if calibrating > 0 {
-		judged += fmt.Sprintf(" (calibration $%.2f of it, not in the arms' costs)", calibrating)
+	if pr.CalibrationUSD > 0 {
+		judged += fmt.Sprintf(" (calibration $%.2f of it, not in the arms' costs)", pr.CalibrationUSD)
 	}
-	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f%s\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD, judged)
+	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f%s\n", pr.Settled, pr.Slots, pr.SpentUSD, pr.BudgetUSD, judged)
 	table := term.NewTable(st, term.Left("ARM"), term.Left("CONTEXT"), term.Right("SETTLED"), term.Right("FAIR"), term.Right("SUCCESSES"),
 		term.Right("UNFAIR"), term.Right("INFRA"), term.Right("CANCELLED"), term.Right("COST"))
-	for _, a := range lock.Arms {
-		c := counts[a.Name]
-		table.Row(a.Name, a.Context, fmt.Sprintf("%d/%d", c.Settled, len(lock.Schedule)/2), strconv.Itoa(c.Fair), strconv.Itoa(c.Successes),
+	for _, c := range pr.Arms {
+		table.Row(c.Name, c.Context, fmt.Sprintf("%d/%d", c.Settled, pr.Slots/2), strconv.Itoa(c.Fair), strconv.Itoa(c.Successes),
 			strconv.Itoa(c.Unfair), strconv.Itoa(c.Infra), strconv.Itoa(c.Cancelled), fmt.Sprintf("$%.2f", c.CostUSD))
 		if c.Passed > c.Successes {
-			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", a.Name, c.Passed-c.Successes)))
+			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", c.Name, c.Passed-c.Successes)))
 		}
 	}
 	if err := table.Write(out); err != nil {
 		return err
 	}
 	fmt.Fprintln(out, st.Note("Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted."))
-	if lock.Method == MethodSeq {
-		data, err := RunDataOfStored(runs)
-		if err != nil {
-			return err
-		}
-		status, _, err := SequentialStatus(lock, data)
-		if err != nil {
-			return err
-		}
-		fmt.Fprintf(out, "Looks (method %s): %s\n", MethodSeq, status.Describe())
-		for _, l := range status.Looks {
-			fmt.Fprintf(out, "  %s\n", DescribeLook(l, len(status.Planned)))
+	if s := pr.Sequential; s != nil {
+		fmt.Fprintf(out, "Looks (method %s): %s\n", MethodSeq, s.Describe())
+		for _, l := range s.Looks {
+			fmt.Fprintf(out, "  %s\n", DescribeLook(l, len(s.Planned)))
 		}
 	}
-	if unjudgedRuns > 0 {
+	if pr.UnjudgedRuns > 0 {
 		resume := "agentium experiment run " + name
-		if stored.Status == store.StatusBudget { // the budget left no room to judge them: the same command as the stop's
+		if pr.Status == store.StatusBudget { // the budget left no room to judge them: the same command as the stop's
 			resume += " --budget USD"
 		}
-		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", unjudgedRuns)), st.Command(resume))
+		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", pr.UnjudgedRuns)), st.Command(resume))
 	}
 	return nil
 }

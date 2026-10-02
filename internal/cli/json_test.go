@@ -71,7 +71,7 @@ func checkJSON(t *testing.T, f runFixture, res cliResult, wantCode int, args []s
 		}
 	}
 	if wantCode != ExitOK {
-		if _, ok := doc["error"]; !ok && args[0] != "task" && args[0] != "start" {
+		if _, ok := doc["error"]; !ok && args[0] != "task" && args[0] != "start" && !(len(args) > 1 && args[0] == "experiment" && args[1] == "run" && doc["run"] != nil) { // results, not errors
 			t.Errorf("%v: failed without an error object:\n%s", args, res.stdout)
 		}
 	} else if _, ok := doc["error"]; ok {
@@ -238,11 +238,11 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 	if got.get("status") != "preview" && got.get("status") != "not_ready" {
 		t.Errorf("start status: %s", got.stdout)
 	}
-	assertKeys(t, got.doc, "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run_command,schema,status,tasks_awaiting_review,tasks_ready")
+	assertKeys(t, got.doc, startKeys)
 	if got.get("tasks_ready") != float64(9) || got.get("tasks_awaiting_review") != float64(0) {
 		t.Errorf("task counts: %s", got.stdout)
 	}
-	assertKeys(t, got.doc["experiment"], "budget_usd,model,name,repeats_per_arm,runs,tasks,template")
+	assertKeys(t, got.doc["experiment"], startExperimentKeys)
 	assertKeys(t, got.doc["project"], "id,name")
 	assertKeys(t, got.doc["north_star"], "decisive,experiment,metric,seconds,spent_usd,verdict")
 	assertKeys(t, got.doc["readiness"].([]any)[0], "status,text")
@@ -259,13 +259,6 @@ func TestJSONStartPreviewNeverAsksOrRuns(t *testing.T) {
 	again := jsonRun(t, f, ExitOK, "start", "--accept-mined")
 	if again.get("experiment", "name") != "quick-aa-baseline" || again.get("tasks_ready") != nil || again.get("tasks_awaiting_review") != nil {
 		t.Errorf("a second start resumes, without counting tasks: %s", again.stdout)
-	}
-
-	// --yes would run the experiment, whose output is not JSON in part 1.
-	refused := f.run(context.Background(), "start", "--json", "--yes")
-	checkJSON(t, f, refused, ExitUsage, []string{"start", "--yes"})
-	if stored, started := paidRuns(t, f, ctrl); stored != 0 || started != 0 {
-		t.Errorf("a refused start --yes ran the agent: %d stored, %d started", stored, started)
 	}
 }
 
@@ -388,13 +381,13 @@ func TestJSONIgnoresColorSettingsAndHelpStaysText(t *testing.T) {
 	}
 }
 
-// Commands outside part 1 keep their behavior: --json is not theirs yet.
+// Commands outside the --json contract keep their behavior: the flag is not theirs.
 func TestJSONFlagIsUntouchedOnOtherCommands(t *testing.T) {
 	t.Parallel()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
-	got := f.run(context.Background(), "experiment", "list", "--json")
+	got := f.run(context.Background(), "run", "calibrate", "--json")
 	if got.code != ExitUsage || !strings.Contains(got.stderr, "json") {
-		t.Errorf("experiment list --json: exit %d\n%s", got.code, got.stderr)
+		t.Errorf("run calibrate --json: exit %d\n%s", got.code, got.stderr)
 	}
 	if got := f.run(context.Background(), "version", "--json"); got.code != ExitOK {
 		t.Errorf("version: %d", got.code)
@@ -415,6 +408,8 @@ func TestSplitJSONFlag(t *testing.T) {
 		{"task", []string{"--json", "show", "a"}, []string{"--json", "show", "a"}, false}, // the subcommand comes first
 		{"task", []string{"list", "--json", "-h"}, []string{"list", "-h"}, false},
 		{"experiment", []string{"report", "--json"}, []string{"report", "--json"}, false},
+		{"experiment", []string{"run", "x", "--yes", "--json"}, []string{"run", "x", "--yes"}, true},
+		{"experiment", []string{"list", "--json"}, []string{"list"}, true},
 		{"run", []string{"calibrate", "--json"}, []string{"calibrate", "--json"}, false},
 		{"context", []string{"lint", "-json"}, []string{"lint"}, true},
 		{"context", []string{"snapshot", "help", "--json"}, []string{"snapshot", "help"}, true}, // "help" is a name here

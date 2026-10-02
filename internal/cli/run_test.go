@@ -199,6 +199,8 @@ type runFixture struct {
 	sleep *func(ctx context.Context, d time.Duration) error
 	// terminal is Env.Terminal: whether stdout counts as a terminal (false: plain output).
 	terminal *bool
+	// account is what Env.AccountHome returns: the account's home folder ("" unknown).
+	account *string
 }
 
 // newRunFixture is a project with one commit that adds a hidden test and the task "value" imported from it, initialized
@@ -236,6 +238,7 @@ func runFixtureAt(repo, data, home string) runFixture {
 	f.vars = map[string]string{"AGENTIUM_HOME": data, "HOME": f.home}
 	f.sleep = new(func(ctx context.Context, d time.Duration) error)
 	f.terminal = new(bool)
+	f.account = new(string)
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
 		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
@@ -248,7 +251,8 @@ func runFixtureAt(repo, data, home string) runFixture {
 				return environ
 			},
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
-			Backoff: func(int) time.Duration { return 10 * time.Millisecond },
+			AccountHome: func() string { return *f.account },
+			Backoff:     func(int) time.Duration { return 10 * time.Millisecond },
 			Sleep: func(ctx context.Context, d time.Duration) error {
 				if *f.sleep != nil {
 					return (*f.sleep)(ctx, d)
@@ -354,6 +358,23 @@ func TestRunSetupUsesTheAgentsBuildCache(t *testing.T) {
 	}
 	if got, want := readString(t, filepath.Join(seen, "verify")), filepath.Join(f.data, "cache", "go-build"); got != want {
 		t.Errorf("verification's GOCACHE = %q, want Agentium's %q", got, want)
+	}
+}
+
+// HOME (the fixture's home) is not the account's home folder here: the run's sandbox settings deny the login keychain
+// in both, so an agent cannot open the account's own by its path.
+func TestRunDeniesTheAccountsKeychainWhenHomeIsRedirected(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	*f.account = t.TempDir()
+	args := filepath.Join(t.TempDir(), "args")
+	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, `printf '%s\n' "$@" > `+args, false)
+	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK)
+	seen := readString(t, args)
+	for _, p := range []string{filepath.Join(*f.account, "Library", "Keychains"), filepath.Join(f.home, "Library", "Keychains")} {
+		if !strings.Contains(seen, `"`+p+`"`) || !strings.Contains(seen, "Read(/"+p+"/**)") {
+			t.Errorf("the run's settings do not deny %s", p)
+		}
 	}
 }
 
