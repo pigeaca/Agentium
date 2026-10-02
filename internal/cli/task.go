@@ -782,6 +782,9 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "  status     %s\n", st.Status(validationStatus(t)))
 	var stored task.Validation
 	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
+		for _, w := range stored.Warnings {
+			fmt.Fprintln(out, st.Warn("warning: "+w))
+		}
 		printWeakTests(out, st, stored.WeakTests)
 	}
 	if t.Grading == task.GradingJudge {
@@ -1079,7 +1082,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	}
 	if env.JSON {
 		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview,
-			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{},
+			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, Warnings: []string{},
 			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
 				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}
 		return env.emitCode(doc, validationExit(result.Status))

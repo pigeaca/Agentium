@@ -70,7 +70,7 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	edited := jsonRun(t, f, ExitOK, "task", "edit", "again", "--reviewed")
 	keys(edited, "command,schema,task,updated")
 	validated := jsonRun(t, f, ExitOK, "task", "validate", "value", "--weak-tests")
-	keys(validated, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,weak_tests")
+	keys(validated, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
 	assertKeys(t, validated.get("weak_tests"), "checked,reason,skipped,timed_out,untested")
 	all := jsonRun(t, f, ExitOK, "task", "validate", "--all")
 	keys(all, "command,interrupted,schema,tasks,total,valid")
@@ -126,8 +126,8 @@ func TestJSONJudgeGradedValidateHasNoNulls(t *testing.T) {
 	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value newer")
 	jsonRun(t, f, ExitOK, "task", "add", "judged", "--base", "HEAD~1", "--solution", "HEAD", "--judge-graded", "--instruction", "Make the value newer.", "--verify", "true")
 	got := jsonRun(t, f, ExitOK, "task", "validate", "judged")
-	assertKeys(t, got.doc, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,weak_tests")
-	for _, k := range []string{"arms", "unstated_requirement_details", "harness_changed"} {
+	assertKeys(t, got.doc, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
+	for _, k := range []string{"arms", "unstated_requirement_details", "harness_changed", "warnings"} {
 		if got.doc[k] == nil {
 			t.Errorf("%s is null:\n%s", k, got.stdout)
 		}

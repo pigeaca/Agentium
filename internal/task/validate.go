@@ -106,6 +106,9 @@ type Validation struct {
 	// Notes are what preparing the build tools said (Validator.Checkout): a venv resolved without a lock file, a test
 	// runner it lacks, a warm-up that failed.
 	Notes []string `json:"notes,omitempty"`
+	// Warnings are what the task's commands keep from grading, which never change its status: hidden Go tests a verify
+	// command's -skip or -run pattern keeps from running (FilteredHiddenTests).
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // CheckoutCommands is how Agentium's own commands run in a checkout of a base commit once its build tools are warmed
@@ -186,6 +189,9 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		if solution, err = source.Commit(ctx, spec.Solution, "--git-dir", v.Bare); err != nil {
 			return Validation{}, err
 		}
+		if result.Warnings, err = v.filteredHiddenTests(ctx, spec, solution); err != nil {
+			return Validation{}, err
+		}
 	}
 	for _, arm := range arms {
 		stages, harness, kept, err := v.validateArm(ctx, spec, arm, solution)
@@ -230,6 +236,25 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		}
 	}
 	return result, nil
+}
+
+// filteredHiddenTests warns of the hidden Go tests the verify commands keep from running (FilteredHiddenTests), and
+// prints each warning to Progress. The base is read only when a verify command filters Go tests.
+func (v Validator) filteredHiddenTests(ctx context.Context, spec Spec, solution source.Source) ([]string, error) {
+	if !slices.ContainsFunc(spec.Verify, func(c string) bool { return len(goTestFilters(c)) > 0 }) {
+		return nil, nil
+	}
+	base, err := source.Commit(ctx, spec.Base, "--git-dir", v.Bare)
+	if err != nil {
+		return nil, err
+	}
+	warnings := FilteredHiddenTests(spec.Verify, spec.HiddenTests, base, solution)
+	for _, w := range warnings {
+		if v.Progress != nil {
+			fmt.Fprintln(v.Progress, v.Style.Warn("  warning: "+w))
+		}
+	}
+	return warnings, nil
 }
 
 // weakSkipReason says why the weak-tests check cannot run: the base context's reference stage must have run and been OK.

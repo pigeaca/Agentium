@@ -171,11 +171,14 @@ type validatedDoc struct {
 	HarnessChanged map[string][]string `json:"harness_changed"` // per arm: settings, hooks or MCP the arm changes
 	WeakTests      *weakTestsDoc       `json:"weak_tests"`
 	Judge          *judgeCheckDoc      `json:"judge"` // judge-graded tasks only
+	// Warnings are what the verify commands keep from grading (task.Validation.Warnings); they never change the status.
+	Warnings []string `json:"warnings"`
 }
 
 func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task, o task.ValidateOptions, result task.Validation) validatedDoc {
 	doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), Arms: []string{}, Repeats: result.RepeatCount(),
-		NeedsReview: t.NeedsReview, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests)}
+		NeedsReview: t.NeedsReview, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests),
+		Warnings: list(env.redactAll(result.Warnings))}
 	for _, a := range o.Arms {
 		doc.Arms = append(doc.Arms, a.Name)
 	}
