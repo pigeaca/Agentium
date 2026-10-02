@@ -34,6 +34,8 @@ const contextUsage = `Usage:
   agentium context lint --print-hook             the Claude Code hook that runs it after you edit context files
                                                  (you add it to ~/.claude/settings.json; Agentium never does)
   agentium context list                          saved versions
+  agentium context show|snapshot|list|diff|lint ... --json
+                                                 one JSON document instead of text (docs/guide.md, "Scripting and automation")
   agentium context diff A B [--patch]            compare two saved versions
 `
 
@@ -86,6 +88,7 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 	if root, err = filepath.EvalSymlinks(root); err != nil {
 		return nil, fmt.Errorf("resolve repository root: %w", err)
 	}
+	env.noteRoot(root)
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
 		return nil, err
@@ -170,6 +173,9 @@ func contextShow(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		return env.emit(contextShowDocument(env, w.project.Name, src.Describe(), resolved, len(aboveRepository(w.root))))
+	}
 	st := env.style()
 	if err := printContext(env.Stdout, st, w.project.Name, src.Describe(), resolved); err != nil {
 		return fail(env, err)
@@ -250,6 +256,70 @@ func printContext(out io.Writer, st term.Style, project, where string, resolved 
 	return nil
 }
 
+type contextEntryDoc struct {
+	Path         string `json:"path"`
+	Kind         string `json:"kind"`
+	Bytes        int    `json:"bytes"`
+	StartupBytes int    `json:"startup_bytes"`
+	Via          string `json:"via"`
+}
+
+type contextShowDoc struct {
+	header
+	Project  string            `json:"project"`
+	Where    string            `json:"where"` // "working tree" or "commit <short hash>"
+	Context  contextSizeDoc    `json:"context"`
+	Entries  []contextEntryDoc `json:"entries"`
+	Linked   []string          `json:"linked"`
+	Warnings []string          `json:"warnings"`
+	// AboveRepository counts instruction files in folders above the repository (personal; never named).
+	AboveRepository int `json:"above_repository_files"`
+}
+
+func contextShowDocument(env Env, name, where string, resolved claudectx.Context, above int) contextShowDoc {
+	doc := contextShowDoc{header: hdr("context show"), Project: name, Where: where, Context: contextSize(resolved), Entries: []contextEntryDoc{},
+		Linked: list(resolved.Linked), Warnings: env.redactAll(resolved.Warnings), AboveRepository: above}
+	for _, e := range resolved.Entries {
+		doc.Entries = append(doc.Entries, contextEntryDoc{Path: e.Path, Kind: e.Kind, Bytes: e.Bytes, StartupBytes: e.StartupBytes, Via: e.Via})
+	}
+	return doc
+}
+
+type snapshotInfo struct {
+	Name          string   `json:"name"`
+	Source        string   `json:"source"`
+	Commit        string   `json:"commit"`
+	Files         int      `json:"files"`
+	StartupTokens int      `json:"startup_tokens_estimated"`
+	Warnings      []string `json:"warnings"`
+}
+
+type snapshotDoc struct {
+	header
+	snapshotInfo
+	// NotIncludedLinked are documents the context links to that this snapshot lacks (add them with --include).
+	NotIncludedLinked []string `json:"not_included_linked"`
+	// UncapturedChanges are changed files that are not context and so not in a --working-tree snapshot; always empty without it.
+	UncapturedChanges []string `json:"uncaptured_changes"`
+}
+
+type snapshotListDoc struct {
+	header
+	Snapshots []snapshotInfo `json:"snapshots"`
+}
+
+type diffDoc struct {
+	header
+	From        string  `json:"from"`
+	To          string  `json:"to"`
+	FromTokens  int     `json:"from_tokens_estimated"`
+	ToTokens    int     `json:"to_tokens_estimated"`
+	DeltaTokens int     `json:"delta_tokens_estimated"`
+	Changed     bool    `json:"changed"`
+	Stat        string  `json:"stat"`
+	Patch       *string `json:"patch"` // with --patch, else null
+}
+
 // stringList is a repeatable string flag.
 type stringList []string
 
@@ -310,6 +380,9 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		return snapshotJSON(ctx, env, w, src, manifest, snapshotInfo{Name: name, Source: label, Commit: commit}, *workingTree)
+	}
 	st := env.style()
 	fmt.Fprintf(env.Stdout, "Saved snapshot %s from %s (%s): %d file(s); about %d tokens at session start\n",
 		name, label, experiment.ShortCommit(commit), len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes))
@@ -329,6 +402,20 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stdout, warning(st, w))
 	}
 	return ExitOK
+}
+
+// snapshotJSON prints context snapshot's --json document: what the text reports, and warns about.
+func snapshotJSON(ctx context.Context, env Env, w *workspace, src source.Source, manifest snapshot.Manifest, info snapshotInfo, workingTree bool) int {
+	info.Files, info.StartupTokens, info.Warnings = len(manifest.Files), claudectx.EstimateTokens(manifest.StartupBytes), env.redactAll(manifest.Warnings)
+	doc := snapshotDoc{header: hdr("context snapshot"), snapshotInfo: info, NotIncludedLinked: list(notIncluded(src, manifest)), UncapturedChanges: []string{}}
+	if workingTree {
+		changes, err := snapshot.UncapturedChanges(ctx, w.root, manifest.Paths())
+		if err != nil {
+			return fail(env, err)
+		}
+		doc.UncapturedChanges = list(changes)
+	}
+	return env.emit(doc)
 }
 
 // saveSnapshot builds the snapshot's commit in Agentium's repository and records it under name.
@@ -392,6 +479,18 @@ func contextList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		doc := snapshotListDoc{header: hdr("context list"), Snapshots: []snapshotInfo{}}
+		for _, snap := range snaps {
+			var manifest snapshot.Manifest
+			if err := json.Unmarshal(snap.Manifest, &manifest); err != nil {
+				return fail(env, fmt.Errorf("snapshot %s: %w", snap.Name, err))
+			}
+			doc.Snapshots = append(doc.Snapshots, snapshotInfo{Name: snap.Name, Source: snap.Source, Commit: snap.SourceCommit, Files: len(manifest.Files),
+				StartupTokens: claudectx.EstimateTokens(manifest.StartupBytes), Warnings: env.redactAll(manifest.Warnings)})
+		}
+		return env.emit(doc)
+	}
 	if len(snaps) == 0 {
 		fmt.Fprintln(env.Stdout, "No snapshots yet: "+env.style().Command("agentium context snapshot NAME"))
 		return ExitOK
@@ -442,6 +541,14 @@ func contextDiff(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	from, to := claudectx.EstimateTokens(manifests[0].StartupBytes), claudectx.EstimateTokens(manifests[1].StartupBytes)
+	if env.JSON {
+		doc := diffDoc{header: hdr("context diff"), From: rest[0], To: rest[1], FromTokens: from, ToTokens: to, DeltaTokens: to - from,
+			Changed: strings.TrimSpace(stat) != "", Stat: strings.TrimSpace(stat)}
+		if *patch {
+			doc.Patch = &fullPatch
+		}
+		return env.emit(doc)
+	}
 	fmt.Fprintf(env.Stdout, "%s -> %s: session-start context about %d -> %d tokens (%+d, estimated)\n", rest[0], rest[1], from, to, to-from)
 	if strings.TrimSpace(stat) == "" {
 		fmt.Fprintln(env.Stdout, "No differences.")
