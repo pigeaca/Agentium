@@ -36,7 +36,7 @@ func seqFixture(t *testing.T) (runFixture, string) {
 		writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")
 		expect(t, f.run(ctx, "context", "snapshot", "lean", "--working-tree"), ExitOK)
 		gitIn(t, f.repo, "checkout", "--", "CLAUDE.md")
-		expect(t, f.run(ctx, "task", "mine", "--limit", "16", "--jobs", "4"), ExitOK, "16 of 16 imported task(s) are valid")
+		expect(t, f.run(ctx, "pool", "update", "--limit", "16", "--jobs", "4"), ExitOK, "Imported 16 of 16 candidate(s) tried", "valid            16")
 		db, id := openFixtureDB(t, f)
 		tasks, err := db.Tasks(ctx, id)
 		if err != nil || len(tasks) != 16 {
@@ -408,9 +408,11 @@ func TestSeqModelAB(t *testing.T) {
 	f, ctrl := seqFixture(t)
 	ctx := context.Background()
 	control(t, ctrl, map[string]string{"cost-claude-opus-5-5": "0.60", "cost-jitter": ""})
-	expect(t, f.run(ctx, "experiment", "new", "models", "--template", "model-ab", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5",
-		"--run-budget-a", "2", "--run-budget-b", "1", "--seed", "5"), ExitOK,
+	expect(t, f.run(ctx, "experiment", "new", "models", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5", "--seed", "5"), ExitOK,
 		"16 task(s) × 1 run(s) per arm = 32 runs", "Method seq-v1: looks after 8, 12 and 16 tasks")
+	// Each arm's own run cap, as --run-budget-a and --run-budget-b set them before they were removed.
+	perArmCaps := func(d *experiment.Design) { d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD = 2, 1 }
+	storeAsBefore(t, f, "models", perArmCaps)
 	if d := loadDesign(t, f, "models"); d.Version != experiment.DesignVersionSeq || d.Method != experiment.MethodSeq || d.Template != experiment.TemplateModelAB {
 		t.Errorf("the stored design: version %d, method %s, template %s", d.Version, d.Method, d.Template)
 	}
@@ -426,8 +428,8 @@ func TestSeqModelAB(t *testing.T) {
 
 	// $2 and $1 caps ($2.30 and $1.15 with their overshoot: Opus 5.5's floor is $0.30), 2 at a time: a pair starts only
 	// while the spend, the caps in flight and its own $3.45 fit $6.
-	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5",
-		"--run-budget-a", "2", "--run-budget-b", "1", "--budget", "6", "--seed", "5"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5", "--budget", "7", "--seed", "5"), ExitOK)
+	storeAsBefore(t, f, "tight", func(d *experiment.Design) { perArmCaps(d); d.BudgetUSD = 6 })
 	tight := f.run(ctx, "experiment", "run", "tight")
 	expect(t, tight, ExitOK, "Experiment tight: budget: the next run would not fit the $6.00 budget", "$2.30 (arm A) or $1.15 (arm B) per run at most")
 	spent := 0.0

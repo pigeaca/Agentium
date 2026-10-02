@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -117,6 +119,11 @@ type Design struct {
 	// and decide nothing; its cost counts against BudgetUSD but never toward an arm's cost. Omitted when off, so designs
 	// and locks made before the judge read and encode as they did.
 	Judge *judge.Settings `json:"judge,omitempty"`
+	// JudgePairs, when set, has the pair judge compare each pair's two passing runs (a task's run in each arm with the
+	// same repeat index) in both orders (judge.JudgePair). Its Repeats is 1: each order is asked once. Unvalidated, its
+	// preferences are exploratory and decide nothing; its cost counts against BudgetUSD but never toward an arm's
+	// cost. Omitted when off, so designs and locks made before it read and encode as they did.
+	JudgePairs *judge.Settings `json:"judge_pairs,omitempty"`
 	// Method is the method the design is made for (NewMethod); empty in designs stored before, which lock under
 	// phase1-v2 (LockMethod). A seq-v1 design has one run per task and arm and at most 16 tasks.
 	Method string `json:"method,omitempty"`
@@ -200,8 +207,45 @@ func ParseProfile(s string) (model, effort string, err error) {
 	return model, effort, nil
 }
 
+// InferTemplate is the template experiment new reads from its --b: none makes an A/A; a model (IsModel), with or
+// without an effort, a model A/B; anything else names a snapshot, for a context A/B.
+func InferTemplate(b string) string {
+	switch {
+	case b == "":
+		return TemplateAA
+	case IsModel(b):
+		return TemplateModelAB
+	}
+	return TemplateContextAB
+}
+
+// IsModel reports whether s, a MODEL[:EFFORT], names a model as experiment new reads --b: one Agentium's price table
+// knows, or a name shaped like a Claude model ID (modelID: claude-next-9, claude-opus-6-20270101). Aliases such as
+// "sonnet" and other claude-… names such as "claude-rules" are not: they read as a snapshot's name.
+func IsModel(s string) bool {
+	model, _, _ := strings.Cut(s, ":")
+	if _, known := pricing.Lookup(model); known {
+		return true
+	}
+	return modelID.MatchString(model)
+}
+
+// modelID is the shape of a Claude model ID: a family and a version of numbers, optionally dated.
+var modelID = regexp.MustCompile(`^claude-[a-z]+-\d+(-\d+)*(-\d{8})?$`)
+
+// SameProfile reports whether two MODEL[:EFFORT]s parse to one model and effort. One that does not parse is never the
+// same: ParseProfile's error is reported where it is read.
+func SameProfile(a, b string) bool {
+	modelA, effortA, errA := ParseProfile(a)
+	modelB, effortB, errB := ParseProfile(b)
+	return errA == nil && errB == nil && modelA == modelB && effortA == effortB
+}
+
 // Runs is the number of agent runs the design asks for.
 func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
+
+// Pairs is the number of pairs the design asks for: a task's run in each arm with the same repeat index.
+func (d Design) Pairs() int { return len(d.Tasks) * d.Repeats }
 
 // JudgeCapUSD is what one run's judgement may spend at most: each repeat's call up to judge.CallCapUSD, twice, since a
 // malformed reply is asked again. Zero without the judge. Claude Code checks --max-budget-usd after a turn, so a call
@@ -214,11 +258,28 @@ func (d Design) JudgeCapUSD() float64 {
 		return 0
 	}
 	s := d.Judge.WithDefaults()
+	return float64(s.Repeats) * 2 * judgeCallCapUSD(s)
+}
+
+// judgeCallCapUSD is what one judge call on s may spend at most: judge.CallCapUSD, with the overshoot allowance of a run
+// on its model for any judge but the default one (JudgeCapUSD says why).
+func judgeCallCapUSD(s judge.Settings) float64 {
+	s = s.WithDefaults()
 	perCall := judge.CallCapUSD
 	if s.Model != judge.DefaultModel || s.Effort != judge.DefaultEffort {
 		perCall += claude.CapOvershootUSD(judge.CallCapUSD, s.Model)
 	}
-	return float64(s.Repeats) * 2 * perCall
+	return perCall
+}
+
+// PairJudgeCapUSD is what one pair's comparison may spend at most: judge.PairCalls calls (both orders, each asked again
+// after a malformed reply), each at the judge's call cap with the same overshoot allowance as JudgeCapUSD. Zero without
+// the pair judge.
+func (d Design) PairJudgeCapUSD() float64 {
+	if d.JudgePairs == nil {
+		return 0
+	}
+	return judge.PairCalls * judgeCallCapUSD(*d.JudgePairs)
 }
 
 // RunCapUSD is what one run may spend at most: the agent's cap, its overshoot (claude.CapOvershootUSD) and its judgement's
@@ -235,12 +296,13 @@ func (d Design) RunCapUSD() float64 {
 	return capUSD
 }
 
-// PairCapUSD is what a pair of runs, one per arm, may spend at most (each run's cap with its overshoot).
+// PairCapUSD is what a pair of runs, one per arm, may spend at most: each run's cap with its overshoot and judgement,
+// and the pair's comparison (PairJudgeCapUSD).
 func (d Design) PairCapUSD() float64 {
 	if len(d.Arms) != 2 {
-		return 2 * d.RunCapUSD()
+		return 2*d.RunCapUSD() + d.PairJudgeCapUSD()
 	}
-	return d.ArmRunCapUSD(d.Arms[0]) + d.ArmRunCapUSD(d.Arms[1])
+	return d.ArmRunCapUSD(d.Arms[0]) + d.ArmRunCapUSD(d.Arms[1]) + d.PairJudgeCapUSD()
 }
 
 // JudgeEstimateUSD is the judge's expected cost for every run of d, at the judge pilot's mean cost of a call
@@ -251,6 +313,18 @@ func (d Design) JudgeEstimateUSD() float64 {
 	}
 	return float64(d.Runs()*d.Judge.WithDefaults().Repeats) * judge.EstimateUSD
 }
+
+// PairJudgeEstimateUSD is the pair judge's expected cost for every pair of d at the pilot's mean pair
+// (judge.PairEstimateUSD), as if both runs of every pair pass: only those are compared. Zero without the pair judge.
+func (d Design) PairJudgeEstimateUSD() float64 {
+	if d.JudgePairs == nil {
+		return 0
+	}
+	return float64(d.Pairs()) * judge.PairEstimateUSD
+}
+
+// JudgingEstimateUSD is both judges' expected cost for d: every run's judgement and every pair's comparison.
+func (d Design) JudgingEstimateUSD() float64 { return d.JudgeEstimateUSD() + d.PairJudgeEstimateUSD() }
 
 // Validate checks that the design is complete and consistent.
 func (d Design) Validate() error {
@@ -269,7 +343,7 @@ func (d Design) Validate() error {
 		same := d.Arms[0].Context == d.Arms[1].Context && d.Arms[0].Snapshot == d.Arms[1].Snapshot
 		switch {
 		case d.Template == TemplateContextAB && same:
-			errs = append(errs, fmt.Errorf("both arms use context %s: a comparison of one context with itself is the %s template", d.Arms[0].Context, TemplateAA))
+			errs = append(errs, fmt.Errorf("both arms use context %s: a comparison of one context with itself is an A/A (%s), made without --b", d.Arms[0].Context, TemplateAA))
 		case d.Template == TemplateAA && !same:
 			errs = append(errs, fmt.Errorf("an %s experiment uses one context in both arms", TemplateAA))
 		case d.Template == TemplateModelAB && !same:
@@ -327,6 +401,14 @@ func (d Design) Validate() error {
 			errs = append(errs, errors.New("the judge needs a model and an effort"))
 		}
 	}
+	if j := d.JudgePairs; j != nil {
+		if j.Repeats != 1 {
+			errs = append(errs, errors.New("the pair judge asks each order once (repeats 1)"))
+		}
+		if j.Model == "" || j.Effort == "" {
+			errs = append(errs, errors.New("the pair judge needs a model and an effort"))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -363,8 +445,8 @@ func (d Design) validateProfiles() []error {
 	for _, a := range d.Arms {
 		if d.Template != TemplateModelAB {
 			if a.Model != "" || a.Effort != "" || a.RunBudgetUSD != 0 {
-				errs = append(errs, fmt.Errorf("arm %s: a %s experiment compares contexts, so its arms take no model, effort or run budget of their own (use the %s template)",
-					a.Name, d.Template, TemplateModelAB))
+				errs = append(errs, fmt.Errorf("arm %s: a %s experiment compares contexts, so its arms take no model, effort or run budget of their own (a model A/B does)",
+					a.Name, d.Template))
 			}
 			continue
 		}
@@ -378,8 +460,8 @@ func (d Design) validateProfiles() []error {
 		}
 	}
 	if d.Template == TemplateModelAB && len(d.Arms) == 2 && d.Arms[0].Model == d.Arms[1].Model && d.Arms[0].Effort == d.Arms[1].Effort {
-		errs = append(errs, fmt.Errorf("both arms run %s: a comparison of one profile with itself measures noise, not a difference (the %s template does that for a context)",
-			Profile(d.Arms[0].Model, d.Arms[0].Effort), TemplateAA))
+		errs = append(errs, fmt.Errorf("both arms run %s: a comparison of one profile with itself measures noise, not a difference (an A/A, without --b, does that for a context)",
+			Profile(d.Arms[0].Model, d.Arms[0].Effort)))
 	}
 	return errs
 }

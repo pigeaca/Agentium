@@ -128,7 +128,7 @@ func TestStartStopsMiningAfterInvalidRoundsAddUp(t *testing.T) {
 	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, t.TempDir())
 	ctx := context.Background()
 	expect(t, f.run(ctx, "init"), ExitOK)
-	expect(t, f.run(ctx, "task", "mine", "--limit", "14"), ExitOK, "14 of 14 imported task(s) are valid")
+	expect(t, f.run(ctx, "pool", "update", "--limit", "14"), ExitOK, "Imported 14 of 14 candidate(s) tried", "valid            14")
 	for _, task := range storedTasks(t, f.data) {
 		expect(t, f.run(ctx, "task", "edit", task.Name, "--reviewed"), ExitOK)
 	}

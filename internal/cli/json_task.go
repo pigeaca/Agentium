@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -194,7 +193,7 @@ func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task,
 	return doc
 }
 
-// batchRowDoc is a row of task mine's and task validate --all's table: a task, or a commit that did not become one.
+// batchRowDoc is a row of pool update's and task validate --all's table: a task, or a commit that did not become one.
 type batchRowDoc struct {
 	Name    string    `json:"name"`
 	Commit  string    `json:"commit"`
@@ -225,6 +224,7 @@ type validateAllDoc struct {
 	Interrupted bool          `json:"interrupted"`
 }
 
+// mineCandidateDoc is a mining candidate in pool update's document.
 type mineCandidateDoc struct {
 	Commit  string   `json:"commit"`
 	Score   int      `json:"score"`
@@ -233,42 +233,4 @@ type mineCandidateDoc struct {
 	Code    int      `json:"code_files"`
 	Lines   int      `json:"changed_lines"`
 	Reasons []string `json:"score_parts"`
-}
-
-type mineDoc struct {
-	header
-	DryRun          bool               `json:"dry_run"`
-	Ref             string             `json:"ref"`
-	Head            string             `json:"head"`
-	Scanned         int                `json:"commits_read"`
-	Shallow         bool               `json:"shallow"`
-	CandidatesFound int                `json:"candidates_found"`
-	Candidates      []mineCandidateDoc `json:"candidates"` // dry run only: the best --limit
-	SetAside        map[string]int     `json:"set_aside"`  // commits not taken, per reason
-	Verify          []string           `json:"verify"`
-	// The rest is for a run that imports.
-	Tried       int           `json:"tried"`
-	Imported    int           `json:"imported"`
-	Valid       int           `json:"valid"`
-	Rows        []batchRowDoc `json:"tasks"`
-	Interrupted bool          `json:"interrupted"`
-}
-
-// mineDocument is the scan's part of task mine's document; the caller adds what an import did.
-func (env Env) mineDocument(prep mine.Prepared, top []mine.Candidate, dry bool) mineDoc {
-	res := prep.Result
-	doc := mineDoc{header: env.hdr(), DryRun: dry, Ref: res.Ref, Head: res.Head, Scanned: res.Scanned, Shallow: res.Shallow,
-		CandidatesFound: len(res.Candidates), Candidates: []mineCandidateDoc{}, SetAside: map[string]int{}, Verify: list(prep.Verify), Rows: []batchRowDoc{}}
-	for _, c := range top {
-		parts := make([]string, len(c.Reasons))
-		for i, p := range c.Reasons {
-			parts[i] = p.String()
-		}
-		doc.Candidates = append(doc.Candidates, mineCandidateDoc{Commit: c.Hash, Score: c.Score, Subject: c.Subject, Tests: len(c.Tests), Code: len(c.Code),
-			Lines: c.Lines, Reasons: parts})
-	}
-	for reason, n := range res.Counts() {
-		doc.SetAside[string(reason)] = n
-	}
-	return doc
 }

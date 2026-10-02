@@ -212,6 +212,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if d.Judge != nil {
 		fmt.Fprintf(out, "The judge: %s.\n", DescribeJudge(*d.Judge))
 	}
+	if d.JudgePairs != nil {
+		fmt.Fprintf(out, "The pair judge (unvalidated): %s.\n", DescribePairJudge(*d.JudgePairs))
+	}
 	return lock, nil
 }
 
@@ -368,8 +371,11 @@ type execution struct {
 	subagentsMu   sync.Mutex
 	seenSubagents map[string]map[string][]string // per arm: the models each subagent type ran on in this experiment so far
 
-	// judgePaused: a verdict stopped at a usage limit or a sign-in failure, which every later call would hit too.
+	// judgePaused: a verdict or a pair's comparison stopped at a usage limit or a sign-in failure, which every later call
+	// would hit too.
 	judgePaused atomic.Bool
+	// pairs compares the pairs beside the runs, with the pair judge; nil without it.
+	pairs *pairJudge
 }
 
 // execute runs the locked experiment's slots (after judging what a stopped execution left unjudged) and writes where
@@ -396,6 +402,22 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, err
 	}
 	x := &execution{r: r, stored: stored, lock: lock, runEnv: runEnv, storedTries: map[int]int{}, seenSubagents: SubagentModels(runs)}
+	var eventMu sync.Mutex // the pair judge reports from its own goroutine: one event at a time
+	event := func(e Event) {
+		if x.pairs != nil { // no comparison starts while the execution waits for the usage window to reset
+			switch e.Kind {
+			case "wait":
+				x.pairs.hold(true)
+			case "start":
+				x.pairs.hold(false)
+			}
+		}
+		if r.Observer.Event != nil {
+			eventMu.Lock()
+			defer eventMu.Unlock()
+			r.Observer.Event(e)
+		}
+	}
 	var judgeNote string
 	var judgeErr error
 	unfunded := 0                 // runs the budget left no room to judge
@@ -410,9 +432,18 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, err
 	}
 	design := lock.Design
+	if design.JudgePairs != nil && judgeNote == "" && judgeErr == nil {
+		if x.pairs, err = newPairJudge(x, runs, standing.Spent, event); err != nil {
+			return RunOutcome{}, err
+		}
+	}
 	judging := ""
 	if design.Judge != nil {
 		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
+	}
+	comparing := ""
+	if design.JudgePairs != nil {
+		comparing = fmt.Sprintf("; each pair's comparison up to $%.2f", design.PairJudgeCapUSD())
 	}
 	runCap := fmt.Sprintf("$%.2f", design.RunBudgetUSD)
 	if design.PerArmProfiles() {
@@ -421,8 +452,8 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 			runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), capB)
 		}
 	}
-	fmt.Fprintf(out, "Running up to %d at a time; each run up to %s%s and %s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
-		design.Concurrency, runCap, judging, design.Timeout, design.BudgetUSD)
+	fmt.Fprintf(out, "Running up to %d at a time; each run up to %s%s and %s%s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
+		design.Concurrency, runCap, judging, design.Timeout, comparing, design.BudgetUSD)
 	if r.Observer.Begin != nil {
 		r.Observer.Begin(lock, standing)
 	}
@@ -440,7 +471,12 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		x.judgePaused.Store(true)
 	default:
 		plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
-			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: r.Observer.Event, Usage: gate}
+			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: event, Usage: gate,
+			Paused: x.paused}
+		if x.pairs != nil {
+			plan.PairHoldUSD, plan.Outside = design.PairJudgeCapUSD(), x.pairs.outside
+			x.pairs.start(ctx)
+		}
 		if lock.Method == MethodSeq {
 			sum, runErr = x.runStages(ctx, plan, o)
 		} else {
@@ -449,6 +485,16 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	}
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = StatusStopped, "Agentium could not start the runs: "+runErr.Error()
+	}
+	if x.pairs != nil { // the queued comparisons end the execution (they were funded), unless it paused at the usage limit
+		unread, err := x.pairs.finish(sum.Status != StatusUsage)
+		sum.SpentUSD += unread
+		if err != nil {
+			if runErr == nil {
+				sum.Status, sum.Note = StatusStopped, "Agentium could not store a pair's comparison: "+err.Error()
+			}
+			runErr = errors.Join(runErr, err)
+		}
 	}
 	runErr = x.settle(ctx, &sum, runErr, unfunded)
 	if err := p.DB.SetExperimentStatus(context.WithoutCancel(ctx), stored.ID, sum.Status, sum.Note); err != nil {
@@ -504,7 +550,7 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 		if ctx.Err() != nil { // cancelled between stages: Execute has nothing in flight
 			return Summary{Status: StatusStopped, Note: "interrupted", SpentUSD: spent}, nil
 		}
-		runs, err := r.Project.DB.ExperimentRuns(ctx, x.stored.ID)
+		runs, err := x.storedRuns(ctx)
 		if err != nil {
 			return Summary{}, err
 		}
@@ -539,6 +585,9 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 			}
 			return sum, nil
 		}
+		if note := x.paused(); note != "" { // a judge at a usage limit: no stage starts
+			return Summary{Status: StatusUsage, Note: note, SpentUSD: spent}, nil
+		}
 		stage := p
 		stage.Prior, stage.Until = prior, lock.Sequential.StageEnd(status.NextStage)
 		if p.Usage != nil { // the latest reading, which the last stage's runs may have moved
@@ -551,6 +600,19 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 			return sum, err
 		}
 	}
+}
+
+// storedRuns reads the experiment's stored runs for a budget: with the pair judge, with no comparison stored meanwhile,
+// so what it stores later is counted apart (pairJudge.outside).
+func (x *execution) storedRuns(ctx context.Context) (runs []store.Run, err error) {
+	read := func() error {
+		runs, err = x.r.Project.DB.ExperimentRuns(ctx, x.stored.ID)
+		return err
+	}
+	if x.pairs == nil {
+		return runs, read()
+	}
+	return runs, x.pairs.read(read)
 }
 
 // RunDataOfStored decodes stored runs into what the analysis reads, in their stored order.
@@ -648,7 +710,19 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		result.Stop = fmt.Sprintf("Claude Code reported model %s, but arm %s's calibration saw %s: later runs would not compare", m.Model, arm.Name, arm.Model)
 	}
 	x.checkSubagents(arm.Name, rec.Metrics.SubagentModels, &result)
+	if x.pairs != nil && err == nil && Settles(rec.Outcome) { // before the result returns: the pair's hold passes to its comparison
+		x.pairs.settled(slot, rec.ID, rec)
+	}
 	return result, err
+}
+
+// paused is Plan.Paused: a judgement or a pair's comparison stopped at a usage limit or a sign-in failure, which every
+// later call would hit too, so no run starts.
+func (x *execution) paused() string {
+	if x.judgePaused.Load() {
+		return judgeLimitNote
+	}
+	return ""
 }
 
 // checkSubagents stops the experiment when a role's model alias moved to a newer model with Claude Code while --model
@@ -670,25 +744,51 @@ func (x *execution) checkSubagents(arm string, models map[string][]string, resul
 }
 
 // settle adjusts the summary of a finished execution. Every slot settled is not done while a graded run still needs the
-// judge: the last runs' judgements may have stopped at a usage limit or an interrupt, or the budget may have left no
-// room to judge them (a budget stop, which a higher --budget resumes, not a failure). It returns runErr with any error
-// of counting them.
+// judge, or a pair of passing runs still needs comparing: the last judgements may have stopped at a usage limit or an
+// interrupt, or the budget may have left no room for them (a budget stop, which a higher --budget resumes, not a
+// failure). unfunded counts the runs the budget left no room to judge before the runs; the pair judge counts its own.
+// It returns runErr with any error of counting them.
 func (x *execution) settle(ctx context.Context, sum *Summary, runErr error, unfunded int) error {
 	design := x.lock.Design
-	if sum.Status != StatusDone || design.Judge == nil {
+	if sum.Status != StatusDone || design.Judge == nil && design.JudgePairs == nil {
 		return runErr
 	}
-	n, err := x.r.unjudged(context.WithoutCancel(ctx), x.stored.ID, x.lock)
-	switch {
-	case err != nil:
+	runs, err := x.r.Project.DB.ExperimentRuns(context.WithoutCancel(ctx), x.stored.ID)
+	if err != nil {
 		return errors.Join(runErr, err)
-	case n > 0 && x.judgePaused.Load():
+	}
+	n, err := unjudgedOf(x.lock, runs)
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+	m, err := uncompared(x.lock, runs)
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+	pairsUnfunded := 0
+	if x.pairs != nil {
+		pairsUnfunded = x.pairs.unfunded
+	}
+	var budget, waiting []string
+	if n > 0 {
+		waiting = append(waiting, fmt.Sprintf("%d run(s) still need the judge", n))
+		if unfunded > 0 {
+			budget = append(budget, fmt.Sprintf("%d run(s) still need the judge, but the budget leaves no room for a judgement ($%.2f)", n, design.JudgeCapUSD()))
+		}
+	}
+	if m > 0 {
+		waiting = append(waiting, fmt.Sprintf("%d pair(s) still need comparing", m))
+		if pairsUnfunded > 0 {
+			budget = append(budget, fmt.Sprintf("%d pair(s) still need comparing, but the budget leaves no room for a comparison ($%.2f)", m, design.PairJudgeCapUSD()))
+		}
+	}
+	switch {
+	case len(waiting) > 0 && x.judgePaused.Load():
 		sum.Status, sum.Note = StatusUsage, judgeLimitNote
-	case n > 0 && unfunded > 0:
-		sum.Status, sum.Note = StatusBudget, fmt.Sprintf("%d run(s) still need the judge, but the budget leaves no room for a judgement ($%.2f)",
-			n, design.JudgeCapUSD())
-	case n > 0:
-		sum.Status, sum.Note = StatusStopped, fmt.Sprintf("%d run(s) still need the judge", n)
+	case len(budget) > 0:
+		sum.Status, sum.Note = StatusBudget, strings.Join(budget, "; ")
+	case len(waiting) > 0:
+		sum.Status, sum.Note = StatusStopped, strings.Join(waiting, "; ")
 	}
 	return runErr
 }
@@ -726,12 +826,8 @@ func needsJudge(lock Lock, r store.Run, rec run.Record) bool {
 	return lock.Design.Judge != nil && ok && Fair(r.Outcome) && run.NeedsJudging(rec, t.Spec())
 }
 
-// unjudged counts the experiment's stored runs that still need the judge.
-func (r Runner) unjudged(ctx context.Context, id int64, lock Lock) (int, error) {
-	runs, err := r.Project.DB.ExperimentRuns(ctx, id)
-	if err != nil {
-		return 0, err
-	}
+// unjudgedOf counts the stored runs that still need the judge.
+func unjudgedOf(lock Lock, runs []store.Run) (int, error) {
 	n := 0
 	for _, s := range runs {
 		var rec run.Record
@@ -749,7 +845,7 @@ func (r Runner) unjudged(ctx context.Context, id int64, lock Lock) (int, error) 
 // (Result.CostUSD), and the progress line tells the agent's part from the judge's. The analysis's cost metric stays the
 // record's agent's cost.
 func spentResult(s run.Spend) Result {
-	return Result{CostUSD: s.TotalUSD(), JudgeUSD: s.JudgeUSD}
+	return Result{CostUSD: s.TotalUSD(), JudgeUSD: s.JudgeUSD + s.PairJudgeUSD}
 }
 
 // judgePending judges, one at a time, the experiment's graded runs that still need it (run.NeedsJudging): those a

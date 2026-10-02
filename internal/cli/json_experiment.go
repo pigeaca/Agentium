@@ -42,11 +42,13 @@ type experimentDoc struct {
 	RunBudgetUSD  float64            `json:"run_budget_usd"`
 	Concurrency   int                `json:"concurrency"`
 	Judge         bool               `json:"judge"`
+	JudgePairs    bool               `json:"judge_pairs"` // the pair judge, unvalidated: exploratory, never a verdict
 }
 
 func experimentOf(name string, d experiment.Design) experimentDoc {
 	doc := experimentDoc{Name: name, Template: d.Template, Goal: d.Goal, Method: d.LockMethod(), Arms: []experimentArmDoc{}, Tasks: list(slices.Clone(d.Tasks)),
-		RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: d.BudgetUSD, RunBudgetUSD: d.RunBudgetUSD, Concurrency: d.Concurrency, Judge: d.Judge != nil}
+		RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: d.BudgetUSD, RunBudgetUSD: d.RunBudgetUSD, Concurrency: d.Concurrency, Judge: d.Judge != nil,
+		JudgePairs: d.JudgePairs != nil}
 	for _, a := range d.Arms {
 		doc.Arms = append(doc.Arms, experimentArmDoc{Name: a.Name, Context: a.Context, Model: d.ArmModel(a), Effort: d.ArmEffort(a)})
 	}
@@ -112,7 +114,7 @@ func looksOf(s *experiment.SeqStatus) []lookDoc {
 }
 
 // spendDoc is what a design may spend, before it runs. Known is false when a task has no estimate yet: the
-// estimates are then null. Max is every look (or every run); WorstCase is every run, and its judgement, at its cap
+// estimates are then null. Max is every look (or every run); WorstCase is every run, its judgement and its pair's comparison, at its cap
 // plus the cap's overshoot allowance (claude.CapOvershootUSD), which is what the budget's reserve holds for each run. Expected is what a seq-v1 experiment spends on average if nothing changed (the
 // planner's noise), and IfCut at a 20% cut in arm B's cost; both are null for other methods, whose expected spend is Max.
 type spendDoc struct {
@@ -371,21 +373,25 @@ type armProgressDoc struct {
 // progressDoc is where a locked experiment stands. Slots are the schedule's runs (both arms); Settled counts slots with
 // a settled run; SpentUSD is all the budget counts, the judge's and the calibrations' included.
 type progressDoc struct {
-	Slots          int              `json:"slots"`
-	Settled        int              `json:"settled"`
-	SpentUSD       float64          `json:"spent_usd"`
-	BudgetUSD      float64          `json:"budget_usd"`
-	JudgeUSD       float64          `json:"judge_usd"`
-	CalibrationUSD float64          `json:"calibration_usd"`
-	UnjudgedRuns   int              `json:"unjudged_runs"`
-	Arms           []armProgressDoc `json:"arms"`
-	Looks          []lookDoc        `json:"looks"`
-	EndedBy        *string          `json:"ended_by"` // seq-v1: stop | futility | final once it has ended
+	Slots          int     `json:"slots"`
+	Settled        int     `json:"settled"`
+	SpentUSD       float64 `json:"spent_usd"`
+	BudgetUSD      float64 `json:"budget_usd"`
+	JudgeUSD       float64 `json:"judge_usd"`      // both judges', of SpentUSD
+	PairJudgeUSD   float64 `json:"pair_judge_usd"` // the pair judge's, of JudgeUSD
+	CalibrationUSD float64 `json:"calibration_usd"`
+	UnjudgedRuns   int     `json:"unjudged_runs"`
+	// UncomparedPairs counts the pairs of passing runs the pair judge has still to compare.
+	UncomparedPairs int              `json:"uncompared_pairs"`
+	Arms            []armProgressDoc `json:"arms"`
+	Looks           []lookDoc        `json:"looks"`
+	EndedBy         *string          `json:"ended_by"` // seq-v1: stop | futility | final once it has ended
 }
 
 func progressOf(p experiment.Progress) *progressDoc {
 	doc := &progressDoc{Slots: p.Slots, Settled: p.Settled, SpentUSD: p.SpentUSD, BudgetUSD: p.BudgetUSD, JudgeUSD: p.JudgeUSD,
-		CalibrationUSD: p.CalibrationUSD, UnjudgedRuns: p.UnjudgedRuns, Arms: []armProgressDoc{}, Looks: looksOf(p.Sequential)}
+		CalibrationUSD: p.CalibrationUSD, UnjudgedRuns: p.UnjudgedRuns, PairJudgeUSD: p.PairJudgeUSD, UncomparedPairs: p.UncomparedPairs,
+		Arms: []armProgressDoc{}, Looks: looksOf(p.Sequential)}
 	for _, a := range p.Arms {
 		doc.Arms = append(doc.Arms, armProgressDoc{Name: a.Name, Context: a.Context, Settled: a.Settled, Fair: a.Fair, Successes: a.Successes,
 			Unfair: a.Unfair, Infra: a.Infra, Cancelled: a.Cancelled, CostUSD: a.CostUSD})

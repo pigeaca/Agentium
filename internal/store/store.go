@@ -39,8 +39,22 @@ type Project struct {
 	Discovery []byte // JSON from the last `agentium init`
 	// AllowLocalBinding is the user's opt-in for the sandbox's local binding in agent runs (see claude.Invocation).
 	AllowLocalBinding bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// Settings are the project's own defaults for mining, importing and validating tasks (SetSettings).
+	Settings  Settings
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// Settings are a project's defaults, set with `agentium init` and kept here, never in the repository. The zero value
+// is "nothing set": every command then uses its built-in default, as before the settings existed. A command's own
+// flag wins over a setting for that call only.
+type Settings struct {
+	Verify []string // the verification commands mined and imported tasks get; empty: the detected ones
+	Setup  []string // the commands a fresh checkout of those tasks runs first; empty: none
+	// RequireLock sets aside Python commits whose base pins no dependencies when mining (mine.Options.RequireLock).
+	RequireLock   bool
+	Jobs          int           // how many tasks to validate at once; 0: the built-in default
+	VerifyTimeout time.Duration // the time limit of each setup or verification command; 0: the built-in default
 }
 
 // openRetry bounds how long Open waits for other processes opening the same database. Switching a new database to WAL
@@ -268,24 +282,47 @@ func (s *Store) inTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	return tx.Commit()
 }
 
-// SaveProject registers root, or refreshes its name and discovery if it is already registered.
+// SaveProject registers root, or refreshes its name and discovery if it is already registered; its settings and
+// local-binding choice are kept.
 func (s *Store) SaveProject(ctx context.Context, root, name string, discovery []byte, now time.Time) (Project, error) {
 	stamp := formatTime(now)
 	var id int64
-	var created string
-	var allowed bool
 	err := s.db.QueryRowContext(ctx, `
 		INSERT INTO projects (root, name, discovery, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
 		ON CONFLICT (root) DO UPDATE SET name = excluded.name, discovery = excluded.discovery, updated_at = excluded.updated_at
-		RETURNING id, created_at, allow_local_binding`, root, name, string(discovery), stamp, stamp).Scan(&id, &created, &allowed)
+		RETURNING id`, root, name, string(discovery), stamp, stamp).Scan(&id)
 	if err != nil {
 		return Project{}, fmt.Errorf("save project %s: %w", root, err)
 	}
-	createdAt, err := parseTime(created)
+	projects, err := s.queryProjects(ctx, `WHERE id = ?`, id)
 	if err != nil {
 		return Project{}, fmt.Errorf("save project %s: %w", root, err)
 	}
-	return Project{ID: id, Root: root, Name: name, Discovery: discovery, AllowLocalBinding: allowed, CreatedAt: createdAt, UpdatedAt: now.UTC()}, nil
+	if len(projects) != 1 {
+		return Project{}, fmt.Errorf("save project %s: %w", root, ErrNotFound)
+	}
+	return projects[0], nil
+}
+
+// SetSettings replaces the project's settings. Jobs and VerifyTimeout must not be negative; a VerifyTimeout is kept
+// to the millisecond.
+func (s *Store) SetSettings(ctx context.Context, projectID int64, set Settings) error {
+	if set.Jobs < 0 || set.VerifyTimeout < 0 {
+		return fmt.Errorf("save the project's settings: jobs %d and verify timeout %s must not be negative", set.Jobs, set.VerifyTimeout)
+	}
+	lists, err := encodeLists(set.Verify, set.Setup)
+	if err != nil {
+		return fmt.Errorf("save the project's settings: %w", err)
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET verify = ?, setup = ?, require_lock = ?, jobs = ?, verify_timeout_ms = ? WHERE id = ?`,
+		lists[0], lists[1], set.RequireLock, set.Jobs, set.VerifyTimeout.Milliseconds(), projectID)
+	if err != nil {
+		return fmt.Errorf("save the project's settings: %w", err)
+	}
+	if n, err := result.RowsAffected(); err == nil && n == 0 {
+		return fmt.Errorf("save the project's settings: project %d: %w", projectID, ErrNotFound)
+	}
+	return nil
 }
 
 // SetLocalBinding stores the project's opt-in for the sandbox's local binding.
@@ -314,7 +351,8 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 }
 
 func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, allow_local_binding, created_at, updated_at FROM projects `+clause, args...)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, allow_local_binding, verify, setup, require_lock, jobs, verify_timeout_ms,
+		created_at, updated_at FROM projects `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query projects: %w", err)
 	}
@@ -322,11 +360,20 @@ func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) (
 	var projects []Project
 	for rows.Next() {
 		var p Project
-		var discovery, created, updated string
-		if err := rows.Scan(&p.ID, &p.Root, &p.Name, &discovery, &p.AllowLocalBinding, &created, &updated); err != nil {
+		var discovery, verify, setup, created, updated string
+		var timeoutMS int64
+		if err := rows.Scan(&p.ID, &p.Root, &p.Name, &discovery, &p.AllowLocalBinding, &verify, &setup, &p.Settings.RequireLock, &p.Settings.Jobs,
+			&timeoutMS, &created, &updated); err != nil {
 			return nil, fmt.Errorf("read project: %w", err)
 		}
 		p.Discovery = []byte(discovery)
+		if err := json.Unmarshal([]byte(verify), &p.Settings.Verify); err != nil {
+			return nil, fmt.Errorf("project %s: verify setting: %w", p.Name, err)
+		}
+		if err := json.Unmarshal([]byte(setup), &p.Settings.Setup); err != nil {
+			return nil, fmt.Errorf("project %s: setup setting: %w", p.Name, err)
+		}
+		p.Settings.VerifyTimeout = time.Duration(timeoutMS) * time.Millisecond
 		if p.CreatedAt, err = parseTime(created); err != nil {
 			return nil, err
 		}

@@ -21,20 +21,21 @@ import (
 )
 
 const poolUsage = `Usage:
-  agentium pool update [--dry-run] [--accept-mined] [--require-lock] [--limit N] [--jobs N]
+  agentium pool update [--dry-run] [--accept-mined] [--limit N]
                          one pass over the task pool; it runs no agent and costs nothing: mines the commits of
                          the default branch since the last pass (within 270 days), imports up to --limit (default
-                         10) as tasks that need your review and validates them --jobs at a time (default 2);
-                         re-validates stale tasks (validated more than 30 days ago, with other build-tool
-                         versions, or flaky and untried for 7 days, with --repeat 3); retires tasks whose base is
-                         270 or more days old or whose files are gone from the default branch (a flag, never a
-                         delete). Tasks a locked experiment uses are kept as they are. While an experiment is
-                         running, re-validations are skipped. --dry-run lists what it would do and writes
-                         nothing; --accept-mined accepts the tasks this pass imported without your review, after
-                         the automatic checks start --accept-mined makes. --require-lock mines no Python
-                         commit whose base pins no dependencies (as task mine --require-lock); passes scan
-                         only new commits, so those a pass set aside are not revisited later without the flag:
-                         task mine reaches them
+                         10) as tasks that need your review and validates them; re-validates stale tasks
+                         (validated more than 30 days ago, with other build-tool versions, or flaky and untried
+                         for 7 days, with --repeat 3); retires tasks whose base is 270 or more days old or whose
+                         files are gone from the default branch (a flag, never a delete). Tasks a locked
+                         experiment uses are kept as they are. While an experiment is running, re-validations are
+                         skipped. --dry-run lists what it would do and writes nothing: the candidates with their
+                         scores, why other commits were set aside, and the tasks it would validate, re-validate
+                         and retire. --accept-mined accepts the tasks this pass imported without your review,
+                         after the automatic checks start --accept-mined makes. Mined tasks verify, set up and
+                         validate as the project's settings say (agentium init); passes read only new commits, so
+                         commits a pass set aside are not read again by later ones (the guide's advanced flags
+                         re-read them)
   agentium pool status   the pool's health: valid, weak, flaky, invalid, awaiting review and retired tasks, the
                          last pass and the oldest valid base
   agentium pool update|status ... --json
@@ -60,23 +61,28 @@ func runPool(ctx context.Context, env Env, args []string) int {
 	}
 }
 
-// poolValidateTimeout bounds each verification command of the pool's validations, as task mine's default does.
-const poolValidateTimeout = 10 * time.Minute
-
 // poolArgs is what pool update was asked for.
 type poolArgs struct {
 	dryRun, acceptMined bool
-	requireLock         bool // mine no Python commit whose base has no lock file (mine.Options.RequireLock)
-	limit, jobs         int
+	limit               int
+	// set holds the hidden overrides of the project's settings: --verify, --setup, --require-lock, --jobs and
+	// --verify-timeout.
+	set *settingFlags
+	// since makes the pass a re-scan from that date (pool.Pass.Since); maxFiles and maxLines bound a candidate. All three
+	// are hidden expert flags.
+	since              time.Time
+	maxFiles, maxLines int
 }
 
 func parsePoolUpdate(env Env, args []string) (a poolArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("pool update", flag.ContinueOnError)
 	fs.BoolVar(&a.dryRun, "dry-run", false, "list what the pass would mine, validate, re-validate and retire; write nothing")
 	fs.BoolVar(&a.acceptMined, "accept-mined", false, "accept this pass's imports without a review, after the automatic checks")
-	fs.BoolVar(&a.requireLock, "require-lock", false, "mine no Python commit whose base pins no dependencies")
 	fs.IntVar(&a.limit, "limit", pool.DefaultPolicy().Limit, "how many tasks to import at most")
-	fs.IntVar(&a.jobs, "jobs", defaultJobs, "how many tasks to validate at once")
+	a.set = addSettingFlags(fs, settingVerifyTimeout, settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout)
+	since := fs.String("since", "", "re-read the commits from this date on (YYYY-MM-DD, UTC), whatever the last pass read")
+	fs.IntVar(&a.maxFiles, "max-files", mine.DefaultMaxFiles, "skip commits that change more test and code files than this")
+	fs.IntVar(&a.maxLines, "max-lines", mine.DefaultMaxLines, "skip commits that change more test and code lines than this")
 	rest, code, ok := parseArgs(env, fs, args, poolUsage)
 	if !ok {
 		return a, code, false
@@ -90,10 +96,20 @@ func parsePoolUpdate(env Env, args []string) (a poolArgs, code int, ok bool) {
 		return usage("takes no arguments (got %q)", strings.Join(rest, " "))
 	case a.limit < 1:
 		return usage("--limit must be at least 1")
-	case a.jobs < 1:
-		return usage("--jobs must be at least 1")
+	case a.maxFiles < 1 || a.maxLines < 1:
+		return usage("--max-files and --max-lines must be at least 1")
 	case a.dryRun && a.acceptMined:
 		return usage("--dry-run accepts nothing, so --accept-mined does not apply")
+	}
+	if err := a.set.check(); err != nil {
+		return usage("%v", err)
+	}
+	if *since != "" {
+		day, err := time.Parse(time.DateOnly, *since)
+		if err != nil {
+			return usage("--since %q is not a date like 2026-01-31", *since)
+		}
+		a.since = day
 	}
 	return a, ExitOK, true
 }
@@ -107,7 +123,11 @@ type poolPass struct {
 	a      poolArgs
 	policy pool.Policy
 	opts   mine.Options
-	verify []string
+	// verify and setup are the commands mined tasks get, jobs and timeout how validations run: the project's settings
+	// with this call's overrides.
+	verify, setup []string
+	jobs          int
+	timeout       time.Duration
 	// noMining: no test command was detected, so the pass mines nothing (newPoolPass).
 	noMining bool
 	// acceptRefused: --accept-mined accepted nothing because the state file was unreadable.
@@ -132,16 +152,20 @@ type poolMaintenance struct {
 }
 
 func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
-	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy()}
+	settings := a.set.apply(w.settings())
+	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy(), setup: settings.Setup, jobs: jobsOf(settings), timeout: verifyTimeoutOf(settings)}
 	p.policy.Limit = a.limit
 	var commands []string
 	p.opts.Languages, commands = mine.TestLanguages(w.root)
 	p.opts.TestCommand = strings.Join(commands, ", ")
-	p.opts.MaxFiles, p.opts.MaxLines, p.opts.MaxCommits = mine.DefaultMaxFiles, mine.DefaultMaxLines, mine.DefaultMaxCommits
-	p.opts.RequireLock = a.requireLock
-	// As task mine: the build tools' own test commands, else the project's detected ones.
-	if p.verify = commands; len(p.verify) == 0 {
-		p.verify = w.defaultVerify()
+	p.opts.MaxFiles, p.opts.MaxLines, p.opts.MaxCommits = a.maxFiles, a.maxLines, mine.DefaultMaxCommits
+	p.opts.RequireLock = settings.RequireLock
+	// The project's verify setting, else the build tools' own test commands (the tests mining picks commits by: other
+	// commands, linters say, fail at old commits for reasons no agent can fix), else the project's detected ones.
+	if p.verify = settings.Verify; len(p.verify) == 0 {
+		if p.verify = commands; len(p.verify) == 0 {
+			p.verify = w.defaultVerify()
+		}
 	}
 	// Without a test command, mined tasks would have nothing to verify with: the pass mines nothing (its watermark stays),
 	// and still validates, re-validates and retires.
@@ -151,13 +175,13 @@ func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 
 // noMiningNote says why a pass mines nothing.
 const noMiningNote = "no test commands were detected for this project, so the pass mines nothing (mined tasks would have nothing to verify with); " +
-	"it still validates, re-validates and retires. agentium task mine --verify CMD imports with your own commands"
+	"it still validates, re-validates and retires. agentium init --verify CMD sets the commands mined tasks verify with"
 
 // pass is the pool's pass over this project, with its steps.
 func (p *poolPass) pass() pool.Pass[mine.Candidate] {
 	w, env := p.w, p.env
 	return pool.Pass[mine.Candidate]{
-		File: pool.StateFile(w.bare), Limit: p.policy.Limit, Window: p.policy.RetireAge, Margin: p.policy.StaleAfter, Now: env.Now,
+		File: pool.StateFile(w.bare), Limit: p.policy.Limit, Window: p.policy.RetireAge, Margin: p.policy.StaleAfter, Since: p.a.since, Now: env.Now,
 		Commit: func(c mine.Candidate) string { return c.Hash },
 		Patch:  func(c mine.Candidate) string { return c.Patch },
 		Base:   func(c mine.Candidate) time.Time { return c.BaseDate },
@@ -188,7 +212,7 @@ func (p *poolPass) pass() pool.Pass[mine.Candidate] {
 	}
 }
 
-// importCandidates imports up to limit candidates, best first, as task mine does (task import --commit's path, no judge).
+// importCandidates imports up to limit candidates, best first, through task import --commit's path (no judge).
 func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candidate, limit int) (pool.Imported, error) {
 	w, env := p.w, p.env
 	tasks, err := w.db.Tasks(ctx, w.project.ID)
@@ -201,7 +225,9 @@ func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candi
 	}
 	_, live := liveEnv(env) // nothing prints while it shows
 	p.imp = mine.Import(ctx, mine.ImportInput{Importer: w.importer(names), Candidates: candidates, Limit: limit,
-		NewTask: func() store.Task { return store.Task{ProjectID: w.project.ID, Verify: p.verify, CreatedAt: env.Now()} },
+		NewTask: func() store.Task {
+			return store.Task{ProjectID: w.project.ID, Verify: p.verify, Setup: append([]string{}, p.setup...), CreatedAt: env.Now()}
+		},
 		Progress: func(imported int, c mine.Candidate) {
 			live.Step(fmt.Sprintf("importing %d of %d: %s", imported+1, limit, experiment.ShortCommit(c.Hash)))
 		}})
@@ -217,17 +243,17 @@ func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candi
 }
 
 // validateNew validates the mined tasks without a validation (this pass's imports, and those a killed pass left) in the
-// base context, as task mine does.
+// base context.
 // While an experiment is running, they are validated one at a time, so its runs are slowed as little as possible (the
 // background pass waits instead; a foreground one was asked for now).
 func (p *poolPass) validateNew(ctx context.Context, tasks []store.Task) error {
-	jobs, st := p.a.jobs, p.env.style()
+	jobs, st := p.jobs, p.env.style()
 	if p.w.layout.RunsBusy() && jobs > 1 {
 		jobs = 1
-		fmt.Fprintln(p.env.Stdout, note(st, "an experiment is running: the new tasks are validated one at a time, not "+strconv.Itoa(p.a.jobs)))
+		fmt.Fprintln(p.env.Stdout, note(st, "an experiment is running: the new tasks are validated one at a time, not "+strconv.Itoa(p.jobs)))
 	}
 	fmt.Fprintf(p.env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Validating %d mined task(s)", len(tasks))), jobs)
-	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: poolValidateTimeout}, jobs)
+	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: p.timeout}, jobs)
 	p.validated = results
 	return err
 }
@@ -359,7 +385,7 @@ func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) (r
 			break
 		}
 		if started == 0 {
-			fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Re-validating %d stale task(s)", len(stale))), p.a.jobs)
+			fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Re-validating %d stale task(s)", len(stale))), p.jobs)
 			for _, r := range stale {
 				fmt.Fprintf(env.Stdout, "  %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
 			}
@@ -367,15 +393,15 @@ func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) (r
 		// A chunk: up to --jobs tasks of one group.
 		first := stale[order[k]].Stale
 		chunk := []int{}
-		for k < len(order) && len(chunk) < p.a.jobs && slices.Equal(stale[order[k]].Stale.Arms, first.Arms) && stale[order[k]].Stale.Repeat == first.Repeat {
+		for k < len(order) && len(chunk) < p.jobs && slices.Equal(stale[order[k]].Stale.Arms, first.Arms) && stale[order[k]].Stale.Repeat == first.Repeat {
 			chunk, k = append(chunk, order[k]), k+1
 		}
 		tasks := make([]store.Task, len(chunk))
 		for c, j := range chunk {
 			tasks[c] = stale[j].Task
 		}
-		o := task.ValidateOptions{Arms: first.Arms, Repeat: first.Repeat, Timeout: poolValidateTimeout, KeepWeakTests: true}
-		got, err := validateBatchWith(ctx, env, p.w, tasks, o, p.a.jobs, true)
+		o := task.ValidateOptions{Arms: first.Arms, Repeat: first.Repeat, Timeout: p.timeout, KeepWeakTests: true}
+		got, err := validateBatchWith(ctx, env, p.w, tasks, o, p.jobs, true)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -449,6 +475,9 @@ func poolUpdate(ctx context.Context, env Env, args []string) int {
 	if p.noMining {
 		fmt.Fprintln(env.Stdout, note(env.style(), noMiningNote))
 	}
+	if !a.since.IsZero() {
+		fmt.Fprintln(env.Stdout, note(env.style(), p.rescanNote()))
+	}
 	if a.dryRun {
 		return p.dryRun(ctx)
 	}
@@ -488,12 +517,39 @@ func poolUpdate(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
+// rescanNote says what a re-scan (--since) reads, and that it leaves the watermark alone.
+func (p *poolPass) rescanNote() string {
+	from := p.a.since.Format(time.DateOnly)
+	if window := p.env.Now().Add(-p.policy.RetireAge); p.a.since.Before(window) {
+		from = fmt.Sprintf("%s (the start of the pool's %d days; --since %s is earlier)", window.UTC().Format(time.DateOnly),
+			int(p.policy.RetireAge/pool.Day), from)
+	}
+	return "a re-scan: it reads every commit from " + from + ", whatever earlier passes read; the next pass still starts where the last one ended"
+}
+
+// readSince says which commits the scan read: those since the last pass, or a re-scan's since its date.
+func (p *poolPass) readSince() string {
+	if p.a.since.IsZero() {
+		return "since the last pass"
+	}
+	return "since " + p.a.since.Format(time.DateOnly)
+}
+
+// setAside counts the commits the scan set aside, per reason, then those read past (older than the window) and the
+// candidates the pass itself drops (kept is how many it keeps): a base too old to import or a change already mined.
+func (p *poolPass) setAside(kept int) []setAside {
+	rows := rejections(p.scan.Result)
+	rows = append(rows, setAside{fmt.Sprintf("outside the pool's %d days", int(p.policy.RetireAge/pool.Day)), p.scan.Old},
+		setAside{"base too old for the pool, or a change mined before", len(p.scan.Scanned.Candidates) - kept})
+	return rows
+}
+
 // printScan says what the scan read: the commits since the last pass, the candidates (before the pass drops those whose
 // base is too old or whose change was mined already), watermark commits that are gone, and whether it read them all.
 func (p *poolPass) printScan() {
 	env, st, scan := p.env, p.env.style(), p.scan
-	line := fmt.Sprintf("%s: %d commit(s) read since the last pass, %d candidate(s)",
-		st.Heading(fmt.Sprintf("Mined %s at %s", p.ref, experiment.ShortCommit(p.head))), scan.Result.Scanned, len(scan.Scanned.Candidates))
+	line := fmt.Sprintf("%s: %d commit(s) read %s, %d candidate(s)",
+		st.Heading(fmt.Sprintf("Mined %s at %s", p.ref, experiment.ShortCommit(p.head))), scan.Result.Scanned, p.readSince(), len(scan.Scanned.Candidates))
 	if scan.Old > 0 {
 		line += fmt.Sprintf(" (%d older commit(s) are outside the pool's %d days)", scan.Old, int(p.policy.RetireAge/pool.Day))
 	}
@@ -501,8 +557,13 @@ func (p *poolPass) printScan() {
 	if n := len(scan.Scanned.Unknown); n > 0 {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d commit(s) the last pass ended at are gone from the repository (a force-push or rebase): their history was read again", n)))
 	}
-	if !scan.Scanned.Complete {
+	if !scan.Scanned.Complete && p.a.since.IsZero() {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("read the oldest %d new commit(s); the next pass reads on", scan.Result.Scanned)))
+	} else if !scan.Scanned.Complete {
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("read the oldest %d commit(s) %s, the most one pass reads; a later date reads newer ones", scan.Result.Scanned, p.readSince())))
+	}
+	if msg := scanNote(p.opts, p.verify); msg != "" {
+		fmt.Fprintln(env.Stdout, note(st, msg))
 	}
 }
 
@@ -549,8 +610,17 @@ func (p *poolPass) dryRun(ctx context.Context) int {
 		return env.emit(doc)
 	}
 	fmt.Fprintln(env.Stdout, st.Heading("Dry run: nothing is imported, validated, re-validated, retired or written"))
-	fmt.Fprintf(env.Stdout, "Would mine %s at %s: %d commit(s) since the last pass, %d candidate(s)\n", p.ref, experiment.ShortCommit(prev.Head),
-		p.scan.Result.Scanned, len(prev.Candidates))
+	fmt.Fprintf(env.Stdout, "Would mine %s at %s: %d commit(s) %s, %d candidate(s)\n", p.ref, experiment.ShortCommit(prev.Head),
+		p.scan.Result.Scanned, p.readSince(), len(prev.Candidates))
+	if p.scan.Result.Shallow {
+		fmt.Fprintln(env.Stdout, note(st, "this is a shallow clone: older history is missing (git fetch --unshallow to mine it)"))
+	}
+	if msg := scanNote(p.opts, p.verify); msg != "" && !p.noMining {
+		fmt.Fprintln(env.Stdout, note(st, msg))
+	}
+	if len(p.verify) > 0 {
+		fmt.Fprintln(env.Stdout, note(st, "mined tasks will verify with: "+strings.Join(p.verify, "; ")+" (agentium init --verify to change)"))
+	}
 	if len(prev.Unknown) > 0 {
 		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d commit(s) the last pass ended at are gone from the repository: their history would be read again", len(prev.Unknown))))
 	}
@@ -558,6 +628,9 @@ func (p *poolPass) dryRun(ctx context.Context) int {
 		fmt.Fprintln(env.Stdout, warning(st, "the pool's state file is unreadable ("+prev.Unreadable+"): a pass sets it aside and starts over"))
 	}
 	if err := printCandidates(env, top, len(prev.Candidates)); err != nil {
+		return fail(env, err)
+	}
+	if err := printSetAside(env, p.setAside(len(prev.Candidates))); err != nil {
 		return fail(env, err)
 	}
 	if len(prev.Unvalidated) > 0 {
@@ -576,6 +649,9 @@ func (p *poolPass) dryRun(ctx context.Context) int {
 		fmt.Fprintf(env.Stdout, "Would retire %s: %s\n", r.Task.Name, r.Reason)
 	}
 	printHealth(env, health)
+	if len(top) > 0 && !health.LastPass.IsZero() { // before the first pass, printHealth names the command already
+		fmt.Fprintf(env.Stdout, "Next: %s imports %d and validates them\n", st.Command("agentium pool update"), len(top))
+	}
 	return ExitOK
 }
 

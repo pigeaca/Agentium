@@ -25,19 +25,15 @@ import (
 
 const contextUsage = `Usage:
   agentium context show [--ref REF]              what Claude Code loads (default: the working tree)
-  agentium context snapshot NAME [--ref REF | --working-tree] [--include PATH]... [--include-linked]
-                                                 save a version (default: --ref HEAD); --include adds a
-                                                 document (Markdown, rst, AsciiDoc), --include-linked every
-                                                 document the context links to
+  agentium context snapshot NAME [--ref REF | --working-tree]
+                                                 save a version (default: --ref HEAD)
   agentium context lint [--ref REF]              free check, no agent runs: size change since the last snapshot,
                                                  broken @imports, AGENTS.md over Codex's 32 KiB limit and show's
                                                  warnings (default: the working tree); always exit 0
-  agentium context lint --print-hook             the Claude Code hook that runs it after you edit context files
-                                                 (you add it to ~/.claude/settings.json; Agentium never does)
   agentium context list                          saved versions
   agentium context show|snapshot|list|diff|lint ... --json
                                                  one JSON document instead of text (docs/guide.md, "Scripting and automation")
-  agentium context diff A B [--patch]            compare two saved versions
+  agentium context diff A B                      compare two saved versions
 `
 
 func runContext(ctx context.Context, env Env, args []string) int {
@@ -338,6 +334,18 @@ type stringList []string
 func (l *stringList) String() string     { return strings.Join(*l, ",") }
 func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }
 
+// reservedSnapshotName says why a valid name cannot name a snapshot: "base" names each task's own context, and a name
+// that reads as a model would make experiment new --b a model A/B (and be refused there as ambiguous). "" when it can.
+func reservedSnapshotName(name string) string {
+	switch {
+	case name == experiment.BaseContext:
+		return `"base" names each task's own context`
+	case experiment.IsModel(name):
+		return fmt.Sprintf("%q reads as a model to experiment new --b (a model A/B)", name)
+	}
+	return ""
+}
+
 func contextSnapshot(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("context snapshot", flag.ContinueOnError)
 	ref := fs.String("ref", "", "snapshot the context at this commit (default HEAD)")
@@ -358,8 +366,8 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "agentium context snapshot: name %q must be lowercase letters, digits, '.', '_' or '-' (up to 63; no \"..\", no trailing \".\" or \".lock\")\n", name)
 		return ExitUsage
 	}
-	if name == "base" {
-		fmt.Fprintln(env.Stderr, `agentium context snapshot: "base" names each task's own context; choose another name`)
+	if why := reservedSnapshotName(name); why != "" {
+		fmt.Fprintf(env.Stderr, "agentium context snapshot: %s; choose another name\n", why)
 		return ExitUsage
 	}
 	if !*workingTree && *ref == "" {

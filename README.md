@@ -69,11 +69,14 @@ Mined instructions need your review for solution leaks (`agentium task show NAME
 | Command | Purpose |
 |---|---|
 | `context show / snapshot / diff / lint` | See, version and compare your context (free) |
-| `task mine / validate / show / edit` | Turn commits into validated tasks (free) |
+| `init` | Register a repository and set its task settings once: `--verify`, `--setup`, `--jobs`, ... (free) |
+| `pool update` | Turn commits into validated tasks and keep them fresh; `--dry-run` previews the candidates (free) |
+| `task validate / show / edit` | Check and review tasks (free) |
 | `run once` | One graded run (paid) |
 | `experiment new / plan / run / report` | Design, price, run and read an experiment (`run` is paid) |
 | `experiment new --judge` | Add an LLM second opinion; tests still decide |
-| `experiment new --template model-ab` | Compare two models or efforts on one context |
+| `experiment new --judge-pairs` | Ask which arm fixed each task better (unvalidated, exploratory) |
+| `experiment new --b MODEL[:EFFORT]` | Compare two models or efforts on one context (`--b` decides the template) |
 
 Everything else is in the [guide](docs/guide.md).
 

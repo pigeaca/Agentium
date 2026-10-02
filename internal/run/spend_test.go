@@ -11,22 +11,26 @@ import (
 )
 
 // spendFields says how Spend accounts for every money field a run record holds (a float64 named *USD, at any depth):
-//   - "agent" and "judge": the field is Spend's AgentUSD or JudgeUSD, and so in TotalUSD;
+//   - "agent", "judge" and "pair": the field is Spend's AgentUSD, JudgeUSD or PairJudgeUSD, and so in TotalUSD;
 //   - "folded": counted elsewhere, or not spend: Metrics.EstimatedCostUSD is an estimate that Once and recovery copy
 //     into Metrics.CostUSD when Claude Code reported no cost, so it is counted there, never on its own;
 //     IsolatedCostUSD is a counterfactual (the run's cost without other runs' prompt cache) that nobody paid;
 //     Overshoot's fields describe Metrics.CostUSD against the run's cap (its cap, how far past it, the allowance held),
-//     so the cost is already counted there.
+//     so the cost is already counted there; a pair comparison's orders (PairJudge.Verdict.AB and BA) are parts of its
+//     Verdict.CostUSD.
 //
 // A new money field fails TestSpendCoversEveryCost until it is added here and to Spend.
 var spendFields = map[string]string{
-	"Metrics.CostUSD":          "agent",
-	"Metrics.EstimatedCostUSD": "folded",
-	"IsolatedCostUSD":          "folded",
-	"Judge.CostUSD":            "judge",
-	"Overshoot.CapUSD":         "folded",
-	"Overshoot.OverUSD":        "folded",
-	"Overshoot.AllowanceUSD":   "folded",
+	"Metrics.CostUSD":              "agent",
+	"Metrics.EstimatedCostUSD":     "folded",
+	"IsolatedCostUSD":              "folded",
+	"Judge.CostUSD":                "judge",
+	"PairJudge.Verdict.CostUSD":    "pair",
+	"PairJudge.Verdict.AB.CostUSD": "folded",
+	"PairJudge.Verdict.BA.CostUSD": "folded",
+	"Overshoot.CapUSD":             "folded",
+	"Overshoot.OverUSD":            "folded",
+	"Overshoot.AllowanceUSD":       "folded",
 }
 
 // moneyFields lists the paths of the float64 fields (or pointers to one) named *USD under t, through structs,
@@ -111,6 +115,8 @@ func TestSpendCoversEveryCost(t *testing.T) {
 			want.AgentUSD = 1.25
 		case "judge":
 			want.JudgeUSD = 1.25
+		case "pair":
+			want.PairJudgeUSD = 1.25
 		}
 		if got != want {
 			t.Errorf("%s at $1.25: Spend = %+v, want %+v", path, got, want)

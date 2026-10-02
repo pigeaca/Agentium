@@ -421,8 +421,8 @@ const (
 type SeqLookPreview struct {
 	Tasks    int
 	Runs     int
-	CostUSD  float64 // the estimate of every run up to the look, the judge's included; zero when unknown
-	WorstUSD float64 // every run up to the look, and its judgement, at its cap
+	CostUSD  float64 // the estimate of every run up to the look, both judges' included; zero when unknown
+	WorstUSD float64 // every run up to the look, its judgement and its pair's comparison, at its cap
 	EffLevel float64
 	EqLevel  float64
 }
@@ -458,9 +458,9 @@ func PreviewSequential(d Design, est ArmEstimates) (SeqPreview, error) {
 			order = append(order, s.Task)
 		}
 	}
-	judgePair := 0.0
+	judgePair := 0.0 // a task's judgements and its pair's comparison
 	if len(d.Tasks) > 0 {
-		judgePair = d.JudgeEstimateUSD() / float64(len(d.Tasks))
+		judgePair = d.JudgingEstimateUSD() / float64(len(d.Tasks))
 	}
 	p := SeqPreview{Known: true, WorstUSD: float64(len(d.Tasks)) * d.PairCapUSD()}
 	for k, n := range seq.Looks {

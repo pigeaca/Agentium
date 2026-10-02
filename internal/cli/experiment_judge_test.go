@@ -49,32 +49,56 @@ func TestExperimentNewJudgeFlags(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	for _, c := range []struct {
-		args []string
-		want string
-	}{
-		{[]string{"--judge-model", "claude-opus-5-5"}, "set the judge: add --judge"},
-		{[]string{"--judge-repeats", "2"}, "set the judge: add --judge"},
-		{[]string{"--judge", "--judge-repeats", "-1"}, "--judge-repeats must be positive"},
-		{[]string{"--judge", "--judge-repeats", "10"}, "the judge's repeats must be 1 to 9"},
-	} {
-		expect(t, f.run(ctx, append([]string{"experiment", "new", "x", "--b", "lean", "--task", "value", "--budget", "50"}, c.args...)...), ExitUsage, c.want)
-	}
 	// Defaults: the pilot's model, effort and 3 calls; a budget below a pair with their judgements is refused.
 	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "lean", "--task", "value", "--judge", "--budget", "8"), ExitUsage,
 		"below one pair of runs at their caps ($12.60)")
 	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "lean", "--task", "value", "--judge", "--budget", "50"), ExitOK,
 		"The judge: claude-opus-5-5 at effort high, 3 call(s) per run, its verdicts a second opinion beside the tests.")
 	d := storedDesign(t, f, "x")
-	if d.Judge == nil || *d.Judge != (llmjudge.Settings{Model: "claude-opus-5-5", Effort: "high", Repeats: 3}) {
+	if d.Judge == nil || *d.Judge != (llmjudge.Settings{Model: "claude-opus-5-5", Effort: "high", Repeats: 3}) || d.JudgePairs != nil {
+		t.Errorf("stored judge settings %+v, %+v", d.Judge, d.JudgePairs)
+	}
+	// The default budget holds back each run's judgement: 3 calls, each up to $0.50 and asked again at most.
+	expect(t, f.run(ctx, "experiment", "new", "default", "--b", "lean", "--task", "value", "--judge", "--seed", "5"), ExitOK, "= 2 runs, budget $24.00")
+	// --judge=MODEL[:EFFORT] picks the judge's model; =false, or no --judge, none.
+	expect(t, f.run(ctx, "experiment", "new", "sonnet", "--b", "lean", "--task", "value", "--judge=claude-sonnet-5-5", "--budget", "50"), ExitOK,
+		"The judge: claude-sonnet-5-5 at effort high, 3 call(s) per run")
+	if d := storedDesign(t, f, "sonnet"); d.Judge == nil || *d.Judge != (llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3}) {
 		t.Errorf("stored judge settings %+v", d.Judge)
 	}
-	expect(t, f.run(ctx, "experiment", "new", "plain", "--b", "lean", "--task", "value", "--budget", "50"), ExitOK)
-	if d := storedDesign(t, f, "plain"); d.Judge != nil {
-		t.Errorf("an experiment without --judge has judge settings %+v", d.Judge)
+	// A bare --judge-pairs takes --judge's model and effort; its own value overrides them.
+	for _, c := range []struct {
+		args        []string
+		judge, pair llmjudge.Settings
+	}{
+		{[]string{"--judge=claude-sonnet-5-5:max", "--judge-pairs"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "max", Repeats: 3},
+			llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "max", Repeats: 1}},
+		{[]string{"--judge-pairs", "--judge=claude-sonnet-5-5"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3},
+			llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 1}},
+		{[]string{"--judge=claude-sonnet-5-5", "--judge-pairs=claude-opus-5-5:low"}, llmjudge.Settings{Model: "claude-sonnet-5-5", Effort: "high", Repeats: 3},
+			llmjudge.Settings{Model: "claude-opus-5-5", Effort: "low", Repeats: 1}},
+	} {
+		expect(t, f.run(ctx, append([]string{"experiment", "new", "pairs", "--b", "lean", "--task", "value", "--budget", "50"}, c.args...)...), ExitOK)
+		if d := storedDesign(t, f, "pairs"); d.Judge == nil || d.JudgePairs == nil || *d.Judge != c.judge || *d.JudgePairs != c.pair {
+			t.Errorf("%v: judges %+v, %+v", c.args, d.Judge, d.JudgePairs)
+		}
+		expect(t, f.run(ctx, "experiment", "rm", "pairs"), ExitOK)
 	}
-	expect(t, f.run(ctx, "experiment", "--help"), ExitOK, "[--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]",
-		"--judge asks an LLM judge about every graded run", "it decides nothing")
+	for _, off := range [][]string{nil, {"--judge=false"}, {"--judge=claude-opus-5-5", "--judge=false"}} {
+		expect(t, f.run(ctx, append([]string{"experiment", "new", "plain", "--b", "lean", "--task", "value", "--budget", "50"}, off...)...), ExitOK)
+		if d := storedDesign(t, f, "plain"); d.Judge != nil || d.JudgePairs != nil {
+			t.Errorf("%v: an experiment without the judge has judge settings %+v", off, d.Judge)
+		}
+		expect(t, f.run(ctx, "experiment", "rm", "plain"), ExitOK)
+	}
+	help := f.run(ctx, "experiment", "--help")
+	expect(t, help, ExitOK, "[--judge[=MODEL[:EFFORT]]] [--judge-pairs[=MODEL[:EFFORT]]]", "--judge asks an LLM judge about every graded run",
+		"it decides nothing", "3 times (the majority wins) on\nclaude-opus-5-5 at effort high, or on --judge=MODEL[:EFFORT].")
+	for _, gone := range []string{"--judge-model", "--judge-effort", "--judge-repeats"} {
+		if strings.Contains(help.stdout, gone) {
+			t.Errorf("the help names the removed %s", gone)
+		}
+	}
 }
 
 // storedDesign reads an experiment's stored design, as the database keeps it.
@@ -113,8 +137,10 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "judged", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--judge-repeats", "2",
-		"--seed", "5"), ExitOK, "1 task(s) × 1 run(s) per arm = 2 runs, budget $21.00", "The judge: claude-opus-5-5 at effort high, 2 call(s) per run")
+	// 2 calls per run, as --judge-repeats made before it was removed: the judge is the old design's.
+	expect(t, f.run(ctx, "experiment", "new", "judged", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--seed", "5", "--budget", "21"),
+		ExitOK, "1 task(s) × 1 run(s) per arm = 2 runs, budget $21.00")
+	storeAsBefore(t, f, "judged", func(d *experiment.Design) { d.Judge.Repeats = 2 })
 	plan := f.run(ctx, "experiment", "plan", "judged")
 	expect(t, plan, ExitOK, "judge: claude-opus-5-5 at effort high, 2 call(s) per run; each run's judgement up to $2.00",
 		"The judge: about $0.26 for this experiment's 2 runs × 2 call(s) at $0.065 a call (EST. COST includes it; the agent's\nruns are $3.22)",
@@ -171,7 +197,8 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 	}
 
 	// A judge that never answers leaves the run as it was: graded, counted, and its verdict final (judged, no answer).
-	expect(t, f.run(ctx, "experiment", "new", "broken", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--judge-repeats", "2"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "broken", "--b", "lean", "--task", "value", "--repeats", "1", "--judge"), ExitOK)
+	storeAsBefore(t, f, "broken", func(d *experiment.Design) { d.Judge.Repeats = 2 })
 	writeFile(t, ctrl, "judge-broken", "")
 	expect(t, f.run(ctx, "experiment", "run", "broken"), ExitOK, "ok, $0.30; judge: no answer: exit 1, not JSON: not json, $0.00", "Experiment broken: done")
 	for _, rec := range records(t, experimentRuns(t, f, "broken")) {
@@ -193,7 +220,8 @@ func TestExperimentJudgePausesAndResumes(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--concurrency", "1", "--judge",
-		"--judge-repeats", "2", "--budget", "40"), ExitOK)
+		"--budget", "40"), ExitOK)
+	storeAsBefore(t, f, "limit", func(d *experiment.Design) { d.Judge.Repeats = 2 })
 	writeFile(t, ctrl, "judge-limit", "")
 	paused := f.run(ctx, "experiment", "run", "limit")
 	expect(t, paused, ExitOK, "[1/4] value", "judge: no answer; stopped at a usage limit or sign-in failure, $0.01",
@@ -278,7 +306,8 @@ func TestExperimentJudgeLimitOnTheLastRun(t *testing.T) {
 	writeFile(t, ctrl, "cost", "5")
 	writeFile(t, ctrl, "judge-limit-after", "2") // the second run's first call
 	expect(t, f.run(ctx, "experiment", "new", "last", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1", "--judge",
-		"--judge-repeats", "2", "--budget", "11"), ExitOK)
+		"--budget", "13"), ExitOK)
+	storeAsBefore(t, f, "last", func(d *experiment.Design) { d.Judge.Repeats, d.BudgetUSD = 2, 11 })
 	paused := f.run(ctx, "experiment", "run", "last")
 	expect(t, paused, ExitOK, "[2/2] value", "judge: no answer; stopped at a usage limit or sign-in failure",
 		"Experiment last: paused at the usage limit: the judge hit a usage limit", "2 of 2 runs settled",

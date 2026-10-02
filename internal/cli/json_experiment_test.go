@@ -19,7 +19,7 @@ import (
 const (
 	startKeys           = "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run,run_command,schema,status,tasks_awaiting_review,tasks_ready"
 	startExperimentKeys = "budget_usd,looks,method,model,name,repeats_per_arm,runs,spend,tasks,template"
-	experimentKeys      = "arms,budget_usd,concurrency,goal,judge,method,name,repeats_per_arm,run_budget_usd,runs,tasks,template"
+	experimentKeys      = "arms,budget_usd,concurrency,goal,judge,judge_pairs,method,name,repeats_per_arm,run_budget_usd,runs,tasks,template"
 	expArmKeys          = "context,effort,model,name"
 	lookKeys            = "analysed,conditional_power,decision,interval,level,look,note,tasks_counted,tasks_planned,verdict"
 	intervalKeys        = "estimate,high,low"
@@ -33,7 +33,7 @@ const (
 	runResultKeys       = "budget_usd,ended_by,judge_paused,looks,method,next_command,north_star,note,resume_at,runs,spent_usd,status,stopped_at_look,verdict"
 	verdictKeys         = "decisive,metrics,summary"
 	metricKeys          = "a,b,decisive,interval,level,metric,note,role,tasks,verdict"
-	progressKeys        = "arms,budget_usd,calibration_usd,ended_by,judge_usd,looks,settled,slots,spent_usd,unjudged_runs"
+	progressKeys        = "arms,budget_usd,calibration_usd,ended_by,judge_usd,looks,pair_judge_usd,settled,slots,spent_usd,uncompared_pairs,unjudged_runs"
 	armProgKeys         = "cancelled,context,cost_usd,fair,infra,name,settled,successes,unfair"
 	lockKeys            = "budget_changes,claude_code,local_binding,locked_at,method,price_table,sign_in"
 )
@@ -187,7 +187,7 @@ func TestJSONExperimentErrors(t *testing.T) {
 	}{
 		{[]string{"experiment", "show", "nope"}, ExitError},
 		{[]string{"experiment", "plan"}, ExitUsage},
-		{[]string{"experiment", "new", "x"}, ExitUsage}, // arm B missing
+		{[]string{"experiment", "new", "x", "--template", "aa"}, ExitUsage}, // a removed flag
 		{[]string{"experiment", "list", "extra"}, ExitUsage},
 		{[]string{"experiment", "run", "x", "--usage-limit", "0"}, ExitUsage},
 	} {

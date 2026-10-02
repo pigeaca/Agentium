@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"slices"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -14,20 +15,23 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// experimentUsage is the help of experiment's subcommands. It is computed once from constants and never changed.
+// experimentUsage is the help of experiment's subcommands. It is computed once from constants and never changed. It
+// lists no expert flag (experimentHidden): the guide's "Advanced flags" table does.
 var experimentUsage = `Usage:
-  agentium experiment new NAME --b SNAPSHOT [--a CONTEXT] [--task NAME...] [--model MODEL] [--effort LEVEL]
-                     [--goal cheaper|better [--tier quick|confident] [--repeats N]] [--no-futility] [--run-budget USD]
-                     [--budget USD] [--concurrency N] [--timeout DURATION] [--verify-timeout DURATION] [--seed N]
-                     [--judge [--judge-model MODEL] [--judge-effort LEVEL] [--judge-repeats N]]
-                     a context A/B: arm A (default: base, each task's own context) against snapshot B
-  agentium experiment new NAME --template aa [--a CONTEXT] [...]
-                     an A/A calibration: one context in both arms, which must find no difference
-  agentium experiment new NAME --template model-ab --a MODEL[:EFFORT] --b MODEL[:EFFORT] [--context SNAPSHOT] [--run-budget-a USD]
-                     [--run-budget-b USD] [...]
-                     a model A/B: two Claude Code profiles (a model, and an effort level: low, medium, high, xhigh or
-                     max) on the same tasks in one context (default: base). Each arm's model is calibrated when the
-                     experiment runs, if it is not yet
+  agentium experiment new NAME [--b SNAPSHOT|MODEL[:EFFORT]] [--a CONTEXT|MODEL[:EFFORT]] [--context SNAPSHOT]
+                     [--task NAME...] [--model MODEL[:EFFORT]] [--goal cheaper|better] [--run-budget USD] [--budget USD]
+                     [--judge[=MODEL[:EFFORT]]] [--judge-pairs[=MODEL[:EFFORT]]]
+                     --b decides what the experiment compares:
+                       no --b             an A/A calibration: one context (--a, default base: each task's own
+                                          context) in both arms, which must find no difference
+                       --b SNAPSHOT       a context A/B: arm A's context (--a, default base) against snapshot B
+                       --b MODEL[:EFFORT] a model A/B: two Claude Code profiles, arm A's (--a, default --model) against
+                                          B's, on the same tasks in one context (--context, default base). A model is
+                                          one Agentium's price table knows, or a claude-… model ID; an effort is low,
+                                          medium, high, xhigh or max (default: the CLI's). Each arm's model is
+                                          calibrated when the experiment runs, if it is not yet
+                     A --b that names both a snapshot and a model is refused. --model (default ` + experiment.DefaultExperimentModel + `) is
+                     the model a context experiment runs on; --run-budget stops each run, in both arms, at its cost
   agentium experiment plan NAME
                      the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
   agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes]
@@ -53,21 +57,46 @@ Every experiment command but report takes --json (one JSON document on stdout; s
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT); --task picks
 them (repeatable), else a seeded sample does. A cost experiment (--goal cheaper, the default) runs method seq-v1: up to
 16 tasks × 1 run per arm in stages, with a look after 8, 12 and 16 tasks; it stops at the first look with a cost
-verdict, or when one has become unlikely (futility; --no-futility turns that off). A success experiment (--goal better)
-samples a tier: quick is 12 tasks × 3 runs per arm, confident 23 × 5.
+verdict, or when one has become unlikely (futility). A success experiment (--goal better) runs 12 tasks × 3 runs per
+arm. Expert flags (a larger sample, repeats, the seed, timeouts, concurrency) are in docs/guide.md, "Advanced flags".
 
 ` + fmt.Sprintf(`--judge asks an LLM judge about every graded run: does its change do what the task asks, as the task's reference
-solution does? It reads the instruction and both changes' code (never the tests), --judge-repeats times (default %d,
-up to %d; the majority wins) on --judge-model (default %s) at --judge-effort (default %s). Its verdict
-(fixed, partly or no, with a reason) is a second opinion beside the tests: it decides nothing. Its calls count against
-the budget, which holds back repeats × 2 × $%.2f per run for them, but never toward an arm's cost. Tasks without a
-reference solution in code are not judged. Judging can hold a run's slot for up to repeats × %d minutes more. The usage
-limit's per-run estimate leaves out the judge's use of a subscription; a judge that hits a usage limit pauses the
-experiment, and --wait does not wait for it. The report's Judge section shows each arm's verdicts among passing and
-failing runs with 95%% intervals, the runs not judged and why, how often the repeats agreed, the judge's cost, and the
-passing runs it did not call fixed, with its reasons (the first %d; --json lists them all).
-`, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD,
-	int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged)
+solution does? It reads the instruction and both changes' code (never the tests), %d times (the majority wins) on
+%s at effort %s, or on --judge=MODEL[:EFFORT]. Its verdict (fixed, partly or no, with a reason) is a
+second opinion beside the tests: it decides nothing. Its calls count against the budget, which holds back %d × 2 ×
+$%.2f per run for them, but never toward an arm's cost. Tasks without a reference solution in code are not judged.
+Judging can hold a run's slot for up to %d minutes more. The usage limit's per-run estimate leaves out the judge's use
+of a subscription; a judge that hits a usage limit pauses the experiment, and --wait does not wait for it. The
+report's Judge section shows each arm's verdicts among passing and failing runs with 95%% intervals, the runs not
+judged and why, how often the repeats agreed, the judge's cost, and the passing runs it did not call fixed, with its
+reasons (the first %d; --json lists them all).
+
+--judge-pairs asks the pair judge, unvalidated, which of a pair's two changes is the better fix, when both runs pass
+(a task's run in each arm with the same repeat index): in both orders, on --judge's model (default %s at
+effort %s), or on --judge-pairs=MODEL[:EFFORT]; when the orders disagree, the pair is a tie. It reads what
+--judge reads. Its preferences are exploratory: they never make a verdict. Each pair is compared beside the runs, so
+it holds no run's slot and no look; the budget holds back %d calls × $%.2f per pair for it at the default judge
+(another model or effort adds each call's overshoot allowance: experiment plan states the cap), about $%.2f a pair at
+the pilot's mean. A pair judge that hits a usage limit pauses the experiment as the judge does; queued comparisons
+wait while the experiment waits for the usage window, and a pause at the usage limit leaves them for the resume.
+`, llmjudge.DefaultRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.DefaultRepeats, llmjudge.CallCapUSD,
+	llmjudge.DefaultRepeats*int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged, llmjudge.DefaultModel, llmjudge.DefaultEffort,
+	llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD)
+
+// experimentHidden are experiment new's expert flags: they parse, but experimentUsage leaves them out (docs/guide.md,
+// "Advanced flags", lists each with its default).
+var experimentHidden = []string{"tier", "repeats", "no-futility", "concurrency", "timeout", "verify-timeout", "seed"}
+
+// experimentRemoved are experiment new's removed flags, each with what replaces it.
+var experimentRemoved = map[string]string{
+	"template":      "--b decides it: no --b for an A/A, --b SNAPSHOT for a context A/B, --b MODEL[:EFFORT] for a model A/B",
+	"effort":        "put the effort in --model: --model MODEL:EFFORT",
+	"run-budget-a":  "--run-budget stops each run, in both arms",
+	"run-budget-b":  "--run-budget stops each run, in both arms",
+	"judge-model":   "name the judge in its flag: --judge=MODEL[:EFFORT] or --judge-pairs=MODEL[:EFFORT]",
+	"judge-effort":  "name the judge in its flag: --judge=MODEL:EFFORT or --judge-pairs=MODEL:EFFORT",
+	"judge-repeats": fmt.Sprintf("the judge asks %d times per run (the majority wins)", llmjudge.DefaultRepeats),
+}
 
 func runExperiment(ctx context.Context, env Env, args []string) int {
 	if len(args) == 0 {
@@ -100,41 +129,47 @@ func runExperiment(ctx context.Context, env Env, args []string) int {
 func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment new", flag.ContinueOnError)
 	var o experiment.NewOptions
-	fs.StringVar(&o.Template, "template", experiment.TemplateContextAB, "context-ab, aa or model-ab")
-	var a, b, contextName string
-	fs.StringVar(&a, "a", "", "arm A's context: base (default) or a snapshot; with model-ab, its MODEL[:EFFORT]")
-	fs.StringVar(&b, "b", "", "arm B's context: a snapshot (context-ab only); with model-ab, its MODEL[:EFFORT]")
-	fs.StringVar(&contextName, "context", "", "model-ab only: the context both arms run: base (default) or a snapshot")
-	fs.Float64Var(&o.RunBudgetA, "run-budget-a", 0, "model-ab only: stop arm A's runs at this cost in USD (default --run-budget)")
-	fs.Float64Var(&o.RunBudgetB, "run-budget-b", 0, "model-ab only: stop arm B's runs at this cost in USD (default --run-budget)")
-	fs.StringVar(&o.Tier, "tier", "", "--goal better: quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
+	var a, b, contextName, model string
+	fs.StringVar(&a, "a", "", "arm A: its context (base, the default, or a snapshot); in a model A/B, its MODEL[:EFFORT] (default --model)")
+	fs.StringVar(&b, "b", "", "arm B, which decides the template: none (A/A), a snapshot (context A/B) or MODEL[:EFFORT] (model A/B)")
+	fs.StringVar(&contextName, "context", "", "a model A/B's one context: base (default) or a snapshot")
 	var tasks stringList
 	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a sample)")
-	fs.IntVar(&o.Repeats, "repeats", 0, "--goal better: runs per task per arm (default: the tier's, or 3); a cost experiment runs 1")
-	fs.BoolVar(&o.NoFutility, "no-futility", false, "a cost experiment: no futility stops (it then runs to a verdict or its last look)")
-	fs.StringVar(&o.Model, "model", experiment.DefaultExperimentModel, "the model")
-	fs.StringVar(&o.Effort, "effort", "", "the effort level (default: the CLI's)")
+	fs.StringVar(&model, "model", experiment.DefaultExperimentModel, "the model, MODEL[:EFFORT] (effort default: the CLI's)")
 	fs.StringVar(&o.Goal, "goal", experiment.GoalCheaper, "cheaper (cost, with success as the guard) or better (success)")
 	fs.Float64Var(&o.RunBudget, "run-budget", experiment.DefaultRunBudgetUSD, "stop each run at this cost in USD")
 	fs.Float64Var(&o.Budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
+	judge, pairs := judgeFlag{name: "judge"}, judgeFlag{name: "judge-pairs"}
+	fs.Var(&judge, "judge", "ask the LLM judge about every graded run, on its default model or MODEL[:EFFORT] (a second opinion)")
+	fs.Var(&pairs, "judge-pairs", "ask the pair judge which arm fixed each task better, when both pass (unvalidated, exploratory)")
+	// Hidden (experimentHidden): the guide's "Advanced flags".
+	fs.StringVar(&o.Tier, "tier", "", "--goal better: quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
+	fs.IntVar(&o.Repeats, "repeats", 0, "--goal better: runs per task per arm (default: the tier's, or 3); a cost experiment runs 1")
+	fs.BoolVar(&o.NoFutility, "no-futility", false, "a cost experiment: no futility stops (it then runs to a verdict or its last look)")
 	fs.IntVar(&o.Concurrency, "concurrency", experiment.DefaultConcurrency, "runs at a time")
 	fs.DurationVar(&o.Timeout, "timeout", experiment.DefaultRunTimeout, "stop each run after this long")
 	fs.DurationVar(&o.VerifyTimeout, "verify-timeout", experiment.DefaultVerifyTimeout, "time limit for each setup or verification command")
 	fs.Uint64Var(&o.Seed, "seed", 0, "the seed for the task sample and the run order (default: random)")
-	fs.BoolVar(&o.Judge, "judge", false, "ask the LLM judge about every graded run (a second opinion; it decides nothing)")
-	fs.StringVar(&o.JudgeModel, "judge-model", "", "the judge's model (default "+llmjudge.DefaultModel+")")
-	fs.StringVar(&o.JudgeEffort, "judge-effort", "", "the judge's effort level (default "+llmjudge.DefaultEffort+")")
-	fs.IntVar(&o.JudgeRepeats, "judge-repeats", 0, fmt.Sprintf("the judge's calls per run, the majority wins (default %d, at most %d)", llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats))
+	removeFlags(fs, experimentRemoved)
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
+	}
+	if (judge.on || pairs.on) && slices.ContainsFunc(rest, experiment.IsModel) { // a model given as a separate word
+		fmt.Fprintln(env.Stderr, "agentium experiment new: --judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]")
+		return ExitUsage
 	}
 	name, ok := oneName(env, "experiment new", rest, experimentUsage)
 	if !ok {
 		return ExitUsage
 	}
 	o.Tasks = tasks
-	if err := setExperimentArms(&o, fs, a, b, contextName); err != nil {
+	o.Judge, o.JudgeModel, o.JudgeEffort = judge.on, judge.model, judge.effort
+	o.JudgePairs, o.PairJudgeModel, o.PairJudgeEffort = pairs.on, pairs.model, pairs.effort
+	if pairs.on && pairs.model == "" { // a bare --judge-pairs takes --judge's model and effort, as one --judge-model set both
+		o.PairJudgeModel, o.PairJudgeEffort = judge.model, judge.effort
+	}
+	if err := setExperimentArms(&o, fs, a, b, contextName, model); err != nil {
 		return failNew(env, err)
 	}
 	if err := o.Prepare(name); err != nil {
@@ -156,26 +191,54 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	return ExitOK
 }
 
-// setExperimentArms puts --a, --b and --context where the template reads them: contexts for the context templates,
-// models for model-ab (whose --model and --effort, left at their defaults, are the arms' own to set).
-func setExperimentArms(o *experiment.NewOptions, fs *flag.FlagSet, a, b, contextName string) error {
+// setExperimentArms sets the template --b implies (experiment.InferTemplate) and puts --a, --b, --context and --model
+// where it reads them. An A/A or a context A/B compares contexts (--a, default base, and --b) on one MODEL[:EFFORT]
+// (--model). A model A/B compares arm A's profile (--a, else --model) with arm B's (--b) in one context (--context,
+// default base).
+func setExperimentArms(o *experiment.NewOptions, fs *flag.FlagSet, a, b, contextName, model string) error {
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	o.Template = experiment.InferTemplate(b)
 	if o.Template != experiment.TemplateModelAB {
-		if contextName != "" {
-			return experiment.UsageError("--context belongs to the model-ab template; the others take --a and --b")
+		switch {
+		case given["context"] && b == "":
+			return experiment.UsageError("--context is a model A/B's one context (--b MODEL[:EFFORT]); an A/A, without --b, runs --a's context in both arms")
+		case given["context"]:
+			return experiment.UsageError(fmt.Sprintf("--context is a model A/B's one context, but --b %s is not a model (one Agentium's price table knows, "+
+				"or a claude-… model ID), so this is a context A/B: --a and --b name its contexts", b))
+		}
+		var err error
+		if o.Model, o.Effort, err = experiment.ParseProfile(model); err != nil {
+			return experiment.UsageError("--model " + err.Error())
 		}
 		if o.ContextA, o.ContextB = a, b; a == "" {
 			o.ContextA = experiment.BaseContext
 		}
 		return nil
 	}
+	if a != "" && given["model"] {
+		return experiment.UsageError(fmt.Sprintf("--b %s makes a model A/B, whose arm A runs --a, else --model: give one of them", b))
+	}
+	// Arm A's profile must read as a model, as --b's did: a context name in --a (or an alias) would otherwise become a
+	// model that Claude Code is asked to run, after paid calibrations. One that does not parse is Prepare's to report.
+	if m, _, err := experiment.ParseProfile(a); a != "" && err == nil && !experiment.IsModel(m) {
+		return experiment.UsageError(fmt.Sprintf("--a %s is not a model: a model A/B's context is --context (a model is one Agentium's "+
+			"price table knows, or a claude-… model ID)", a))
+	}
+	if m, _, err := experiment.ParseProfile(model); a == "" && err == nil && !experiment.IsModel(m) {
+		return experiment.UsageError(fmt.Sprintf("--model %s is not a model Agentium reads as one, and arm A of this model A/B runs it: "+
+			"use a model the price table knows, or a claude-… model ID", model))
+	}
 	o.ProfileA, o.ProfileB, o.ContextA = a, b, contextName
+	if a == "" {
+		o.ProfileA = model
+		if experiment.SameProfile(model, b) { // say how --b was read: the design's profile check alone would not
+			return experiment.UsageError(fmt.Sprintf("--b %s is a model, so this is a model A/B, and arm A runs --model (%s), the same profile: "+
+				"give arm A another with --a MODEL[:EFFORT]", b, model))
+		}
+	}
 	if contextName == "" {
 		o.ContextA = experiment.BaseContext
-	}
-	given := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
-	if !given["model"] {
-		o.Model = ""
 	}
 	return nil
 }

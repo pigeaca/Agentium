@@ -37,7 +37,7 @@ func toolCommand(t *testing.T, inv Invocation, environ []string) (env map[string
 	return env, settings
 }
 
-func sandbox(settings map[string]any) (network, filesystem map[string]any) {
+func sandboxOf(settings map[string]any) (network, filesystem map[string]any) {
 	sb := settings["sandbox"].(map[string]any)
 	return sb["network"].(map[string]any), sb["filesystem"].(map[string]any)
 }
@@ -61,7 +61,7 @@ func TestMavenRunEnvironmentAndSandbox(t *testing.T) {
 	if _, ok := env["MAVEN_OPTS"]; ok {
 		t.Error("MAVEN_OPTS reaches the agent: it could point the repository back at the user's")
 	}
-	network, fs := sandbox(settings)
+	network, fs := sandboxOf(settings)
 	if _, ok := network["allowLocalBinding"]; ok {
 		t.Error("Maven projects get no local binding")
 	}
@@ -110,7 +110,7 @@ func TestGradleRunEnvironmentAndSandbox(t *testing.T) {
 	if _, ok := env["GRADLE_OPTS"]; ok {
 		t.Error("GRADLE_OPTS reaches the agent")
 	}
-	network, fs := sandbox(settings)
+	network, fs := sandboxOf(settings)
 	if network["allowLocalBinding"] != true {
 		t.Errorf("Gradle's file-lock service binds a local socket: %v", network)
 	}
@@ -130,7 +130,7 @@ func TestGradleRunEnvironmentAndSandbox(t *testing.T) {
 			t.Errorf("%v is refused without the opt-in: %v", tools, err)
 		}
 		_, other := toolCommand(t, toolInvocation(t, tools...), userTools)
-		if n, _ := sandbox(other); n["allowLocalBinding"] != nil {
+		if n, _ := sandboxOf(other); n["allowLocalBinding"] != nil {
 			t.Errorf("%v gets local binding", tools)
 		}
 	}
@@ -162,7 +162,7 @@ func TestCargoRunEnvironmentAndSandbox(t *testing.T) {
 			t.Errorf("%s = %q (set %v), want %q: sccache would cache compiled hidden tests", name, got, ok, v)
 		}
 	}
-	if network, _ := sandbox(settings); network["allowLocalBinding"] != nil {
+	if network, _ := sandboxOf(settings); network["allowLocalBinding"] != nil {
 		t.Errorf("Cargo projects get no local binding: %v", network)
 	}
 	denied := inv.DeniedPaths(userTools)
@@ -190,7 +190,7 @@ func TestUnmarkedProjectKeepsItsEnvironment(t *testing.T) {
 			t.Errorf("%s = %q without its profile", name, v)
 		}
 	}
-	if network, _ := sandbox(settings); network["allowLocalBinding"] != nil {
+	if network, _ := sandboxOf(settings); network["allowLocalBinding"] != nil {
 		t.Error("local binding without Gradle")
 	}
 	denied := inv.DeniedPaths(userTools)
@@ -217,7 +217,7 @@ func TestGoRunWithADepsFolder(t *testing.T) {
 	inv := toolInvocation(t, "go")
 	inv.AllowLocalBinding = false
 	env, settings := toolCommand(t, inv, userTools)
-	network, fs := sandbox(settings)
+	network, fs := sandboxOf(settings)
 	if network["allowLocalBinding"] != nil {
 		t.Error("local binding for a Go project")
 	}

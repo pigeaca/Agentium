@@ -67,7 +67,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	}
 	// The smoke check's preview: runs capped at $0.50 are estimated at the cap, not at the default profile's $1.61, so
 	// the estimate by each look stays within its worst case (2 runs at $0.50 and their $0.15 overshoot).
-	expect(t, f.run(ctx, "experiment", "new", "smoke", "--template", "aa", "--run-budget", "0.5", "--budget", "5", "--seed", "7"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "smoke", "--run-budget", "0.5", "--budget", "5", "--seed", "7"), ExitOK)
 	smoke := f.run(ctx, "experiment", "plan", "smoke")
 	expect(t, smoke, ExitOK, "1 of 1", "$1.00", "$1.30", "Spend: at most $1.00 if every look runs (all 1 tasks; $1.30 if every run reaches its cap",
 		"value, without runs of their own: $0.50, the run cap: no runs on this model yet: the estimate assumes each run reaches its cap ($1.61\n    from a default task run's tokens at claude-sonnet-5-5's list prices",
@@ -124,9 +124,9 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// A/A: one context in both arms, checked once.
 	aa := f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitError, `experiment "noise": not found`)
-	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "5"), ExitUsage,
+	expect(t, f.run(ctx, "experiment", "new", "noise", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "5"), ExitUsage,
 		"the budget $5.00 is below one pair of runs at their caps ($6.60)")
-	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "8"), ExitOK,
+	expect(t, f.run(ctx, "experiment", "new", "noise", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "8"), ExitOK,
 		"A/A calibration of context lean, 1 task(s) × 2 run(s) per arm = 4 runs, budget $8.00")
 	aa = f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitOK, "arm A: context lean", "arm B: context lean",
@@ -310,8 +310,16 @@ func TestExperimentNewUsage(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"lean-ab"}, "a context A/B needs --b SNAPSHOT"},
-		{[]string{"noise", "--template", "aa", "--b", "lean"}, "drop --b"},
+		// Removed flags name what replaced them.
+		{[]string{"x", "--template", "aa"}, "agentium experiment new: --template was removed: --b decides it: no --b for an A/A"},
+		{[]string{"x", "--b", "lean", "--effort", "high"}, "--effort was removed: put the effort in --model: --model MODEL:EFFORT"},
+		{[]string{"x", "--b", "lean", "--judge", "--judge-model", "claude-opus-5-5"}, "--judge-model was removed: name the judge in its flag: --judge=MODEL[:EFFORT]"},
+		{[]string{"x", "--model", "claude-opus-5-5:huge"}, `--model "claude-opus-5-5:huge": unknown effort "huge"`},
+		{[]string{"x", "--b", "lean", "--judge=claude-opus-5-5:huge"}, `agentium experiment new: --judge=claude-opus-5-5:huge: unknown effort "huge"`},
+		{[]string{"x", "--b", "lean", "--judge", "claude-opus-5-5"}, "--judge and --judge-pairs take their model after an equals sign: --judge=MODEL[:EFFORT]"},
+		// Without a NAME, the model is not taken for one.
+		{[]string{"--b", "lean", "--judge", "claude-sonnet-5-5"}, "--judge and --judge-pairs take their model after an equals sign"},
+		{[]string{"--judge-pairs", "claude-sonnet-5-5"}, "--judge and --judge-pairs take their model after an equals sign"},
 		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "huge"}, `unknown tier "huge"`},
 		{[]string{"x", "--b", "lean", "--goal", "better", "--tier", "quick", "--task", "value"}, "use one"},
 		{[]string{"x", "--b", "lean", "--tier", "quick"}, "--tier sizes success experiments (--goal better); a cost experiment (--goal cheaper) runs method seq-v1"},
@@ -366,7 +374,7 @@ func TestExperimentNewUsage(t *testing.T) {
 	}
 	db.Close()
 	expect(t, f.run(ctx, "experiment", "plan", "gone"), ExitOK, "context lean: its snapshot commit abababababab is gone from Agentium's repository")
-	expect(t, f.run(ctx, "experiment", "new", "x", "--template", "ab", "--b", "base"), ExitUsage, `unknown template "ab"`)
+	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "base", "--task", "value"), ExitUsage, "both arms use context base: a comparison of one context with itself is an A/A (aa), made without --b")
 	expect(t, f.run(ctx, "experiment"), ExitUsage, "agentium experiment new NAME")
 	expect(t, f.run(ctx, "experiment", "bogus"), ExitUsage, `unknown subcommand "bogus"`)
 }

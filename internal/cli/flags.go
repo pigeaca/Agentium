@@ -19,6 +19,14 @@ func parseArgs(env Env, fs *flag.FlagSet, args []string, usage string) (position
 			fmt.Fprint(env.Stdout, usage)
 			return nil, ExitOK, false
 		}
+		if instead := removedHit(fs); instead != "" { // a removed flag names its replacement, without the whole usage
+			fmt.Fprintf(env.Stderr, "agentium %s: %s\n", fs.Name(), instead)
+			return nil, ExitUsage, false
+		}
+		if why := badValue(fs); err != nil && why != "" { // a value that says why itself, without the whole usage
+			fmt.Fprintf(env.Stderr, "agentium %s: %s\n", fs.Name(), why)
+			return nil, ExitUsage, false
+		}
 		if err != nil {
 			fmt.Fprintf(env.Stderr, "agentium %s: %v\n\n%s", fs.Name(), err, usage)
 			return nil, ExitUsage, false
@@ -52,4 +60,44 @@ func oneName(env Env, command string, rest []string, usage string) (name string,
 			command, len(rest), strings.Join(quoted, ", "), usage)
 	}
 	return "", false
+}
+
+// removedFlag is a flag that no longer exists. It still parses, with or without a value, only to fail: parseArgs then
+// reports that it was removed and names its replacement (instead), rather than "flag provided but not defined".
+type removedFlag struct {
+	name, instead string
+	hit           bool
+}
+
+// errRemovedFlag stops the parse at a removed flag; parseArgs prints the replacement instead of it.
+var errRemovedFlag = errors.New("removed")
+
+func (r *removedFlag) String() string { return "" }
+
+// IsBoolFlag lets the flag appear without a value: a removed --old FILE then leaves FILE positional, and the parse
+// fails at the flag either way.
+func (r *removedFlag) IsBoolFlag() bool { return true }
+
+func (r *removedFlag) Set(string) error {
+	r.hit = true
+	return errRemovedFlag
+}
+
+// removeFlags registers flags that were removed, each with what replaces it: say "use --allow-local-binding=false".
+// They appear in no usage text.
+func removeFlags(fs *flag.FlagSet, replacements map[string]string) {
+	for name, instead := range replacements {
+		fs.Var(&removedFlag{name: name, instead: instead}, name, "removed: "+instead)
+	}
+}
+
+// removedHit is the message for the removed flag that stopped fs's parse; "" when none did.
+func removedHit(fs *flag.FlagSet) string {
+	var msg string
+	fs.VisitAll(func(f *flag.Flag) {
+		if r, ok := f.Value.(*removedFlag); ok && r.hit && msg == "" {
+			msg = fmt.Sprintf("--%s was removed: %s", r.name, r.instead)
+		}
+	})
+	return msg
 }

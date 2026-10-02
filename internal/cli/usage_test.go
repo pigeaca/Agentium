@@ -169,7 +169,7 @@ func TestUsagePreviewPerModelAndReadingAge(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "smoke", "--template", "aa", "--run-budget", "0.3", "--budget", "5", "--seed", "7"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "smoke", "--run-budget", "0.3", "--budget", "5", "--seed", "7"), ExitOK)
 	now := time.Now()
 	resets := now.Add(3 * time.Hour).Truncate(time.Second)
 	var runs []store.Run
