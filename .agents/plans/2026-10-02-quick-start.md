@@ -91,7 +91,53 @@ Each step is one PR with green CI and a review.
     No problems found.
     ```
 - [ ] **2. Calibration inside `experiment run`:** after the model A/B experiment step, since both change `internal/experiment` and `experiment_run.go`.
-- [ ] **3. `agentium start` and north-star tracking.**
+- [x] **3. `agentium start` and north-star tracking** (2026-10-02, branch `claude/feat/agentium-start`). How it works:
+  - **Code:** `internal/cli/start.go` (the handler, the stages) and `start_tasks.go` (supplying tasks); `internal/report/northstar.go` (the measure). Only new files, plus wiring: dispatch, help, `Env.Stdin`/`StdinTerminal`, the report's line, the README and the code map.
+  - **Stages**, each skipped when done and printed as one line: registered (`init`'s own output the first time); a snapshot (arm A is `baseline`, saved from HEAD if the project has none, else the newest snapshot `--b` does not name; the source commit is shown, and a note says when HEAD's context has moved on); tasks; the experiment `quick-aa-<A>` or `quick-<A>-vs-<B>` (8 tasks × 1 run per arm, a sample of the ready ones, Sonnet, budget a quarter above the estimate or `--budget`); the preview (`LoadReview` and `Review.Write`); then the run.
+  - **Tasks:** if the experiment exists already, this stage is skipped. Otherwise it counts the ready ones (`EligibleTasks`). Below the floor it validates tasks that lack a validation in some arm's context, then mines (`mine.Prepare`/`Import`, the default limits, the detected test command) and validates (`validateBatch`, 2 at a time, base plus each experiment snapshot) until 8 are ready, the history runs out, a round validates no task as valid, or 24 tasks (3 × the floor) are imported; the tasks set aside are printed with their reasons. Fewer than 8: it says how many it found and what to do, exits 1 and creates no experiment.
+  - **The review gate stays.** Mined instructions are `needs_review`, and experiments refuse such tasks. `start` does not skip that: it stops and names `task show` and `task edit --reviewed`. The opt-in flag `--accept-mined` accepts, without a person's review, only the tasks `start` itself mined (identities kept in `start-mined.json` beside the project's repository, so a later run knows them; a task from a pull request, a ticket or `task import` is never accepted). It checks solution headings, reference-file names in the instruction and unstated hidden-test requirements, prints the accepted names, and says that a message that explains the fix is not detected. **Removed tasks:** a record is `{name, solution_commit, created_at}` and counts only while a task with all three exists; otherwise its commit is dismissed for good, so `start` never mines it again (it cannot return to be accepted unread after a removal, and a hand import of it is never accepted). Tasks the checks hold back do not count toward the 8, so mining continues, and each is listed with its reason. **Known limitation, follow-up:** accepted tasks carry no mark that nobody read them; recording that needs a migration (0009 is taken by another branch).
+  - **Budget:** the preview, the prompt and the printed command quote the budget a run would have: the lock's (or the design's), raised to `--budget`; a lower `--budget` is a usage error before any question, and the printed `experiment run` command carries `--budget` when it was given.
+  - **The run:** `--yes`, or `y` at a prompt when stdin and stdout are terminals, calls `experimentRun`, so it behaves as `agentium experiment run NAME`. Otherwise it prints `agentium experiment run NAME`. Not ready (for example, a context not calibrated before step 2) it does not run, and exits 1 only with `--yes`.
+  - **North star:** `report.LoadNorthStar` reads the project's registration, its locked experiments and its runs. It analyses each experiment as its report does; the first experiment (by the end of its last run) with a decisive verdict on its primary or guard metric (improved, improved but small, regressed, equivalent, no loss) gives the time from registration to that run's end, and the spend (`run.StoredSpend`: agent and judge) of every project run started up to its last run. Inconclusive and exploratory verdicts, and A/A calibrations (they answer nothing about a change), do not count. No migration. Only experiments with status done count. The line shows in `start` and in `experiment report` (terminal and Markdown; the JSON has `north_star`), set by `report.Load`; `Build` does not set it, so no golden file changed.
+  - **Tests:** `start_test.go` (hermetic, with the fake Claude Code: a preview in one run with no paid run, a second run skips, `--yes`, too few tasks, `--b` versus A/A, the review wait, usage, the prompt only on terminals) and `report/northstar_test.go` (none yet; decisive with its time and spend, judge spend included, later runs left out; inconclusive, exploratory and A/A only).
+  - **Real console sample,** `start` without `--yes` on a scratch Go repository of 11 commits, with `AGENTIUM_HOME` in a scratch folder (no paid runs; Claude Code 2.1.285; long lines cut). Mining, 8 validations in two contexts and the whole first command took 9 s (8 s of it validation, 2 at a time):
+    ```
+    $ agentium start
+    Registered demo (project 1)
+      ...
+    Context: saved snapshot baseline from HEAD (a5816b4d7432): 1 file(s)
+    Mining: 10 candidate(s) in 11 commit(s) read; imported 8 of 8 tried (verify: go test ./...)
+    Validating 8 task(s) in 2 context(s), 2 at a time
+      8 valid of 8, in 8s
+    Tasks: 8 valid, 0 ready of the 8 an experiment needs: the others wait for your review
+      Read each instruction for solution leaks: agentium task show NAME, then agentium task edit NAME --reviewed
+      (or agentium start --accept-mined accepts the ones start mined without your review, after automatic checks that miss an instruction explaining the fix)
+      waiting: add-trim-to-the-library-03008c9, add-last-to-the-library-28c606e, ...
+    $ agentium start --accept-mined --budget 60
+    Project demo: registered (skipped)
+    Context: snapshot baseline from a5816b4d7432 (skipped)
+    Accepted 8 mined instruction(s) without your review (--accept-mined): add-trim-to-the-library-03008c9, ...
+      Only solution headings, reference-file names and unstated test requirements were checked; a message that explains the fix is not detected.
+    Tasks: 8 ready (needs 8), in 0s
+    Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs, budget $60.00
+
+    note: no second context was given, so this is an A/A calibration of baseline ... It never counts toward the first decisive verdict.
+
+    Experiment quick-aa-baseline: A/A calibration of context baseline
+      ...
+    Before it runs:
+      ok       Claude Code 2.1.285 at /opt/homebrew/bin/claude
+      MISSING  context baseline is not calibrated: agentium run calibrate --model claude-sonnet-5 --snapshot baseline
+      ...
+    Not ready to run: see above.
+
+    First decisive verdict: none yet ($0.00 spent since init)
+    Nothing was run: fix what is missing above, then agentium start --yes (or agentium experiment run quick-aa-baseline --budget 60)
+    $ agentium start --budget 10
+    agentium start: --budget $10.00 is below the experiment's $60.00: a budget can only be raised
+    ```
+    A later `start` printed four "(skipped)" lines, then the same preview, in 0.3 s. The "not calibrated" line is expected until step 2.
+  - **Deviations from the brief:** the `--accept-mined` flag (without it the review gate makes the one-command preview impossible); A/A calibrations do not count toward the north star.
 - [ ] **4. Real check (free up to the preview)** on a public repository, then docs.
 - [ ] **5. README pictures** (the user's decision on 2026-10-02: refresh them once, after quick start, not before). The pictures date from 2026-09-30. Since then `plan`, `report` and the status line have changed, and the README's claim that they show today's output no longer holds.
   - **Redo from stored data with today's binary:** `experiment plan`, the run summary, `experiment report` and `run show`. Re-record the live status-line animation with the stand-in agent.

@@ -26,8 +26,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
 		Args: os.Args[1:], Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
-		Columns: func() int { return term.Columns(os.Stdout) },
-		Dir:     dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
+		StdinTerminal: term.IsTerminal(os.Stdin),
+		Columns:       func() int { return term.Columns(os.Stdout) },
+		Dir:           dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
 	})
 	stop()
 	os.Exit(code)

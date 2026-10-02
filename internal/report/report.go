@@ -59,8 +59,11 @@ type Report struct {
 	Arms       []Arm               `json:"arms"`
 	Tasks      []TaskRow           `json:"tasks"`
 	Judge      *Judge              `json:"judge,omitempty"` // only with the judge
-	Notes      []string            `json:"notes"`
-	Runs       []RunRow            `json:"runs"`
+	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
+	// project's other experiments).
+	NorthStar *NorthStar `json:"north_star,omitempty"`
+	Notes     []string   `json:"notes"`
+	Runs      []RunRow   `json:"runs"`
 }
 
 // Arm summarizes one arm's counted runs. Means are nil when there is nothing to average.
@@ -160,10 +163,7 @@ func Build(in Input) (Report, error) {
 	l := in.Lock
 	var data []experiment.RunData
 	for _, r := range in.Runs {
-		m := r.Record.Metrics
-		data = append(data, experiment.RunData{Slot: r.Slot, Task: r.Record.Task, Arm: r.Record.Arm, Outcome: r.Record.Outcome,
-			Passed: r.Record.Passed, ConfigChanged: r.Record.Behavior.ConfigChanged, CostUSD: r.Record.Spend().AgentUSD, DurationS: float64(m.DurationMS) / 1000,
-			OutputTokens: float64(m.OutputTokens)})
+		data = append(data, runData(r.Slot, r.Record))
 	}
 	analysis, err := experiment.Analyze(l, data)
 	if err != nil {

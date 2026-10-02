@@ -103,7 +103,7 @@ func openProject(ctx context.Context, env Env) (*workspace, error) {
 	project, err := db.ProjectByRoot(ctx, root)
 	if errors.Is(err, store.ErrNotFound) {
 		db.Close()
-		return nil, fmt.Errorf("%s is not registered: run `agentium init` first", root)
+		return nil, notRegisteredError{root}
 	} else if err != nil {
 		db.Close()
 		return nil, err

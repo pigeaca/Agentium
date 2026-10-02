@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
 )
@@ -31,6 +33,12 @@ func Output(ctx context.Context, stdin io.Reader, args ...string) ([]byte, error
 func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"}, args...)...)
 	cmd.Env = append(Environ(os.Environ()), env...)
+	// A cancelled git is asked to stop (SIGINT) so it can remove its lock files (shallow.lock, index.lock), as Ctrl-C in
+	// a terminal would: git runs in its own process group and the whole group gets the signal, so its children (a shell
+	// alias, a remote helper) stop too and release the output pipes. Anything still running after the delay is killed.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGINT) }
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Stdin = stdin
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

@@ -28,6 +28,9 @@ type Env struct {
 	// Terminal is whether Stdout is a terminal. With NO_COLOR, FORCE_COLOR and TERM it decides whether output is
 	// styled (term.Detect); tests leave it false and get plain text.
 	Terminal bool
+	// StdinTerminal is whether Stdin is a terminal. A command that asks a question asks only when both Stdin and Stdout
+	// are terminals; tests leave it false and are never asked.
+	StdinTerminal bool
 	// Columns is the terminal's width in columns, for the live status line; nil or 0 means unknown.
 	Columns  func() int
 	Dir      string                       // working directory; empty when it cannot be read
@@ -48,6 +51,7 @@ Usage:
   agentium <command> [arguments]
 
 Commands:
+  start         From a repository to a previewed experiment: register, snapshot, mine tasks, create it; resumes (agentium start -h)
   init [path]   Register the repository at path (default: current directory) and report what Agentium found
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
   task          Add, import and validate coding tasks (agentium task for details)
@@ -74,6 +78,8 @@ func Run(ctx context.Context, env Env) int {
 	case "version", "--version":
 		fmt.Fprintf(env.Stdout, "agentium %s (%s %s/%s)\n", env.Version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 		return ExitOK
+	case "start":
+		return runStart(ctx, env, args)
 	case "init":
 		return runInit(ctx, env, args)
 	case "context":

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -103,14 +102,14 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	var tasks stringList
 	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a tier)")
 	fs.IntVar(&o.Repeats, "repeats", 0, "runs per task per arm (default: the tier's, or 3)")
-	fs.StringVar(&o.Model, "model", "claude-sonnet-5", "the model")
+	fs.StringVar(&o.Model, "model", experiment.DefaultExperimentModel, "the model")
 	fs.StringVar(&o.Effort, "effort", "", "the effort level (default: the CLI's)")
 	fs.StringVar(&o.Goal, "goal", experiment.GoalCheaper, "cheaper (cost, with success as the guard) or better (success)")
-	fs.Float64Var(&o.RunBudget, "run-budget", 3, "stop each run at this cost in USD")
+	fs.Float64Var(&o.RunBudget, "run-budget", experiment.DefaultRunBudgetUSD, "stop each run at this cost in USD")
 	fs.Float64Var(&o.Budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
-	fs.IntVar(&o.Concurrency, "concurrency", 2, "runs at a time")
-	fs.DurationVar(&o.Timeout, "timeout", 20*time.Minute, "stop each run after this long")
-	fs.DurationVar(&o.VerifyTimeout, "verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
+	fs.IntVar(&o.Concurrency, "concurrency", experiment.DefaultConcurrency, "runs at a time")
+	fs.DurationVar(&o.Timeout, "timeout", experiment.DefaultRunTimeout, "stop each run after this long")
+	fs.DurationVar(&o.VerifyTimeout, "verify-timeout", experiment.DefaultVerifyTimeout, "time limit for each setup or verification command")
 	fs.Uint64Var(&o.Seed, "seed", 0, "the seed for the task sample and the run order (default: random)")
 	fs.BoolVar(&o.Judge, "judge", false, "ask the LLM judge about every graded run (a second opinion; it decides nothing)")
 	fs.StringVar(&o.JudgeModel, "judge-model", "", "the judge's model (default "+llmjudge.DefaultModel+")")

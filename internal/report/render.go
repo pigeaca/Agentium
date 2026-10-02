@@ -43,7 +43,13 @@ func (r Report) Markdown(w io.Writer) error {
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
+	if r.NorthStar != nil {
+		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())
+	}
 	if l.LocalBinding {
+		if r.NorthStar != nil {
+			b.WriteString("\n") // a blank line keeps the two notes apart
+		}
 		b.WriteString(localBindingNote + "\n")
 	}
 
