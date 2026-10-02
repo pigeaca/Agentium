@@ -651,8 +651,11 @@ func TestRetirementMigrationOnAPopulatedDatabase(t *testing.T) {
 	if err := old.LockExperiment(ctx, e.ID, []byte(`{"tasks":[{"name":"fix-parser"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := old.SaveRun(ctx, Run{ID: "r1", ProjectID: app.ID, TaskID: 1, TaskName: "fix-parser", Arm: "A", Outcome: "ok", Record: []byte(`{}`),
-		Started: now, Finished: now, ExperimentID: e.ID, Slot: 0, Attempt: 1}); err != nil {
+	// The pre-migration binary's run INSERT: SaveRun now names columns of later migrations.
+	if _, err := old.db.ExecContext(ctx, `
+		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
+		                  experiment_id, slot, attempt)
+		VALUES ('r1', ?, 1, 'fix-parser', 'task', 'A', 'ok', NULL, 0, '{}', ?, ?, ?, 0, 1)`, app.ID, formatTime(now), formatTime(now), e.ID); err != nil {
 		t.Fatal(err)
 	}
 	old.Close()

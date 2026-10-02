@@ -9,7 +9,7 @@ Where each part of Agentium lives. Loaded on demand (not default context): read 
 | `internal/cli` | Command-line parsing, dispatch and printing; each handler calls one service; `start` composes setup |
 | `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
 | `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock and file locks that wait until cancelled |
-| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments |
+| `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations, experiments and the watch's state |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
 | `internal/mine` | Task candidates from git history: explained scores, rejections, import; the pool's bounded range scan with patch IDs |
 | `internal/pool` | The task pool: state, watermark, a pass and its recovery; stale, retire and health rules; toolchain versions |
@@ -30,6 +30,7 @@ Where each part of Agentium lives. Loaded on demand (not default context): read 
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run or calibration: the arm's workspace with everything else denied, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`) and isolated-run cost; recovery of dead runs; its temp root |
 | `internal/screen` | The pull-request cost screen: `Classify` reads a pushed range (and the merge base with the default branch) through `gitx`, `source` and `claudectx`, and calls it read context (a candidate), harness (refused in automated mode) or neither |
+| `internal/watch` | The watch's consent (only the terminal raises), its ledger in dollars and window share (derived from runs), drift panels |
 | `scripts/harness.py` | Standard-library entrypoint: checks, hooks, worktrees, metrics, PR merges ([harness](../../docs/harness.md)) |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
