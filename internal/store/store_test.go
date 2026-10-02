@@ -467,6 +467,7 @@ func TestExperimentLockStatusAndRuns(t *testing.T) {
 		{ID: "r1", ProjectID: app.ID, TaskName: "fix", Arm: "A", Outcome: "infra", Record: []byte(`{}`), Started: now, Finished: now, ExperimentID: e.ID, Slot: 3, Attempt: 1},
 		{ID: "r2", ProjectID: app.ID, TaskName: "fix", Arm: "A", Outcome: "ok", Record: []byte(`{}`), Started: now.Add(time.Minute), Finished: now, ExperimentID: e.ID, Slot: 3, Attempt: 2},
 		{ID: "r3", ProjectID: app.ID, TaskName: "fix", Arm: "base", Outcome: "ok", Record: []byte(`{}`), Started: now, Finished: now},
+		{ID: "r4", ProjectID: app.ID, TaskName: "calibration", Kind: "calibration", Arm: "base", Outcome: "ok", Record: []byte(`{}`), Started: now, Finished: now, ExperimentID: e.ID},
 	} {
 		if err := s.SaveRun(ctx, run); err != nil {
 			t.Fatalf("run %d: %v", i, err)
@@ -475,6 +476,9 @@ func TestExperimentLockStatusAndRuns(t *testing.T) {
 	runs, err := s.ExperimentRuns(ctx, e.ID)
 	if err != nil || len(runs) != 2 || runs[0].ID != "r1" || runs[1].Slot != 3 || runs[1].Attempt != 2 || runs[1].ExperimentID != e.ID {
 		t.Errorf("ExperimentRuns = %+v, %v", runs, err)
+	}
+	if cal, err := s.ExperimentCalibrationRuns(ctx, e.ID); err != nil || len(cal) != 1 || cal[0].ID != "r4" {
+		t.Errorf("ExperimentCalibrationRuns = %+v, %v: a calibration run is the experiment's but not one of its slots", cal, err)
 	}
 	if other, _ := s.RunByID(ctx, app.ID, "r3"); other.ExperimentID != 0 || other.Slot != 0 {
 		t.Errorf("a run outside experiments = %+v", other)

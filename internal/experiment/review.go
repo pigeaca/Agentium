@@ -65,6 +65,7 @@ func (r Review) Write(ctx context.Context, out io.Writer, st term.Style, name, s
 	}
 	d := r.Design
 	r.writeCostBasis(out, st)
+	r.writeCalibration(out, st)
 	r.writeWorstCase(out, st)
 	fmt.Fprintln(out, st.Note(fmt.Sprintf("Detectable effects: 80%% power; changes two-sided at 5%%, the no-loss guard one-sided at 5%%. Planning defaults until an\n"+
 		"A/A calibration measures this repository's: per-run log-cost spread σ = %.2f, success variance w = %.2f, and a spread of\n"+
@@ -169,6 +170,18 @@ func (r Review) writeSizes(out io.Writer, st term.Style) error {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("* only %d task(s) can be in this experiment; a tier asking for more uses them all", len(r.Eligible))))
 	}
 	return nil
+}
+
+// writeCalibration says what the calibrations the experiment makes when it runs cost, when there are any: they come out
+// of the budget, apart from the table's costs.
+func (r Review) writeCalibration(out io.Writer, st term.Style) {
+	needs := r.Readiness.Calibrations
+	if len(needs) == 0 {
+		return
+	}
+	estimate, capUSD := CalibrationCosts(needs)
+	fmt.Fprintln(out, st.Note(fmt.Sprintf("Calibration: %d context calibration(s) are made when the experiment runs, about $%.2f in all and at most $%.2f (not in the\n"+
+		"table's costs; counted in the budget). A calibration that fails its checks stops the experiment before any task run.", len(needs), estimate, capUSD)))
 }
 
 // writeWorstCase prints the judge's share of the cost, when there is a judge, and the worst case the budget guards.

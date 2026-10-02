@@ -32,8 +32,9 @@ Goes from a repository to a previewed experiment, skipping every stage that is a
      difference: it measures this repository's noise, it does not compare contexts);
   5. prints its preview: runs, estimated cost, detectable effect and what is missing.
 
-It stops before any paid run. --yes runs the experiment (as agentium experiment run NAME); on a terminal, it asks
-instead. --budget raises the experiment's total in USD. Mined tasks wait for your review of their instructions for
+It stops before any paid run. --yes runs the experiment (as agentium experiment run NAME), which first calibrates each
+context that lacks a calibration on this Claude Code and model (a paid run each, counted in the budget); on a terminal,
+it asks instead. --budget raises the experiment's total in USD. Mined tasks wait for your review of their instructions for
 solution leaks (agentium task show NAME, then agentium task edit NAME --reviewed). --accept-mined accepts, without
 your review, the tasks start itself mined: it checks only solution headings, reference-file names and unstated test
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
@@ -340,12 +341,13 @@ func (s *starter) finish(ctx context.Context, name string) int {
 		}
 		return ExitOK
 	}
-	if !s.args.yes && !s.confirm(ctx, budget.total) {
+	calibrating := calibrationNote(review.Readiness.Calibrations)
+	if !s.args.yes && !s.confirm(ctx, budget.total, calibrating) {
 		if ctx.Err() != nil {
 			fmt.Fprintln(env.Stdout, "\nInterrupted: nothing was run.")
 			return ExitError
 		}
-		fmt.Fprintf(env.Stdout, "\nNothing was run%s. To run it (real Claude Code runs, up to $%.2f): %s\n", s.spentBefore(ctx, stored.ID), budget.total, st.Command(runCommand))
+		fmt.Fprintf(env.Stdout, "\nNothing was run%s. To run it (real Claude Code runs%s, up to $%.2f): %s\n", s.spentBefore(ctx, stored.ID), calibrating, budget.total, st.Command(runCommand))
 		return ExitOK
 	}
 	runArgs := []string{name}
@@ -373,10 +375,17 @@ func (s *starter) spentBefore(ctx context.Context, experimentID int64) string {
 	if err != nil {
 		return " in this command" // what the experiment spent before is not known: claim nothing about it
 	}
-	if len(runs) == 0 {
-		return " and nothing was spent"
+	calibrations, err := s.w.db.ExperimentCalibrationRuns(ctx, experimentID)
+	if err != nil {
+		return " in this command"
 	}
-	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs))
+	switch {
+	case len(runs)+len(calibrations) == 0:
+		return " and nothing was spent"
+	case len(runs) == 0:
+		return fmt.Sprintf(" in this command (the experiment has %d calibration run(s) from before)", len(calibrations))
+	}
+	return fmt.Sprintf(" in this command (the experiment has %d run(s) from before)", len(runs)+len(calibrations))
 }
 
 // budgetPlan is what a run of the experiment may spend in total.
@@ -413,11 +422,11 @@ func (s *starter) effectiveBudget(ctx context.Context, stored store.Experiment, 
 
 // confirm asks whether to run the experiment, only when a person can answer: stdin and stdout are terminals. Ctrl-C
 // while it waits for the answer counts as no.
-func (s *starter) confirm(ctx context.Context, budget float64) bool {
+func (s *starter) confirm(ctx context.Context, budget float64, calibrating string) bool {
 	if !s.env.StdinTerminal || !s.env.Terminal || s.env.Stdin == nil {
 		return false
 	}
-	fmt.Fprintf(s.env.Stdout, "\nRun it now? It makes real Claude Code runs and spends up to $%.2f. [y/N] ", budget)
+	fmt.Fprintf(s.env.Stdout, "\nRun it now? It makes real Claude Code runs%s and spends up to $%.2f. [y/N] ", calibrating, budget)
 	type answer struct {
 		line string
 		err  error
@@ -437,6 +446,15 @@ func (s *starter) confirm(ctx context.Context, budget float64) bool {
 		reply := strings.ToLower(strings.TrimSpace(a.line))
 		return reply == "y" || reply == "yes"
 	}
+}
+
+// calibrationNote words the calibrations the experiment makes first, for the consent: they are paid runs too.
+func calibrationNote(needs []experiment.CalibrationNeed) string {
+	if len(needs) == 0 {
+		return ""
+	}
+	estimate, _ := experiment.CalibrationCosts(needs)
+	return fmt.Sprintf(", first %d calibration run(s) of about $%.2f", len(needs), estimate)
 }
 
 // northStar prints the project's time and spend to its first decisive verdict.

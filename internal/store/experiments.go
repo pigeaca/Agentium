@@ -143,7 +143,14 @@ func (s *Store) SetExperimentStatus(ctx context.Context, id int64, status, note 
 	return nil
 }
 
-// ExperimentRuns lists an experiment's runs, oldest first.
+// ExperimentRuns lists an experiment's task runs (its slots' attempts), oldest first. The calibration runs the
+// experiment made for its arms are not slots: ExperimentCalibrationRuns lists them.
 func (s *Store) ExperimentRuns(ctx context.Context, experimentID int64) ([]Run, error) {
-	return s.queryRuns(ctx, `WHERE experiment_id = ? ORDER BY started_at, id`, experimentID)
+	return s.queryRuns(ctx, `WHERE experiment_id = ? AND kind <> 'calibration' ORDER BY started_at, id`, experimentID)
+}
+
+// ExperimentCalibrationRuns lists the calibration runs an experiment made before its first pair, oldest first. They
+// count against the experiment's budget.
+func (s *Store) ExperimentCalibrationRuns(ctx context.Context, experimentID int64) ([]Run, error) {
+	return s.queryRuns(ctx, `WHERE experiment_id = ? AND kind = 'calibration' ORDER BY started_at, id`, experimentID)
 }

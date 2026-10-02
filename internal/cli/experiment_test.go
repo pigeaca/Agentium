@@ -51,13 +51,17 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 
 	notReady := f.run(ctx, "experiment", "plan", "lean-ab")
 	expect(t, notReady, ExitOK, "Experiment lean-ab: context A/B, A = base, B = lean", "tasks (1, seed 7): value",
-		"ok       Claude Code 2.1.281", "MISSING  context base is not calibrated: agentium run calibrate --model claude-sonnet-5",
-		"MISSING  context lean is not calibrated: agentium run calibrate --model claude-sonnet-5 --snapshot lean",
-		"Not ready to run", "Quick", "Confident", "This experiment", "$9.67", "$18.00", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
+		"ok       Claude Code 2.1.281", "ok       context base on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.",
+		"ok       context lean on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.",
+		"Calibration: 2 context calibration(s) are made when the experiment runs, about $", "at most $1.00",
+		"Quick", "Confident", "This experiment", "$9.67", "$18.00", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
 		"* only 1 task(s) can be in this experiment", "Estimated cost per run on claude-sonnet-5:",
 		"value, without runs of their own: $1.61, a default task run's tokens at claude-sonnet-5's list prices of 2026-09-29",
 		"τ = 0.10–0.25", "the study assumed 0.05 for success",
 		"note: at this size the no-loss guard certifies only about 94–100+ pp, wider than the 15 pp success margin")
+	if strings.Contains(notReady.stdout, "MISSING") || strings.Contains(notReady.stdout, "Not ready") {
+		t.Errorf("an uncalibrated experiment is ready to run (it calibrates itself):\n%s", notReady.stdout)
+	}
 	if strings.Contains(notReady.stdout, "WARNING") {
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", notReady.stdout)
 	}
@@ -87,10 +91,10 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// Calibrations are per Claude Code version and model.
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.300")
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "ok       Claude Code 2.1.300",
-		"context base was calibrated on Claude Code 2.1.281, not 2.1.300", "Not ready to run")
+		"context base on claude-sonnet-5 was calibrated on Claude Code 2.1.281, not 2.1.300: calibrated when the experiment runs")
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
 	expect(t, f.run(ctx, "experiment", "new", "opus", "--b", "lean", "--model", "claude-opus-5-5"), ExitOK)
-	expect(t, f.run(ctx, "experiment", "plan", "opus"), ExitOK, "context base was calibrated with claude-sonnet-5, not claude-opus-5-5")
+	expect(t, f.run(ctx, "experiment", "plan", "opus"), ExitOK, "context base on claude-opus-5-5 is not calibrated: calibrated when the experiment runs")
 
 	// A/A: one context in both arms, checked once.
 	aa := f.run(ctx, "experiment", "plan", "noise")
@@ -108,7 +112,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 
 	// The calibration's sign-in must be the runs'.
 	f.vars["ANTHROPIC_API_KEY"] = "sk-test-not-real" // secret-scan: allow
-	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "context base was calibrated with sign-in login, and runs would now use api-key")
+	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "context base on claude-sonnet-5 was calibrated with sign-in login, and runs would now use api-key: calibrated when the experiment runs")
 	delete(f.vars, "ANTHROPIC_API_KEY")
 
 	// The task's own earlier fair runs on the model replace the default profile (the fake agent reports $0.02 a run);

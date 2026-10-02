@@ -75,13 +75,18 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 			held, err = startRuns(ctx, env, w)
 			return err
 		},
+		KeepHead:  func(ctx context.Context) (string, error) { return w.keepCommit(ctx, "HEAD") },
 		NewRunEnv: func(verifyTimeout time.Duration) (run.Env, error) { return newRunEnv(env, w, verifyTimeout) },
 		NeedsLocalBinding: func(ctx context.Context, bases []string) (needed, allowed bool, err error) {
 			needed, err = run.NeedsLocalBinding(ctx, w.bare, bases)
 			return needed, w.project.AllowLocalBinding, err
 		},
 		ExecuteRun: func(ctx context.Context, e run.Env, meta experiment.RunMeta, spec run.Spec) (run.Record, error) {
-			return executeRun(ctx, env, w, e, runMeta{Kind: "task", TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
+			kind := "task"
+			if meta.Kind == experiment.KindCalibration {
+				kind = meta.Kind
+			}
+			return executeRun(ctx, env, w, e, runMeta{Kind: kind, TaskID: meta.TaskID, ExperimentID: meta.ExperimentID, Slot: meta.Slot,
 				Attempt: meta.Attempt}, spec)
 		},
 		WaitUntil: func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) },
@@ -159,6 +164,11 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	out := env.Stdout
 	if stored.Lock == nil {
 		fmt.Fprintf(out, "Experiment %s: %s; not run yet. Preview: %s\n", rest[0], experiment.DescribeArms(d), env.style().Command("agentium experiment plan "+rest[0]))
+		if spent, err := w.service().CalibrationSpend(ctx, stored.ID); err != nil {
+			return fail(env, err)
+		} else if spent > 0 {
+			fmt.Fprintf(out, "Calibration runs so far: $%.2f (in its budget)\n", spent)
+		}
 		return ExitOK
 	}
 	var lock experiment.Lock

@@ -30,7 +30,8 @@ const runUsage = `Usage:
   agentium run calibrate [--snapshot NAME]... [--model MODEL] [--budget USD]
                      one short real run per arm (the base's own context, and each snapshot): checks that
                      sandboxed commands work and large outputs read back, compares the first request's size with
-                     Agentium's estimate, and records the tools, skills and slash commands later runs must get
+                     Agentium's estimate, and records the tools, skills and slash commands later runs must get.
+                     Optional: experiment run calibrates any arm that lacks a calibration on its model
   agentium run list
   agentium run show ID [--diff] [--log]
                      one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
@@ -131,20 +132,11 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	runEnv.Step = live.Step
-	if cal, err := w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot); err == nil {
-		var found run.Calibration
-		if err := json.Unmarshal(cal.Result, &found); err != nil {
-			return fail(env, fmt.Errorf("calibration of %s: %w", arm.Name, err))
-		}
-		runEnv.Expect = claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}
-		fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, cal.CreatedAt.Format("2006-01-02 15:04"))
-		if found.RequestedModel != *model {
-			fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("the calibration used %s, this run %s: its tool set may differ by model", found.RequestedModel, *model)))
-		}
-	} else if errors.Is(err, store.ErrNotFound) {
-		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate", arm.Name)))
-	} else {
+	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, *model); {
+	case err != nil:
 		return fail(env, err)
+	case cal != nil:
+		runEnv.Expect = *cal
 	}
 	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *model, runEnv.SignIn, *budget)
 	release, err := startRuns(ctx, env, w)
@@ -422,7 +414,11 @@ func runShow(ctx context.Context, env Env, args []string) int {
 				}
 			}
 		}
-		fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
+		if stored.Kind == "calibration" {
+			fmt.Fprintf(env.Stdout, "  experiment   %s (a calibration before its first pair)\n", name)
+		} else {
+			fmt.Fprintf(env.Stdout, "  experiment   %s, slot %d (from 0), attempt %d\n", name, stored.Slot, stored.Attempt)
+		}
 	}
 	if entries, err := os.ReadDir(rec.RecordsDir); err == nil {
 		var names []string
@@ -549,4 +545,31 @@ func saveCalibration(ctx context.Context, env Env, w *workspace, c run.Calibrati
 	}
 	return w.db.SaveCalibration(ctx, store.Calibration{ProjectID: w.project.ID, Arm: c.Arm, Snapshot: c.Snapshot, RunID: c.RunID,
 		Result: encoded, CreatedAt: env.Now()})
+}
+
+// checkAgainstCalibration finds the calibration a run of arm on model is checked against: the newest of the arm's
+// context on that very model (tools and skills can differ by model, as experiments check), and says so. Without one it
+// falls back to the newest on any model, with a note that the model differs, and without any it says the run's tools
+// and skills are not checked. It returns nil when there is nothing to check against.
+func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm task.Arm, model string) (*claude.Expect, error) {
+	stored, err := w.service().CalibrationOn(ctx, arm.Name, arm.Snapshot, model)
+	if errors.Is(err, store.ErrNotFound) {
+		stored, err = w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot)
+	}
+	if errors.Is(err, store.ErrNotFound) {
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate --model %s", arm.Name, model)))
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var found run.Calibration
+	if err := json.Unmarshal(stored.Result, &found); err != nil {
+		return nil, fmt.Errorf("calibration of %s: %w", arm.Name, err)
+	}
+	fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, stored.CreatedAt.Format("2006-01-02 15:04"))
+	if found.RequestedModel != model {
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("the calibration used %s, this run %s: its tool set may differ by model", found.RequestedModel, model)))
+	}
+	return &claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}, nil
 }

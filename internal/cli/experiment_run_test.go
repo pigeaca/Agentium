@@ -31,9 +31,12 @@ import (
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
 // "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl, and
 // its --model and --effort ("args-e1-s0-t1": "MODEL EFFORT"); it reports the model it was given, or the one in
-// "report-model".
+// "report-model". Called for a calibration run (its prompt is an environment check), it logs its model to "calibrations"
+// and answers as calibratingAgent does, on that model; with "calibration-fail" its sandbox check fails, and with "calibration-crash" it exits without a transcript.
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
+	sonnetCal := calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "")
+	failingCal := calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, "sandbox-error")
 	script := `#!/bin/sh
 CTRL='` + ctrl + `'
 version=2.1.281; [ -f "$CTRL/version" ] && version=$(cat "$CTRL/version")
@@ -45,6 +48,14 @@ case " $* " in *" --json-schema "*)
   [ -f "$CTRL/judge-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
   [ -f "$CTRL/judge-broken" ] && { echo 'not json'; exit 1; }
   echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"fixed":"yes","reason":"Sets the value as the reference does."},"total_cost_usd":0.05}'; exit 0;;
+esac
+case "$2" in *"This is an environment check"*) # a calibration run: the calibrating agent's transcript, on the model asked for
+  model=claude-sonnet-5; prev=""; for a in "$@"; do [ "$prev" = "--model" ] && model=$a; prev=$a; done
+  echo "$model" >> "$CTRL/calibrations"
+  [ -f "$CTRL/calibration-crash" ] && exit 1
+  [ -f "$CTRL/calibration-fail" ] && exec ` + failingCal + ` "$@"
+  sed "s/\"model\":\"claude-sonnet-5\"/\"model\":\"$model\"/" ` + sonnetCal + ` > "$CTRL/calibrator-$$"; chmod +x "$CTRL/calibrator-$$"
+  exec "$CTRL/calibrator-$$" "$@";;
 esac
 [ -f "$CTRL/init-version" ] && version=$(cat "$CTRL/init-version")
 ws=$(basename "$(dirname "$PWD")")

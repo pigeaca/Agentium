@@ -49,6 +49,10 @@ func Load(ctx context.Context, p experiment.Project, name, home string, warn io.
 	if err != nil {
 		return Report{}, err
 	}
+	if rep.CalibrationUSD, err = p.CalibrationSpend(ctx, stored.ID); err != nil {
+		return Report{}, err
+	}
+	rep.SpentUSD += rep.CalibrationUSD
 	// The north star reads the project's other experiments too; one that cannot be analyzed costs the line, not the report.
 	if star, err := LoadNorthStar(ctx, p); ctx.Err() != nil {
 		return Report{}, ctx.Err()

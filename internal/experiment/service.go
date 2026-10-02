@@ -68,21 +68,26 @@ func (p Project) ResolveArm(ctx context.Context, name, contextName string) (Arm,
 // not displace a context experiment's on another. ErrNotFound when there is none; the caller names the command that
 // makes it.
 func (p Project) CalibrationFor(ctx context.Context, d Design, a Arm) (store.Calibration, error) {
-	all, err := p.DB.Calibrations(ctx, p.ID, a.Context, a.Snapshot)
+	return p.CalibrationOn(ctx, a.Context, a.Snapshot, d.ArmModel(a))
+}
+
+// CalibrationOn is the newest calibration of a context (BaseContext or a snapshot's name, with its commit; "" for the
+// base) on a model, as asked for with --model. ErrNotFound when there is none. `run once` uses it for its own model.
+func (p Project) CalibrationOn(ctx context.Context, contextName, snapshot, model string) (store.Calibration, error) {
+	all, err := p.DB.Calibrations(ctx, p.ID, contextName, snapshot)
 	if err != nil {
 		return store.Calibration{}, err
 	}
-	model := d.ArmModel(a)
 	for _, c := range all {
 		var cal run.Calibration
 		if err := json.Unmarshal(c.Result, &cal); err != nil {
-			return store.Calibration{}, fmt.Errorf("calibration of %s: %w", a.Context, err)
+			return store.Calibration{}, fmt.Errorf("calibration of %s: %w", contextName, err)
 		}
 		if cal.RequestedModel == model {
 			return c, nil
 		}
 	}
-	return store.Calibration{}, fmt.Errorf("calibration of %s on %s: %w", a.Context, model, store.ErrNotFound)
+	return store.Calibration{}, fmt.Errorf("calibration of %s on %s: %w", contextName, model, store.ErrNotFound)
 }
 
 // EstimatesFor estimates each arm on its own model and effort: the same estimate twice when the arms share a profile.

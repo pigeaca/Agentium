@@ -47,18 +47,23 @@ type Input struct {
 
 // Report is an experiment's results, ready to render.
 type Report struct {
-	Experiment string              `json:"experiment"`
-	Template   string              `json:"template"`
-	Status     string              `json:"status"`
-	StatusNote string              `json:"status_note,omitempty"`
-	Slots      int                 `json:"slots"`
-	Settled    int                 `json:"settled"`
-	SpentUSD   float64             `json:"spent_usd"`
-	Lock       experiment.Lock     `json:"lock"` // skill and command names counted; Claude Code's file name only
-	Analysis   experiment.Analysis `json:"analysis"`
-	Arms       []Arm               `json:"arms"`
-	Tasks      []TaskRow           `json:"tasks"`
-	Judge      *Judge              `json:"judge,omitempty"` // only with the judge
+	Experiment string  `json:"experiment"`
+	Template   string  `json:"template"`
+	Status     string  `json:"status"`
+	StatusNote string  `json:"status_note,omitempty"`
+	Slots      int     `json:"slots"`
+	Settled    int     `json:"settled"`
+	SpentUSD   float64 `json:"spent_usd"` // everything the budget counts, the calibrations' included (Load adds them)
+	// CalibrationUSD is the part of SpentUSD that went to the calibration runs the experiment made for its arms; Load
+	// sets it (Build does not: calibration runs are not slots).
+	CalibrationUSD float64             `json:"calibration_usd,omitempty"`
+	Lock           experiment.Lock     `json:"lock"` // skill and command names counted; Claude Code's file name only
+	Analysis       experiment.Analysis `json:"analysis"`
+	Arms           []Arm               `json:"arms"`
+	Tasks          []TaskRow           `json:"tasks"`
+	// Summary is a model-ab experiment's verdicts in one sentence, naming the arm by profile.
+	Summary string `json:"summary,omitempty"`
+	Judge   *Judge `json:"judge,omitempty"` // only with the judge
 	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
 	// project's other experiments).
 	NorthStar *NorthStar `json:"north_star,omitempty"`
@@ -71,7 +76,9 @@ type Arm struct {
 	Name     string `json:"name"`
 	Context  string `json:"context"`
 	Snapshot string `json:"snapshot,omitempty"`
-	Counted  int    `json:"counted"`
+	// Profile is the arm's model and effort ("MODEL" or "MODEL:EFFORT"), in a model-ab experiment only.
+	Profile string `json:"profile,omitempty"`
+	Counted int    `json:"counted"`
 	// FirstRequest is the mean measured size of the first request: the context overhead Claude Code saw.
 	FirstRequest   *float64 `json:"first_request_tokens"`
 	CostUSD        *float64 `json:"cost_usd"`         // mean reported cost
@@ -120,6 +127,7 @@ type TaskRow struct {
 // TaskCell is a task's runs in one arm: marks in schedule order (● success, ○ failure, × not counted), and the mean cost
 // of the counted runs (nil without any).
 type TaskCell struct {
+	Profile   string   `json:"profile,omitempty"` // the arm's model and effort, in a model-ab experiment only
 	Marks     string   `json:"marks"`
 	Successes int      `json:"successes"`
 	Counted   int      `json:"counted"`
@@ -193,9 +201,20 @@ func Build(in Input) (Report, error) {
 	}
 	rep.Settled = len(settled)
 	for _, a := range l.Arms {
-		rep.Arms = append(rep.Arms, armSummary(a, in.Runs))
+		arm := armSummary(a, in.Runs)
+		arm.Profile = armProfile(l.Design, a)
+		rep.Arms = append(rep.Arms, arm)
 	}
 	rep.Tasks = taskRows(l, in.Runs)
+	rep.Summary = summarize(rep)
+	for _, t := range rep.Tasks {
+		for _, a := range rep.Arms {
+			if cell, ok := t.Arms[a.Name]; ok && a.Profile != "" {
+				cell.Profile = a.Profile
+				t.Arms[a.Name] = cell
+			}
+		}
+	}
 	rep.Judge = judgeSummary(in)
 	rep.Notes = notes(rep, in)
 	return rep, nil

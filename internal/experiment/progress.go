@@ -83,9 +83,17 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 		status = "stopped (its Agentium process ended; run it again to resume)"
 	}
 	fmt.Fprintf(out, "%s %s\n", st.Heading("Experiment "+name+":"), st.Heading(st.Status(status)))
+	calibrating, err := p.CalibrationSpend(ctx, id)
+	if err != nil {
+		return err
+	}
+	spent += calibrating
 	judged := ""
 	if judgeSpent > 0 {
 		judged = fmt.Sprintf(" (the judge $%.2f of it, not in the arms' costs)", judgeSpent)
+	}
+	if calibrating > 0 {
+		judged += fmt.Sprintf(" (calibration $%.2f of it, not in the arms' costs)", calibrating)
 	}
 	fmt.Fprintf(out, "  %d of %d runs settled; spent $%.2f of $%.2f%s\n", len(settled), len(lock.Schedule), spent, lock.Design.BudgetUSD, judged)
 	table := term.NewTable(st, term.Left("ARM"), term.Left("CONTEXT"), term.Right("SETTLED"), term.Right("FAIR"), term.Right("SUCCESSES"),

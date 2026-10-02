@@ -81,7 +81,8 @@ func TestStartReachesAPreviewWithoutPromptsOrPaidRuns(t *testing.T) {
 	got := f.run(ctx, "start", "--accept-mined")
 	expect(t, got, ExitOK, "Registered ", "Context: saved snapshot baseline from HEAD", "Mining: ", "imported 8 of 8 tried (verify: make test)",
 		"Validating 8 task(s) in 2 context(s)", "8 valid of 8", "Tasks: 8 ready (needs 8), in ", "Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs",
-		"A/A calibration of baseline", "Before it runs:", "Sizes (runs count both arms):", "is not calibrated", "Nothing was run: fix what is missing",
+		"A/A calibration of baseline", "Before it runs:", "Sizes (runs count both arms):", "is not calibrated: calibrated when the experiment runs, about $",
+		"Calibration: 1 context calibration(s)", "Nothing was run and nothing was spent. To run it (real Claude Code runs, first 1 calibration run(s) of about $",
 		"agentium experiment run quick-aa-baseline", "First decisive verdict: none yet ($0.00 spent since init)")
 	if stored, started := paidRuns(t, f, ctrl); stored != 0 || started != 0 {
 		t.Errorf("start without --yes ran the agent: %d stored run(s), %d started", stored, started)
@@ -123,21 +124,20 @@ func TestStartYesRunsTheExperiment(t *testing.T) {
 	f, ctrl := startFixture(t, 9)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK)
-	// Calibration inside experiment run is a later step: calibrate the baseline here, as the readiness check asks.
-	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
-	expect(t, f.run(ctx, "run", "calibrate", "--snapshot", "baseline"), ExitOK)
-	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, ctrl)
-
+	// No manual calibration: the experiment calibrates the context itself, after the consent --yes gives.
 	ready := f.run(ctx, "start")
-	expect(t, ready, ExitOK, "Nothing was run and nothing was spent. To run it (real Claude Code runs, up to $", "agentium experiment run quick-aa-baseline")
+	expect(t, ready, ExitOK, "Nothing was run and nothing was spent. To run it (real Claude Code runs, first 1 calibration run(s) of about $", "agentium experiment run quick-aa-baseline")
 	if strings.Contains(ready.stdout, "MISSING") {
-		t.Errorf("a calibrated experiment is not ready:\n%s", ready.stdout)
+		t.Errorf("an uncalibrated experiment is not ready:\n%s", ready.stdout)
 	}
 	if stored, started := paidRuns(t, f, ctrl); started != 0 {
 		t.Errorf("start without --yes ran %d run(s) (%d stored)", started, stored)
 	}
 	got := f.run(ctx, "start", "--yes")
-	expect(t, got, ExitOK, "Experiment quick-aa-baseline: exists (skipped)", "Before it runs:", "[16/16]", "settled")
+	expect(t, got, ExitOK, "Experiment quick-aa-baseline: exists (skipped)", "Before it runs:", "Calibrating 1 context(s) on claude-sonnet-5", "[16/16]", "settled")
+	if logged, _ := os.ReadFile(filepath.Join(ctrl, "calibrations")); strings.Count(string(logged), "\n") != 1 {
+		t.Errorf("start --yes calibrated %q, want one calibration (the A/A's one context)", logged)
+	}
 	if strings.Contains(got.stdout, "Nothing was run") {
 		t.Errorf("--yes stopped at the preview:\n%s", got.stdout)
 	}
@@ -213,7 +213,7 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 			t.Parallel()
 			var out strings.Builder
 			s := &starter{env: Env{Stdin: strings.NewReader(c.input), StdinTerminal: c.stdinTTY, Terminal: c.stdoutTTY, Stdout: &out}}
-			if got := s.confirm(context.Background(), 12.5); got != c.want {
+			if got := s.confirm(context.Background(), 12.5, ""); got != c.want {
 				t.Errorf("confirm = %v, want %v", got, c.want)
 			}
 			if asked := strings.Contains(out.String(), "Run it now?"); asked != c.asked {
@@ -222,7 +222,7 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 		})
 	}
 	var out strings.Builder
-	if (&starter{env: Env{Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(context.Background(), 1) || out.Len() != 0 {
+	if (&starter{env: Env{Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(context.Background(), 1, "") || out.Len() != 0 {
 		t.Error("a terminal without a stdin reader was asked")
 	}
 }
@@ -292,7 +292,7 @@ func TestStartPromptStopsOnCancel(t *testing.T) {
 	var out strings.Builder
 	s := &starter{env: Env{Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: &out}}
 	done := make(chan bool)
-	go func() { done <- s.confirm(ctx, 5) }()
+	go func() { done <- s.confirm(ctx, 5, "") }()
 	cancel()
 	select {
 	case got := <-done:
