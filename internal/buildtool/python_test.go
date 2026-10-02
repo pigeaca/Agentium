@@ -467,8 +467,9 @@ func TestWarmPythonPinnedRequirementsAreALock(t *testing.T) {
 	}
 }
 
-// Warm-ups that cannot be done are failures with a reason (the base is not stamped), never a download: no interpreter
-// meets requires-python, uv.lock without uv, a requirement file including one outside the repository.
+// Warm-ups that cannot be done are failures with a reason (the base is not stamped, the run goes on), never a download
+// and never an error that stops the run: no interpreter meets requires-python, uv.lock without uv, a requirement file
+// including one outside the repository, a report that is not pip's.
 func TestWarmPythonFailures(t *testing.T) {
 	ctx := context.Background()
 	old := newFakePython(t, "3.9.6", false, "")
@@ -485,15 +486,15 @@ func TestWarmPythonFailures(t *testing.T) {
 	}
 	outside := t.TempDir()
 	writeFiles(t, outside, map[string]string{"requirements.txt": "-r ../../shared.txt\n"})
-	if _, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(outside, t.TempDir())); err == nil || !strings.Contains(err.Error(), "outside the repository") {
-		t.Errorf("an include outside the repository: %v", err)
+	if w, err := WarmFuncs(ctx, Select([]string{"python"}), old.input(outside, t.TempDir())); err != nil || !strings.Contains(w.Failed, "outside the repository") {
+		t.Errorf("an include outside the repository: %+v %v", w, err)
 	}
 	// A failed resolve leaves no stamp.
 	failing := newFakePython(t, "3.12.13", false, "not json")
 	deps := t.TempDir()
 	writeFiles(t, outside, map[string]string{"requirements.txt": "x\n"})
-	if _, err := WarmFuncs(ctx, Select([]string{"python"}), failing.input(outside, deps)); err == nil {
-		t.Error("a report that is not JSON")
+	if w, err := WarmFuncs(ctx, Select([]string{"python"}), failing.input(outside, deps)); err != nil || !strings.Contains(w.Failed, "pip's report") {
+		t.Errorf("a report that is not JSON: %+v %v", w, err)
 	}
 	stamps, _ := filepath.Glob(filepath.Join(deps, "py", "*", venvStampName))
 	if len(stamps) != 0 {

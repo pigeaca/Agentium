@@ -221,9 +221,10 @@ type pyInputs struct {
 // stamp, while agents read it. Nothing of the project is built or imported beyond what pip needs to read its
 // dependencies, and no test runs (a later base holds earlier tasks' hidden tests as ordinary tests).
 func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
+	// What the repository's files make impossible is a note (the run goes on without a venv), not an error.
 	inputs, err := readPyInputs(in.Dir)
 	if err != nil {
-		return Warmed{}, err
+		return Warmed{Failed: err.Error()}, nil
 	}
 	path := vars(in.Environ)["PATH"]
 	uv := lookPath("uv", path)
@@ -247,7 +248,7 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	}
 	key, err := venvKey(in.Dir, inputs, tool, interp, version)
 	if err != nil {
-		return Warmed{}, err
+		return Warmed{Failed: err.Error()}, nil
 	}
 	root := filepath.Join(in.Deps, "py", key)
 	venv := filepath.Join(root, "venv")
@@ -335,7 +336,7 @@ func pipVenv(ctx context.Context, in WarmInput, inputs pyInputs, interp, venv, k
 	}
 	pinned, skipped, err := pinnedFromReport(data, in.Dir)
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, err.Error(), nil
 	}
 	if len(skipped) > 0 {
 		notes = append(notes, "local packages not installed (the checkout is on PYTHONPATH): "+strings.Join(skipped, ", "))
