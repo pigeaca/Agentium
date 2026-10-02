@@ -403,7 +403,7 @@ func TestRunDocumentSurvivesNonFiniteNumbers(t *testing.T) {
 	env := Env{Getenv: func(string) string { return "" }}
 	analysis := experiment.Analysis{Results: []experiment.MetricResult{{Metric: "cost", Role: experiment.RolePrimary, Tasks: 3, A: &nan, B: &inf, Level: math.NaN(),
 		Boot95: stats.Interval{Estimate: nan, Low: 1, High: inf}, T95: stats.Interval{Estimate: 1, Low: 0, High: 2}, Verdict: stats.Inconclusive}},
-		Sequential: &experiment.SeqStatus{Looks: []experiment.Look{{Look: 1, Analysed: true, EffLevel: nan, Verdict: stats.Inconclusive,
+		Sequential: &experiment.SeqStatus{Planned: []int{1, 2}, Reported: 1, Looks: []experiment.Look{{Look: 1, Analysed: true, EffLevel: nan, Verdict: stats.Inconclusive,
 			Interval: &stats.Interval{Estimate: 1, Low: nan, High: 2}, ConditionalPower: &nan, Decision: experiment.LookContinue}}}}
 	doc := runResultDoc{Status: "done", Looks: looksOf(analysis.Sequential), Verdict: verdictOf(env, analysis), SpentUSD: finiteOf(nan)}
 	data, err := json.Marshal(doc)
