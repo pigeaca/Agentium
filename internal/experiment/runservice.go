@@ -86,6 +86,8 @@ type Runner struct {
 	WaitUntil func(ctx context.Context, until time.Time) error
 	Backoff   func(attempt int) time.Duration // nil: 30 seconds, then 2 minutes
 	Observer  Observer
+	// Quiet says Out goes nowhere (a --json run): errors then must not point at output.
+	Quiet bool
 }
 
 // RunOutcome is how an execution ended: its summary, whether the judge paused it, and the error that stopped it, if
@@ -174,6 +176,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	ready := CheckReadiness(ctx, p, r.Readiness, d, eligible, reasons, est)
 	ready.Write(out, r.Style)
 	if !ready.Ready || ctx.Err() != nil {
+		if r.Quiet { // the checks above went nowhere
+			return Lock{}, errors.Join(ctx.Err(), errors.New("not ready to run (agentium experiment plan "+name+")"))
+		}
 		return Lock{}, errors.Join(ctx.Err(), errors.New("not ready to run: see above (agentium experiment plan "+name+")"))
 	}
 	// Everything that can refuse the experiment without a calibration comes first: a refused run spends nothing on them.
