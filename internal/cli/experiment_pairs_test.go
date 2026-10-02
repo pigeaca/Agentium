@@ -3,10 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
@@ -236,8 +238,16 @@ func TestSeqExperimentComparesPairsBesideItsLooks(t *testing.T) {
 	t.Parallel()
 	f, ctrl := seqFixture(t)
 	ctx := context.Background()
-	control(t, ctrl, map[string]string{"cost-lean": "0.15", "cost-jitter": "", "pair-sleep": "0.3", "fix-lib": ""}) // every run passes
+	// Every run passes; every comparison waits for pair-block, which goes 3 s after stage 1's last run is stored.
+	control(t, ctrl, map[string]string{"cost-lean": "0.15", "cost-jitter": "", "pair-block": "", "fix-lib": ""})
 	expect(t, f.run(ctx, "experiment", "new", "lean-seq", "--b", "lean", "--seed", "5", "--judge-pairs"), ExitOK)
+	go func() {
+		for storedRunCount(f, "lean-seq") < 16 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		time.Sleep(3 * time.Second)
+		os.Remove(filepath.Join(ctrl, "pair-block"))
+	}()
 	out := f.run(ctx, "experiment", "run", "lean-seq")
 	expect(t, out, ExitOK, "Look 1 of 3 (8 of 8 tasks counted): cost improved at 99.84%: stop",
 		"Experiment lean-seq: done: stopped at look 1 of 3 (8 tasks): cost improved", "16 of 32 runs settled")
@@ -245,8 +255,8 @@ func TestSeqExperimentComparesPairsBesideItsLooks(t *testing.T) {
 	if n := strings.Count(out.stdout, "Compared pair "); n != 8 {
 		t.Errorf("%d comparisons, want stage 1's 8 pairs:\n%s", n, out.stdout)
 	}
-	// Each comparison takes two calls of 0.3 s: the last pair's is still running when the look is made.
-	if look, last := strings.Index(out.stdout, "Look 1 of 3"), strings.LastIndex(out.stdout, "Compared pair "); look < 0 || last < look {
+	// The comparisons were all waiting when the stage ended: the look did not wait for them.
+	if look, first := strings.Index(out.stdout, "Look 1 of 3"), strings.Index(out.stdout, "Compared pair "); look < 0 || first < look {
 		t.Errorf("the look waited for the comparisons:\n%s", out.stdout)
 	}
 	l := seqLockOf(t, f, "lean-seq")
@@ -274,5 +284,149 @@ func TestSeqExperimentComparesPairsBesideItsLooks(t *testing.T) {
 	}
 	if again := f.run(ctx, "experiment", "run", "lean-seq"); strings.Contains(again.stdout, "Compared pair") || strings.Contains(again.stdout, "started") {
 		t.Errorf("a resume of an ended experiment ran or compared again:\n%s", again.stdout)
+	}
+}
+
+// pairPrompts counts the pair judge's calls so far.
+func pairPrompts(t *testing.T, ctrl string) int {
+	t.Helper()
+	paths, err := filepath.Glob(filepath.Join(ctrl, "pair-prompt-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(paths)
+}
+
+// storedRunCount counts an experiment's stored runs from another goroutine than the test's (0 on any error).
+func storedRunCount(f runFixture, name string) int {
+	ctx := context.Background()
+	db, err := store.OpenReadOnly(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		return 0
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		return 0
+	}
+	e, err := db.ExperimentByName(ctx, projects[0].ID, name)
+	if err != nil {
+		return 0
+	}
+	runs, _ := db.ExperimentRuns(ctx, e.ID)
+	return len(runs)
+}
+
+// A comparison's spend, stored while the runs go on, counts in the budget: here it keeps the third pair from starting
+// ($1.20 of runs, $2 compared, $2 held for the second comparison and $8.60 for a pair pass the $13 budget; without the
+// first comparison's $2 they would fit).
+func TestExperimentComparisonSpendKeepsALaterPairBack(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	control(t, ctrl, map[string]string{"pair-cost": "1.00"}) // $2 a comparison, its cap
+	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--judge-pairs",
+		"--seed", "5", "--budget", "13"), ExitOK)
+	out := f.run(ctx, "experiment", "run", "tight")
+	expect(t, out, ExitOK, "Compared pair value, repeat 1 (pair judge, unvalidated): tie, $2.00", "Compared pair value, repeat 2 (pair judge, unvalidated): tie, $2.00",
+		"Experiment tight: budget: the next run would not fit the $13.00 budget", "4 of 6 runs settled; spent $5.20 of $13.00",
+		"Stopped at the budget.")
+	if runs := experimentRuns(t, f, "tight"); len(runs) != 4 {
+		t.Errorf("%d runs, want 4: the third pair does not fit beside the comparisons\n%s", len(runs), out.stdout)
+	}
+}
+
+// A pair judge at a usage limit pauses the runs after it at once (Plan.Paused), not only when a later run's result says
+// so; the resume compares the pair again, then runs and compares the rest.
+func TestExperimentPairJudgeLimitPausesTheRuns(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	control(t, ctrl, map[string]string{"pair-limit": ""})
+	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1",
+		"--judge-pairs", "--seed", "5"), ExitOK)
+	paused := f.run(ctx, "experiment", "run", "limit")
+	expect(t, paused, ExitOK, "Compared pair value, repeat 1 (pair judge, unvalidated): no answer; stopped at a usage limit or sign-in failure",
+		"Experiment limit: paused at the usage limit: the judge hit a usage limit", "Paused: the judge hit a usage limit or a sign-in failure.")
+	l := seqLockOf(t, f, "limit")
+	runs := experimentRuns(t, f, "limit")
+	for _, r := range runs {
+		if l.Schedule[r.Slot].Repeat == 3 {
+			t.Errorf("a run of the third pair started after the pair judge's limit:\n%s", paused.stdout)
+		}
+	}
+	if len(runs) > 4 {
+		t.Errorf("%d runs after the pair judge's limit", len(runs))
+	}
+	os.Remove(filepath.Join(ctrl, "pair-limit"))
+	resumed := f.run(ctx, "experiment", "run", "limit")
+	expect(t, resumed, ExitOK, "Compared pair value, repeat 1 (pair judge, unvalidated): tie", "Compared pair value, repeat 3 (pair judge, unvalidated): tie",
+		"Experiment limit: done", "6 of 6 runs settled")
+	if n := strings.Count(resumed.stdout, "Compared pair"); n != 3 {
+		t.Errorf("%d comparisons on resume, want each of the 3 pairs once:\n%s", n, resumed.stdout)
+	}
+}
+
+// A pause at the usage limit drops the queued comparisons (the running one finishes): none spends more of the window
+// until the resume, which compares each exactly once.
+func TestExperimentUsagePauseDropsQueuedComparisons(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	resets := time.Now().Add(time.Hour).Truncate(time.Second)
+	// Two pairs fit before 85% (58% → 82%, 6% a run); the first comparison waits for pair-block meanwhile.
+	control(t, ctrl, map[string]string{"usage": fmt.Sprintf("0.58 0.06 %d\n", resets.Unix()), "pair-block": ""})
+	expect(t, f.run(ctx, "experiment", "new", "window", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1",
+		"--judge-pairs", "--seed", "5"), ExitOK)
+	go func() { // once the second pair is stored and the execution has paused, let the running comparison go
+		for storedRunCount(f, "window") < 4 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		time.Sleep(3 * time.Second)
+		os.Remove(filepath.Join(ctrl, "pair-block"))
+	}()
+	paused := f.run(ctx, "experiment", "run", "window")
+	expect(t, paused, ExitOK, "Compared pair value, repeat 1 (pair judge, unvalidated): tie", "Paused before the usage limit",
+		"1 pair(s) of passing runs still need the pair judge")
+	if strings.Contains(paused.stdout, "repeat 2 (pair judge") || pairPrompts(t, ctrl) != 2 {
+		t.Errorf("%d pair calls, want the running comparison's 2 only:\n%s", pairPrompts(t, ctrl), paused.stdout)
+	}
+	os.Remove(filepath.Join(ctrl, "usage"))
+	resumed := f.run(ctx, "experiment", "run", "window", "--usage-limit", "100")
+	expect(t, resumed, ExitOK, "Compared pair value, repeat 2 (pair judge, unvalidated): tie", "Compared pair value, repeat 3 (pair judge, unvalidated): tie",
+		"Experiment window: done")
+	if n := strings.Count(resumed.stdout, "Compared pair"); n != 2 || pairPrompts(t, ctrl) != 6 {
+		t.Errorf("%d comparisons on resume and %d pair calls in all, want 2 and 3 pairs × 2:\n%s", n, pairPrompts(t, ctrl), resumed.stdout)
+	}
+}
+
+// While --wait waits for the usage window to reset, no queued comparison starts (the running one finishes); the next
+// run in the new window lets them go.
+func TestExperimentUsageWaitHoldsComparisons(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	resets := time.Now().Add(time.Hour).Truncate(time.Second)
+	control(t, ctrl, map[string]string{"usage": fmt.Sprintf("0.58 0.06 %d\n", resets.Unix()), "pair-block": ""})
+	expect(t, f.run(ctx, "experiment", "new", "wait", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1",
+		"--judge-pairs", "--seed", "5"), ExitOK)
+	during := -1
+	*f.sleep = func(ctx context.Context, d time.Duration) error {
+		os.Remove(filepath.Join(ctrl, "pair-block")) // the running comparison finishes its two calls
+		for pairPrompts(t, ctrl) < 2 {
+			time.Sleep(20 * time.Millisecond)
+		}
+		time.Sleep(time.Second) // time enough for a queued comparison to start, were it let
+		during = pairPrompts(t, ctrl)
+		control(t, ctrl, map[string]string{"usage": fmt.Sprintf("0 0.06 %d\n", resets.Add(5*time.Hour).Unix())})
+		return nil
+	}
+	out := f.run(ctx, "experiment", "run", "wait", "--wait")
+	expect(t, out, ExitOK, "waiting for it to reset", "Every run is done")
+	if during != 2 {
+		t.Errorf("%d pair calls by the end of the wait, want the running comparison's 2", during)
+	}
+	if n := strings.Count(out.stdout, "Compared pair"); n != 3 || pairPrompts(t, ctrl) != 6 {
+		t.Errorf("%d comparisons and %d calls, want each of the 3 pairs once:\n%s", n, pairPrompts(t, ctrl), out.stdout)
 	}
 }

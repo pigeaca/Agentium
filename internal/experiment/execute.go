@@ -106,6 +106,10 @@ type Plan struct {
 	// were read, and what it holds for what it may still spend. Every budget check adds both, and progress events count
 	// what it spent. It is called from Execute's goroutine only, and must be safe to call while that work goes on.
 	Outside func() (spentUSD, heldUSD float64)
+	// Paused, when set and not empty, says why no run may start: work outside the schedule (the pair judge) hit a usage
+	// limit or a sign-in failure. It is checked before every start; runs in flight finish, then the execution pauses
+	// with StatusUsage and its note, as a Result's Pause does.
+	Paused func() string
 }
 
 // Summary is how an execution ended.
@@ -163,8 +167,8 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 //     to reset (Usage.Wait) or pauses with StatusUsage;
 //   - a Result with Stop, an executor error, or ctx's cancellation stop it; runs in flight finish first (a cancelled
 //     ctx interrupts them, and they come back cancelled);
-//   - a Result with Pause pauses it as a usage pause does (StatusUsage, with Pause as the note), without waiting: runs
-//     in flight finish first.
+//   - a Result with Pause, or a note from Paused, pauses it as a usage pause does (StatusUsage, with that note),
+//     without waiting: runs in flight finish first.
 //
 // An executor error while ctx is live is Agentium's own failure: it is returned.
 func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
@@ -249,6 +253,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	warmWaits := 0   // attempts that waited out another run's dependency warm-up (not part of the streak)
 	done := ctx.Done()
 	for {
+		if pauseNote == "" && p.Paused != nil {
+			pauseNote = p.Paused()
+		}
 		now := time.Now()
 		blocked, usageBlocked := false, false
 		var wake time.Time

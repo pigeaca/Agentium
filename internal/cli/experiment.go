@@ -70,9 +70,11 @@ passing runs it did not call fixed, with its reasons (the first %d; --json lists
 --judge-pairs asks the pair judge, unvalidated, which of a pair's two changes is the better fix, when both runs pass
 (a task's run in each arm with the same repeat index): in both orders, on --judge-model at --judge-effort; when the
 orders disagree, the pair is a tie. It reads what --judge reads. Its preferences are exploratory: they never make a
-verdict. Each pair is compared beside the runs, so it holds no run's slot and no look; the budget holds back %d × $%.2f
-per pair for it (about $%.2f a pair at the pilot's mean). A pair judge that hits a usage limit pauses the experiment
-as the judge does.
+verdict. Each pair is compared beside the runs, so it holds no run's slot and no look; the budget holds back %d calls
+× $%.2f per pair for it at the default judge (another model or effort adds each call's overshoot allowance: experiment
+plan states the cap), about $%.2f a pair at the pilot's mean. A pair judge that hits a usage limit pauses the
+experiment as the judge does; queued comparisons wait while the experiment waits for the usage window, and a pause at
+the usage limit leaves them for the resume.
 `, llmjudge.DefaultRepeats, experiment.MaxJudgeRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.CallCapUSD,
 	int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged, llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD)
 

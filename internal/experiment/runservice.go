@@ -404,6 +404,14 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	x := &execution{r: r, stored: stored, lock: lock, runEnv: runEnv, storedTries: map[int]int{}, seenSubagents: SubagentModels(runs)}
 	var eventMu sync.Mutex // the pair judge reports from its own goroutine: one event at a time
 	event := func(e Event) {
+		if x.pairs != nil { // no comparison starts while the execution waits for the usage window to reset
+			switch e.Kind {
+			case "wait":
+				x.pairs.hold(true)
+			case "start":
+				x.pairs.hold(false)
+			}
+		}
 		if r.Observer.Event != nil {
 			eventMu.Lock()
 			defer eventMu.Unlock()
@@ -463,7 +471,8 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		x.judgePaused.Store(true)
 	default:
 		plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
-			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: event, Usage: gate}
+			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: event, Usage: gate,
+			Paused: x.paused}
 		if x.pairs != nil {
 			plan.PairHoldUSD, plan.Outside = design.PairJudgeCapUSD(), x.pairs.outside
 			x.pairs.start(ctx)
@@ -477,8 +486,8 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if sum.Status == "" { // Execute refused its input
 		sum.Status, sum.Note = StatusStopped, "Agentium could not start the runs: "+runErr.Error()
 	}
-	if x.pairs != nil { // the queued comparisons end the execution: they were funded
-		unread, err := x.pairs.finish()
+	if x.pairs != nil { // the queued comparisons end the execution (they were funded), unless it paused at the usage limit
+		unread, err := x.pairs.finish(sum.Status != StatusUsage)
 		sum.SpentUSD += unread
 		if err != nil {
 			if runErr == nil {
@@ -575,6 +584,9 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 				}
 			}
 			return sum, nil
+		}
+		if note := x.paused(); note != "" { // a judge at a usage limit: no stage starts
+			return Summary{Status: StatusUsage, Note: note, SpentUSD: spent}, nil
 		}
 		stage := p
 		stage.Prior, stage.Until = prior, lock.Sequential.StageEnd(status.NextStage)
@@ -701,10 +713,16 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	if x.pairs != nil && err == nil && Settles(rec.Outcome) { // before the result returns: the pair's hold passes to its comparison
 		x.pairs.settled(slot, rec.ID, rec)
 	}
-	if result.Pause == "" && x.judgePaused.Load() { // the pair judge hit a limit the next runs' judges would hit too
-		result.Pause = judgeLimitNote
-	}
 	return result, err
+}
+
+// paused is Plan.Paused: a judgement or a pair's comparison stopped at a usage limit or a sign-in failure, which every
+// later call would hit too, so no run starts.
+func (x *execution) paused() string {
+	if x.judgePaused.Load() {
+		return judgeLimitNote
+	}
+	return ""
 }
 
 // checkSubagents stops the experiment when a role's model alias moved to a newer model with Claude Code while --model

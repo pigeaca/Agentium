@@ -43,14 +43,16 @@ func experimentAgent(t *testing.T, ctrl string) string {
 CTRL='` + ctrl + `'
 version=2.1.281; [ -f "$CTRL/version" ] && version=$(cat "$CTRL/version")
 [ "$1" = --version ] && { echo "$version (Claude Code)"; exit 0; }
-case " $* " in *" --json-schema "*'"prefer"'*) # the pair judge: "tie", or what pair-answer says ("alternate": B in both orders)
+case " $* " in *" --json-schema "*'"prefer"'*) # the pair judge: "tie" at $0.09 a call, or what pair-answer ("alternate": B in both orders) and pair-cost say; each call waits while pair-block exists
   calls=$(ls "$CTRL" | grep -c '^pair-prompt-')
   cat > "$CTRL/pair-prompt-$$"; pwd > "$CTRL/pair-dir-$$"
+  n=0; while [ -f "$CTRL/pair-block" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n+1)); done
   [ -f "$CTRL/pair-sleep" ] && sleep "$(cat "$CTRL/pair-sleep")"
   [ -f "$CTRL/pair-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
   answer=tie; [ -f "$CTRL/pair-answer" ] && answer=$(cat "$CTRL/pair-answer")
   [ "$answer" = alternate ] && { answer=second; [ $((calls % 2)) = 1 ] && answer=first; }
-  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"prefer":"'"$answer"'","reason":"Both set the value; this one is closer."},"total_cost_usd":0.09}'; exit 0;;
+  pcost=0.09; [ -f "$CTRL/pair-cost" ] && pcost=$(cat "$CTRL/pair-cost")
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"prefer":"'"$answer"'","reason":"Both set the value; this one is closer."},"total_cost_usd":'"$pcost"'}'; exit 0;;
 esac
 case " $* " in *" --json-schema "*)
   calls=$(ls "$CTRL" | grep -c '^judge-prompt-')

@@ -22,12 +22,18 @@ import (
 // does not is unfunded, and waits for a higher budget. Execute counts the holds and what comparisons stored since it read
 // its spend (outside), so runs and comparisons together stay within the budget.
 //
+// Usage window: while the execution waits for the five-hour window to reset (hold), no queued comparison starts; when it
+// pauses at the usage limit, the queued comparisons are dropped (finish) and compared on resume. A running one may
+// finish either way.
+//
 // Crash and resume: each call's reported cost is stored as soon as it lands, as a comparison stopped early, which a
 // resume compares again keeping that spend; a pair whose comparison never started has none, and is queued again.
 type pairJudge struct {
-	x       *execution
-	capUSD  float64
-	emit    func(Event)
+	x      *execution
+	capUSD float64
+	emit   func(Event)
+	// judge makes one comparison: the run environment's JudgePair (a fake in tests).
+	judge   func(ctx context.Context, spec run.Spec, s llmjudge.Settings, a, b run.Record, spent func(run.PairJudgement)) run.PairJudgement
 	mu      sync.Mutex
 	pairs   map[int]*PairRuns // by Slot.Pair: each arm's settled run so far, stored or finished in this execution
 	queued  map[int]bool      // pairs queued in this execution, compared or not: none twice
@@ -39,6 +45,8 @@ type pairJudge struct {
 	unfunded int  // pairs left uncompared for want of budget at the start
 	stopped  bool // a comparison hit a usage limit or sign-in failure, or a record could not be stored: no more
 	closed   bool // no more pairs will be queued
+	waiting  bool // the execution waits for the usage window to reset: no queued comparison starts
+	drop     bool // the execution paused at the usage limit: the queued comparisons are left for a resume
 	err      error
 	wake     chan struct{}
 	done     chan struct{}
@@ -56,16 +64,11 @@ func newPairJudge(x *execution, runs []store.Run, spentUSD float64, emit func(Ev
 	if err != nil {
 		return nil, err
 	}
-	p := &pairJudge{x: x, capUSD: x.lock.Design.PairJudgeCapUSD(), emit: emit, pairs: map[int]*PairRuns{}, queued: map[int]bool{},
-		wake: make(chan struct{}, 1), done: make(chan struct{})}
+	p := &pairJudge{x: x, capUSD: x.lock.Design.PairJudgeCapUSD(), emit: emit, judge: x.runEnv.JudgePair, pairs: map[int]*PairRuns{},
+		queued: map[int]bool{}, wake: make(chan struct{}, 1), done: make(chan struct{})}
 	for i := range pairs {
 		pr := pairs[i]
 		p.pairs[pr.Pair] = &pr
-		if pr.B != nil { // what a comparison Agentium died in left (the run lock is held: none is running)
-			if err := run.RemovePairJudgeDir(pr.B.Rec); err != nil {
-				return nil, err
-			}
-		}
 		if !pr.NeedsComparing(x.lock) {
 			continue
 		}
@@ -134,17 +137,31 @@ func (p *pairJudge) read(fn func() error) error {
 // start compares the queued pairs, and those queued later, until finish.
 func (p *pairJudge) start(ctx context.Context) { go p.work(ctx) }
 
-// finish waits for the queued comparisons, then returns what they stored since the last read and the first error that
-// stopped them. With ctx cancelled, the running comparison stops (stored as stopped early) and the queued ones are left
-// for a resume.
-func (p *pairJudge) finish() (unreadUSD float64, err error) {
+// hold stops queued comparisons from starting while the execution waits for the usage window to reset (on), and lets
+// them go again once a run starts in the new window (off). A running comparison finishes.
+func (p *pairJudge) hold(on bool) {
 	p.mu.Lock()
-	p.closed = true
+	p.waiting = on
 	p.mu.Unlock()
+	p.poke()
+}
+
+func (p *pairJudge) poke() {
 	select {
 	case p.wake <- struct{}{}:
 	default:
 	}
+}
+
+// finish ends the comparisons and returns what they stored since the last read and the first error that stopped them.
+// With drain it waits for the queued ones; without (a pause at the usage limit, which no comparison may spend more of)
+// it drops them for a resume. With ctx cancelled, the running comparison stops (stored as stopped early) and the queued
+// ones are left for a resume.
+func (p *pairJudge) finish(drain bool) (unreadUSD float64, err error) {
+	p.mu.Lock()
+	p.closed, p.drop, p.waiting = true, !drain, false
+	p.mu.Unlock()
+	p.poke()
 	<-p.done
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -155,7 +172,7 @@ func (p *pairJudge) work(ctx context.Context) {
 	defer close(p.done)
 	for {
 		p.mu.Lock()
-		if ctx.Err() != nil || p.stopped || (p.closed && len(p.queue) == 0) {
+		if ctx.Err() != nil || p.stopped || p.drop || (p.closed && len(p.queue) == 0) {
 			for _, j := range p.queue { // left for a resume: their holds go
 				p.heldUSD -= j.leftUSD
 			}
@@ -163,7 +180,7 @@ func (p *pairJudge) work(ctx context.Context) {
 			p.mu.Unlock()
 			return
 		}
-		if len(p.queue) == 0 {
+		if len(p.queue) == 0 || p.waiting {
 			p.mu.Unlock()
 			select {
 			case <-p.wake:
@@ -233,7 +250,7 @@ func (p *pairJudge) compare(ctx context.Context, job *pairJob) error {
 		}
 	}
 	before := written
-	c := x.runEnv.JudgePair(ctx, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec()}, *lock.Design.JudgePairs, job.A.Rec, rec, spent)
+	c := p.judge(ctx, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec()}, *lock.Design.JudgePairs, job.A.Rec, rec, spent)
 	if err := keep(c); err != nil {
 		return err
 	}
