@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -20,7 +21,7 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined]
+const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--json]
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
@@ -39,7 +40,8 @@ it asks instead. --budget raises the experiment's total in USD. Mined tasks wait
 solution leaks (agentium task show NAME, then agentium task edit NAME --reviewed). --accept-mined accepts, without
 your review, the tasks start itself mined: it checks only solution headings, reference-file names and unstated test
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
-accepted. --b must name a snapshot; --budget can only raise an experiment's budget.
+accepted. --json prints one JSON document (status preview, not_ready, too_few_tasks or finished) and never asks; it
+cannot be combined with --yes yet. Without a terminal on stdin, start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget.
 `
 
 // startArgs is what start was asked for.
@@ -68,6 +70,16 @@ func runStart(ctx context.Context, env Env, args []string) int {
 		return ExitUsage
 	}
 	s := &starter{env: env, args: a, importedNow: map[string]bool{}, held: map[string]string{}}
+	if env.JSON {
+		// start reports through its own document: the stages' text is kept as its "log" and no stage emits one. It never asks,
+		// and it never runs the experiment: that output is experiment run's, which takes --json in part 1b.
+		if a.yes {
+			fmt.Fprintln(env.Stderr, "agentium start: --yes runs the experiment, whose output is not JSON yet: use start --json to preview, then agentium experiment run NAME")
+			return ExitUsage
+		}
+		s.log = &bytes.Buffer{}
+		s.env.Stdout, s.env.JSON = s.log, false
+	}
 	defer s.close()
 	name, err := s.prepare(ctx)
 	switch {
@@ -80,6 +92,8 @@ func runStart(ctx context.Context, env Env, args []string) int {
 			return ExitUsage
 		}
 		return failNew(env, err) // tasks that cannot be in the experiment, listed with their reasons
+	case name == "" && s.log != nil: // fewer tasks than the floor: the log says why
+		return s.emitJSON(ctx, "too_few_tasks", ExitError, "", nil, budgetPlan{})
 	case name == "": // fewer tasks than the floor: said already
 		return ExitError
 	}
@@ -96,6 +110,7 @@ type starter struct {
 	// mined holds the tasks start mined (now or earlier, checked against the project's tasks), records and dismissed are
 	// the state file's content (see minedState), importedNow the tasks this run imported, held why --accept-mined held a
 	// task back, and stopped why mining ended with too few tasks.
+	log         *bytes.Buffer // JSON mode: the stages' text, in place of s.env.Stdout
 	mined       map[string]bool
 	records     []minedRecord
 	dismissed   map[string]bool
@@ -300,6 +315,9 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if stored.Status == store.StatusDone && s.log != nil {
+		return s.emitJSON(ctx, "finished", ExitOK, name, nil, budgetPlan{})
+	}
 	if stored.Status == store.StatusDone {
 		fmt.Fprintf(env.Stdout, "\nExperiment %s has finished: %s\n", name, st.Command("agentium experiment report "+name))
 		return s.northStar(ctx)
@@ -331,6 +349,13 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	}
 	if code := s.northStar(ctx); code != ExitOK {
 		return code
+	}
+	if s.log != nil { // JSON: the preview is the result; a person (or a script with consent) runs the command it names
+		status := "preview"
+		if !review.Readiness.Ready {
+			status = "not_ready"
+		}
+		return s.emitJSON(ctx, status, ExitOK, name, &review, budget)
 	}
 	runCommand := "agentium experiment run " + name
 	if s.args.budget > 0 {
