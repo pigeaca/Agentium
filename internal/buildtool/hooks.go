@@ -326,30 +326,64 @@ func (h Host) terminate(ctx context.Context, pid int, stillTheSame func() bool) 
 // clonefile, Linux reflinks), so a distribution of hundreds of megabytes costs neither time nor space; the copy is
 // independent: writing in it never changes src.
 func cloneTree(ctx context.Context, src, dst string) error {
+	_, err := copyTree(ctx, src, dst)
+	return err
+}
+
+// copyTree is cloneTree, and returns how it copied: the cp command that succeeded. cp clones file by file, so a tree of
+// thousands of files takes seconds even where it clones (CloneFolder clones a whole folder in one call).
+//
+// dst is created here, exclusively (owner-only), and the copy goes into it (cp -R src/. dst): a dst that someone else
+// made, before or meanwhile, is refused and never removed. Between attempts and on a failure only what this call made
+// is removed.
+func copyTree(ctx context.Context, src, dst string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
-		return err
+		return "", err
+	}
+	if err := os.Mkdir(dst, 0o700); err != nil {
+		return "", err
 	}
 	var attempts [][]string
 	switch runtime.GOOS {
 	case "darwin":
-		attempts = append(attempts, []string{"-Rc", src, dst})
+		attempts = append(attempts, []string{"-Rc"})
 	case "linux":
-		attempts = append(attempts, []string{"-R", "--reflink=auto", src, dst})
+		attempts = append(attempts, []string{"-R", "--reflink=auto"})
 	}
-	attempts = append(attempts, []string{"-R", src, dst})
+	attempts = append(attempts, []string{"-R"})
 	var last error
-	for _, args := range attempts {
-		os.RemoveAll(dst) // a failed attempt may leave a part
-		out, err := exec.CommandContext(ctx, "cp", args...).CombinedOutput()
-		if err == nil {
-			return nil
+	for i, flags := range attempts {
+		if i > 0 {
+			if err := emptyFolder(dst); err != nil { // a failed attempt may leave a part, in the folder this call made
+				os.RemoveAll(dst)
+				return "", errors.Join(last, err)
+			}
 		}
-		last = fmt.Errorf("cp %s: %w: %s", strings.Join(args[:len(args)-2], " "), err, strings.TrimSpace(string(out)))
+		how := "cp " + strings.Join(flags, " ")
+		out, err := exec.CommandContext(ctx, "cp", append(flags, src+string(filepath.Separator)+".", dst)...).CombinedOutput()
+		if err == nil {
+			return how, nil
+		}
+		last = fmt.Errorf("%s: %w: %s", how, err, strings.TrimSpace(string(out)))
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return last
+	os.RemoveAll(dst)
+	return "", last
+}
+
+// emptyFolder removes what is in dir, not dir itself.
+func emptyFolder(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, e := range entries {
+		errs = append(errs, os.RemoveAll(filepath.Join(dir, e.Name())))
+	}
+	return errors.Join(errs...)
 }
 
 // userHome returns the folder named by environ's variable name when it is absolute, else def.

@@ -90,6 +90,7 @@ func TestRecoverUnreadableStartFile(t *testing.T) {
 		write(filepath.Join(dir, "notes.txt"), "token sk-"+"ant-api03-abcdefghijklmnopqrstuvwxyz", old)
 		write(filepath.Join(dir, "verify", "hidden_test.go"), "", old)
 		write(filepath.Join(dir, "judge", "config.json"), "login", old)
+		write(filepath.Join(dir, gradingFolder, "cache", "hidden_test.a"), "", old)
 		write(filepath.Join(ws, "repo", "a.txt"), "", old)
 		write(filepath.Join(layout.RunTemp(filepath.Base(ws)), "x"), "", old)
 	}
@@ -107,7 +108,8 @@ func TestRecoverUnreadableStartFile(t *testing.T) {
 			o.Record.IsolatedCostUSD == nil || *o.Record.IsolatedCostUSD != 0.082 || !strings.Contains(strings.Join(o.Record.Notes, ";"), "judge spend") {
 			t.Errorf("orphan %d = %+v", i, o)
 		}
-		for _, gone := range []string{filepath.Join(dir, startFile), filepath.Join(dir, "verify"), filepath.Join(dir, "judge"), ws, layout.RunTemp(filepath.Base(ws))} {
+		for _, gone := range []string{filepath.Join(dir, startFile), filepath.Join(dir, "verify"), filepath.Join(dir, "judge"), filepath.Join(dir, gradingFolder),
+			ws, layout.RunTemp(filepath.Base(ws))} {
 			if _, err := os.Stat(gone); err == nil {
 				t.Errorf("%s was left behind", gone)
 			}

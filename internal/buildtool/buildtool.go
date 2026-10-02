@@ -115,6 +115,10 @@ type Profile struct {
 	// StopRun ends what the tool left running when the run's agent ended; it must not run anything from the checkout,
 	// which the agent may have changed.
 	StopRun func(ctx context.Context, buildCache string, host Host) error
+	// GradeEnv returns what a sandboxed grade's environment adds to the agent's recipe for this tool (GraderEnv), given
+	// the grade's temp root: what the grading sandbox needs that the agent's sandbox gives otherwise (the isolation
+	// plan, step 0). Like AgentEnv, it applies only with the profile's agent side.
+	GradeEnv func(temp string) []string
 	// PrepareCommands makes what Agentium's own commands need under the data folder's cache root (see CommandCaches).
 	PrepareCommands func(cache string) error
 	// WarmFunc warms what fixed commands (Warm) cannot: Python finds an interpreter on the host and builds a venv per
@@ -277,7 +281,10 @@ func goProfile() Profile {
 		TempVars:      []string{"GOTMPDIR"},
 		AgentCaches:   []CacheVar{{Name: "GOCACHE"}},
 		AgentEnv:      goAgentEnv,
-		UserCaches:    goCaches,
+		// A grade fetches nothing (its sandbox has no network): a module the agent added fails at once, saying so,
+		// instead of after a network timeout.
+		GradeEnv:   func(string) []string { return []string{"GOPROXY=off"} },
+		UserCaches: goCaches,
 	}
 }
 
