@@ -44,6 +44,10 @@ type Invocation struct {
 	ConfigDir string  // a fresh, empty CLAUDE_CONFIG_DIR for SignInAPIKey and SignInTokenFile
 	TokenFile string  // for SignInTokenFile: the token's file, whose folder the agent may not read
 	Home      string  // the user's home folder
+	// AccountHome is the account's home folder in the user database (user.Current), when known. HOME (Home) can point
+	// elsewhere, but the account's login keychain stays in the real home folder, where an explicit path opens it, so
+	// that folder is denied too (credentialPaths). Empty: only Home's.
+	AccountHome string
 	// Deny lists absolute paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data
 	// (other runs, hidden tests, the database), the user's repository, and verification copies.
 	Deny []string
@@ -202,8 +206,9 @@ func DisallowedTools() []string {
 // (com.apple.SecurityServer, com.apple.securityd.xpc), and its settings offer no way to deny them, only to allow more
 // (network.allowMachLookup). With the folder readable, `security` inside the agent's shell searches the login keychain,
 // where Claude Code and gh keep their tokens, stored through /usr/bin/security and so likely readable by it without a
-// prompt. Denied, the login keychain leaves the shell's search list. Claude Code reads its own login outside the
-// sandbox, which covers only its tools' commands, so sign-in is unaffected.
+// prompt. Denied, the keychain file cannot be opened even by an explicit path (the security client fails with
+// "Operation not permitted"), and the login keychain leaves the shell's search list. Claude Code reads its own login
+// outside the sandbox, which covers only its tools' commands, so sign-in is unaffected.
 func credentialFiles() []string {
 	return []string{".ssh", ".codex", ".config/gh", ".config/agentium", ".netrc", ".git-credentials", ".aws", ".docker",
 		".npmrc", ".pypirc", ".kube", ".gnupg", "Library/Keychains"}
@@ -217,11 +222,16 @@ func machineCredentials() []string {
 }
 
 // credentialPaths are every credential store the sandbox denies, as absolute paths: the user's (credentialFiles) under
-// home, then the machine's.
-func credentialPaths(home string) []string {
+// home; the account's own login keychain folder when accountHome (Invocation.AccountHome) is set and is not home (HOME
+// redirected: the login keychain stays in the account's real home folder, and an explicit path opens it); then the
+// machine's.
+func credentialPaths(home, accountHome string) []string {
 	var paths []string
 	for _, name := range credentialFiles() {
 		paths = append(paths, filepath.Join(home, name))
+	}
+	if accountHome != "" && filepath.Clean(accountHome) != filepath.Clean(home) {
+		paths = append(paths, filepath.Join(accountHome, "Library", "Keychains"))
 	}
 	return append(paths, machineCredentials()...)
 }
@@ -263,7 +273,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv, inv.AccountHome} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
 		}
@@ -415,7 +425,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	if inv.TokenFile != "" {
 		paths = append(paths, filepath.Dir(inv.TokenFile))
 	}
-	paths = append(paths, credentialPaths(inv.Home)...)
+	paths = append(paths, credentialPaths(inv.Home, inv.AccountHome)...)
 	paths = append(paths, movedCredentials(environ, inv.Home)...)
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	if inv.Deps != "" {
@@ -547,7 +557,7 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
 	}
 	var files []map[string]string
-	for _, p := range credentialPaths(inv.Home) {
+	for _, p := range credentialPaths(inv.Home, inv.AccountHome) {
 		files = append(files, map[string]string{"path": p, "mode": "deny"})
 	}
 	if inv.TokenFile != "" {
