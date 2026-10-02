@@ -42,7 +42,7 @@ type Floors struct {
 // phase1-v1 report keeps its three-run cost floor; an unknown method gets the strictest floors.
 func FloorsFor(method string) Floors {
 	f := Floors{CostTasks: MinTasksCost, CostRepeats: MinRepeats, SuccessTasks: MinTasksSuccess, SuccessRepeats: MinRepeats}
-	if method == MethodV2 {
+	if method == MethodV2 || method == MethodSeq {
 		f.CostRepeats = MinRepeatsCost
 	}
 	return f
@@ -63,9 +63,20 @@ type Tier struct {
 	Repeats int
 }
 
-// Tiers are the preview's presets: Quick measures cost changes of roughly 15–20%; Confident also certifies that
-// success does not drop by more than about 15–20 pp.
+// Tiers are the preview's presets for success experiments (goal better, method phase1-v2): Quick measures changes of
+// roughly 15–20%; Confident also certifies that success does not drop by more than about 15–20 pp.
 func Tiers() []Tier { return []Tier{{"Quick", 12, 3}, {"Confident", 23, 5}} }
+
+// SeqTier is a cost experiment's size (method seq-v1): its most tasks, one run per arm.
+func SeqTier() Tier { return Tier{"Sequential", stats.SeqMaxTasks, 1} }
+
+// tiersFor are the sizes a preview of d offers: SeqTier for a seq-v1 design, else Tiers.
+func tiersFor(d Design) []Tier {
+	if d.Sequential() {
+		return []Tier{SeqTier()}
+	}
+	return Tiers()
+}
 
 // TierByName finds a tier, ignoring case.
 func TierByName(name string) (Tier, bool) {
@@ -323,7 +334,7 @@ func PreviewFor(d Design, eligible []string, est ArmEstimates) []Row {
 	}
 	mean, known := est.MeanUSD(eligible)
 	var rows []Row
-	for _, t := range Tiers() {
+	for _, t := range tiersFor(d) {
 		r := row(t.Name, min(t.Tasks, len(eligible)), t.Repeats, mean, known)
 		r.Short = len(eligible) < t.Tasks
 		rows = append(rows, r)

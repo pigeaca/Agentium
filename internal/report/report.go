@@ -171,7 +171,7 @@ func Build(in Input) (Report, error) {
 	l := in.Lock
 	var data []experiment.RunData
 	for _, r := range in.Runs {
-		data = append(data, runData(r.Slot, r.Record))
+		data = append(data, experiment.RunDataOf(r.Slot, r.Record))
 	}
 	analysis, err := experiment.Analyze(l, data)
 	if err != nil {
@@ -464,8 +464,13 @@ func notes(rep Report, in Input) []string {
 		if rep.StatusNote != "" {
 			status += ": " + in.scrub(rep.StatusNote)
 		}
-		out = append(out, fmt.Sprintf("The experiment is not finished (%s): %d of %d runs settled, and the results cover those.", status, rep.Settled, rep.Slots))
+		covers := "and the results cover those"
+		if rep.Analysis.Sequential != nil {
+			covers = "and the results are its last look's"
+		}
+		out = append(out, fmt.Sprintf("The experiment is not finished (%s): %d of %d runs settled, %s.", status, rep.Settled, rep.Slots, covers))
 	}
+	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
 		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, claude.OutcomeCancelled}
@@ -554,21 +559,32 @@ func notes(rep Report, in Input) []string {
 		}
 		decided = append(decided, fmt.Sprintf("%s (%s)", strings.ToLower(title(r.Metric)), r.Role))
 		switch {
-		case r.Verdict == stats.Exploratory && r.Warning == "" && r.Note == "":
+		case r.Verdict == stats.Exploratory && r.Warning == "" && r.Note == "" && r.FullTasks < r.FloorTasks:
 			out = append(out, fmt.Sprintf("%s is exploratory: %d of %d task(s) have %d or more counted %s in both arms, below the floor of %d tasks (method %s).",
 				title(r.Metric), r.FullTasks, r.Tasks, r.FloorRepeats, plural(r.FloorRepeats, "run"), r.FloorTasks, rep.Lock.Method))
-		case r.Verdict != stats.Exploratory && r.FloorRepeats < experiment.MinRepeats && r.Repeats < experiment.MinRepeats:
+		case r.Verdict != stats.Exploratory && r.FloorRepeats < experiment.MinRepeats && r.Repeats < experiment.MinRepeats && a.Sequential == nil:
 			out = append(out, fmt.Sprintf("%s's verdict rests on tasks with fewer than %d runs per arm, as method %s allows: each task's difference "+
 				"carries the run-to-run noise, and %s decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) "+
 				"checked it: false differences in at most %.0f%% of experiments without a true difference, and 95%% intervals that cover the true effect at least %.0f%% of the time.",
 				title(r.Metric), experiment.MinRepeats, rep.Lock.Method, wider(r.T95, r.Boot95), 100*stats.OneRunMaxFalseDifferences, 100*stats.OneRunMinCoverage))
 		}
 	}
-	out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
-		"the intervals in the summary are the wider of the two, at 95%%, or at 90%% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%%.",
-		strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	if a.Sequential != nil {
+		out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
+			"the intervals in the summary are the wider of the two, cost's at its look's levels (\"equivalent\" is two one-sided tests at the look's "+
+			"equivalence level), the others' at 95%%, or at 90%% for \"no loss\".", strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	} else {
+		out = append(out, fmt.Sprintf("Verdicts are given for %s; %s are exploratory. A verdict needs the bootstrap and the t-interval to agree: "+
+			"the intervals in the summary are the wider of the two, at 95%%, or at 90%% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%%.",
+			strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
+	}
 	if rep.Template == experiment.TemplateAA {
-		out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		if rep.Lock.Sequential != nil {
+			out = append(out, fmt.Sprintf("Both arms use the same context, so any difference is noise. Method %s spends %.1f%% over all its looks: "+
+				"about one experiment in thirty shows a difference by chance.", experiment.MethodSeq, 100*rep.Lock.Sequential.Alpha))
+		} else {
+			out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		}
 	}
 	cold := fmt.Sprintf("Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of %s.", rep.Lock.PriceTable)
 	if unrepriced > 0 {
@@ -590,11 +606,18 @@ func title(metric string) string {
 }
 
 // verdictInterval is the interval a verdict rests on: the wider of the bootstrap and the t-interval, at 90% for "no
-// loss" and "equivalent" (one-sided tests at 5%) and at 95% otherwise.
+// loss" and "equivalent" (one-sided tests at 5%) and at 95% otherwise; a seq-v1 look's primary metric at the look's
+// equivalence and efficacy levels.
 func verdictInterval(r experiment.MetricResult) (stats.Interval, string) {
 	a, b, level := r.Boot95, r.T95, "95%"
+	if r.Level > 0 {
+		level = fmt.Sprintf("%.2f%%", 100*r.Level)
+	}
 	if r.Verdict == stats.NoLoss || r.Verdict == stats.Equivalent {
 		a, b, level = r.Boot90, r.T90, "90%"
+		if r.EqLevel > 0 {
+			level = fmt.Sprintf("%.2f%%", 100*r.EqLevel)
+		}
 	}
 	return stats.Interval{Estimate: a.Estimate, Low: math.Min(a.Low, b.Low), High: math.Max(a.High, b.High)}, level
 }

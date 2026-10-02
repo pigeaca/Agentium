@@ -80,16 +80,17 @@ func TestStartReachesAPreviewWithoutPromptsOrPaidRuns(t *testing.T) {
 	f, ctrl := startFixture(t, 9)
 	ctx := context.Background()
 	got := f.run(ctx, "start", "--accept-mined")
-	expect(t, got, ExitOK, "Registered ", "Context: saved snapshot baseline from HEAD", "Mining: ", "imported 8 of 8 tried (verify: make test)",
-		"Validating 8 task(s) in 2 context(s)", "8 valid of 8", "Tasks: 8 ready (needs 8), in ", "Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs",
-		"A/A calibration of baseline", "Before it runs:", "Sizes (runs count both arms):", "is not calibrated: calibrated when the experiment runs, about $",
+	expect(t, got, ExitOK, "Registered ", "Context: saved snapshot baseline from HEAD", "Mining: ", "imported 9 of 9 tried (verify: make test)",
+		"Validating 9 task(s) in 2 context(s)", "9 valid of 9", "Tasks: 9 ready (aims for 16; the history has no more candidates), in ",
+		"the experiment takes them all, one look, after all 9 tasks", "Experiment quick-aa-baseline: created, 9 task(s) × 1 run per arm = 18 runs at most",
+		"A/A calibration of baseline", "Before it runs:", "Looks (method seq-v1; runs count both arms):", "is not calibrated: calibrated when the experiment runs, about $",
 		"Calibration: 1 context calibration(s)", "Nothing was run and nothing was spent. To run it (real Claude Code runs, first 1 calibration run(s) of about $",
 		"agentium experiment run quick-aa-baseline", "First decisive verdict: none yet ($0.00 spent since init)")
 	if stored, started := paidRuns(t, f, ctrl); stored != 0 || started != 0 {
 		t.Errorf("start without --yes ran the agent: %d stored run(s), %d started", stored, started)
 	}
 	list := f.run(ctx, "experiment", "list")
-	expect(t, list, ExitOK, "quick-aa-baseline", "aa", "baseline / baseline", "8 × 1")
+	expect(t, list, ExitOK, "quick-aa-baseline", "aa", "baseline / baseline", "9 × 1")
 
 	again := f.run(ctx, "start", "--accept-mined")
 	expect(t, again, ExitOK, "Project ", "registered (skipped)", "Context: snapshot baseline from ", "Tasks: skipped (the experiment exists)",
@@ -112,8 +113,8 @@ func TestStartWithBComparesContexts(t *testing.T) {
 
 	expect(t, f.run(ctx, "start", "--b", "nope"), ExitError, "snapshot", "nope")
 	got := f.run(ctx, "start", "--b", "lean", "--accept-mined")
-	expect(t, got, ExitOK, "Context: saved snapshot baseline from HEAD", "Validating 8 task(s) in 3 context(s)",
-		"Experiment quick-baseline-vs-lean: created, 8 task(s) × 1 run per arm = 16 runs", "baseline", "lean")
+	expect(t, got, ExitOK, "Context: saved snapshot baseline from HEAD", "Validating 9 task(s) in 3 context(s)",
+		"Experiment quick-baseline-vs-lean: created, 9 task(s) × 1 run per arm = 18 runs at most", "baseline", "lean")
 	if strings.Contains(got.stdout, "no second context was given") {
 		t.Errorf("--b made an A/A:\n%s", got.stdout)
 	}
@@ -135,15 +136,15 @@ func TestStartYesRunsTheExperiment(t *testing.T) {
 		t.Errorf("start without --yes ran %d run(s) (%d stored)", started, stored)
 	}
 	got := f.run(ctx, "start", "--yes")
-	expect(t, got, ExitOK, "Experiment quick-aa-baseline: exists (skipped)", "Before it runs:", "Calibrating 1 context(s) on claude-sonnet-5", "[16/16]", "settled")
+	expect(t, got, ExitOK, "Experiment quick-aa-baseline: exists (skipped)", "Before it runs:", "Calibrating 1 context(s) on claude-sonnet-5", "[18/18]", "settled")
 	if logged, _ := os.ReadFile(filepath.Join(ctrl, "calibrations")); strings.Count(string(logged), "\n") != 1 {
 		t.Errorf("start --yes calibrated %q, want one calibration (the A/A's one context)", logged)
 	}
 	if strings.Contains(got.stdout, "Nothing was run") {
 		t.Errorf("--yes stopped at the preview:\n%s", got.stdout)
 	}
-	if runs := experimentRuns(t, f, "quick-aa-baseline"); len(runs) < 16 {
-		t.Errorf("--yes stored %d run(s), want 16", len(runs))
+	if runs := experimentRuns(t, f, "quick-aa-baseline"); len(runs) < 18 {
+		t.Errorf("--yes stored %d run(s), want 18", len(runs))
 	}
 	// The project's spend now shows, and an A/A never counts as a decisive verdict.
 	expect(t, f.run(ctx, "start"), ExitOK, "First decisive verdict: none yet ($")
@@ -175,10 +176,10 @@ func TestStartWaitsForReviews(t *testing.T) {
 	f, _ := startFixture(t, 9)
 	ctx := context.Background()
 	got := f.run(ctx, "start")
-	expect(t, got, ExitError, "8 valid of 8", "8 valid, 0 ready of the 8 an experiment needs: the others wait for your review", "Read each instruction for solution leaks",
+	expect(t, got, ExitError, "9 valid of 9", "9 valid, 0 ready: the others wait for your review (an experiment aims for 16 tasks and needs at least 8)", "Read each instruction for solution leaks",
 		"agentium task show NAME", "agentium task edit NAME --reviewed", "agentium start --accept-mined", "without your review")
-	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK, "Accepted 8 mined instruction(s) without your review (--accept-mined)", "a message that explains the fix is not detected",
-		"Tasks: 8 ready", "Experiment quick-aa-baseline: created")
+	expect(t, f.run(ctx, "start", "--accept-mined"), ExitOK, "Accepted 9 mined instruction(s) without your review (--accept-mined)", "a message that explains the fix is not detected",
+		"Tasks: 9 ready", "Experiment quick-aa-baseline: created")
 }
 
 func TestStartUsage(t *testing.T) {
@@ -264,13 +265,13 @@ func TestStartPromptQuotesTheEffectiveBudget(t *testing.T) {
 	f, ctrl := readyFixture(t)
 	ctx := context.Background()
 	declined := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
-	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $42.00. [y/N]", "Nothing was run and nothing was spent",
-		"up to $42.00): agentium experiment run quick-aa-baseline\n")
+	expect(t, declined, ExitOK, "Run it now? It makes real Claude Code runs and spends up to $46.00. [y/N]", "Nothing was run and nothing was spent",
+		"up to $46.00): agentium experiment run quick-aa-baseline\n")
 	raised := terminalRun(f, ctx, strings.NewReader("n\n"), "start", "--budget", "100")
-	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the design's $42.00, raised by --budget)", "spends up to $100.00. [y/N]",
+	expect(t, raised, ExitOK, "Budget for this run: $100.00 (the design's $46.00, raised by --budget)", "spends up to $100.00. [y/N]",
 		"up to $100.00): agentium experiment run quick-aa-baseline --budget 100")
 	lower := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "10")
-	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $42.00")
+	expect(t, lower, ExitUsage, "--budget $10.00 is below the experiment's $46.00")
 	if strings.Contains(lower.stdout, "Run it now?") {
 		t.Errorf("a lower budget was asked about:\n%s", lower.stdout)
 	}
@@ -278,9 +279,9 @@ func TestStartPromptQuotesTheEffectiveBudget(t *testing.T) {
 		t.Errorf("declined prompts ran %d run(s) (%d stored)", started, stored)
 	}
 	yes := terminalRun(f, ctx, strings.NewReader("y\n"), "start", "--budget", "100")
-	expect(t, yes, ExitOK, "spends up to $100.00. [y/N]", "[16/16]")
-	if runs := experimentRuns(t, f, "quick-aa-baseline"); len(runs) < 16 {
-		t.Errorf("answering y stored %d run(s), want 16", len(runs))
+	expect(t, yes, ExitOK, "spends up to $100.00. [y/N]", "[18/18]")
+	if runs := experimentRuns(t, f, "quick-aa-baseline"); len(runs) < 18 {
+		t.Errorf("answering y stored %d run(s), want 18", len(runs))
 	}
 }
 
@@ -333,7 +334,7 @@ func TestStartAcceptMinedLeavesOtherTasksAlone(t *testing.T) {
 	head := strings.TrimSpace(gitIn(t, f.repo, "rev-parse", "HEAD"))
 	expect(t, f.run(ctx, "task", "import", "--commit", head, "--name", "by-hand", "--verify", "make test"), ExitOK)
 	got := f.run(ctx, "start", "--accept-mined")
-	expect(t, got, ExitOK, "Accepted 8 mined instruction(s) without your review", "Experiment quick-aa-baseline: created")
+	expect(t, got, ExitOK, "Accepted 9 mined instruction(s) without your review", "Experiment quick-aa-baseline: created")
 	for _, line := range strings.Split(got.stdout, "\n") {
 		if strings.HasPrefix(line, "Accepted ") && strings.Contains(line, "by-hand") {
 			t.Errorf("the hand-imported task was accepted: %s", line)
@@ -404,7 +405,7 @@ func TestStartStopsWhenNothingValidates(t *testing.T) {
 	writeFile(t, repo, "lib.sh", "base() { echo base; }\n")
 	gitIn(t, repo, "add", "-A")
 	gitIn(t, repo, "commit", "-q", "-m", "Initial commit")
-	for i := 1; i <= 12; i++ { // each commit's test passes on the base already: the task is invalid
+	for i := 1; i <= 20; i++ { // each commit's test passes on the base already: the task is invalid
 		writeFile(t, repo, "lib.sh", fmt.Sprintf("# change %d\nbase() { echo base; }\n", i))
 		writeFile(t, repo, fmt.Sprintf("tests/b%d_test.sh", i), ". ./lib.sh\n[ \"$(base)\" = base ]\n")
 		gitIn(t, repo, "add", "-A")
@@ -412,13 +413,13 @@ func TestStartStopsWhenNothingValidates(t *testing.T) {
 	}
 	f := runFixtureAt(repo, filepath.Join(t.TempDir(), "data"), t.TempDir())
 	got := f.run(context.Background(), "start", "--accept-mined")
-	expect(t, got, ExitError, "imported 8 of 8 tried", "0 valid of 8", "set aside: ", "only 0 of the 8 an experiment needs are ready",
-		"none of the 8 tasks just mined is valid")
+	expect(t, got, ExitError, "imported 16 of 16 tried", "0 valid of 16", "set aside: ", "only 0 of the 8 an experiment needs are ready",
+		"none of the 16 tasks just mined is valid")
 	if n := strings.Count(got.stdout, "Mining:"); n != 1 {
 		t.Errorf("start mined %d times, want once:\n%s", n, got.stdout)
 	}
-	if tasks := storedTasks(t, f.data); len(tasks) != 8 {
-		t.Errorf("%d tasks imported, want 8", len(tasks))
+	if tasks := storedTasks(t, f.data); len(tasks) != 16 {
+		t.Errorf("%d tasks imported, want 16", len(tasks))
 	}
 }
 
@@ -447,7 +448,7 @@ func TestStartAcceptMinedIgnoresRemovedAndReimportedTasks(t *testing.T) {
 	t.Parallel()
 	f, _ := startFixture(t, 9)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "start"), ExitError, "8 valid")
+	expect(t, f.run(ctx, "start"), ExitError, "9 valid")
 	first := storedTasks(t, f.data)[0]
 	expect(t, f.run(ctx, "task", "rm", first.Name), ExitOK)
 	expect(t, f.run(ctx, "task", "import", "--commit", first.SolutionCommit, "--name", first.Name, "--verify", "make test"), ExitOK)
@@ -466,7 +467,7 @@ func TestStartNeverMinesARemovedTaskAgain(t *testing.T) {
 	t.Parallel()
 	f, _ := startFixture(t, 9)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "start"), ExitError, "8 valid")
+	expect(t, f.run(ctx, "start"), ExitError, "9 valid")
 	first := storedTasks(t, f.data)[0]
 	expect(t, f.run(ctx, "task", "rm", first.Name), ExitOK)
 	got := f.run(ctx, "start", "--accept-mined")
@@ -478,7 +479,7 @@ func TestStartNeverMinesARemovedTaskAgain(t *testing.T) {
 	}
 }
 
-// Tasks the checks hold back do not count toward the 8, so mining goes on; what stays held back is listed with its
+// Tasks the checks hold back do not count toward the floor of 8, so mining goes on; what stays held back is listed with its
 // reason instead of suggesting the flag again.
 func TestStartHeldBackTasksDoNotCount(t *testing.T) {
 	t.Parallel()
@@ -507,7 +508,7 @@ func TestStartWithACorruptStateFile(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "start", "--accept-mined"), ExitError, "start-mined.json is unreadable", "cannot tell which tasks start mined")
 	plain := f.run(ctx, "start")
-	expect(t, plain, ExitError, "is unreadable and ignored", "8 valid")
+	expect(t, plain, ExitError, "is unreadable and ignored", "9 valid")
 }
 
 // tryTasks counts the project's tasks while another command runs; any failure counts as none.
@@ -621,7 +622,7 @@ func TestStartQuotesAnEarlierRaiseAndEarlierRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := terminalRun(f, ctx, strings.NewReader("n\n"), "start")
-	expect(t, got, ExitOK, "Budget for this run: $60.00 (the design's $42.00, raised earlier)", "spends up to $60.00. [y/N]",
+	expect(t, got, ExitOK, "Budget for this run: $60.00 (the design's $46.00, raised earlier)", "spends up to $60.00. [y/N]",
 		"Nothing was run in this command (the experiment has 1 run(s) from before)")
 	if strings.Contains(got.stdout, "nothing was spent") {
 		t.Errorf("claims nothing was spent:\n%s", got.stdout)

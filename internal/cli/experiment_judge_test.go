@@ -192,7 +192,7 @@ func TestExperimentJudgePausesAndResumes(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1", "--judge",
+	expect(t, f.run(ctx, "experiment", "new", "limit", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--concurrency", "1", "--judge",
 		"--judge-repeats", "2", "--budget", "40"), ExitOK)
 	writeFile(t, ctrl, "judge-limit", "")
 	paused := f.run(ctx, "experiment", "run", "limit")

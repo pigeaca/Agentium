@@ -110,6 +110,20 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 		return err
 	}
 	fmt.Fprintln(out, st.Note("Successes need a pass with the hidden tests; unfair (drifted), infrastructure and cancelled runs are not counted."))
+	if lock.Method == MethodSeq {
+		data, err := RunDataOfStored(runs)
+		if err != nil {
+			return err
+		}
+		status, _, err := SequentialStatus(lock, data)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "Looks (method %s): %s\n", MethodSeq, status.Describe())
+		for _, l := range status.Looks {
+			fmt.Fprintf(out, "  %s\n", DescribeLook(l, len(status.Planned)))
+		}
+	}
 	if unjudgedRuns > 0 {
 		resume := "agentium experiment run " + name
 		if stored.Status == store.StatusBudget { // the budget left no room to judge them: the same command as the stop's

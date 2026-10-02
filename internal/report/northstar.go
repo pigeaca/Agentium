@@ -117,7 +117,7 @@ func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
 			return nil, fmt.Errorf("run %s: %w", r.ID, err)
 		}
-		data = append(data, runData(r.Slot, rec))
+		data = append(data, experiment.RunDataOf(r.Slot, rec))
 		out.started = latest(out.started, r.Started)
 		out.finished = latest(out.finished, r.Finished)
 	}
@@ -134,14 +134,6 @@ func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (
 		}
 	}
 	return nil, nil
-}
-
-// runData is what the analysis reads of a run: the one mapping Build and the north star share, so the verdict counted
-// is the one the experiment's report shows.
-func runData(slot int, rec run.Record) experiment.RunData {
-	return experiment.RunData{Slot: slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
-		ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
-		OutputTokens: float64(rec.Metrics.OutputTokens)}
 }
 
 func latest(a, b time.Time) time.Time {

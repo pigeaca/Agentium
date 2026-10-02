@@ -25,12 +25,12 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 `agentium start` never writes to your repository and makes no paid run on its own. It skips steps already done, so run it again to resume:
 
 - registers the repository (`init`) and, if the project has no snapshot, saves the committed context as `baseline` (arm A);
-- mines and validates tasks until 8 are ready, the cost floor;
-- creates the experiment `quick-...` at the floor, 8 tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
-- prints the preview: runs, estimated cost, detectable effect, and what is missing;
+- mines and validates tasks until 16 are ready; when the history has no more candidates, 8 or more will do (the cost floor), with fewer looks;
+- creates the experiment `quick-...`, a cost experiment (method `seq-v1`, below) on those tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
+- prints the preview: the looks, the maximum and expected spend, and what is missing;
 - stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it). The run first calibrates each context that lacks a calibration (a short paid run, about $0.1 to $0.2, counted in the budget and shown in the preview).
 
-Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`), so a first `start` stops there. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
+Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`, or `agentium task rm NAME` for one you will not accept), so a first `start` stops there and lists them. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
 
 `start` and `experiment report` also show how long it took, and what was spent, to your first decisive verdict (improved, regressed or no loss; inconclusive does not count), from finished experiments only.
 
@@ -79,12 +79,24 @@ Mined tasks verify with your build tool's test command (`go test ./...`, `./mvnw
 ```sh
 agentium run calibrate --snapshot trimmed     # optional: short checks (sandbox, large outputs, context size, tools); experiment run does it for any arm that lacks one
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
-agentium experiment new lean --b trimmed      # an A/B: each task's own context against trimmed, on a sample of valid tasks
+agentium experiment new lean --b trimmed      # a cost A/B: each task's own context against trimmed, on up to 16 valid tasks (method seq-v1, below)
 agentium experiment plan lean                 # runs, estimated cost (calibrations included), detectable effects; what is missing
-agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
+agentium experiment run lean                  # calibrates what is not calibrated, locks it, then runs interleaved pairs in stages, a look after each, within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
+
+### How a cost experiment decides
+
+Cost experiments (`--goal cheaper`, the default) run method `seq-v1`, a group-sequential design: up to 16 tasks x 1 run per arm, in stages, with a look after 8, 12 and 16 tasks (one look after all of them with 8 to 11 tasks, two with 12 to 15).
+
+- **Looks.** A look comes once its stage's runs are settled, retries included, and analyses exactly the tasks of the stages so far. No run of the next stage starts before it. Each look's cost interval is wider than a fixed design's (99.84%, 98.84% and 96.88% at 8, 12 and 16 tasks): together they spend a two-sided 3.5%, O'Brien–Fleming-type, which keeps false differences at or under 5% in the simulations of the [statistics note](research/2026-10-02-wave3-statistics-note.md).
+- **Stops.** The experiment stops at the first look with a cost verdict (improved, regressed or equivalent), or for futility, when a verdict by the last look has become unlikely (below 10%); `experiment new --no-futility` turns futility stops off.
+- **Spend.** `experiment plan` shows each look's runs and spend, the maximum (every stage; the default budget covers it), and the expected spend if nothing changed and at a 20% cut.
+- **Stops between looks.** The budget, the usage limit or Ctrl-C keep the last look's verdict; `experiment run` resumes the stage, and its look comes once the stage is settled.
+- **Reading it.** The report says where the experiment stopped ("stopped at look 1 of 3") and lists each look with its interval. An early stop overstates the effect's size on average: the true change is likely smaller than the estimate.
+
+Success and time are exploratory in cost experiments. For success verdicts use `--goal better` with `--tier quick|confident` or `--task` and `--repeats` (method `phase1-v2`, one analysis at 95%). Experiments locked before keep the method they were locked under.
 
 ## Experiment templates
 
@@ -119,7 +131,7 @@ For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|
 **`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off. Put it after the subcommand: `task list --json`. `task --json list` is deliberately not recognized.
 - Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case. Lists are `[]`, never `null`, and every field is always present: one that can be unknown or not asked for is `null` (`solution_commit`, `unstated_requirements`, `passed`, `diff`, `patch`, the logs of `run show`).
 - Failure: `{"schema": 1, "command": "...", "error": {"message": "...", "code": 1}}`. `code` is the exit code. `message` is the command's own error sentence, for example `task "nope": not found`, or `agentium task edit: give NAME and at least one of ...` for a usage error; when the arguments are wrong in a way that has no sentence, `invalid arguments: run the command with -h for its usage`. The usage text and earlier warnings are never part of it.
-- A result that is bad rather than broken keeps its normal document and exit 1: an invalid or flaky task (`task validate`), `start` with too few tasks (`"status": "too_few_tasks"`).
+- A result that is bad rather than broken keeps its normal document and exit 1: an invalid or flaky task (`task validate`), `start` with too few tasks (`"status": "too_few_tasks"`) or with mined tasks waiting for your review (`"status": "awaiting_review"`).
 - **Unstable human text:** `log`, `status_summary`, `summary`, `message`, `warnings`, `notes`, `problems` and `readiness[].text` are for people. Their wording changes; do not parse it. Branch on the other fields, and on `status` values.
 - **`readiness[].status`** is one of `ok`, `missing` or `warning`, mapped from the labels the text shows, so a change of label does not change JSON.
 - No ANSI escape ever, whatever `NO_COLOR`, `FORCE_COLOR` or the terminal say. Documents name no absolute path (repository, data folder, records, Claude Code), no user name and no secret, as reports do; repository files appear as relative paths. In free text (messages, logs, warnings, notes) the data folder is shown as `<data>`, the repository as `<repo>` and the home folder as `~`, at whole path names only. The setup and verification logs of `run show --log` are Agentium's own output and are redacted the same way; content that is yours (diffs, patches, instructions, file names) is never rewritten.
@@ -130,12 +142,12 @@ For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|
 | Code | Meaning |
 |---|---|
 | 0 | Success, including nothing to do: no tasks, no candidates, no differences, or `start` stopping at its preview. `context lint` exits 0 when it finds problems. |
-| 1 | Runtime failure, or a bad result: an invalid or flaky task, `start` with too few tasks, `start --yes` that was not ready. |
+| 1 | Runtime failure, or a bad result: an invalid or flaky task, `start` with too few tasks or with tasks awaiting review, `start --yes` that was not ready. |
 | 2 | Usage error: bad flags or arguments. |
 
 **No prompts.** Agentium asks one question: `start`'s "Run it now?", and only when stdin and stdout are both terminals. With stdin from a pipe, a file or `/dev/null` it never reads stdin and stops at the preview; `start --json` never asks, even at a terminal. Only `--yes` spends money, and `start --json --yes` is refused (usage error) until `experiment run` has JSON.
 
-For `start`, read `"status"`: `preview` (everything is in place; `"run_command"` starts the experiment and spends money), `not_ready` (`"readiness"` lists what is missing, for example mined tasks that wait for a person's review), `too_few_tasks`, or `finished`. `"nothing_was_run"` is always true.
+For `start`, read `"status"`: `preview` (everything is in place; `"run_command"` starts the experiment and spends money), `not_ready` (`"readiness"` lists what is missing), `awaiting_review` (tasks start mined wait for a person's review before the experiment is made: `agentium task show NAME`, then `agentium task edit NAME --reviewed`), `too_few_tasks` (fewer than 8 valid tasks, and none waiting for a review), or `finished`. `"tasks_ready"` and `"tasks_awaiting_review"` count the tasks when `start` looked at them, and are `null` when the experiment already existed. `"nothing_was_run"` is always true.
 
 Planned (part 2): a committed `agentium.toml` that Agentium reads and never writes, for budgets and consent to spend. See the [plan](../.agents/plans/2026-10-02-headless.md).
 

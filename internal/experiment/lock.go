@@ -16,17 +16,24 @@ import (
 // floors. A lock records its method; a resume refuses an unknown one, and the analysis applies the lock's floors.
 //   - phase1-v1: the study's floors, 3 runs per task and arm for every metric.
 //   - phase1-v2: the cost floor counts tasks with one run in each arm (FloorsFor); it runs exactly as phase1-v1, so
-//     phase1-v1 experiments still resume, and keep their floors.
+//     phase1-v1 experiments still resume, and keep their floors. New success experiments (goal better) use it.
+//   - seq-v1: a group-sequential cost design (the wave-3 statistics note, §3): up to 16 tasks × 1 run per arm, run in
+//     stages, with a look after each (Sequential); it stops at the first look whose cost verdict is decisive, or for
+//     futility. New cost experiments (goal cheaper) use it.
 const (
-	MethodV1 = "phase1-v1"
-	MethodV2 = "phase1-v2"
+	MethodV1  = "phase1-v1"
+	MethodV2  = "phase1-v2"
+	MethodSeq = "seq-v1"
 )
 
-// MethodVersion is the method new experiments are locked under.
-const MethodVersion = MethodV2
+// MethodVersion is the method new cost experiments, the default and what start makes, are locked under. Its floors
+// are phase1-v2's.
+const MethodVersion = MethodSeq
 
 // Resumable reports whether an experiment locked under method runs exactly as this Agentium runs experiments.
-func Resumable(method string) bool { return method == MethodV1 || method == MethodV2 }
+func Resumable(method string) bool {
+	return method == MethodV1 || method == MethodV2 || method == MethodSeq
+}
 
 // MaxAttempts is how often a slot is tried when its runs fail for infrastructure reasons.
 const MaxAttempts = 3
@@ -51,6 +58,9 @@ type Lock struct {
 	// bind any local port and connect to localhost services. The report shows it.
 	LocalBinding  bool           `json:"local_binding,omitempty"`
 	BudgetChanges []BudgetChange `json:"budget_changes,omitempty"`
+	// Sequential is a seq-v1 lock's design: its looks, alpha, spending, nominal levels and futility setting. Absent
+	// from the other methods' locks, which read and encode as they did.
+	Sequential *Sequential `json:"sequential,omitempty"`
 }
 
 // LockedArm is an arm's context and the environment its runs must see.
@@ -118,7 +128,8 @@ type Slot struct {
 	Pair     int    `json:"pair"`
 	Task     string `json:"task"`
 	Arm      string `json:"arm"`
-	Repeat   int    `json:"repeat"` // from 1
+	Repeat   int    `json:"repeat"`          // from 1
+	Stage    int    `json:"stage,omitempty"` // seq-v1: the stage (from 1) whose look counts the slot; 0 otherwise
 }
 
 // Schedule orders the runs: repeat by repeat, so a stopped experiment still has every task at similar depth; within a
@@ -149,7 +160,13 @@ func Schedule(d Design) []Slot {
 func (l Lock) Check(cliVersion, signIn string) error {
 	switch {
 	case !Resumable(l.Method):
-		return fmt.Errorf("the experiment was locked under method %s; this Agentium runs %s and %s", l.Method, MethodV1, MethodV2)
+		return fmt.Errorf("the experiment was locked under method %s; this Agentium runs %s, %s and %s", l.Method, MethodV1, MethodV2, MethodSeq)
+	case l.Method == MethodSeq:
+		if err := l.checkSequential(); err != nil {
+			return err
+		}
+	}
+	switch {
 	case cliVersion != l.ClaudeCode:
 		return fmt.Errorf("Claude Code is %s now, but the experiment's runs used %s: install %s again to continue, or start a new experiment", cliVersion, l.ClaudeCode, l.ClaudeCode)
 	case signIn != l.SignIn:

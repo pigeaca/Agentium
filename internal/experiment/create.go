@@ -14,6 +14,7 @@ import (
 
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/snapshot"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -37,6 +38,8 @@ type NewOptions struct {
 	Judge                   bool
 	JudgeModel, JudgeEffort string
 	JudgeRepeats            int
+	// NoFutility turns off a cost experiment's futility stops (Design.NoFutility).
+	NoFutility bool
 
 	tier         Tier
 	profA, profB profile // model-ab: ProfileA and ProfileB, parsed
@@ -46,10 +49,24 @@ type NewOptions struct {
 type profile struct{ model, effort string }
 
 // Prepare checks the options before anything is read: the name, flag combinations, the tier, repeats and a seed (random
-// when 0). A mistake in them is a UsageError. It changes o.
+// when 0). A mistake in them is a UsageError. It changes o. A cost experiment (goal cheaper) is made under method
+// seq-v1 (NewMethod): one run per task and arm and up to 16 tasks, so it takes no tier and no other repeats.
 func (o *NewOptions) Prepare(name string) error {
 	if err := o.prepareProfiles(); err != nil {
 		return UsageError(err.Error())
+	}
+	cost := NewMethod(o.Goal) == MethodSeq
+	sequential := fmt.Sprintf("a cost experiment (--goal %s) runs method %s: up to %d tasks × 1 run per arm, with looks after %d, 12 and %d tasks",
+		GoalCheaper, MethodSeq, stats.SeqMaxTasks, stats.SeqFirstLook, stats.SeqMaxTasks)
+	switch {
+	case cost && o.Tier != "":
+		return UsageError("--tier sizes success experiments (--goal " + GoalBetter + "); " + sequential)
+	case cost && o.Repeats > 1:
+		return UsageError("--repeats is for success experiments (--goal " + GoalBetter + "); " + sequential)
+	case cost && len(o.Tasks) > stats.SeqMaxTasks:
+		return UsageError(fmt.Sprintf("%d tasks are too many: %s", len(o.Tasks), sequential))
+	case !cost && o.NoFutility:
+		return UsageError("--no-futility belongs to cost experiments (--goal " + GoalCheaper + ")")
 	}
 	switch {
 	case !snapshot.ValidName(name):
@@ -73,6 +90,9 @@ func (o *NewOptions) Prepare(name string) error {
 		if o.tier, found = TierByName(o.Tier); !found {
 			return UsageError(fmt.Sprintf("unknown tier %q (use quick or confident)", o.Tier))
 		}
+	}
+	if cost {
+		o.tier, o.Repeats = SeqTier(), 1
 	}
 	if o.Repeats == 0 {
 		o.Repeats = o.tier.Repeats
@@ -151,9 +171,11 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		armB.Model, armB.Effort, armB.RunBudgetUSD = o.profB.model, o.profB.effort, o.RunBudgetB
 		model, effort = armA.Model, armA.Effort
 	}
-	d := Design{Version: Design{Template: o.Template}.WantVersion(), Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
+	d := Design{Template: o.Template, Arms: []Arm{armA, armB}, Repeats: o.Repeats, Model: model, Effort: effort,
 		Goal: o.Goal, CostMargin: DefaultCostMargin, SuccessMargin: DefaultSuccessMargin, RunBudgetUSD: o.RunBudget,
-		BudgetUSD: o.Budget, Timeout: o.Timeout, VerifyTimeout: o.VerifyTimeout, Concurrency: o.Concurrency, Seed: o.Seed}
+		BudgetUSD: o.Budget, Timeout: o.Timeout, VerifyTimeout: o.VerifyTimeout, Concurrency: o.Concurrency, Seed: o.Seed,
+		Method: NewMethod(o.Goal), NoFutility: o.NoFutility}
+	d.Version = d.WantVersion()
 	if o.Judge {
 		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort, Repeats: o.JudgeRepeats}.WithDefaults()
 		d.Judge = &s
@@ -240,10 +262,16 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 	d := c.Design
 	fmt.Fprintf(out, "Created experiment %s: %s, %d task(s) × %d run(s) per arm = %d runs, budget $%.2f.\n", name,
 		DescribeArms(d), len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
+	if d.Sequential() {
+		fmt.Fprintf(out, "Method %s: %s.\n", MethodSeq, DescribeLooks(d))
+	}
 	if d.Judge != nil {
 		fmt.Fprintf(out, "The judge: %s, its verdicts a second opinion beside the tests.\n", DescribeJudge(*d.Judge))
 	}
-	if !c.Explicit && c.Eligible < c.Tier.Tasks {
+	switch {
+	case !c.Explicit && c.Eligible < c.Tier.Tasks && d.Sequential():
+		fmt.Fprintln(out, st.Note(fmt.Sprintf("note: a cost experiment takes up to %d tasks; only %d can be in it", c.Tier.Tasks, c.Eligible)))
+	case !c.Explicit && c.Eligible < c.Tier.Tasks:
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("note: the %s tier asks for %d tasks; only %d can be in it", c.Tier.Name, c.Tier.Tasks, c.Eligible)))
 	}
 	fmt.Fprintf(out, "Preview what it costs and can detect: %s\n", st.Command("agentium experiment plan "+name))

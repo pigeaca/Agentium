@@ -57,10 +57,11 @@ func (r Result) AgentUSD() float64 { return r.CostUSD - r.JudgeUSD }
 // folders must be denied to it before it starts.
 type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (Result, error)
 
-// Event reports progress: a run starting, finishing, or waiting to be retried, or the execution waiting for the usage
-// window to reset (Kind "wait": Until and Usage, the window's share used).
+// Event reports progress: a run starting, finishing, or waiting to be retried, the execution waiting for the usage
+// window to reset (Kind "wait": Until and Usage, the window's share used), or a seq-v1 look (Kind "look": Look, of
+// Looks planned).
 type Event struct {
-	Kind     string // "start", "finish", "retry" or "wait"
+	Kind     string // "start", "finish", "retry", "wait" or "look"
 	Slot     Slot
 	Attempt  int
 	Result   Result
@@ -69,6 +70,8 @@ type Event struct {
 	RetryIn  time.Duration
 	Until    time.Time
 	Usage    float64
+	Look     *Look
+	Looks    int
 }
 
 // Plan is an execution's input.
@@ -86,6 +89,10 @@ type Plan struct {
 	Backoff     func(attempt int) time.Duration // before retrying a slot whose attempt failed for infrastructure
 	Progress    func(Event)                     // optional
 	Usage       *UsageGate                      // optional: pause before the subscription's usage limit
+	// Until, when above 0, ends the schedule there for this execution: a seq-v1 stage's end. No slot at or after it
+	// starts, and the execution is done once every slot before it is settled or out of attempts, with no run in
+	// flight: the stage barrier. It must fall between pairs.
+	Until int
 }
 
 // Summary is how an execution ended.
@@ -146,6 +153,13 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	if p.Concurrency < 1 || p.MaxAttempts < 1 {
 		return Summary{}, errors.New("execute: concurrency and attempts must be positive")
+	}
+	limit := len(p.Schedule) // the slots this execution may run: those before it
+	if p.Until > 0 {
+		if p.Until > len(p.Schedule) || p.Until < len(p.Schedule) && p.Schedule[p.Until].Pair == p.Schedule[p.Until-1].Pair {
+			return Summary{}, fmt.Errorf("execute: the schedule cannot end at slot %d", p.Until)
+		}
+		limit = p.Until
 	}
 	state := make([]slotState, len(p.Schedule))
 	partner := make([]int, len(p.Schedule))
@@ -215,8 +229,8 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		blocked, usageBlocked := false, false
 		var wake time.Time
 		if stopNote == "" && pauseNote == "" && runErr == nil && ctx.Err() == nil {
-			low := len(state)
-			for i := range state {
+			low := limit
+			for i := range limit {
 				if !state[i].finished() {
 					low = i
 					break
@@ -231,7 +245,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 					held++
 				}
 			}
-			for pos := low; pos < len(state) && pos < low+Window(p.Concurrency) && running < p.Concurrency; pos++ {
+			for pos := low; pos < limit && pos < low+Window(p.Concurrency) && running < p.Concurrency; pos++ {
 				s := &state[pos]
 				if s.finished() || s.running {
 					continue
@@ -289,7 +303,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		}
 		if running == 0 {
 			sum := Summary{SpentUSD: spent}
-			for _, s := range state {
+			for _, s := range state[:limit] {
 				switch {
 				case s.settled:
 					sum.Settled++
