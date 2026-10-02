@@ -117,7 +117,7 @@ func TestAgentEnvPerTool(t *testing.T) {
 	}
 	gradle := env(t, AgentEnv(Select([]string{"gradle"}), ctx))
 	for name, want := range map[string]string{"JAVA_HOME": "/host/jdk", "GRADLE_USER_HOME": "/data/workspaces/r1/go-build/gradle",
-		"GRADLE_RO_DEP_CACHE": "/data/deps/1/gradle/caches"} {
+		"GRADLE_RO_DEP_CACHE": "/data/deps/1/gradle-ro"} {
 		if gradle[name] != want {
 			t.Errorf("gradle: %s = %q, want %q", name, gradle[name], want)
 		}
@@ -336,7 +336,7 @@ func TestPrepareGradleRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	props, _ := os.ReadFile(filepath.Join(cache, "gradle", "gradle.properties"))
-	if want := gradleHomeProps + "org.gradle.java.installations.paths=" + filepath.Join(deps, "gradle", "jdks") + "\norg.gradle.java.installations.auto-download=false\n"; string(props) != want {
+	if want := gradleHomeProps + "org.gradle.java.installations.paths=" + filepath.Join(deps, "gradle-jdks") + "\norg.gradle.java.installations.auto-download=false\n"; string(props) != want {
 		t.Errorf("gradle.properties = %q, want %q", props, want)
 	}
 	if init, _ := os.ReadFile(filepath.Join(cache, "gradle", "init.d", "agentium-offline.gradle")); !strings.Contains(string(init), "startParameter.offline = true") {
@@ -717,20 +717,183 @@ func TestBuildCachesAreOffAndDenied(t *testing.T) {
 			t.Errorf("a Maven warm-up with the build cache extension on: %q", step.Command)
 		}
 	}
-	for _, d := range []string{"build-cache-2", "jars-9", "modules-2"} {
-		if err := os.MkdirAll(filepath.Join(deps, "gradle", "caches", d), 0o755); err != nil {
+	if denied := DepsDenied(deps); !slices.Equal(denied, []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}) {
+		t.Errorf("denied %q: the whole Gradle home and the build cache", denied)
+	}
+}
+
+// What a warm-up writes to the deps folder's Gradle home is denied to agents as a whole (a caches/<version> folder made
+// by a warm-up after an agent started included), and what they read lies outside it: GRADLE_RO_DEP_CACHE names a folder
+// holding only modules-2, and the toolchain JDKs have a folder of their own. Warm-ups write both through links in
+// the home.
+func TestGradleDepsLayout(t *testing.T) {
+	deps, run := t.TempDir(), t.TempDir()
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	guh := filepath.Join(deps, "gradle")
+	for link, want := range map[string]string{filepath.Join(guh, "caches", "modules-2"): "../../gradle-ro/modules-2", filepath.Join(guh, "jdks"): "../gradle-jdks"} {
+		if got, err := os.Readlink(link); err != nil || got != filepath.FromSlash(want) {
+			t.Errorf("%s -> %q (%v), want %s", link, got, err, want)
+		}
+	}
+	// A warm-up writes through the links; a later one, with another Gradle version, adds its own caches.
+	for _, f := range []string{filepath.Join("caches", "modules-2", "files-2.1", "a.jar"), filepath.Join("jdks", "jdk-21", "release"),
+		filepath.Join("caches", "9.9", "javaCompile", "classAnalysis.bin")} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(guh, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(guh, f), []byte("x"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	denied := DepsDenied(deps)
-	for _, want := range []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "gradle", "caches", "build-cache-2"), filepath.Join(deps, "build-cache"),
-		filepath.Join(deps, "gradle", "caches", "jars-9")} { // everything but modules-2, which GRADLE_RO_DEP_CACHE reads
-		if !slices.Contains(denied, want) {
-			t.Errorf("%s is not denied: %q", want, denied)
+	if entries, _ := os.ReadDir(filepath.Join(deps, gradleRO)); len(entries) != 1 || entries[0].Name() != "modules-2" || !entries[0].IsDir() {
+		t.Errorf("the read-only cache holds %v, want only the modules-2 folder", entries)
+	}
+	for _, f := range []string{filepath.Join(gradleRO, "modules-2", "files-2.1", "a.jar"), filepath.Join(gradleJDKs, "jdk-21", "release")} {
+		if _, err := os.Stat(filepath.Join(deps, f)); err != nil {
+			t.Errorf("a warm-up's file is not where agents read it: %v", err)
 		}
 	}
-	if slices.Contains(denied, filepath.Join(deps, "gradle", "caches")) || slices.Contains(denied, filepath.Join(deps, "gradle", "caches", "modules-2")) {
-		t.Error("the dependency cache itself is denied")
+	agent := env(t, AgentEnv(Select([]string{"gradle"}), AgentContext{Deps: deps, BuildCache: run}))
+	if agent["GRADLE_RO_DEP_CACHE"] != filepath.Join(deps, gradleRO) {
+		t.Errorf("GRADLE_RO_DEP_CACHE = %q", agent["GRADLE_RO_DEP_CACHE"])
+	}
+	if err := PrepareRun(context.Background(), Select([]string{"gradle"}), deps, run); err != nil {
+		t.Fatal(err)
+	}
+	props, _ := os.ReadFile(filepath.Join(run, "gradle", "gradle.properties"))
+	if !strings.Contains(string(props), "org.gradle.java.installations.paths="+filepath.Join(deps, gradleJDKs)+"\n") {
+		t.Errorf("the run's JDKs: %q", props)
+	}
+	// Agents read only those two folders: neither is under a denied path, and everything in the Gradle home is.
+	denied := DepsDenied(deps)
+	under := func(path string) bool {
+		return slices.ContainsFunc(denied, func(d string) bool { return path == d || strings.HasPrefix(path, d+string(filepath.Separator)) })
+	}
+	for _, f := range []string{agent["GRADLE_RO_DEP_CACHE"], filepath.Join(deps, gradleJDKs)} {
+		if under(f) {
+			t.Errorf("%s is denied", f)
+		}
+	}
+	err := filepath.WalkDir(deps, func(path string, d os.DirEntry, err error) error {
+		rel, _ := filepath.Rel(deps, path)
+		if top := strings.Split(rel, string(filepath.Separator))[0]; top != "." && top != gradleRO && top != gradleJDKs && !under(path) {
+			t.Errorf("%s is readable", path)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Laying out again, as each warm-up does, changes nothing.
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(guh, "caches", "modules-2", "files-2.1", "a.jar")); err != nil {
+		t.Errorf("laid out again: %v", err)
+	}
+}
+
+// A deps folder from before the layout: its modules-2 and jdks folders move out in one rename each, with their files,
+// and the links take their place. A crash after a rename is completed by the next call; an unexpected state is refused.
+func TestGradleDepsLayoutMovesAnEarlierOne(t *testing.T) {
+	deps := t.TempDir()
+	guh := filepath.Join(deps, "gradle")
+	for _, f := range []string{filepath.Join("caches", "modules-2", "files-2.1", "a.jar"), filepath.Join("jdks", "jdk-21", "release")} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(guh, f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(guh, f), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(gradleRO, "modules-2", "files-2.1", "a.jar"), filepath.Join(gradleJDKs, "jdk-21", "release")} {
+		if _, err := os.Stat(filepath.Join(deps, f)); err != nil {
+			t.Errorf("not moved: %v", err)
+		}
+	}
+	if info, err := os.Lstat(filepath.Join(guh, "caches", "modules-2")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("no link in modules-2's place: %v %v", info, err)
+	}
+
+	// A crash between the rename and the link; then a link to somewhere else: both are made right.
+	link := filepath.Join(guh, "caches", "modules-2")
+	os.Remove(link)
+	if err := linkOutside(link, filepath.Join(deps, gradleRO, "modules-2")); err != nil {
+		t.Fatal(err)
+	}
+	os.Remove(link)
+	os.Symlink(filepath.Join(deps, "elsewhere"), link)
+	if err := linkOutside(link, filepath.Join(deps, gradleRO, "modules-2")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.Readlink(link); got != filepath.Join("..", "..", gradleRO, "modules-2") {
+		t.Errorf("link %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(link, "files-2.1", "a.jar")); err != nil {
+		t.Errorf("files lost: %v", err)
+	}
+
+	// Both a folder in the home and one outside: which is current is unknown, so nothing changes.
+	os.Remove(link)
+	if err := os.MkdirAll(filepath.Join(link, "files-2.1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err == nil || !strings.Contains(err.Error(), "both folders") {
+		t.Errorf("both folders: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(deps, gradleRO, "modules-2", "files-2.1", "a.jar")); err != nil {
+		t.Errorf("the outside folder changed: %v", err)
+	}
+	// Something other than a folder outside (a link back into the home, say) is refused, and so is a file in the home.
+	other := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(other, "gradle", "caches"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Symlink(filepath.Join(other, "gradle"), filepath.Join(other, "gradle-jdks"))
+	if err := linkOutside(filepath.Join(other, "gradle", "jdks"), filepath.Join(other, "gradle-jdks")); err == nil {
+		t.Error("an outside folder that is a link is accepted")
+	}
+	os.WriteFile(filepath.Join(other, "gradle", "caches", "modules-2"), nil, 0o644)
+	if err := linkOutside(filepath.Join(other, "gradle", "caches", "modules-2"), filepath.Join(other, gradleRO, "modules-2")); err == nil {
+		t.Error("a file in the link's place is accepted")
+	}
+}
+
+// Agents read the read-only cache while later warm-ups lay the folder out again: modules-2 never goes missing.
+func TestGradleDepsLayoutKeepsModulesForReaders(t *testing.T) {
+	deps := t.TempDir()
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	ro := filepath.Join(deps, gradleRO, "modules-2")
+	stop, missing := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(missing)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := os.Stat(ro); err != nil {
+				missing <- err
+				return
+			}
+		}
+	}()
+	for range 200 {
+		if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	if err := <-missing; err != nil {
+		t.Errorf("a reader saw no modules-2: %v", err)
 	}
 }
 

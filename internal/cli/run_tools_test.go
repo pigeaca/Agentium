@@ -21,7 +21,7 @@ func TestRunsFollowTheRepositorysBuildTool(t *testing.T) {
 		calls                         int
 		binding                       bool
 	}{
-		{tool: "gradle", marker: "build.gradle", agent: []string{"GRADLE_USER_HOME=<ws>/go-build/gradle", "GRADLE_RO_DEP_CACHE=<deps>/gradle/caches"},
+		{tool: "gradle", marker: "build.gradle", agent: []string{"GRADLE_USER_HOME=<ws>/go-build/gradle", "GRADLE_RO_DEP_CACHE=<deps>/gradle-ro"},
 			warmVar: "GRADLE_USER_HOME", warmWant: "<deps>/gradle", verifyWant: "<cache>/gradle", calls: 3, binding: true},
 		{tool: "mvn", marker: "pom.xml", agent: []string{"MAVEN_USER_HOME=<deps>/mvnw-home",
 			"MAVEN_ARGS=-o -Dmaven.repo.local=<ws>/go-build/m2 -Dmaven.repo.local.tail=<deps>/m2 -Dmaven.build.cache.enabled=false"},

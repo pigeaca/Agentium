@@ -21,7 +21,9 @@
 // Dependencies offline (Cargo, Maven and Gradle; the recipes were proved in real sessions, see the Java and Rust plan):
 // the agent's sandbox has no network and writes only its checkout and its run's own build cache. Dependencies come
 // from a deps folder in the data folder (home.Layout.Deps) that agents may read and not write. Only a run's setup
-// writes it, before any hidden test exists in a checkout, so it never holds compiled hidden tests (Profile.Warm).
+// writes it, in a checkout of the task's base, where its own hidden tests do not exist (Profile.Warm). A later task's
+// base does hold earlier tasks' hidden tests, though, as ordinary tests, and a warm-up compiles them: what a build tool
+// records of its compiles in the deps folder (Gradle's caches) is denied to agents (DepsDenied).
 // Each tool keeps its own subfolder of the run cache; Go's cache stays at its root.
 //
 // The golden test in internal/run (TestGoProfileGolden) pins a Go project's behavior.
@@ -87,8 +89,9 @@ type Profile struct {
 	// WarmRecipe is whatever else shapes a warm-up besides its steps (the scripts PrepareDeps writes). With the steps
 	// it makes WarmVersion, so changing the recipe re-warms bases that earlier recipes stamped as warmed.
 	WarmRecipe string
-	// PrepareDeps makes the deps folder's own settings before a warm-up writes it (Gradle: no cache cleanup, which
-	// would delete files under agents that read them).
+	// PrepareDeps makes the deps folder's own settings and layout before a warm-up writes it, under the warm-up lock
+	// (Gradle: no cache cleanup, which would delete files under agents that read them, and what agents read kept
+	// outside the Gradle home they are denied).
 	PrepareDeps func(deps string) error
 	// PrepareRun makes the run's own folders for the tool (inside buildCache) before the agent starts: the agent
 	// cannot write deps, so what must be writable is copied or created here.
@@ -381,20 +384,15 @@ func CheckConfigs(environ []string, home string, roots []string) error {
 	return err
 }
 
-// DepsDenied are the folders under deps agents may not read: build caches, which hold compiled classes (a later task's
-// base holds earlier tasks' reference code and hidden tests), and everything else in Gradle's caches folder but
-// modules-2. The warm-ups run with every build cache off, so these should be empty or absent: this is the second line.
+// DepsDenied are the folders under deps agents may not read:
+//   - the deps folder's whole Gradle home: its caches record what warm-ups compiled in each base, whose later tasks'
+//     hidden tests are there (javaCompile/classAnalysis.bin names their classes), and a warm-up running another Gradle
+//     version adds a caches/<version> folder at any time, while agents of other runs work. So nothing in it is listed:
+//     it is denied whole, and what agents need of it lives outside it (gradleShared: gradleRO, which
+//     GRADLE_RO_DEP_CACHE reads and holds only modules-2, and gradleJDKs);
+//   - build-cache, a build cache's folder: warm-ups run with every build cache off, so it should not exist.
 func DepsDenied(deps string) []string {
-	paths := []string{filepath.Join(deps, "gradle", "caches", "build-cache-1"), filepath.Join(deps, "build-cache")}
-	// GRADLE_RO_DEP_CACHE reads only caches/modules-2: whatever else a Gradle home keeps there (transforms, generated
-	// jars, build caches) is denied, as far as it exists when the run starts.
-	found, _ := filepath.Glob(filepath.Join(deps, "gradle", "caches", "*"))
-	for _, f := range found {
-		if filepath.Base(f) != "modules-2" {
-			paths = append(paths, f)
-		}
-	}
-	return paths
+	return []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}
 }
 
 // EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.
