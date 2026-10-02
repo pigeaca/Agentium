@@ -258,6 +258,16 @@ func TestRecover(t *testing.T) {
 	startFileFor("r7", true, deadGroup, filepath.Join(layout.Workspaces, "r7"), &Record{ID: "r7", Task: "fix", Arm: "A", Outcome: "ok", Passed: &passed})
 	write(filepath.Join(layout.Workspaces, "r7", "repo", "a.txt"), "")
 	startFileFor("r8", false, 0, filepath.Join(layout.Workspaces, "r8"), &Record{ID: "r8"})
+	// Grade folders (a cache clone, a temp root, a profile): r3's, with what a hostile grade left to resist removal (a
+	// folder without permissions), r7's, and the stored r4's, which a failed removal left.
+	for _, id := range []string{"r3", "r7", "r4"} {
+		write(filepath.Join(layout.Records, id, gradingFolder, "cache", "locked", "entry"), "compiled hidden test")
+		write(filepath.Join(layout.Records, id, gradingFolder, "profile.sb"), "(version 1)")
+		if err := os.Chmod(filepath.Join(layout.Records, id, gradingFolder, "cache", "locked"), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(layout.Records, "r4", "stream.jsonl"), "")
 	stored := func(id string) (bool, error) { return id == "r4", nil }
 	// Temp roots: r3's (an older start file reads the same: the root follows from the workspace's name), r7's, and the
 	// stored r4's, which is not touched.
@@ -281,12 +291,13 @@ func TestRecover(t *testing.T) {
 	}
 	for _, gone := range []string{filepath.Join(layout.Records, "r1"), filepath.Join(layout.Records, "r2"), filepath.Join(layout.Workspaces, "r2"),
 		filepath.Join(layout.Workspaces, "e1-s4-t1"), filepath.Join(layout.Records, "r3", "verify"), filepath.Join(layout.Workspaces, "r7"),
-		filepath.Join(layout.Records, "r8"), layout.RunTemp("e1-s4-t1"), layout.RunTemp("r7")} {
+		filepath.Join(layout.Records, "r8"), layout.RunTemp("e1-s4-t1"), layout.RunTemp("r7"), filepath.Join(layout.Records, "r3", gradingFolder),
+		filepath.Join(layout.Records, "r7", gradingFolder), filepath.Join(layout.Records, "r4", gradingFolder)} {
 		if _, err := os.Stat(gone); err == nil {
 			t.Errorf("%s was left behind", gone)
 		}
 	}
-	for _, kept := range []string{filepath.Join(layout.Records, "r3", "stream.jsonl"), filepath.Join(layout.Records, "r4"), layout.RunTemp("r4")} {
+	for _, kept := range []string{filepath.Join(layout.Records, "r3", "stream.jsonl"), filepath.Join(layout.Records, "r4", "stream.jsonl"), layout.RunTemp("r4")} {
 		if _, err := os.Stat(kept); err != nil {
 			t.Errorf("%s: %v", kept, err)
 		}

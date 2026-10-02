@@ -145,7 +145,8 @@ func (e *AliveError) runsText() string {
 //   - a run whose current command's process group (setup, the agent, verification) still exists is left alone and
 //     reported in an *AliveError, along with the runs that were recovered.
 //
-// The workspaces, temp roots and grading copies of recovered runs are removed. A run's temp root is found from its
+// The workspaces, temp roots, grading copies and grade folders (gradingFolder: a grade's cache clone) of recovered runs
+// are removed, and a stored run's leftover grade folder too. A run's temp root is found from its
 // workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
 //
 // A stored run's records keep nothing to recover, but a pair's comparison (Env.JudgePair) that Agentium died in leaves
@@ -174,6 +175,10 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		if known {
 			if err := os.RemoveAll(filepath.Join(layout.Records, e.Name(), pairJudgeFolder)); err != nil {
 				return orphans, fmt.Errorf("remove the pair judge folder of %s: %w", e.Name(), err)
+			}
+			// A grade's folder a failed removal left (removeTree reports it, the run is stored anyway).
+			if err := removeTree(filepath.Join(layout.Records, e.Name(), gradingFolder)); err != nil {
+				return orphans, fmt.Errorf("remove the grade's folder of %s: %w", e.Name(), err)
 			}
 			continue
 		}
@@ -233,8 +238,13 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		if err := removeRunTemp(layout.RunTemp(filepath.Base(s.Workspace))); err != nil {
 			return orphans, fmt.Errorf("run %s: %w", e.Name(), err)
 		}
-		if err := os.RemoveAll(filepath.Join(dir, "verify")); err != nil {
+		// The grading copy and the grade's own folder (its cache clone, temp root and profile): what a grade wrote there
+		// may resist a plain removal (removeTree).
+		if err := removeTree(filepath.Join(dir, "verify")); err != nil {
 			return orphans, fmt.Errorf("remove the grading copy of %s: %w", e.Name(), err)
+		}
+		if err := removeTree(filepath.Join(dir, gradingFolder)); err != nil {
+			return orphans, fmt.Errorf("remove the grade's folder of %s: %w", e.Name(), err)
 		}
 		if s.Finished && s.Record.Outcome != "" {
 			// Its judge may have been cut short: the judge's folder (a config folder with the sign-in, for an API key or
@@ -372,8 +382,8 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 		}
 		return nil, "", nil
 	}
-	for _, sub := range []string{"verify", "judge", pairJudgeFolder} { // hidden tests; the sign-in config folders
-		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+	for _, sub := range []string{"verify", gradingFolder, "judge", pairJudgeFolder} { // hidden tests; the sign-in config folders
+		if err := removeTree(filepath.Join(dir, sub)); err != nil {
 			return nil, "", fmt.Errorf("remove the %s folder of %s: %w", sub, id, err)
 		}
 	}
