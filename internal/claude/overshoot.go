@@ -38,7 +38,8 @@ func CapOvershootUSD(capUSD float64, model string) float64 {
 	return max(CapOvershootShare*capUSD, CapOvershootFloorUSD(model))
 }
 
-// Overshoot is how far a run Claude Code stopped at its cost cap went past it, against the allowance the budget held.
+// Overshoot is how far a run went past its cost cap (stopped there, or finished on the turn that crossed it), against
+// the allowance the budget held.
 type Overshoot struct {
 	CapUSD       float64 `json:"cap_usd"`
 	OverUSD      float64 `json:"over_usd"` // the reported cost less the cap; negative when it stopped below it
@@ -48,10 +49,11 @@ type Overshoot struct {
 // Exceeded reports whether the run passed its cap by more than the allowance: spending may then pass a budget.
 func (o Overshoot) Exceeded() bool { return o.OverUSD > o.AllowanceUSD+1e-9 }
 
-// CapOvershoot is a budget-capped run's Overshoot (m is its metrics, costUSD its reported cost), or nil for a run
-// that did not stop at its cost cap.
+// CapOvershoot is the Overshoot of a run that Claude Code stopped at its cost cap, or that went past the cap whatever
+// its result (one that finished on the turn that crossed it), with m its metrics and costUSD its reported cost; nil for
+// any other run.
 func CapOvershoot(m Metrics, costUSD, capUSD float64, model string) *Overshoot {
-	if m.Result != "error_max_budget_usd" || capUSD <= 0 {
+	if capUSD <= 0 || m.Result != "error_max_budget_usd" && costUSD <= capUSD {
 		return nil
 	}
 	return &Overshoot{CapUSD: capUSD, OverUSD: costUSD - capUSD, AllowanceUSD: CapOvershootUSD(capUSD, model)}

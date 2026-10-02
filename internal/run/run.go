@@ -173,8 +173,9 @@ type Record struct {
 	// metric; this is a counterfactual beside it, not spend. Nil when it cannot be computed and in records made before
 	// it existed: absent, never zero.
 	IsolatedCostUSD *float64 `json:"isolated_cost_usd,omitempty"`
-	// Overshoot is how far a run Claude Code stopped at its cost cap went past it, against the allowance budgets hold
-	// for that (claude.CapOvershoot); nil for any other run, and for runs recorded before Agentium kept it.
+	// Overshoot is how far a run went past its cost cap (Claude Code stopped it there, or it finished on the turn that
+	// crossed it), against the allowance budgets hold for that (claude.CapOvershoot); nil for any other run, and for
+	// runs recorded before Agentium kept it.
 	Overshoot *claude.Overshoot `json:"overshoot,omitempty"`
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
 	// and is cancelled) or RecoveredFinished (it had finished).

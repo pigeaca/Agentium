@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -121,6 +122,29 @@ func TestSummaryPartReadsDirectionAndSize(t *testing.T) {
 	} {
 		if got, phrase := summaryPart(c.res); got != c.want || phrase != c.phrase {
 			t.Errorf("summaryPart(%s %s) = %q, %v; want %q, %v", c.res.Metric, c.res.Verdict, got, phrase, c.want, c.phrase)
+		}
+	}
+}
+
+// "Improved (small)" and "no loss" favour arm B as "improved" does: runs cut short in B put the caveat in the cost
+// headline, and a short one in the model-ab summary; in arm A they do not.
+func TestCaveatOnEveryCostVerdictFavouringB(t *testing.T) {
+	t.Parallel()
+	for _, verdict := range []string{stats.ImprovedSmall, stats.NoLoss} {
+		res := experiment.MetricResult{Metric: experiment.MetricCost, Role: experiment.RolePrimary, Ratio: true, Tasks: 8, Verdict: verdict}
+		res.Boot95.Estimate, res.T95.Estimate = 0.95, 0.95
+		res.Boot95.Low, res.T95.Low, res.Boot95.High, res.T95.High = 0.92, 0.92, 0.98, 0.98
+		for cutShort, want := range map[string]bool{"B": true, "A": false} {
+			rep := Report{Arms: []Arm{{Name: "A", Profile: "claude-opus-5-5"}, {Name: "B", Profile: "claude-sonnet-5-5"}},
+				Analysis: experiment.Analysis{Results: []experiment.MetricResult{res}}}
+			rep.Lock.Design = experiment.Design{Template: experiment.TemplateModelAB, CostMargin: 0.1, SuccessMargin: 0.15}
+			rep.Arms[map[string]int{"A": 0, "B": 1}[cutShort]].Capped = 1
+			_, _, headline := rep.headlineParts(res)
+			summary := summarize(rep)
+			if strings.Contains(headline, "caveat: runs cut short at their cap or the timeout, 1 in arm B") != want ||
+				strings.Contains(summary, "(caveat: runs cut short favour it)") != want {
+				t.Errorf("%s, cut short in %s: headline %q, summary %q; caveat wanted %v", verdict, cutShort, headline, summary, want)
+			}
 		}
 	}
 }

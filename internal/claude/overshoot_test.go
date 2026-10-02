@@ -26,7 +26,8 @@ func TestCapOvershootScalesWithTheModel(t *testing.T) {
 	}
 }
 
-// Only a run stopped at its cost cap gets an Overshoot, which says whether it passed the allowance.
+// A run stopped at its cost cap, or past it whatever its result, gets an Overshoot, which says whether it passed the
+// allowance.
 func TestCapOvershootRecord(t *testing.T) {
 	t.Parallel()
 	o := CapOvershoot(Metrics{Result: "error_max_budget_usd"}, 0.507, 0.5, "claude-sonnet-5-5")
@@ -37,8 +38,15 @@ func TestCapOvershootRecord(t *testing.T) {
 		t.Errorf("$0.40 past a $0.50 cap: %+v", o)
 	}
 	for _, m := range []Metrics{{Result: "success"}, {Result: "error_max_turns"}} {
-		if CapOvershoot(m, 0.9, 0.5, "claude-sonnet-5-5") != nil {
-			t.Errorf("%s has no overshoot", m.Result)
+		if CapOvershoot(m, 0.45, 0.5, "claude-sonnet-5-5") != nil {
+			t.Errorf("%s within its cap has no overshoot", m.Result)
 		}
+	}
+	// A run that finished on the turn that crossed its cap went past it too.
+	if o := CapOvershoot(Metrics{Result: "success"}, 0.9, 0.5, "claude-sonnet-5-5"); o == nil || math.Abs(o.OverUSD-0.4) > 1e-9 || !o.Exceeded() {
+		t.Errorf("a success past its cap: %+v", o)
+	}
+	if o := CapOvershoot(Metrics{Result: "success"}, 0.55, 0.5, "claude-sonnet-5-5"); o == nil || o.Exceeded() {
+		t.Errorf("a success just past its cap: %+v", o)
 	}
 }

@@ -688,15 +688,16 @@ func overshootNote(runs []Run) string {
 		"$%.2f cap, against a $%.2f allowance), so the spending may have passed the budget by the difference.", n, worst.OverUSD, worst.CapUSD, worst.AllowanceUSD)
 }
 
-// censoredCaveat is the headline's caveat on a cost verdict that runs cut short favour: "improved" favours arm B (it
-// looks cheaper), "regressed" arm A, and "equivalent" either (a cut-off cost narrows a difference). "" otherwise.
+// censoredCaveat is the headline's caveat on a cost verdict that runs cut short favour: "improved", "improved (small)"
+// and "no loss" favour arm B (it looks cheaper), "regressed" arm A, and "equivalent" either (a cut-off cost narrows a
+// difference). "" otherwise.
 func (r Report) censoredCaveat(res experiment.MetricResult) string {
 	if res.Metric != experiment.MetricCost || len(r.Arms) != 2 {
 		return ""
 	}
 	var favoured []Arm
 	switch res.Verdict {
-	case stats.Improved:
+	case stats.Improved, stats.ImprovedSmall, stats.NoLoss:
 		favoured = r.Arms[1:]
 	case stats.Regressed:
 		favoured = r.Arms[:1]

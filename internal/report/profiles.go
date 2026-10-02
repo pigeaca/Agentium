@@ -77,7 +77,7 @@ func (r Report) headline(res experiment.MetricResult) string {
 
 // summarize says a model-ab experiment's verdicts in one sentence, for example "B (claude-sonnet-5-5) costs 48% less;
 // success: exploratory." A ratio metric with a verdict states its direction and size; any other result gives its
-// verdict word.
+// verdict word. A cost verdict that runs cut short favour carries a short caveat (Report.censoredCaveat).
 func summarize(r Report) string {
 	if !r.Lock.Design.PerArmProfiles() || len(r.Arms) != 2 {
 		return ""
@@ -87,7 +87,11 @@ func summarize(r Report) string {
 		if res.Role == experiment.RoleSecondary {
 			continue
 		}
-		if part, phrase := summaryPart(res); phrase {
+		part, phrase := summaryPart(res)
+		if res.Tasks >= 2 && r.censoredCaveat(res) != "" {
+			part += " (caveat: runs cut short favour it)"
+		}
+		if phrase {
 			phrases = append(phrases, part)
 		} else {
 			verdicts = append(verdicts, part)
