@@ -48,7 +48,7 @@ Shape:
 | `internal/report` | An experiment's report: verdicts in words, metrics with both intervals, noise, context, its use and costs, behavior, the judge, per-task results and notes, for a terminal, Markdown or JSON (no personal names or paths); `Load` reads the store; the north star (time and spend to the first decisive verdict) |
 | `internal/pricing` | Anthropic's dated list prices per model, for cost estimates and transcripts without Claude Code's cost |
 | `internal/run` | One run (and calibration): a workspace prepared as the arm, Claude Code denied everything else, hidden grading, behavior flags, context use, redacted records; its spend (`Spend`: agent and judge costs, one total); a start file recovering dead runs; its temp root; folders for overlapping runs |
-| `scripts/harness.py` | Standard-library entrypoint: checks (docs, harness, Go, vulnerabilities), hooks, worktrees, metrics |
+| `scripts/harness.py` | Standard-library entrypoint: checks, hooks, worktrees, metrics, PR merges ([harness](../docs/harness.md)) |
 | `.claude/agents`, `.claude/skills` | Thin Claude adapters over `.agents/roles` and `.agents/skills` |
 | `.githooks/pre-commit` | Shared pre-commit guard |
 | `.github/` | CI, the PR template, issue forms and community files (contributing, security, conduct) |

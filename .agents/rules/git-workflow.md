@@ -4,7 +4,7 @@
 
 Within the assigned task, agents may inspect and fetch, create task branches and worktrees, stage owned changes, commit, push task branches to the repository's existing remote, and create or update a PR. No repeated permission request is needed. User instructions such as "local only", "do not commit" or "leave on this branch" override the relevant steps. Tool/sandbox permissions and repository branch protection still apply.
 
-**Done means a PR, not a local merge.** A task that changes files is complete when its commits are pushed, a PR against the remote default branch is open, the required CI checks pass (or each failure is explained as unrelated and pre-existing), and the review below is recorded. The user merges the PR. Do not report uncommitted, unpushed or red work as complete, and do not stop at implementation or merely offer to commit.
+**Done means a PR, not a local merge.** A task that changes files is complete when its commits are pushed, a PR against the remote default branch is open, the required CI checks pass (or each failure is explained as unrelated and pre-existing), and the review below is recorded. The user merges the PR, with one [exception](#merge-authorization). Do not report uncommitted, unpushed or red work as complete, and do not stop at implementation or merely offer to commit.
 
 Merge into the local default branch only when publishing is unavailable (no remote, no access, or a failed push) or the user asks for local-only work. In that case, merge non-fast-forward from a clean, idle checkout and report publication as blocked.
 
@@ -40,7 +40,11 @@ Rebase is allowed on an unpublished, exclusively owned branch. Coordinate shared
 
 Sync the local default branch by fast-forward only (fetch, over HTTPS if SSH is unavailable, see [GitHub access](../reference/agent-setup.md#github-access); then `git merge --ff-only <remote>/<default>` in the clean primary checkout). If it has diverged, report it instead of resetting. Then remove the idle task worktree and its merged local branch (`harness.py worktree remove <branch>`). GitHub's "automatically delete head branches" setting removes the remote branch; otherwise leave it for the user.
 
-Separate explicit approval is required for force-push, rewriting published/shared history, destructive reset/clean, deleting remote branches, direct pushes to protected/default branches, merging PRs, release-branch merges, tags/releases and deployment.
+Separate explicit approval is required for force-push, rewriting published/shared history, destructive reset/clean, deleting remote branches, direct pushes to protected/default branches, merging PRs (except under a [merge authorization](#merge-authorization)), release-branch merges, tags/releases and deployment.
+
+### Merge authorization
+
+While the user has given an explicit merge authorization with a scope and a time window, the coordinator may merge a PR in that scope whose review is clean and whose CI passed, or launch `harness.py pr land <N>`, which waits for CI on the PR's head commit and merges only if it passes ([harness](../../docs/harness.md#landing-pull-requests)). Never merge on red or pending CI, and never outside the scope or window.
 
 ## Worktree lifecycle
 
