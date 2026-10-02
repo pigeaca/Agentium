@@ -234,3 +234,19 @@ func TestParseFieldMatchesKeysExactly(t *testing.T) {
 		t.Errorf("%+v", a)
 	}
 }
+
+// An interrupt that lands as a call returns keeps what the call reported it cost: the caller's spend hook stored it.
+func TestJudgePairCancelledAfterACallKeepsItsCost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	v, err := JudgePair(ctx, pairIn, Settings{}, func(context.Context, string) (Reply, error) {
+		calls++
+		if calls == 2 {
+			cancel()
+		}
+		return pairResult("second", "r", 0.05), nil
+	})
+	if !errors.Is(err, context.Canceled) || calls != 2 || math.Abs(v.CostUSD-0.1) > 1e-12 || math.Abs(v.BA.CostUSD-0.05) > 1e-12 || v.Complete() {
+		t.Errorf("cancelled after BA's call: %+v, %v (want both calls' $0.05)", v, err)
+	}
+}

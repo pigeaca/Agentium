@@ -147,6 +147,9 @@ func (e *AliveError) runsText() string {
 //
 // The workspaces, temp roots and grading copies of recovered runs are removed. A run's temp root is found from its
 // workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
+//
+// A stored run's records keep nothing to recover, but a pair's comparison (Env.JudgePair) that Agentium died in leaves
+// its folder there, with a config folder that may hold the sign-in: with the run lock held none is running, so it goes.
 func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
 	entries, err := os.ReadDir(layout.Records)
 	if errors.Is(err, os.ErrNotExist) {
@@ -169,6 +172,9 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			return orphans, err
 		}
 		if known {
+			if err := os.RemoveAll(filepath.Join(layout.Records, e.Name(), pairJudgeFolder)); err != nil {
+				return orphans, fmt.Errorf("remove the pair judge folder of %s: %w", e.Name(), err)
+			}
 			continue
 		}
 		dir := filepath.Join(layout.Records, e.Name())
@@ -233,8 +239,10 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 		if s.Finished && s.Record.Outcome != "" {
 			// Its judge may have been cut short: the judge's folder (a config folder with the sign-in, for an API key or
 			// a token) goes, and the records are redacted again, as for a stopped run.
-			if err := os.RemoveAll(filepath.Join(dir, "judge")); err != nil {
-				return orphans, fmt.Errorf("remove the judge folder of %s: %w", e.Name(), err)
+			for _, sub := range []string{"judge", pairJudgeFolder} {
+				if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
+					return orphans, fmt.Errorf("remove the %s folder of %s: %w", sub, e.Name(), err)
+				}
 			}
 			if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
 				return orphans, err
@@ -364,7 +372,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 		}
 		return nil, "", nil
 	}
-	for _, sub := range []string{"verify", "judge"} { // hidden tests; the sign-in config folder
+	for _, sub := range []string{"verify", "judge", pairJudgeFolder} { // hidden tests; the sign-in config folders
 		if err := os.RemoveAll(filepath.Join(dir, sub)); err != nil {
 			return nil, "", fmt.Errorf("remove the %s folder of %s: %w", sub, id, err)
 		}

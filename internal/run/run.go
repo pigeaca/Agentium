@@ -192,6 +192,10 @@ type Record struct {
 	// Judge is the judge's verdict on a graded run, when its experiment asked for one: a second opinion beside Passed
 	// that decides nothing. Its cost is kept here, apart from Metrics.CostUSD, which stays the agent's alone (Spend).
 	Judge *judge.Verdict `json:"judge,omitempty"`
+	// PairJudge is the pair judge's comparison of this run's change with its pair's arm-A run (an experiment with
+	// --judge-pairs, both runs passing): kept on the pair's arm-B run only. Unvalidated and exploratory, it decides
+	// nothing; its cost is kept here, apart from Metrics.CostUSD (Spend).
+	PairJudge *PairJudgement `json:"pair_judge,omitempty"`
 }
 
 // Behavior is what the agent did, beyond passing or failing.

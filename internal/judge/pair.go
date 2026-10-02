@@ -60,6 +60,17 @@ const MinPreferences = 5
 // PairVersion numbers the pair judge's protocol (prompt, schema, rules) in stored pair verdicts, apart from Version.
 const PairVersion = 1
 
+// PairCallEstimateUSD is the pilot's mean cost of one pair call ($0.088 over 38 calls on claude-opus-5-5 at high
+// effort), and PairEstimateUSD a pair's, both orders: previews state it as that, not as a measure of this project.
+const (
+	PairCallEstimateUSD = 0.088
+	PairEstimateUSD     = 2 * PairCallEstimateUSD
+)
+
+// PairCalls is how many calls a pair makes at most: both orders, each asked once more after a malformed reply. Each is
+// capped at CallCapUSD, so a pair's reserve derives from both (experiment.Design.PairJudgeCapUSD).
+const PairCalls = 2 * 2
+
 // PairInput is what one pair's judgement reads: the changes of arm A and arm B on the same task.
 type PairInput struct {
 	Instruction string
@@ -175,6 +186,11 @@ func (v *PairVerdict) ask(ctx context.Context, prompt string, call Caller) (Pair
 	var o PairOrder
 	for attempt := 0; attempt < 2; attempt++ {
 		reply, err := call(ctx, prompt)
+		if err == nil { // counted before an interrupt is: a call that reported its cost spent it
+			a := parseField(reply, "prefer", []string{first, second, tie})
+			o.CostUSD += a.cost
+			v.CostUSD += a.cost
+		}
 		if ctx.Err() != nil {
 			return o, ctx.Err()
 		}
@@ -185,8 +201,6 @@ func (v *PairVerdict) ask(ctx context.Context, prompt string, call Caller) (Pair
 			return o, nil
 		}
 		a := parseField(reply, "prefer", []string{first, second, tie})
-		o.CostUSD += a.cost
-		v.CostUSD += a.cost
 		if a.kind == "" {
 			o.Answered, o.Answer, o.Reason = true, a.fixed, a.reason
 			return o, nil
