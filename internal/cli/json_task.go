@@ -102,12 +102,14 @@ type taskShowDoc struct {
 	Gaps        []gapDoc      `json:"unstated_requirement_details"`
 	// InstructionNamesFiles lists reference files the instruction names: it tells the agent where the fix goes.
 	InstructionNamesFiles []string `json:"instruction_names_reference_files"`
+	// Warnings are the stored validation's (task.Validation.Warnings): what the verify commands keep from grading.
+	Warnings []string `json:"warnings"`
 }
 
 func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) taskShowDoc {
 	doc := taskShowDoc{header: env.hdr(), taskInfo: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Instruction: t.Instruction,
 		Setup: list(t.Setup), Verify: list(t.Verify), HiddenTests: list(t.HiddenTests), Reference: list(t.Reference), Gaps: []gapDoc{},
-		InstructionNamesFiles: []string{}}
+		InstructionNamesFiles: []string{}, Warnings: []string{}}
 	switch {
 	case t.NeedsReview && isTicket(t):
 		doc.Review = "ticket"
@@ -117,6 +119,7 @@ func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) 
 	var stored task.Validation
 	if t.Validation != nil && json.Unmarshal(t.Validation, &stored) == nil {
 		doc.WeakTests = weakTestsOf(stored.WeakTests)
+		doc.Warnings = list(env.redactAll(stored.Warnings))
 	}
 	if gaps, err := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t); err == nil {
 		doc.Gaps = gapDocs(gaps)

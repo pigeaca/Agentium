@@ -20,50 +20,71 @@ import (
 // task may still be valid (another hidden test fails on the base), but it checks less than its solution's tests do.
 // FilteredHiddenTests finds that case, for a warning: the user may mean it (a slow test kept out on purpose).
 
-// goTestFilter is the -run and -skip patterns of one `go test` invocation in a verify command; "" when not given.
+// goTestFilter is one `go test` invocation in a verify command, with its -run and -skip patterns ("" when not given,
+// or not known here).
 type goTestFilter struct {
 	command   string
 	run, skip string
 }
 
-// FilteredHiddenTests warns, once per verify command, of the hidden Go tests (top-level Test, Fuzz and Example
-// functions the solution adds or changes in its hidden _test.go files) that the command's `go test` -skip pattern
-// matches or its -run pattern does not. Only the first element of a pattern (before an unbracketed "/") is checked:
-// a -skip pattern with more elements skips subtests only, and one with a run pattern's later elements narrows the
-// subtests a matching test runs. Commands it cannot read (a pattern from a shell variable, one that does not
-// compile) are left alone.
+// filtered reports whether the invocation names a pattern.
+func (f goTestFilter) filtered() bool { return f.run != "" || f.skip != "" }
+
+// runs reports whether the invocation runs the top-level test name. Only a pattern's first element (before an
+// unbracketed "/") decides: a -skip pattern with more elements skips subtests only, and a -run pattern's later
+// elements narrow the subtests a matching test runs. A pattern that does not compile is taken to run everything (`go
+// test` would fail on it instead).
+func (f goTestFilter) runs(name string) bool {
+	if f.skip != "" && len(splitPattern(f.skip)) == 1 {
+		if re := firstElement(f.skip); re != nil && re.MatchString(name) {
+			return false
+		}
+	}
+	if f.run != "" {
+		if re := firstElement(f.run); re != nil && !re.MatchString(name) {
+			return false
+		}
+	}
+	return true
+}
+
+// describe is the invocation and its patterns in words: "`go test -skip 'Slow' ./...` (-skip "Slow")".
+func (f goTestFilter) describe() string {
+	var flags []string
+	if f.run != "" {
+		flags = append(flags, fmt.Sprintf("-run %q", f.run))
+	}
+	if f.skip != "" {
+		flags = append(flags, fmt.Sprintf("-skip %q", f.skip))
+	}
+	return fmt.Sprintf("`%s` (%s)", f.command, strings.Join(flags, ", "))
+}
+
+// FilteredHiddenTests warns of the hidden Go tests (top-level Test, Fuzz and Example functions the solution adds or
+// changes in its hidden _test.go files; not TestMain, nor an example without an output comment, which `go test` only
+// compiles) that no `go test` invocation of the verify commands runs: an invocation without patterns runs them all,
+// so a test one invocation filters out and another runs is graded. Commands it cannot read (a pattern from a shell
+// variable) count as running everything. It returns at most one warning.
 func FilteredHiddenTests(verify, hiddenTests []string, base, solution source.Source) []string {
-	var filters []goTestFilter
+	var invocations []goTestFilter
 	for _, command := range verify {
-		filters = append(filters, goTestFilters(command)...)
+		invocations = append(invocations, goTestFilters(command)...)
 	}
-	if len(filters) == 0 || solution == nil {
+	if !slices.ContainsFunc(invocations, goTestFilter.filtered) || solution == nil {
 		return nil
 	}
-	names := ownGoTests(hiddenTests, base, solution)
-	if len(names) == 0 {
+	missed := slices.DeleteFunc(ownGoTests(hiddenTests, base, solution), func(name string) bool {
+		return slices.ContainsFunc(invocations, func(f goTestFilter) bool { return f.runs(name) })
+	})
+	if len(missed) == 0 {
 		return nil
 	}
-	var warnings []string
-	for _, f := range filters {
-		if f.skip != "" && len(splitPattern(f.skip)) == 1 { // with more elements, it skips subtests only
-			if re := firstElement(f.skip); re != nil {
-				if hit := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return !re.MatchString(n) }); len(hit) > 0 {
-					warnings = append(warnings, fmt.Sprintf("the verify command `%s` skips hidden test(s) %s: its -skip pattern %q matches them, so grading never runs them",
-						f.command, strings.Join(hit, ", "), f.skip))
-				}
-			}
-		}
-		if f.run != "" {
-			if re := firstElement(f.run); re != nil {
-				if miss := slices.DeleteFunc(slices.Clone(names), re.MatchString); len(miss) > 0 {
-					warnings = append(warnings, fmt.Sprintf("the verify command `%s` leaves out hidden test(s) %s: its -run pattern %q does not match them, so grading never runs them",
-						f.command, strings.Join(miss, ", "), f.run))
-				}
-			}
-		}
+	var filters []string
+	for _, f := range invocations {
+		filters = append(filters, f.describe())
 	}
-	return warnings
+	return []string{fmt.Sprintf("no `go test` in the verify commands runs hidden test(s) %s: %s filter(s) them out, so grading never runs them",
+		strings.Join(missed, ", "), strings.Join(filters, " and "))}
 }
 
 // firstElement compiles a -run or -skip pattern's first element, as `go test` matches it against a top-level test's
@@ -102,7 +123,7 @@ func splitPattern(pattern string) []string {
 	return append(parts, pattern[start:])
 }
 
-// goTestFilters reads the `go test` invocations of a shell command and their -run and -skip patterns (the last one of
+// goTestFilters reads every `go test` invocation of a shell command, with its -run and -skip patterns (the last one of
 // each, as the flag package keeps). Flags after -args belong to the test binary and are not read.
 func goTestFilters(command string) []goTestFilter {
 	words, ok := shellWords(command)
@@ -126,9 +147,7 @@ func goTestFilters(command string) []goTestFilter {
 				f.skip, j = known(value), next
 			}
 		}
-		if f.run != "" || f.skip != "" {
-			out = append(out, f)
-		}
+		out = append(out, f)
 	}
 	return out
 }
@@ -282,7 +301,11 @@ func ownGoTests(hiddenTests []string, base, solution source.Source) []string {
 	return slices.Compact(names)
 }
 
-// goTestFuncs maps a Go test file's top-level test functions to their source text.
+// outputComment matches an example's output comment, without which `go test` compiles the example but never runs it.
+var outputComment = regexp.MustCompile(`(?mi)^\s*//\s*(unordered output|output):`)
+
+// goTestFuncs maps a Go test file's top-level test functions that `go test` runs (TestMain and examples without an
+// output comment are not) to their source text.
 func goTestFuncs(src []byte) (map[string]string, bool) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "x_test.go", src, parser.SkipObjectResolution)
@@ -292,10 +315,14 @@ func goTestFuncs(src []byte) (map[string]string, bool) {
 	out := map[string]string{}
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) {
+		if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) || fn.Name.Name == "TestMain" {
 			continue
 		}
-		out[fn.Name.Name] = string(src[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
+		text := string(src[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
+		if strings.HasPrefix(fn.Name.Name, "Example") && !outputComment.MatchString(text) {
+			continue // compiled, never run
+		}
+		out[fn.Name.Name] = text
 	}
 	return out, true
 }

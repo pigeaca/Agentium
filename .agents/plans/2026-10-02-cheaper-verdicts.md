@@ -83,6 +83,14 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
   - Run the long simulation on production code, and record its figures in the note.
   - Run the approved `seq-v1` smoke check.
     - **Smoke check (2026-10-02, at `4815470`, [report](../../docs/examples/seq-v1-smoke-report.md)): a budget stop before look 1, so no look and no verdict; this exit-gate item is not yet met.** It was an A/A of samber/lo's `baseline` context on `claude-sonnet-5` (sign-in login) with a hard $3.50 budget. Its 16 tasks were mined and validated with `go test -skip '<timing tests>' ./...`, then checked as `start --accept-mined` checks them; one task `start` mined itself uses plain `go test ./...`. `start` made a $74 budget with $3 run caps, and `--budget` can only raise a budget. One pair at those caps ($6) does not fit $3.50, so the experiment was remade with `experiment new` with the same tasks and seed, `--run-budget 0.50 --budget 3.50`. It spent $2.62 at list price: $0.12 on calibration and $2.49 on 6 runs (3 tasks, all passed). Runs cost $0.29 to $0.51, about 4x Sonnet 5.5's $0.10 on the same tasks, so 16 runs could not fit; one run reached $0.51, over its $0.50 cap. The first attempt paused at 85% of the five-hour window, which other work had used, and `--wait` waited 2 h 35 min for the reset. The 6 runs then took the window from 3% to 13% in about 10 minutes. The stage barrier, the looks and futility remain untested in a real run. A rerun that reaches look 1 needs about $7 to $8 on `claude-sonnet-5`, or about $3 with `--model claude-sonnet-5-5`.
+    - **The smoke check's findings, fixed in PR #117** (the rerun on `claude-sonnet-5-5`, cap $5, is approved and follows it):
+      - the default model is `claude-sonnet-5-5` for new experiments, `start`, `run once` and `run calibrate`;
+      - a run's estimate never exceeds its cap (the preview showed "est. cost by then" $25.79 above an $8 worst case);
+      - caps are soft, so every reserve, budget check and worst case holds an overshoot allowance per run: 10% of the cap, at least $0.15 scaled by the model's output price against Sonnet's (the smoke check's $0.507 against $0.50); capped runs record their overshoot, and one past the allowance is warned of;
+      - reports mark runs cut short (capped or timed out) per task, in a note, and in the headline of a cost verdict they favour;
+      - the note on an unfinished `seq-v1` experiment no longer claims a look that was never made;
+      - `experiment` subcommands say why a bad argument was refused;
+      - validation warns when the verify commands' `go test -skip`/`-run` patterns keep a hidden test from running (the smoke tasks' `-skip '<timing tests>'`).
   - Update the docs, then the next chapter's wave-3 results (by the coordinator).
   - Archive this plan.
   - *Acceptance:* the exit gate is recorded, passed or failed, with its evidence.
@@ -98,6 +106,8 @@ The review's reuse findings are already fixed in the note's text:
 - a 14-day window and validation lifetime;
 - failures recorded per key family, reopened only by a new pin, fingerprint or `RunMethod`;
 - day effects and ±12% biases simulated.
+
+**Follow-up, recorded (PR #117 review, 2026-10-02):** cut-off costs make cost verdicts too optimistic for the arm cut short more often (its runs look cheaper than they were). Today the report only says so in the verdict's headline. In a new method version, demote the cost verdict to exploratory, and in `seq-v1` block an early stop, when runs cut short (capped or timed out) exceed about 10% of either arm's counted runs, or the arms' counts differ by 2 or more, and the verdict favours the arm cut short more often. It changes the analysis, so it needs the user's approval, a simulation of the censoring rule, and its own step.
 
 **Research, deferred (the user, 2026-10-02):** a skew-robust interval (bootstrap-t or Johnson's skew-corrected t) for both `seq-v1` and phase1-v2. It is aimed at the scenario no α fixes: both arms strongly and oppositely skewed, 6.54% at 3.5% (note §8). It would change the analysis itself, so it needs a new method version, and its own note and plan.
 

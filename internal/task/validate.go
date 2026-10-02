@@ -241,7 +241,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 // filteredHiddenTests warns of the hidden Go tests the verify commands keep from running (FilteredHiddenTests), and
 // prints each warning to Progress. The base is read only when a verify command filters Go tests.
 func (v Validator) filteredHiddenTests(ctx context.Context, spec Spec, solution source.Source) ([]string, error) {
-	if !slices.ContainsFunc(spec.Verify, func(c string) bool { return len(goTestFilters(c)) > 0 }) {
+	if !slices.ContainsFunc(spec.Verify, func(c string) bool { return slices.ContainsFunc(goTestFilters(c), goTestFilter.filtered) }) {
 		return nil, nil
 	}
 	base, err := source.Commit(ctx, spec.Base, "--git-dir", v.Bare)

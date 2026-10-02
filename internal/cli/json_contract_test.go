@@ -63,7 +63,10 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	row(tasks, "tasks", taskInfoKeys)
 	shown := jsonRun(t, f, ExitOK, "task", "show", "value")
 	keys(shown, "base_commit,command,graded_by,hidden_test_files,hidden_tests,instruction,instruction_names_reference_files,name,needs_review,reference,reference_files,review,"+
-		"schema,setup,solution_commit,source,status,status_summary,unstated_requirement_details,unstated_requirements,untested_hunks,verify,weak_tests")
+		"schema,setup,solution_commit,source,status,status_summary,unstated_requirement_details,unstated_requirements,untested_hunks,verify,warnings,weak_tests")
+	if w, ok := shown.get("warnings").([]any); !ok || len(w) != 0 {
+		t.Errorf("task show: warnings %v, want an empty list", shown.get("warnings"))
+	}
 	imported := jsonRun(t, f, ExitOK, "task", "import", "--commit", "HEAD", "--name", "again", "--verify", "sh run_tests.sh")
 	keys(imported, "command,next_command,schema,setup,solution_leak_sections,task,verify")
 	assertKeys(t, imported.get("task"), taskInfoKeys)

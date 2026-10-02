@@ -16,10 +16,10 @@ func TestGoTestFiltersReadsShellCommands(t *testing.T) {
 		`go test -run "^TestA$" -skip TestB/sub ./...`:        {{run: "^TestA$", skip: "TestB/sub"}},
 		`cd sub && /usr/local/go/bin/go test --run X; go vet`: {{run: "X"}},
 		`go test -test.skip=TestX -run TestY -run TestZ`:      {{run: "TestZ", skip: "TestX"}}, // the last -run wins
-		`go test ./... -args -run TestX`:                      nil,                             // the test binary's
-		`go test -run "$PATTERN" ./...`:                       nil,                             // unknown here
-		`go test -run "Test$(echo A)"`:                        nil,
-		`go test ./...`:                                       nil,
+		`go test ./... -args -run TestX`:                      {{}},                            // the test binary's
+		`go test -run "$PATTERN" ./...`:                       {{}},                            // unknown here: as if it ran everything
+		`go test -run "Test$(echo A)"`:                        {{}},
+		`go test ./...`:                                       {{}},
 		`go vet -run X`:                                       nil,
 		`go test -run 'unterminated`:                          nil,
 		`make test # go test -run X`:                          nil,
@@ -47,17 +47,18 @@ func TestFilteredHiddenTests(t *testing.T) {
 	solution := snapSource{
 		"lo_test.go": "package lo\n\nimport \"testing\"\n\nfunc TestOld(t *testing.T) {}\n\nfunc TestSlowOld(t *testing.T) {}\n\n" +
 			"func TestUnionBy(t *testing.T) { t.Log(1) }\n\nfunc TestSlowUnionBy(t *testing.T) {}\n\nfunc Testing(t *testing.T) {}\n\nfunc helper() {}\n",
-		"new_test.go":    "package lo\n\nimport \"testing\"\n\nfunc FuzzUnion(f *testing.F) {}\n\nfunc ExampleUnionBy() {}\n",
+		"new_test.go": "package lo\n\nimport \"testing\"\n\nfunc FuzzUnion(f *testing.F) {}\n\nfunc ExampleUnionBy() {\n\tprintln(1)\n\t// Output: 1\n}\n\n" +
+			"func ExampleNoOutput() {}\n\nfunc TestMain(m *testing.M) { m.Run() }\n", // TestMain and an example without output never run as tests
 		"broken_test.go": "package lo\n\nfunc TestBroken(",
 		"testdata/x.txt": "data",
 	}
 	hidden := []string{"broken_test.go", "lo_test.go", "new_test.go", "testdata/x.txt"}
-	if got := ownGoTests(hidden, base, solution); !slices.Equal(got, []string{"ExampleUnionBy", "FuzzUnion", "TestSlowUnionBy", "TestUnionBy"}) {
+	if got := ownGoTests(hidden, base, solution); !slices.Equal(got, []string{"ExampleUnionBy", "FuzzUnion", "TestSlowUnionBy", "TestUnionBy"}) { // no TestMain, no ExampleNoOutput
 		t.Errorf("own tests = %v", got)
 	}
 
 	warnings := FilteredHiddenTests([]string{"go test ./... -skip 'Slow'"}, hidden, base, solution)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "skips hidden test(s) TestSlowUnionBy: its -skip pattern \"Slow\" matches them") ||
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "no `go test` in the verify commands runs hidden test(s) TestSlowUnionBy: `go test ./... -skip 'Slow'` (-skip \"Slow\") filter(s) them out") ||
 		strings.Contains(warnings[0], "TestSlowOld") {
 		t.Errorf("skip: %q", warnings)
 	}
@@ -66,8 +67,22 @@ func TestFilteredHiddenTests(t *testing.T) {
 		t.Errorf("-run matching every own test: %q", warnings)
 	}
 	warnings = FilteredHiddenTests([]string{"go test -run '^TestUnionBy$' ./..."}, hidden, base, solution)
-	if len(warnings) != 1 || !strings.Contains(warnings[0], "leaves out hidden test(s) ExampleUnionBy, FuzzUnion, TestSlowUnionBy: its -run pattern") {
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "runs hidden test(s) ExampleUnionBy, FuzzUnion, TestSlowUnionBy: `go test -run '^TestUnionBy$' ./...` (-run \"^TestUnionBy$\")") {
 		t.Errorf("run: %q", warnings)
+	}
+	// A test one invocation filters out and another runs is graded: the warning is for tests no invocation runs.
+	for _, verify := range [][]string{
+		{"go test ./...", "go test -race -run TestConc ./pkg"},
+		{"go test -skip 'Slow' ./...", "go test -run 'Slow' ./..."},
+		{"go test -run \"$ONLY\" ./...", "go test -skip Slow"},
+	} {
+		if w := FilteredHiddenTests(verify, hidden, base, solution); len(w) != 0 {
+			t.Errorf("%q: %q", verify, w)
+		}
+	}
+	if w := FilteredHiddenTests([]string{"go test -skip 'Slow' ./a", "go test -skip 'SlowUnion|Fuzz' ./b"}, hidden, base, solution); len(w) != 1 ||
+		!strings.Contains(w[0], "runs hidden test(s) TestSlowUnionBy: ") || !strings.Contains(w[0], "./a` (-skip \"Slow\") and `go test -skip") {
+		t.Errorf("filtered out by both: %q", w)
 	}
 	for _, quiet := range []string{"go test ./...", "go test -skip 'TestUnionBy/empty' ./...", "go test -skip 'Nothing'", "go test -skip '('"} {
 		if w := FilteredHiddenTests([]string{quiet}, hidden, base, solution); len(w) != 0 {
@@ -104,10 +119,10 @@ func TestValidateWarnsOfSkippedHiddenTests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Status != StatusValid || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "skips hidden test(s) TestSlowValue") {
+	if result.Status != StatusValid || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "runs hidden test(s) TestSlowValue") {
 		t.Fatalf("status %s, warnings %q, stages %v", result.Status, result.Warnings, stages(result))
 	}
-	if !strings.Contains(progress.String(), "  warning: the verify command `go test ./... -skip 'TestSlow'` skips hidden test(s) TestSlowValue") {
+	if !strings.Contains(progress.String(), "  warning: no `go test` in the verify commands runs hidden test(s) TestSlowValue: `go test ./... -skip 'TestSlow'`") {
 		t.Errorf("progress:\n%s", progress)
 	}
 }
