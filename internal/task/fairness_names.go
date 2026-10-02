@@ -11,7 +11,7 @@ import (
 	"github.com/pigeaca/agentium/internal/source"
 )
 
-// minName is the length under which a Java, Kotlin or Rust name is too short to be worth a word search.
+// minName is the length under which a Java, Kotlin, Rust, Python or TypeScript name is too short to be worth a word search.
 const minName = 4
 
 var (
@@ -49,7 +49,11 @@ var (
 	}
 )
 
-// nameFamily groups the files whose names can refer to each other: Java and Kotlin share the JVM; Rust stands alone.
+// jsFamily is the TypeScript and JavaScript family: a TypeScript test imports names from JavaScript files and back.
+var jsFamily = []string{".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+
+// nameFamily groups the files whose names can refer to each other: Java and Kotlin share the JVM; Rust and Python
+// stand alone; TypeScript and JavaScript share one family.
 // It returns the language of the extension, the extensions of its family and whether the family is supported.
 func nameFamily(ext string) (l lang, exts []string, ok bool) {
 	switch ext {
@@ -59,6 +63,10 @@ func nameFamily(ext string) (l lang, exts []string, ok bool) {
 		return langKotlin, []string{".java", ".kt"}, true
 	case ".rs":
 		return langRust, []string{".rs"}, true
+	case ".py":
+		return langPython, []string{".py"}, true
+	case ".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs":
+		return langTS, jsFamily, true
 	}
 	return 0, nil, false
 }
@@ -89,6 +97,9 @@ func codeOnly(src string, l lang) string {
 // too, for a test file's own names. It is a pattern match, not a parser, so it misses enum constants and the like; a
 // name it misses is never flagged.
 func declaredNames(src string, l lang, skipOverrides bool) map[string]bool {
+	if l == langPython || l == langTS {
+		return scriptNames(importLine.ReplaceAllString(codeOnly(src, l), ""), l, skipOverrides)
+	}
 	var res []*regexp.Regexp
 	switch l {
 	case langJava:

@@ -115,7 +115,7 @@ func TestFairnessNamesFromAnotherDirectory(t *testing.T) {
 	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:Apply", "identifier:Retry")
 }
 
-func TestFairnessOtherLanguagesCheckLiteralsOnly(t *testing.T) {
+func TestFairnessPythonLiteralsAndDataFiles(t *testing.T) {
 	base := map[string]string{
 		"app.py":            "def note():\n    return 'graded with the base version'\n",
 		"tests/test_app.py": "from app import note\n\ndef test_old():\n    assert note()\n",
@@ -127,8 +127,8 @@ func TestFairnessOtherLanguagesCheckLiteralsOnly(t *testing.T) {
 			"    assert 'a test-only message' != note()\n",
 		"tests/data.json": "{\"message\": \"a long message nobody states\"}\n",
 	}
-	// No identifiers; data files are not scanned; a text the reference lacks is the test's own.
-	wantGaps(t, fairnessGaps(t, base, solution, ""), "literal:graded with the starting version")
+	// Data files are not scanned; a text the reference lacks is the test's own; the new name is an identifier gap.
+	wantGaps(t, fairnessGaps(t, base, solution, ""), "identifier:brand_new_helper", "literal:graded with the starting version")
 }
 
 func TestFairnessFormatStringsAndTrailingPunctuation(t *testing.T) {
