@@ -39,6 +39,9 @@ type Env struct {
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)
 	LookPath func(string) (string, error) // exec.LookPath
 	Now      func() time.Time             // time.Now
+	// AccountHome is the account's home folder in the user database (user.Current().HomeDir), which HOME may not be;
+	// runs deny the login keychain in both. nil or "" means unknown.
+	AccountHome func() string
 	// Backoff is how long an experiment waits before retrying a run that failed for infrastructure reasons; nil means
 	// 30 seconds, then 2 minutes.
 	Backoff func(attempt int) time.Duration
