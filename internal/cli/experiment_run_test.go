@@ -168,7 +168,7 @@ func TestExperimentRunEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--seed", "5"), ExitOK)
 	first := f.run(ctx, "experiment", "run", "lean-ab", "--budget", "30")
-	expect(t, first, ExitOK, "Budget raised to $30.00 (recorded in the lock)", "Locked: Claude Code 2.1.281, claude-sonnet-5, sign-in login, 6 runs in a seeded order (seed 5)",
+	expect(t, first, ExitOK, "Budget raised to $30.00 (recorded in the lock)", "Locked: Claude Code 2.1.281, claude-sonnet-5-5, sign-in login, 6 runs in a seeded order (seed 5)",
 		"Running up to 2 at a time", "[1/6] value, arm ", "[6/6] value, arm ", "ok, $0.30", "spent $1.80 of $",
 		"Experiment lean-ab: done", "6 of 6 runs settled; spent $1.80", "Every run is done. The report: agentium experiment report lean-ab")
 	for _, arm := range []string{"A", "B"} {
@@ -253,11 +253,11 @@ func TestExperimentRunBudgetRetriesAndLock(t *testing.T) {
 	t.Parallel()
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
-	// Runs cost $0.30 at a $1 cap, 2 at a time: a pair starts only while the spend so far and the caps of the runs in
-	// flight leave room for both of its caps in the $3 budget, so the third pair never starts.
+	// Runs cost $0.30 at a $1 cap ($1.15 with its overshoot), 2 at a time: a pair starts only while the spend so far and
+	// the caps of the runs in flight leave room for both of its caps in the $3 budget, so the third pair never starts.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--run-budget", "1", "--budget", "3"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "tight"), ExitOK,
-		"Experiment tight: budget: the next run would not fit the $3.00 budget ($1.20 spent, $1.00 per run at most)",
+		"Experiment tight: budget: the next run would not fit the $3.00 budget ($1.20 spent, $1.15 per run at most)",
 		"4 of 6 runs settled", "--budget USD (a higher total)")
 	expect(t, f.run(ctx, "experiment", "run", "tight", "--budget", "2"), ExitUsage, "can only be raised")
 

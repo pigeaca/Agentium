@@ -78,7 +78,7 @@ type Event struct {
 type Plan struct {
 	Schedule    []Slot
 	Concurrency int
-	RunCapUSD   float64 // what one run may spend, its judgement included (Design.RunCapUSD): the larger arm's
+	RunCapUSD   float64 // what one run may spend, overshoot and judgement included (Design.RunCapUSD): the larger arm's
 	// ArmCapUSD, set for a model-ab experiment (even when the caps are equal), gives each arm's own; an arm without an
 	// entry has RunCapUSD.
 	ArmCapUSD   map[string]float64
@@ -138,7 +138,8 @@ func (s slotState) finished() bool { return s.settled || s.failed }
 // Execute runs the schedule's unsettled slots in order, up to Concurrency at a time within the window, and returns
 // when every slot is settled or failed, or it has to stop:
 //   - budget: a run starts only when the spend so far, the caps of the runs in flight (and of pair partners held for),
-//     and its own cap (both caps for a pair's first run) fit BudgetUSD, so spending never passes it;
+//     and its own cap (both caps for a pair's first run) fit BudgetUSD, so spending never passes it while each run
+//     spends at most its cap (RunCapUSD and ArmCapUSD hold Design.RunCapUSD's: the overshoot allowance included);
 //   - retries: an infrastructure failure is retried after Backoff, up to MaxAttempts per slot; InfraStreak failures in
 //     a row, on more than one slot, stop the experiment;
 //   - usage (Usage set): a new pair starts only when the latest usage reading, plus the expected use of the runs in

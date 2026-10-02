@@ -109,8 +109,8 @@ func TestSeqExperimentStopsAtItsFirstLook(t *testing.T) {
 		"Method seq-v1: looks after 8, 12 and 16 tasks; it stops at the first look with a cost verdict, or for futility.")
 	plan := f.run(ctx, "experiment", "plan", "lean-seq")
 	expect(t, plan, ExitOK, "Looks (method seq-v1; runs count both arms):", "1 of 3", "2 of 3", "3 of 3", "99.84%", "98.84%", "96.88%",
-		"Spend: at most $", "if every look runs (all 16 tasks; $96.00 if every run reaches its cap); expected about $",
-		"if nothing changed\n(10.3 tasks on average)", "at a 20% cut (13.2 tasks)", "The budget is sized for the maximum")
+		"Spend: at most $", "if every look runs (all 16 tasks; $105.60 if every run reaches its cap, overshoot included); expected\nabout $",
+		"if nothing changed (10.3 tasks on average)", "at a 20% cut (13.2 tasks)", "The budget is sized for the\nmaximum")
 	t.Log("experiment plan, a seq-v1 design:\n" + plan.stdout)
 
 	run := f.run(ctx, "experiment", "run", "lean-seq")
@@ -298,7 +298,7 @@ func TestSeqExperimentBudgetStopKeepsTheLastLook(t *testing.T) {
 	}
 	report := f.run(ctx, "experiment", "report", "short")
 	expect(t, report, ExitOK, "Method seq-v1: look 1 of 3 made (continue)", "**Cost", "(99.84%: ", "): inconclusive",
-		"The experiment is not finished (budget: ", "and the results are its last look's", "The results are look 1's",
+		"The experiment is not finished (budget: ", "and the results are look 1's.", "The results are look 1's",
 		"run(s) of stages after look 1 are not in its results")
 	if strings.Contains(report.stdout, "early stop overstates") {
 		t.Errorf("a budget stop is not an early stop:\n%s", report.stdout)
@@ -414,7 +414,7 @@ func TestSeqModelAB(t *testing.T) {
 	if d := loadDesign(t, f, "models"); d.Version != experiment.DesignVersionSeq || d.Method != experiment.MethodSeq || d.Template != experiment.TemplateModelAB {
 		t.Errorf("the stored design: version %d, method %s, template %s", d.Version, d.Method, d.Template)
 	}
-	expect(t, f.run(ctx, "experiment", "plan", "models"), ExitOK, "Looks (method seq-v1; runs count both arms):", "$24.00", "$48.00",
+	expect(t, f.run(ctx, "experiment", "plan", "models"), ExitOK, "Looks (method seq-v1; runs count both arms):", "$26.80", "$53.60",
 		"if every run reaches its cap")
 	got := f.run(ctx, "experiment", "run", "models")
 	expect(t, got, ExitOK, "each run up to $2.00 (arm A) or $1.00 (arm B)", "Look 1 of 3 (8 of 8 tasks counted): cost improved at 99.84%: stop",
@@ -424,11 +424,12 @@ func TestSeqModelAB(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "experiment", "report", "models"), ExitOK, "B (claude-sonnet-5) costs", "Method seq-v1: stopped at look 1 of 3")
 
-	// $2 and $1 caps, 2 at a time: a pair starts only while the spend, the caps in flight and its own $3 fit $6.
+	// $2 and $1 caps ($2.20 and $1.15 with their overshoot), 2 at a time: a pair starts only while the spend, the caps in
+	// flight and its own $3.35 fit $6.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--template", "model-ab", "--a", "claude-opus-5-5", "--b", "claude-sonnet-5",
 		"--run-budget-a", "2", "--run-budget-b", "1", "--budget", "6", "--seed", "5"), ExitOK)
 	tight := f.run(ctx, "experiment", "run", "tight")
-	expect(t, tight, ExitOK, "Experiment tight: budget: the next run would not fit the $6.00 budget", "$2.00 (arm A) or $1.00 (arm B) per run at most")
+	expect(t, tight, ExitOK, "Experiment tight: budget: the next run would not fit the $6.00 budget", "$2.20 (arm A) or $1.15 (arm B) per run at most")
 	spent := 0.0
 	runs := experimentRuns(t, f, "tight")
 	for _, r := range runs {

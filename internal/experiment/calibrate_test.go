@@ -13,7 +13,7 @@ func TestCalibrationEstimateIsBoundedByItsCap(t *testing.T) {
 		t.Error("a larger model's calibration should cost more")
 	}
 	estimate, capUSD := CalibrationCosts([]CalibrationNeed{{Model: "no-such-model"}, {Model: "no-such-model"}})
-	if estimate != 2*fallbackCalibrationUSD || capUSD != 2*CalibrationBudgetUSD {
+	if estimate != 2*fallbackCalibrationUSD || !near(capUSD, 2*(CalibrationBudgetUSD+CapOvershootMinUSD)) { // each cap with its overshoot
 		t.Errorf("costs = %v, %v", estimate, capUSD)
 	}
 }

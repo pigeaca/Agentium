@@ -19,7 +19,7 @@ import (
 // A calibration is one short real run that checks an arm's environment (see run.Calibrator). `run calibrate` makes
 // them on demand; an experiment makes the ones it lacks before its first pair. The limits below are `run calibrate`'s.
 const (
-	CalibrationBudgetUSD = 0.5 // a calibration run stops at this cost; also what the budget holds for each
+	CalibrationBudgetUSD = 0.5 // a calibration run stops at this cost; the budget holds it for each, with its overshoot
 	CalibrationTimeout   = 5 * time.Minute
 	// fallbackCalibrationUSD is a calibration's estimate for a model without a list price.
 	fallbackCalibrationUSD = 0.15
@@ -110,11 +110,12 @@ func sameCalibration(d Design, a, b Arm) bool {
 	return a.Context == b.Context && a.Snapshot == b.Snapshot && d.ArmModel(a) == d.ArmModel(b)
 }
 
-// CalibrationCosts is the expected cost of needs, and the most they may spend (a cap for each).
+// CalibrationCosts is the expected cost of needs, and the most they may spend: a cap for each, with the turn that may
+// cross it (CapOvershootUSD).
 func CalibrationCosts(needs []CalibrationNeed) (estimate, capUSD float64) {
 	for _, n := range needs {
 		estimate += CalibrationEstimateUSD(n.Model)
-		capUSD += CalibrationBudgetUSD
+		capUSD += CalibrationBudgetUSD + CapOvershootUSD(CalibrationBudgetUSD)
 	}
 	return estimate, capUSD
 }

@@ -104,7 +104,7 @@ func TestSeqReportBetweenLooks(t *testing.T) {
 	}
 	md, _ := renderings(t, rep)
 	for _, want := range []string{"Method seq-v1: look 1 of 3 made (continue); look 2 comes once the first 12 tasks are settled.",
-		"and the results are its last look's", "The results are look 1's",
+		"20 of 32 runs settled, and the results are look 1's.", "The results are look 1's",
 		"4 run(s) of stages after look 1 are not in its results (their spend is in the total): the next look counts them once its stage is settled.",
 		"futility stops were off", "| 1 of 3 | 8 of 8 |", "| continue |"} {
 		if !strings.Contains(md, want) {
@@ -156,5 +156,88 @@ func TestSeqReportAfterALookWithoutVerdict(t *testing.T) {
 		if !strings.Contains(md, want) {
 			t.Errorf("the Markdown lacks %q:\n%s", want, md)
 		}
+	}
+}
+
+// The smoke check's case: a budget stop before the first look. The note on the unfinished experiment says no look was
+// made, rather than that the results are its last look's.
+func TestSeqReportOfABudgetStopBeforeAnyLook(t *testing.T) {
+	rep, err := Build(seqInput(t, 1.0, 6, true, experiment.StatusBudget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, plain := renderings(t, rep)
+	for _, out := range []string{md, plain} {
+		if !strings.Contains(out, "6 of 32 runs settled, and no look has been analysed yet, so the results cover every run so far.") ||
+			strings.Contains(out, "last look's") || strings.Contains(out, "are look ") {
+			t.Errorf("a budget stop before any look:\n%s", out)
+		}
+	}
+}
+
+// A run Claude Code stopped at its cap counts as it ended (graded, at the cost it reached), and the report marks it:
+// its task's counts and mean cost in the per-task table, a note with the count per arm, and the arms' JSON.
+func TestReportMarksCappedRuns(t *testing.T) {
+	in := seqInput(t, 1.0, 6, true, experiment.StatusBudget)
+	var capped string
+	for i, r := range in.Runs {
+		if r.Record.Arm == "B" {
+			in.Runs[i].Record.Outcome, in.Runs[i].Record.Metrics.CostUSD = claude.OutcomeCapped, 3.07
+			in.Runs[i].Record.Metrics.Result = "error_max_budget_usd"
+			capped = r.Record.Task
+			break
+		}
+	}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Arms[0].Capped != 0 || rep.Arms[1].Capped != 1 || rep.Arms[1].Counted != 3 {
+		t.Errorf("arms: A %d capped, B %d capped of %d counted", rep.Arms[0].Capped, rep.Arms[1].Capped, rep.Arms[1].Counted)
+	}
+	for _, row := range rep.Tasks {
+		if want := map[bool]int{true: 1}[row.Task == capped]; row.Arms["B"].Capped != want || row.Arms["A"].Capped != 0 {
+			t.Errorf("task %s: %+v", row.Task, row.Arms)
+		}
+		if row.Task == capped && (row.Arms["B"].Successes != 1 || row.Arms["B"].Counted != 1) {
+			t.Errorf("a capped run that passed counts as a success, as before: %+v", row.Arms["B"])
+		}
+	}
+	md, plain := renderings(t, rep)
+	note := "1 counted run(s) were capped (A 0, B 1): Claude Code stopped them at their cost cap or turn limit, so each one's cost is a lower bound"
+	for _, out := range []string{md, plain} {
+		for _, want := range []string{"1/1, 1 capped", "→ ≥$3.070", "≥ marks a mean that includes one", note} {
+			if !strings.Contains(out, want) {
+				t.Errorf("the report lacks %q:\n%s", want, out)
+			}
+		}
+	}
+	if !strings.Contains(md, "| "+capped+" | ● 1/1 | ● 1/1, 1 capped | $0.436 → ≥$3.070 |") || strings.Contains(md, "The arms' caps differ") {
+		t.Error("a context experiment's arms share one cap")
+	}
+	// Without capped runs, the legend and the notes are as they were.
+	plainRep, err := Build(seqInput(t, 1.0, 6, true, experiment.StatusBudget))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if md, _ := renderings(t, plainRep); strings.Contains(md, "capped") || strings.Contains(md, "≥") {
+		t.Errorf("a report without capped runs mentions them:\n%s", md)
+	}
+}
+
+// A model-ab experiment whose arms have their own caps says the lower one cuts its arm shorter.
+func TestCappedNoteWithDifferentArmCaps(t *testing.T) {
+	rep := Report{Arms: []Arm{{Name: "A", Capped: 2}, {Name: "B"}}, Lock: experiment.Lock{Design: experiment.Design{Template: experiment.TemplateModelAB,
+		RunBudgetUSD: 3, Arms: []experiment.Arm{{Name: "A", Model: "m1", RunBudgetUSD: 1}, {Name: "B", Model: "m2"}}}}}
+	if note := cappedNote(rep); !strings.HasPrefix(note, "2 counted run(s) were capped (A 2, B 0)") || !strings.HasSuffix(note, "the arm with the lower cap is cut shorter.") {
+		t.Errorf("note %q", note)
+	}
+	rep.Lock.Design.Arms[0].RunBudgetUSD = 3
+	if note := cappedNote(rep); strings.Contains(note, "caps differ") {
+		t.Errorf("equal caps: %q", note)
+	}
+	rep.Arms[0].Capped = 0
+	if cappedNote(rep) != "" {
+		t.Error("no capped runs, no note")
 	}
 }

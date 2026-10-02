@@ -160,8 +160,34 @@ func (d Design) ArmRunBudgetUSD(a Arm) float64 {
 	return d.RunBudgetUSD
 }
 
-// ArmRunCapUSD is what one of arm a's runs may spend at most: the agent's cap and its judgement's.
-func (d Design) ArmRunCapUSD(a Arm) float64 { return d.ArmRunBudgetUSD(a) + d.JudgeCapUSD() }
+// ArmRunCapUSD is what one of arm a's runs may spend at most: the agent's cap, the turn that may cross it
+// (CapOvershootUSD), and its judgement's cap.
+func (d Design) ArmRunCapUSD(a Arm) float64 {
+	return d.ArmRunBudgetUSD(a) + CapOvershootUSD(d.ArmRunBudgetUSD(a)) + d.JudgeCapUSD()
+}
+
+// A cap is soft: Claude Code checks --max-budget-usd after each turn, so a run stops only once a turn has crossed it,
+// and spends its cap plus that turn. In the seq-v1 smoke check (2026-10-02, claude-sonnet-5, $0.50 caps) a run ended
+// at $0.507; across its seven transcripts the dearest turn cost $0.105 (the first, which writes the context to the
+// cache, so it cannot cross a cap above it) and no later turn more than $0.058. A turn's cost does not grow with the
+// cap but with the context and the output, which grow in longer runs, so the allowance is a share of the cap with a
+// floor: CapOvershootMinUSD is about 2.5 times the dearest later turn measured, for small caps (and a subagent's turn
+// in flight beside the session's), and CapOvershootShare covers the larger contexts of runs allowed to go further
+// ($0.30 at the default $3 cap). It is an estimate, as the cap is: a single turn dearer than the allowance (a very
+// large tool result or output on a pricey model) would still pass it.
+const (
+	CapOvershootShare  = 0.10
+	CapOvershootMinUSD = 0.15
+)
+
+// CapOvershootUSD is how far past capUSD a run capped there may spend: what every reserve, budget check and worst case
+// holds back beside the cap.
+func CapOvershootUSD(capUSD float64) float64 {
+	if capUSD <= 0 {
+		return 0
+	}
+	return max(CapOvershootShare*capUSD, CapOvershootMinUSD)
+}
 
 // ModelLabel is the model of an experiment in words: the design's, or each arm's in a model-ab experiment.
 func (d Design) ModelLabel() string {
@@ -201,7 +227,9 @@ func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
 
 // JudgeCapUSD is what one run's judgement may spend at most: each repeat's call up to judge.CallCapUSD, twice, since a
 // malformed reply is asked again. Zero without the judge. Claude Code checks --max-budget-usd after a turn, so a call
-// can pass its cap a little: the reserve is an estimate, as the agent's own cap is.
+// can pass its cap a little; a judge call has no tools and few turns, and CallCapUSD already clears the dearest call
+// measured with room, so no overshoot allowance is added (unlike a run's, CapOvershootUSD): the reserve is an estimate,
+// as the agent's own cap is.
 func (d Design) JudgeCapUSD() float64 {
 	if d.Judge == nil {
 		return 0
@@ -209,11 +237,12 @@ func (d Design) JudgeCapUSD() float64 {
 	return float64(d.Judge.WithDefaults().Repeats) * 2 * judge.CallCapUSD
 }
 
-// RunCapUSD is what one run may spend at most: the agent's cap and its judgement's; the larger of the arms' when they
-// differ. Reserve holds it back for every run in flight, so spending never passes the budget.
+// RunCapUSD is what one run may spend at most: the agent's cap, its overshoot (CapOvershootUSD) and its judgement's
+// cap; the larger of the arms' when they differ. Reserve holds it back for every run in flight, so spending never
+// passes the budget while each run stays within it.
 func (d Design) RunCapUSD() float64 {
 	if !d.PerArmProfiles() || len(d.Arms) == 0 { // the arms of a model-ab design may all differ from RunBudgetUSD
-		return d.RunBudgetUSD + d.JudgeCapUSD()
+		return d.RunBudgetUSD + CapOvershootUSD(d.RunBudgetUSD) + d.JudgeCapUSD()
 	}
 	capUSD := 0.0
 	for _, a := range d.Arms {
@@ -222,7 +251,7 @@ func (d Design) RunCapUSD() float64 {
 	return capUSD
 }
 
-// PairCapUSD is what a pair of runs, one per arm, may spend at most.
+// PairCapUSD is what a pair of runs, one per arm, may spend at most (each run's cap with its overshoot).
 func (d Design) PairCapUSD() float64 {
 	if len(d.Arms) != 2 {
 		return 2 * d.RunCapUSD()

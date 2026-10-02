@@ -25,13 +25,19 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 || o.Budget < 0 || o.UsageLimit <= 0 || o.UsageLimit > 100 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	name, ok := oneName(env, "experiment run", rest, experimentUsage)
+	switch {
+	case !ok:
+		return ExitUsage
+	case o.Budget < 0:
+		fmt.Fprintf(env.Stderr, "agentium experiment run: --budget cannot be negative (it raises the total)\n\n%s", experimentUsage)
+		return ExitUsage
+	case o.UsageLimit <= 0 || o.UsageLimit > 100:
+		fmt.Fprintf(env.Stderr, "agentium experiment run: --usage-limit is a percentage above 0 and at most 100\n\n%s", experimentUsage)
 		return ExitUsage
 	}
 	env, live := liveEnv(env)
 	defer live.Stop() // covers early returns and interrupts; the summary below stops it first
-	name := rest[0]
 	w, err := openProject(ctx, env)
 	if err != nil {
 		return fail(env, err)
@@ -156,8 +162,7 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	if !ok {
 		return code
 	}
-	if len(rest) != 1 {
-		fmt.Fprint(env.Stderr, experimentUsage)
+	if _, ok := oneName(env, "experiment show", rest, experimentUsage); !ok {
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)

@@ -90,19 +90,21 @@ func (p Project) CalibrationOn(ctx context.Context, contextName, snapshot, model
 	return store.Calibration{}, fmt.Errorf("calibration of %s on %s: %w", contextName, model, store.ErrNotFound)
 }
 
-// EstimatesFor estimates each arm on its own model and effort: the same estimate twice when the arms share a profile.
+// EstimatesFor estimates each arm on its own model and effort (the same estimate twice when the arms share a profile),
+// each limited to that arm's run cap.
 func (p Project) EstimatesFor(ctx context.Context, d Design) (ArmEstimates, error) {
 	var out ArmEstimates
 	for i, a := range d.Arms[:2] {
 		if i == 1 && d.ArmModel(a) == d.ArmModel(d.Arms[0]) && d.ArmEffort(a) == d.ArmEffort(d.Arms[0]) {
 			out[1] = out[0]
-			break
+		} else {
+			est, err := p.EstimateFor(ctx, d.ArmModel(a), d.ArmEffort(a))
+			if err != nil {
+				return out, err
+			}
+			out[i] = est
 		}
-		est, err := p.EstimateFor(ctx, d.ArmModel(a), d.ArmEffort(a))
-		if err != nil {
-			return out, err
-		}
-		out[i] = est
+		out[i].CapUSD = d.ArmRunBudgetUSD(a)
 	}
 	return out, nil
 }

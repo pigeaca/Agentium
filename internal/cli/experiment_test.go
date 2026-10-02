@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -43,34 +44,44 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean", "--repeat", "3"), ExitOK)
 
 	// A success experiment: the Quick tier's sample of what is eligible, and a budget a quarter above the estimate (6
-	// runs at the default profile's $1.612 on claude-sonnet-5) plus 3 caps of $3 held for runs in flight, rounded up.
+	// runs at the default profile's $1.612 on claude-sonnet-5-5, and 2 calibrations) plus 3 caps of $3 and their $0.30
+	// overshoot held for runs in flight, rounded up.
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--goal", "better", "--seed", "7"), ExitOK,
-		"Created experiment lean-ab: context A/B, A = base, B = lean, 1 task(s) × 3 run(s) per arm = 6 runs, budget $22.00",
+		"Created experiment lean-ab: context A/B, A = base, B = lean, 1 task(s) × 3 run(s) per arm = 6 runs, budget $23.00",
 		"note: the Quick tier asks for 12 tasks; only 1 can be in it", "agentium experiment plan lean-ab")
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean"), ExitError, "already exists")
 	// A cost experiment, the default: method seq-v1, one run per task and arm on up to 16 tasks, its budget sized for
-	// all of them (2 runs at $1.612, a quarter above, plus 3 caps of $3).
+	// all of them (2 runs at $1.612 and 2 calibrations, a quarter above, plus 3 caps of $3.30).
 	expect(t, f.run(ctx, "experiment", "new", "cost-ab", "--b", "lean", "--seed", "7"), ExitOK,
-		"Created experiment cost-ab: context A/B, A = base, B = lean, 1 task(s) × 1 run(s) per arm = 2 runs, budget $14.00",
+		"Created experiment cost-ab: context A/B, A = base, B = lean, 1 task(s) × 1 run(s) per arm = 2 runs, budget $15.00",
 		"Method seq-v1: one look, after all 1 task(s), below the cost floor of 8: cost stays exploratory.", "note: a cost experiment takes up to 16 tasks; only 1 can be in it")
 	cost := f.run(ctx, "experiment", "plan", "cost-ab")
-	expect(t, cost, ExitOK, "method seq-v1: one look, after all 1 task(s), below the cost floor of 8", "Looks (method seq-v1; runs count both arms):", "1 of 1", "$3.22", "$6.00",
-		"96.50%", "90.00%", "Spend: at most $3.22 if every look runs (all 1 tasks; $6.00 if every run reaches its cap)",
+	expect(t, cost, ExitOK, "method seq-v1: one look, after all 1 task(s), below the cost floor of 8", "Looks (method seq-v1; runs count both arms):", "1 of 1", "$3.22", "$6.60",
+		"96.50%", "90.00%", "Spend: at most $3.22 if every look runs (all 1 tasks; $6.60 if every run reaches its cap, overshoot included)",
+		"Claude Code checks a cap after each turn", "10% of each cap for that, at least $0.15",
 		"Cost decides at each look", "Floors (method seq-v1)")
 	for _, tiers := range []string{"Quick", "Confident", "Detectable effects"} {
 		if strings.Contains(cost.stdout, tiers) {
 			t.Errorf("a seq-v1 preview shows %q:\n%s", tiers, cost.stdout)
 		}
 	}
+	// The smoke check's preview: runs capped at $0.50 are estimated at the cap, not at the default profile's $1.61, so
+	// the estimate by each look stays within its worst case (2 runs at $0.50 and their $0.15 overshoot).
+	expect(t, f.run(ctx, "experiment", "new", "smoke", "--template", "aa", "--run-budget", "0.5", "--budget", "5", "--seed", "7"), ExitOK)
+	smoke := f.run(ctx, "experiment", "plan", "smoke")
+	expect(t, smoke, ExitOK, "1 of 1", "$1.00", "$1.30", "Spend: at most $1.00 if every look runs (all 1 tasks; $1.30 if every run reaches its cap",
+		"value, without runs of their own: $0.50, the run cap: runs are expected to reach it ($1.61 from a default task run's tokens at claude-sonnet-5-5's list prices",
+		"Worst case: every run reaches its $0.50 cap.\nClaude Code checks a cap after each turn", "at least $0.15")
+	t.Log("experiment plan, runs capped below their estimate:\n" + smoke.stdout)
 
 	notReady := f.run(ctx, "experiment", "plan", "lean-ab")
 	expect(t, notReady, ExitOK, "Experiment lean-ab: context A/B, A = base, B = lean", "tasks (1, seed 7): value",
-		"ok       Claude Code 2.1.281", "ok       context base on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.",
-		"ok       context lean on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.",
-		"Calibration: 2 context calibration(s) are made when the experiment runs, about $", "at most $1.00",
-		"Quick", "Confident", "This experiment", "$9.67", "$18.00", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
-		"* only 1 task(s) can be in this experiment", "Estimated cost per run on claude-sonnet-5:",
-		"value, without runs of their own: $1.61, a default task run's tokens at claude-sonnet-5's list prices of 2026-09-29",
+		"ok       Claude Code 2.1.281", "ok       context base on claude-sonnet-5-5 is not calibrated: calibrated when the experiment runs, about $0.",
+		"ok       context lean on claude-sonnet-5-5 is not calibrated: calibrated when the experiment runs, about $0.",
+		"Calibration: 2 context calibration(s) are made when the experiment runs, about $", "at most $1.30",
+		"Quick", "Confident", "This experiment", "$9.67", "$19.80", "cost, success", "40–56%", "100+ pp", "94–100+ pp",
+		"* only 1 task(s) can be in this experiment", "Estimated cost per run on claude-sonnet-5-5:",
+		"value, without runs of their own: $1.61, a default task run's tokens at claude-sonnet-5-5's list prices of 2026-09-29",
 		"τ = 0.10–0.25", "the study assumed 0.05 for success")
 	if strings.Contains(notReady.stdout, "MISSING") || strings.Contains(notReady.stdout, "Not ready") {
 		t.Errorf("an uncalibrated experiment is ready to run (it calibrates itself):\n%s", notReady.stdout)
@@ -104,7 +115,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	// Calibrations are per Claude Code version and model.
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.300")
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "ok       Claude Code 2.1.300",
-		"context base on claude-sonnet-5 was calibrated on Claude Code 2.1.281, not 2.1.300: calibrated when the experiment runs")
+		"context base on claude-sonnet-5-5 was calibrated on Claude Code 2.1.281, not 2.1.300: calibrated when the experiment runs")
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
 	expect(t, f.run(ctx, "experiment", "new", "opus", "--b", "lean", "--model", "claude-opus-5-5"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "opus"), ExitOK, "context base on claude-opus-5-5 is not calibrated: calibrated when the experiment runs")
@@ -113,19 +124,19 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	aa := f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitError, `experiment "noise": not found`)
 	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "5"), ExitUsage,
-		"the budget $5.00 is below one pair of runs at their caps ($6.00)")
+		"the budget $5.00 is below one pair of runs at their caps ($6.60)")
 	expect(t, f.run(ctx, "experiment", "new", "noise", "--template", "aa", "--a", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--budget", "8"), ExitOK,
 		"A/A calibration of context lean, 1 task(s) × 2 run(s) per arm = 4 runs, budget $8.00")
 	aa = f.run(ctx, "experiment", "plan", "noise")
 	expect(t, aa, ExitOK, "arm A: context lean", "arm B: context lean",
-		"WARNING  the budget $8.00 is below the estimated $6.45 plus $9.00 held for runs in flight: expect it to stop the experiment early")
+		"WARNING  the budget $8.00 is below the estimated $6.45 plus $9.90 held for runs in flight: expect it to stop the experiment early")
 	if n := strings.Count(aa.stdout, "context lean calibrated"); n != 1 {
 		t.Errorf("the shared context is checked %d times:\n%s", n, aa.stdout)
 	}
 
 	// The calibration's sign-in must be the runs'.
 	f.vars["ANTHROPIC_API_KEY"] = "sk-test-not-real" // secret-scan: allow
-	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "context base on claude-sonnet-5 was calibrated with sign-in login, and runs would now use api-key: calibrated when the experiment runs")
+	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "context base on claude-sonnet-5-5 was calibrated with sign-in login, and runs would now use api-key: calibrated when the experiment runs")
 	delete(f.vars, "ANTHROPIC_API_KEY")
 
 	// The task's own earlier fair runs on the model replace the default profile (the fake agent reports $0.02 a run);
@@ -134,7 +145,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	f.vars["AGENTIUM_CLAUDE"] = calibratingAgent(t, `"Bash","Edit","Read","Monitor"`, `"review"`, 25000, "")
 	expect(t, f.run(ctx, "run", "once", "value"), ExitOK, "outcome      unfair")
 	saveRuns(t, f,
-		store.Run{TaskName: "value", Outcome: "timeout", CostUSD: 5, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false}}`)},
+		store.Run{TaskName: "value", Outcome: "timeout", CostUSD: 5, Record: []byte(`{"model":"claude-sonnet-5-5","metrics":{"saw_result":false}}`)},
 		store.Run{TaskName: "value", Outcome: "ok", CostUSD: 0, Record: sonnetRecord})
 	f.vars["AGENTIUM_CLAUDE"] = versioned(t, calibratingAgent(t, `"Bash","Edit","Read"`, `"review"`, 25000, ""), "2.1.281")
 	for range 3 {
@@ -152,7 +163,7 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "alias"), ExitOK, "unknown", "sonnet has no list price")
 
 	list := f.run(ctx, "experiment", "list")
-	expect(t, list, ExitOK, "lean-ab", "context-ab", "base / lean", "1 × 3", "$22.00", "noise", "aa", "lean / lean", "1 × 2")
+	expect(t, list, ExitOK, "lean-ab", "context-ab", "base / lean", "1 × 3", "$23.00", "noise", "aa", "lean / lean", "1 × 2")
 	expect(t, f.run(ctx, "experiment", "rm", "alias"), ExitOK, "Removed experiment alias")
 	if list := f.run(ctx, "experiment", "list"); strings.Contains(list.stdout, "alias") {
 		t.Errorf("removed experiment still listed:\n%s", list.stdout)
@@ -166,8 +177,9 @@ func TestExperimentNewPlanListAndRemove(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "lean-ab"), ExitOK, "task(s) removed since the experiment was made: value")
 }
 
-// sonnetRecord is a stored run's record as cost estimates read it: a fair run on claude-sonnet-5 that reported its cost.
-var sonnetRecord = []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":true}}`)
+// sonnetRecord is a stored run's record as cost estimates read it: a fair run on the default model that reported its
+// cost.
+var sonnetRecord = []byte(`{"model":"` + experiment.DefaultExperimentModel + `","metrics":{"saw_result":true}}`)
 
 // taskIDs maps the fixture's tasks to their IDs, which link a stored run to its task.
 func taskIDs(t *testing.T, f runFixture) map[string]int64 {
@@ -246,26 +258,26 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	} { // the project's median: $0.40
 		runs = append(runs, store.Run{TaskID: r.id, TaskName: r.task, Outcome: "ok", CostUSD: r.cost, Record: sonnetRecord})
 	}
-	// value's own run on another model: no use on claude-sonnet-5.
+	// value's own run on another model: no use on claude-sonnet-5-5.
 	runs = append(runs, store.Run{TaskID: ids["value"], TaskName: "value", Outcome: "ok", CostUSD: 5,
 		Record: []byte(`{"model":"claude-opus-5-5","metrics":{"saw_result":true}}`)})
 	saveRuns(t, f, runs...)
 
-	// value $0.40 and costly $1.80 a run, 2 runs each: $4.40, so 1.25 × $4.40 + 3 caps of $3 held for runs in flight,
-	// rounded up. The project's median alone gave $1.60 and a budget of $11.
+	// value $0.40 and costly $1.80 a run, 2 runs each: $4.40, so 1.25 × $4.40 + 3 caps of $3.30 held for runs in
+	// flight, rounded up. The project's median alone gave $1.60 and a budget of $12.
 	expect(t, f.run(ctx, "experiment", "new", "mixed", "--b", "lean", "--task", "value", "--task", "costly", "--goal", "better", "--repeats", "1"), ExitOK,
-		"2 task(s) × 1 run(s) per arm = 4 runs, budget $15.00")
+		"2 task(s) × 1 run(s) per arm = 4 runs, budget $16.00")
 	plan := f.run(ctx, "experiment", "plan", "mixed")
-	expect(t, plan, ExitOK, "Estimated cost per run on claude-sonnet-5:",
+	expect(t, plan, ExitOK, "Estimated cost per run on claude-sonnet-5-5:",
 		"from each task's own earlier runs (their median): costly $1.80 (2 run(s))",
-		"value, without runs of their own: $0.40, the median of this project's 6 earlier task runs on claude-sonnet-5",
+		"value, without runs of their own: $0.40, the median of this project's 6 earlier task runs on claude-sonnet-5-5",
 		"The tiers' estimates average the 2 eligible task(s), each estimated the same way: $1.10 a run.")
 	// The experiment sums its tasks' estimates; Quick would draw 2 tasks × 3 runs per arm at their average, $1.10 a run.
-	if row := armRow(plan.stdout, "Quick"); len(row) < 6 || row[4] != "$13.20" || row[5] != "$36.00" {
-		t.Errorf("Quick row = %v, want $13.20 and the worst case $36.00:\n%s", row, plan.stdout)
+	if row := armRow(plan.stdout, "Quick"); len(row) < 6 || row[4] != "$13.20" || row[5] != "$39.60" {
+		t.Errorf("Quick row = %v, want $13.20 and the worst case $39.60:\n%s", row, plan.stdout)
 	}
-	if !strings.Contains(plan.stdout, "This experiment     2          1     4      $4.40      $12.00") {
-		t.Errorf("this experiment's row, want $4.40 and the worst case $12.00:\n%s", plan.stdout)
+	if !strings.Contains(plan.stdout, "This experiment     2          1     4      $4.40      $13.20") {
+		t.Errorf("this experiment's row, want $4.40 and the worst case $13.20:\n%s", plan.stdout)
 	}
 	if strings.Contains(plan.stdout, "the budget $") { // the budget's own warning; validation warnings may appear
 		t.Errorf("the default budget covers the estimate and the reserve:\n%s", plan.stdout)
@@ -281,7 +293,7 @@ func TestExperimentEstimatesEachTaskFromItsOwnRuns(t *testing.T) {
 	// its maximum, every task.
 	expect(t, f.run(ctx, "experiment", "new", "tight", "--b", "lean", "--task", "value", "--task", "costly", "--repeats", "1", "--budget", "12"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "plan", "tight"), ExitOK,
-		"WARNING  the budget $12.00 is below the estimated $4.40 plus $9.00 held for runs in flight")
+		"WARNING  the budget $12.00 is below the estimated $4.40 plus $9.90 held for runs in flight")
 }
 
 func TestExperimentNewUsage(t *testing.T) {
@@ -304,9 +316,18 @@ func TestExperimentNewUsage(t *testing.T) {
 		{append([]string{"x", "--b", "lean"}, strings.Split(strings.Repeat("--task t ", 17), " ")[:34]...), "17 tasks are too many"},
 		{[]string{"bad name", "--b", "lean"}, "cannot name an experiment"},
 		{[]string{"x", "--b", "lean", "--repeats", "-1"}, "--repeats must be positive"},
+		// A stray word (a flag's value split by the shell, a misspelled flag without its dashes) gets a reason, not
+		// only the usage.
+		{[]string{"x", "--b", "lean", "--budget", "3", "50"}, `agentium experiment new: expected one NAME, got 2: "x", "50"`},
+		{[]string{"--b", "lean"}, "agentium experiment new: give a NAME"},
 	} {
 		expect(t, f.run(ctx, append([]string{"experiment", "new"}, c.args...)...), ExitUsage, c.want)
 	}
+	for _, sub := range []string{"plan", "show", "report", "rm", "run"} {
+		expect(t, f.run(ctx, "experiment", sub, "x", "y"), ExitUsage, "agentium experiment "+sub+`: expected one NAME, got 2: "x", "y"`, "Usage:")
+	}
+	expect(t, f.run(ctx, "experiment", "run", "x", "--usage-limit", "0"), ExitUsage, "agentium experiment run: --usage-limit is a percentage above 0 and at most 100")
+	expect(t, f.run(ctx, "experiment", "run", "x", "--budget", "-1"), ExitUsage, "agentium experiment run: --budget cannot be negative")
 	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "nope"), ExitError, `snapshot "nope": not found`)
 	expect(t, f.run(ctx, "context", "snapshot", "base"), ExitUsage, `"base" names each task's own context`)
 	writeFile(t, f.repo, "CLAUDE.md", "# Rules\nKeep it short.\n")

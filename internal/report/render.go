@@ -135,11 +135,10 @@ func (r Report) Markdown(w io.Writer) error {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
 	}
 
-	fmt.Fprintf(&b, "\n## Per task\n\n● success, ○ failure, × not counted; cost is the mean of counted runs.\n\n| Task | %s | %s | Cost A → B |\n|---|---|---|---|\n", r.Arms[0].label(), r.Arms[1].label())
+	fmt.Fprintf(&b, "\n## Per task\n\n%s\n\n| Task | %s | %s | Cost A → B |\n|---|---|---|---|\n", r.perTaskLegend(), r.Arms[0].label(), r.Arms[1].label())
 	for _, t := range r.Tasks {
 		ca, cb := t.Arms[r.Arms[0].Name], t.Arms[r.Arms[1].Name]
-		fmt.Fprintf(&b, "| %s | %s %d/%d | %s %d/%d | %s → %s |\n", t.Task, orDash(ca.Marks), ca.Successes, ca.Counted, orDash(cb.Marks),
-			cb.Successes, cb.Counted, num(ca.CostUSD, "$%.3f"), num(cb.CostUSD, "$%.3f"))
+		fmt.Fprintf(&b, "| %s | %s %s | %s %s | %s → %s |\n", t.Task, orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost(), cb.cost())
 	}
 
 	if r.Judge != nil {
@@ -381,6 +380,34 @@ func orDefault(effort string) string {
 		return "default"
 	}
 	return effort
+}
+
+// perTaskLegend explains the per-task table's marks; it names capped runs only when there are some.
+func (r Report) perTaskLegend() string {
+	legend := "● success, ○ failure, × not counted; cost is the mean of counted runs."
+	for _, a := range r.Arms {
+		if a.Capped > 0 {
+			return legend + " A capped run stopped at its cost cap or turn limit, so its cost is a lower bound: ≥ marks a mean that includes one."
+		}
+	}
+	return legend
+}
+
+// counts is a cell's successes of its counted runs, and its capped runs when there are any: "1/1" or "1/1, 1 capped".
+func (c TaskCell) counts() string {
+	s := fmt.Sprintf("%d/%d", c.Successes, c.Counted)
+	if c.Capped > 0 {
+		s += fmt.Sprintf(", %d capped", c.Capped)
+	}
+	return s
+}
+
+// cost is a cell's mean cost, marked ≥ when a capped run makes it a lower bound.
+func (c TaskCell) cost() string {
+	if c.Capped > 0 && c.CostUSD != nil {
+		return "≥" + num(c.CostUSD, "$%.3f")
+	}
+	return num(c.CostUSD, "$%.3f")
 }
 
 func orDash(s string) string {

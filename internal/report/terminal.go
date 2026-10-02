@@ -173,13 +173,12 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		return err
 	}
 
-	section("Per task", "● success, ○ failure, × not counted; cost is the mean of counted runs.")
+	section("Per task", r.perTaskLegend())
 	// Marks and counts are separate columns, so the counts line up whatever the number of marks.
 	t = table(term.Left("Task"), term.Left(r.Arms[0].label()), term.Right(""), term.Left(r.Arms[1].label()), term.Right(""), term.Right("Cost A → B"))
 	for _, tr := range r.Tasks {
 		ca, cb := tr.Arms[r.Arms[0].Name], tr.Arms[r.Arms[1].Name]
-		t.Row(tr.Task, orDash(ca.Marks), fmt.Sprintf("%d/%d", ca.Successes, ca.Counted), orDash(cb.Marks), fmt.Sprintf("%d/%d", cb.Successes, cb.Counted),
-			num(ca.CostUSD, "$%.3f")+" → "+num(cb.CostUSD, "$%.3f"))
+		t.Row(tr.Task, orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost()+" → "+cb.cost())
 	}
 	if err := t.Write(&b); err != nil {
 		return err

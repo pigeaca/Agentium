@@ -62,7 +62,7 @@ func TestExperimentNewJudgeFlags(t *testing.T) {
 	}
 	// Defaults: the pilot's model, effort and 3 calls; a budget below a pair with their judgements is refused.
 	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "lean", "--task", "value", "--judge", "--budget", "8"), ExitUsage,
-		"below one pair of runs at their caps ($12.00)")
+		"below one pair of runs at their caps ($12.60)")
 	expect(t, f.run(ctx, "experiment", "new", "x", "--b", "lean", "--task", "value", "--judge", "--budget", "50"), ExitOK,
 		"The judge: claude-opus-5-5 at effort high, 3 call(s) per run, its verdicts a second opinion beside the tests.")
 	d := storedDesign(t, f, "x")
@@ -114,19 +114,19 @@ func TestExperimentJudgesEveryGradedRun(t *testing.T) {
 	f, ctrl := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "judged", "--b", "lean", "--task", "value", "--repeats", "1", "--judge", "--judge-repeats", "2",
-		"--seed", "5"), ExitOK, "1 task(s) × 1 run(s) per arm = 2 runs, budget $20.00", "The judge: claude-opus-5-5 at effort high, 2 call(s) per run")
+		"--seed", "5"), ExitOK, "1 task(s) × 1 run(s) per arm = 2 runs, budget $21.00", "The judge: claude-opus-5-5 at effort high, 2 call(s) per run")
 	plan := f.run(ctx, "experiment", "plan", "judged")
 	expect(t, plan, ExitOK, "judge: claude-opus-5-5 at effort high, 2 call(s) per run; each run's judgement up to $2.00",
 		"The judge: about $0.26 for this experiment's 2 runs × 2 call(s) at $0.065 a call (EST. COST includes it; the agent's\nruns are $3.22)",
 		"the judge pilot's mean call on claude-opus-5-5 at effort high, not a measure of this project",
 		"Worst case: every run reaches its $3.00 cap, and its judgement $2.00")
-	if !strings.Contains(plan.stdout, "$3.48      $10.00") { // this experiment: 2 × $1.612 + 2 × 2 × $0.065; worst 2 × ($3 + $2)
-		t.Errorf("this experiment's row, want $3.48 and the worst case $10.00:\n%s", plan.stdout)
+	if !strings.Contains(plan.stdout, "$3.48      $10.60") { // this experiment: 2 × $1.612 + 2 × 2 × $0.065; worst 2 × ($3 + $0.30 + $2)
+		t.Errorf("this experiment's row, want $3.48 and the worst case $10.60:\n%s", plan.stdout)
 	}
 
 	first := f.run(ctx, "experiment", "run", "judged")
 	expect(t, first, ExitOK, "The judge: claude-opus-5-5 at effort high, 2 call(s) per run.", "each run up to $3.00 and its judgement up to $2.00",
-		"ok, $0.30; judge: fixed (2 of 2), $0.10", "spent $0.80 of $20.00 (the judge $0.20 of it, not in the arms' costs)", "Experiment judged: done")
+		"ok, $0.30; judge: fixed (2 of 2), $0.10", "spent $0.80 of $21.00 (the judge $0.20 of it, not in the arms' costs)", "Experiment judged: done")
 	for _, arm := range []string{"A", "B"} {
 		if row := armRow(first.stdout, arm); len(row) < 9 || row[8] != "$0.30" {
 			t.Errorf("arm %s = %v: its cost is the agent's alone", arm, row)

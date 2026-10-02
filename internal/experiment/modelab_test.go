@@ -51,13 +51,13 @@ func TestEffortsIsAFreshSlice(t *testing.T) {
 func TestEqualArmCapsBelowTheRunBudget(t *testing.T) {
 	d := modelAB()
 	d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 1, 4
-	if d.RunCapUSD() != 1 || d.PairCapUSD() != 2 || Reserve(d) != 3 {
-		t.Errorf("run cap %v, pair %v, reserve %v; want 1, 2, 3", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
+	if !near(d.RunCapUSD(), 1.15) || !near(d.PairCapUSD(), 2.3) || !near(Reserve(d), 3.45) {
+		t.Errorf("run cap %v, pair %v, reserve %v; want 1.15, 2.30, 3.45 (each $1 cap and its $0.15 overshoot)", d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
 	if err := d.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if caps := armCaps(d); caps["A"] != 1 || caps["B"] != 1 {
+	if caps := armCaps(d); !near(caps["A"], 1.15) || !near(caps["B"], 1.15) {
 		t.Errorf("armCaps = %v", caps)
 	}
 	if armCaps(validDesign()) != nil {
@@ -111,7 +111,7 @@ func TestValidateModelAB(t *testing.T) {
 		"no model":           {func(d *Design) { d.Arms[1].Model = "" }, "gives each arm a model"},
 		"unknown effort":     {func(d *Design) { d.Arms[1].Effort = "huge" }, `unknown effort "huge"`},
 		"negative run cap":   {func(d *Design) { d.Arms[0].RunBudgetUSD = -1 }, "run budget must be positive"},
-		"below a pair":       {func(d *Design) { d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 5, 5.5 }, "below one pair of runs at their caps ($6.00)"},
+		"below a pair":       {func(d *Design) { d.Arms[0].RunBudgetUSD, d.Arms[1].RunBudgetUSD, d.BudgetUSD = 1, 5, 5.5 }, "below one pair of runs at their caps ($6.65)"},
 		"context ab models":  {func(d *Design) { *d = validDesign(); d.Arms[1].Model = "claude-opus-5-5" }, "compares contexts"},
 		"context ab efforts": {func(d *Design) { *d = validDesign(); d.Arms[0].Effort = "high" }, "compares contexts"},
 		"aa run budgets": {func(d *Design) {
@@ -138,15 +138,15 @@ func TestArmProfilesAndCaps(t *testing.T) {
 	}
 	ctx := validDesign()
 	ctx.Effort = "medium"
-	if ctx.ArmModel(ctx.Arms[1]) != ctx.Model || ctx.ArmEffort(ctx.Arms[0]) != "medium" || ctx.RunCapUSD() != 3 || ctx.PairCapUSD() != 6 {
+	if ctx.ArmModel(ctx.Arms[1]) != ctx.Model || ctx.ArmEffort(ctx.Arms[0]) != "medium" || !near(ctx.RunCapUSD(), 3.3) || !near(ctx.PairCapUSD(), 6.6) {
 		t.Errorf("a context experiment's arms share the design's profile and cap")
 	}
 	d.Arms[1].RunBudgetUSD = 5
-	if d.ArmRunBudgetUSD(a) != 3 || d.ArmRunBudgetUSD(d.Arms[1]) != 5 || d.RunCapUSD() != 5 || d.PairCapUSD() != 8 || Reserve(d) != 15 {
+	if d.ArmRunBudgetUSD(a) != 3 || d.ArmRunBudgetUSD(d.Arms[1]) != 5 || !near(d.RunCapUSD(), 5.5) || !near(d.PairCapUSD(), 8.8) || !near(Reserve(d), 16.5) {
 		t.Errorf("caps: %v %v, run cap %v, pair %v, reserve %v", d.ArmRunBudgetUSD(a), d.ArmRunBudgetUSD(d.Arms[1]), d.RunCapUSD(), d.PairCapUSD(), Reserve(d))
 	}
 	d.Judge = &judge.Settings{Model: "m", Effort: "high", Repeats: 1}
-	if d.ArmRunCapUSD(a) != 4 || d.PairCapUSD() != 10 { // each arm's judgement ($1) on top of its own cap
+	if !near(d.ArmRunCapUSD(a), 4.3) || !near(d.PairCapUSD(), 10.8) { // each arm's judgement ($1) on top of its own cap and overshoot
 		t.Errorf("with the judge: arm A cap %v, pair %v", d.ArmRunCapUSD(a), d.PairCapUSD())
 	}
 	if d.ModelLabel() != "A = claude-sonnet-5, B = claude-opus-5-5:high" || validDesign().ModelLabel() != "claude-sonnet-5" {
@@ -163,7 +163,7 @@ func TestOlderDesignsAndLocksLoad(t *testing.T) {
 	if err := json.Unmarshal([]byte(old), &d); err != nil || d.Validate() != nil {
 		t.Fatalf("an older design: %v, %v", err, d.Validate())
 	}
-	if d.ArmModel(d.Arms[0]) != "claude-sonnet-5" || d.ArmEffort(d.Arms[1]) != "" || d.RunCapUSD() != 3 || d.PairCapUSD() != 6 {
+	if d.ArmModel(d.Arms[0]) != "claude-sonnet-5" || d.ArmEffort(d.Arms[1]) != "" || !near(d.RunCapUSD(), 3.3) || !near(d.PairCapUSD(), 6.6) {
 		t.Errorf("older design's arms: %+v", d.Arms)
 	}
 	if encoded, _ := json.Marshal(d); strings.Contains(string(encoded), "requested_model") || strings.Contains(string(encoded), "effort") ||
@@ -203,16 +203,16 @@ func TestModelABEstimatesAndBudget(t *testing.T) {
 	if got, ok := ests.DesignUSD(d); !ok || math.Abs(got-15.2) > 1e-9 {
 		t.Errorf("DesignUSD = %v, %v; want 15.20", got, ok)
 	}
-	if want := math.Ceil(1.25*15.2 + 3*6); DefaultBudgetFor(d, ests) != want {
-		t.Errorf("default budget = %v, want %v (1.25 × $15.20 and 3 of the larger cap, $6)", DefaultBudgetFor(d, ests), want)
+	if want := math.Ceil(1.25*15.2 + 3*6.6); DefaultBudgetFor(d, ests) != want {
+		t.Errorf("default budget = %v, want %v (1.25 × $15.20 and 3 of the larger cap, $6 and its $0.60 overshoot)", DefaultBudgetFor(d, ests), want)
 	}
 	rows := PreviewFor(d, []string{"t1", "t2"}, ests)
 	own := rows[len(rows)-1]
-	if !own.CostKnown || math.Abs(own.CostUSD-15.2) > 1e-9 || own.WorstUSD != 4*(3+6) || own.Runs != 8 {
-		t.Errorf("this experiment = %+v, want $15.20 and a worst case of 4 pairs × $9", own)
+	if !own.CostKnown || math.Abs(own.CostUSD-15.2) > 1e-9 || !near(own.WorstUSD, 4*(3.3+6.6)) || own.Runs != 8 {
+		t.Errorf("this experiment = %+v, want $15.20 and a worst case of 4 pairs × $9.90", own)
 	}
 	// Quick: 2 eligible tasks × 3 repeats at each arm's mean per run: (0.8 + 3) a pair.
-	if quick := rows[0]; math.Abs(quick.CostUSD-6*(0.8+3)) > 1e-9 || quick.WorstUSD != 6*9 {
+	if quick := rows[0]; math.Abs(quick.CostUSD-6*(0.8+3)) > 1e-9 || !near(quick.WorstUSD, 6*9.9) {
 		t.Errorf("quick = %+v", quick)
 	}
 	// Either arm without an estimate leaves the cost unknown.

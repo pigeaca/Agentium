@@ -93,7 +93,7 @@ func signInMode(env Env) (mode, tokenFile string) {
 func runOnce(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("run once", flag.ContinueOnError)
 	snapshotName := fs.String("snapshot", "", "apply this context snapshot (default: the base's own context)")
-	model := fs.String("model", "claude-sonnet-5", "the model")
+	model := fs.String("model", experiment.DefaultExperimentModel, "the model")
 	effort := fs.String("effort", "", "the effort level (default: the CLI's)")
 	budget := fs.Float64("budget", 3, "stop the run at this cost in USD")
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop the run after this long")
@@ -478,7 +478,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("run calibrate", flag.ContinueOnError)
 	var snapshots stringList
 	fs.Var(&snapshots, "snapshot", "also calibrate this snapshot's context (repeatable)")
-	model := fs.String("model", "claude-sonnet-5", "the model")
+	model := fs.String("model", experiment.DefaultExperimentModel, "the model")
 	budget := fs.Float64("budget", 0.5, "stop each calibration run at this cost in USD")
 	timeout := fs.Duration("timeout", 5*time.Minute, "stop each calibration run after this long")
 	rest, code, ok := parseArgs(env, fs, args, runUsage)

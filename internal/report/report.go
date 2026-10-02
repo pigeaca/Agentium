@@ -79,6 +79,9 @@ type Arm struct {
 	// Profile is the arm's model and effort ("MODEL" or "MODEL:EFFORT"), in a model-ab experiment only.
 	Profile string `json:"profile,omitempty"`
 	Counted int    `json:"counted"`
+	// Capped counts the counted runs Claude Code stopped at their cost cap or turn limit: each one's cost is a lower
+	// bound of what it would have spent.
+	Capped int `json:"capped"`
 	// FirstRequest is the mean measured size of the first request: the context overhead Claude Code saw.
 	FirstRequest *float64 `json:"first_request_tokens"`
 	CostUSD      *float64 `json:"cost_usd"`      // mean reported cost
@@ -128,12 +131,14 @@ type TaskRow struct {
 }
 
 // TaskCell is a task's runs in one arm: marks in schedule order (● success, ○ failure, × not counted), and the mean cost
-// of the counted runs (nil without any).
+// of the counted runs (nil without any). Capped counts the counted runs stopped at their cap: with any, CostUSD is a
+// lower bound.
 type TaskCell struct {
 	Profile   string   `json:"profile,omitempty"` // the arm's model and effort, in a model-ab experiment only
 	Marks     string   `json:"marks"`
 	Successes int      `json:"successes"`
 	Counted   int      `json:"counted"`
+	Capped    int      `json:"capped"`
 	CostUSD   *float64 `json:"cost_usd"`
 }
 
@@ -296,6 +301,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 			continue
 		}
 		arm.Counted++
+		if rec.Outcome == claude.OutcomeCapped {
+			arm.Capped++
+		}
 		m, b := rec.Metrics, rec.Behavior
 		if m.FirstRequest > 0 {
 			first = append(first, float64(m.FirstRequest))
@@ -445,6 +453,9 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 					cell.Marks += "○"
 				}
 				cell.Counted++
+				if rec.Outcome == claude.OutcomeCapped {
+					cell.Capped++
+				}
 				costs = append(costs, rec.Spend().AgentUSD)
 			}
 			cell.CostUSD = mean(costs)
@@ -474,8 +485,11 @@ func notes(rep Report, in Input) []string {
 			status += ": " + in.scrub(rep.StatusNote)
 		}
 		covers := "and the results cover those"
-		if rep.Analysis.Sequential != nil {
-			covers = "and the results are its last look's"
+		if s := rep.Analysis.Sequential; s != nil {
+			covers = "and no look has been analysed yet, so the results cover every run so far"
+			if l := s.ReportedLook(); l != nil {
+				covers = fmt.Sprintf("and the results are look %d's", l.Look)
+			}
 		}
 		out = append(out, fmt.Sprintf("The experiment is not finished (%s): %d of %d runs settled, %s.", status, rep.Settled, rep.Slots, covers))
 	}
@@ -537,6 +551,9 @@ func notes(rep Report, in Input) []string {
 	}
 	if len(drift) > 0 {
 		out = append(out, "Environment drift in unfair runs: "+strings.Join(drift, "; ")+".")
+	}
+	if note := cappedNote(rep); note != "" {
+		out = append(out, note)
 	}
 	if estimated > 0 {
 		out = append(out, fmt.Sprintf("%d run(s) ended without Claude Code's cost: it was estimated from their transcripts at list prices.", estimated))
@@ -613,6 +630,28 @@ func notes(rep Report, in Input) []string {
 			"a subagent request without a model, or a subagent of unknown type), so their arm shows none.", noIsolated)
 	}
 	return append(out, cold, isolatedNote)
+}
+
+// cappedNote says how many counted runs Claude Code stopped at their cap, and what that means for their cost and the
+// verdicts; "" when none was.
+func cappedNote(rep Report) string {
+	total := 0
+	var parts []string
+	for _, a := range rep.Arms {
+		total += a.Capped
+		parts = append(parts, fmt.Sprintf("%s %d", a.Name, a.Capped))
+	}
+	if total == 0 {
+		return ""
+	}
+	note := fmt.Sprintf("%d counted run(s) were capped (%s): Claude Code stopped them at their cost cap or turn limit, so each one's cost is "+
+		"a lower bound of what it would have spent, and a mean that includes one is marked ≥ in the per-task table. They count as they ended, "+
+		"as every run does: graded with the hidden tests (a success when they pass) and at the cost they reached, which makes an arm that "+
+		"reaches its cap more often look cheaper than it would be without the cap.", total, strings.Join(parts, ", "))
+	if d := rep.Lock.Design; d.PerArmProfiles() && len(d.Arms) == 2 && d.ArmRunBudgetUSD(d.Arms[0]) != d.ArmRunBudgetUSD(d.Arms[1]) {
+		note += " The arms' caps differ, so the arm with the lower cap is cut shorter."
+	}
+	return note
 }
 
 func plural(n int, noun string) string {
