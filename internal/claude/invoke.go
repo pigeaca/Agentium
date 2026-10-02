@@ -75,6 +75,9 @@ type Invocation struct {
 	AllowLocalBinding bool
 	// JavaHome is a JDK resolved on the host (buildtool.ResolveJavaHome), which the JVM tools' environments name.
 	JavaHome string
+	// Venv is the Python venv the run's warm-up chose in Deps (buildtool.Warmed), which the Python profile's
+	// environment activates. Empty: none.
+	Venv string
 }
 
 // LocalBindingRefusal is why a run may not start: its tools (Gradle) need the sandbox's allowLocalBinding and the user
@@ -212,7 +215,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 			return nil, nil, fmt.Errorf("path %q (a denied path, the home folder or CLAUDE_CONFIG_DIR) is not absolute", p)
 		}
 	}
-	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome} {
+	for _, p := range []string{inv.ConfigDir, inv.TokenFile, inv.BuildCache, inv.TempRoot, inv.Deps, inv.JavaHome, inv.Venv} {
 		if p != "" && !filepath.IsAbs(p) {
 			return nil, nil, fmt.Errorf("path %q is not absolute", p)
 		}
@@ -245,7 +248,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	profiles := buildtool.Select(inv.Tools)
 	allowed := EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
-		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome})
+		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
 		name, _, _ := strings.Cut(kv, "=")
@@ -553,11 +556,14 @@ func Environ(environ []string) []string {
 // clears it in the agent's environment instead.
 func EnvironFor(environ []string, selected []buildtool.Profile) []string {
 	names := []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR",
-		"LANG", "TERM", "TZ", "VIRTUAL_ENV", "JAVA_HOME", "CARGO_HOME",
+		"LANG", "TERM", "TZ", "JAVA_HOME", "CARGO_HOME",
 		"RUSTUP_HOME", "PNPM_HOME", "BUN_INSTALL", "DENO_DIR",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
 		"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
-	prefixes := []string{"LC_", "PYTHON", "NODE_", "NVM_", "CONDA_", "PIP_", "UV_", "RUSTC", "XDG_", "HOMEBREW_"}
+	// No PYTHON*, PIP_*, UV_* or VIRTUAL_ENV, for any project: a PIP_INDEX_URL may carry a token, and PYTHONPATH,
+	// VIRTUAL_ENV or UV_CACHE_DIR would point the agent at other code or at the user's caches. A Python project's
+	// profile sets its own (buildtool's pythonEnv).
+	prefixes := []string{"LC_", "NODE_", "NVM_", "CONDA_", "RUSTC", "XDG_", "HOMEBREW_"}
 	toolNames, toolPrefixes := buildtool.EnvAllowlist(selected)
 	// Credentials are dropped by the shared policy; GIT_*, AGENTIUM_* and CLAUDE_* are simply not on the list.
 	return runner.EnvPolicy{Allowlist: true, Names: append(names, toolNames...), Prefixes: append(prefixes, toolPrefixes...)}.Filter(environ)

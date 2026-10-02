@@ -97,6 +97,9 @@ type Env struct {
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
 	CommandEnv []string
+	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
+	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
+	checkoutEnv func(dir string) []string
 	// judgeSpent, when set, learns what a judgement has spent so far (its earlier verdict's included) after each call
 	// that reported a cost: Once keeps it in the start file, so a crash while judging loses none of it.
 	judgeSpent func(usd float64)
@@ -396,8 +399,15 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
 		}
 	}
-	notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
+	warmed, notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
+	// What the warm-up found (Python's venv) goes to the agent, and to Agentium's own commands in a checkout: the task's
+	// setup in the run's, grading in its copy, with their caches in the data folder.
+	inv.Venv = warmed.Venv
+	env.checkoutEnv = func(dir string) []string {
+		return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.Environ, Environ: env.Environ, Home: env.Home, Repo: dir,
+			BuildCache: env.Layout.Cache, Deps: inv.Deps, Venv: warmed.Venv})
+	}
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
 		// not counted against it (an infrastructure failure is retried or left out).
@@ -413,6 +423,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		// build; the workspace holds no hidden tests yet.
 		setup := env
 		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
+		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
 		var ok bool
 		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
@@ -671,7 +682,11 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if !failed {
 		var commands []task.Command
 		var ok bool
-		commands, ok, err = env.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
+		verify := env
+		if env.checkoutEnv != nil {
+			verify.CommandEnv = append(slices.Clone(env.CommandEnv), env.checkoutEnv(graded)...)
+		}
+		commands, ok, err = verify.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -692,7 +707,6 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	runners := buildtool.RunnerConfigs()
 	for word, files := range map[string][]string{
 		"make": {"Makefile", "GNUmakefile"}, "npm": {"package.json"}, "pnpm": {"package.json"}, "yarn": {"package.json"},
-		"pytest": {"pytest.ini", "pyproject.toml", "setup.cfg", "tox.ini", "conftest.py"}, "tox": {"tox.ini"},
 		"jest": {"jest.config.js", "jest.config.ts"}, "vitest": {"vitest.config.ts", "vitest.config.js"},
 	} {
 		runners[word] = append(runners[word], files...)
@@ -705,8 +719,8 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range files {
-					if source.Has(base, f) && !slices.Contains(configs, f) {
+				for _, f := range matching(base, files) {
+					if !slices.Contains(configs, f) {
 						configs = append(configs, f)
 					}
 				}
@@ -714,6 +728,26 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 		}
 	}
 	return scripts, configs
+}
+
+// matching lists the files of base that names give: a name that exists, or every path a pattern with "*" matches
+// (path.Match: within one folder, requirements*.txt never reaches into a subfolder), in base's order.
+func matching(base source.Source, names []string) []string {
+	var out []string
+	for _, name := range names {
+		if !strings.Contains(name, "*") {
+			if source.Has(base, name) {
+				out = append(out, name)
+			}
+			continue
+		}
+		for _, p := range base.Paths() {
+			if ok, _ := path.Match(name, p); ok {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
 }
 
 // syncWorkTree makes dst's work tree (everything but .git) a copy of src's, and lists what in src could not be read.
@@ -1022,9 +1056,9 @@ func measure(numstat string, b *Behavior) []string {
 	return paths
 }
 
-// testRunner matches commands that run tests: the build tools' patterns from their profiles (Go, Maven, Gradle, Cargo),
-// then other runners.
-var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(), `pytest|python3? -m (pytest|unittest)|`+
+// testRunner matches commands that run tests: the build tools' patterns from their profiles (Go, Maven, Gradle, Cargo,
+// Python), then other runners.
+var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(),
 	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
 
 func ranTests(commands []string) bool {
