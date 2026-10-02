@@ -61,8 +61,10 @@ func gradleProfile() Profile {
 			return env
 		},
 		LocalBinding: true,
-		// Two steps: the compile classpaths, then the test task with a filter that selects nothing (it fails for that
-		// reason, after resolving the test runtime classpath, and the warm-up tolerates failures).
+		// Three steps: the compile classpaths, the test task with a filter that selects nothing (it fails for that
+		// reason, after resolving the test runtime classpath), then every other resolvable configuration of every
+		// project (Checkstyle, Spotless, JaCoCo, ...: the agent may run tasks that `test` does not reach). The warm-up
+		// tolerates failures.
 		PrepareDeps: prepareGradleDeps,
 		Warm: func(_, deps string, has func(string) bool) []WarmStep {
 			gradle := "gradle"
@@ -73,6 +75,7 @@ func gradleProfile() Profile {
 			return []WarmStep{
 				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q testClasses", Env: env},
 				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q test --tests AgentiumWarmNoSuchTest || true", Env: env},
+				{Command: gradle + " --no-daemon --no-build-cache --console=plain -q " + resolveAllTask + " || true", Env: env},
 			}
 		},
 		PrepareRun:      prepareGradleRun,
@@ -216,8 +219,39 @@ func prepareGradleDeps(deps string) error {
 		return err
 	}
 	script := "beforeSettings { settings ->\n    settings.caches { cleanup = Cleanup.DISABLED }\n}\n"
-	return os.WriteFile(filepath.Join(guh, "init.d", "agentium-no-cleanup.gradle"), []byte(script), 0o600)
+	if err := os.WriteFile(filepath.Join(guh, "init.d", "agentium-no-cleanup.gradle"), []byte(script), 0o600); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(guh, "init.d", "agentium-resolve-all.gradle"), []byte(resolveAllScript), 0o600)
 }
+
+// resolveAllTask is the task resolveAllScript adds to every project of the warm-up's build.
+const resolveAllTask = "agentiumResolveAll"
+
+// resolveAllScript is an init script, in the deps folder's Gradle home (so only the warm-up, which uses that home, sees
+// it), that adds resolveAllTask to every project: it resolves every resolvable configuration, which downloads the
+// artifacts into the read-only cache. Without it a build's other tasks fail offline in the agent's sandbox
+// (junit-pioneer: ":checkstyle ... No cached version of com.puppycrawl.tools:checkstyle ... offline mode").
+// A configuration that cannot be resolved here (one that needs attributes only its consumer sets, a failing
+// repository) is reported and skipped so it does not stop the others. It uses the project at execution time, so it
+// declares itself incompatible with the configuration cache where Gradle knows that call.
+const resolveAllScript = `allprojects {
+    tasks.register("agentiumResolveAll") {
+        if (it.respondsTo("notCompatibleWithConfigurationCache", String)) {
+            it.notCompatibleWithConfigurationCache("resolves every configuration of the project")
+        }
+        doLast {
+            project.configurations.matching { it.canBeResolved }.all { conf ->
+                try {
+                    conf.resolve()
+                } catch (Exception e) {
+                    println "agentium: skipped ${project.path}:${conf.name}: ${e.message?.readLines()?.getAt(0)}"
+                }
+            }
+        }
+    }
+}
+`
 
 // prepareGradleCommands gives Agentium's own Gradle commands (validation, grading) a user home under the cache folder
 // that never starts a daemon: a daemon would outlive the command with a heap of gigabytes.

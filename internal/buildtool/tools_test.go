@@ -235,6 +235,19 @@ func TestWarmSteps(t *testing.T) {
 		!strings.Contains(plain[0].Command, "AgentiumWarmNoSuchTest") {
 		t.Errorf("without wrappers or tests: %q", plain)
 	}
+	// Gradle: compile classpaths, the test runtime, then every other resolvable configuration, each its own step (a failure
+	// of one must not skip the next), all without the daemon and the build cache.
+	var gradle []string
+	for _, s := range WarmSteps(Select([]string{"gradle"}), repoWith(t, "gradlew"), "/d") {
+		if !strings.Contains(s.Command, "--no-daemon --no-build-cache") {
+			t.Errorf("a Gradle warm-up that may use the daemon or the build cache: %q", s.Command)
+		}
+		gradle = append(gradle, s.Command)
+	}
+	if len(gradle) != 3 || !strings.HasSuffix(gradle[0], "testClasses") || !strings.Contains(gradle[1], "AgentiumWarmNoSuchTest") ||
+		!strings.HasSuffix(gradle[2], "-q agentiumResolveAll || true") {
+		t.Errorf("Gradle warm-up steps: %q", gradle)
+	}
 	if got := NeedsWarming(Select([]string{"cargo", "maven"})); !slices.Equal(got, []string{"maven", "cargo"}) {
 		t.Errorf("warmed tools: %q", got)
 	}
@@ -250,6 +263,30 @@ func TestGradleDepsHomeKeepsItsFiles(t *testing.T) {
 	script, _ := os.ReadFile(filepath.Join(deps, "gradle", "init.d", "agentium-no-cleanup.gradle"))
 	if !strings.Contains(string(props), "org.gradle.cache.cleanup=false") || !strings.Contains(string(script), "Cleanup.DISABLED") {
 		t.Errorf("cleanup is not disabled: %q %q", props, script)
+	}
+}
+
+// The warm-up's task exists through an init script in the deps folder's Gradle home only: it resolves every resolvable
+// configuration of every project, tolerating one that cannot be resolved, and the agent's home has no such script.
+func TestGradleDepsHomeResolvesEveryConfiguration(t *testing.T) {
+	deps, cache := t.TempDir(), t.TempDir()
+	if err := PrepareDeps(Select([]string{"gradle"}), deps); err != nil {
+		t.Fatal(err)
+	}
+	script, err := os.ReadFile(filepath.Join(deps, "gradle", "init.d", "agentium-resolve-all.gradle"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"allprojects", `register("agentiumResolveAll")`, "canBeResolved", "conf.resolve()", "catch (Exception e)", "notCompatibleWithConfigurationCache"} {
+		if !strings.Contains(string(script), want) {
+			t.Errorf("init script lacks %q:\n%s", want, script)
+		}
+	}
+	if err := PrepareRun(context.Background(), Select([]string{"gradle"}), "", cache); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, "gradle", "init.d", "agentium-resolve-all.gradle")); err == nil {
+		t.Error("the run's Gradle home resolves configurations")
 	}
 }
 
