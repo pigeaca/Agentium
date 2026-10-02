@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
 )
 
@@ -162,5 +163,31 @@ func TestDescribePair(t *testing.T) {
 		if got := DescribePair(c.v); got != c.want {
 			t.Errorf("DescribePair(%+v) = %q, want %q", c.v, got, c.want)
 		}
+	}
+}
+
+// A comparison Agentium died in leaves its folder (with a config folder that may hold the sign-in) in a stored run's
+// records: any command that takes the run lock removes it, and keeps the rest of the records.
+func TestRecoverRemovesALeftoverPairJudgeFolder(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Records: filepath.Join(data, "records"), Workspaces: filepath.Join(data, "workspaces")}
+	dir := filepath.Join(layout.Records, "r2")
+	for p, body := range map[string]string{"agent.diff": "+x\n", "pair-judge/config/.claude.json": `{"token":"tok-secret-1234567890"}`} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, p), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	orphans, err := Recover(context.Background(), layout, func(id string) (bool, error) { return id == "r2", nil }, "", time.Now())
+	if err != nil || len(orphans) != 0 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "pair-judge")); err == nil {
+		t.Error("the pair judge's folder outlived the crash")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "agent.diff")); err != nil {
+		t.Errorf("the stored run's records went: %v", err)
 	}
 }

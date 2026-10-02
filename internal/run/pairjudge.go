@@ -95,8 +95,9 @@ func (env Env) JudgePair(ctx context.Context, spec Spec, s judge.Settings, a, b 
 	if err != nil {
 		return again(err)
 	}
+	so := 0.0         // what the calls reported, as the spend hook stored it
 	if spent != nil { // each call's reported cost as it lands, so a crash loses none of it
-		inner, so := call, 0.0
+		inner := call
 		call = func(ctx context.Context, prompt string) (judge.Reply, error) {
 			reply, err := inner(ctx, prompt)
 			var out struct {
@@ -113,7 +114,8 @@ func (env Env) JudgePair(ctx context.Context, spec Spec, s judge.Settings, a, b 
 		}
 	}
 	v, err := judge.JudgePair(ctx, judge.PairInput{Instruction: spec.Instruction, Reference: reference, A: diffs[0], B: diffs[1]}, s, call)
-	v.CostUSD += priorCost
+	// Never below what the hook stored: the stored cost of a pair only grows, whatever stopped it.
+	v.CostUSD = max(v.CostUSD+priorCost, priorCost+so)
 	if err != nil {
 		if ctx.Err() == nil { // the reference changes no code: nothing was spent
 			return final(err)
@@ -124,21 +126,13 @@ func (env Env) JudgePair(ctx context.Context, spec Spec, s judge.Settings, a, b 
 	return env.redactPair(PairJudgement{RunA: a.ID, Verdict: v})
 }
 
-// PairJudgeDir is the folder in b's records that b's comparison runs its calls in, and removes afterwards. Agentium
-// dying while comparing leaves it, with a config folder that may hold the sign-in (an API key or a token): an
-// experiment removes the folders of its runs before it compares again (RemovePairJudgeDir).
-func PairJudgeDir(b Record) string { return filepath.Join(b.RecordsDir, "pair-judge") }
+// pairJudgeFolder is the folder in an arm-B run's records that its comparison runs its calls in (PairJudgeDir).
+const pairJudgeFolder = "pair-judge"
 
-// RemovePairJudgeDir removes the folder a comparison left in b's records, if any. No comparison may be running on b.
-func RemovePairJudgeDir(b Record) error {
-	if b.RecordsDir == "" {
-		return nil
-	}
-	if err := os.RemoveAll(PairJudgeDir(b)); err != nil {
-		return fmt.Errorf("remove the pair judge folder of run %s: %w", b.ID, err)
-	}
-	return nil
-}
+// PairJudgeDir is the folder in b's records that b's comparison runs its calls in, and removes afterwards. Agentium
+// dying while comparing leaves it, with a config folder that may hold the sign-in (an API key or a token): Recover
+// removes it the next time any command takes the run lock, and a comparison made again removes it first.
+func PairJudgeDir(b Record) string { return filepath.Join(b.RecordsDir, pairJudgeFolder) }
 
 // redactPair redacts the comparison's texts: Claude Code's may quote what it was given or its environment.
 func (env Env) redactPair(p PairJudgement) PairJudgement {
