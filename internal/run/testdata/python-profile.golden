@@ -49,6 +49,8 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.pypirc
 /golden/home/.kube
 /golden/home/.gnupg
+/golden/home/Library/Keychains
+/Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build
 /golden/home/xdg/go-build
@@ -171,6 +173,8 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.pypirc
 /golden/home/.kube
 /golden/home/.gnupg
+/golden/home/Library/Keychains
+/Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build
 /golden/home/xdg/go-build
@@ -291,6 +295,8 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.pypirc
 /golden/home/.kube
 /golden/home/.gnupg
+/golden/home/Library/Keychains
+/Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build
 /golden/home/xdg/go-build
