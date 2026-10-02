@@ -197,10 +197,33 @@ func DisallowedTools() []string {
 		"SendMessage", "EnterWorktree", "ExitWorktree", "ArtifactComments", "ArtifactData", "Monitor", "PushNotification", "RemoteTrigger"}
 }
 
-// credentialFiles are the user's credential stores the sandbox denies (relative to the home folder).
+// credentialFiles are the user's credential stores the sandbox denies (relative to the home folder). Library/Keychains
+// holds the macOS login keychain: Claude Code's sandbox (2.1.285) allows the security server's Mach lookups
+// (com.apple.SecurityServer, com.apple.securityd.xpc), and its settings offer no way to deny them, only to allow more
+// (network.allowMachLookup). With the folder readable, `security` inside the agent's shell searches the login keychain,
+// where Claude Code and gh keep their tokens, stored through /usr/bin/security and so likely readable by it without a
+// prompt. Denied, the login keychain leaves the shell's search list. Claude Code reads its own login outside the
+// sandbox, which covers only its tools' commands, so sign-in is unaffected.
 func credentialFiles() []string {
 	return []string{".ssh", ".codex", ".config/gh", ".config/agentium", ".netrc", ".git-credentials", ".aws", ".docker",
-		".npmrc", ".pypirc", ".kube", ".gnupg"}
+		".npmrc", ".pypirc", ".kube", ".gnupg", "Library/Keychains"}
+}
+
+// machineCredentials are the machine's credential stores the sandbox denies: the System keychain's folder, which holds
+// no user secrets but which no agent needs (TLS trust is trustd's, outside the sandbox, and the network is off). It is
+// listed on every system, so the settings do not depend on the machine; denying a missing path is harmless.
+func machineCredentials() []string {
+	return []string{"/Library/Keychains"}
+}
+
+// credentialPaths are every credential store the sandbox denies, as absolute paths: the user's (credentialFiles) under
+// home, then the machine's.
+func credentialPaths(home string) []string {
+	var paths []string
+	for _, name := range credentialFiles() {
+		paths = append(paths, filepath.Join(home, name))
+	}
+	return append(paths, machineCredentials()...)
 }
 
 // movedCredentials are credential stores the user's environment moves out of credentialFiles' places: gh's config
@@ -366,7 +389,7 @@ func SessionFolders(configDir string) []string {
 //     its history paths: Claude Code keeps working files there that its Bash tool reads, such as the shell snapshot.
 //     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
-//   - credential stores and the token file's folder;
+//   - credential stores (credentialPaths: the login and System keychains among them) and the token file's folder;
 //   - the build tools' caches of the user (buildtool.UserCaches: Go's build caches), which hold hidden tests compiled
 //     before Agentium kept its own;
 //   - with a temp root of the run's own, the user's shared Claude Code temp folders (SharedTempDirs);
@@ -392,9 +415,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	if inv.TokenFile != "" {
 		paths = append(paths, filepath.Dir(inv.TokenFile))
 	}
-	for _, name := range credentialFiles() {
-		paths = append(paths, filepath.Join(inv.Home, name))
-	}
+	paths = append(paths, credentialPaths(inv.Home)...)
 	paths = append(paths, movedCredentials(environ, inv.Home)...)
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	if inv.Deps != "" {
@@ -526,8 +547,8 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
 	}
 	var files []map[string]string
-	for _, name := range credentialFiles() {
-		files = append(files, map[string]string{"path": filepath.Join(inv.Home, name), "mode": "deny"})
+	for _, p := range credentialPaths(inv.Home) {
+		files = append(files, map[string]string{"path": p, "mode": "deny"})
 	}
 	if inv.TokenFile != "" {
 		files = append(files, map[string]string{"path": filepath.Dir(inv.TokenFile), "mode": "deny"})
