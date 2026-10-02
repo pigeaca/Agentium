@@ -11,6 +11,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 - [Running and comparing](#running-and-comparing)
 - [Experiment templates](#experiment-templates)
 - [The judge](#the-judge-second-opinion)
+- [Scripting and automation](#scripting-and-automation)
 - [Data folder and environment](#data-folder-and-environment)
 
 ## Requirements in detail
@@ -110,6 +111,33 @@ Its limits:
 - **It decides nothing.** Success, cost and every verdict stay the tests'.
 - **Its accuracy is unmeasured.** In the [pilot](research/2026-10-01-judge-pilot-results.md), it judged 18 of 40 passing runs not fully fixed.
 - **It costs extra.** Each call costs a few cents: about $0.065 a call (the preview's estimate; $0.063 per single judgement in the pilot). The calls count against the budget, but not toward an arm's cost.
+
+## Scripting and automation
+
+For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|list|diff|lint`, `task list|show|mine|validate|import|add|edit|rm`, `run once|show|list` and `start`. The experiment commands follow in part 1b (`experiment report --json` exists already, with its own shape).
+
+**`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off. Put it after the subcommand: `task list --json`. `task --json list` is deliberately not recognized.
+- Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case. Lists are `[]`, never `null`, and every field is always present: one that can be unknown or not asked for is `null` (`solution_commit`, `unstated_requirements`, `passed`, `diff`, `patch`, the logs of `run show`).
+- Failure: `{"schema": 1, "command": "...", "error": {"message": "...", "code": 1}}`. `code` is the exit code. `message` is the command's own error sentence, for example `task "nope": not found`, or `agentium task edit: give NAME and at least one of ...` for a usage error; when the arguments are wrong in a way that has no sentence, `invalid arguments: run the command with -h for its usage`. The usage text and earlier warnings are never part of it.
+- A result that is bad rather than broken keeps its normal document and exit 1: an invalid or flaky task (`task validate`), `start` with too few tasks (`"status": "too_few_tasks"`).
+- **Unstable human text:** `log`, `status_summary`, `summary`, `message`, `warnings`, `notes`, `problems` and `readiness[].text` are for people. Their wording changes; do not parse it. Branch on the other fields, and on `status` values.
+- **`readiness[].status`** is one of `ok`, `missing` or `warning`, mapped from the labels the text shows, so a change of label does not change JSON.
+- No ANSI escape ever, whatever `NO_COLOR`, `FORCE_COLOR` or the terminal say. Documents name no absolute path (repository, data folder, records, Claude Code), no user name and no secret, as reports do; repository files appear as relative paths. In free text (messages, logs, warnings, notes) the data folder is shown as `<data>`, the repository as `<repo>` and the home folder as `~`, at whole path names only. The setup and verification logs of `run show --log` are Agentium's own output and are redacted the same way; content that is yours (diffs, patches, instructions, file names) is never rewritten.
+- Warnings for a person may still appear on stderr. `--json` with `-h`, `-help` or `--help` prints the usage as text. `context lint --hook` and `--print-hook` already print Claude Code's JSON and refuse `--json`.
+
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| 0 | Success, including nothing to do: no tasks, no candidates, no differences, or `start` stopping at its preview. `context lint` exits 0 when it finds problems. |
+| 1 | Runtime failure, or a bad result: an invalid or flaky task, `start` with too few tasks, `start --yes` that was not ready. |
+| 2 | Usage error: bad flags or arguments. |
+
+**No prompts.** Agentium asks one question: `start`'s "Run it now?", and only when stdin and stdout are both terminals. With stdin from a pipe, a file or `/dev/null` it never reads stdin and stops at the preview; `start --json` never asks, even at a terminal. Only `--yes` spends money, and `start --json --yes` is refused (usage error) until `experiment run` has JSON.
+
+For `start`, read `"status"`: `preview` (everything is in place; `"run_command"` starts the experiment and spends money), `not_ready` (`"readiness"` lists what is missing, for example mined tasks that wait for a person's review), `too_few_tasks`, or `finished`. `"nothing_was_run"` is always true.
+
+Planned (part 2): a committed `agentium.toml` that Agentium reads and never writes, for budgets and consent to spend. See the [plan](../.agents/plans/2026-10-02-headless.md).
 
 ## Data folder and environment
 

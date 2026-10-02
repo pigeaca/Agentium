@@ -101,7 +101,13 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 	st, res := env.style(), prep.Result
 	printScan(env, prep)
 	if a.dryRun {
+		if env.JSON {
+			return env.emit(env.mineDocument(prep, res.Candidates[:min(a.limit, len(res.Candidates))], true))
+		}
 		return printDryRun(env, prep, a.limit)
+	}
+	if len(res.Candidates) == 0 && env.JSON { // nothing to do is a success
+		return env.emit(env.mineDocument(prep, nil, false))
 	}
 	if len(res.Candidates) == 0 {
 		fmt.Fprintf(env.Stdout, "Nothing to import: %s shows why the commits were set aside\n", st.Command("agentium task mine --dry-run"))
@@ -117,6 +123,11 @@ func taskMine(ctx context.Context, env Env, args []string) int {
 			live.Step(fmt.Sprintf("importing %d of %d: %s", imported+1, a.limit, experiment.ShortCommit(c.Hash)))
 		}})
 	live.Stop()
+	if imp.Interrupted && env.JSON {
+		doc := env.mineDocument(prep, nil, false)
+		doc.Tried, doc.Imported, doc.Interrupted = imp.Tried, len(imp.Tasks), true
+		return env.emitCode(doc, ExitError)
+	}
 	if imp.Interrupted {
 		fmt.Fprintf(env.Stdout, "Interrupted: %d task(s) imported, not validated; %s validates them\n", len(imp.Tasks),
 			st.Command("agentium task validate --all --status unvalidated"))
@@ -164,6 +175,11 @@ func finishMine(ctx context.Context, env Env, w *workspace, a mineArgs, prep min
 	for _, f := range imp.Failed {
 		rows = append(rows, batchRow{name: taskName(f.Candidate.Subject, f.Candidate.Hash), commit: f.Candidate.Hash, problem: "not imported: " + f.Err.Error()})
 	}
+	if len(imp.Tasks) == 0 && env.JSON {
+		doc := env.mineDocument(prep, nil, false)
+		doc.Tried, doc.Rows = imp.Tried, batchRowDocs(ctx, env, w, rows)
+		return env.emitCode(doc, ExitError)
+	}
 	if len(imp.Tasks) == 0 {
 		fmt.Fprintln(env.Stdout, st.Heading(fmt.Sprintf("Imported none of %d candidate(s)", imp.Tried)))
 		if err := printBatchTable(ctx, env, w, rows); err != nil {
@@ -177,14 +193,24 @@ func finishMine(ctx context.Context, env Env, w *workspace, a mineArgs, prep min
 	if err != nil {
 		return fail(env, err)
 	}
-	if err := printBatchTable(ctx, env, w, append(batchRows(results), rows...)); err != nil {
-		return fail(env, err)
-	}
 	valid := 0
 	for _, r := range results {
 		if r.Validated && task.ValidationOf(r.Task).Status == task.StatusValid {
 			valid++
 		}
+	}
+	if env.JSON {
+		doc := env.mineDocument(prep, nil, false)
+		doc.Tried, doc.Imported, doc.Valid, doc.Interrupted = imp.Tried, len(imp.Tasks), valid, ctx.Err() != nil
+		doc.Rows = batchRowDocs(ctx, env, w, append(batchRows(results), rows...))
+		code := ExitOK
+		if doc.Interrupted {
+			code = ExitError
+		}
+		return env.emitCode(doc, code)
+	}
+	if err := printBatchTable(ctx, env, w, append(batchRows(results), rows...)); err != nil {
+		return fail(env, err)
 	}
 	fmt.Fprintf(env.Stdout, "%d of %d imported task(s) are valid.\n", valid, len(imp.Tasks))
 	if ctx.Err() != nil {
@@ -275,6 +301,9 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 		tasks = task.FilterByStatus(tasks, status)
 	}
 	st := env.style()
+	if len(tasks) == 0 && env.JSON { // nothing to validate is a success
+		return env.emit(validateAllDoc{header: env.hdr(), Rows: []batchRowDoc{}})
+	}
 	if len(tasks) == 0 {
 		if status != "" {
 			fmt.Fprintf(env.Stdout, "No %s tasks to validate.\n", status)
@@ -288,6 +317,15 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		doc := validateAllDoc{header: env.hdr(), Rows: batchRowDocs(ctx, env, w, batchRows(results)), Total: len(results), Interrupted: ctx.Err() != nil}
+		for _, r := range results {
+			if r.Validated && task.ValidationOf(r.Task).Status == task.StatusValid {
+				doc.Valid++
+			}
+		}
+		return env.emitCode(doc, batchExit(ctx, results))
+	}
 	if err := printBatchTable(ctx, env, w, batchRows(results)); err != nil {
 		return fail(env, err)
 	}
@@ -300,6 +338,19 @@ func validateAll(ctx context.Context, env Env, w *workspace, status string, o ta
 			return ExitError
 		}
 		if s := task.ValidationOf(r.Task).Status; s == task.StatusInvalid || s == task.StatusFlaky {
+			return ExitError
+		}
+	}
+	return ExitOK
+}
+
+// batchExit is task validate --all's exit code: a failure when interrupted, or when any task is not validated, invalid or flaky.
+func batchExit(ctx context.Context, results []task.BatchResult) int {
+	if ctx.Err() != nil {
+		return ExitError
+	}
+	for _, r := range results {
+		if !r.Validated || validationExit(task.ValidationOf(r.Task).Status) != ExitOK {
 			return ExitError
 		}
 	}
