@@ -199,9 +199,17 @@ func (e Estimate) EstimateBasis() string {
 	}
 }
 
-// NoHistory reports whether no earlier task run on the model taught the estimate anything: every run is then priced
-// by the default profile, or at the cap.
-func (e Estimate) NoHistory() bool { return e.Runs == 0 }
+// FewRuns reports whether fewer than MinPastRuns earlier task runs on the model back the estimate: a task without runs
+// of its own is then priced by the default profile, or at the cap, not by the project's median.
+func (e Estimate) FewRuns() bool { return e.Runs < MinPastRuns }
+
+// FewRunsWords says how few runs back the estimate: none yet, or fewer than MinPastRuns.
+func (e Estimate) FewRunsWords(model string) string {
+	if e.Runs == 0 {
+		return "no runs on " + model + " yet"
+	}
+	return fmt.Sprintf("fewer than %d runs on %s (%d)", MinPastRuns, model, e.Runs)
+}
 
 // EstimateRun estimates runs on model from the project's earlier fair task runs on it. A task with runs of its own is
 // estimated by their median. Any other task gets the median of all of them when there are at least MinPastRuns, else

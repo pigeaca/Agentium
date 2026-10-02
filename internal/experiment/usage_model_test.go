@@ -145,3 +145,19 @@ func TestUsagePreviewSaysWhatItRestsOn(t *testing.T) {
 		t.Errorf("an API key: %+v", p)
 	}
 }
+
+// A 0% reading in a live window is current: the window has not reset, nothing of it is used yet.
+func TestUsagePreviewZeroReadingIsCurrent(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 2, 15, 30, 0, 0, time.Local)
+	resets := now.Add(4 * time.Hour)
+	arms := []UsageModel{{UsageRate: UsageRate{Model: sonnet55}, PlannedRuns: 2}}
+	p := planUsage([]UsageSample{usageRun(sonnet55, now.Add(-10*time.Minute), time.Minute, 0, 0, resets)}, arms, "login", 0.85, now)
+	if p.Latest == nil || !p.Latest.Current || p.Latest.Used != 0 || p.Latest.Fits != 14 { // 0.85 / 0.06
+		t.Fatalf("a 0%% reading: %+v", p.Latest)
+	}
+	got := writeUsage(p, now)
+	if want := "The window was 0% used at the last reading, 9 min ago"; !strings.Contains(got, want) || strings.Contains(got, "has reset since") {
+		t.Errorf("preview lacks %q, or says the window reset:\n%s", want, got)
+	}
+}

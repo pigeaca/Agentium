@@ -161,19 +161,19 @@ func (r Review) writeSequential(out io.Writer, st term.Style) error {
 	return nil
 }
 
-// writeNoHistory warns, for each arm model without earlier task runs whose estimate is the run cap, that the estimated
-// and expected spend assume every run reaches it: safe for the budget, but often several times the real spend (the
-// seq-v1 smoke rerun's $0.30 cap against $0.09 a run).
+// writeNoHistory warns, for each arm model with fewer than MinPastRuns earlier task runs whose default estimate is held
+// to the run cap, that the estimated spend assumes every run reaches it: safe for the budget, but often several times
+// the real spend (the seq-v1 smoke rerun's $0.30 cap against $0.09 a run).
 func (r Review) writeNoHistory(out io.Writer, st term.Style) {
-	var models []string
+	var seen []string
 	for _, e := range r.Estimates {
-		if e.NoHistory() && e.EstimateBasis() == BasisCap && !slices.Contains(models, e.Model) {
-			models = append(models, e.Model)
+		if !e.FewRuns() || e.EstimateBasis() != BasisCap || slices.Contains(seen, e.Model) {
+			continue
 		}
-	}
-	for _, m := range models {
-		fmt.Fprintln(out, st.Warn(fmt.Sprintf("No runs on %s yet: the estimated spend above assumes each run reaches its cap, so\n"+
-			"it is likely high (safe for the budget); the experiment's first runs measure the real cost.", m)))
+		seen = append(seen, e.Model)
+		words := e.FewRunsWords(e.Model)
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("%s: the estimated spend above assumes each run reaches its cap, so\n"+
+			"it is likely high (safe for the budget); the experiment's first runs measure the real cost.", strings.ToUpper(words[:1])+words[1:])))
 	}
 }
 
@@ -359,9 +359,9 @@ func WriteCostBasis(out io.Writer, st term.Style, d Design, eligible []string, e
 	if len(other) > 0 {
 		fallback := "no estimate (" + est.Basis + ")"
 		switch {
-		case est.Known && est.Capped(est.PerRunUSD) && est.NoHistory():
-			fallback = fmt.Sprintf("$%.2f, the run cap: no runs on this model yet: the estimate assumes each run reaches its cap ($%.2f\n"+
-				"    from %s)", est.CapUSD, est.PerRunUSD, est.Basis)
+		case est.Known && est.Capped(est.PerRunUSD) && est.FewRuns():
+			fallback = fmt.Sprintf("$%.2f, the run cap: %s: the estimate assumes each run reaches its cap ($%.2f\n"+
+				"    from %s)", est.CapUSD, est.FewRunsWords("this model"), est.PerRunUSD, est.Basis)
 		case est.Known && est.Capped(est.PerRunUSD):
 			fallback = fmt.Sprintf("$%.2f, the run cap: runs are expected to reach it ($%.2f from %s)", est.CapUSD, est.PerRunUSD, est.Basis)
 		case est.Known:

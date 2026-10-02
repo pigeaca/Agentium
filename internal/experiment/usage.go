@@ -48,8 +48,11 @@ type UsageRate struct {
 	Runs   int // the task runs on Model it was measured over; 0 when it is DefaultUsagePerRun
 }
 
-// UsagePerRun estimates the share of a five-hour window one task run on model uses, from that model's task runs only:
-// another model's runs use the window at their own rate. It takes the latest window in which at least MinUsageRuns of
+// UsagePerRun estimates the share of a five-hour window one task run on model uses, from that model's task runs only,
+// so another model's runs apart from them do not set its rate. Runs of another model that overlap this model's
+// stretches (a model-ab experiment's arms running side by side) are counted in them, though: each model's figure is
+// then about its own rate plus the other's times their runs' ratio, which errs high, and a later experiment on one of
+// the models inherits it until a window of that model's runs alone measures it again. It takes the latest window in which at least MinUsageRuns of
 // them read a rise, and divides that rise by those runs. The rise is counted only while the model's runs were going:
 // runs are joined into stretches (each starting within UsageJoinGap of the stretch's end so far), and each stretch adds
 // the rise from its lowest first reading to its highest last reading, so overlapping runs count their shared rise once

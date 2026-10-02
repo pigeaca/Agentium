@@ -156,7 +156,8 @@ func planUsage(samples []UsageSample, arms []UsageModel, signIn string, limit fl
 	}
 	l := UsageLatest{Reading: latest.Last, ReadAt: latest.Finished}
 	age, known := l.Age(now)
-	l.Current = latest.Last.FiveHourAt(now) > 0 && (!known || age < FiveHourWindow)
+	// A reading is this window's while its window has not reset and it is younger than a window; 0% is a reading too.
+	l.Current = now.Before(latest.Last.FiveHourResets) && (!known || age < FiveHourWindow)
 	if l.Current {
 		l.Used = latest.Last.FiveHour
 		perRun := 0.0 // the gate holds every model to the largest rate
@@ -211,7 +212,7 @@ func (p UsagePreview) Write(out io.Writer, st term.Style, now time.Time) {
 	}
 	if !l.Current {
 		why := "its window has reset since"
-		if l.Reading.FiveHourAt(now) > 0 {
+		if now.Before(l.Reading.FiveHourResets) {
 			why = "it is older than a five-hour window"
 		}
 		fmt.Fprintf(out, "The last reading (%s) is not this window's: %s, so this window's use is unknown until a run reports it.\n", when, why)

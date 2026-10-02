@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -339,4 +340,44 @@ func TestLoadRefusesMismatchedDesignVersions(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "plan", "old-model"), ExitError, "its design (version 1) is not one this Agentium reads")
 	expect(t, f.run(ctx, "experiment", "plan", "new-ctx"), ExitError, "its design (version 2) is not one this Agentium reads")
 	expect(t, f.run(ctx, "experiment", "plan", "good"), ExitOK, "model A/B")
+}
+
+// A model-ab experiment's usage gate holds both arms to the larger of their models' measured shares of the window: arm
+// A's model at 0.2% a run would let the next pair start at 78%, arm B's at 6% would pass the 85% limit, so it pauses.
+func TestModelABUsageGateUsesTheLargerModelRate(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	calibrateOn(t, f, ctrl, opus)
+	now := time.Now()
+	resets := now.Add(2 * time.Hour).Truncate(time.Second)
+	read := func(model string, start time.Time, first, last float64) store.Run {
+		var rec struct {
+			Model   string         `json:"model"`
+			Metrics claude.Metrics `json:"metrics"`
+		}
+		rec.Model = model
+		rec.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
+		rec.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
+		data, err := json.Marshal(rec)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return store.Run{TaskName: "value", Kind: "task", Outcome: "ok", Record: data, Started: start, Finished: start.Add(time.Minute)}
+	}
+	var runs []store.Run
+	for i := range 3 {
+		runs = append(runs, read(opus, now.Add(-2*time.Hour+time.Duration(i)*time.Minute), 0.50+0.06*float64(i), 0.56+0.06*float64(i)),
+			read(sonnet, now.Add(-10*time.Minute+time.Duration(i)*time.Minute), 0.774+0.002*float64(i), 0.776+0.002*float64(i)))
+	}
+	saveRuns(t, f, runs...)
+	expect(t, f.run(ctx, "experiment", "new", "m", "--template", "model-ab", "--a", sonnet, "--b", opus, "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5",
+		"--budget", "40", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "plan", "m"), ExitOK, "about 0.2% of the five-hour window per run on claude-sonnet-5-5 (measured over 3 task run(s)",
+		"about 6% of the five-hour window per run on claude-opus-5-5 (measured over 3 task run(s)")
+	out := f.run(ctx, "experiment", "run", "m")
+	expect(t, out, ExitOK, "the five-hour usage window is at 78%, and the next pair (about 6% a run) would pass the 85% limit")
+	if n := len(experimentRuns(t, f, "m")); n != 0 {
+		t.Errorf("%d run(s) started; the gate should hold both arms to arm B's 6%%:\n%s", n, out.stdout)
+	}
 }
