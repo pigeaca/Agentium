@@ -81,8 +81,9 @@ func newFakeGH(t *testing.T, rules ...rule) fakeGH {
 		t.Fatal(err)
 	}
 	return fakeGH{dir: bin, record: record, environ: []string{"PATH=" + bin + ":/usr/bin:/bin", "HOME=" + root, "LANG=C",
-		"GH_TOKEN=gho_user", "ANTHROPIC_API_KEY=sk-ant-x", "SSH_AUTH_SOCK=/tmp/agent", "GIT_DIR=/user/.git", // secret-scan: allow
-		"AGENTIUM_HOME=/data", "GH_HOST=evil.example", "GH_DEBUG=api", "GH_REPO=evil/repo", "GH_ENTERPRISE_TOKEN=e", "EDITOR=vim"}}
+		"GH_TOKEN=gho_user", "GITHUB_TOKEN=ghp_other", "ANTHROPIC_API_KEY=sk-ant-x", "SSH_AUTH_SOCK=/tmp/agent", "GIT_DIR=/user/.git", // secret-scan: allow
+		"AGENTIUM_HOME=/data", "GH_HOST=evil.example", "GH_DEBUG=api", "GH_REPO=evil/repo", "GH_ENTERPRISE_TOKEN=e", "EDITOR=vim",
+		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/501/bus", "XDG_RUNTIME_DIR=/run/user/501"}}
 }
 
 // hasFunc is the fake's matcher. The call's arguments are kept in the args file; has reads them back NUL-separated
@@ -139,7 +140,11 @@ type fakePull struct {
 	URL    string `json:"html_url"`
 	Title  string `json:"title"`
 	Head   struct {
-		SHA string `json:"sha"`
+		SHA  string `json:"sha"`
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
 		Repo struct {
@@ -148,9 +153,23 @@ type fakePull struct {
 	} `json:"base"`
 }
 
+// pull is a pull request into base whose head is the commit head on a branch of base itself; fromFork moves the head
+// to another repository (an empty name: the head repository was deleted, so GitHub sends null).
 func pull(number int, state, head, base, title string) fakePull {
 	p := fakePull{Number: number, State: state, URL: fmt.Sprintf("https://github.com/%s/pull/%d", base, number), Title: title}
-	p.Head.SHA, p.Base.Repo.FullName = head, base
+	p.Head.SHA, p.Head.Ref, p.Base.Repo.FullName = head, fmt.Sprintf("branch-%d", number), base
+	p.Head.Repo = &struct {
+		FullName string `json:"full_name"`
+	}{base}
+	return p
+}
+
+func fromFork(p fakePull, headRepo string) fakePull {
+	if headRepo == "" {
+		p.Head.Repo = nil
+	} else {
+		p.Head.Repo.FullName = headRepo
+	}
 	return p
 }
 
@@ -168,13 +187,17 @@ func TestPullRequests(t *testing.T) {
 		{"one", rule{stdout: jsonOf(t, []fakePull{pull(7, "open", sha, "octo/widgets", hostile)})}, []int{7}},
 		{"several, by number, over two pages", rule{stdout: jsonOf(t, []fakePull{pull(12, "open", sha, "octo/widgets", "b")}) +
 			jsonOf(t, []fakePull{pull(4, "open", sha, "octo/widgets", "a"), pull(12, "open", sha, "octo/widgets", "b")})}, []int{4, 12}},
-		// The associated list holds every pull request containing the commit; only open ones headed by it, into this
-		// repository, count. Text that mentions the commit (hostile's title) does not make a pull request match.
+		// The associated list holds every pull request containing the commit; only open ones headed by it, on a branch
+		// of this repository, count. Text that mentions the commit (hostile's title) does not make a pull request match,
+		// and neither does a stranger's fork at the very same commit.
 		{"filtered", rule{stdout: jsonOf(t, []fakePull{
 			pull(1, "closed", sha, "octo/widgets", "closed"),
 			pull(2, "open", other, "octo/widgets", hostile),
 			pull(3, "open", sha, "fork/widgets", "another base"),
+			fromFork(pull(6, "open", sha, "octo/widgets", hostile), "mallory/widgets"),
+			fromFork(pull(8, "open", sha, "octo/widgets", "deleted fork"), ""),
 			pull(5, "open", sha, "OCTO/Widgets", hostile)})}, []int{5}},
+		{"only a fork at the commit", rule{stdout: jsonOf(t, []fakePull{fromFork(pull(9, "open", sha, "octo/widgets", "x"), "mallory/widgets")})}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			c.answer.match = []string{pullsEndpoint}
@@ -186,7 +209,7 @@ func TestPullRequests(t *testing.T) {
 			var numbers []int
 			for _, p := range got {
 				numbers = append(numbers, p.Number)
-				if p.HeadSHA != sha || !strings.HasPrefix(p.URL, "https://github.com/") {
+				if p.HeadSHA != sha || p.HeadRef != fmt.Sprintf("branch-%d", p.Number) || !strings.HasPrefix(p.URL, "https://github.com/") {
 					t.Errorf("pull request %+v", p)
 				}
 			}
@@ -301,7 +324,7 @@ func TestUpsertComment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Created != (c.edit == 0) || got.ID != 99 {
+			if got.Created != (c.edit == 0) || got.ID != 99 || got.As != "alice" {
 				t.Errorf("comment %+v", got)
 			}
 			calls := fake.calls(t)
@@ -364,7 +387,7 @@ func TestSetStatus(t *testing.T) {
 	}{
 		{StatePending, "Queued for tonight's pass", "Queued for tonight's pass"},
 		{StateSuccess, long, ""},
-		{StateError, "The check broke: a run failed to start", "The check broke: a run failed to start"},
+		{StateSuccess, "Agentium could not screen this commit: a run failed to start", "Agentium could not screen this commit: a run failed to start"},
 	} {
 		fake := newFakeGH(t, rule{match: []string{"--method", "POST", endpoint}, stdout: `{"id":1}`})
 		if err := fake.client(t).SetStatus(context.Background(), repo, sha, c.state, c.desc); err != nil {
@@ -389,9 +412,10 @@ func TestSetStatus(t *testing.T) {
 			t.Errorf("description %q (%d characters)", desc, n)
 		}
 	}
-	// A warn-only screen never fails a pull request: "failure" (and anything else) is refused before gh runs.
+	// A warn-only screen never fails a pull request: "error" and "failure" both would, and are refused before gh runs,
+	// as is anything else.
 	fake := newFakeGH(t)
-	for _, state := range []State{"failure", "neutral", ""} {
+	for _, state := range []State{"error", "failure", "neutral", "Success", ""} {
 		if err := fake.client(t).SetStatus(context.Background(), repo, sha, state, "x"); err == nil {
 			t.Errorf("state %q accepted", state)
 		}
@@ -464,7 +488,8 @@ func TestGHEnvironment(t *testing.T) {
 		env[name] = value
 	}
 	for name, want := range map[string]string{"GH_TOKEN": "gho_user", "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1",
-		"GH_TELEMETRY": "false", "NO_COLOR": "1", "LANG": "C"} {
+		"GH_TELEMETRY": "false", "NO_COLOR": "1", "LANG": "C", "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/501/bus",
+		"XDG_RUNTIME_DIR": "/run/user/501"} {
 		if env[name] != want {
 			t.Errorf("%s = %q, want %q", name, env[name], want)
 		}
@@ -472,10 +497,46 @@ func TestGHEnvironment(t *testing.T) {
 	if !strings.HasPrefix(env["PATH"], fake.dir) || env["HOME"] == "" {
 		t.Errorf("PATH %q, HOME %q", env["PATH"], env["HOME"])
 	}
-	for _, gone := range []string{"ANTHROPIC_API_KEY", "SSH_AUTH_SOCK", "GIT_DIR", "AGENTIUM_HOME", "GH_HOST", "GH_DEBUG", "GH_REPO",
+	// GITHUB_TOKEN is often another tool's or another account's: only gh's explicit GH_TOKEN passes.
+	for _, gone := range []string{"GITHUB_TOKEN", "ANTHROPIC_API_KEY", "SSH_AUTH_SOCK", "GIT_DIR", "AGENTIUM_HOME", "GH_HOST", "GH_DEBUG", "GH_REPO",
 		"GH_ENTERPRISE_TOKEN", "EDITOR"} {
 		if _, ok := env[gone]; ok {
 			t.Errorf("%s reached gh", gone)
+		}
+	}
+}
+
+// A rate limit is its own error (the caller waits for the next pass); a 403 without one is an ordinary failure.
+func TestRateLimit(t *testing.T) {
+	for _, c := range []struct {
+		stderr string
+		want   error
+	}{
+		{"gh: API rate limit exceeded for user ID 1. (HTTP 403)", ErrRateLimited},
+		{"gh: You have exceeded a secondary rate limit. Please wait a few minutes before you try again. (HTTP 403)", ErrRateLimited},
+		{"gh: API rate limit exceeded (HTTP 429)", ErrRateLimited},
+		{"gh: Resource not accessible by personal access token (HTTP 403)", nil},
+	} {
+		fake := newFakeGH(t, rule{match: []string{"user"}, stderr: c.stderr, code: 1})
+		_, err := fake.client(t).Login(context.Background())
+		var call *CallError
+		switch {
+		case c.want != nil && !errors.Is(err, c.want):
+			t.Errorf("%q: error %v, want %v", c.stderr, err, c.want)
+		case c.want == nil && (errors.Is(err, ErrRateLimited) || !errors.As(err, &call)):
+			t.Errorf("%q: error %v, want a CallError", c.stderr, err)
+		}
+	}
+}
+
+// Login is the identity a caller shows before posting; logins GitHub no longer issues are refused (fail-closed).
+func TestLogin(t *testing.T) {
+	for login, ok := range map[string]bool{"alice": true, "Alice-B": true, "a1": true, "legacy-": false, "le--gacy": false, "": false,
+		"$(id)": false} {
+		fake := newFakeGH(t, rule{match: []string{"user"}, stdout: jsonOf(t, map[string]string{"login": login})})
+		got, err := fake.client(t).Login(context.Background())
+		if ok && (err != nil || got != login) || !ok && err == nil {
+			t.Errorf("login %q: %q, %v", login, got, err)
 		}
 	}
 }

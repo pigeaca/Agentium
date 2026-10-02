@@ -22,7 +22,8 @@ var ghTokens = []string{"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITH
 // config folder (~/.config/gh, where gh keeps its hosts and, without a keychain, its token) is denied to the shell,
 // the Read tool and the sandbox's credential files in every sign-in mode, and gh's token variables are dropped from
 // every run's and judge call's environment, whatever build-tool profiles widen the allowlist; GH_CONFIG_DIR, which
-// would point the agent at a config folder elsewhere, does not pass either.
+// would point the agent at a config folder elsewhere, does not pass either. This covers the default folder only: denying
+// a non-default one ($GH_CONFIG_DIR, $XDG_CONFIG_HOME/gh) belongs to the Python profile branch's change to this package.
 func TestGHLoginNeverReachesTheAgent(t *testing.T) {
 	if !slices.Contains(credentialFiles(), ".config/gh") {
 		t.Fatalf("credential files %q do not include .config/gh", credentialFiles())

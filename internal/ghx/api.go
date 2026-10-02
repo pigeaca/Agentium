@@ -13,17 +13,23 @@ import (
 	"unicode/utf8"
 )
 
-// PullRequest is an open pull request whose head is the commit asked about. Only identifiers are kept: titles and
-// bodies are never read.
+// PullRequest is an open pull request whose head is the commit asked about, on a branch of the same repository. Only
+// identifiers are kept: titles and bodies are never read.
 type PullRequest struct {
 	Number  int
 	URL     string // its page on github.com
 	HeadSHA string
+	HeadRef string // the head branch's name (in the repository itself), for the caller to match the branch it watched
 }
 
-// PullRequests returns the open pull requests of repo whose head commit is sha, by number; none is not an error (the
-// screen waits until one exists). Several are possible (one branch opened against two bases, or two branches at the
-// same commit): the caller chooses.
+// PullRequests returns the open pull requests of repo whose head commit is sha on a branch of repo itself, by number;
+// none is not an error (the screen waits until one exists). Several are possible (one branch opened against two bases,
+// or two branches at the same commit): the caller chooses, by HeadRef.
+//
+// Pull requests from forks are left out: anyone can fork the repository and open a pull request whose head is the
+// user's commit, and posting there would put the user's report on a stranger's pull request. The flip side: when the
+// remote (repo) is the user's own fork and the pull request goes to the upstream repository, nothing is found, since
+// that pull request belongs to upstream, not to repo.
 //
 // It asks GitHub for the pull requests associated with the commit (GET repos/{o}/{r}/commits/{sha}/pulls) rather
 // than searching (`gh pr list --search <sha>`): the lookup is exact and current, while search reads an index that
@@ -50,7 +56,11 @@ func (c Client) PullRequests(ctx context.Context, repo Repo, sha string) ([]Pull
 		State   string `json:"state"`
 		HTMLURL string `json:"html_url"`
 		Head    struct {
-			SHA string `json:"sha"`
+			SHA  string `json:"sha"`
+			Ref  string `json:"ref"`
+			Repo *struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"` // null when the head repository was deleted
 		} `json:"head"`
 		Base struct {
 			Repo struct {
@@ -64,9 +74,11 @@ func (c Client) PullRequests(ctx context.Context, repo Repo, sha string) ([]Pull
 	}
 	var found []PullRequest
 	for _, p := range pulls {
-		if p.State == "open" && p.Head.SHA == sha && strings.EqualFold(p.Base.Repo.FullName, repo.String()) && p.Number > 0 &&
+		sameRepo := p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo.String()) &&
+			strings.EqualFold(p.Base.Repo.FullName, repo.String())
+		if p.State == "open" && p.Head.SHA == sha && sameRepo && p.Head.Ref != "" && p.Number > 0 &&
 			!slices.ContainsFunc(found, func(f PullRequest) bool { return f.Number == p.Number }) {
-			found = append(found, PullRequest{Number: p.Number, URL: p.HTMLURL, HeadSHA: p.Head.SHA})
+			found = append(found, PullRequest{Number: p.Number, URL: p.HTMLURL, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref})
 		}
 	}
 	slices.SortFunc(found, func(a, b PullRequest) int { return cmp.Compare(a.Number, b.Number) })
@@ -85,14 +97,18 @@ const maxCommentRunes = 65536
 type Comment struct {
 	ID      int64
 	URL     string
-	Created bool // false: an existing comment was edited
+	Created bool   // false: an existing comment was edited
+	As      string // the login it was posted as (Login)
 }
 
 // UpsertComment keeps one comment on pull request number of repo: marker on the first line, then body. It edits the
 // comment that the signed-in account (Login) wrote and whose body starts with that marker line, the oldest if there
 // are several, or creates one. A comment anyone else wrote is never edited, whatever it contains: another account can
 // copy the marker, and only authorship (the API's user.login) is trusted. body is the caller's own text (Agentium's
-// redacted report); it reaches gh only on stdin, inside a JSON request.
+// redacted report); it reaches gh only on stdin, inside a JSON request. Comment.As is the login it was posted as.
+//
+// Callers must serialize upserts on a pull request (the watch holds watch.lock): it is a read, then a write, so two at
+// once can both find no comment and both create one.
 func (c Client) UpsertComment(ctx context.Context, repo Repo, number int, marker, body string) (Comment, error) {
 	if err := repo.Valid(); err != nil {
 		return Comment{}, err
@@ -155,7 +171,7 @@ func (c Client) UpsertComment(ctx context.Context, repo Repo, number int, marker
 	if err := json.Unmarshal(out, &saved); err != nil {
 		return Comment{}, fmt.Errorf("read gh's JSON: %w", err)
 	}
-	return Comment{ID: saved.ID, URL: saved.HTMLURL, Created: own == 0}, nil
+	return Comment{ID: saved.ID, URL: saved.HTMLURL, Created: own == 0, As: login}, nil
 }
 
 // startsWithLine reports whether body's first line is exactly line (GitHub may store \r\n line ends).
@@ -164,18 +180,18 @@ func startsWithLine(body, line string) bool {
 	return strings.TrimSuffix(first, "\r") == line
 }
 
-// State is a commit status's state. Only the three a warn-only screen uses exist: GitHub's fourth, "failure", would
-// fail the pull request's checks, and the screen must never do that.
+// State is a commit status's state. Only the two a warn-only screen uses exist: GitHub's "error" and "failure" both
+// fail the pull request's checks, and the screen must never do that. Commit statuses have no "neutral" (that is a
+// check run's conclusion, which needs a GitHub App).
 type State string
 
 const (
-	// StatePending: the check is queued or running.
+	// StatePending: the check is queued or running. A pending status also blocks a merge that requires it, so the
+	// caller must always finish it with StateSuccess, also when the check breaks or is given up.
 	StatePending State = "pending"
-	// StateSuccess: the check finished, whatever its verdict ("regressed" included); the verdict is in the description.
-	// Commit statuses have no "neutral" (that is a check run's conclusion, which needs a GitHub App), so success it is.
+	// StateSuccess: the check is over, whatever happened: the verdict ("regressed" included) is in the description, and
+	// so is a check that broke ("Agentium could not screen this commit: ...").
 	StateSuccess State = "success"
-	// StateError: the check itself broke (not the verdict).
-	StateError State = "error"
 )
 
 // StatusContext names the screen's commit status on GitHub.
@@ -185,7 +201,8 @@ const StatusContext = "agentium/cost-screen"
 const maxDescription = 140
 
 // SetStatus sets the commit status StatusContext on sha in repo. description is the caller's text (the verdict in
-// words), stripped of control characters and cut to GitHub's 140 characters. It is sent on stdin as JSON.
+// words, or why the check broke), stripped of control characters and cut to GitHub's 140 characters. It is sent on
+// stdin as JSON. Only StatePending and StateSuccess are accepted, and every pending must later be finished with success.
 func (c Client) SetStatus(ctx context.Context, repo Repo, sha string, state State, description string) error {
 	if err := repo.Valid(); err != nil {
 		return err
@@ -194,9 +211,9 @@ func (c Client) SetStatus(ctx context.Context, repo Repo, sha string, state Stat
 		return err
 	}
 	switch state {
-	case StatePending, StateSuccess, StateError:
+	case StatePending, StateSuccess:
 	default:
-		return fmt.Errorf("commit status state %q is not one the screen sets (pending, success, error)", state)
+		return fmt.Errorf("commit status state %q is not one the screen sets (pending, success): it must never fail a pull request", state)
 	}
 	request, err := json.Marshal(map[string]string{"state": string(state), "context": StatusContext,
 		"description": printable(description, maxDescription-1)})

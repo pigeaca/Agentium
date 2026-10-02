@@ -41,6 +41,8 @@ var (
 	ErrNoGH = errors.New("the GitHub CLI (gh) is not installed or not on PATH; install it (https://cli.github.com), then run `gh auth login`")
 	// ErrNotLoggedIn: gh has no usable login for github.com (exit code 4, or HTTP 401).
 	ErrNotLoggedIn = errors.New("the GitHub CLI (gh) is not logged in to github.com; run `gh auth login`")
+	// ErrRateLimited: GitHub refused the call for a rate limit (HTTP 403 or 429 saying so); try again later.
+	ErrRateLimited = errors.New("GitHub's rate limit for this login is used up; try again later")
 	// ErrTimeout: a gh call ran past the client's timeout; its process group was killed.
 	ErrTimeout = errors.New("the GitHub CLI (gh) timed out")
 )
@@ -89,13 +91,17 @@ func lookPath(name string, environ []string) (string, error) {
 // ghNames are the user's variables gh needs to find its login and reach GitHub: the home and config folders (gh reads
 // $GH_CONFIG_DIR, else $XDG_CONFIG_HOME/gh, else ~/.config/gh; its token is there or in the macOS keychain, which gh
 // reads through /usr/bin/security, hence PATH), locale, proxies and certificates.
+// On Linux, gh's keyring is the Secret Service, reached over the session bus (DBUS_SESSION_BUS_ADDRESS, and
+// XDG_RUNTIME_DIR where the bus socket lives): this is the user's own process, so both pass.
 var ghNames = []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "TZ",
-	"GH_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME",
+	"GH_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS",
 	"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR"}
 
-// ghTokens are gh's own token variables for github.com: a user who logs gh in this way (`GH_TOKEN=... gh`) keeps that
-// login here. They are the only credentials gh receives; runner's credential filter drops every other one.
-var ghTokens = []string{"GH_TOKEN", "GITHUB_TOKEN"}
+// ghToken is gh's own, explicit token variable for github.com: a user who logs gh in this way (`GH_TOKEN=... gh`)
+// keeps that login here. It is the only credential variable gh receives; runner's credential filter drops every other
+// one. GITHUB_TOKEN, which gh also reads, is dropped: it is often exported for other tools or another account, and
+// would make the screen post as that account instead of the user's gh login.
+const ghToken = "GH_TOKEN"
 
 // ghFixed make gh non-interactive and quiet, and keep it from sending anything but the call: no prompts, pager,
 // colors, spinner, update checks or telemetry.
@@ -103,17 +109,15 @@ var ghFixed = []string{"GH_PROMPT_DISABLED=1", "GH_PAGER=cat", "NO_COLOR=1", "CL
 	"GH_NO_UPDATE_NOTIFIER=1", "GH_NO_EXTENSION_UPDATE_NOTIFIER=1", "GH_TELEMETRY=false", "DO_NOT_TRACK=1"}
 
 // Environ is gh's environment, formed from the user's: an allowlist (ghNames and LC_*), which the shared credential
-// filter applies to as everywhere, then gh's own token variables (ghTokens) when the user set them, then ghFixed.
-// Everything else is dropped: other credentials (ANTHROPIC_API_KEY, SSH_AUTH_SOCK), GIT_*, AGENTIUM_*, and gh settings
-// that would redirect or log a call (GH_HOST, GH_REPO, GH_DEBUG, GH_FORCE_TTY, GH_ENTERPRISE_TOKEN).
+// filter applies to as everywhere, then GH_TOKEN when the user set it, then ghFixed. Everything else is dropped: other
+// credentials (GITHUB_TOKEN, ANTHROPIC_API_KEY, SSH_AUTH_SOCK), GIT_*, AGENTIUM_*, and gh settings that would redirect
+// or log a call (GH_HOST, GH_REPO, GH_DEBUG, GH_FORCE_TTY, GH_ENTERPRISE_TOKEN).
 func Environ(environ []string) []string {
 	out := runner.EnvPolicy{Allowlist: true, Names: ghNames, Prefixes: []string{"LC_"}}.Filter(environ)
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		for _, token := range ghTokens {
-			if name == token {
-				out = append(out, kv)
-			}
+		if name == ghToken {
+			out = append(out, kv)
 		}
 	}
 	return append(out, ghFixed...)
@@ -144,12 +148,21 @@ func (c Client) api(ctx context.Context, body []byte, args ...string) ([]byte, e
 		return nil, fmt.Errorf("gh api %s: %w after %s", endpoint, ErrTimeout, c.timeout)
 	case result.ExitCode == 4 || strings.Contains(stderr.String(), "(HTTP 401)"):
 		return nil, fmt.Errorf("gh api %s: %w", endpoint, ErrNotLoggedIn)
+	case rateLimited(stderr.String()):
+		return nil, fmt.Errorf("gh api %s: %w", endpoint, ErrRateLimited)
 	case result.ExitCode != 0:
 		return nil, &CallError{Endpoint: endpoint, ExitCode: result.ExitCode, Stderr: printable(stderr.String(), 400)}
 	case stdout.over:
 		return nil, fmt.Errorf("gh api %s: output over %d bytes", endpoint, maxOutput)
 	}
 	return stdout.Bytes(), nil
+}
+
+// rateLimited reports whether gh's message is GitHub's refusal for a rate limit, primary or secondary: an HTTP 403 or
+// 429 whose message says "rate limit". Other 403s (no access) stay CallErrors.
+func rateLimited(stderr string) bool {
+	return (strings.Contains(stderr, "(HTTP 403)") || strings.Contains(stderr, "(HTTP 429)")) &&
+		strings.Contains(strings.ToLower(stderr), "rate limit")
 }
 
 // CallError is a gh call that ran and failed (not a timeout or a missing login). Stderr is gh's message, cut short and
@@ -241,7 +254,9 @@ func checkCommit(sha string) error {
 	return nil
 }
 
-// Login is the login of the account gh is signed in as on github.com (GET /user).
+// Login is the login of the account gh is signed in as on github.com (GET /user): the identity every comment and
+// status is posted as, for the caller to show ("commenting as <login>") before it posts. Logins GitHub no longer
+// issues (ending in a hyphen, or with "--") are refused: such an account cannot post (fail-closed).
 func (c Client) Login(ctx context.Context) (string, error) {
 	out, err := c.api(ctx, nil, "user")
 	if err != nil {
