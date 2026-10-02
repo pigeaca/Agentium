@@ -161,6 +161,11 @@ type Record struct {
 	// CostEstimated: Claude Code reported no cost, so Metrics.CostUSD prices the transcript's requests at list prices.
 	// Read costs through Spend, which keeps the agent's and the judge's apart.
 	CostEstimated bool `json:"cost_estimated,omitempty"`
+	// IsolatedCostUSD is the run's cost had no other run warmed the prompt cache: Metrics.CostUSD with the first-request
+	// cache reads of Metrics.FirstReads repriced as cache writes (isolatedCost). Actual cost (Spend) stays the primary
+	// metric; this is a counterfactual beside it, not spend. Nil when it cannot be computed and in records made before
+	// it existed: absent, never zero.
+	IsolatedCostUSD *float64 `json:"isolated_cost_usd,omitempty"`
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
 	// and is cancelled) or RecoveredFinished (it had finished).
 	Recovered string `json:"recovered,omitempty"`
@@ -497,6 +502,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.CostEstimated = true
 		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
 	}
+	// The isolated-run cost starts from the cost, so it comes after the cost is settled.
+	rec.IsolatedCostUSD = isolatedCost(rec)
 	if runErr != nil { // cancelled: keep what the run reported (Claude Code reports its result on SIGINT)
 		return unfinished(runErr)
 	}
