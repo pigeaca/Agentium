@@ -162,3 +162,28 @@ func TestCancelStopsGitGently(t *testing.T) {
 		t.Fatal("a cancelled git kept running")
 	}
 }
+
+// A repository is a partial clone when its config says so, by either signal; a plain one is not.
+func TestPartialClone(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, set := range map[string][]string{
+		"plain":           nil,
+		"extension":       {"extensions.partialClone", "origin"},
+		"promisor remote": {"remote.origin.promisor", "true"},
+		"promisor false":  {"remote.origin.promisor", "false"},
+	} {
+		dir := t.TempDir()
+		git(t, dir, "init", "-q")
+		if set != nil {
+			git(t, dir, "config", set[0], set[1])
+		}
+		got, err := PartialClone(ctx, dir)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if want := name == "extension" || name == "promisor remote"; got != want {
+			t.Errorf("%s: partial = %v, want %v", name, got, want)
+		}
+	}
+}
