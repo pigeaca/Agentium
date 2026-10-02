@@ -332,10 +332,14 @@ func (e Estimate) MeanUSD(tasks []string) (float64, bool) {
 // when the spend so far, the caps of the runs in flight and its own caps fit the budget, so spending never passes it
 // while each run stays within its cap and overshoot allowance. With concurrency c, at most c−1 runs are in flight when
 // a pair's first run starts, so c+1 caps are reserved. A run's cap includes its overshoot (claude.CapOvershootUSD) and its
-// judgement's (Design.RunCapUSD).
-func Reserve(d Design) float64 { return float64(d.Concurrency+1) * d.RunCapUSD() }
+// judgement's (Design.RunCapUSD). With the pair judge, each pair with a run in flight, and each pair whose comparison is
+// waiting or in progress, holds its comparison's cap (Design.PairJudgeCapUSD) too: c+1 of those are reserved as well,
+// an estimate, since comparisons may queue behind one another.
+func Reserve(d Design) float64 {
+	return float64(d.Concurrency+1) * (d.RunCapUSD() + d.PairJudgeCapUSD())
+}
 
-// DefaultBudget is a quarter above the estimate (the judge's included) plus the reserve, in whole dollars; zero when
+// DefaultBudget is a quarter above the estimate (both judges' included) plus the reserve, in whole dollars; zero when
 // the estimate is unknown.
 func DefaultBudget(d Design, est Estimate) float64 { return DefaultBudgetFor(d, Same(est)) }
 
@@ -349,7 +353,7 @@ func DefaultBudgetWith(d Design, est ArmEstimates, calibrationUSD float64) float
 	if !ok {
 		return 0
 	}
-	return math.Ceil(1.25*(expected+d.JudgeEstimateUSD()+calibrationUSD) + Reserve(d))
+	return math.Ceil(1.25*(expected+d.JudgingEstimateUSD()+calibrationUSD) + Reserve(d))
 }
 
 // Row is one line of a preview.
@@ -361,8 +365,8 @@ type Row struct {
 	Short       bool    // fewer tasks are eligible than the tier asks for
 	CostUSD     float64 // the agent's expected cost; zero when the estimate is unknown
 	CostKnown   bool    // every task the row may hold has an estimate
-	JudgeUSD    float64 // the judge's expected cost at the pilot's figure (Design.JudgeEstimateUSD); zero without it
-	WorstUSD    float64 // every run, and its judgement, at its cap
+	JudgeUSD    float64 // both judges' expected cost at the pilot's figures (Design.JudgingEstimateUSD); zero without them
+	WorstUSD    float64 // every run, its judgement and its pair's comparison, at its cap
 	Detect      Detectable
 	Exploratory []string
 }
@@ -382,7 +386,7 @@ func PreviewFor(d Design, eligible []string, est ArmEstimates) []Row {
 		sized := d
 		sized.Tasks, sized.Repeats = make([]string, tasks), repeats
 		r := Row{Name: name, Tasks: tasks, Repeats: repeats, Runs: runs, WorstUSD: float64(tasks*repeats) * d.PairCapUSD(),
-			JudgeUSD: sized.JudgeEstimateUSD(), Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
+			JudgeUSD: sized.JudgingEstimateUSD(), Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
 		if known {
 			r.CostUSD = float64(tasks*repeats) * pair
 		}

@@ -190,6 +190,8 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 			if e.Look != nil {
 				fmt.Fprintln(out, st.Heading(upperFirst(experiment.DescribeLook(*e.Look, e.Looks))))
 			}
+		case "pair":
+			fmt.Fprintf(out, "Compared pair %s, repeat %d (pair judge, unvalidated): %s, $%.2f\n", e.Slot.Task, e.Slot.Repeat, e.Result.Judge, e.Result.JudgeUSD)
 		}
 	}
 }
@@ -245,6 +247,9 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 		lock.ClaudeCode, lock.SignIn, lock.Host, lock.Method, lock.PriceTable)
 	if j := lock.Design.Judge; j != nil {
 		fmt.Fprintf(out, "Judge: %s (a second opinion beside the tests)\n", experiment.DescribeJudge(*j))
+	}
+	if j := lock.Design.JudgePairs; j != nil {
+		fmt.Fprintf(out, "Pair judge: %s (unvalidated, exploratory)\n", experiment.DescribePairJudge(*j))
 	}
 	for _, c := range lock.BudgetChanges {
 		fmt.Fprintf(out, "Budget raised %s: $%.2f to $%.2f\n", c.At.Format("2006-01-02 15:04"), c.From, c.To)

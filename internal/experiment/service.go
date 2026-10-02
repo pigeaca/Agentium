@@ -202,6 +202,11 @@ func DescribeJudge(s llmjudge.Settings) string {
 	return fmt.Sprintf("%s at effort %s, %d call(s) per run", s.Model, s.Effort, s.Repeats)
 }
 
+// DescribePairJudge is the pair judge's settings in words.
+func DescribePairJudge(s llmjudge.Settings) string {
+	return fmt.Sprintf("%s at effort %s, both orders of each pair of passing runs", s.Model, s.Effort)
+}
+
 // DescribeArms is the experiment's arms in words.
 func DescribeArms(d Design) string {
 	switch d.Template {

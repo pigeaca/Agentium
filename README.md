@@ -61,6 +61,7 @@ Mined instructions need your review for solution leaks (`agentium task show NAME
 | `run once` | One graded run (paid) |
 | `experiment new / plan / run / report` | Design, price, run and read an experiment (`run` is paid) |
 | `experiment new --judge` | Add an LLM second opinion; tests still decide |
+| `experiment new --judge-pairs` | Ask which arm fixed each task better (unvalidated, exploratory) |
 | `experiment new --template model-ab` | Compare two models or efforts on one context |
 
 Everything else is in the [guide](docs/guide.md).

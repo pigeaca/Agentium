@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // gh's config, which can hold a plain-text token, is denied where the user's environment moves it (GH_CONFIG_DIR,
@@ -29,7 +31,7 @@ func TestMovedGhConfigIsDenied(t *testing.T) {
 		inv := toolInvocation(t, tools...)
 		denied := inv.DeniedPaths(environ)
 		_, settings := toolCommand(t, inv, environ)
-		_, fs := sandbox(settings)
+		_, fs := sandboxOf(settings)
 		denyRead := fs["denyRead"].([]any)
 		for _, p := range []string{filepath.Join(link, "ghconf"), filepath.Join(realDir, "ghconf"), filepath.Join(link, "xdg", "gh"),
 			filepath.Join(realDir, "xdg", "gh"), "/home/u/.config/gh"} {
@@ -39,7 +41,7 @@ func TestMovedGhConfigIsDenied(t *testing.T) {
 		}
 	}
 	for _, v := range []string{"GH_CONFIG_DIR=/home/u", "GH_CONFIG_DIR=/home", "GH_CONFIG_DIR=relative/gh"} {
-		got := movedCredentials([]string{v}, "/home/u")
+		got := sandbox.MovedCredentials([]string{v}, "/home/u")
 		if len(got) != 0 {
 			t.Errorf("%s denies %q", v, got)
 		}

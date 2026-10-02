@@ -36,8 +36,10 @@ type NewOptions struct {
 	Timeout, VerifyTimeout  time.Duration
 	Seed                    uint64
 	Judge                   bool
-	JudgeModel, JudgeEffort string
+	JudgeModel, JudgeEffort string // both judges'
 	JudgeRepeats            int
+	// JudgePairs has the pair judge compare each pair of passing runs (Design.JudgePairs), on JudgeModel at JudgeEffort.
+	JudgePairs bool
 	// NoFutility turns off a cost experiment's futility stops (Design.NoFutility).
 	NoFutility bool
 
@@ -79,8 +81,10 @@ func (o *NewOptions) Prepare(name string) error {
 		return UsageError("--tier and --task both choose the tasks: use one")
 	case o.Repeats < 0:
 		return UsageError("--repeats must be positive")
-	case !o.Judge && (o.JudgeModel != "" || o.JudgeEffort != "" || o.JudgeRepeats != 0):
-		return UsageError("--judge-model, --judge-effort and --judge-repeats set the judge: add --judge")
+	case !o.Judge && !o.JudgePairs && (o.JudgeModel != "" || o.JudgeEffort != ""):
+		return UsageError("--judge-model and --judge-effort set the judges: add --judge or --judge-pairs")
+	case !o.Judge && o.JudgeRepeats != 0:
+		return UsageError("--judge-repeats sets the judge of each run: add --judge (the pair judge asks each order once)")
 	case o.JudgeRepeats < 0:
 		return UsageError("--judge-repeats must be positive")
 	}
@@ -180,6 +184,10 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort, Repeats: o.JudgeRepeats}.WithDefaults()
 		d.Judge = &s
 	}
+	if o.JudgePairs {
+		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort, Repeats: 1}.WithDefaults()
+		d.JudgePairs = &s
+	}
 	eligible, err := p.chooseTasks(ctx, &d, o)
 	if err != nil {
 		return Created{}, err
@@ -267,6 +275,9 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 	}
 	if d.Judge != nil {
 		fmt.Fprintf(out, "The judge: %s, its verdicts a second opinion beside the tests.\n", DescribeJudge(*d.Judge))
+	}
+	if d.JudgePairs != nil {
+		fmt.Fprintf(out, "The pair judge: %s; unvalidated, its preferences are exploratory and decide nothing.\n", DescribePairJudge(*d.JudgePairs))
 	}
 	switch {
 	case !c.Explicit && c.Eligible < c.Tier.Tasks && d.Sequential():

@@ -43,6 +43,17 @@ func experimentAgent(t *testing.T, ctrl string) string {
 CTRL='` + ctrl + `'
 version=2.1.281; [ -f "$CTRL/version" ] && version=$(cat "$CTRL/version")
 [ "$1" = --version ] && { echo "$version (Claude Code)"; exit 0; }
+case " $* " in *" --json-schema "*'"prefer"'*) # the pair judge: "tie" at $0.09 a call, or what pair-answer ("alternate": B in both orders) and pair-cost say; each call waits while pair-block exists
+  calls=$(ls "$CTRL" | grep -c '^pair-prompt-')
+  cat > "$CTRL/pair-prompt-$$"; pwd > "$CTRL/pair-dir-$$"
+  n=0; while [ -f "$CTRL/pair-block" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n+1)); done
+  [ -f "$CTRL/pair-sleep" ] && sleep "$(cat "$CTRL/pair-sleep")"
+  [ -f "$CTRL/pair-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
+  answer=tie; [ -f "$CTRL/pair-answer" ] && answer=$(cat "$CTRL/pair-answer")
+  [ "$answer" = alternate ] && { answer=second; [ $((calls % 2)) = 1 ] && answer=first; }
+  pcost=0.09; [ -f "$CTRL/pair-cost" ] && pcost=$(cat "$CTRL/pair-cost")
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"prefer":"'"$answer"'","reason":"Both set the value; this one is closer."},"total_cost_usd":'"$pcost"'}'; exit 0;;
+esac
 case " $* " in *" --json-schema "*)
   calls=$(ls "$CTRL" | grep -c '^judge-prompt-')
   cat > "$CTRL/judge-prompt-$$"; pwd > "$CTRL/judge-dir-$$"
@@ -81,7 +92,8 @@ fi
 grep -qx "$key" "$CTRL/infra" 2>/dev/null && exit 1
 if grep -qx "$key" "$CTRL/hang" 2>/dev/null; then touch "$CTRL/hanging-$ws"; sleep 60; fi
 sleep 0.2
-printf 'new\n' > value.txt
+[ -f "$CTRL/no-change" ] || printf 'new\n' > value.txt
+if [ -f "$CTRL/fix-lib" ] && [ -f lib.sh ]; then i=1; while [ $i -le 16 ]; do echo "f$i() { echo v$i; }" >> lib.sh; i=$((i+1)); done; fi
 if [ -f "$CTRL/usage" ]; then
   used=$(awk "BEGIN{print $used + $step}"); echo "$used $step $resets" > "$CTRL/usage"; limit "$used"
 fi

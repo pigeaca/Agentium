@@ -209,6 +209,10 @@ func (r Review) writeDesign(out io.Writer, st term.Style, name string) {
 	if d.Judge != nil {
 		fmt.Fprintf(out, "  judge: %s; each run's judgement up to $%.2f; a second opinion, it decides nothing\n", DescribeJudge(*d.Judge), d.JudgeCapUSD())
 	}
+	if d.JudgePairs != nil {
+		fmt.Fprintf(out, "  judge pairs: %s; each comparison up to $%.2f; unvalidated and exploratory, it decides nothing\n",
+			DescribePairJudge(*d.JudgePairs), d.PairJudgeCapUSD())
+	}
 }
 
 func orDefaultEffort(effort string) string {
@@ -275,19 +279,25 @@ func (r Review) writeCalibration(out io.Writer, st term.Style) {
 		"table's costs; counted in the budget). A calibration that fails its checks stops the experiment before any task run.", len(needs), estimate, capUSD)))
 }
 
-// writeWorstCase prints the judge's share of the cost, when there is a judge, and the worst case the budget guards.
+// writeWorstCase prints the judges' share of the cost, when there are judges, and the worst case the budget guards.
 func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 	d := r.Design
+	own := r.Rows[len(r.Rows)-1]
+	agent := "unknown"
+	if own.CostKnown {
+		agent = fmt.Sprintf("$%.2f", own.CostUSD)
+	}
 	if d.Judge != nil {
 		j := d.Judge
-		own := r.Rows[len(r.Rows)-1]
-		agent := "unknown"
-		if own.CostKnown {
-			agent = fmt.Sprintf("$%.2f", own.CostUSD)
-		}
 		fmt.Fprintf(out, "The judge: about $%.2f for this experiment's %d runs × %d call(s) at $%.3f a call (EST. COST includes it; the agent's\n"+
 			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
-			own.JudgeUSD, own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
+			d.JudgeEstimateUSD(), own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
+	}
+	if d.JudgePairs != nil {
+		fmt.Fprintf(out, "The pair judge (unvalidated): about $%.2f if it compares all %d pairs at $%.3f a pair, both orders (EST. COST includes it;\n"+
+			"only pairs whose two runs pass are compared). $%.3f is the judge pilot's mean pair on %s at effort %s, not a measure\n"+
+			"of this project. Its preferences are exploratory: never a verdict.\n",
+			d.PairJudgeEstimateUSD(), d.Pairs(), llmjudge.PairEstimateUSD, llmjudge.PairEstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
 	}
 	floor := fmt.Sprintf("$%.2f", claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])))
 	if fb := claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[1])); fb != claude.CapOvershootFloorUSD(d.ArmModel(d.Arms[0])) {
@@ -298,6 +308,10 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 		"spend so far and the caps of the runs in flight, with that allowance, leave room for its own, so spending stays within\n"+
 		"the $%.2f budget unless a single turn costs more.",
 		100*claude.CapOvershootShare, floor, d.BudgetUSD)
+	if d.JudgePairs != nil {
+		guard = fmt.Sprintf(" Each pair's comparison may reach $%.2f (%d calls at $%.2f: both orders, each asked twice at most).", d.PairJudgeCapUSD(),
+			llmjudge.PairCalls, d.PairJudgeCapUSD()/llmjudge.PairCalls) + guard
+	}
 	if d.PerArmProfiles() {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s).%s", d.ArmRunBudgetUSD(d.Arms[0]),
 			d.ArmRunBudgetUSD(d.Arms[1]), judgeCapNote(d), guard)))

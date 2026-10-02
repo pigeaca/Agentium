@@ -28,11 +28,14 @@ type Progress struct {
 	Settled        int // slots with a settled run
 	Failed         int // slots out of attempts: a resume does not retry them
 	SpentUSD       float64
-	JudgeUSD       float64 // of SpentUSD
+	JudgeUSD       float64 // of SpentUSD: both judges', the pairs' comparisons included
+	PairJudgeUSD   float64 // of JudgeUSD: the pairs' comparisons
 	CalibrationUSD float64 // of SpentUSD
 	BudgetUSD      float64
 	Arms           []ArmProgress
 	UnjudgedRuns   int
+	// UncomparedPairs counts the pairs of passing runs the pair judge has still to compare (PairRuns.NeedsComparing).
+	UncomparedPairs int
 	// Sequential is a seq-v1 experiment's looks; nil for other methods.
 	Sequential *SeqStatus
 	// Orphaned: a "running" status was stored by a process that is gone.
@@ -63,7 +66,8 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 		}
 		s := storedSpend(r)
 		out.SpentUSD += s.TotalUSD() // the budget's spend; the arm's cost is the agent's alone
-		out.JudgeUSD += s.JudgeUSD
+		out.JudgeUSD += s.JudgeUSD + s.PairJudgeUSD
+		out.PairJudgeUSD += s.PairJudgeUSD
 		c.CostUSD += s.AgentUSD
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
@@ -97,6 +101,9 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 		}
 	}
 	out.Settled = len(settled)
+	if out.UncomparedPairs, err = uncompared(lock, runs); err != nil {
+		return Progress{}, err
+	}
 	for slot, n := range attempts {
 		if !settled[slot] && n >= lock.MaxAttempts && slot >= 0 && slot < out.Slots {
 			out.Failed++
@@ -176,6 +183,13 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 			resume += " --budget USD"
 		}
 		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d graded run(s) still need the judge:", pr.UnjudgedRuns)), st.Command(resume))
+	}
+	if pr.UncomparedPairs > 0 {
+		resume := "agentium experiment run " + name
+		if pr.Status == store.StatusBudget {
+			resume += " --budget USD"
+		}
+		fmt.Fprintf(out, "%s %s\n", st.Warn(fmt.Sprintf("%d pair(s) of passing runs still need the pair judge:", pr.UncomparedPairs)), st.Command(resume))
 	}
 	return nil
 }
