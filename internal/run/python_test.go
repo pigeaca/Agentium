@@ -347,3 +347,62 @@ func TestPythonFailureNeverRewarmsOtherTools(t *testing.T) {
 		t.Error("an empty stamp of tools without a Go warm-up is warmed, as before")
 	}
 }
+
+// The steps marker never hides a network failure of the fixed steps: a Gradle skip that looks like one leaves neither
+// stamp nor marker, so the next run runs the steps again. A permanent skip, with a Go warm-up that failed transiently,
+// is kept in the marker: the next run skips the steps and still stamps the base with the skip's note.
+func TestStepsMarkerWaitsForNetworkSkips(t *testing.T) {
+	dir := writableTempDir(t)
+	deps, log := filepath.Join(dir, "deps"), filepath.Join(dir, "steps")
+	env := Env{VerifyTimeout: 20 * time.Second, Layout: home.Layout{Cache: filepath.Join(dir, "cache")}}
+	pyFails := true
+	python := buildtool.Profile{Name: "python", WarmFunc: func(context.Context, buildtool.WarmInput) (buildtool.Warmed, error) {
+		if pyFails {
+			return buildtool.Warmed{Failed: "uv sync failed", Transient: true}, nil
+		}
+		return buildtool.Warmed{Venv: ""}, nil
+	}}
+	profiles := []buildtool.Profile{{Name: "gradle"}, python}
+	names := []string{"gradle", "python"}
+	step := func(reason string) []buildtool.WarmStep {
+		cmd := "echo ran >> " + log
+		if reason != "" {
+			cmd += "; printf ':app:conf\\t" + reason + "\\n' > " + buildtool.WarmSkippedFile
+		}
+		return []buildtool.WarmStep{{Command: cmd}}
+	}
+	warm := func(base string, steps []buildtool.WarmStep) string {
+		t.Helper()
+		note, err := env.warmTools(context.Background(), t.TempDir(), deps, base, profiles, names, steps, filepath.Join(dir, "log"), func(int) {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return note
+	}
+	ran := func() int { b, _ := os.ReadFile(log); return strings.Count(string(b), "ran") }
+
+	// A network skip: not stamped, no marker; the next run (Python now fine, the network back) runs the steps again.
+	pyFails = false
+	if note := warm("c1", step("Could not GET https://repo/x.pom")); !strings.Contains(note, "network failure") {
+		t.Fatalf("note %q", note)
+	}
+	if _, err := os.Stat(env.stampPath(deps, "c1", names) + ".steps"); err == nil {
+		t.Error("a marker after a network skip")
+	}
+	if note := warm("c1", step("")); note != "" || ran() != 2 {
+		t.Errorf("the retry: note %q, steps ran %d times", note, ran())
+	}
+	if _, ok := readStamp(env.stampPath(deps, "c1", names), profiles); !ok {
+		t.Error("not stamped after the retry")
+	}
+
+	// A permanent skip while Python fails transiently: the marker keeps the note, and the next run, skipping the steps,
+	// stamps the base with it.
+	pyFails = true
+	warm("c2", step("Cannot choose between variants"))
+	pyFails = false
+	before := ran()
+	if note := warm("c2", step("")); !strings.Contains(note, "1 configuration(s) not warmed: :app:conf") || ran() != before {
+		t.Errorf("note %q, steps ran again: %v", note, ran() != before)
+	}
+}

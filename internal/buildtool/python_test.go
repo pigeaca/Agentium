@@ -366,7 +366,8 @@ func TestWarmPythonWithUv(t *testing.T) {
 
 // A venv without its stamp (a warm-up that died, or failed) is removed and built again; a stamp of another recipe does
 // not count; a stamped venv whose interpreter is gone is not ready; nor is one whose imports changed after its stamp (a
-// .pth or a package added, a package removed: the manifest). A stamped venv is read-only, and a rebuild copes with it.
+// .pth or a package added, a package removed: the manifest). A stamped venv is read-only, and a rebuild copes with it:
+// an unstamped one is removed, a stamped one (a run may be using it) is moved aside whole and rebuilt.
 func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 	f := newFakePython(t, "3.12.13", true, "")
 	deps, repo := depsDir(t), t.TempDir()
@@ -387,6 +388,7 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(site, "evil.pth"), []byte("import os\n"), 0o644); err == nil {
 		t.Error("a .pth could be written into a stamped venv")
 	}
+	asidesBefore := 0
 	for name, damage := range map[string]func(){
 		"a .pth planted":    func() { os.WriteFile(filepath.Join(site, "evil.pth"), []byte("import os\n"), 0o644) },
 		"a package added":   func() { os.MkdirAll(filepath.Join(site, "planted"), 0o755) },
@@ -420,6 +422,12 @@ func TestWarmPythonRebuildsAnUnstampedVenv(t *testing.T) {
 		if _, err := os.Stat(leftover); err == nil {
 			t.Errorf("%s: the unfinished venv's files were kept", name)
 		}
+		// A stamped venv (any case but "no stamp") may be in use by a run: moved aside whole, never removed in place.
+		asides, _ := filepath.Glob(filepath.Dir(w.Venv) + ".bad-*")
+		if wantAside := name != "no stamp"; wantAside != (len(asides) > asidesBefore) {
+			t.Errorf("%s: moved aside %v (folders %q)", name, len(asides) > asidesBefore, asides)
+		}
+		asidesBefore = len(asides)
 		if s := readStamp(t, again.Venv); s.Recipe != pythonRecipe {
 			t.Errorf("%s: stamp %+v", name, s)
 		}

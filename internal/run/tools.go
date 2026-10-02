@@ -203,10 +203,14 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 		return "", err
 	}
 	// The fixed steps, unless they already succeeded for this base and tool set while a Go warm-up (Python's) failed
-	// in a way worth retrying: that failure never makes the other tools warm again (stepsDone).
-	failed := ""
+	// in a way worth retrying: that failure never makes the other tools warm again (stepsDone). The marker is written
+	// only when the steps are done for good: none failed and none skipped for a network failure (Gradle's skip file),
+	// and it keeps their note (permanent skips), which the stamp then carries as if the steps had just run.
+	failed, note, transient := "", "", false
 	stepsDone := stamp + ".steps"
-	if _, err := os.Stat(stepsDone); err != nil || !warmsInGo(profiles) {
+	if done, err := os.ReadFile(stepsDone); err == nil && warmsInGo(profiles) {
+		note = string(done)
+	} else {
 		for _, step := range steps {
 			warm := env
 			warm.CommandEnv = append(slices.Clone(env.CommandEnv), step.Env...)
@@ -218,8 +222,19 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 				failed = step.Command
 			}
 		}
-		if failed == "" && len(steps) > 0 && warmsInGo(profiles) {
-			if err := buildtool.WriteFileSynced(stepsDone, nil, 0o600); err != nil {
+		// What a step could not warm (Gradle's unresolvable configurations) is a note. Mostly such skips are permanent
+		// and the base is stamped; a skip that looks like a network failure is not stamped, so the next run tries again.
+		var skipped []string
+		skipped, transient = buildtool.ReadWarmSkipped(repo)
+		if len(skipped) > 0 {
+			note = fmt.Sprintf("%d configuration(s) not warmed: %s", len(skipped), strings.Join(skipped[:min(len(skipped), 8)], ", "))
+			if len(skipped) > 8 {
+				note += ", ..."
+			}
+			note += "; the agent may not be able to use them offline"
+		}
+		if failed == "" && !transient && len(steps) > 0 && warmsInGo(profiles) {
+			if err := buildtool.WriteFileSynced(stepsDone, []byte(note), 0o600); err != nil {
 				return "", fmt.Errorf("warm-up state: %w", err)
 			}
 		}
@@ -241,20 +256,8 @@ func (env Env) warmTools(ctx context.Context, repo, deps, base string, profiles 
 		}
 		warmed.Notes = append(warmed.Notes, why)
 	}
-	// What a step could not warm (Gradle's unresolvable configurations) is a note. Mostly such skips are permanent and
-	// the base is stamped; a skip that looks like a network failure is not stamped, so the next run tries again.
-	skipped, transient := buildtool.ReadWarmSkipped(repo)
-	note := ""
-	if len(skipped) > 0 {
-		note = fmt.Sprintf("%d configuration(s) not warmed: %s", len(skipped), strings.Join(skipped[:min(len(skipped), 8)], ", "))
-		if len(skipped) > 8 {
-			note += ", ..."
-		}
-		note += "; the agent may not be able to use them offline"
-		if transient {
-			note += " (a network failure: not stamped, the next run warms again)"
-			return note, nil
-		}
+	if transient {
+		return note + " (a network failure: not stamped, the next run warms again)", nil
 	}
 	var content []byte
 	if warmsInGo(profiles) || warmed.Venv != "" || len(warmed.Notes) > 0 {

@@ -231,15 +231,18 @@ type venvStamp struct {
 	Pinned      []string `json:"pinned,omitempty"` // pip without a lock file: what the resolve chose, installed as is
 	Resolved    string   `json:"resolved,omitempty"`
 	Notes       []string `json:"notes,omitempty"`
-	// Manifest is a hash of what imports see in the venv (venvManifest), checked by VenvReady: a venv changed after
-	// its stamp (by a host-side command: the venv is read-only, and agents cannot write the deps folder) is rebuilt.
+	// Manifest is a hash of the venv's layout (venvManifest), checked by VenvReady: a package or a .pth added to or
+	// removed from site-packages, a .pth rewritten, a script added to bin/ after the stamp (by a host-side command: the
+	// venv is read-only, and agents cannot write the deps folder) makes it rebuilt. It does not hash every file, so an
+	// edit inside an installed package goes unseen.
 	Manifest string `json:"manifest"`
 }
 
 const venvStampName = "stamp.json"
 
-// VenvReady reports whether venv is a complete venv of the deps folder, unchanged since it was stamped, whose
-// interpreter still exists: its stamp is there, of the current recipe, its manifest matches, and bin/python resolves.
+// VenvReady reports whether venv is a complete venv of the deps folder whose interpreter still exists and whose layout
+// is as stamped: its stamp is there, of the current recipe, bin/python resolves, and its manifest matches (packages
+// and .pth files added, removed or, for .pth files, rewritten; not edits inside a package: see venvStamp.Manifest).
 // A run's stamp naming a venv that is not ready is warmed again, which rebuilds the venv.
 func VenvReady(venv string) bool {
 	_, ok := venvIntact(venv)
@@ -261,8 +264,10 @@ func venvIntact(venv string) (venvStamp, bool) {
 	return stamp, true
 }
 
-// venvManifest hashes what decides imports from the venv: pyvenv.cfg, the names in bin/, and in each site-packages
-// folder every top-level name with its type and size, and the content of every .pth file (which runs code at start).
+// venvManifest hashes the venv's layout: pyvenv.cfg, the names in bin/, in each site-packages folder every top-level
+// name with its type and size, and the content of every .pth file (which runs code at start). It reads no package's
+// files, so it is cheap enough to check on every run, and catches what is added, removed or swapped at the top, not an
+// edit deeper down.
 func venvManifest(venv string) (string, error) {
 	h := sha256.New()
 	cfg, err := os.ReadFile(filepath.Join(venv, "pyvenv.cfg"))
@@ -385,14 +390,27 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	if stamp, ok := venvIntact(venv); ok {
 		return Warmed{Venv: venv, Notes: stamp.Notes}, nil
 	}
-	// Unstamped, or changed since its stamp: a warm-up that died or failed, or a venv written from the host. No run is
-	// handed it (only intact venvs are), so it is rebuilt from nothing, in place (a venv's scripts name its folder, so it
-	// cannot be built elsewhere and moved); a stamped one is read-only, so it is made writable first.
-	if err := setWritable(root, true); err != nil {
-		return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
-	}
-	if err := os.RemoveAll(root); err != nil {
-		return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
+	// Not intact: it is rebuilt from nothing, in place (a venv's scripts name its folder, so it cannot be built elsewhere
+	// and moved). Unstamped (a warm-up that died or failed), no run was ever handed it, so it is removed. Stamped (its
+	// manifest no longer matches, or its interpreter is gone), runs of other bases may be using it right now, so it is
+	// renamed aside, whole, to <key>.bad-<time> beside it and left there: Agentium cannot tell when no run uses it any
+	// more, so the user removes it (`chmod -R u+w` first: it is read-only). The setup log names it.
+	if _, err := os.Lstat(filepath.Join(root, venvStampName)); err == nil {
+		aside := fmt.Sprintf("%s.bad-%s", root, in.Now.UTC().Format("20060102T150405Z"))
+		for n := 2; fileExists(aside); n++ { // another rebuild in the same second
+			aside = fmt.Sprintf("%s.bad-%s-%d", root, in.Now.UTC().Format("20060102T150405Z"), n)
+		}
+		if err := os.Rename(root, aside); err != nil {
+			return Warmed{}, fmt.Errorf("move a changed venv aside: %w", err)
+		}
+		fmt.Fprintf(in.Log, "[agentium] the venv %s no longer matches its stamp: moved aside to %s (remove it when no run uses it) and rebuilt\n", venv, aside)
+	} else {
+		if err := setWritable(root, true); err != nil {
+			return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
+		}
+		if err := os.RemoveAll(root); err != nil {
+			return Warmed{}, fmt.Errorf("remove an unfinished venv: %w", err)
+		}
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return Warmed{}, err
@@ -467,6 +485,12 @@ func MissingRunners(ctx context.Context, venv string, verify []string, environ [
 		}
 	}
 	return notes
+}
+
+// fileExists reports whether path exists (a link counts, whatever it points at).
+func fileExists(path string) bool {
+	_, err := os.Lstat(path)
+	return err == nil
 }
 
 // venvMade is VenvReady before the stamp is written: the venv's own files.
