@@ -1,49 +1,51 @@
 # Wave 3 statistics note: reuse, sequential stopping and drift
 
-- Date: 2026-10-02
-- Status: proposed. The user decides the [open questions](#9-open-questions-for-the-user). No production code changes until then. The implementation steps are in the [cheaper verdicts plan](../../.agents/plans/2026-10-02-cheaper-verdicts.md).
+- Date: 2026-10-02 (revised the same day after review; the user's decisions recorded)
+- Status:
+  - **Decided** (the user, 2026-10-02):
+    - α = 4.5% for `seq-v1` is approved;
+    - actual cost stays the primary metric, and the isolated-run cost (§1) is reported beside it;
+    - sequential stopping is built now; run reuse, the reuse A/A and the drift chart are deferred, and this note keeps their design for later;
+    - the `seq-v1` smoke check (about $3) is approved once the engine is built; the reuse A/A is not;
+    - futility stops are on by default (non-binding);
+    - the drift panel and the reuse defaults stay open until reuse resumes.
+  - **Open:** the simulation half of the exit gate does not pass yet for arm-specific noise shapes (§7). It went back to the coordinator before any change to α.
+  - **Plan:** the implementation steps are in the [cheaper verdicts plan](../../.agents/plans/2026-10-02-cheaper-verdicts.md).
 - Why it exists: the [next chapter](../../.agents/plans/2026-10-01-next-chapter.md#wave-3-requirement-a-statistics-note-before-any-code) requires this note before any code for run reuse, early stopping or the scheduled watch. Each of them breaks a safeguard the engine has today: the version lock, interleaving in time, and the study's rule against optional stopping (§5.6, rule 7).
-- Evidence: seeded simulations in `internal/stats` (`sequential_test.go`, `drift_test.go`; test-only). Every figure below comes from `AGENTIUM_LONG_SIM=50 go test -v -run 'TestGroupSequential|TestReuseValidation|TestDriftChart' ./internal/stats` (89 s on 12 cores). Rates carry 95% Wilson intervals.
+- Evidence:
+  - **Where:** seeded simulations in `internal/stats` (`sequential_test.go`, `drift_test.go`; test-only).
+  - **Command:** every figure comes from `AGENTIUM_LONG_SIM=50 go test -v -run 'TestGroupSequential|TestReuseValidation|TestDriftChart' ./internal/stats`, about 2.5 minutes on 12 cores. Smaller factors are exploratory.
+  - **Intervals:** rates carry 95% Wilson intervals.
 - Trust guard: A/A experiments give a false decisive verdict at most 5% of the time. Here a *false difference* is "improved", "improved, but small" or "regressed" when the true mean difference is zero.
 
 ## Summary
-1. **Group-sequential cost design (method `seq-v1`).**
-   - **Looks:** up to 16 tasks × 1 run per arm, with looks after 8, 12 and 16 tasks.
-   - **Spending:** O'Brien–Fleming-type Lan–DeMets spending of a two-sided **4.5%** for "improved" and "regressed". Equivalence spends a one-sided 5% on each side. Futility stops are non-binding.
-   - **Verdicts:** at every look, the existing `Decide` runs on intervals at that look's nominal level. The bootstrap and the t-interval must still agree.
-   - **Simulated false differences:** 4.53% [4.46, 4.60] over 360,000 experiments without a true difference, and at most 4.58% [4.46, 4.70] for any noise shape.
-   - **Gain at a true 20% cost cut** (τ = 0.10): one experiment ends decisively 80% of the time, against 48% for today's fixed 8 tasks, using 13.1 tasks on average.
-2. **The reuse key.**
-   - **What it covers:**
-     - the task digest;
-     - the arm's context;
-     - model and effort;
-     - Claude Code's version and binary hash;
-     - sign-in and host;
-     - an invocation fingerprint;
-     - the price table;
-     - a maximum age of 14 days.
-   - **Cost only.** Reuse counts toward cost verdicts only, never success.
-   - **Cost metric:** reuse uses a *cold-start cost* that removes the cross-run prompt cache. The cache moves a run's cost by up to 10–11% on Agentium-sized tasks and up to 42–57% on small ones.
-3. **Validating reuse.**
-   - **Design:** an A/A of 16 tasks × 4 stored runs against 4 fresh runs.
-   - **Pass rule:** the 95% interval of log(fresh/stored) contains zero and stays within ±log 1.15.
-   - **Bias allowance:** a passing key carries an allowance, the far end of that interval. Reuse verdicts must clear it.
-   - **Simulated:** false differences of 0.05–2.1% at true biases up to ±10%, and a pass rate of 88% with no bias.
-4. **Drift.**
-   - **Chart:** a self-starting two-sided CUSUM (k = 0.5, h = 6) on a fixed 8-task panel's mean log cost, one point per check.
-   - **False alarms:** 3.59% [3.47, 3.71] of charts alarm within 52 checks. A fresh 5% test per check would alarm in about 93% of them.
+1. **Group-sequential cost design (method `seq-v1`; in scope).**
+   - **Design:** up to 16 tasks × 1 run per arm, with looks after 8, 12 and 16 tasks.
+   - **Spending:** O'Brien–Fleming-type Lan–DeMets spending of a two-sided **4.5%** for "improved" and "regressed". Equivalence spends one-sided 5% per side. Futility stops are non-binding and on by default.
+   - **Verdicts:** the existing `Decide` runs at each look's nominal levels, so the bootstrap and the t-interval must still agree.
+   - **Simulated false differences:**
+     - with the same noise shape in both arms: 4.22–4.68% (normal, skewed, heavy-tailed; 120,000 experiments each);
+     - on the 22 recorded per-task differences of three real experiments: 4.85% [4.73, 4.97];
+     - with **arm-specific** shapes: 5.62% [5.49, 5.75], up to 7.6% when both arms are strongly and oppositely skewed. phase1-v2's fixed 8-task design gives 5.79% [5.66, 5.92] in the same scenarios, so this is not new with `seq-v1`, but the gate does not pass (§5, §7).
+   - **Gain at a true 20% cost cut** (τ = 0.10): one experiment ends decisively 78% of the time, against 47% for today's fixed 8 tasks, using 13.1 tasks on average.
+2. **Isolated-run cost (in scope, reported beside actual cost).** It is a run's cost with other runs' prompt cache removed. From the reports' data, cross-run cache hits could move a run's cost by **at most** 10–11% on Agentium-sized tasks and 42–57% on samber/lo. These are upper bounds, not measured hits.
+3. **Run reuse (deferred; the design for later).**
+   - **Key:** the task digest, context, model, effort, the pinned Claude Code (version and binary hash), an invocation fingerprint and a 14-day window.
+   - **Cost only.**
+   - **Validation:** a reused-against-fresh A/A gives the key a bias allowance.
+   - **Simulated:** false differences of 0.02–2.7%, including day effects and biases up to ±12%. The economics are poor: reuse pays only for cuts of 35% or more, after about 11–22 reuse experiments per key within 14 days.
+4. **Drift (deferred).** A self-starting two-sided CUSUM (k = 0.5, h = 6) on a fixed panel's mean log cost.
+   - **False alarms:** 3.59% [3.47, 3.71] of charts within 52 checks.
    - **Detection:** a 20% change after 12 checks is caught in a median 5–6 checks.
 5. **North star.**
-   - **Sequential stopping** buys *time* to a decisive cost verdict, by more decisive experiments. It barely changes dollars per decisive verdict.
-   - **Reuse** pays only for large effects (35% or more), and only after about 9–18 experiments per key in 30 days.
-   - **The dollar lever is small tasks:** on samber/lo a decisive cost verdict costs $2–4.
-   - **Success:** no wave-3 statistic reaches a success verdict for $40 on Agentium-sized tasks. On small tasks the existing 20 × 3 floor already costs about $12–34.
+   - **Sequential stopping** buys *time* to a decisive cost verdict, by more decisive experiments. Dollars per decisive verdict move −1.5% to −10% at 20% cuts, and *up* 18–21% at 35% cuts, where fixed 8 tasks already suffice.
+   - **The dollar lever is small tasks:** on samber/lo a decisive cost verdict costs about $1.7–5.
+   - **Success:** no wave-3 lever reaches a success verdict for $40 on Agentium-sized tasks. On small tasks the existing 20 × 3 floor already costs about $12–34.
 
 ## 0. What the engine does today (unchanged by this note)
 - **Fixed design:** the verdict comes from one analysis of the locked design (`phase1-v2`: the cost floor is 8 tasks × 1 run).
 - **Analysis:** per-task log differences go through a two-stage bootstrap (10,000 draws) and a t-interval. Each bound is the wider of the two, at 95% for differences and 90% for equivalence and no loss (`stats.Decide`).
-- **Its gate:** `TestOneRunCostVerdictsSimulation` allows up to 6% false differences, and measured 4.6–5.7%. The fixed 8-task design here gave 4.7–5.4% "any verdict" without a true difference.
+- **Its gate:** `TestOneRunCostVerdictsSimulation` allows up to 6% false differences, and measured 4.6–5.7%. The fixed 8-task design here gave 5.4–5.7% "any verdict" without a true difference.
 - **Interleaving:** runs are interleaved pair by pair (`experiment.Schedule`).
 - **Version lock:** a lock pins the Claude Code version (`Lock.Check`).
 - **Measured noise** (log cost):
@@ -52,8 +54,34 @@
   - Spread of the per-task differences with one run per arm: 0.20 (ab16), 0.27 (model A/B) and 0.29 (aa2).
   - τ: estimated 0.00 in both real A/Bs, with ranges up to 0.33 and 0.47. The planner keeps τ = 0.10–0.25.
 
-## 1. The reuse key
-A stored run may stand in for a fresh run of an arm only when **every** field below matches. Then the run is *eligible*, and its key is *validated* (§2).
+## 1. Isolated-run cost, and the reuse key (deferred)
+**Isolated-run cost (in scope: reported beside actual cost).**
+- **The effect it removes:** Claude Code writes its prompt cache for an hour. A run whose shared prefix (tools, system prompt, context) is still cached from another run reads that prefix at the cache-read rate instead of writing it.
+- **Its name:** the *isolated-run cost* is what the run would have cost if no other run had warmed the cache. It differs from the report's existing "cold-cache cost" (`internal/report/report.go`): that column reprices *every* cached read as a write, the run's own included, as a sensitivity bound.
+- **The rule:** start from the run's reported cost. Then reprice, at the cache-write rate the session used, the cache-read tokens of:
+  - the main session's first request;
+  - the first launch of each subagent *type* (the Task tool's `subagent_type`, matched by `parent_tool_use_id`).
+
+  The write rate is 1 hour unless the stream's `ephemeral_5m` field says otherwise. A later launch of a type already launched in the same run reads the prefix that run wrote itself, so it is not repriced. The repricing uses Agentium's dated price table.
+- **What stays the same:**
+  - A run that started cold is unchanged.
+  - A model missing from the price table leaves the value absent, not zero.
+  - Actual cost stays the primary metric (the user's decision).
+- **To confirm on recorded transcripts (step 2 of the plan):**
+  - on a run with no other run inside the cache TTL, every request this rule reprices must show `cache_read` = 0;
+  - otherwise some of the rule's reads are the run's own (two subagent types sharing a prefix, say), and the rule changes before it ships.
+- **Upper bounds from report data** (first-request tokens × (1-hour write rate − read rate); not measured cross-run hits):
+
+| Real experiment | First request | Cost per run | Bound | Share |
+|---|---|---|---|---|
+| aa2, Sonnet 5 | 30,206 | $1.014 | $0.115 | at most 11% |
+| ab16, Sonnet 5 | 30,520 | $1.181 | $0.116 | at most 10% (the plan's "about 9%") |
+| model A/B, Opus 5.5 (samber/lo) | 15,432 | $0.284 | $0.120 | at most 42% |
+| model A/B, Sonnet 5.5 (samber/lo) | 15,439 | $0.103 | $0.059 | at most 57% |
+
+- **Why reuse needs it:** interleaving spreads this effect over both arms of a fresh experiment. A reused arm ran at another time in another cache state, so the effect becomes a *bias*, and it grows as runs get cheaper. Every reuse comparison (the validation, reuse experiments, anchors, the drift chart) would therefore use the isolated-run cost.
+
+**The reuse key (deferred).** A stored run may stand in for a fresh run of an arm only when **every** field below matches. Then the run is *eligible*, and its key is *validated* (§2).
 
 | Field | Source today | Why |
 |---|---|---|
@@ -68,7 +96,7 @@ A stored run may stand in for a fresh run of an arm only when **every** field be
 | Sign-in | `Lock.SignIn` | Already a resume condition |
 | Host | `Lock.Host` (OS and architecture) and the selected build profiles' toolchain identity (`go version`, the JDK release, `cargo --version`) | The sandbox and builds differ |
 | Invocation fingerprint | SHA-256 of a canonical JSON, described below | Catches unintended changes to how a run is driven |
-| Price table | `pricing.Date` | The cold-start adjustment prices tokens with it |
+| Price table | `pricing.Date` | The isolated-run cost prices tokens with it |
 | Concurrency | `Design.Concurrency` | Contention changes timeouts |
 | Age | stored run's start to the new lock | At most **14 days** |
 
@@ -89,103 +117,102 @@ A stored run may stand in for a fresh run of an arm only when **every** field be
 
 Agentium versions that change none of these keep the fingerprint, so reuse survives a refactor. A change that matters must change the fingerprint or bump `RunMethod`. A golden test pins the fingerprint, as `TestGoProfileGolden` pins a Go run today.
 
-**Eligible runs.**
-- **Outcome:** a counted experiment run, with outcome `ok`, `capped` or `timeout`. Capped and timed-out runs must stay in, or reuse would bias cost downward.
-- **What disqualifies a run:**
-  - recovered after a crash (`Recovered`);
-  - an estimated cost (`CostEstimated`);
-  - a missing transcript, which the cold-start cost needs;
-  - recorded drift;
-  - a warm-up failure note;
-  - calibration and `run once` runs, whose prompts or conditions differ.
+**Eligible runs: one filter for stored and fresh runs.**
+- **The filter is the analysis's own counting rule:** a fair outcome (`ok`, `capped`, `timeout`), a cost above zero, and an isolated-run cost that can be computed.
+  - Estimated-cost runs count with their estimate (`CostEstimated`: a timeout or recovered run stopped before Claude Code reported, `internal/run/run.go` and `recover.go`). That is how fresh arms count them today.
+  - Dropping them from stored runs only would bias stored cost downward, since they are the long, expensive runs.
+- **Every fresh arm uses the same filter.** A fresh run without a computable isolated-run cost is left out of a reuse comparison exactly as a stored one would be.
+  - No other outcome-based exclusion applies to stored runs. Recovered runs, drift notes and warm-up notes are treated as the analysis treats them in fresh arms.
+  - Only calibration and `run once` runs are never eligible: they are not experiment runs, and their prompts or conditions differ.
 - **Selection is fixed and blind to outcomes:** per task, the 4 most recent eligible runs at lock time. The lock records their IDs. A task without stored runs disables reuse for the whole experiment.
 
 **What invalidates.**
 - **A key:**
   - any field change;
-  - the age limit;
   - an alarm on the key's anchor chart (§4);
-  - its validation turning 30 days old;
-  - a failed validation, which is final for that key;
+  - its validation turning 14 days old (below);
   - the user's reset.
-- **A run** stops being eligible when it passes 14 days or loses its transcript.
+- **A run** stops being eligible when it passes 14 days.
+- **The user's reset** only turns reuse *off* for a key. It never re-enables a failed key family (§2).
 
-**Prompt cache: the cold-start cost.**
-- **How the cache moves cost:** Claude Code writes its prompt cache for an hour. A run whose shared prefix (tools, system prompt, context) is still cached from another run reads it at the cache-read rate instead of writing it.
-- **Upper bound per run:** first-request tokens × (1-hour write − read rate).
-
-| Real experiment | First request | Cost per run | Warm-vs-cold bound | Share |
-|---|---|---|---|---|
-| aa2, Sonnet 5 | 30,206 | $1.014 | $0.115 | 11% |
-| ab16, Sonnet 5 | 30,520 | $1.181 | $0.116 | 10% (the plan's "about 9%") |
-| model A/B, Opus 5.5 (samber/lo) | 15,432 | $0.284 | $0.120 | 42% |
-| model A/B, Sonnet 5.5 (samber/lo) | 15,439 | $0.103 | $0.059 | 57% |
-
-- **Why it matters for reuse:** interleaving spreads this effect over both arms. A reused arm ran at another time in another cache state, so the effect becomes a *bias*, not noise, and it grows as runs get cheaper.
-- **The cost metric for every reuse comparison (the validation, reuse experiments, anchors, the drift chart) is the cold-start cost:**
-  - Start from the run's reported cost.
-  - For the first request of the main session and of each subagent session (first assistant message per `parent_tool_use_id`), reprice that request's cache-read tokens at the cache-write rate the session used. That rate is 1 hour unless the stream's `ephemeral_5m` field says otherwise.
-  - Use Agentium's dated price table for the repricing.
-  - The run then costs what it would have cost with nobody else's cache. A run that started cold is unchanged.
-  - The raw cost stays in every report.
-  - A model missing from the price table makes the run ineligible.
-
-**Reuse counts toward cost only.**
-- **Cost:** reuse counts once the key is validated, with the bias allowance below.
+**Reuse would count toward cost only.**
 - **Success:** a reused arm leaves success *exploratory*.
   - At w ≈ 0.20, a success validation of 16 × 4 against 16 × 4 has a standard error of about 8 pp, so its allowance would exceed 15 pp.
   - Success never decides in the cost designs anyway: they have at most 16 tasks, below the 20-task success floor.
-- **Time:** stays exploratory, as today. Time depends on API load at the hour of the run.
+- **Time** stays exploratory, as today.
 
 **The bias allowance.**
 - **Rule:** a validated key carries `a`, the far end of its validation interval (§2). A reuse experiment calls "improved" only when the interval's upper end is below −a. It calls "regressed" only when the lower end is above +a.
 - **No equivalence:** a reuse experiment gives no "equivalent" verdict, because a bias up to `a` could fake it.
-- **Why the guard holds:** in the direction of the bias, a false verdict needs either a key whose bias exceeds `a`, or a 2.5% tail event when it does not. The validation gives the first at most 2.5%, and the efficacy test gives the second at most 2.25%. The total stays under 5%, and the simulation shows far less (§7).
+- **Why the guard holds:** in the direction of the bias, a false verdict needs either a key whose bias exceeds `a`, or a tail event when it does not. The validation bounds the first at 2.5% and the efficacy test bounds the second at 2.25%, so the total stays under 5%.
+- **The caveat:** a day effect common to one occasion's runs is outside this argument. The simulation measures it (§2, §7).
 
-## 2. Validating reuse (the reused-against-fresh A/A)
-- **When:** once per key, before any reuse counts. The arms are the stored runs and fresh runs of the same context, model and pinned Claude Code.
+## 2. Validating reuse: the reused-against-fresh A/A (deferred)
+- **When:** once per key family, before any reuse counts. The arms are the stored runs and fresh runs of the same context, model and pinned Claude Code.
 - **Size:**
   - 16 tasks.
-  - **Stored side:** 4 eligible runs per task (normally a baseline experiment of 16 × 4, or earlier experiments). Every stored run must be at least 48 hours old when the fresh side starts, and at most 14 days old.
+  - **Stored side:** 4 eligible runs per task. Every stored run must be at least 48 hours old when the fresh side starts, and at most 14 days old.
   - **Fresh side:** 4 runs per task, scheduled repeat by repeat in a seeded random task order. That makes 64 fresh runs, plus 64 stored ones if no baseline exists.
-- **Metric:** log cold-start cost. The per-task difference is the mean over the 4 fresh runs minus the mean over the 4 stored ones.
+- **Metric:** log isolated-run cost. The per-task difference is the mean over the 4 fresh runs minus the mean over the 4 stored ones.
 - **Analysis:** the two-stage cluster bootstrap (10,000 draws) and the t-interval, at 95%. Take the widest interval [L, U].
-- **Pass rule (pre-registered):**
+- **Pass rule (to be fixed before any validation runs):**
   - [L, U] contains 0, so no bias is detected;
   - max(|L|, |U|) ≤ log 1.15 = 0.140;
   - at least 14 of 16 tasks have at least 3 counted runs on each side.
 
   The allowance is a = max(|L|, |U|), recorded with the key.
-- **If it fails:**
-  - Reuse stays off for that key, and fresh experiments remain available.
-  - The report shows the estimate, the per-task table, and the first-request cache-read shares of both sides, to help find the cause.
-  - **No retry on the same key.** Repeating until it passes is optional stopping. Only a key change, such as a new pin or a fingerprint change, gets a new validation.
-- **Lifetime:** 30 days after the fresh side ends, or until an anchor alarm or a key change. The fresh side's runs then become the stored runs that later experiments reuse.
-- **Anchors** keep checking it:
+- **Lifetime: 14 days, the same as the stored-run window.**
+  - The fresh side's runs become the stored runs that later reuse experiments draw on.
+  - They age out at 14 days, and anchors replenish only 4 tasks per experiment, so the validation expires when they do.
+  - A key is then revalidated, and the 14 days are the window for the break-even in §6.
+- **Failures are recorded per key family:** (project, context, model, effort, Claude Code pin).
+  - A family whose validation failed may be validated again only after a change to the Claude Code pin (version or binary hash), the invocation fingerprint or `RunMethod`.
+  - Changing a timeout, a run cap, concurrency or the task set does not reopen it. Repeating until a pass is optional stopping.
+- **The report on a failure shows:**
+  - the estimate and the per-task table;
+  - the first-request cache-read shares of both sides;
+  - the false-fail rate: with no bias at all, the validation fails 12% of the time without day effects, and 31–47% with day effects of 0.03–0.05.
+
+  So a failure is weak evidence of bias. It still stays final for the family, which is the conservative side.
+- **Anchors** keep checking a passing key:
   - every reuse experiment runs 4 fresh runs of the reused arm, on seeded random tasks of its first stage;
   - they stay out of the experiment's analysis;
   - they feed the key's anchor chart (§4) and later become stored runs.
-- **Simulated** (16 × 4 against 16 × 4, σ = 0.19, 5,000 validations per row; normal noise, skewed in brackets):
+- **Simulated** (16 × 4 against 16 × 4, σ = 0.19, 5,000 validations per row, then a reuse experiment per pass):
 
-| True bias (stored over fresh) | Passes | Mean allowance | False differences after a pass |
-|---|---|---|---|
-| 0 | 88.8% [87.9, 89.6] (87.4%) | 0.105 | 0.05% [0.01, 0.16] (0.11%) |
-| −5% | 56.0% (56.8%) | 0.112 | 0.21% [0.10, 0.47] (0.07%) |
-| +5% | 56.5% (54.8%) | 0.112 | 0.07% [0.02, 0.26] (0.44%) |
-| +10% | 11.1% (10.3%) | 0.122 | 0.90% [0.38, 2.09] (2.13% [1.19, 3.78]) |
+| True bias (stored over fresh) | Noise, day effect | Passes | Mean allowance | Bias beyond the allowance, among passes | False differences after a pass |
+|---|---|---|---|---|---|
+| 0 | normal, none | 87.8% [86.9, 88.7] | 0.105 | 0% | 0.02% [0.00, 0.13] |
+| −4.9% / +5.1% | normal, none | 56.7% / 56.7% | 0.112 | 0% | 0.18% / 0.18% |
+| +10.5% | normal, none | 10.3% | 0.122 | 8.9% [6.8, 11.7] | 0.97% [0.42, 2.25] |
+| −11.3% / +12.7% | normal, none | 3.1% / 3.8% | 0.125 | 27.9% / 29.1% | 2.60% / 2.65% [1.14, 6.04] |
+| 0 / +5.1% | skewed, none | 87.6% / 57.1% | 0.104 / 0.112 | 0% | 0.02% / 0.39% |
+| +10.5% / +12.7% | skewed, none | 10.3% / 3.9% | 0.123 / 0.125 | 7.0% / 24.9% | 2.53% / 2.59% |
+| 0 / +5.1% | normal, 0.03 | 68.9% / 50.6% | 0.108 / 0.110 | 0% | 0.20% / 0.91% |
+| 0 / +5.1% | normal, 0.05 | 53.4% / 44.4% | 0.108 / 0.109 | 0% | 1.50% [1.10, 2.03] / 2.70% [2.11, 3.46] |
 
-## 3. Group-sequential stopping (method `seq-v1`)
+The day effect is one common log-cost shift per occasion: each side of the validation, and each arm of each reuse experiment.
+
+## 3. Group-sequential stopping (method `seq-v1`; in scope)
 **Design.**
 - **Maximum:** 16 tasks × 1 run per arm.
-- **Looks:** after the first 8, 12 and 16 tasks of the locked task order (information fractions 0.5, 0.75 and 1). With 12–15 eligible tasks there are two looks (8 and all); with 8–11, one look, which is the fixed design.
+- **Looks:** after the first 8, 12 and 16 tasks of the locked task order, at information fractions 0.5, 0.75 and 1.
+  - With 12–15 eligible tasks there are two looks: 8 and all.
+  - With 8–11 there is one look. That is a fixed design at the 4.5% level, with a 95.5% efficacy interval, so it is not `phase1-v2`, which uses 95%.
 - **Efficacy** ("improved", "regressed"):
   - O'Brien–Fleming-type Lan–DeMets spending, α(t) = 2 − 2Φ(z₁₋α/₄ / √t) per side, of a two-sided α = **4.5%**;
-  - symmetric boundaries;
-  - boundaries recomputed for the actual information fractions when tasks are lost;
-  - the final look spends what is left.
+  - symmetric boundaries.
+- **When tasks are lost:**
+  - An interim look's fraction is its counted tasks over the *planned* maximum.
+  - Boundaries already used at earlier looks stay fixed. Only the current look's boundary is computed, from what is left to spend.
+  - The final look spends the remainder whatever its count.
 - **Equivalence:** each one-sided test spends a one-sided 5% with the same function.
-- **Futility:** non-binding. At an interim look with no verdict, the experiment stops when the conditional power to cross the final efficacy boundary is below 10%. The power is computed under the observed trend: 1 − Φ((c₃ − |T|/√f_k)/√(1 − f_k)), with T the look's t-statistic and f_k its information fraction. Futility never changes the efficacy boundaries, so ignoring a futility stop cannot raise false differences, and the gate below counts experiments as if every futility stop were ignored. The lock records whether futility stops apply (default on).
-- **Why 4.5%, not 5%:** a first long run at 5% gave 5.12% [4.99, 5.24] under normal noise, because t-intervals at nominal levels run slightly liberal with 7–15 degrees of freedom. Spending 4.5% leaves room for that and for noise shapes the simulation does not cover.
+- **Futility:** non-binding, and on by default (the user's decision).
+  - At an interim look with no verdict, the experiment stops when the conditional power to cross the final efficacy boundary is below 10%.
+  - The power is computed under the observed trend: 1 − Φ((c₃ − |T|/√f_k)/√(1 − f_k)), with T the look's t-statistic and f_k its information fraction.
+  - Futility never changes the efficacy boundaries, so ignoring a futility stop cannot raise false differences. The gate counts experiments as if every futility stop were ignored.
+  - The lock records the futility setting.
+- **Why 4.5%, not 5%:** a first long run at 5% gave 5.12% [4.99, 5.24] false differences under normal noise. t-intervals at nominal levels run slightly liberal with 7–15 degrees of freedom.
 
 **Boundaries** (two-sided 4.5%; numerical integration, checked against gsDesign's published values to ±0.002 and by 400,000 Brownian paths):
 
@@ -196,47 +223,46 @@ Agentium versions that change none of these keep the fingerprint, so reuse survi
 | 3 | 16 | 1.00 | 4.50% | 2.056 | 96.02% | 1.720 | 91.46% |
 
 **How it composes with today's rules.**
-- **The bootstrap and the t-interval must agree:** kept. At look k, `Decide` gets the bootstrap and t-intervals at the look's efficacy level in its "95%" slots, and at its equivalence level in its "90%" slots. `Decide`'s logic is unchanged: regressed, improved (small when the estimate is within the margin), equivalent, otherwise inconclusive.
+- **The bootstrap and the t-interval must agree:** kept. At look k, `Decide` gets the bootstrap and t-intervals at the look's efficacy level in its "95%" slots, and at its equivalence level in its "90%" slots. `Decide`'s logic is unchanged.
 - **Floors:**
   - The first look is the cost floor (8 tasks × 1 run). No look comes before a floor.
   - A look with fewer than 8 counted tasks, after failures, gives no verdict and the experiment continues.
   - Success stays exploratory at every look, since 16 < 20.
-  - A success-primary sequential design (looks at 20, 30, 40 × 3, say) is later work.
 - **"No loss" and "equivalent":**
-  - The cost designs have no cost guard, so "no loss" does not arise. The success guard is exploratory.
-  - "Equivalent" spends its own one-sided 5% per side.
-  - At the margin (a true +10%), "equivalent" came out 0.71% [0.66, 0.77] of the time.
-  - In practice equivalence within ±10% is out of reach at 16 tasks: the 91% half-width there is about 0.12–0.13 at σ = 0.19, wider than the margin (0.095).
+  - The cost designs have no cost guard, so "no loss" does not arise.
+  - "Equivalent" spends its own one-sided 5% per side. At the margin (a true +10%), it came out 0.66% [0.60, 0.71] of the time.
+  - In practice it is out of reach at 16 tasks: the 91% half-width there is about 0.12–0.13 at σ = 0.19, wider than the margin of 0.095.
 - **Pairing and interleaving:**
   - The schedule becomes stages. Stage k holds tasks n_{k−1}+1 … n_k of the seeded task order, each pair adjacent and its arms in seeded random order, as today.
-  - The executor finishes and settles a stage, retries included, before analysing it. It starts no run of the next stage until the look's decision.
-  - A look includes exactly the stage prefix, never tasks that finished early from a later stage. Finish order correlates with cost, since cheaper runs end sooner.
+  - The executor settles a stage, retries included, before analysing it. It starts no run of the next stage until the look's decision.
+  - A look includes exactly the stage prefix. Finish order correlates with cost.
 - **Rule 7 (no optional stopping):**
-  - `seq-v1` replaces the study's "99% at interim looks" and extension stages with the pre-declared spending above.
-  - There is no "run more" beyond 16. A larger question is a new experiment.
-  - An experiment stopped by budget or by the user between looks keeps the verdict of its last completed look (inconclusive if none). Later runs are shown as exploratory.
-- **The lock** records the looks, α, the spending function, the computed nominal levels, the futility threshold and whether it applies. A resume refuses a changed design.
-- **Budget:** the preview and the reserve use the maximum (16 tasks). The preview also shows the expected spend at no effect and at −20% (table in §6).
+  - `seq-v1` replaces the study's "99% at interim looks" and extension stages with the spending above.
+  - There is no "run more" beyond 16.
+  - An experiment stopped by budget or by the user between looks keeps the verdict of its last completed look (inconclusive if none).
+- **The lock** records the looks, α, the spending function, the computed nominal levels and the futility setting. A resume refuses a changed design.
+- **Budget:** the preview and the reserve use the maximum (16 tasks), on every resume too. The preview also shows the expected spend at no effect and at −20%.
 - **Reporting:**
   - "stopped at look k of 3 (n tasks)";
-  - the look's interval, which is a repeated confidence interval with simultaneous coverage;
-  - a note that an early stop overstates the effect's size on average (the interval is valid, the point estimate is not unbiased).
+  - the look's interval (a repeated confidence interval);
+  - a note that an early stop overstates the effect's size on average.
 
-## 4. Drift checks for the scheduled watch
-- **The chart:** one per (project, model, effort, context, panel). The panel is 8 tasks chosen once by seed from validated tasks.
+## 4. Drift checks for the scheduled watch (deferred)
+- **The chart:** one per (project, model, effort, context, panel). The panel is a fixed set of tasks.
   - Each check runs every panel task once, on the current pinned Claude Code, and records the version.
-  - The point is y_j = the mean log cold-start cost over the panel. The panel is fixed, so task difficulty is a constant.
+  - The point is y_j = the mean log isolated-run cost over the panel.
 - **Self-starting standardization (Hawkins):**
-  - The first 4 checks are the reference. The 4 rounds of a validation's 16 × 4 runs can serve, restricted to the panel.
+  - The first 4 checks are the reference.
   - After that, each point is standardized against all earlier in-control points: U_j = Φ⁻¹(F_t,m−1((y_j − ȳ) / (s·√(1 + 1/m)))).
-  - This is exactly standard normal under normal noise, whatever the spread and the day effects. No σ or day-effect parameter is assumed.
-  - **Why self-starting:** a first version that standardized against a fixed 4-check reference falsely alarmed within 52 checks in about 30–45% of charts (h = 5 and 6), because the reference's own error persists in every check.
+  - This is exactly standard normal under normal noise, whatever the spread and the day effects.
+  - **Why self-starting:** a version that standardized against a fixed 4-check reference falsely alarmed within 52 checks in about 30–45% of charts.
 - **CUSUM:** S⁺ = max(0, S⁺ + U − 0.5) and S⁻ = max(0, S⁻ − U − 0.5). It alarms when either exceeds **h = 6**. A point that does not alarm joins the baseline.
-- **False-alarm budget:** at most 5% of charts alarm within 52 checks (a year of weekly checks).
+  - **The CUSUM accumulates and can alarm from the first check after the reference,** warm-up included. Those alarms are real and count against the false-alarm budget below.
+  - "Warming up" (the first 12 checks) only means that *no* alarm is not yet evidence of no change.
+- **False-alarm budget:** at most 5% of charts alarm within 52 checks.
   - **Measured:** 3.59% [3.47, 3.71] pooled over 90,000 charts. The worst scenario is 4.04% [3.53, 4.62].
   - **Scenarios:** σ = 0.19 and 0.35; day effects of 0, 0.03 and 0.05; normal, skewed and heavy-tailed noise.
-  - **Run length without a change:** median 730–940 checks.
-  - **For comparison:** h = 5 gives 10.0%. A fresh 5% test per check gives 1 − 0.95⁵² ≈ 93%.
+  - **For comparison:** h = 5 gives 10.0%. A fresh 5% test per check gives about 93%.
 - **Detection** (σ = 0.19, day effect 0.03, change after 12 checks):
 
 | Change | 8 tasks: alarm within 8 checks, median delay | 16 tasks |
@@ -245,127 +271,149 @@ Agentium versions that change none of these keep the fingerprint, so reuse survi
 | +20% / −20% | 79% / 94%, 6 / 5 checks | 97% / 100%, 4 / 4 checks |
 | +35% | 99.8%, 4 checks | 100%, 3 checks |
 
-  - **A young chart detects little:** within the first 8 checks after only 4 reference checks, a 20% change is caught 3% of the time. The chart reports "warming up" until 12 checks and claims nothing then. False alarms still count against the budget.
-- **On an alarm:**
-  - The watch reports the change and the version where the CUSUM started climbing.
-  - It invalidates reuse for every key with that version, and proposes a proper interleaved A/B of the two pinned versions: one pre-declared test, triggered by the alarm.
-  - The chart restarts with a new reference once the user accepts the new level.
-- **The anchor chart** of a reuse key is the same chart.
-  - Each point is a reuse experiment's 4 anchors: the mean of log(fresh) − mean log(stored), per anchor task.
-  - Its in-control level is the key's bias, so it detects *changes* in bias, not the level, which the validation bounds.
-- **Cost:** a check is 8 runs. That is about $0.80 on samber/lo-sized tasks with Sonnet 5.5, and about $9 on Agentium-sized tasks with Sonnet 5. Weekly checks fit the watch's $20 weekly cap.
+  - After only the 4 reference checks, a 20% change is caught within 8 checks 3% of the time.
+- **On an alarm:** the watch reports the change and the version where the CUSUM started climbing, and invalidates reuse for every key with that version. It then proposes one pre-declared interleaved A/B of the two pinned versions.
+- **The anchor chart** of a reuse key is the same chart, with each reuse experiment's 4 anchors as a point. It detects *changes* in bias.
+- **Cost:** a check is one run per panel task. With 8 tasks that is about $0.80 on samber/lo-sized tasks, and about $9 on Agentium-sized tasks. The panel size and budget are open (deferred).
 
 ## 5. The exit gate, exactly
-"The simulation shows at most 5% false verdicts, and a reused-against-fresh A/A passes" means all of these, recorded in the plan:
-
-1. **Simulation**, run against the production implementation:
+The user narrowed the gate on 2026-10-02 to sequential stopping:
+1. **The long simulation passes against the production `seq-v1` implementation.**
    - The plan moves the spending, boundary and look logic into `internal/stats` and `internal/experiment`, and the tests call them.
-   - The run is `AGENTIUM_LONG_SIM=50 go test -run 'TestGroupSequentialFalseVerdicts|TestReuseValidationAndAllowance|TestDriftChart' ./internal/stats`. It must pass and log, for each noise shape:
-     - false differences, with futility stops ignored, at most 5.0%, and their Wilson 95% upper bound at most 5.0%. The null scenarios are σ ∈ {0.19, 0.35} × τ ∈ {0, 0.10, 0.25}, 120,000 experiments per noise shape;
-     - "equivalent" at a true +10% at most 5%;
-     - reuse false differences at most 5% for true biases within ±5%;
-     - h = 6 false alarms within 52 checks at most 5% in every scenario.
-   - The default CI run, with smaller sizes, stays as a regression check: at most 5.0% pooled and 6.0% per noise shape.
+   - The run is `AGENTIUM_LONG_SIM=50 go test -run 'TestGroupSequentialBounds|TestGroupSequentialFalseVerdicts' ./internal/stats`.
+   - **Each null group must pass,** at 120,000 experiments each, futility stops ignored, counting on the t-interval alone (an upper bound that does not depend on bootstrap draws): at most 5.0% false differences, with the Wilson 95% upper bound at most 5.0%. The groups are:
+     - the same noise in both arms: normal, skewed and heavy-tailed;
+     - arm-specific shapes;
+     - the recorded differences.
+   - "Equivalent" at a true +10% must come out at most 5%.
+   - **The default CI run** is a regression check: at most 7.0% per group and 5.5% pooled, on the t-interval alone.
    - `TestOneRunCostVerdictsSimulation` (phase1-v2) still passes unchanged.
-2. **A real reused-against-fresh A/A passes** the rule in §2, on one real project, with a pinned Claude Code and the cold-start cost.
-   - **Suggested project:** samber/lo with Sonnet 5.5, if it has 16 valid tasks. Otherwise the user picks one.
-   - **Estimated cost:** 64 fresh runs, plus 64 stored ones if no baseline exists. That is about $13–15 there with calibrations, and about $140 on Agentium's own tasks. It is paid and needs approval.
-   - **If it fails,** the gate fails honestly: reuse stays off, the wave closes with sequential stopping and the chart, and the user decides what follows.
-3. **Recommended, not part of the gate:** a real `seq-v1` A/A on the same project (at most 32 runs, about $3). It checks that the stage barrier, looks and reports work end to end.
+   - **Status today:**
+     - the like-shaped groups pass;
+     - the arm-specific group fails (5.66% [5.53, 5.79] on the t-interval alone);
+     - the recorded differences fail by their upper bound only (4.90% [4.78, 5.03]).
+
+     See §7. Changing α or the analysis needs the user.
+2. **A real `seq-v1` A/A smoke check runs** on one real project: at most 32 runs, about $3, approved by the user once the engine is built. It checks the stage barrier, the looks and the report end to end.
+
+**Deferred with reuse:** the real reused-against-fresh A/A (about $13–15 on samber/lo, about $140 on Agentium's tasks; not approved), and the reuse and drift simulations' thresholds. Those are reuse false differences at most 5% for biases within ±5% without day effects, and h = 6 at most 5% false alarms within 52 checks in every scenario.
 
 ## 6. What this means for the north star
-**Context A/B on cost.** The table assumes σ = 0.19 and one run per arm. Probability is that of a decisive verdict in one experiment; runs are means. Dollars use $0.10 a run (samber/lo, Sonnet 5.5) and $1.10 a run (Agentium's own tasks, Sonnet 5).
+**Context A/B on cost.** The table assumes σ = 0.19 and one run per arm. "Decisive" is the chance of a decisive verdict in one experiment; runs are means, and runs per decisive verdict = runs / decisive. Dollars use $0.10 a run (samber/lo, Sonnet 5.5) and $1.10 a run (Agentium's tasks, Sonnet 5).
 
-| True cost cut, τ | Design | Decisive | Runs | $ (lo / Agentium) | Runs per decisive verdict |
+| True cost cut, τ | Design | Decisive | Runs | $ per experiment (lo / Agentium) | Runs per decisive verdict |
 |---|---|---|---|---|---|
-| 20%, 0.10 | fixed 8 (today) | 47.8% | 16 | 1.6 / 18 | 33 |
-| | fixed 16 | 83.3% | 32 | 3.2 / 35 | 38 |
-| | **seq-v1** | **80.2%** | **26.2** | **2.6 / 29** | **33** |
-| | reuse of arm A (validated, allowance ≈ 0.105) | 45.0% | 15.1 + 4 anchors | 1.9 / 21 | 42 (+ validation) |
-| 20%, 0.25 | fixed 8 | 30.8% | 16 | 1.6 / 18 | 52 |
-| | seq-v1 | 56.4% | 26.0 | 2.6 / 29 | 46 |
-| 35%, 0.25 | fixed 8 | 80.6% | 16 | 1.6 / 18 | 20 |
-| | seq-v1 | 98.7% | 23.0 | 2.3 / 25 | 23 |
-| | reuse (τ = 0.10) | 99.9% | 10.7 + 4 | 1.5 / 16 | 15 (+ validation) |
+| 20%, 0.10 | fixed 8 (today) | 47.1% | 16 | 1.6 / 18 | 34.0 |
+| | fixed 16 | 83.0% | 32 | 3.2 / 35 | 38.6 |
+| | **seq-v1** | **78.3%** | **26.2** | **2.6 / 29** | **33.5** |
+| | reuse of arm A (deferred; allowance ≈ 0.105) | 45.5% | 15.1 + 4 anchors | 1.9 / 21 | 42.0 (+ validation) |
+| 20%, 0.25 | fixed 8 | 31.7% | 16 | 1.6 / 18 | 50.5 |
+| | seq-v1 | 57.5% | 26.0 | 2.6 / 29 | 45.2 |
+| 35%, 0.10 | fixed 8 | 95.1% | 16 | 1.6 / 18 | 16.8 |
+| | seq-v1 | 99.9% | 20.4 | 2.0 / 22 | 20.4 |
+| | reuse (deferred) | 99.9% | 10.7 + 4 | 1.5 / 16 | 14.7 (+ validation) |
+| 35%, 0.25 | fixed 8 | 81.2% | 16 | 1.6 / 18 | 19.7 |
+| | seq-v1 | 98.4% | 22.8 | 2.3 / 25 | 23.2 |
 | 63% (model A/B) | fixed 8 = seq-v1 | 100% | 16 | 3.10 measured | 16 |
-| none | seq-v1 (futility) | 3.8–4.8% any verdict | 21 | 2.1 / 23 | — |
-| | fixed 16 | 5.0–6.4% | 32 | 3.2 / 35 | — |
+| none | seq-v1 (futility) | 4.2–4.3% any verdict | 21 | 2.1 / 23 | — |
+| | fixed 16 | 4.9–6.6% | 32 | 3.2 / 35 | — |
 
-- **Sequential stopping** keeps dollars per decisive verdict about level at 20% effects: −2% at τ = 0.10 and −11% at τ = 0.25.
-  - It turns a coin-flip experiment into a likely-decisive one (48% → 80%), which shortens the time to the first decisive verdict.
-  - It spends a third fewer runs than a fixed 16-task design when nothing changed.
-  - The guard is tighter than today's: 4.5% against about 5%.
-- **Reuse** saves runs per experiment only for effects of 35% or more. At 20% it loses, because the allowance eats power.
-  - The validation costs 64–128 runs per key every 30 days.
-  - At a 35% cut it saves 6–8 runs per experiment, so it breaks even after about 9–18 reuse experiments per key within those 30 days.
-  - So reuse is not the lever for a first verdict. It earns its place as the watch's baseline and for repeated screens of big changes against one base.
+- **Sequential stopping:**
+  - **At 20% cuts:** dollars per decisive verdict move −1.5% at τ = 0.10 and −10% at τ = 0.25. A coin-flip experiment becomes a likely-decisive one (47% → 78%), which shortens the time to the first decisive verdict.
+  - **At 35% cuts it costs more per decisive verdict than fixed 8:** 20.4 against 16.8 runs at τ = 0.10, and 23.2 against 19.7 at τ = 0.25. Its first look is stricter (99.75%), so effects that fixed 8 would already decide often go on to 12 tasks. That is the price of the 4.5% guard and of the gain at 20%.
+  - **With no effect,** it spends a third fewer runs than a fixed 16-task design.
+- **Reuse (deferred):** it saves runs only for cuts of 35% or more. At 20% it loses, because the allowance eats power.
+  - At 35% (τ = 0.10) it saves 5.7 runs per decisive verdict against `seq-v1` (20.4 → 14.7), and 2.1 against fixed 8.
+  - A validation costs 64–128 runs, and must be repeated every 14 days (§2). So reuse breaks even after about 11–22 reuse experiments per key within 14 days against `seq-v1`, or 30–61 against fixed 8.
+  - It is not a lever for the first verdict. If it comes back, it is for the watch's baseline and for frequent screens of big changes against one base.
+- **Dollars per decisive cost verdict on samber/lo-sized tasks:** about $1.7–5 across the rows above. The most expensive is a 20% cut at τ = 0.25 ($4.5 with `seq-v1`, $5.1 with fixed 8).
 - **Time** (estimates):
   - samber/lo-sized runs (30–60 s of agent time): about 1.5 minutes per pair at concurrency 2, so a 13-task `seq-v1` experiment takes about 20 minutes.
   - Agentium-sized runs (4–6 minutes): about 1.5 hours.
-  - Both fit "within a day".
 - **Success:** no lever here reaches a success verdict for $40 on Agentium-sized tasks.
   - The 20 × 3 floor costs about $130 on Sonnet 5, and certifies only a 21–25 pp margin.
   - On small tasks the same floor costs about $12–34 (120 runs at $0.10–0.28).
-  - **Recommended success target:** set it on small-task repositories, where the floor already fits $40. Leave sequential success designs to a later wave.
+  - **Recommended success target:** set it on small-task repositories, where the floor already fits $40.
 
 ## 7. Simulation evidence
 **Model.** Each task has a level (removed by pairing). Each arm's log cost is level + effect + σ·noise. A task's effect is the mean effect + τ·noise.
-- **Noise shapes,** standardized:
+- **Noise shapes,** standardized to mean 0 and variance 1:
   - normal;
-  - a skewed lognormal (skewness about 0.9, as `TestOneRunCostVerdictsSimulation`);
+  - a skewed lognormal (skewness about 0.9, as `TestOneRunCostVerdictsSimulation`), and its mirror;
+  - a strongly skewed lognormal (shape 0.6, skewness about 2.3), and its mirror;
   - Student's t with 5 degrees of freedom (kurtosis 9).
-- **Analysis:** the production `NewBootstrap`, `TInterval` and `Decide` at each look's levels, with 200 bootstrap draws. With one run per cell the percentile bootstrap is narrower than the t-interval at these sizes, so the widest-interval rule follows the t-interval. The t-alone counts are logged as an upper bound and differ by at most 0.05 points.
+- **Why the same shape in both arms tests little:** with one run per arm and the same noise in both, each task's difference is symmetric whatever the shape. Those groups test the tails more than the skew.
+- **The arm-specific group** gives the arms different shapes with equal mean log cost, and in one scenario different spreads (0.19 against 0.35), as two models or contexts could:
+  - skewed against normal;
+  - skewed against its mirror;
+  - strongly skewed against normal;
+  - strongly skewed against its mirror, at τ = 0 and 0.10;
+  - strongly skewed (σ 0.19) against normal (σ 0.35).
+- **The recorded group** resamples the 22 per-task log differences of `aa-report.md`, `context-ab-16-report.md` and `model-ab-report.md`, each experiment's centered and scaled by its own spread.
+- **Analysis:** the production `NewBootstrap`, `TInterval` and `Decide` at each look's levels, with 200 bootstrap draws (50 in the default run). The t-alone counts, which the assertions use, are an upper bound and differ from the widest-interval counts by at most 0.05 points.
 - **Seeds:** each scenario has its own seed, so the counts are reproducible.
 
-**False differences without a true difference** (`seq-v1`, 20,000 experiments per scenario, 120,000 per shape):
+**False differences without a true difference** (`seq-v1`, 20,000 experiments per scenario, 120,000 per group):
 
-| Noise | With futility stops ignored | With them obeyed | A/A only (τ = 0) |
+| Group | Futility ignored | Futility obeyed | t-interval alone (gate) |
 |---|---|---|---|
-| normal | 4.58% [4.46, 4.70] | 4.30% [4.18, 4.41] | 4.52% [4.32, 4.73] |
-| skewed | 4.56% [4.45, 4.68] | 4.27% [4.16, 4.39] | 4.52% [4.32, 4.73] |
-| heavy-tailed | 4.45% [4.34, 4.57] | 4.20% [4.09, 4.32] | 4.30% [4.11, 4.50] |
-| all, pooled | 4.53% [4.46, 4.60] | — | 4.45% [4.33, 4.56] |
+| normal | 4.68% [4.56, 4.80] | 4.36% [4.25, 4.48] | 4.72% [4.60, 4.84] |
+| skewed | 4.59% [4.47, 4.71] | 4.32% [4.21, 4.44] | 4.61% [4.50, 4.73] |
+| heavy-tailed | 4.22% [4.11, 4.34] | 3.96% [3.85, 4.07] | 4.24% [4.13, 4.36] |
+| arm-specific shapes | 5.62% [5.49, 5.75] | 5.28% [5.16, 5.41] | **5.66% [5.53, 5.79]** |
+| recorded differences | 4.85% [4.73, 4.97] | 4.50% [4.39, 4.62] | **4.90% [4.78, 5.03]** |
+| A/A only (τ = 0, like shapes) | 4.42% [4.31, 4.54] | — | — |
 
-- The worst single scenario was 4.75% [4.46, 5.05] (normal, σ = 0.19, τ = 0.10).
-- Under normal noise every scenario has the same rate. The analysis is scale-free, so σ and τ change only the noise shape's mix.
+- **Within the arm-specific group:**
+  - skewed against normal: 4.83%;
+  - skewed against its mirror: 5.06%;
+  - strongly skewed against normal: 5.54%;
+  - strongly skewed against normal with a wider spread: 4.61%;
+  - strongly skewed against its mirror: 7.64% [7.28, 8.02] at τ = 0, and 6.25% at τ = 0.10.
+
+  In that last pair the per-task difference has a skewness of about −1.6, which a t-interval on 8 tasks does not survive.
+- **phase1-v2 on the same scenarios:** its fixed 8-task design gives 5.79% [5.66, 5.92], logged by the same test. So the shipped method has the same weakness, slightly worse.
+- **What could fix it** (for the coordinator and the user; nothing has changed):
+  - a lower α;
+  - a skew-robust interval (a bootstrap-t, or Johnson's skew-corrected t);
+  - a first look at 12 tasks;
+  - or accepting the arm-specific scenarios as beyond the noise seen in real data, where the recorded differences give 4.90% with an upper bound of 5.03%.
 - **Power** (5,000 experiments per row; "improved" at a true cut):
 
 | Cut | τ | fixed 8 | seq-v1 | fixed 16 | seq-v1 tasks used |
 |---|---|---|---|---|---|
-| 10% | 0.10 / 0.25 | 15.4% / 10.6% | 26.1% / 16.0% | 28.2% / 18.6% | 12.0 / 11.5 |
-| 20% | 0.10 / 0.25 | 47.8% / 30.8% | 80.2% / 56.4% | 83.3% / 62.4% | 13.1 / 13.0 |
-| 35% | 0.10 / 0.25 | 94.7% / 80.6% | 99.96% / 98.7% | 100% / 99.2% | 10.2 / 11.5 |
+| 10% | 0.10 / 0.25 | 13.5% / 10.4% | 23.8% / 15.7% | 27.3% / 18.4% | 11.9 / 11.4 |
+| 20% | 0.10 / 0.25 | 47.1% / 31.7% | 78.3% / 57.5% | 83.0% / 62.1% | 13.1 / 13.0 |
+| 35% | 0.10 / 0.25 | 95.1% / 81.2% | 99.94% / 98.4% | 99.98% / 99.1% | 10.2 / 11.4 |
 | 63% | 0.10 / 0.25 | 100% / 100% | 100% / 100% | 100% / 100% | 8.0 / 8.1 |
 
-  Skewed noise at τ = 0.25 gives within 5 points of the normal rows.
+  Skewed noise at τ = 0.25 gives within 4 points of the normal rows.
 - **Reuse:** see §2. Reuse experiments use arm A = 4 stored runs per task with the true bias, arm B = 1 fresh run, the `seq-v1` looks without futility, and the allowance from a passing validation.
-  - At no bias: "improved" at a true 20% cut 45.0% (15.1 fresh runs), at 35% 99.9% (10.7), at 63% 100% (8.0).
+  - At no bias: "improved" at a true 20% cut 45.5% (15.1 fresh runs), at 35% 99.9% (10.7), at 63% 100% (8.0).
 - **Drift:** see §4.
-- **Runtime:**
-  - The default run, which CI runs under the race detector, adds about 8 s to `internal/stats` (13 s in all).
-  - The long run takes 89 s without the race detector.
+- **Runtime:** the default run, which CI runs under the race detector, takes about 31 s for `internal/stats` on 2 cores (`GOMAXPROCS=2`), 13.5 s of it the existing phase1-v2 simulation.
 
 ## 8. Assumptions and limitations
 - **Tasks:** independent, and the effects across tasks are independent of the noise. Missing tasks (infrastructure failures) are not informative.
-- **The simulated configuration** is one run per arm. The two-stage bootstrap with more runs per cell is wider, which is conservative. Futility uses the t-statistic as if it were normal; since futility is non-binding, this can only cost power.
-- **Noise shapes:** three; real cost noise could be bimodal (cache states). The cold-start cost removes the known bimodality, and its effect on σ is unmeasured.
-- **Reuse bias** is modeled as a constant per key, with the validation's noise independent of the experiment's. In practice the stored runs of later experiments are the validation's fresh side, which correlates them. Anchors were not simulated.
-- **The drift chart** assumes check-to-check independence, without autocorrelated day effects, and step changes. Slow drifts get absorbed into a self-starting baseline. The chart covers cost only.
-- **The cache bound** counts each run's first request only. Cross-run cache hits after the first request are assumed to be the run's own. The implementation must confirm this on recorded transcripts.
+- **Configuration:** the simulated one is one run per arm. Futility uses the t-statistic as if it were normal; since futility is non-binding, this can only cost power.
+- **Noise:** real cost noise could be bimodal (cache states). The isolated-run cost removes the known bimodality; its effect on σ is unmeasured.
+- **Arm-specific skew** breaks the 5% guard for `seq-v1` and phase1-v2 alike (§7). The recorded differences sit at the edge, but they are only 22 values.
+- **Reuse bias** is modeled as a constant per key, with the validation's noise independent of the experiment's. In practice later stored runs are the validation's fresh side, which correlates them. Anchors were not simulated.
+- **Day effects in reuse** were simulated at γ = 0.03 and 0.05, as one shift per occasion. They cut the validation's pass rate with no bias from 88% to 53–69%. After a pass they raise false differences to 0.2–2.7%, which is still under 5%.
+- **Biases of ±12%:** the validation passes 3–4% of the time. When it does, the bias exceeds the allowance in 25–29% of passes, and false differences after a pass are 0.6–2.7%.
+- **The drift chart** assumes check-to-check independence, without autocorrelated day effects, and step changes. Slow drifts get absorbed into a self-starting baseline.
+- **The cache bound** counts each run's first request only, and is an upper bound. Step 2 checks the repricing rule on recorded transcripts.
 - **The source of the plan's "about 9%"** was not recorded. It matches the bound for ab16.
-- **σ was swept at 0.19 and 0.35.** Results under normal noise do not depend on σ.
+- **σ was swept at 0.19 and 0.35.** Results under like-shaped normal noise do not depend on σ.
 
-## 9. Open questions for the user
-1. **α:** approve 4.5% (two-sided) for `seq-v1`, stricter than phase1-v2's about 5%?
-2. **Cold-start cost:** make it the *primary* cost metric of `seq-v1`, with raw cost still reported? Or use it only for reuse, the validation and the chart? It removes cross-run cache effects of up to 10–57% per run, but changes what "cost" means in a verdict.
-3. **Reuse scope in wave 3:** the economics favor building, in order:
-   1. `seq-v1`;
-   2. the cold-start cost, the reuse key and the validation (the gate);
-   3. the chart;
-   4. reuse inside A/B verdicts last, or deferred to wave 4, since it pays only for effects of 35% or more at about 9–18 experiments per key a month.
+## 9. Decisions and what stays open
+The user's decisions (2026-10-02), answering this note's first version:
+1. α = 4.5% for `seq-v1`: approved.
+2. Actual cost stays the primary metric. The isolated-run cost is reported beside it.
+3. Sequential stopping is built now. The reuse key, the reuse A/A, reuse in experiments and the drift chart are deferred, and this note keeps their design.
+4. The `seq-v1` smoke check (about $3) is approved once the engine is built. The reuse A/A is not approved.
+5. Futility stops are on by default (non-binding).
+6. The drift panel is deferred.
+7. The reuse defaults (14-day window, the ±15% pass bound, 4 anchors) stay open until reuse resumes. They must be fixed before any validation runs.
 
-   Which cut?
-4. **Paid checks** (approval and a budget): the real reused-against-fresh A/A (about $13–15 on samber/lo; about $140 on Agentium's tasks) and the real `seq-v1` A/A smoke check (about $3).
-5. **Futility:** stop by default (it saves about a third of the runs when nothing changed; non-binding) or ask at each look?
-6. **Drift panel and budget:** 8 tasks a week, about $0.80 on small tasks or $9 on Agentium-sized ones, with a ±10% change found in a median 17–29 checks? Or 16 tasks, which double the cost and halve the delay?
-7. **Defaults:** stored runs at most 14 days old, validations valid 30 days, a validation passing at ±15%. Accept them, or set your own before any validation runs? They must be fixed beforehand.
+Open for the coordinator and the user: the arm-specific result in §7, before step 1's gate can pass.
