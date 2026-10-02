@@ -162,3 +162,57 @@ func TestWorkingTreeSymlinksNeverReachPersonalFiles(t *testing.T) {
 		t.Errorf("ignored file: err = %v, want ErrNotExist", err)
 	}
 }
+
+func TestLinkReportsStoredTargetsWithoutFollowingThem(t *testing.T) {
+	root, head := fixture(t)
+	committed, err := Commit(context.Background(), head, "-C", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := WorkingTree(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []Source{committed, tree} {
+		cases := []struct {
+			path, target string
+			link         bool
+		}{
+			{"AGENTS.md", "docs/rules.md", true},
+			{"docs/escape.md", "../../outside.md", true}, // reported as stored, never opened
+			{"CLAUDE.md", "", false},
+			{"docs", "", false},       // a folder is not a file of the source
+			{"missing.md", "", false}, // nor is a missing path
+		}
+		for _, c := range cases {
+			target, ok, err := Link(src, c.path)
+			if err != nil || ok != c.link || target != c.target {
+				t.Errorf("%s: Link(%s) = %q, %v, %v; want %q, %v", src.Describe(), c.path, target, ok, err, c.target, c.link)
+			}
+		}
+	}
+}
+
+// TestCommitEnvReachesEveryGitCall: the extra environment is on the listing, on reads and on link reads (GIT_TRACE
+// writes a trace for each call that sees it).
+func TestCommitEnvReachesEveryGitCall(t *testing.T) {
+	root, head := fixture(t)
+	trace := filepath.Join(t.TempDir(), "trace")
+	src, err := CommitEnv(context.Background(), []string{"GIT_TRACE=" + trace}, head, "-C", root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := src.ReadFile("CLAUDE.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Link(src, "AGENTS.md"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "trace: built-in: git "); got != 3 || !strings.Contains(string(data), "ls-tree") {
+		t.Errorf("traced %d git calls, want 3 (ls-tree, cat-file, cat-file):\n%s", got, data)
+	}
+}
