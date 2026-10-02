@@ -24,12 +24,12 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 `agentium start` never writes to your repository and makes no paid run on its own. It skips steps already done, so run it again to resume:
 
 - registers the repository (`init`) and, if the project has no snapshot, saves the committed context as `baseline` (arm A);
-- mines and validates tasks until 8 are ready, the cost floor;
-- creates the experiment `quick-...`, a cost experiment (method `seq-v1`, below) on up to 16 of the ready tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
-- prints the preview: runs, estimated cost, detectable effect, and what is missing;
+- mines and validates tasks until 16 are ready; when the history has no more candidates, 8 or more will do (the cost floor), with fewer looks;
+- creates the experiment `quick-...`, a cost experiment (method `seq-v1`, below) on those tasks x 1 run per arm: an A/A calibration of your context, or with `--b SNAPSHOT` a comparison of the context with that snapshot;
+- prints the preview: the looks, the maximum and expected spend, and what is missing;
 - stops there. `--yes` (or answering `y` on a terminal) runs the experiment, within its budget (`--budget USD` raises it). The run first calibrates each context that lacks a calibration (a short paid run, about $0.1 to $0.2, counted in the budget and shown in the preview).
 
-Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`), so a first `start` stops there. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
+Mined instructions need your review for solution leaks (`agentium task show NAME`, then `agentium task edit NAME --reviewed`, or `agentium task rm NAME` for one you will not accept), so a first `start` stops there and lists them. `start --accept-mined` accepts the tasks it mined without your review: it checks only solution headings, reference-file names and unstated test requirements, so an instruction that explains the fix passes. The default A/A calibration never counts toward the first decisive verdict.
 
 `start` and `experiment report` also show how long it took, and what was spent, to your first decisive verdict (improved, regressed or no loss; inconclusive does not count), from finished experiments only.
 

@@ -26,11 +26,12 @@ Goes from a repository to a previewed experiment, skipping every stage that is a
   1. registers the repository (as init);
   2. saves the committed context as the snapshot "baseline", if the project has none; arm A is "baseline" when it
      exists, else the newest snapshot that --b does not name;
-  3. mines and validates tasks until 8 are ready, the experiment's cost floor, or the candidates run out;
-  4. creates the experiment "quick-..." at the cost floor: 8 tasks × 1 run per arm. With --b it compares the context
-     with that snapshot; without it, it is an A/A calibration of the context (both arms the same, which must find no
-     difference: it measures this repository's noise, it does not compare contexts);
-  5. prints its preview: runs, estimated cost, detectable effect and what is missing.
+  3. mines and validates tasks until 16 are ready; when the candidates run out, 8 or more will do (the cost floor);
+  4. creates the experiment "quick-...", a cost experiment (method seq-v1) on those tasks × 1 run per arm, with a look
+     after 8, 12 and 16 tasks (fewer looks with fewer tasks). With --b it compares the context with that snapshot;
+     without it, it is an A/A calibration of the context (both arms the same, which must find no difference: it
+     measures this repository's noise, it does not compare contexts);
+  5. prints its preview: the looks, the maximum and expected spend, and what is missing.
 
 It stops before any paid run. --yes runs the experiment (as agentium experiment run NAME), which first calibrates each
 context that lacks a calibration on this Claude Code and model (a paid run each, counted in the budget); on a terminal,
@@ -287,7 +288,8 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 		return "", err
 	}
 	d := created.Design
-	fmt.Fprintf(out, "Experiment %s: created, %d task(s) × %d run per arm = %d runs, budget $%.2f\n", name, len(d.Tasks), d.Repeats, d.Runs(), d.BudgetUSD)
+	fmt.Fprintf(out, "Experiment %s: created, %d task(s) × %d run per arm = %d runs at most, budget $%.2f; %s\n", name, len(d.Tasks), d.Repeats,
+		d.Runs(), d.BudgetUSD, experiment.DescribeLooks(d))
 	return name, nil
 }
 
