@@ -10,7 +10,7 @@ Time and dollars to the first decisive verdict (inconclusive doesn't count): rea
 ## Next, in waves ([coordinating plan](plans/2026-10-01-next-chapter.md))
 1. Done: task mining, judge reports, temp isolation, [refactor](plans/archive/2026-10-01-refactor-round.md).
 2. First decisive verdict: [quick start](plans/archive/2026-10-02-quick-start.md), [model A/B](plans/archive/2026-10-01-model-ab.md); [Java and Rust](plans/archive/2026-09-30-java-rust.md).
-3. Cheaper verdicts: a statistics note, then run reuse and sequential stopping.
+3. Cheaper verdicts: [statistics note](../docs/research/2026-10-02-wave3-statistics-note.md), then sequential stopping; run reuse deferred.
 4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, scheduled watch.
 5. Later: Codex.
 
