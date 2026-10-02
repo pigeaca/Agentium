@@ -17,7 +17,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 ## Requirements in detail
 
 - Go 1.27.1 and a C compiler (SQLite is built with cgo); Git.
-- Your project's own build tool, on the machine that runs Agentium: Go, Maven or Gradle (`mvnw` and `gradlew` preferred; Java and Kotlin, with a JDK) or Cargo. Go, Maven and Cargo are proven in real runs; Gradle too, except worker-daemon tools such as Checkstyle and PMD (see [build tools](#build-tools-and-offline-dependencies)).
+- Your project's own build tool, on the machine that runs Agentium: Go, Maven or Gradle (`mvnw` and `gradlew` preferred; Java and Kotlin, with a JDK) or Cargo; for Python, `python3` (a `python3.N` matching `requires-python` when there is one) and, when the project has `uv.lock`, `uv`. Go, Maven, Cargo and Python are proven in real runs; Gradle too, except worker-daemon tools such as Checkstyle and PMD (see [build tools](#build-tools-and-offline-dependencies)).
 - [Claude Code](https://claude.com/claude-code), signed in. `ANTHROPIC_API_KEY` or a token file in `AGENTIUM_CLAUDE_TOKEN_FILE` works too.
 
 ## What `start` does

@@ -1,8 +1,8 @@
 # Cheaper verdicts: sequential stopping (wave 3)
 
 - Date: 2026-10-02
-- Status: Ready (2026-10-02).
-  - **The user's decisions** (source: the user, 2026-10-02), answering the [statistics note's](../../docs/research/2026-10-02-wave3-statistics-note.md) questions:
+- Status: Done (2026-10-02). The exit gate passed: the long simulation on production `seq-v1` (largest false-difference bound 4.62%), and a real A/A smoke check that made both looks and stopped for futility at look 2 ($2.25). Steps 3–6 stay deferred (below).
+  - **The user's decisions** (source: the user, 2026-10-02), answering the [statistics note's](../../../docs/research/2026-10-02-wave3-statistics-note.md) questions:
     1. α for `seq-v1`: 4.5% was approved first, then **3.5%** after the arm-specific result (decision 8).
     2. Actual cost stays the primary metric. The isolated-run cost is reported beside it (step 2).
     3. Sequential stopping is built now. The reuse key, the reuse A/A, reuse in experiments and the drift chart are deferred (below).
@@ -17,7 +17,7 @@
        - new cost experiments default to `seq-v1`;
        - phase1-v2's measured excess on lopsided noise is a known limitation: 5.38% [5.25, 5.51] on resampled real differences (5.31% in the probe) and 5.79% [5.66, 5.92] on arm-specific shapes (5.76% in the probe);
        - a skew-robust interval (bootstrap-t or Johnson's t) is a later research item, for both methods (Deferred).
-- Scope: wave 3's feature track in the [next chapter](2026-10-01-next-chapter.md). It implements the [wave-3 statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md), which fixes every statistical choice below. Changing one of them means changing the note first, with the user's agreement.
+- Scope: wave 3's feature track in the [next chapter](../2026-10-01-next-chapter.md). It implements the [wave-3 statistics note](../../../docs/research/2026-10-02-wave3-statistics-note.md), which fixes every statistical choice below. Changing one of them means changing the note first, with the user's agreement.
 
 ## Acceptance
 1. **Exit gate** (the note's §5):
@@ -30,7 +30,7 @@
 ## Work
 Steps 1 and 2 touch different packages and can run in parallel (step 1: `internal/stats`, `internal/experiment`, `internal/report`, `internal/cli`; step 2: `internal/claude`, `internal/run`). Both change `internal/report`: step 1 owns it, and step 2's cost-table change lands after step 1 merges, rebased on it.
 
-- [ ] **1. The sequential engine: method `seq-v1`. Risk: high** (money: stop and budget logic; persistence: lock schema; concurrency: the stage barrier).
+- [x] **1. The sequential engine: method `seq-v1`. Risk: high** (money: stop and budget logic; persistence: lock schema; concurrency: the stage barrier).
   - **`internal/stats`:** the Lan–DeMets O'Brien–Fleming-type spending, and boundaries by numerical integration.
     - Interim fractions are counted tasks over the planned maximum.
     - Boundaries already used stay fixed, and the final look spends the remainder.
@@ -46,7 +46,7 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
   - **The lock** records the looks, α, the spending, the levels and the futility setting. A resume refuses changes.
   - **The preview and the reserve** use the maximum spend (16 tasks), and the preview also shows the expected spend at no effect and at a 20% cut.
   - **The report** says "stopped at look k of 3", shows the look's interval, and notes that early stops overstate the effect.
-  - *Threats* ([checklist](../roles/reviewer.md#threat-checklist)):
+  - *Threats* ([checklist](../../roles/reviewer.md#threat-checklist)):
     - budget and consent: the reserve stays at the maximum on every resume between stages, and the preview states the maximum spend before consent;
     - crash and recovery: a kill mid-stage resumes the stage without repeating or skipping a look;
     - concurrent runs: the stage barrier holds against the concurrency of 2 and retries; no run of the next stage starts before the look.
@@ -62,11 +62,12 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
     - Resuming after a crash mid-stage repeats no look and skips none.
     - The reserve on resume is the maximum's.
     - A real console sample of a report stopped early.
-- [ ] **2. Isolated-run cost, reported beside actual cost. Risk: high** (a money metric; a new stored field).
+  - **Done:** #99, reviewed; fixes from the smoke checks in #117.
+- [x] **2. Isolated-run cost, reported beside actual cost. Risk: high** (a money metric; a new stored field).
   - **`internal/claude`:** record the first-request cache-read tokens and write TTL of the main session, and of the first launch of each subagent type (`subagent_type`, matched by `parent_tool_use_id`).
   - **`internal/run`:** compute the isolated-run cost with the dated price table, and store it beside the reported cost.
   - **Reports** show it as "isolated-run cost", with a note that tells it apart from the existing "cold-cache cost" column. Actual cost stays primary. **Done:** the report column (`Arm.IsolatedCostUSD`, shown only when every counted run has a value) and its note, with the count of runs lacking one.
-  - *Threats* ([checklist](../roles/reviewer.md#threat-checklist)):
+  - *Threats* ([checklist](../../roles/reviewer.md#threat-checklist)):
     - crash and recovery: old records, without the field, still load and report;
     - persistence: an absent value stays absent, never zero;
     - no personal data: subagent types and skill names stay out of stored records and reports, as skill names do today.
@@ -79,10 +80,11 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
     - Unknown models make the value absent, not zero.
     - Old records still load and report.
     - On recorded transcripts of a run with no other run inside the cache TTL, every request the rule reprices shows `cache_read` = 0. If one doesn't, the rule and the note change before merge.
-- [ ] **7. Close the wave. Risk: low.**
+  - **Done:** #92 (the stored value) and #107 (the report column), each reviewed.
+- [x] **7. Close the wave. Risk: low.**
   - Run the long simulation on production code, and record its figures in the note.
   - Run the approved `seq-v1` smoke check.
-    - **Smoke check (2026-10-02, at `4815470`, [report](../../docs/examples/seq-v1-smoke-report.md)): a budget stop before look 1, so no look and no verdict; this exit-gate item is not yet met.** It was an A/A of samber/lo's `baseline` context on `claude-sonnet-5` (sign-in login) with a hard $3.50 budget. Its 16 tasks were mined and validated with `go test -skip '<timing tests>' ./...`, then checked as `start --accept-mined` checks them; one task `start` mined itself uses plain `go test ./...`. `start` made a $74 budget with $3 run caps, and `--budget` can only raise a budget. One pair at those caps ($6) does not fit $3.50, so the experiment was remade with `experiment new` with the same tasks and seed, `--run-budget 0.50 --budget 3.50`. It spent $2.62 at list price: $0.12 on calibration and $2.49 on 6 runs (3 tasks, all passed). Runs cost $0.29 to $0.51, about 4x Sonnet 5.5's $0.10 on the same tasks, so 16 runs could not fit; one run reached $0.51, over its $0.50 cap. The first attempt paused at 85% of the five-hour window, which other work had used, and `--wait` waited 2 h 35 min for the reset. The 6 runs then took the window from 3% to 13% in about 10 minutes. The stage barrier, the looks and futility remain untested in a real run. A rerun that reaches look 1 needs about $7 to $8 on `claude-sonnet-5`, or about $3 with `--model claude-sonnet-5-5`.
+    - **Smoke check (2026-10-02, at `4815470`, [report](../../../docs/examples/seq-v1-smoke-report.md)): a budget stop before look 1, so no look and no verdict; this exit-gate item is not yet met.** It was an A/A of samber/lo's `baseline` context on `claude-sonnet-5` (sign-in login) with a hard $3.50 budget. Its 16 tasks were mined and validated with `go test -skip '<timing tests>' ./...`, then checked as `start --accept-mined` checks them; one task `start` mined itself uses plain `go test ./...`. `start` made a $74 budget with $3 run caps, and `--budget` can only raise a budget. One pair at those caps ($6) does not fit $3.50, so the experiment was remade with `experiment new` with the same tasks and seed, `--run-budget 0.50 --budget 3.50`. It spent $2.62 at list price: $0.12 on calibration and $2.49 on 6 runs (3 tasks, all passed). Runs cost $0.29 to $0.51, about 4x Sonnet 5.5's $0.10 on the same tasks, so 16 runs could not fit; one run reached $0.51, over its $0.50 cap. The first attempt paused at 85% of the five-hour window, which other work had used, and `--wait` waited 2 h 35 min for the reset. The 6 runs then took the window from 3% to 13% in about 10 minutes. The stage barrier, the looks and futility remain untested in a real run. A rerun that reaches look 1 needs about $7 to $8 on `claude-sonnet-5`, or about $3 with `--model claude-sonnet-5-5`.
     - **The smoke check's findings, fixed in PR #117** (the rerun on `claude-sonnet-5-5`, cap $5, is approved and follows it):
       - the default model is `claude-sonnet-5-5` for new experiments, `start`, `run once` and `run calibrate`;
       - a run's estimate never exceeds its cap (the preview showed "est. cost by then" $25.79 above an $8 worst case);
@@ -91,7 +93,7 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
       - the note on an unfinished `seq-v1` experiment no longer claims a look that was never made;
       - `experiment` subcommands say why a bad argument was refused;
       - validation warns when the verify commands' `go test -skip`/`-run` patterns keep a hidden test from running (the smoke tasks' `-skip '<timing tests>'`).
-    - **Smoke check rerun (2026-10-02, at `80c7f9b`, [report](../../docs/examples/seq-v1-smoke-55-report.md)): stopped at look 2 of 3 for futility, with no cost verdict, as an A/A should end. The gate's smoke check has now run with real looks.**
+    - **Smoke check rerun (2026-10-02, at `80c7f9b`, [report](../../../docs/examples/seq-v1-smoke-55-report.md)): stopped at look 2 of 3 for futility, with no cost verdict, as an A/A should end. The gate's smoke check has now run with real looks.**
       - **Setup:** the same 16 tasks and seed on `claude-sonnet-5-5` (sign-in login), `--run-budget 0.30 --budget 5`.
       - **Preview:** with every run assumed at its cap, look 1 plus calibration came to $4.89, within $5.
       - **Look 1** (8 tasks): cost +11%, [-28%, +71%] at 99.84%, inconclusive. Conditional power was 27%, so it continued.
@@ -101,6 +103,8 @@ Steps 1 and 2 touch different packages and can run in parallel (step 1: `interna
       - **Time:** look 1 came 4 min 46 s after `experiment run` began (calibration included), and the run ended at 7 min 05 s.
       - **Usage:** the five-hour window went from 59% to 64%, about 0.2% per run.
       - **The preview's estimates were far off:** $0.30 per run (the cap; there were no Sonnet 5.5 runs yet) against $0.09 actual. It gave 2% of the window per run, measured on the first attempt's `claude-sonnet-5` runs in a window other work shared. It also quoted a window reading from about two hours before.
+      - **Fixed in #122:** usage per run is estimated per model, from runs of the experiment's own model only; the preview says what each estimate rests on and how old the window reading is; with no history it says so instead of quoting the cap as an estimate.
+  - **Docs:** the [guide](../../../docs/guide.md#running-and-comparing) describes `seq-v1`, the isolated-run cost and the overshoot allowance; the README's verdict line names the looks; the [code map](../../reference/code-map.md) lists the group-sequential spending and boundaries; the note's status records the gate.
   - Update the docs, then the next chapter's wave-3 results (by the coordinator).
   - Archive this plan.
   - *Acceptance:* the exit gate is recorded, passed or failed, with its evidence.
@@ -125,7 +129,7 @@ The deferred steps:
 - **3. The reuse key and storage.** Risk: high.
 - **4. The reused-against-fresh A/A.** Risk: high; paid.
 - **5. Reuse in cost experiments**, with anchors and the bias allowance. Risk: high.
-- ~~**6. The drift chart.**~~ **Cancelled by the user (2026-10-02)** with the watch (A5) it was moved into ([watch and screen plan](2026-10-02-watch-and-screen.md)): Agentium runs nothing on a schedule. Only the pure statistics remain (`internal/stats/drift.go`, the note's §4), with no caller.
+- ~~**6. The drift chart.**~~ **Cancelled by the user (2026-10-02)** with the watch (A5) it was moved into ([watch and screen plan](../2026-10-02-watch-and-screen.md)): Agentium runs nothing on a schedule. Only the pure statistics remain (`internal/stats/drift.go`, the note's §4), with no caller.
 
 ## Boundaries
 - **Unchanged:** phase1-v1 and phase1-v2 analysis for existing and locked experiments, `Decide`'s logic, and verdict thresholds. Only the default method of new cost experiments changes.
@@ -138,8 +142,9 @@ The deferred steps:
 - **For the gate:** `AGENTIUM_LONG_SIM=50 go test -v -run 'TestGroupSequentialBounds|TestGroupSequentialFalseVerdicts' ./internal/stats`, and the smoke check's report.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code desktop / claude-opus-5-5 / high (coordinator, the note, steps 1 and 2, the smoke checks, reviews); claude-sonnet-5-5 / medium for the report column (#107) and its review
+- Elapsed: about 8 hours of wall clock on 2026-10-02 (the note at 08:31, step 2 at 09:20, step 1 at 10:31, the rerun's report at 15:49 UTC), beside waves 4 and isolation
+- Paid runs: $4.87 in all, both smoke attempts ($2.62, then $2.25), within the approvals ($3, then a $5 cap)
+- Check-fix loops: 3 (the first smoke check's budget stop, its findings in #117, the estimates in #122)
+- User corrections: 2 (α from 4.5% to 3.5% after the review's arm-specific result; the default model to Sonnet 5.5)
+- Review: the note, #92, #99, #107, #117 and #122 each had a recorded review, its notes fixed before merge
