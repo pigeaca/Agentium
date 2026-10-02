@@ -103,3 +103,36 @@ func TestSkipInUseLeavesLockedTasksAlone(t *testing.T) {
 		t.Errorf("task validate's store of a locked task = %s, %v", stored.Validation, err)
 	}
 }
+
+// A re-validation with KeepWeakTests (the pool's, which never runs the weak-tests check) keeps the task's last
+// weak-tests result; without it, as task validate --all, the result is dropped as before.
+func TestBatchKeepsWeakTestsWhenAsked(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	p, err := db.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := `{"status":"valid","arms":[{"name":"base"}],"stages":[],"at":"2026-08-01T00:00:00Z","weak_tests":{"checked":2,"untested":[{"file":"lib.go","start":3,"end":4}]}}`
+	saved, err := db.SaveTask(ctx, store.Task{ProjectID: p.ID, Name: "weak", Instruction: "Do it.", Source: "manual", BaseCommit: f.base,
+		Verify: []string{"true"}, Validation: []byte(last), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := Validating{DB: db, Bare: f.bare, Artifacts: t.TempDir(), Now: func() time.Time { return now }}
+	for _, keep := range []bool{true, false} {
+		o := ValidateOptions{Arms: []Arm{{Name: "base"}}, Timeout: 30 * time.Second, KeepWeakTests: keep}
+		got := v.Batch(ctx, BatchOutput{Out: &bytes.Buffer{}, Show: func(func() string) {}}, []store.Task{saved}, o, 1)[0]
+		weak := ValidationOf(got.Task).WeakTests
+		if !got.Validated || (keep && (weak == nil || len(weak.Untested) != 1 || weak.Untested[0].File != "lib.go")) || (!keep && weak != nil) {
+			t.Errorf("keep %v: validated %v, weak tests %+v", keep, got.Validated, weak)
+		}
+		saved = got.Task
+	}
+}

@@ -10,8 +10,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/mine"
+	"github.com/pigeaca/agentium/internal/pool"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -391,6 +393,12 @@ func interrupted(env Env, results []task.BatchResult) int {
 // validateBatch validates tasks with o, jobs at a time (task.Validating.Batch), with a live line naming those in progress.
 // The error is for what stops the whole batch before it starts.
 func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Task, o task.ValidateOptions, jobs int) ([]task.BatchResult, error) {
+	return validateBatchWith(ctx, env, w, tasks, o, jobs, false)
+}
+
+// validateBatchWith is validateBatch; skipInUse stores nothing for a task that a locked experiment able to run uses
+// (task.Validating.SkipInUse: the task pool's re-validations).
+func validateBatchWith(ctx context.Context, env Env, w *workspace, tasks []store.Task, o task.ValidateOptions, jobs int, skipInUse bool) ([]task.BatchResult, error) {
 	if len(tasks) == 0 {
 		return []task.BatchResult{}, nil
 	}
@@ -398,10 +406,34 @@ func validateBatch(ctx context.Context, env Env, w *workspace, tasks []store.Tas
 	if err != nil {
 		return nil, err
 	}
+	v := w.validating(env, buildEnv)
+	if v.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
+		return nil, err
+	}
+	v.SkipInUse = skipInUse
 	env, live := liveEnv(env)
 	defer live.Stop()
 	out := task.BatchOutput{Out: env.Stdout, Style: env.style(), Show: live.Show, RunsBusy: w.layout.RunsBusy()}
-	return w.validating(env, buildEnv).Batch(ctx, out, tasks, o, jobs), nil
+	return v.Batch(ctx, out, tasks, o, jobs), nil
+}
+
+// hostToolchain is the versions of the project's build tools on this host (pool.DetectToolchain, for the build tools
+// detected at the repository's root), asked once per command: every validation records them, and the task pool
+// re-validates a task when they change. A tool that cannot be asked is left out.
+func (w *workspace) hostToolchain(ctx context.Context, env Env) (task.Toolchain, error) {
+	if w.toolchain != nil {
+		return w.toolchain, nil
+	}
+	var environ []string
+	if env.Environ != nil {
+		environ = env.Environ()
+	}
+	found, err := pool.DetectToolchain(ctx, buildtool.DetectIn(w.root), pool.HostVersions(w.layout.Root, environ))
+	if err != nil {
+		return nil, err
+	}
+	w.toolchain = found
+	return found, nil
 }
 
 // batchRow is a row of the table task mine and task validate --all end with: a task, or a commit that did not
