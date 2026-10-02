@@ -1,0 +1,623 @@
+package cli
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"maps"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/gitx"
+	"github.com/pigeaca/agentium/internal/mine"
+	"github.com/pigeaca/agentium/internal/pool"
+	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/term"
+)
+
+const poolUsage = `Usage:
+  agentium pool update [--dry-run] [--accept-mined] [--limit N] [--jobs N]
+                         one pass over the task pool; it runs no agent and costs nothing: mines the commits of
+                         the default branch since the last pass (within 270 days), imports up to --limit (default
+                         10) as tasks that need your review and validates them --jobs at a time (default 2);
+                         re-validates stale tasks (validated more than 30 days ago, with other build-tool
+                         versions, or flaky and untried for 7 days, with --repeat 3); retires tasks whose base is
+                         270 or more days old or whose files are gone from the default branch (a flag, never a
+                         delete). Tasks a locked experiment uses are kept as they are. While an experiment is
+                         running, re-validations are skipped. --dry-run lists what it would do and writes
+                         nothing; --accept-mined accepts the tasks this pass imported without your review, after
+                         the automatic checks start --accept-mined makes
+  agentium pool status   the pool's health: valid, weak, flaky, invalid, awaiting review and retired tasks, the
+                         last pass and the oldest valid base
+  agentium pool update|status ... --json
+                         one JSON document instead of text (docs/guide.md, "Scripting and automation")
+`
+
+func runPool(ctx context.Context, env Env, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprint(env.Stderr, poolUsage)
+		return ExitUsage
+	}
+	switch args[0] {
+	case "update":
+		return poolUpdate(ctx, env, args[1:])
+	case "status":
+		return poolStatus(ctx, env, args[1:])
+	case "-h", "--help", "help":
+		fmt.Fprint(env.Stdout, poolUsage)
+		return ExitOK
+	default:
+		fmt.Fprintf(env.Stderr, "agentium pool: unknown subcommand %q\n\n%s", args[0], poolUsage)
+		return ExitUsage
+	}
+}
+
+// poolValidateTimeout bounds each verification command of the pool's validations, as task mine's default does.
+const poolValidateTimeout = 10 * time.Minute
+
+// poolArgs is what pool update was asked for.
+type poolArgs struct {
+	dryRun, acceptMined bool
+	limit, jobs         int
+}
+
+func parsePoolUpdate(env Env, args []string) (a poolArgs, code int, ok bool) {
+	fs := flag.NewFlagSet("pool update", flag.ContinueOnError)
+	fs.BoolVar(&a.dryRun, "dry-run", false, "list what the pass would mine, validate, re-validate and retire; write nothing")
+	fs.BoolVar(&a.acceptMined, "accept-mined", false, "accept this pass's imports without a review, after the automatic checks")
+	fs.IntVar(&a.limit, "limit", pool.DefaultPolicy().Limit, "how many tasks to import at most")
+	fs.IntVar(&a.jobs, "jobs", defaultJobs, "how many tasks to validate at once")
+	rest, code, ok := parseArgs(env, fs, args, poolUsage)
+	if !ok {
+		return a, code, false
+	}
+	usage := func(format string, args ...any) (poolArgs, int, bool) {
+		fmt.Fprintf(env.Stderr, "agentium pool update: "+format+"\n", args...)
+		return a, ExitUsage, false
+	}
+	switch {
+	case len(rest) != 0:
+		return usage("takes no arguments (got %q)", strings.Join(rest, " "))
+	case a.limit < 1:
+		return usage("--limit must be at least 1")
+	case a.jobs < 1:
+		return usage("--jobs must be at least 1")
+	case a.dryRun && a.acceptMined:
+		return usage("--dry-run accepts nothing, so --accept-mined does not apply")
+	}
+	return a, ExitOK, true
+}
+
+// poolPass is one pool update: the pass's steps (pool.Pass, given internal/mine and internal/task) and what each step
+// did, for the report. Nothing here starts an agent or a judge: mining reads git, imports use judgeNever, and
+// validation runs only the build and the tests.
+type poolPass struct {
+	env    Env
+	w      *workspace
+	a      poolArgs
+	policy pool.Policy
+	opts   mine.Options
+	verify []string
+
+	ref, head string
+	scan      mine.RangeResult
+	imp       mine.Imported
+	tried     []mine.Candidate // the candidates the import tried, best first
+	validated []task.BatchResult
+	maint     poolMaintenance
+}
+
+// poolMaintenance is what the maintenance step planned and did.
+type poolMaintenance struct {
+	plan        pool.Plan
+	skipped     bool                // re-validations skipped: an experiment is running
+	revalidated []task.BatchResult  // in plan.Revalidate's order
+	retired     []pool.Retirement   // those stored
+	reasons     map[string][]string // task name: why it was stale
+}
+
+func newPoolPass(env Env, w *workspace, a poolArgs) (*poolPass, error) {
+	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy()}
+	p.policy.Limit = a.limit
+	var commands []string
+	p.opts.Languages, commands = mine.TestLanguages(w.root)
+	p.opts.TestCommand = strings.Join(commands, ", ")
+	p.opts.MaxFiles, p.opts.MaxLines, p.opts.MaxCommits = mine.DefaultMaxFiles, mine.DefaultMaxLines, mine.DefaultMaxCommits
+	// As task mine: the build tools' own test commands, else the project's detected ones.
+	if p.verify = commands; len(p.verify) == 0 {
+		p.verify = w.defaultVerify()
+	}
+	if !a.dryRun && len(p.verify) == 0 {
+		return nil, errors.New("no test commands were detected for this project, so mined tasks would have nothing to verify with " +
+			"(agentium task mine --verify CMD imports with your own)")
+	}
+	return p, nil
+}
+
+// pass is the pool's pass over this project, with its steps.
+func (p *poolPass) pass() pool.Pass[mine.Candidate] {
+	w, env := p.w, p.env
+	return pool.Pass[mine.Candidate]{
+		File: pool.StateFile(w.bare), Limit: p.policy.Limit, Window: p.policy.RetireAge, Margin: p.policy.StaleAfter, Now: env.Now,
+		Commit: func(c mine.Candidate) string { return c.Hash },
+		Patch:  func(c mine.Candidate) string { return c.Patch },
+		Base:   func(c mine.Candidate) time.Time { return c.BaseDate },
+		Tasks:  func(ctx context.Context) ([]store.Task, error) { return w.db.Tasks(ctx, w.project.ID) },
+		Head: func(ctx context.Context) (string, error) {
+			var err error
+			p.ref, p.head, err = mine.DefaultBranch(ctx, w.root)
+			return p.head, err
+		},
+		Scan: func(ctx context.Context, r pool.ScanRange) (pool.Scanned[mine.Candidate], error) {
+			tasks, err := w.db.Tasks(ctx, w.project.ID)
+			if err != nil {
+				return pool.Scanned[mine.Candidate]{}, err
+			}
+			p.scan, err = mine.ScanRange(ctx, mine.RangeInput{Root: w.root, Bare: w.bare, Range: r, Options: p.opts, Tasks: tasks})
+			p.scan.Result.Ref = p.ref
+			if err == nil && !p.a.dryRun {
+				p.printScan()
+			}
+			return p.scan.Scanned, err
+		},
+		Import:   p.importCandidates,
+		Validate: p.validateNew,
+		Maintain: p.maintain,
+	}
+}
+
+// importCandidates imports up to limit candidates, best first, as task mine does (task import --commit's path, no judge).
+func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candidate, limit int) (pool.Imported, error) {
+	w, env := p.w, p.env
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return pool.Imported{}, err
+	}
+	names := map[string]bool{}
+	for _, t := range tasks {
+		names[t.Name] = true
+	}
+	_, live := liveEnv(env) // nothing prints while it shows
+	p.imp = mine.Import(ctx, mine.ImportInput{Importer: w.importer(names), Candidates: candidates, Limit: limit,
+		NewTask: func() store.Task { return store.Task{ProjectID: w.project.ID, Verify: p.verify, CreatedAt: env.Now()} },
+		Progress: func(imported int, c mine.Candidate) {
+			live.Step(fmt.Sprintf("importing %d of %d: %s", imported+1, limit, experiment.ShortCommit(c.Hash)))
+		}})
+	live.Stop()
+	p.tried = candidates[:p.imp.Tried]
+	st := env.style()
+	fmt.Fprintf(env.Stdout, "%s (verify: %s)\n", st.Heading(fmt.Sprintf("Imported %d of %d candidate(s) tried", len(p.imp.Tasks), p.imp.Tried)),
+		strings.Join(p.verify, "; "))
+	for _, f := range p.imp.Failed {
+		fmt.Fprintf(env.Stdout, "  not imported: %s (%s): %v\n", cut(f.Candidate.Subject, maxSubject), experiment.ShortCommit(f.Candidate.Hash), f.Err)
+	}
+	return pool.Imported{Tasks: p.imp.Tasks, Tried: p.imp.Tried, Interrupted: p.imp.Interrupted}, nil
+}
+
+// validateNew validates the mined tasks without a validation (this pass's imports, and those a killed pass left) in the
+// base context, as task mine does.
+func (p *poolPass) validateNew(ctx context.Context, tasks []store.Task) error {
+	fmt.Fprintf(p.env.Stdout, "%s, %d at a time\n", p.env.style().Heading(fmt.Sprintf("Validating %d mined task(s)", len(tasks))), p.a.jobs)
+	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: poolValidateTimeout}, p.a.jobs)
+	p.validated = results
+	return err
+}
+
+// plan reads what the maintenance rules need and applies them: nothing is written.
+func (p *poolPass) plan(ctx context.Context) (pool.Plan, error) {
+	w, env := p.w, p.env
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return pool.Plan{}, err
+	}
+	inUse, err := w.db.TasksInUse(ctx, w.project.ID)
+	if err != nil {
+		return pool.Plan{}, err
+	}
+	tools, err := w.hostToolchain(ctx, env)
+	if err != nil {
+		return pool.Plan{}, err
+	}
+	var bases, named []string
+	for _, t := range tasks {
+		if !t.Retired() {
+			bases = append(bases, t.BaseCommit)
+			named = append(named, t.HiddenTests...)
+			named = append(named, t.Reference...)
+		}
+	}
+	baseTimes, err := mine.CommitTimes(ctx, bases, "--git-dir", w.bare)
+	if err != nil {
+		return pool.Plan{}, err
+	}
+	atHead, err := mine.TreeHas(ctx, p.head, slices.Compact(slices.Sorted(slices.Values(named))), "-C", w.root)
+	if err != nil {
+		return pool.Plan{}, err
+	}
+	// What each active task's solution commit has, and whether the head contains it, read up front: the rules are pure.
+	inSolution, contained := map[string]map[string]bool{}, map[string]bool{}
+	for _, t := range tasks {
+		if t.Retired() || t.SolutionCommit == "" {
+			continue
+		}
+		if contained[t.SolutionCommit], err = mine.Contains(ctx, w.root, p.head, t.SolutionCommit); err != nil {
+			return pool.Plan{}, err
+		}
+		if !contained[t.SolutionCommit] {
+			continue
+		}
+		files := append(slices.Clone(t.HiddenTests), t.Reference...)
+		has, err := mine.TreeHas(ctx, t.SolutionCommit, files, "--git-dir", w.bare)
+		if ctx.Err() != nil {
+			return pool.Plan{}, fmt.Errorf("pool: %w", ctx.Err())
+		}
+		if err == nil { // unreadable: the file rule does not apply to this task, rather than failing every pass
+			inSolution[t.SolutionCommit] = has
+		}
+	}
+	return p.policy.Plan(tasks, pool.Facts{Now: env.Now(), Toolchain: tools, InUse: inUse,
+		BaseTime: func(commit string) time.Time { return baseTimes[commit] },
+		Head: pool.Head{
+			Has:      func(path string) bool { return atHead[path] },
+			Contains: func(commit string) bool { return contained[commit] },
+			InCommit: func(commit, path string) bool { return inSolution[commit][path] },
+		}}), nil
+}
+
+// maintain re-validates the stale tasks no locked experiment uses (each with the arms and repeats of its last
+// validation, keeping its weak-tests result), unless an experiment is running, and retires the dead ones.
+func (p *poolPass) maintain(ctx context.Context) error {
+	env, w, st := p.env, p.w, p.env.style()
+	plan, err := p.plan(ctx)
+	if err != nil {
+		return err
+	}
+	p.maint = poolMaintenance{plan: plan, reasons: map[string][]string{}}
+	for _, r := range append(slices.Clone(plan.Revalidate), plan.Kept...) {
+		p.maint.reasons[r.Task.Name] = r.Stale.Reasons
+	}
+	for _, k := range plan.Kept {
+		fmt.Fprintf(env.Stdout, "%s: kept for experiment %s, which uses it (%s)\n", k.Task.Name, strings.Join(k.Experiments, ", "),
+			strings.Join(k.Stale.Reasons, "; "))
+	}
+	switch {
+	case len(plan.Revalidate) == 0:
+	case w.layout.RunsBusy():
+		p.maint.skipped = true
+		fmt.Fprintln(env.Stdout, warning(st, fmt.Sprintf("an experiment is running: %d stale task(s) are not re-validated now (they would slow its runs); "+
+			"the next pass re-validates them", len(plan.Revalidate))))
+	default:
+		fmt.Fprintf(env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Re-validating %d stale task(s)", len(plan.Revalidate))), p.a.jobs)
+		for _, r := range plan.Revalidate {
+			fmt.Fprintf(env.Stdout, "  %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
+		}
+		if p.maint.revalidated, err = p.revalidate(ctx, plan.Revalidate); err != nil {
+			return err
+		}
+	}
+	for _, r := range plan.Retire {
+		retired, err := w.db.RetireTask(context.WithoutCancel(ctx), r.Task.ID, r.Reason, env.Now())
+		if err != nil {
+			return err
+		}
+		if retired {
+			p.maint.retired = append(p.maint.retired, r)
+			fmt.Fprintf(env.Stdout, "Retired %s: %s\n", r.Task.Name, r.Reason)
+		}
+	}
+	return nil
+}
+
+// revalidate re-validates the tasks in groups of the same arms and repeats, keeping plan order in the results.
+func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) ([]task.BatchResult, error) {
+	results := make([]task.BatchResult, len(stale))
+	done := make([]bool, len(stale))
+	for i := range stale {
+		if done[i] {
+			continue
+		}
+		var group []int
+		for j := i; j < len(stale); j++ {
+			if !done[j] && slices.Equal(stale[j].Stale.Arms, stale[i].Stale.Arms) && stale[j].Stale.Repeat == stale[i].Stale.Repeat {
+				group, done[j] = append(group, j), true
+			}
+		}
+		tasks := make([]store.Task, len(group))
+		for k, j := range group {
+			tasks[k] = stale[j].Task
+		}
+		o := task.ValidateOptions{Arms: stale[i].Stale.Arms, Repeat: stale[i].Stale.Repeat, Timeout: poolValidateTimeout, KeepWeakTests: true}
+		got, err := validateBatchWith(ctx, p.env, p.w, tasks, o, p.a.jobs, true)
+		if err != nil {
+			return nil, err
+		}
+		for k, j := range group {
+			results[j] = got[k]
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return results, nil
+}
+
+// acceptMined marks this pass's imports reviewed when start --accept-mined's checks find nothing (heldBack): only
+// valid, test-graded tasks the pass itself imported (never recovered or hand-made ones). An unreadable state file costs
+// only this shortcut. It returns the accepted names and the reasons it held others back.
+func (p *poolPass) acceptMined(ctx context.Context, res pool.PassResult) (accepted []string, held map[string]string, err error) {
+	held = map[string]string{}
+	if res.Unreadable != "" {
+		fmt.Fprintln(p.env.Stdout, warning(p.env.style(), "the pool's state file was unreadable ("+res.Unreadable+"), so --accept-mined accepts nothing this time"))
+		return nil, held, nil
+	}
+	w := p.w
+	fair := task.NewFairness("--git-dir", w.bare)
+	for _, imported := range res.Imported {
+		t, err := w.db.TaskByName(ctx, w.project.ID, imported.Name)
+		if errors.Is(err, store.ErrNotFound) {
+			continue
+		} else if err != nil {
+			return accepted, held, err
+		}
+		if !t.CreatedAt.Equal(imported.CreatedAt) || !t.NeedsReview || t.Grading == task.GradingJudge || t.Retired() || t.Validation == nil ||
+			task.ValidationOf(t).Status != task.StatusValid {
+			continue
+		}
+		reason, err := heldBack(ctx, fair, t)
+		if err != nil {
+			return accepted, held, err
+		}
+		if reason != "" {
+			held[t.Name] = reason
+			continue
+		}
+		t.NeedsReview = false
+		if err := w.db.UpdateTask(ctx, t, p.env.Now()); err != nil {
+			return accepted, held, err
+		}
+		accepted = append(accepted, t.Name)
+	}
+	return accepted, held, nil
+}
+
+func poolUpdate(ctx context.Context, env Env, args []string) int {
+	a, code, ok := parsePoolUpdate(env, args)
+	if !ok {
+		return code
+	}
+	w, err := openProjectFor(ctx, env, a.dryRun)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	if partial, err := gitx.PartialClone(ctx, w.root); err != nil {
+		return fail(env, err)
+	} else if partial {
+		return fail(env, mine.ErrPartialClone)
+	}
+	p, err := newPoolPass(env, w, a)
+	if err != nil {
+		return fail(env, err)
+	}
+	if a.dryRun {
+		return p.dryRun(ctx)
+	}
+	fmt.Fprintln(env.Stdout, note(env.style(), "the pool pass runs no agent and costs nothing: it mines, validates and retires"))
+	res, err := p.pass().Run(ctx)
+	if errors.Is(err, pool.ErrPassRunning) {
+		return fail(env, fmt.Errorf("%w: it continues on its own", err))
+	}
+	interrupted := ctx.Err() != nil
+	if err != nil && !interrupted {
+		return fail(env, err)
+	}
+	var accepted []string
+	held := map[string]string{}
+	if a.acceptMined && !interrupted {
+		if accepted, held, err = p.acceptMined(ctx, res); err != nil {
+			return fail(env, err)
+		}
+	}
+	health, err := poolHealth(context.WithoutCancel(ctx), w)
+	if err != nil {
+		return fail(env, err)
+	}
+	doc := p.document(ctx, res, accepted, held, health, interrupted)
+	if env.JSON {
+		code := ExitOK
+		if interrupted {
+			code = ExitError
+		}
+		return env.emitCode(doc, code)
+	}
+	p.printEnd(res, accepted, held, health)
+	if interrupted {
+		fmt.Fprintf(env.Stdout, "Interrupted: what finished is kept; %s goes on from there\n", env.style().Command("agentium pool update"))
+		return ExitError
+	}
+	return ExitOK
+}
+
+// printScan says what the scan read: the commits since the last pass, the candidates (before the pass drops those whose
+// base is too old or whose change was mined already), watermark commits that are gone, and whether it read them all.
+func (p *poolPass) printScan() {
+	env, st, scan := p.env, p.env.style(), p.scan
+	line := fmt.Sprintf("%s: %d commit(s) read since the last pass, %d candidate(s)",
+		st.Heading(fmt.Sprintf("Mined %s at %s", p.ref, experiment.ShortCommit(p.head))), scan.Result.Scanned, len(scan.Scanned.Candidates))
+	if scan.Old > 0 {
+		line += fmt.Sprintf(" (%d older commit(s) are outside the pool's %d days)", scan.Old, int(p.policy.RetireAge/pool.Day))
+	}
+	fmt.Fprintln(env.Stdout, line)
+	if n := len(scan.Scanned.Unknown); n > 0 {
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d commit(s) the last pass ended at are gone from the repository (a force-push or rebase): their history was read again", n)))
+	}
+	if !scan.Scanned.Complete {
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("read the oldest %d new commit(s); the next pass reads on", scan.Result.Scanned)))
+	}
+}
+
+// printEnd prints what --accept-mined did, the review advice and the pool's health.
+func (p *poolPass) printEnd(res pool.PassResult, accepted []string, held map[string]string, health pool.Health) {
+	env, st := p.env, p.env.style()
+	if res.Candidates == 0 && len(res.Validated) == 0 {
+		fmt.Fprintln(env.Stdout, "Nothing new to import.")
+	}
+	if len(accepted) > 0 {
+		fmt.Fprintf(env.Stdout, "Accepted %d mined instruction(s) without your review (--accept-mined): %s\n"+
+			"  Only solution headings, reference-file names and unstated test requirements were checked; a message that explains the fix is not detected.\n",
+			len(accepted), strings.Join(accepted, ", "))
+	}
+	for _, name := range slices.Sorted(maps.Keys(held)) {
+		fmt.Fprintf(env.Stdout, "  held back from --accept-mined: %s: %s\n", name, held[name])
+	}
+	if len(res.Imported) > len(accepted) {
+		fmt.Fprintf(env.Stdout, "%s: %s, then %s.\n", st.Warn("Review each mined instruction for solution leaks"), st.Command("agentium task show NAME"),
+			st.Command("agentium task edit NAME --reviewed"))
+	}
+	printHealth(env, health)
+}
+
+// dryRun lists what a pass would do now, and writes nothing (pool.Pass.Preview and the maintenance plan).
+func (p *poolPass) dryRun(ctx context.Context) int {
+	env, st := p.env, p.env.style()
+	prev, err := p.pass().Preview(ctx)
+	if err != nil {
+		return fail(env, err)
+	}
+	plan, err := p.plan(ctx)
+	if err != nil {
+		return fail(env, err)
+	}
+	health, err := poolHealth(ctx, p.w)
+	if err != nil {
+		return fail(env, err)
+	}
+	busy := len(plan.Revalidate) > 0 && p.w.layout.RunsBusy()
+	top := prev.Candidates[:min(p.policy.Limit, len(prev.Candidates))]
+	if env.JSON {
+		doc := p.dryRunDocument(ctx, prev, top, plan, health, busy)
+		return env.emit(doc)
+	}
+	fmt.Fprintln(env.Stdout, st.Heading("Dry run: nothing is imported, validated, re-validated, retired or written"))
+	fmt.Fprintf(env.Stdout, "Would mine %s at %s: %d commit(s) since the last pass, %d candidate(s)\n", p.ref, experiment.ShortCommit(prev.Head),
+		p.scan.Result.Scanned, len(prev.Candidates))
+	if len(prev.Unknown) > 0 {
+		fmt.Fprintln(env.Stdout, note(st, fmt.Sprintf("%d commit(s) the last pass ended at are gone from the repository: their history would be read again", len(prev.Unknown))))
+	}
+	if prev.Unreadable != "" {
+		fmt.Fprintln(env.Stdout, warning(st, "the pool's state file is unreadable ("+prev.Unreadable+"): a pass sets it aside and starts over"))
+	}
+	if err := printCandidates(env, top, len(prev.Candidates)); err != nil {
+		return fail(env, err)
+	}
+	if len(prev.Unvalidated) > 0 {
+		fmt.Fprintf(env.Stdout, "Would validate %d mined task(s) without a validation: %s\n", len(prev.Unvalidated), strings.Join(taskNames(prev.Unvalidated), ", "))
+	}
+	for _, r := range plan.Revalidate {
+		fmt.Fprintf(env.Stdout, "Would re-validate %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
+	}
+	if busy {
+		fmt.Fprintln(env.Stdout, note(st, "an experiment is running: a pass now would skip the re-validations"))
+	}
+	for _, k := range plan.Kept {
+		fmt.Fprintf(env.Stdout, "Would keep %s for experiment %s, which uses it (%s)\n", k.Task.Name, strings.Join(k.Experiments, ", "), strings.Join(k.Stale.Reasons, "; "))
+	}
+	for _, r := range plan.Retire {
+		fmt.Fprintf(env.Stdout, "Would retire %s: %s\n", r.Task.Name, r.Reason)
+	}
+	printHealth(env, health)
+	return ExitOK
+}
+
+func taskNames(tasks []store.Task) []string {
+	names := make([]string, len(tasks))
+	for i, t := range tasks {
+		names[i] = t.Name
+	}
+	return names
+}
+
+func poolStatus(ctx context.Context, env Env, args []string) int {
+	rest, code, ok := parseArgs(env, flag.NewFlagSet("pool status", flag.ContinueOnError), args, poolUsage)
+	if !ok {
+		return code
+	}
+	if len(rest) != 0 {
+		fmt.Fprintf(env.Stderr, "agentium pool status: takes no arguments (got %q)\n", strings.Join(rest, " "))
+		return ExitUsage
+	}
+	w, err := openProjectFor(ctx, env, true)
+	if err != nil {
+		return fail(env, err)
+	}
+	defer w.Close()
+	health, err := poolHealth(ctx, w)
+	if err != nil {
+		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(poolStatusDoc{header: env.hdr(), Health: healthDocOf(health)})
+	}
+	printHealth(env, health)
+	return ExitOK
+}
+
+// poolHealth counts the project's tasks (pool.HealthOf), with the base commits' times from Agentium's repository and
+// the last pass from the pool's state file (an unreadable one has none).
+func poolHealth(ctx context.Context, w *workspace) (pool.Health, error) {
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return pool.Health{}, err
+	}
+	bases := make([]string, len(tasks))
+	for i, t := range tasks {
+		bases[i] = t.BaseCommit
+	}
+	times, err := mine.CommitTimes(ctx, bases, "--git-dir", w.bare)
+	if err != nil {
+		return pool.Health{}, err
+	}
+	st, err := pool.Load(pool.StateFile(w.bare))
+	if err != nil {
+		return pool.Health{}, err
+	}
+	return pool.HealthOf(tasks, func(commit string) time.Time { return times[commit] }, st.LastPass), nil
+}
+
+// printHealth prints the pool's counts, its last pass and its oldest valid base.
+func printHealth(env Env, h pool.Health) {
+	st := env.style()
+	fmt.Fprintln(env.Stdout, st.Heading(fmt.Sprintf("Task pool: %d task(s)", h.Total)))
+	table := term.NewTable(st, term.Left(""), term.Right(""), term.Left(""))
+	table.Indent = "  "
+	weak := ""
+	if h.Weak > 0 {
+		weak = fmt.Sprintf("%d with weak tests", h.Weak)
+	}
+	table.Row("valid", strconv.Itoa(h.Valid), weak)
+	table.Row("flaky", strconv.Itoa(h.Flaky), "")
+	table.Row("invalid", strconv.Itoa(h.Invalid), "")
+	if h.Unchecked > 0 {
+		table.Row("unchecked", strconv.Itoa(h.Unchecked), "no hidden tests to check")
+	}
+	table.Row("not validated", strconv.Itoa(h.Unvalidated), "")
+	table.Row("awaiting review", strconv.Itoa(h.AwaitingReview), "")
+	table.Row("retired", strconv.Itoa(h.Retired), "")
+	_ = table.Write(env.Stdout)
+	last, oldest := "never", "none"
+	if !h.LastPass.IsZero() {
+		last = h.LastPass.UTC().Format("2006-01-02 15:04 UTC")
+	}
+	if !h.OldestValidBase.IsZero() {
+		oldest = h.OldestValidBase.UTC().Format(time.DateOnly)
+	}
+	fmt.Fprintf(env.Stdout, "  last pass %s; oldest valid base %s\n", last, oldest)
+	if h.LastPass.IsZero() {
+		fmt.Fprintf(env.Stdout, "%s mines, validates and retires (no agent runs)\n", st.Command("agentium pool update"))
+	}
+}

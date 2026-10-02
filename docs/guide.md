@@ -6,7 +6,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 
 - [Registering a repository](#registering-a-repository)
 - [Versioning context](#versioning-context) and [context lint](#context-lint)
-- [Turning commits into tasks](#turning-commits-into-tasks)
+- [Turning commits into tasks](#turning-commits-into-tasks) and [the task pool](#the-task-pool)
 - [Build tools and offline dependencies](#build-tools-and-offline-dependencies)
 - [Running and comparing](#running-and-comparing)
 - [Experiment templates](#experiment-templates)
@@ -67,6 +67,21 @@ agentium task validate <name> --repeat 3           # run every stage 3 times: a 
 agentium task validate <name> --weak-tests          # which parts of the reference the hidden tests do not need (a warning, not a gate; a later validate without the flag drops the list)
 ```
 
+### The task pool
+
+Free, no agent runs: `agentium pool update` is one pass over the pool.
+
+```sh
+agentium pool update --dry-run    # what a pass would mine, validate, re-validate and retire; writes nothing
+agentium pool update              # mine the commits since the last pass, validate them, re-validate stale tasks, retire dead ones
+agentium pool status              # valid (and weak), flaky, invalid, awaiting review, retired; the last pass; the oldest valid base
+```
+
+- **Mining** reads the default branch's commits since the last pass, oldest first (at most 2,000 per pass; the next pass reads on), within 270 days by committer date, and imports up to `--limit` (default 10) as tasks that need your review, validated `--jobs` at a time (default 2). Commits that are tasks already, and rebased or cherry-picked copies of any task's change (same patch ID), are skipped; so is a mined task's commit once you remove the task. A candidate whose base would retire within 30 days is not imported.
+- **Re-validation:** a task is stale when its last validation is more than 30 days old, was made with other versions of the build tools (Go, Maven, the JDK, Cargo, rustc; `task validate` records them), or is flaky and untried for 7 days (it is tried with `--repeat 3`). It keeps its arms and repeats, and its weak-tests result. A task that a locked, unfinished experiment uses is kept as it is ("kept for experiment X"). While an experiment is running, re-validations are skipped with a warning (they would slow its runs).
+- **Retirement** is a flag with a reason, never a delete: a base 270 or more days old, or a hidden test or reference file the solution has that is gone from the default branch. Retired tasks leave new experiments; locked ones keep them.
+- **Review:** mined tasks wait for `agentium task edit NAME --reviewed`. `--accept-mined` accepts only the valid tasks this pass imported, after `start --accept-mined`'s checks; it accepts nothing when the pool's state file was unreadable.
+
 ### Build tools and offline dependencies
 
 Mined tasks verify with your build tool's test command (`go test ./...`, `./mvnw -q test` or `mvn -q test`, `./gradlew test` or `gradle test`, `cargo test`); `--verify` changes it. Dependencies for the agent's offline builds are fetched by a run's setup, once per base commit and tool set, into the `deps` folder of your data folder (`~/.agentium`, or `AGENTIUM_HOME`). Build files are detected only at the repository root: a Maven or Cargo build in a subfolder is not detected, so its agent gets no offline dependencies, and your caches stay denied to it. Plugins that fetch their own tools when a task runs (Spotless, say) are not warmed, so those tasks fail offline in the agent's sandbox. Gradle tools that run in a separate worker process (Checkstyle, PMD) also fail in the agent's sandbox: Claude Code's sandbox allows only IPv4 localhost connections, and Gradle starts those workers without the option that keeps Java on IPv4. Your machine's grading is unaffected; only the agent can't run them itself. Gradle's file-lock service needs the sandbox's local binding, which lets the agent bind any local port and reach localhost services (outbound network to other hosts stays blocked): agent runs on a Gradle project refuse to start until you run `agentium init --allow-local-binding`. Validation fetches those dependencies first, as a run's setup does, into the same `deps` folder (a task's runs then find them ready), so it runs the verification with what grading uses: for a Python project, the same venv, interpreter and `PYTHONPATH`. When another run or validation is fetching for the same project, it waits up to 15 minutes, then validates without the fetched dependencies and says so in a note. Validation builds and runs tests on your machine, two tasks at a time by default: `--jobs` above 1 assumes your tests can run side by side (no fixed ports, shared `/tmp` paths or databases), so use `--jobs 1` if they cannot.
@@ -126,7 +141,7 @@ Its limits:
 
 ## Scripting and automation
 
-For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|list|diff|lint`, `task list|show|mine|validate|import|add|edit|rm`, `run once|show|list` and `start`. The experiment commands follow in part 1b (`experiment report --json` exists already, with its own shape).
+For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|list|diff|lint`, `task list|show|mine|validate|import|add|edit|rm`, `run once|show|list`, `pool update|status` and `start`. The experiment commands follow in part 1b (`experiment report --json` exists already, with its own shape).
 
 **`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off. Put it after the subcommand: `task list --json`. `task --json list` is deliberately not recognized.
 - Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case. Lists are `[]`, never `null`, and every field is always present: one that can be unknown or not asked for is `null` (`solution_commit`, `unstated_requirements`, `passed`, `diff`, `patch`, the logs of `run show`).
@@ -146,6 +161,8 @@ For hooks, schedulers and scripts. Part 1 covers `init`, `context show|snapshot|
 | 2 | Usage error: bad flags or arguments. |
 
 **No prompts.** Agentium asks one question: `start`'s "Run it now?", and only when stdin and stdout are both terminals. With stdin from a pipe, a file or `/dev/null` it never reads stdin and stops at the preview; `start --json` never asks, even at a terminal. Only `--yes` spends money, and `start --json --yes` is refused (usage error) until `experiment run` has JSON.
+
+For `pool update`, `"tasks"` holds the validations of mined tasks (and candidates that failed to import), `"revalidated"` the stale tasks with their new `"status"` (`null` when not stored: `"problem"` says why, or when `"revalidations_skipped"` is true), `"kept"` the stale tasks experiments use, `"retired"` the tasks retired with their reasons, and `"health"` the counts `pool status` prints (`"last_pass"` and `"oldest_valid_base"` are `null` when there is none). With `--dry-run` the same fields say what it would do. Exit 0 includes a pass with invalid tasks; 1 is an interrupt or a failure, such as another pass of the project running.
 
 For `start`, read `"status"`: `preview` (everything is in place; `"run_command"` starts the experiment and spends money), `not_ready` (`"readiness"` lists what is missing), `awaiting_review` (tasks start mined wait for a person's review before the experiment is made: `agentium task show NAME`, then `agentium task edit NAME --reviewed`), `too_few_tasks` (fewer than 8 valid tasks, and none waiting for a review), or `finished`. `"tasks_ready"` and `"tasks_awaiting_review"` count the tasks when `start` looked at them, and are `null` when the experiment already existed. `"nothing_was_run"` is always true.
 
