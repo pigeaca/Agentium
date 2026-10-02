@@ -66,6 +66,7 @@ type Env struct {
 	ProjectRoot   string // the user's repository: the agent may not read it
 	CLI           string // the claude executable
 	Home          string
+	AccountHome   string   // the account's home folder in the user database, when known (claude.Invocation.AccountHome)
 	Environ       []string // the parent's environment; the run gets an allowlisted part
 	SignIn        string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
 	Secret        string   // for API key and token sign-in; redacted from every record
@@ -297,7 +298,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		TempRoot: tempRoot, UID: os.Getuid()}
+		AccountHome: env.AccountHome, TempRoot: tempRoot, UID: os.Getuid()}
 	deny, err := env.denied(ctx, workspace)
 	if err != nil {
 		return rec, err
