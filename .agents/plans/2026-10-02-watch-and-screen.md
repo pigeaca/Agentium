@@ -1,11 +1,11 @@
 # Automation A5 and A4: the deep watch and the pull-request cost screen (wave 4)
 
 - Date: 2026-10-02
-- Status: Planned (2026-10-02), awaiting the user's answers to the open questions. Planning only: no code yet.
+- Status: Ready (2026-10-02): the user answered the main questions (see Decisions); the rest use the proposed defaults until the user says otherwise. Steps 1–3 can start; paid steps need their own approval.
 - Scope: sections 2 and 3 of the [automation plan](2026-10-01-automation.md), redesigned by **the user's decisions (2026-10-02, "plan all")**:
   - **The drift chart is un-deferred** for A5. It moves here from the [cheaper verdicts plan](2026-10-02-cheaper-verdicts.md) (deferred step 6), with the [statistics note's](../../docs/research/2026-10-02-wave3-statistics-note.md) §4 design unchanged.
   - **A4 runs without run reuse,** which stays deferred: fresh runs under `seq-v1`, with a small cap per check.
-- Builds on: `seq-v1` (cheaper verdicts step 1, in review), the isolated-run cost (merged), A1 part 1 (`--json`, exit codes; [plan](https://github.com/pigeaca/Agentium/blob/claude/feat/headless-json/.agents/plans/2026-10-02-headless.md) on its branch), and A2's pool, queue and `hooks print git` ([plan](2026-10-02-task-pool.md)).
+- Builds on: `seq-v1` (cheaper verdicts step 1, in review), the isolated-run cost (merged), A1 part 1 (`--json`, exit codes; [plan](2026-10-02-headless.md) on its branch), and A2's pool, queue and `hooks print git` ([plan](2026-10-02-task-pool.md)).
 
 ## Outcome and boundaries
 
@@ -131,6 +131,15 @@ One check is 8 runs: about $0.80 on small tasks and $9 on Agentium-sized ones. O
 
 ## Verification
 `python3 scripts/harness.py check changed` per step; unit and CLI tests with a fake Claude Code, a fake `gh` and a fake clock; `-race` on the pass's gates; the long drift simulation; real console samples of `watch status` and a screen comment.
+
+## Decisions (the user, 2026-10-02)
+1. **Weekly budget:** $20 a week, shared by the watch and the screens.
+2. **Screen size:** the full `seq-v1`, up to 16 tasks (stops at 8 when clear).
+3. **Window shares:** as proposed: at most 30% of a five-hour window per pass and 15% of the seven-day window per week; nothing starts above 50% (five-hour) or 60% (seven-day).
+4. **Harness-settings changes:** always refused in automated mode.
+5. **Subscription windows** are a first-class budget, beside API keys (the user's standing requirement).
+
+Proposed defaults stand for the other questions until the user changes them: weekly drift checks, screens in the nightly pass only, broken-task re-runs off by default, the user-first signals as listed, and a digest that recommends pinning Claude Code. Hosted CI with a token file waits for the user to confirm the plan's terms.
 
 ## Open questions for the user
 1. **Weekly budget:** a default of $20? Do screens share it? Agentium-sized drift alone takes $9 of it each week.
