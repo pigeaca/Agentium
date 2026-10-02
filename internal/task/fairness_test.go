@@ -352,3 +352,60 @@ func TestStringLiteralsLexer(t *testing.T) {
 		})
 	}
 }
+
+// The Java, Kotlin and Rust identifier check: a name the hidden test uses, the reference declares, and neither the
+// instruction nor the base has.
+func TestFairnessJVMAndRustIdentifiers(t *testing.T) {
+	const instruction = "Add the feature, exposed through Stated.stated_value()."
+	cases := map[string]struct {
+		base, solution map[string]string
+		want           []string
+	}{
+		"java static import constant": {
+			map[string]string{"src/main/java/Ext.java": "package p;\npublic class Ext { public static final String OLD_PARAMETER = \"old\"; }\n"},
+			map[string]string{
+				"src/main/java/Ext.java": "package p;\npublic class Ext {\n  public static final String OLD_PARAMETER = \"old\";\n  public static final String EXECUTION_DATE_PARAMETER = \"date\";\n}\n",
+				"src/test/java/ExtTests.java": "package p;\nimport static p.Ext.EXECUTION_DATE_PARAMETER;\nimport static p.Ext.OLD_PARAMETER;\nimport java.util.Objects;\nimport org.junit.jupiter.api.Test;\n" +
+					"class ExtTests {\n  // MISSING_IN_COMMENT\n  @Test void t() { Objects.requireNonNull(EXECUTION_DATE_PARAMETER); Objects.requireNonNull(OLD_PARAMETER); }\n}\n"},
+			[]string{"EXECUTION_DATE_PARAMETER"},
+		},
+		"java: base, JDK, test-own and stated names are fine": {
+			map[string]string{"src/main/java/Ext.java": "package p;\npublic class Ext { public static String existing() { return null; } }\n"},
+			map[string]string{
+				"src/main/java/Ext.java":      "package p;\npublic class Ext {\n  public static String existing() { return null; }\n  public static String stated_value() { return null; }\n  public String toList() { return null; }\n  public static void helperName() {}\n}\n",
+				"src/test/java/ExtTests.java": "package p;\nimport java.util.List;\nclass ExtTests {\n  static void helperName() {}\n  void t() { Ext.existing(); Ext.stated_value(); List.of(); helperName(); }\n}\n"},
+			nil,
+		},
+		"kotlin": {
+			map[string]string{"src/main/kotlin/Check.kt": "fun oldCheck() = 1\n"},
+			map[string]string{
+				"src/main/kotlin/Check.kt":     "fun oldCheck() = 1\nconst val NEW_LIMIT = 5\nfun newChecker() = 2\n",
+				"src/test/kotlin/CheckTest.kt": "import kotlin.test.assertEquals\nclass CheckTest {\n  @Test fun t() { assertEquals(5, NEW_LIMIT); assertEquals(1, oldCheck()); listOf(1).map { it } }\n}\n"},
+			[]string{"NEW_LIMIT"},
+		},
+		"rust": {
+			map[string]string{"src/lib.rs": "pub fn old_item() {}\n", "tests/t.rs": "use m::old_item;\n#[test]\nfn t() { old_item(); }\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn old_item() {}\npub mod fresh_module { pub const FRESH_LIMIT: u32 = 3; }\npub struct Config { pub fresh_field: u32 }\n",
+				"tests/t.rs": "use m::old_item;\nuse m::fresh_module::FRESH_LIMIT;\nuse serde::Serialize;\nuse std::collections::HashMap;\n#[test]\nfn t() { old_item(); let _ = FRESH_LIMIT; let _m: HashMap<u8, u8> = HashMap::new(); }\n"},
+			[]string{"FRESH_LIMIT", "fresh_module"},
+		},
+		"rust: a dependency's items and a base item are fine": {
+			map[string]string{"src/lib.rs": "pub fn shared_item() {}\n"},
+			map[string]string{
+				"src/lib.rs": "pub fn shared_item() {}\n",
+				"tests/t.rs": "use serde_json::json;\nuse m::shared_item;\n#[test]\nfn t() { shared_item(); let _ = json!({}); }\n"},
+			nil,
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			gaps := fairnessGaps(t, tc.base, tc.solution, instruction)
+			var want []string
+			for _, w := range tc.want {
+				want = append(want, "identifier:"+w)
+			}
+			wantGaps(t, gaps, want...)
+		})
+	}
+}

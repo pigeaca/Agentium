@@ -21,7 +21,7 @@ import (
 // Gap kinds.
 const (
 	GapLiteral    = "literal"    // a text the hidden tests compare against and the solution produces, stated nowhere the agent can see
-	GapIdentifier = "identifier" // a Go name the hidden tests use that the solution adds and the base lacks
+	GapIdentifier = "identifier" // a Go, Java, Kotlin or Rust name the hidden tests use that the solution adds and the base lacks
 )
 
 // Gap is one thing the hidden tests require that neither the instruction nor the base code states.
@@ -90,6 +90,14 @@ type FairnessInput struct {
 //     Matching ignores case, collapsed whitespace and surrounding punctuation; base and reference are searched with
 //     git grep, so whitespace inside a piece must match exactly there. Limitation: the format argument of a
 //     call in a hidden test is skipped, so an expectation a test builds with fmt.Sprintf is not checked.
+//   - For Java, Kotlin and Rust (fairness_names.go): names a hidden test file newly uses anywhere in its code (imports,
+//     static imports, qualified references, Type::item) that the reference declares (class, interface, enum, record,
+//     object, fun, val, struct, trait, fn, const, mod, field and so on, found by pattern), that the test does not declare
+//     itself, that the instruction does not mention and that no base .java or .kt (or .rs) file contains as a word.
+//     Only names the reference declares can be flagged, so JDK, standard-library and dependency names never are.
+//     Limits: names under 4 characters are skipped; a new name equal to any old word in the base is missed; interface
+//     methods without a modifier and enum constants are not seen as declarations; no scoping, so a name the reference
+//     declares in one place and the test takes from a dependency is flagged only if the base lacks the word.
 //   - For Go: names the tests newly use as selectors (x.Name), composite-literal keys (T{Name: v}) or called functions
 //     that a changed non-test Go file declares at package level or as a struct or interface member, that the base's Go
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be
@@ -106,6 +114,10 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 		return nil, err
 	}
 	formats, err := f.formats(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	refNames, err := f.referenceNames(ctx, in)
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +160,13 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 			}
 		}
 		if !isGo {
+			names, err := f.unstatedNames(ctx, in, file, after, before, stated, refNames)
+			if err != nil {
+				return nil, err
+			}
+			for _, name := range names {
+				gaps = append(gaps, Gap{Kind: GapIdentifier, Text: name, File: file})
+			}
 			continue
 		}
 		var oldUse usage
