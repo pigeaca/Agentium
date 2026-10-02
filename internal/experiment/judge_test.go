@@ -57,25 +57,25 @@ func TestJudgeCapsAndEstimates(t *testing.T) {
 		t.Errorf("without the judge: cap %v, run cap %v, estimate %v, reserve %v", plain.JudgeCapUSD(), plain.RunCapUSD(), plain.JudgeEstimateUSD(), Reserve(plain))
 	}
 	d := judged(judge.Settings{Model: "m", Effort: "high", Repeats: 3})
-	if d.JudgeCapUSD() != 6 || d.RunCapUSD() != 9 || Reserve(d) != 27 {
-		t.Errorf("with 3 repeats: judge cap %v (want 3 × 2 × $1), run cap %v, reserve %v (want 3 run caps of $9)", d.JudgeCapUSD(), d.RunCapUSD(), Reserve(d))
+	if d.JudgeCapUSD() != 3 || d.RunCapUSD() != 6 || Reserve(d) != 18 {
+		t.Errorf("with 3 repeats: judge cap %v (want 3 × 2 × $0.50), run cap %v, reserve %v (want 3 run caps of $6)", d.JudgeCapUSD(), d.RunCapUSD(), Reserve(d))
 	}
 	if want := 6 * 3 * judge.EstimateUSD; math.Abs(d.JudgeEstimateUSD()-want) > 1e-9 {
 		t.Errorf("estimate %v, want %v", d.JudgeEstimateUSD(), want)
 	}
 	est := Estimate{PerRunUSD: 1, Known: true}
-	// 1.25 × ($6 for the agent + $1.17 for the judge) + $27, rounded up.
-	if got := DefaultBudget(d, est); got != math.Ceil(1.25*(6+6*3*judge.EstimateUSD)+27) {
+	// 1.25 × ($6 for the agent + $1.17 for the judge) + $18, rounded up.
+	if got := DefaultBudget(d, est); got != math.Ceil(1.25*(6+6*3*judge.EstimateUSD)+18) {
 		t.Errorf("default budget %v", got)
 	}
-	d.RunBudgetUSD, d.BudgetUSD = 3, 17
-	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "below one pair of runs at their caps ($18.00)") {
+	d.RunBudgetUSD, d.BudgetUSD = 3, 11
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "below one pair of runs at their caps ($12.00)") {
 		t.Errorf("a budget below a pair with their judgements: %v", err)
 	}
 	rows := Preview(d, []string{"t1"}, est)
 	own := rows[len(rows)-1]
-	if own.CostUSD != 6 || math.Abs(own.JudgeUSD-6*3*judge.EstimateUSD) > 1e-9 || own.WorstUSD != 54 {
-		t.Errorf("this experiment's row = %+v: the agent's $6 apart from the judge's, worst 6 × $9", own)
+	if own.CostUSD != 6 || math.Abs(own.JudgeUSD-6*3*judge.EstimateUSD) > 1e-9 || own.WorstUSD != 36 {
+		t.Errorf("this experiment's row = %+v: the agent's $6 apart from the judge's, worst 6 × $6", own)
 	}
 	if quick := rows[0]; math.Abs(quick.JudgeUSD-float64(quick.Runs*3)*judge.EstimateUSD) > 1e-9 {
 		t.Errorf("the quick tier's judge estimate = %v for %d runs", quick.JudgeUSD, quick.Runs)
@@ -107,10 +107,10 @@ func TestExecuteReservesTheJudgement(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
 	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeOK, CostUSD: 3, JudgeUSD: 2} }} // agent $1, judge $2
 	d := judged(judge.Settings{Model: "m", Effort: "high", Repeats: 1})
-	d.RunBudgetUSD = 1 // a run's cap: $1 + 1 × 2 × $1
+	d.RunBudgetUSD = 1 // a run's cap: $1 + 1 × 2 × $0.50
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: d.RunCapUSD(), BudgetUSD: 12, MaxAttempts: 3}, f.run)
-	// Pairs start while spend + both caps fit: $0 + $6, $6 + $6; then $12 + $6 does not.
-	if err != nil || sum.Status != StatusBudget || sum.Settled != 4 || sum.SpentUSD > 12 || !strings.Contains(sum.Note, "$3.00 per run at most") {
+	// Pairs start while spend + both caps fit: pairs of $4 each fit until $12 + $3 does not.
+	if err != nil || sum.Status != StatusBudget || sum.Settled != 4 || sum.SpentUSD > 12 || !strings.Contains(sum.Note, "$2.00 per run at most") {
 		t.Fatalf("summary %+v, %v", sum, err)
 	}
 }

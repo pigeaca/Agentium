@@ -8,7 +8,7 @@ import (
 
 func TestJudgementCommand(t *testing.T) {
 	j := Judgement{CLI: "/bin/claude", Dir: "/data/judge/call-1", Model: "claude-opus-5-5", Effort: "high", SystemPrompt: "You review.",
-		Schema: `{"type": "object"}`, BudgetUSD: 1, SignIn: SignInLogin, Home: "/home/u"}
+		Schema: `{"type": "object"}`, BudgetUSD: 0.5, SignIn: SignInLogin, Home: "/home/u"}
 	environ := []string{"PATH=/bin", "HOME=/home/u", "ANTHROPIC_API_KEY=sk-user", "GITHUB_TOKEN=gh", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
 		"CLAUDE_CONFIG_DIR=/home/u/.claude-work", "LC_ALL=C"}
 	args, env, err := j.Command(environ)
@@ -18,7 +18,7 @@ func TestJudgementCommand(t *testing.T) {
 	want := []string{"-p", "--model", "claude-opus-5-5", "--tools", "", "--system-prompt", "You review.", "--json-schema", `{"type": "object"}`,
 		"--output-format", "json", "--no-session-persistence", "--setting-sources", "project", "--strict-mcp-config",
 		"--settings", `{"autoMemoryEnabled":false,"disableClaudeAiConnectors":true}`, "--effort", "high",
-		"--max-budget-usd", "1"}
+		"--max-budget-usd", "0.5"}
 	if !slices.Equal(args, want) {
 		t.Errorf("args = %q", args)
 	}
