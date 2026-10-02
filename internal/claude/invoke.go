@@ -203,6 +203,28 @@ func credentialFiles() []string {
 		".npmrc", ".pypirc", ".kube", ".gnupg"}
 }
 
+// movedCredentials are credential stores the user's environment moves out of credentialFiles' places: gh's config
+// (GH_CONFIG_DIR, else $XDG_CONFIG_HOME/gh), which can hold a plain-text token. Only absolute values count, and never
+// the home folder or one above it (a misconfigured variable would deny everything).
+func movedCredentials(environ []string, home string) []string {
+	var paths []string
+	add := func(p string) {
+		if !filepath.IsAbs(p) {
+			return
+		}
+		p = filepath.Clean(p)
+		if rel, err := filepath.Rel(p, home); err == nil && filepath.IsLocal(rel) {
+			return
+		}
+		paths = append(paths, p)
+	}
+	add(lookup(environ, "GH_CONFIG_DIR"))
+	if x := lookup(environ, "XDG_CONFIG_HOME"); filepath.IsAbs(x) {
+		add(filepath.Join(x, "gh"))
+	}
+	return paths
+}
+
 // Command returns the arguments and environment for the run. environ is the parent's environment (os.Environ()),
 // filtered through an allowlist; the sign-in secret is the only credential the child receives.
 func (inv Invocation) Command(environ []string) (args, env []string, err error) {
@@ -373,6 +395,7 @@ func (inv Invocation) deniedPaths(userConfig string, environ []string) []string 
 	for _, name := range credentialFiles() {
 		paths = append(paths, filepath.Join(inv.Home, name))
 	}
+	paths = append(paths, movedCredentials(environ, inv.Home)...)
 	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
 	if inv.Deps != "" {
 		paths = append(paths, buildtool.DepsDenied(inv.Deps)...)
