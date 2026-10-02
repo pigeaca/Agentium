@@ -579,7 +579,12 @@ func notes(rep Report, in Input) []string {
 			strings.Join(decided, " and "), strings.Join(exploratory, " and ")))
 	}
 	if rep.Template == experiment.TemplateAA {
-		out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		if rep.Lock.Sequential != nil {
+			out = append(out, fmt.Sprintf("Both arms use the same context, so any difference is noise. Method %s spends %.1f%% over all its looks: "+
+				"about one experiment in thirty shows a difference by chance.", experiment.MethodSeq, 100*rep.Lock.Sequential.Alpha))
+		} else {
+			out = append(out, "Both arms use the same context, so any difference is noise. At the 5% level, about one verdict in twenty shows a difference by chance.")
+		}
 	}
 	cold := fmt.Sprintf("Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of %s.", rep.Lock.PriceTable)
 	if unrepriced > 0 {

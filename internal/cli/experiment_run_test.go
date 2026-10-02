@@ -27,6 +27,7 @@ import (
 // answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
 // numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON. "cost" sets what a run
 // reports it cost (default 0.30), "cost-lean" what a run in the lean context (CLAUDE.md says "Keep it short") reports,
+// "cost-MODEL" what a run on that model reports,
 // and with "cost-jitter" each slot's cost is scaled by 1 + (slot × 7 mod 11)/40, so tasks' differences vary. "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
@@ -86,6 +87,7 @@ if [ -f "$CTRL/usage" ]; then
 fi
 cost=0.30; [ -f "$CTRL/cost" ] && cost=$(cat "$CTRL/cost")
 [ -f "$CTRL/cost-lean" ] && grep -q "Keep it short" CLAUDE.md 2>/dev/null && cost=$(cat "$CTRL/cost-lean")
+[ -f "$CTRL/cost-$model" ] && cost=$(cat "$CTRL/cost-$model")
 if [ -f "$CTRL/cost-jitter" ]; then slot=${key%%-*}; slot=${slot#s}; cost=$(awk "BEGIN{print $cost*(1+($slot*7%11)/40)}"); fi
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":'"$cost"',"num_turns":2,"duration_ms":1000,"modelUsage":{}}'
 `

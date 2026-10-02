@@ -131,3 +131,45 @@ func TestSequentialExpectedTasks(t *testing.T) {
 		t.Errorf("without stops every path runs to 16 tasks, got %.2f", all)
 	}
 }
+
+// seqGolden is every seq-v1 design size's looks as this code computes them (tasks, look's tasks, efficacy z,
+// equivalence z, efficacy level, equivalence level). Locks record the levels, and a resume refuses a lock whose levels
+// this build computes more than 1e-6 apart (experiment's checkSequential): a change that moves them that far is a new
+// method (seq-v2), not a fix, and this test fails first.
+var seqGolden = [][6]float64{
+	{1, 1, 2.108358399, 1.644853627, 0.965000000, 0.900000000},
+	{8, 8, 2.108358399, 1.644853627, 0.965000000, 0.900000000},
+	{11, 11, 2.108358399, 1.644853627, 0.965000000, 0.900000000},
+	{12, 8, 2.686160103, 2.135142979, 0.992772155, 0.967250667},
+	{12, 12, 2.135246880, 1.694201380, 0.967259151, 0.909772977},
+	{13, 8, 2.812904795, 2.242239726, 0.995090382, 0.975054117},
+	{13, 13, 2.126835611, 1.682687952, 0.966566256, 0.907564485},
+	{14, 8, 2.934365088, 2.344741967, 0.996657692, 0.980959749},
+	{14, 14, 2.121081853, 1.673921395, 0.966085085, 0.905853951},
+	{15, 8, 3.051140279, 2.443179116, 0.997720260, 0.985441490},
+	{15, 15, 2.117133251, 1.667229439, 0.965751460, 0.904531209},
+	{16, 8, 3.163725458, 2.537987603, 0.998442363, 0.988850807},
+	{16, 12, 2.522640501, 2.015923197, 0.988352259, 0.956191992},
+	{16, 16, 2.154460000, 1.720132483, 0.968795884, 0.914591638},
+}
+
+func TestSeqLevelsGolden(t *testing.T) {
+	byTasks := map[int][][6]float64{}
+	for _, g := range seqGolden {
+		byTasks[int(g[0])] = append(byTasks[int(g[0])], g)
+	}
+	for n, want := range byTasks {
+		looks, err := SequentialLooks(SeqLooks(n), n, true, SeqAlpha, SeqEquivalenceAlpha)
+		if err != nil || len(looks) != len(want) {
+			t.Fatalf("%d tasks: %d looks, %v", n, len(looks), err)
+		}
+		for k, w := range want {
+			got := []float64{float64(looks[k].Tasks), looks[k].EffBound, looks[k].EqBound, looks[k].EffLevel, looks[k].EqLevel}
+			for i, g := range got {
+				if math.Abs(g-w[i+1]) > 1e-6 {
+					t.Errorf("%d tasks, look %d: field %d is %.9f, the golden value %.9f", n, k+1, i, g, w[i+1])
+				}
+			}
+		}
+	}
+}

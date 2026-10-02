@@ -39,6 +39,9 @@ const (
 	RoleSecondary = "secondary"
 )
 
+// NoteNoLook is a seq-v1 primary metric's note before its first look: no verdict yet, whatever the runs show.
+const NoteNoLook = "no look yet: the first comes once its stage is settled"
+
 // BootstrapDraws is the number of bootstrap draws per metric.
 const BootstrapDraws = 10000
 
@@ -233,6 +236,9 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 			continue
 		}
 		res.Verdict, res.Warning = stats.Decide(evidence, dir, margin, res.Role == RoleGuard, belowFloor || sequential && lv.noVerdict)
+		if sequential && lv.noVerdict { // not too small: its first look has not come yet
+			res.Warning, res.Note = "", NoteNoLook
+		}
 		if res.Verdict == stats.Inconclusive && lv.eff == 0 { // a sequential design runs no more than its maximum
 			wide := math.Max(halfWidth(evidence.Boot95), halfWidth(evidence.T95))
 			res.TasksToResolve, _ = stats.TasksToResolve(res.Tasks, wide, math.Min(margin.Better, margin.Worse))

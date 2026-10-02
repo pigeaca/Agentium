@@ -79,8 +79,12 @@ func seqNotes(rep Report, in Input) []string {
 				"smaller than the estimate. The interval is valid at the look it stopped at (a repeated confidence interval).")
 		}
 		if after := runsAfter(rep.Lock, in.Runs, l.Look); after > 0 {
-			out = append(out, fmt.Sprintf("%d run(s) of later stages ran after look %d and are not in its results (their spend is in the total): "+
-				"the next look counts them once its stage is settled.", after, l.Look))
+			last := s.Looks[len(s.Looks)-1]
+			next := "the next look counts them once its stage is settled"
+			if last.Look > l.Look { // a later look was made on them, but gave no verdict
+				next = fmt.Sprintf("look %d was made on them but gave no verdict (%s), so the results stay look %d's", last.Look, last.Note, l.Look)
+			}
+			out = append(out, fmt.Sprintf("%d run(s) of stages after look %d are not in its results (their spend is in the total): %s.", after, l.Look, next))
 		}
 	}
 	out = append(out, fmt.Sprintf("A seeded simulation of method %s (up to %d tasks × 1 run, the same looks and levels; normal, skewed, heavy-tailed, "+

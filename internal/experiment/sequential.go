@@ -84,6 +84,9 @@ func (s Sequential) stage(slots []Slot) []Slot {
 	return slots
 }
 
+// levelTolerance is how far a lock's recorded levels may be from what this build computes for a resume to go on.
+const levelTolerance = 1e-6
+
 // checkSequential refuses a seq-v1 lock this Agentium would not run and analyse as it was locked: a design that is not
 // seq-v1's (looks, alphas, spending, futility, one run per task and arm), levels this Agentium computes differently, or
 // a schedule whose stages do not match the looks.
@@ -110,9 +113,14 @@ func (l Lock) checkSequential() error {
 	if err != nil {
 		return refuse(err.Error())
 	}
+	// The analysis uses the recorded levels for planned looks, so a harmless numerical change (a finer grid, another
+	// quadrature) must not refuse every resume: levels within levelTolerance pass. A change that moves them further is
+	// a new method (seq-v2), and stats' golden test (TestSeqLevelsGolden) fails before it ships.
+	if len(s.EfficacyLevels) != len(want.EfficacyLevels) || len(s.EquivalenceLevels) != len(want.EquivalenceLevels) {
+		return refuse("its looks' levels are not one per look")
+	}
 	for k := range want.EfficacyLevels {
-		if k >= len(s.EfficacyLevels) || k >= len(s.EquivalenceLevels) ||
-			math.Abs(s.EfficacyLevels[k]-want.EfficacyLevels[k]) > 1e-9 || math.Abs(s.EquivalenceLevels[k]-want.EquivalenceLevels[k]) > 1e-9 {
+		if math.Abs(s.EfficacyLevels[k]-want.EfficacyLevels[k]) > levelTolerance || math.Abs(s.EquivalenceLevels[k]-want.EquivalenceLevels[k]) > levelTolerance {
 			return refuse("its looks' levels are not the ones this Agentium computes")
 		}
 	}
@@ -219,8 +227,9 @@ func analyzeSequential(l Lock, runs []RunData) (Analysis, error) {
 
 // SequentialStatus makes a seq-v1 experiment's looks from its stored runs, as the executor does between stages: for
 // each stage in order whose every slot is settled or out of attempts, the look analyses exactly the runs of the stages
-// up to it, at levels from the tasks it counts (stats.SequentialLooks: earlier looks keep theirs, the last spends the
-// remainder). The first look with a decisive cost verdict, a futility stop or the last look ends it; the first stage
+// up to it: at the lock's recorded levels while every look so far counted its planned tasks, so `experiment run` and
+// `experiment report` always read the same levels; else at levels from the tasks counted (stats.SequentialLooks: earlier
+// looks keep theirs, the last spends the remainder). The first look with a decisive cost verdict, a futility stop or the last look ends it; the first stage
 // not yet settled is the one to run next. It is a function of the lock and the runs alone, so a resume after a crash
 // makes the same looks: none is repeated on other data, and none is skipped.
 //
@@ -229,7 +238,7 @@ func analyzeSequential(l Lock, runs []RunData) (Analysis, error) {
 // last look's verdict.
 func SequentialStatus(l Lock, runs []RunData) (SeqStatus, Analysis, error) {
 	s := l.Sequential
-	if s == nil || len(s.Looks) == 0 || len(s.EfficacyLevels) != len(s.Looks) || len(l.Design.Arms) != 2 {
+	if s == nil || len(s.Looks) == 0 || len(s.EfficacyLevels) != len(s.Looks) || len(s.EquivalenceLevels) != len(s.Looks) || len(l.Design.Arms) != 2 {
 		return SeqStatus{}, Analysis{}, errors.New("analyze: a seq-v1 lock without its sequential design")
 	}
 	status := SeqStatus{Planned: slices.Clone(s.Looks)}
@@ -259,11 +268,15 @@ func SequentialStatus(l Lock, runs []RunData) (SeqStatus, Analysis, error) {
 			look.Note = "no task was counted since the last analysed look"
 		default:
 			counts = append(counts, look.Counted)
-			looks, err := stats.SequentialLooks(counts, maximum, final, s.Alpha, s.EquivalenceAlpha)
-			if err != nil {
-				return SeqStatus{}, Analysis{}, err
+			cur := stats.SeqLook{Tasks: look.Counted, Fraction: float64(look.Counted) / float64(maximum),
+				EffLevel: s.EfficacyLevels[k-1], EqLevel: s.EquivalenceLevels[k-1]}
+			if !slices.Equal(counts, s.Looks[:k]) { // tasks lost: levels the lock did not plan, from the counts
+				looks, err := stats.SequentialLooks(counts, maximum, final, s.Alpha, s.EquivalenceAlpha)
+				if err != nil {
+					return SeqStatus{}, Analysis{}, err
+				}
+				cur = looks[len(looks)-1]
 			}
-			cur := looks[len(looks)-1]
 			an, z, err := analyze(l, prefix, lookLevels{eff: cur.EffLevel, eq: cur.EqLevel, look: k})
 			if err != nil {
 				return SeqStatus{}, Analysis{}, err

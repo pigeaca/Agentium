@@ -316,11 +316,12 @@ func TestSeqLostTasks(t *testing.T) {
 	}
 }
 
-// Before any look, the results cover every run so far, and cost has no verdict whatever the runs show: an experiment
-// of 8–11 tasks has one stage, which a partial run must not decide.
+// Before any look, the results cover every run so far, and cost has no verdict whatever the runs show, nor the "too
+// small" warning: it says no look has come yet. An experiment of 8–11 tasks has one stage, which a partial run must
+// not decide.
 func TestSeqNoLookYet(t *testing.T) {
 	l := seqLock(t, seqDesign(11))
-	runs := seqRuns(l, 20, 0.5) // 10 of 11 tasks: more than the floor, but the stage is not settled
+	runs := seqRuns(l, 20, 2.0) // 10 of 11 tasks: more than the floor, but the stage is not settled; a clear regression
 	s, an, err := SequentialStatus(l, runs)
 	if err != nil {
 		t.Fatal(err)
@@ -328,7 +329,8 @@ func TestSeqNoLookYet(t *testing.T) {
 	if len(s.Looks) != 0 || s.Reported != 0 || s.NextStage != 1 {
 		t.Fatalf("status %+v", s)
 	}
-	if cost := costResult(t, an); cost.Verdict != stats.Exploratory || cost.Tasks != 10 || cost.Level != l.Sequential.EfficacyLevels[0] {
+	if cost := costResult(t, an); cost.Verdict != stats.Exploratory || cost.Tasks != 10 || cost.Level != l.Sequential.EfficacyLevels[0] ||
+		cost.Warning != "" || cost.Note != NoteNoLook {
 		t.Errorf("cost before any look: %+v", cost)
 	}
 	if !strings.HasPrefix(s.Describe(), "no look yet") {
@@ -455,5 +457,35 @@ func TestPrepareMakesCostExperimentsSequential(t *testing.T) {
 		if _, usage := o.Prepare("x").(UsageError); !usage {
 			t.Errorf("%+v was accepted", o)
 		}
+	}
+}
+
+// A lock's recorded levels within 1e-6 of this build's resume, and planned looks are analysed at the recorded levels,
+// so `experiment run` and `experiment report` cannot disagree; levels 1e-3 apart are a different method, refused.
+func TestSeqLockLevelsTolerance(t *testing.T) {
+	near := seqLock(t, seqDesign(16))
+	for k := range near.Sequential.EfficacyLevels {
+		near.Sequential.EfficacyLevels[k] += 1e-7
+		near.Sequential.EquivalenceLevels[k] -= 1e-7
+	}
+	if err := near.Check("2.1.281", "login"); err != nil {
+		t.Errorf("levels 1e-7 apart: %v", err)
+	}
+	d := seqDesign(16)
+	d.NoFutility = true
+	near2 := seqLock(t, d)
+	near2.Sequential.EfficacyLevels[0] += 1e-7
+	near2.Sequential.EfficacyLevels[1] += 1e-7
+	s, _, err := SequentialStatus(near2, seqRuns(near2, 24, 1.0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Looks[0].EffLevel != near2.Sequential.EfficacyLevels[0] || s.Looks[1].EffLevel != near2.Sequential.EfficacyLevels[1] {
+		t.Errorf("planned looks use levels %v, not the lock's %v", []float64{s.Looks[0].EffLevel, s.Looks[1].EffLevel}, near2.Sequential.EfficacyLevels[:2])
+	}
+	far := seqLock(t, seqDesign(16))
+	far.Sequential.EquivalenceLevels[1] += 1e-3
+	if err := far.Check("2.1.281", "login"); err == nil || !strings.Contains(err.Error(), "levels are not the ones this Agentium computes") {
+		t.Errorf("levels 1e-3 apart: %v", err)
 	}
 }

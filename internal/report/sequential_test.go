@@ -104,7 +104,8 @@ func TestSeqReportBetweenLooks(t *testing.T) {
 	}
 	md, _ := renderings(t, rep)
 	for _, want := range []string{"Method seq-v1: look 1 of 3 made (continue); look 2 comes once the first 12 tasks are settled.",
-		"and the results are its last look's", "The results are look 1's", "4 run(s) of later stages ran after look 1 and are not in its results",
+		"and the results are its last look's", "The results are look 1's",
+		"4 run(s) of stages after look 1 are not in its results (their spend is in the total): the next look counts them once its stage is settled.",
 		"futility stops were off", "| 1 of 3 | 8 of 8 |", "| continue |"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the Markdown lacks %q:\n%s", want, md)
@@ -122,7 +123,38 @@ func TestSeqReportBetweenLooks(t *testing.T) {
 		t.Fatal(err)
 	}
 	md, _ = renderings(t, none)
-	if !strings.Contains(md, "No look was analysed yet, so cost has no verdict") || strings.Contains(md, "## Looks") || none.Analysis.Results[1].Verdict != "exploratory" {
+	if !strings.Contains(md, "No look was analysed yet, so cost has no verdict") || !strings.Contains(md, "): exploratory: no look yet") ||
+		strings.Contains(md, "## Looks") || strings.Contains(md, "too small") || none.Analysis.Results[1].Verdict != "exploratory" {
 		t.Errorf("before any look:\n%s", md)
+	}
+}
+
+// When the look after the reported one was made but gave no verdict (every run of its stage failed), the note says so
+// rather than promising that the next look counts the runs.
+func TestSeqReportAfterALookWithoutVerdict(t *testing.T) {
+	in := seqInput(t, 1.0, 26, false, experiment.StatusStopped)
+	var runs []Run
+	for _, r := range in.Runs {
+		if r.Slot >= 16 && r.Slot < 24 { // stage 2: three infrastructure failures a slot
+			for a := 1; a <= 3; a++ {
+				failed := r
+				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = a, claude.OutcomeInfra, nil
+				runs = append(runs, failed)
+			}
+			continue
+		}
+		runs = append(runs, r)
+	}
+	in.Runs = runs
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, _ := renderings(t, rep)
+	for _, want := range []string{"| 2 of 3 | 8 of 12 | - | - | - | no verdict: no task was counted since the last analysed look | - | continue |",
+		"look 2 was made on them but gave no verdict (no task was counted since the last analysed look), so the results stay look 1's"} {
+		if !strings.Contains(md, want) {
+			t.Errorf("the Markdown lacks %q:\n%s", want, md)
+		}
 	}
 }

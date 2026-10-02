@@ -302,6 +302,9 @@ func headlineParts(res experiment.MetricResult, d experiment.Design) (bold, mid,
 		}
 	case stats.Exploratory:
 		verdict = "exploratory: too few tasks or runs for a verdict"
+		if res.Note != "" { // a seq-v1 experiment before its first look
+			verdict = "exploratory: " + res.Note
+		}
 		if res.Warning != "" {
 			verdict += "; warning: " + res.Warning
 		}
