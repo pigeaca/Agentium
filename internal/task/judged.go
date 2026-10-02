@@ -40,7 +40,7 @@ func JudgedFiles(reference []string) []string {
 func ValidateJudged(instruction string, reference []string, diff string, now time.Time) Validation {
 	check := &JudgeCheck{CodeFiles: JudgedFiles(reference), ChangedLines: changedLines(diff)}
 	if strings.TrimSpace(instruction) == "" {
-		check.Problems = append(check.Problems, "the instruction is empty: state what to do (agentium task edit NAME --instruction-file FILE)")
+		check.Problems = append(check.Problems, "the instruction is empty: state what to do (agentium task edit NAME --instruction @FILE)")
 	}
 	switch {
 	case len(check.CodeFiles) == 0:

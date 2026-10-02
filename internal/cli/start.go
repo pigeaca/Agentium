@@ -16,12 +16,13 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--require-lock] [--json]
+const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--json]
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
@@ -42,14 +43,15 @@ your review, the tasks start itself mined: it checks only solution headings, ref
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
 accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks, finished, or ran with --yes) and
 never asks: only --yes runs the experiment, and then the document holds the run's result too. Without a terminal on stdin,
-start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget. --require-lock mines
-no Python commit whose base pins no dependencies (as task mine --require-lock).
+start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget. Mining, validation
+and the experiment's verification follow the project's settings (agentium init: verify and setup commands, require
+lock, jobs, verify timeout).
 `
 
 // startArgs is what start was asked for.
 type startArgs struct {
 	yes, acceptMined bool
-	requireLock      bool // mine no Python commit whose base has no lock file (mine.Options.RequireLock)
+	set              *settingFlags // --require-lock: a hidden override of the project's setting
 	budget           float64
 	b                string // the snapshot to compare the context with; "" for an A/A calibration
 }
@@ -62,7 +64,7 @@ func runStart(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	fs.BoolVar(&a.yes, "yes", false, "run the experiment without asking (real, paid runs)")
 	fs.BoolVar(&a.acceptMined, "accept-mined", false, "accept the tasks start mined without your review (only automatic checks)")
-	fs.BoolVar(&a.requireLock, "require-lock", false, "mine no Python commit whose base pins no dependencies")
+	a.set = addSettingFlags(fs, settingVerifyTimeout, settingRequireLock)
 	fs.Float64Var(&a.budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
 	fs.StringVar(&a.b, "b", "", "compare the context with this snapshot (default: an A/A calibration)")
 	rest, code, ok := parseArgs(env, fs, args, startUsage)
@@ -121,6 +123,8 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
+	// lastScan is the last mining scan's result: why its commits were set aside, for the shortage message.
+	lastScan *mine.Result
 	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).
 	invalidStreak int
 	// counts is the task stage's last count (nil when the stage was skipped); awaitingReview says it stopped because
@@ -137,6 +141,9 @@ type notRegisteredError struct{ root string }
 func (e notRegisteredError) Error() string {
 	return fmt.Sprintf("%s is not registered: run `agentium init` first", e.root)
 }
+
+// settings is the project's settings with this call's overrides.
+func (s *starter) settings() store.Settings { return s.args.set.apply(s.w.settings()) }
 
 func (s *starter) close() {
 	if s.w != nil {
@@ -294,7 +301,7 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	floor := experiment.FloorsFor(experiment.MethodVersion)
 	o := experiment.NewOptions{Template: experiment.TemplateAA, ContextA: s.a, Repeats: floor.CostRepeats, Model: experiment.DefaultExperimentModel,
 		Goal: experiment.GoalCheaper, RunBudget: experiment.DefaultRunBudgetUSD, Budget: s.args.budget, Concurrency: experiment.DefaultConcurrency,
-		Timeout: experiment.DefaultRunTimeout, VerifyTimeout: experiment.DefaultVerifyTimeout}
+		Timeout: experiment.DefaultRunTimeout, VerifyTimeout: verifyTimeoutOf(s.settings())}
 	if s.b != "" {
 		o.Template, o.ContextB = experiment.TemplateContextAB, s.b
 	}

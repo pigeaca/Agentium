@@ -30,50 +30,42 @@ import (
 )
 
 const taskUsage = `Usage:
-  agentium task add NAME --base REF (--instruction TEXT | --instruction-file FILE | --ticket-file FILE)
+  agentium task add NAME --base REF (--instruction TEXT | --instruction @FILE | --ticket-file FILE)
                          [--solution REF [--judge-graded]] [--accept-gaps] [--setup CMD]... [--verify CMD]...
                          a task by hand; with --solution, its test-file changes are the hidden tests.
+                         --instruction @FILE reads the instruction from a file (@@ starts a text with @).
                          --ticket-file reads an exported ticket (Jira's JSON export of one issue, or Markdown: a
                          title, a description and an "Acceptance criteria" section) into the instruction, keeps its key
                          as the source (ticket ABC-123) and asks for a review of the result; its --solution may change
                          no test files, and the task is then judge-graded. --judge-graded asks the same of a solution
                          without a ticket (without it, such a solution is refused)
-  agentium task mine [--since DATE] [--limit N] [--max-files N] [--max-lines N] [--dry-run] [--jobs N]
-                     [--timeout DURATION] [--setup CMD]... [--verify CMD]... [--require-lock]
-                         tasks from history in one go: finds commits on the default branch that change tests and
-                         code, small and with a clear message, imports the best --limit (default 10) as task import
-                         --commit does, and validates them --jobs at a time (default 2), ending with one table;
-                         --dry-run lists the candidates with their scores, and why other commits were set aside,
-                         and saves nothing. Commits that are already tasks are skipped. Mined tasks verify with
-                         the detected build tools' test commands (go test ./... for Go), not every command init
-                         found (linters and docs checks fail at old commits); without a build tool, with those.
-                         --require-lock sets aside Python commits whose base pins no dependencies (no uv.lock or
-                         fully pinned requirement files): their warm-up installs today's versions, with a note
-  agentium task import (--commit REF | --pr N) [--name NAME] [--setup CMD]... [--verify CMD]...
+  agentium task import (--commit REF | --pr N) [--name NAME]
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh); a commit's
                          instruction is its subject and body, without trailers such as Co-Authored-By
   agentium task list
   agentium task show NAME
-  agentium task edit NAME [--instruction TEXT | --instruction-file FILE] [--setup CMD... | --no-setup]
+  agentium task edit NAME [--instruction TEXT | --instruction @FILE] [--setup CMD... | --no-setup]
                          [--verify CMD]... [--reviewed] [--accept-gaps]
-  agentium task validate (NAME [--weak-tests [--max-hunks N]] | --all [--status STATUS] [--jobs N])
-                         [--snapshot NAME]... [--repeat N] [--timeout DURATION] [--keep]
+  agentium task validate (NAME [--weak-tests] | --all [--status STATUS]) [--snapshot NAME]... [--repeat N]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes);
                          --repeat N (1 to 20) runs every stage N times, and a stage whose runs disagree makes the
                          task flaky, which experiments reject (experiment plan asks for at least 3);
-                         --weak-tests removes one hunk of the reference at a time (the first --max-hunks, default 20)
-                         and reruns the checks in the base context: hunks that still pass are "not tested by the
-                         hidden tests", a warning that leaves the task valid; a later task validate without
-                         --weak-tests replaces the stored result, so rerun with it to keep the list;
+                         --weak-tests removes one hunk of the reference at a time (the first 20) and reruns the
+                         checks in the base context: hunks that still pass are "not tested by the hidden tests", a
+                         warning that leaves the task valid; a later task validate without --weak-tests replaces
+                         the stored result, so rerun with it to keep the list;
                          --all validates every task (--status: only the unvalidated, valid, invalid, flaky or
-                         unchecked ones), --jobs at a time (default 2), and ends with one table; an interrupt keeps
-                         the validations that finished. --jobs above 1 (here and in task mine) assumes the project's
-                         tests can run side by side: no fixed ports, shared /tmp paths or databases
+                         unchecked ones), as many at a time as the project's jobs setting (default 2), and ends with
+                         one table; an interrupt keeps the validations that finished. More than one at a time
+                         assumes the project's tests can run side by side: no fixed ports, shared /tmp paths or
+                         databases
   agentium task rm NAME
 
-list, show, mine, validate, import, add, edit and rm take --json: one JSON document instead of text (docs/guide.md,
+Tasks from history come from agentium pool update (agentium pool update --dry-run previews the candidates).
+
+list, show, validate, import, add, edit and rm take --json: one JSON document instead of text (docs/guide.md,
 "Scripting and automation"); nothing prompts, and exit codes are 0 success, 1 failure or an invalid task, 2 usage.
 
 Judge-graded tasks have no hidden tests: their runs are to be graded by the judge against the reference solution.
@@ -84,9 +76,10 @@ task show and task validate list what the hidden tests require that neither the 
 (exact texts; for Go also new names); task list counts them. A task that becomes reviewed (task add --solution, task edit --instruction or --reviewed)
 with such a list needs --accept-gaps.
 
---verify defaults to the test commands found by agentium init (task add and task import; task mine uses the build
-tools' own). --setup commands run first in every fresh
-checkout (for example, building assets the code embeds); they must pass.
+Without --verify or --setup, task add and task import take the project's settings (agentium init --verify CMD
+--setup CMD); without a verify setting, the test commands init found. --setup commands run first in every fresh
+checkout (for example, building assets the code embeds); they must pass. Each verification and setup command has the
+project's time limit (agentium init --verify-timeout, default 10m).
 `
 
 func runTask(ctx context.Context, env Env, args []string) int {
@@ -96,7 +89,7 @@ func runTask(ctx context.Context, env Env, args []string) int {
 	}
 	commands := map[string]func(context.Context, Env, []string) int{
 		"add": taskAdd, "import": taskImport, "list": taskList, "show": taskShow, "edit": taskEdit,
-		"validate": taskValidate, "rm": taskRemove, "mine": taskMine,
+		"validate": taskValidate, "rm": taskRemove, "mine": taskMineRemoved,
 	}
 	if run, ok := commands[args[0]]; ok {
 		return run(ctx, env, args[1:])
@@ -106,6 +99,13 @@ func runTask(ctx context.Context, env Env, args []string) int {
 		return ExitOK
 	}
 	fmt.Fprintf(env.Stderr, "agentium task: unknown subcommand %q\n\n%s", args[0], taskUsage)
+	return ExitUsage
+}
+
+// taskMineRemoved answers the removed task mine: pool update mines, and its --dry-run lists the candidates.
+func taskMineRemoved(_ context.Context, env Env, _ []string) int {
+	fmt.Fprintln(env.Stderr, "agentium task mine: removed: agentium pool update mines and validates tasks from history; "+
+		"agentium pool update --dry-run lists the candidates with their scores and why other commits were set aside")
 	return ExitUsage
 }
 
@@ -134,26 +134,39 @@ func (w *workspace) defaultVerify() []string {
 	return info.TestCommands
 }
 
-// instructionFlags reads --instruction or --instruction-file.
-type instructionFlags struct {
-	text, file *string
+// instructionFlag reads --instruction: TEXT, or @FILE to read the text from a file (relative to the working folder);
+// a text that starts with @ is written @@ (one @ is dropped). The removed --instruction-file names it.
+type instructionFlag struct {
+	text *string
 }
 
-func addInstructionFlags(fs *flag.FlagSet) instructionFlags {
-	return instructionFlags{
-		text: fs.String("instruction", "", "what the agent is asked to do"),
-		file: fs.String("instruction-file", "", "read the instruction from this file"),
-	}
+func addInstructionFlag(fs *flag.FlagSet) instructionFlag {
+	removeFlags(fs, map[string]string{"instruction-file": "use --instruction @FILE"})
+	return instructionFlag{text: fs.String("instruction", "", "what the agent is asked to do; @FILE reads it from a file, @@ starts a text with @")}
 }
 
-// value returns the instruction, or "" when neither flag was given.
-func (f instructionFlags) value(env Env) (string, error) {
+// given reports whether --instruction has a value.
+func (f instructionFlag) given() bool { return *f.text != "" }
+
+// value returns the instruction, or "" when the flag was not given.
+func (f instructionFlag) value(env Env) (string, error) {
+	return instructionText(env, *f.text)
+}
+
+// instructionText is --instruction's text: v itself, @FILE's content, or v without its first @ when it starts with @@.
+func instructionText(env Env, v string) (string, error) {
 	switch {
-	case *f.text != "" && *f.file != "":
-		return "", errors.New("give --instruction or --instruction-file, not both")
-	case *f.file != "":
-		file := *f.file
+	case strings.HasPrefix(v, "@@"):
+		return strings.TrimSpace(v[1:]), nil
+	case strings.HasPrefix(v, "@"):
+		file := v[1:]
+		if file == "" {
+			return "", errors.New("--instruction @ needs a file name (@FILE), or @@ for a text that starts with @")
+		}
 		if !filepath.IsAbs(file) {
+			if env.Dir == "" {
+				return "", fmt.Errorf("read instruction %s: the current folder cannot be read: give an absolute path", file)
+			}
 			file = filepath.Join(env.Dir, file)
 		}
 		data, err := os.ReadFile(file)
@@ -162,20 +175,18 @@ func (f instructionFlags) value(env Env) (string, error) {
 		}
 		return strings.TrimSpace(string(data)), nil
 	}
-	return strings.TrimSpace(*f.text), nil
+	return strings.TrimSpace(v), nil
 }
 
 func taskAdd(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("task add", flag.ContinueOnError)
 	base := fs.String("base", "", "the commit the agent starts from")
 	solution := fs.String("solution", "", "a commit that solves the task: its test-file changes become the hidden tests")
-	instruction := addInstructionFlags(fs)
+	instruction := addInstructionFlag(fs)
 	ticketFile := fs.String("ticket-file", "", "read the instruction from an exported ticket (Jira JSON or Markdown)")
 	judgeGraded := fs.Bool("judge-graded", false, "with --solution that changes no test files: grade runs with the judge")
 	acceptGaps := fs.Bool("accept-gaps", false, "accept the requirements the hidden tests have that nothing states")
-	var verify, setup stringList
-	fs.Var(&verify, "verify", "a verification command (repeatable)")
-	fs.Var(&setup, "setup", "a command a fresh checkout needs first (repeatable)")
+	commands := addSettingFlags(fs, "", settingVerify, settingSetup)
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
@@ -188,6 +199,7 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(env.Stderr, "agentium task add: --judge-graded needs --solution: the judge compares runs with the reference solution")
 		return ExitUsage
 	}
+	verify, setup := commands.taskCommands()
 	t := store.Task{Name: rest[0], Source: "manual", Verify: verify, Setup: setup, CreatedAt: env.Now()}
 	judging := judgeNever
 	switch {
@@ -197,8 +209,8 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 		judging = judgeAllowed
 	}
 	if *ticketFile != "" {
-		if *instruction.text != "" || *instruction.file != "" {
-			fmt.Fprintln(env.Stderr, "agentium task add: give --ticket-file or --instruction/--instruction-file, not both")
+		if instruction.given() {
+			fmt.Fprintln(env.Stderr, "agentium task add: give --ticket-file or --instruction, not both")
 			return ExitUsage
 		}
 		ticket, err := readTicket(env, *ticketFile)
@@ -210,7 +222,7 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	} else {
 		text, err := instruction.value(env)
 		if err != nil || text == "" {
-			fmt.Fprintf(env.Stderr, "agentium task add: an instruction is required (--instruction, --instruction-file or --ticket-file)%s\n", errSuffix(err))
+			fmt.Fprintf(env.Stderr, "agentium task add: an instruction is required (--instruction TEXT, --instruction @FILE or --ticket-file FILE)%s\n", errSuffix(err))
 			return ExitUsage
 		}
 		t.Instruction = text
@@ -273,9 +285,7 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 	commitRef := fs.String("commit", "", "import this commit")
 	pr := fs.Int("pr", 0, "import this merged pull request (read through gh)")
 	name := fs.String("name", "", "task name (default: from the commit subject)")
-	var verify, setup stringList
-	fs.Var(&verify, "verify", "a verification command (repeatable)")
-	fs.Var(&setup, "setup", "a command a fresh checkout needs first (repeatable)")
+	commands := addSettingFlags(fs, "", settingVerify, settingSetup) // hidden: the project's settings apply
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
@@ -289,6 +299,7 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer w.Close()
+	verify, setup := commands.taskCommands()
 	t := store.Task{ProjectID: w.project.ID, Name: *name, Verify: verify, Setup: setup, NeedsReview: true, CreatedAt: env.Now()}
 	if *pr == 0 {
 		if t, err = w.commitTask(ctx, *commitRef, "", t); err != nil {
@@ -314,7 +325,7 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 	return saveTask(ctx, env, w, t, false, judgeNever)
 }
 
-// commitTask fills in t from a commit of the user's repository, as task import --commit and task mine both make
+// commitTask fills in t from a commit of the user's repository, as task import --commit and mining both make
 // tasks: the commit is the solution and its first parent the base (both kept in Agentium's repository), the source
 // is "commit <hash>", the instruction is the message by mine's rule (the subject, a blank line and the body without
 // trailers; instruction, when not empty, must be that rule's text, as a mined candidate gives it), and the name is
@@ -358,14 +369,22 @@ func (w *workspace) keepSolution(ctx context.Context, ref string, t store.Task) 
 	return t, nil
 }
 
-// completeTask fills in the verify commands' default, splits the solution into hidden tests and the reference, and
+// completeTask fills in the verify and setup commands' defaults, splits the solution into hidden tests and the reference, and
 // sets the grading mode, refusing what cannot be a task (inline Rust tests, nothing to implement, no tests to grade
 // by unless judging allows it).
 func (w *workspace) completeTask(ctx context.Context, t store.Task, judging judging) (store.Task, error) {
+	// Commands not given come from the project's settings, then (verify only) from what init detected. A setup given as
+	// empty (not nil) means none.
 	if len(t.Verify) == 0 {
-		if t.Verify = w.defaultVerify(); len(t.Verify) == 0 {
-			return t, errors.New("no test commands were detected for this project: pass --verify CMD")
+		if t.Verify = w.settings().Verify; len(t.Verify) == 0 {
+			t.Verify = w.defaultVerify()
 		}
+		if len(t.Verify) == 0 {
+			return t, errors.New("no test commands were detected for this project: set them with `agentium init --verify CMD`")
+		}
+	}
+	if t.Setup == nil {
+		t.Setup = w.settings().Setup
 	}
 	if t.SolutionCommit == "" {
 		return t, nil
@@ -442,7 +461,7 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	}
 	if saved.NeedsReview {
 		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review the instruction "+reviewReason(saved)),
-			st.Command("agentium task show "+saved.Name), st.Command("task edit "+saved.Name+" --instruction-file FILE")+" or "+st.Command("--reviewed"))
+			st.Command("agentium task show "+saved.Name), st.Command("task edit "+saved.Name+" --instruction @FILE")+" or "+st.Command("--reviewed"))
 	}
 	fmt.Fprintf(env.Stdout, "Next: %s\n", st.Command("agentium task validate "+saved.Name))
 	return ExitOK
@@ -639,7 +658,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	if len(tasks) == 0 {
 		st := env.style()
-		fmt.Fprintf(env.Stdout, "No tasks yet: %s, %s, or %s\n", st.Command("agentium task mine"), st.Command("agentium task import --commit REF"),
+		fmt.Fprintf(env.Stdout, "No tasks yet: %s, %s, or %s\n", st.Command("agentium pool update"), st.Command("agentium task import --commit REF"),
 			st.Command("agentium task add NAME ..."))
 		return ExitOK
 	}
@@ -694,7 +713,7 @@ func printGaps(out io.Writer, st term.Style, gaps []task.Gap) {
 		return
 	}
 	fmt.Fprintln(out, st.Warn(fmt.Sprintf("Unstated requirements (%d): the hidden tests need these, but neither the instruction nor the base code states them.\n"+
-		"State them in the instruction (task edit --instruction-file), or accept them (task edit --reviewed --accept-gaps):", len(gaps))))
+		"State them in the instruction (task edit --instruction @FILE), or accept them (task edit --reviewed --accept-gaps):", len(gaps))))
 	for _, g := range gaps {
 		fmt.Fprintf(out, "  %s\n", g)
 	}
@@ -817,7 +836,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 
 func taskEdit(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("task edit", flag.ContinueOnError)
-	instruction := addInstructionFlags(fs)
+	instruction := addInstructionFlag(fs)
 	var verify, setup stringList
 	fs.Var(&verify, "verify", "replace the verification commands (repeatable)")
 	fs.Var(&setup, "setup", "replace the setup commands (repeatable)")
@@ -831,7 +850,7 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	text, err := instruction.value(env)
 	if err != nil || len(rest) != 1 || (len(setup) > 0 && *noSetup) ||
 		(text == "" && len(verify) == 0 && len(setup) == 0 && !*noSetup && !*reviewed) {
-		fmt.Fprintf(env.Stderr, "agentium task edit: give NAME and at least one of --instruction, --instruction-file, --setup, --no-setup, --verify or --reviewed%s\n", errSuffix(err))
+		fmt.Fprintf(env.Stderr, "agentium task edit: give NAME and at least one of --instruction, --setup, --no-setup, --verify or --reviewed%s\n", errSuffix(err))
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -875,7 +894,7 @@ type validateArgs struct {
 	name      string // the task, unless all
 	all       bool
 	status    string
-	jobs      int
+	set       *settingFlags // --jobs and --timeout: hidden overrides of the project's settings
 	snapshots stringList
 	weak      bool
 	opts      task.ValidateOptions
@@ -888,12 +907,11 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("task validate", flag.ContinueOnError)
 	all := fs.Bool("all", false, "validate every task of the project, --jobs at a time")
 	status := fs.String("status", "", "with --all: only tasks with this status ("+strings.Join(task.BatchStatuses(), ", ")+")")
-	jobs := fs.Int("jobs", 2, "with --all: how many tasks to validate at once")
 	fs.Var(&a.snapshots, "snapshot", "also validate with this context snapshot applied (repeatable)")
 	repeat := fs.Int("repeat", 1, "run every stage this many times; a stage whose runs disagree makes the task flaky")
 	weak := fs.Bool("weak-tests", false, "also remove each hunk of the reference solution and list those no hidden test needs")
 	maxHunks := fs.Int("max-hunks", task.DefaultMaxHunks, "with --weak-tests: how many hunks to try, in file and line order")
-	timeout := fs.Duration("timeout", 10*time.Minute, "time limit for each verification command")
+	a.set = addSettingFlags(fs, "timeout", settingJobs, settingVerifyTimeout)
 	keep := fs.Bool("keep", false, "keep the checkouts for inspection")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
@@ -915,8 +933,6 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 		return usage("give a task NAME or --all, not both")
 	case *all && *weak:
 		return usage("--weak-tests checks one task at a time: give its NAME instead of --all")
-	case *all && *jobs < 1:
-		return usage("--jobs must be at least 1")
 	case *all && given["status"] && !slices.Contains(task.BatchStatuses(), *status):
 		return usage("--status must be one of %s", strings.Join(task.BatchStatuses(), ", "))
 	case !*all && (given["status"] || given["jobs"]):
@@ -931,6 +947,9 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	case *maxHunks < 1:
 		return usage("--max-hunks must be at least 1")
 	}
+	if err := a.set.check(); err != nil {
+		return usage("%v", err)
+	}
 	for i, name := range a.snapshots {
 		if name == "base" || slices.Contains(a.snapshots[:i], name) { // arm names name checkouts and logs
 			return usage("--snapshot %q is repeated or reserved (\"base\" is the task's own context)", name)
@@ -939,8 +958,8 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	if len(rest) == 1 {
 		a.name = rest[0]
 	}
-	a.all, a.status, a.jobs, a.weak = *all, *status, *jobs, *weak
-	a.opts = task.ValidateOptions{Repeat: *repeat, Weak: *weak, MaxHunks: *maxHunks, Timeout: *timeout, Keep: *keep}
+	a.all, a.status, a.weak = *all, *status, *weak
+	a.opts = task.ValidateOptions{Repeat: *repeat, Weak: *weak, MaxHunks: *maxHunks, Keep: *keep} // Timeout: the project's
 	return a, ExitOK, true
 }
 
@@ -954,12 +973,14 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer w.Close()
+	settings := a.set.apply(w.settings())
 	o := a.opts
+	o.Timeout = verifyTimeoutOf(settings)
 	if a.all {
-		if o.Arms, err = w.validating(env, nil).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+		if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 			return fail(env, err)
 		}
-		return validateAll(ctx, env, w, a.status, o, a.jobs)
+		return validateAll(ctx, env, w, a.status, o, jobsOf(settings))
 	}
 	t, err := w.db.TaskByName(ctx, w.project.ID, a.name)
 	if err != nil {
@@ -981,14 +1002,14 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	if o.Arms, err = w.validating(env, nil).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+	if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
 		return fail(env, err)
 	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
 		return fail(env, err)
 	}
-	val := w.validating(env, buildEnv)
+	val := w.validating(env, buildEnv, o.Timeout)
 	if val.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
 		return fail(env, err)
 	}
@@ -1034,8 +1055,12 @@ func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating
 
 // validating is what validating w's tasks needs; buildEnv is the environment commands run in (run.BuildEnv). With
 // one, each validation warms its base's build tools as runs do (run.CheckoutCommands: Python's venv), so it runs the
-// verification as grading will.
-func (w *workspace) validating(env Env, buildEnv []string) task.Validating {
+// verification as grading will, each warm-up command within timeout: the call's verify timeout (the project's setting
+// or the command's own override; 0: the setting).
+func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration) task.Validating {
+	if timeout <= 0 {
+		timeout = verifyTimeoutOf(w.settings())
+	}
 	v := task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Cache: w.layout.Cache, Now: env.Now,
 		ReferenceDiff: func(ctx context.Context, base, solution string, reference []string) (string, error) {
 			return llmjudge.ReferenceDiff(ctx, w.bare, base, solution, reference)
@@ -1045,7 +1070,7 @@ func (w *workspace) validating(env Env, buildEnv []string) task.Validating {
 		if env.Environ != nil {
 			environ = env.Environ()
 		}
-		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: experiment.DefaultVerifyTimeout, Now: env.Now}
+		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now}
 		v.Checkout = func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return run.CheckoutCommands(ctx, c, base, verify, logPath)
 		}
@@ -1061,7 +1086,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	if len(notApplied) > 0 {
 		fmt.Fprintln(out, note(st, strings.Join(notApplied, ", ")+" do(es) not apply: nothing runs for a judge-graded task"))
 	}
-	val := w.validating(env, nil)
+	val := w.validating(env, nil, 0)
 	result, diff, err := val.Judged(ctx, t, env.Now())
 	if err != nil {
 		return fail(env, err)

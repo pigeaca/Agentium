@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -602,6 +603,84 @@ func TestOpenReadOnlySchemaAndMissingFile(t *testing.T) {
 	}
 }
 
+// insertOldProject registers root as a binary from before the settings migration does (SaveProject reads the newer
+// columns).
+func insertOldProject(t *testing.T, s *Store, root string, now time.Time) Project {
+	t.Helper()
+	var id int64
+	if err := s.db.QueryRowContext(context.Background(), `INSERT INTO projects (root, name, discovery, created_at, updated_at) VALUES (?, ?, '{}', ?, ?)
+		RETURNING id`, root, path.Base(root), formatTime(now), formatTime(now)).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return Project{ID: id, Root: root, Name: path.Base(root)}
+}
+
+// migrationVersion is the version of the migration whose file name ends in _suffix.sql, found by its name so that
+// the number lives in the file name alone.
+func migrationVersion(t *testing.T, suffix string) int {
+	t.Helper()
+	names, err := fs.Glob(migrations, "migrations/*_"+suffix+".sql")
+	if err != nil || len(names) != 1 {
+		t.Fatalf("the %s migration: %v, %v", suffix, names, err)
+	}
+	version, err := strconv.Atoi(strings.SplitN(path.Base(names[0]), "_", 2)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+// A project registered before the settings migration (with its local-binding choice) has no settings after it: every
+// command keeps its built-in defaults. Settings then round-trip, survive registering again, and stay per project.
+func TestProjectSettingsMigrationAndRoundTrip(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	old, err := openOnce(ctx, file, migrationVersion(t, "project_settings")-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := insertOldProject(t, old, "/work/app", now)
+	if _, err := old.db.ExecContext(ctx, `UPDATE projects SET allow_local_binding = 1 WHERE id = ?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s := open(t, file)
+	got, err := s.ProjectByRoot(ctx, "/work/app")
+	if err != nil || !got.AllowLocalBinding || len(got.Settings.Verify) != 0 || len(got.Settings.Setup) != 0 ||
+		got.Settings.RequireLock || got.Settings.Jobs != 0 || got.Settings.VerifyTimeout != 0 {
+		t.Fatalf("an old project after the migration = %+v, %v", got, err)
+	}
+	other, err := s.SaveProject(ctx, "/work/other", "other", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Settings{Verify: []string{"make test", "make lint"}, Setup: []string{"make assets"}, RequireLock: true, Jobs: 4, VerifyTimeout: 90 * time.Second}
+	if err := s.SetSettings(ctx, app.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{"v":2}`), now.Add(time.Hour))
+	if err != nil || !reflect.DeepEqual(again.Settings, want) || !again.AllowLocalBinding {
+		t.Errorf("registering again must keep the settings: %+v, %v", again, err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/other"); got.ID != other.ID || len(got.Settings.Verify) != 0 || got.Settings.Jobs != 0 {
+		t.Errorf("another project: %+v", got)
+	}
+	if err := s.SetSettings(ctx, app.ID, Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/app"); len(got.Settings.Verify) != 0 || got.Settings.RequireLock || got.Settings.VerifyTimeout != 0 {
+		t.Errorf("clearing the settings did not stick: %+v", got.Settings)
+	}
+	if err := s.SetSettings(ctx, app.ID, Settings{Jobs: -1}); err == nil {
+		t.Error("negative jobs were stored")
+	}
+	if err := s.SetSettings(ctx, 999, Settings{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("an unknown project: %v", err)
+	}
+}
+
 // retirementVersion is the version of the migration that adds task retirement, found by its name so that the number
 // lives in the file name alone.
 func retirementVersion(t *testing.T) int {
@@ -631,10 +710,7 @@ func TestRetirementMigrationOnAPopulatedDatabase(t *testing.T) {
 	if err := old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name LIKE 'retired%'`).Scan(&columns); err != nil || columns != 0 {
 		t.Fatalf("the older schema has %d retirement columns (%v)", columns, err)
 	}
-	app, err := old.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := insertOldProject(t, old, "/work/app", now)
 	// The pre-migration binary's own INSERT, which names no retirement column.
 	for i, name := range []string{"fix-parser", "add-flag"} {
 		if _, err := old.db.ExecContext(ctx, `
@@ -881,10 +957,7 @@ func TestDatabaseWithTheRemovedWatchStillWorks(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	app, err := old.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := insertOldProject(t, old, "/work/app", now)
 	task, err := old.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix it.", Source: "manual", BaseCommit: "base",
 		Verify: []string{"go test ./..."}, CreatedAt: now})
 	if err != nil {

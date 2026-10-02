@@ -7,53 +7,110 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/mine"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-const initUsage = `Usage: agentium init [path] [--json]
+const initUsage = `Usage: agentium init [path] [--verify CMD]... [--setup CMD]... [--require-lock[=false]] [--jobs N]
+                     [--verify-timeout DURATION] [--allow-local-binding[=false]] [--json]
 
-Registers the git repository containing path (default: the current folder) and reports what Agentium found. It only
-reads the repository; data goes to ~/.agentium (or AGENTIUM_HOME), which must be outside the repository.
+Registers the git repository containing path (default: the current folder), reports what Agentium found and prints
+the project's settings. It only reads the repository; data, settings included, goes to ~/.agentium (or AGENTIUM_HOME),
+which must be outside the repository, so no commit can change them. Running init again keeps every setting it is not
+given.
+
+Settings (pool update, start, task import, task add and task validate use them):
+  --verify CMD              a verification command for the tasks mined and imported (repeatable; default: the
+                            detected build tools' test commands for mined tasks, every detected test command for
+                            imported ones); --verify '' returns to the default
+  --setup CMD               a command a fresh checkout of those tasks runs first (repeatable; default none;
+                            --setup '' removes them)
+  --require-lock            mining sets aside Python commits whose base pins no dependencies (no uv.lock or fully
+                            pinned requirement files); --require-lock=false turns it off
+  --jobs N                  how many tasks to validate at once (default 2): above 1 assumes the project's tests can
+                            run side by side (no fixed ports, shared /tmp paths or databases)
+  --verify-timeout DURATION
+                            the time limit of each setup or verification command (default 10m)
+  --allow-local-binding     let agent runs on a Gradle project bind local ports and connect to localhost in the
+                            sandbox; --allow-local-binding=false turns it off
 
   --json                    print one JSON document instead of text (docs/guide.md, "Scripting and automation")
-  --allow-local-binding     let agent runs on a Gradle project bind local ports and connect to localhost in the sandbox
-  --no-allow-local-binding  turn that off again
 
 Gradle's file-lock service binds a local socket, which the sandbox forbids by default. Allowing it lets the agent bind
 any local port and connect to any service listening on localhost (databases, dev servers) on this machine; outbound
-network to other hosts stays blocked. Without it, agent runs on a Gradle project refuse to start. Running init again
-without either flag keeps the stored choice.
+network to other hosts stays blocked. Without it, agent runs on a Gradle project refuse to start.
 `
+
+// initArgs is what init was asked for: the folder, and the choices to store.
+type initArgs struct {
+	dir string
+	set *settingFlags
+	// allow is the local-binding choice, when given (allowGiven).
+	allow, allowGiven bool
+}
+
+// parseInit reads and checks init's arguments; a mistake is reported and its exit code returned.
+func parseInit(env Env, args []string) (a initArgs, code int, ok bool) {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	fs.BoolVar(&a.allow, "allow-local-binding", false, "")
+	removeFlags(fs, map[string]string{"no-allow-local-binding": "use --allow-local-binding=false"})
+	a.set = addSettingFlags(fs, settingVerifyTimeout, settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout)
+	paths, code, ok := parseArgs(env, fs, args, initUsage)
+	if !ok {
+		return a, code, false
+	}
+	if err := a.set.check(); err != nil {
+		fmt.Fprintf(env.Stderr, "agentium init: %v\n", err)
+		return a, ExitUsage, false
+	}
+	fs.Visit(func(f *flag.Flag) { a.allowGiven = a.allowGiven || f.Name == "allow-local-binding" })
+	if len(paths) > 1 {
+		fmt.Fprintf(env.Stderr, "agentium init: expected at most one path, got %d\n\n%s", len(paths), initUsage)
+		return a, ExitUsage, false
+	}
+	a.dir = env.Dir
+	if len(paths) == 1 {
+		a.dir = paths[0]
+	}
+	return a, ExitOK, true
+}
+
+// storeChoices saves the choices init was given (and only those) and returns the project as stored.
+func (a initArgs) storeChoices(ctx context.Context, db *store.Store, saved store.Project) (store.Project, error) {
+	if a.allowGiven {
+		if err := db.SetLocalBinding(ctx, saved.ID, a.allow); err != nil {
+			return saved, err
+		}
+		saved.AllowLocalBinding = a.allow
+	}
+	if a.set.any() {
+		settings := a.set.apply(saved.Settings)
+		if err := db.SetSettings(ctx, saved.ID, settings); err != nil {
+			return saved, err
+		}
+		saved.Settings = settings
+	}
+	return saved, nil
+}
 
 // runInit registers a repository: discovery is read-only, and the result goes to the data folder only.
 func runInit(ctx context.Context, env Env, args []string) int {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	allow, deny := fs.Bool("allow-local-binding", false, ""), fs.Bool("no-allow-local-binding", false, "")
-	paths, code, ok := parseArgs(env, fs, args, initUsage)
+	a, code, ok := parseInit(env, args)
 	if !ok {
 		return code
 	}
-	if *allow && *deny {
-		fmt.Fprintf(env.Stderr, "agentium init: --allow-local-binding and --no-allow-local-binding exclude each other\n\n%s", initUsage)
-		return ExitUsage
-	}
-	if len(paths) > 1 {
-		fmt.Fprintf(env.Stderr, "agentium init: expected at most one path, got %d\n\n%s", len(paths), initUsage)
-		return ExitUsage
-	}
-	dir := env.Dir
-	if len(paths) == 1 {
-		dir = paths[0]
-	}
+	dir := a.dir
 	if !filepath.IsAbs(dir) {
 		if env.Dir == "" {
 			return fail(env, errors.New("the current folder cannot be read: pass an absolute path"))
@@ -88,11 +145,8 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	if *allow || *deny {
-		if err := db.SetLocalBinding(ctx, saved.ID, *allow); err != nil {
-			return fail(env, err)
-		}
-		saved.AllowLocalBinding = *allow
+	if saved, err = a.storeChoices(ctx, db, saved); err != nil {
+		return fail(env, err)
 	}
 	src, err := source.WorkingTree(ctx, info.Root)
 	if err != nil {
@@ -121,7 +175,124 @@ type initDoc struct {
 	TestCommands []string        `json:"test_commands"`
 	Context      contextSizeDoc  `json:"context"`
 	LocalBinding localBindingDoc `json:"local_binding"`
+	Settings     settingsDoc     `json:"settings"`
 	Warnings     []string        `json:"warnings"`
+}
+
+// settingsDoc is the project's settings as commands use them: the stored verify and setup commands (empty: not set),
+// the verify commands mined tasks get now, the effective jobs and verify timeout, and which settings are at their
+// built-in default (verify, setup, require_lock, jobs, verify_timeout).
+type settingsDoc struct {
+	Verify               []string `json:"verify"`
+	MinedVerify          []string `json:"mined_verify"`
+	Setup                []string `json:"setup"`
+	RequireLock          bool     `json:"require_lock"`
+	Jobs                 int      `json:"jobs"`
+	VerifyTimeoutSeconds float64  `json:"verify_timeout_seconds"`
+	AllowLocalBinding    bool     `json:"allow_local_binding"`
+	Defaults             []string `json:"defaults"`
+}
+
+// projectSettings is what init shows of a project's settings: each one's value as commands use it, and whether it is
+// the built-in default.
+type projectSettings struct {
+	stored       store.Settings
+	minedVerify  []string // the verify commands mined tasks get: the setting, else the build tools', else the detected ones
+	importVerify []string // those imported tasks get: the setting, else every detected test command
+}
+
+func settingsOf(saved store.Project, info project.Info) projectSettings {
+	p := projectSettings{stored: saved.Settings, minedVerify: saved.Settings.Verify, importVerify: saved.Settings.Verify}
+	if len(p.minedVerify) == 0 {
+		if _, p.minedVerify = mine.TestLanguages(info.Root); len(p.minedVerify) == 0 {
+			p.minedVerify = info.TestCommands
+		}
+		p.importVerify = info.TestCommands
+	}
+	return p
+}
+
+// defaults names the settings left at their built-in default.
+func (p projectSettings) defaults() []string {
+	s := p.stored
+	var names []string
+	for _, d := range []struct {
+		name  string
+		unset bool
+	}{{"verify", len(s.Verify) == 0}, {"setup", len(s.Setup) == 0}, {"require_lock", !s.RequireLock}, {"jobs", s.Jobs == 0},
+		{"verify_timeout", s.VerifyTimeout == 0}} {
+		if d.unset {
+			names = append(names, d.name)
+		}
+	}
+	return names
+}
+
+func (p projectSettings) document(allowLocalBinding bool) settingsDoc {
+	return settingsDoc{Verify: list(p.stored.Verify), MinedVerify: list(p.minedVerify), Setup: list(p.stored.Setup), RequireLock: p.stored.RequireLock,
+		Jobs: jobsOf(p.stored), VerifyTimeoutSeconds: verifyTimeoutOf(p.stored).Seconds(), AllowLocalBinding: allowLocalBinding, Defaults: list(p.defaults())}
+}
+
+// print shows the settings under a heading that says how to change them.
+func (p projectSettings) print(env Env, saved store.Project, gradle bool) {
+	w, st, s := env.Stdout, env.style(), p.stored
+	fmt.Fprintf(w, "%s (in the data folder; %s changes one, the others stay)\n", st.Heading("Settings"), st.Command("agentium init --FLAG VALUE"))
+	label := func(set bool, text string) string {
+		if set {
+			return text
+		}
+		return text + st.Note(" (default)")
+	}
+	none := func(commands []string) string {
+		if len(commands) == 0 {
+			return "none"
+		}
+		return strings.Join(commands, "; ")
+	}
+	var verify string
+	switch {
+	case len(s.Verify) > 0:
+		verify = strings.Join(s.Verify, "; ")
+	case len(p.minedVerify) == 0 && len(p.importVerify) == 0:
+		verify = "not set, and no test command was detected: " + st.Command("agentium init --verify CMD") + " sets one"
+	default:
+		verify = "not set: mined tasks verify with " + none(p.minedVerify)
+		if !slices.Equal(p.minedVerify, p.importVerify) {
+			verify += ", imported ones with " + none(p.importVerify)
+		}
+	}
+	rows := [][2]string{
+		{"verify", verify},
+		{"setup", label(len(s.Setup) > 0, none(s.Setup))},
+		{"require lock", label(s.RequireLock, onOff(s.RequireLock))},
+		{"jobs", label(s.Jobs > 0, strconv.Itoa(jobsOf(s)))},
+		{"verify timeout", label(s.VerifyTimeout > 0, durationLabel(verifyTimeoutOf(s)))},
+	}
+	if gradle || saved.AllowLocalBinding { // a project without Gradle needs no word about it
+		rows = append(rows, [2]string{"local ports", localBindingLine(saved.AllowLocalBinding, gradle)})
+	}
+	for _, r := range rows {
+		fmt.Fprintf(w, "  %-15s %s\n", r[0], r[1])
+	}
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
+}
+
+// durationLabel writes d without zero units: 10m, 1h30m, 45s.
+func durationLabel(d time.Duration) string {
+	text := d.String()
+	if strings.HasSuffix(text, "m0s") {
+		text = strings.TrimSuffix(text, "0s")
+	}
+	if strings.HasSuffix(text, "h0m") {
+		text = strings.TrimSuffix(text, "0m")
+	}
+	return text
 }
 
 type projectDoc struct {
@@ -161,7 +332,7 @@ func initDocument(saved store.Project, info project.Info, resolved claudectx.Con
 		ClaudeCode: claudeCodeDoc{Found: info.Claude.Path != "", Version: info.Claude.Version}, SignIn: info.Claude.SignIn,
 		TestCommands: list(info.TestCommands), Context: contextSize(resolved),
 		LocalBinding: localBindingDoc{Allowed: saved.AllowLocalBinding, Gradle: slices.Contains(buildtool.DetectIn(info.Root), "gradle")},
-		Warnings:     list(info.Warnings)}
+		Settings:     settingsOf(saved, info).document(saved.AllowLocalBinding), Warnings: list(info.Warnings)}
 }
 
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
@@ -183,10 +354,8 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	}
 	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: %s\n",
 		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup, st.Command("agentium context show"))
-	if gradle := slices.Contains(buildtool.DetectIn(info.Root), "gradle"); gradle || saved.AllowLocalBinding {
-		fmt.Fprintf(w, "  local ports  %s\n", localBindingLine(saved.AllowLocalBinding, gradle))
-	}
 	fmt.Fprintf(w, "  data         %s (your repository was not modified)\n", layout.Root)
+	settingsOf(saved, info).print(env, saved, slices.Contains(buildtool.DetectIn(info.Root), "gradle"))
 	for _, text := range info.Warnings {
 		fmt.Fprintln(w, warning(st, text))
 	}
@@ -196,7 +365,7 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 func localBindingLine(allowed, gradle bool) string {
 	switch {
 	case allowed:
-		return "agents may bind local ports and connect to localhost (--no-allow-local-binding turns it off)"
+		return "agents may bind local ports and connect to localhost (--allow-local-binding=false turns it off)"
 	case gradle:
 		return "off: agent runs on this Gradle project refuse to start until you allow it with `agentium init --allow-local-binding` (it lets the agent bind any local port and reach localhost services)"
 	}

@@ -75,7 +75,8 @@ true`, false)
 				if _, err := os.Stat(filepath.Join(out, "tool")); err == nil {
 					t.Error("the build tool ran for a run that was refused")
 				}
-				expect(t, f.run(context.Background(), "init", "--allow-local-binding", "--no-allow-local-binding"), ExitUsage)
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding", "--no-allow-local-binding"), ExitUsage,
+					"--no-allow-local-binding was removed: use --allow-local-binding=false")
 				expect(t, f.run(context.Background(), "init", "--allow-local-binding"), ExitOK, "agents may bind local ports")
 				expect(t, f.run(context.Background(), "init"), ExitOK, "agents may bind local ports")
 			} else {
@@ -137,9 +138,38 @@ true`, false)
 				t.Errorf("the second run warmed again: %q", again)
 			}
 			if c.binding {
-				expect(t, f.run(context.Background(), "init", "--no-allow-local-binding"), ExitOK, "refuse to start")
+				expect(t, f.run(context.Background(), "init", "--allow-local-binding=false"), ExitOK, "refuse to start")
 				expect(t, f.run(context.Background(), "run", "once", "tool"), 1, "agentium init --allow-local-binding")
 			}
 		})
+	}
+}
+
+// Validation's warm-up of the base's build tools runs within the call's verify timeout: the project's setting, or
+// task validate's own --timeout, which wins for that call. A fake cargo whose fetch takes 2 seconds is stopped under a
+// 500ms setting and finishes under a 1m override.
+func TestValidationWarmUpFollowsTheTimeout(t *testing.T) { // not parallel: PATH is the test process's own
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	bin, out := t.TempDir(), t.TempDir()
+	done := filepath.Join(out, "warmed")
+	if err := os.WriteFile(filepath.Join(bin, "cargo"), []byte("#!/bin/sh\n[ \"$1\" = fetch ] || exit 0\nsleep 2\ntouch "+done+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	writeFile(t, f.repo, "Cargo.toml", "\n")
+	gitIn(t, f.repo, "add", "-A")
+	gitIn(t, f.repo, "commit", "-q", "-m", "build file")
+	ctx := context.Background()
+	expect(t, f.run(ctx, "task", "add", "tool", "--base", "HEAD", "--instruction", "Anything.", "--verify", "true"), ExitOK)
+	expect(t, f.run(ctx, "init", "--verify-timeout", "500ms"), ExitOK, "verify timeout  500ms")
+	expect(t, f.run(ctx, "task", "validate", "tool"), ExitOK, "dependency warm-up failed (cargo fetch)")
+	if _, err := os.Stat(done); err == nil {
+		t.Fatal("the warm-up finished under a 500ms verify timeout")
+	}
+	if r := f.run(ctx, "task", "validate", "tool", "--timeout", "1m"); r.code != ExitOK || strings.Contains(r.stdout, "warm-up failed") {
+		t.Errorf("with --timeout 1m: %+v", r)
+	}
+	if _, err := os.Stat(done); err != nil {
+		t.Error("the warm-up did not finish under task validate --timeout 1m")
 	}
 }

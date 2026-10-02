@@ -188,32 +188,39 @@ func TestJSONRunOnceListAndShow(t *testing.T) {
 	jsonRun(t, f, ExitError, "run", "show", "nope")
 }
 
-func TestJSONTaskMineDryRun(t *testing.T) {
+// pool update --json: the dry run lists the best --limit candidates with their scores and the commits set aside per
+// reason; a pass imports and validates; the next takes the one left; a pass with nothing to do is a success. task
+// mine is gone: its --json is a usage error that names pool update.
+func TestJSONPoolUpdateMines(t *testing.T) {
 	t.Parallel()
 	f, _ := startFixture(t, 3)
 	jsonRun(t, f, ExitOK, "init")
-	mined := jsonRun(t, f, ExitOK, "task", "mine", "--dry-run", "--limit", "2")
+	mined := jsonRun(t, f, ExitOK, "pool", "update", "--dry-run", "--limit", "2")
 	cands := mined.get("candidates").([]any)
-	if mined.get("dry_run") != true || len(cands) != 2 || mined.get("candidates_found") != float64(3) || mined.get("set_aside") == nil {
-		t.Errorf("task mine --dry-run: %s", mined.stdout)
+	if mined.get("dry_run") != true || len(cands) != 2 || mined.get("candidates_found") != float64(3) || mined.get("set_aside", "no parent commit") != float64(1) {
+		t.Errorf("pool update --dry-run: %s", mined.stdout)
 	}
 	first := cands[0].(map[string]any)
 	if len(first["commit"].(string)) != 40 || first["score_parts"] == nil || first["subject"] == nil {
 		t.Errorf("a candidate: %v", first)
 	}
-	imported := jsonRun(t, f, ExitOK, "task", "mine", "--limit", "2")
+	imported := jsonRun(t, f, ExitOK, "pool", "update", "--limit", "2")
 	rows := imported.get("tasks").([]any)
-	if imported.get("dry_run") != false || imported.get("imported") != float64(2) || imported.get("valid") != float64(2) || len(rows) != 2 ||
+	if imported.get("dry_run") != false || len(imported.get("imported").([]any)) != 2 || imported.get("health", "valid") != float64(2) || len(rows) != 2 ||
 		rows[0].(map[string]any)["task"].(map[string]any)["status"] != "valid" {
-		t.Errorf("task mine: %s", imported.stdout)
+		t.Errorf("pool update: %s", imported.stdout)
 	}
-	again := jsonRun(t, f, ExitOK, "task", "mine", "--limit", "5")
-	if again.get("imported") != float64(1) {
-		t.Errorf("a second mine takes the one left: %s", again.stdout)
+	again := jsonRun(t, f, ExitOK, "pool", "update", "--limit", "5")
+	if len(again.get("imported").([]any)) != 1 {
+		t.Errorf("a second pass takes the one left: %s", again.stdout)
 	}
-	nothing := jsonRun(t, f, ExitOK, "task", "mine")
-	if nothing.get("candidates_found") != float64(0) || nothing.get("imported") != float64(0) {
-		t.Errorf("task mine with nothing to do is a success: %s", nothing.stdout)
+	nothing := jsonRun(t, f, ExitOK, "pool", "update")
+	if nothing.get("candidates_found") != float64(0) || len(nothing.get("imported").([]any)) != 0 {
+		t.Errorf("a pass with nothing to do is a success: %s", nothing.stdout)
+	}
+	removed := jsonRun(t, f, ExitUsage, "task", "mine", "--dry-run")
+	if msg, _ := removed.get("error", "message").(string); !strings.Contains(msg, "pool update") {
+		t.Errorf("task mine --json: %s", removed.stdout)
 	}
 }
 
