@@ -90,7 +90,7 @@ type FairnessInput struct {
 //     Matching ignores case, collapsed whitespace and surrounding punctuation; base and reference are searched with
 //     git grep, so whitespace inside a piece must match exactly there. Limitation: the format argument of a
 //     call in a hidden test is skipped, so an expectation a test builds with fmt.Sprintf is not checked.
-//   - For Java, Kotlin and Rust (fairness_names.go): names a hidden test file newly uses anywhere in its code (imports,
+//   - For Java, Kotlin, Rust, Python and TypeScript or JavaScript (fairness_names.go, fairness_script.go): names a hidden test file newly uses anywhere in its code (imports,
 //     static imports, qualified references, Type::item) that the reference declares (class, interface, enum, record,
 //     object, fun, val, struct, trait, fn, const, mod, field and so on, found by pattern), that the test does not declare
 //     itself, that the instruction does not mention and that no base .java or .kt (or .rs) file contains as a word.
@@ -102,6 +102,14 @@ type FairnessInput struct {
 //     constants are not seen as declarations; Kotlin generic functions with nested ">" (fun <T : List<X>> f), Kotlin
 //     constructor parameters without val or var, and Rust "pub use" re-exports are missed; no scoping, so a name the
 //     reference declares in one place and the test takes from a dependency is flagged only if the base lacks the word.
+//     Python and TypeScript declarations are def, class, module-level assignments and annotated fields (Python) and
+//     function, class, interface, type, enum, exported or top-level const, export lists and members with a modifier,
+//     a body or a type (TypeScript); Python dunder methods and TypeScript toString and the like are not. A test's
+//     own names are its definitions, assignments, parameters and destructured names. Python and TypeScript limits:
+//     plain class-level assignments (enum members, class constants), TypeScript enum members, object-literal methods
+//     and re-exports (from x import y in an __init__, export * from) are not seen as declarations; a Python name
+//     reached only through __all__ strings is not a declaration; a regular-expression literal with a quote or JSX
+//     text with an apostrophe can blank the rest of its line; .js, .jsx, .mjs and .cjs files join the TypeScript family.
 //   - For Go: names the tests newly use as selectors (x.Name), composite-literal keys (T{Name: v}) or called functions
 //     that a changed non-test Go file declares at package level or as a struct or interface member, that the base's Go
 //     files in that directory lack, and that the instruction does not mention. Only names the reference declares can be

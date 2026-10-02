@@ -18,19 +18,27 @@ import (
 // detected. Files that cannot be scanned reliably (unbalanced
 // braces) are listed too, with the reason. The caller refuses the task.
 func InlineRustTests(ctx context.Context, base, solution string, reference []string, where ...string) ([]string, error) {
+	return changedItems(ctx, base, solution, reference, where, "rust tests",
+		func(ext string) bool { return ext == ".rs" }, rustTestItems)
+}
+
+// changedItems lists the reference files selected by match whose items (as found by items) differ between base and
+// solution, each with the reason when a file cannot be scanned reliably. label prefixes wrapped errors.
+func changedItems(ctx context.Context, base, solution string, reference []string, where []string, label string,
+	match func(ext string) bool, items func(src string) ([]string, error)) ([]string, error) {
 	var files []string
 	var sol, bs source.Source
 	for _, p := range reference {
-		if path.Ext(p) != ".rs" {
+		if !match(path.Ext(p)) {
 			continue
 		}
 		if sol == nil {
 			var err error
 			if sol, err = source.Commit(ctx, solution, where...); err != nil {
-				return nil, fmt.Errorf("rust tests: %w", err)
+				return nil, fmt.Errorf("%s: %w", label, err)
 			}
 			if bs, err = source.Commit(ctx, base, where...); err != nil {
-				return nil, fmt.Errorf("rust tests: %w", err)
+				return nil, fmt.Errorf("%s: %w", label, err)
 			}
 		}
 		read := func(s source.Source) (string, error) {
@@ -42,14 +50,14 @@ func InlineRustTests(ctx context.Context, base, solution string, reference []str
 		}
 		after, err := read(sol)
 		if err != nil {
-			return nil, fmt.Errorf("rust tests: %w", err)
+			return nil, fmt.Errorf("%s: %w", label, err)
 		}
 		before, err := read(bs)
 		if err != nil {
-			return nil, fmt.Errorf("rust tests: %w", err)
+			return nil, fmt.Errorf("%s: %w", label, err)
 		}
-		a, errA := rustTestItems(after)
-		b, errB := rustTestItems(before)
+		a, errA := items(after)
+		b, errB := items(before)
 		switch {
 		case errA != nil:
 			files = append(files, p+" ("+errA.Error()+")")
@@ -288,16 +296,4 @@ func matchClose(src string, open int) (int, error) {
 		i++
 	}
 	return 0, fmt.Errorf("unbalanced brackets: %q opened on line %d is never closed", src[open], lineOf(src, open))
-}
-
-// RefuseInlineRustTests returns the error the task commands give for a solution that changes inline Rust tests, or
-// nil. where locates the repository holding both commits (for example "--git-dir", bare).
-func RefuseInlineRustTests(ctx context.Context, base, solution string, reference []string, where ...string) error {
-	files, err := InlineRustTests(ctx, base, solution, reference, where...)
-	if err != nil || len(files) == 0 {
-		return err
-	}
-	return fmt.Errorf("the solution changes Rust tests inside source files (%s): #[cfg(test)] and #[test] code would land in the "+
-		"reference solution, so the hidden tests could not be kept from the agent or kept in the grading; move them to a "+
-		"file under tests/ or choose another solution", strings.Join(files, ", "))
 }

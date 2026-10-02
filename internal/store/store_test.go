@@ -3,10 +3,15 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -593,5 +598,233 @@ func TestOpenReadOnlySchemaAndMissingFile(t *testing.T) {
 	}
 	if _, err := OpenReadOnly(ctx, notDB); err == nil || errors.Is(err, ErrSchema) {
 		t.Errorf("a corrupt file is unreadable, not another schema: %v", err)
+	}
+}
+
+// retirementVersion is the version of the migration that adds task retirement, found by its name so that the number
+// lives in the file name alone.
+func retirementVersion(t *testing.T) int {
+	t.Helper()
+	names, err := fs.Glob(migrations, "migrations/*_task_retirement.sql")
+	if err != nil || len(names) != 1 {
+		t.Fatalf("the retirement migration: %v, %v", names, err)
+	}
+	version, err := strconv.Atoi(strings.SplitN(path.Base(names[0]), "_", 2)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
+// A database populated before the retirement migration (projects, tasks with validations, a locked experiment and its
+// runs) keeps everything when the migration applies, and every task stays active.
+func TestRetirementMigrationOnAPopulatedDatabase(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	old, err := openOnce(ctx, file, retirementVersion(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var columns int
+	if err := old.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name LIKE 'retired%'`).Scan(&columns); err != nil || columns != 0 {
+		t.Fatalf("the older schema has %d retirement columns (%v)", columns, err)
+	}
+	app, err := old.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The pre-migration binary's own INSERT, which names no retirement column.
+	for i, name := range []string{"fix-parser", "add-flag"} {
+		if _, err := old.db.ExecContext(ctx, `
+			INSERT INTO tasks (project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
+			                   verify, setup, needs_review, grading, validation, created_at, updated_at)
+			VALUES (?, ?, 'Do it.', 'commit abc', 'base', 'sol', '["a_test.go"]', '["a.go"]', '["go test ./..."]', '[]', 0, 'tests',
+			        '{"status":"valid"}', ?, ?)`, app.ID, name, formatTime(now.Add(time.Duration(i)*time.Minute)), formatTime(now)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e, err := old.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "lean", Template: "context-ab", Design: []byte(`{}`), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := old.LockExperiment(ctx, e.ID, []byte(`{"tasks":[{"name":"fix-parser"}]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.SaveRun(ctx, Run{ID: "r1", ProjectID: app.ID, TaskID: 1, TaskName: "fix-parser", Arm: "A", Outcome: "ok", Record: []byte(`{}`),
+		Started: now, Finished: now, ExperimentID: e.ID, Slot: 0, Attempt: 1}); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s := open(t, file)
+	tasks, err := s.Tasks(ctx, app.ID)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("tasks after the migration = %+v, %v", tasks, err)
+	}
+	for _, task := range tasks {
+		if task.Retired() || task.RetiredReason != "" || string(task.Validation) != `{"status":"valid"}` || task.HiddenTests[0] != "a_test.go" {
+			t.Errorf("task after the migration = %+v", task)
+		}
+	}
+	if runs, err := s.ExperimentRuns(ctx, e.ID); err != nil || len(runs) != 1 || runs[0].TaskID != tasks[0].ID {
+		t.Errorf("the experiment's runs after the migration = %+v, %v", runs, err)
+	}
+	if got, err := s.ExperimentByName(ctx, app.ID, "lean"); err != nil || got.Status != StatusRunning || got.Lock == nil {
+		t.Errorf("the experiment after the migration = %+v, %v", got, err)
+	}
+	if ok, err := s.RetireTask(ctx, tasks[1].ID, "its base is 300 days old", now); err != nil || !ok {
+		t.Errorf("retiring a migrated task = %v, %v", ok, err)
+	}
+}
+
+// Retiring is a flag with a reason: the row stays listed and editable, a second retirement keeps the first reason, and
+// RestoreTask reverses it. SaveTask and UpdateTask leave the flag alone.
+func TestRetireAndRestoreTask(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix it.", Source: "manual", BaseCommit: "base",
+		Verify: []string{"go test ./..."}, CreatedAt: now, RetiredAt: now, RetiredReason: "ignored by SaveTask"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "fix"); got.Retired() || got.RetiredReason != "" {
+		t.Errorf("SaveTask wrote the retirement: %+v", got)
+	}
+	if _, err := s.RetireTask(ctx, saved.ID, "  ", now); err == nil {
+		t.Error("a retirement without a reason must be refused")
+	}
+	if ok, err := s.RetireTask(ctx, saved.ID, "a/b.go is gone from the default branch", now.Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("RetireTask = %v, %v", ok, err)
+	}
+	if ok, err := s.RetireTask(ctx, saved.ID, "a second reason", now.Add(2*time.Hour)); err != nil || ok {
+		t.Errorf("retiring twice = %v, %v; want false", ok, err)
+	}
+	got, err := s.TaskByName(ctx, app.ID, "fix")
+	if err != nil || !got.Retired() || !got.RetiredAt.Equal(now.Add(time.Hour)) || got.RetiredReason != "a/b.go is gone from the default branch" ||
+		!got.UpdatedAt.Equal(now) {
+		t.Errorf("retired task = %+v, %v", got, err)
+	}
+	got.Instruction = "Fix it now."
+	if err := s.UpdateTask(ctx, got, now.Add(3*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.Tasks(ctx, app.ID); len(list) != 1 || !list[0].Retired() || list[0].Instruction != "Fix it now." {
+		t.Errorf("Tasks lists = %+v; want the retired task, edited and still retired", list)
+	}
+	if ok, err := s.RestoreTask(ctx, app.ID, "fix"); err != nil || !ok {
+		t.Fatalf("RestoreTask = %v, %v", ok, err)
+	}
+	if ok, err := s.RestoreTask(ctx, app.ID, "fix"); err != nil || ok {
+		t.Errorf("restoring an active task = %v, %v; want false", ok, err)
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "fix"); got.Retired() || got.RetiredReason != "" {
+		t.Errorf("restored task = %+v", got)
+	}
+	if _, err := s.RestoreTask(ctx, app.ID, "nope"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("restoring a missing task: %v", err)
+	}
+	if ok, err := s.RetireTask(ctx, 9999, "gone", now); err != nil || ok {
+		t.Errorf("retiring a missing task = %v, %v", ok, err)
+	}
+}
+
+// The pool's re-validation stores nothing for a task that a locked experiment able to run still uses, by name, in the
+// same project; drafts, finished experiments, unreadable locks and other projects do not count.
+func TestSetTaskValidationIdleSkipsTasksOfLockedExperiments(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.SaveProject(ctx, "/work/other", "other", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := map[string]int64{}
+	for _, name := range []string{"running", "stopped", "draft", "done", "free", "corrupt"} {
+		saved, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: name, Instruction: "Do it.", Source: "manual", BaseCommit: "base",
+			Verify: []string{"go test ./..."}, Validation: []byte(`{"status":"valid"}`), CreatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids[name] = saved.ID
+	}
+	experiment := func(projectID int64, name, lock, status string) {
+		t.Helper()
+		e, err := s.SaveExperiment(ctx, Experiment{ProjectID: projectID, Name: name, Template: "context-ab", Design: []byte(`{"tasks":["draft"]}`), CreatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lock == "" {
+			return
+		}
+		if err := s.LockExperiment(ctx, e.ID, []byte(lock)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetExperimentStatus(ctx, e.ID, status, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	experiment(app.ID, "b-run", `{"tasks":[{"name":"running"},{"name":"stopped"}]}`, StatusRunning)
+	experiment(app.ID, "a-stop", `{"tasks":[{"name":"stopped"},"not an object",{"digest":"no name"}]}`, StatusStopped)
+	experiment(app.ID, "drafted", "", "")
+	experiment(app.ID, "finished", `{"tasks":[{"name":"done"}]}`, StatusDone)
+	experiment(app.ID, "broken", `{"tasks":[{"name":"corrupt"}`, StatusRunning)
+	experiment(other.ID, "elsewhere", `{"tasks":[{"name":"free"}]}`, StatusRunning)
+
+	users, err := s.TasksInUse(ctx, app.ID)
+	want := map[string][]string{"running": {"b-run"}, "stopped": {"a-stop", "b-run"}}
+	if err != nil || fmt.Sprint(users) != fmt.Sprint(want) {
+		t.Errorf("TasksInUse = %v, %v; want %v", users, err, want)
+	}
+	verify := []string{"go test ./..."}
+	for _, name := range []string{"running", "stopped"} {
+		ok, err := s.SetTaskValidationIdle(ctx, ids[name], verify, nil, []byte(`{"status":"invalid"}`), now.Add(time.Hour))
+		if ok || !errors.Is(err, ErrTaskInUse) || !strings.Contains(err.Error(), "b-run") {
+			t.Errorf("%s: SetTaskValidationIdle = %v, %v; want ErrTaskInUse naming b-run", name, ok, err)
+		}
+		if got, _ := s.TaskByName(ctx, app.ID, name); string(got.Validation) != `{"status":"valid"}` || !got.UpdatedAt.Equal(now) {
+			t.Errorf("%s: a task in use was changed: %+v", name, got)
+		}
+	}
+	for _, name := range []string{"draft", "done", "free", "corrupt"} {
+		if ok, err := s.SetTaskValidationIdle(ctx, ids[name], verify, nil, []byte(`{"status":"invalid"}`), now.Add(time.Hour)); err != nil || !ok {
+			t.Errorf("%s: SetTaskValidationIdle = %v, %v; want stored", name, ok, err)
+		}
+	}
+	if ok, err := s.SetTaskValidationIdle(ctx, ids["free"], []string{"make test"}, nil, []byte(`{}`), now); err != nil || ok {
+		t.Errorf("other commands: SetTaskValidationIdle = %v, %v; want not stored", ok, err)
+	}
+	if ok, err := s.SetTaskValidationIdle(ctx, 9999, verify, nil, []byte(`{}`), now); err != nil || ok {
+		t.Errorf("a missing task: SetTaskValidationIdle = %v, %v; want not stored", ok, err)
+	}
+}
+
+// Two migrations with one version prefix (parallel branches that both took the next number) are refused, so the
+// second to merge must renumber; the embedded set has none.
+func TestMigrationVersionsAreUnique(t *testing.T) {
+	if _, _, err := latestMigration(); err != nil {
+		t.Fatalf("the embedded migrations: %v", err)
+	}
+	clash := fstest.MapFS{
+		"migrations/0001_projects.sql":   {Data: []byte("SELECT 1;")},
+		"migrations/0002_a.sql":          {Data: []byte("SELECT 1;")},
+		"migrations/0002_b.sql":          {Data: []byte("SELECT 1;")},
+		"migrations/0003_after_both.sql": {Data: []byte("SELECT 1;")},
+	}
+	if _, _, err := migrationsIn(clash); err == nil || !strings.Contains(err.Error(), "share version 2") {
+		t.Errorf("a shared version: %v", err)
+	}
+	delete(clash, "migrations/0002_b.sql")
+	if latest, all, err := migrationsIn(clash); err != nil || latest != 3 || len(all) != 3 {
+		t.Errorf("distinct versions: %d, %v, %v", latest, all, err)
 	}
 }

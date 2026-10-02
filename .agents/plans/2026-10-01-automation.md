@@ -38,7 +38,8 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 - **Cost:** no agent runs.
 - **Shows:** pool health: valid, flaky, weak, awaiting review.
 
-### 2. Cost screen on pull requests (wave 4; warn-only)
+### 2. Cost screen on pull requests (wave 4; warn-only; [plan](2026-10-02-watch-and-screen.md))
+- **Redesigned (the user, 2026-10-02):** fresh runs under `seq-v1` with a small cap per check, without run reuse (still deferred), on the subscription's usage windows as well as API keys; the plan supersedes the budget below.
 - **What it can honestly say:** only cost gets a verdict, since time and tokens are reported but never decided (`experiment/analyze.go`). At the floor (8 tasks × 1 run per arm) it detects changes of about 25–30%. So it is a *screen*, never a gate.
 - **Trigger:** a git `pre-push` hook, when the pushed commits change context files that the runs actually read (from context use).
   - Not MCP, model or Claude Code version changes: runs pass `--strict-mcp-config` with no servers and use the design's own model, so those arms would behave identically.
@@ -63,7 +64,8 @@ Each can run on a trigger, inside a budget, and report where the team already lo
   - The opt-in label is not trust, since anyone with triage access can add it.
 - **Queue:** the run lock fails with `ErrBusy` after about 2 s (`home/lock.go`), so background jobs need a small queue: a queue file in the data folder, one consumer, each head commit at most once. That is new work.
 
-### 3. Deep watch (wave 4, after the statistics note)
+### 3. Deep watch (wave 4, after the statistics note; [plan](2026-10-02-watch-and-screen.md))
+- **Redesigned (the user, 2026-10-02):** the drift chart is un-deferred (note §4), budgets come in dollars and usage-window share, consent lives in the data folder, and the digest stays local.
 - **Trigger:** a launchd calendar entry (nightly) runs `agentium watch --once`, a single budgeted pass in an idle usage window. It also posts deferred pull request comments.
 - **Does:**
   - continues long experiments under the wave-3 group-sequential design (pre-declared looks and alpha spending; no optional stopping);
@@ -97,8 +99,8 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 | A1 Headless | 3 | `--json`, exit codes, `start --yes`, `agentium.toml` | quick start |
 | [A2 Supply](2026-10-02-task-pool.md) | 4 | `pool update --background`, pool health, the git hooks, the queue | task mining, A1 |
 | A3 Linux runs | Later | A short paid spike, only for hosted runners | temp isolation |
-| A4 Cost screen | 4 | The warn-only screen, honest broken-task listing, the harness-settings refusal and its probe, deferred comments, commit status | A1, A2, run reuse |
-| A5 Deep watch | 4 | `watch --once` from launchd, sequential continuation, drift control chart, digest | A1, the statistics note |
+| [A4 Cost screen](2026-10-02-watch-and-screen.md) | 4 | The warn-only screen, honest broken-task listing, the harness-settings refusal and its probe, deferred comments, commit status; redesigned on fresh `seq-v1` runs, without reuse | A1, A2, `seq-v1`, A5's pass |
+| [A5 Deep watch](2026-10-02-watch-and-screen.md) | 4 | `watch --once` from launchd, sequential continuation, drift control chart (un-deferred), digest; budgets in dollars and window share | A1, A2, `seq-v1` |
 | A6 Autopilot | Later | Propose, test and open pull requests with context changes | A4, A5 |
 
 ## Acceptance (per phase, refined when it starts)

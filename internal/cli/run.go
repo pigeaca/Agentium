@@ -37,6 +37,8 @@ const runUsage = `Usage:
                      one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
                      and verification output
 
+once, list and show take --json: one JSON document instead of text (docs/guide.md, "Scripting and automation").
+
 Sign-in: ANTHROPIC_API_KEY when set, else a token file from ` + "`claude setup-token`" + ` (AGENTIUM_CLAUDE_TOKEN_FILE or
 ~/.config/agentium/claude-oauth-token), else your own login with project settings only.
 `
@@ -150,6 +152,9 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	live.Stop()
 	if err != nil {
 		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(runOnceDoc{header: hdr("run once"), Run: runInfoOf(env, rec)})
 	}
 	printRun(env, rec)
 	return ExitOK
@@ -356,6 +361,20 @@ func runList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	if env.JSON {
+		doc := runListDoc{header: hdr("run list"), Runs: []runListEntry{}}
+		for _, r := range runs {
+			entry := runListEntry{ID: r.ID, Task: r.TaskName, Kind: r.Kind, Arm: r.Arm, Outcome: r.Outcome, Passed: r.Passed, CostUSD: r.CostUSD, Started: r.Started}
+			if entry.Kind == "" {
+				entry.Kind = "task"
+			}
+			if r.Kind == "calibration" {
+				entry.Task = ""
+			}
+			doc.Runs = append(doc.Runs, entry)
+		}
+		return env.emit(doc)
+	}
 	if len(runs) == 0 {
 		fmt.Fprintln(env.Stdout, "No runs yet: "+env.style().Command("agentium run once TASK"))
 		return ExitOK
@@ -403,6 +422,9 @@ func runShow(ctx context.Context, env Env, args []string) int {
 	var rec run.Record
 	if err := json.Unmarshal(stored.Record, &rec); err != nil {
 		return fail(env, fmt.Errorf("run %s: %w", stored.ID, err))
+	}
+	if env.JSON {
+		return env.emit(runShowDocument(ctx, env, w, stored, rec, *diff, *logs))
 	}
 	printRun(env, rec)
 	if stored.ExperimentID != 0 {

@@ -16,23 +16,28 @@ import (
 // The letter before the suffix keeps GIT, AUDIT, ABTest and a bare Test.java (production names) out.
 var jvmTest = regexp.MustCompile(`[a-z0-9](Test|Tests|IT)\.(java|kt)$`)
 
-// jsTest matches JavaScript and TypeScript test files: name.test.ts, name.spec.jsx and so on.
-var jsTest = regexp.MustCompile(`\.(test|spec)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$`)
+// jsTest matches JavaScript and TypeScript test files: name.test.ts, name.spec.jsx and so on, Vitest's type tests
+// (name.test-d.ts, name.spec-d.ts) and benchmarks (name.bench.ts).
+var jsTest = regexp.MustCompile(`\.(?:(?:test|spec)(?:-d)?|bench)\.(js|jsx|ts|tsx|mjs|cjs|mts|cts)$`)
 
-// IsTestFile reports whether p holds tests or test data: Go (_test.go), Python (test_*.py, *_test.py, tests.py,
-// conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*), Java and Kotlin test classes
+// IsTestFile reports whether p holds tests or test data: Go (_test.go), Python (test_*.py, *_test.py, *_tests.py,
+// tests.py, conftest.py), Ruby (*_spec.rb), JavaScript and TypeScript (*.test.*, *.spec.*, *.test-d.ts, *.spec-d.ts,
+// *.bench.*), Java and Kotlin test classes
 // (a name like ParserTest, ParserTests or ParserIT outside a src/main folder: Maven and Gradle keep tests in src/test,
 // and a production class that is merely named like a test, such as RetryingTest.java, must stay in the reference or the
-// hidden tests would hand it to agents), and anything in a test, tests, spec,
-// __tests__, __mocks__, testdata, fixtures, __fixtures__, __snapshots__ or e2e folder. Other test inputs (a golden file
+// hidden tests would hand it to agents), and anything in a test, tests, spec, __tests__, __mocks__, testdata,
+// fixtures, __fixtures__, __snapshots__, e2e or test_utils folder. A Python testing.py is not a test file:
+// click.testing and flask.testing are public modules, so a solution that changes one must keep it in the reference;
+// the same goes for a testing/ package such as numpy.testing. Other test inputs (a golden file
 // beside the code, say) land in the reference, which validation cannot notice because the reference supplies them.
 // Kotlin Multiplatform source sets are not handled: src/<name>Main is not excluded from the class-name rule, and
-// src/<name>Test folders are not test folders. Rust's inline #[cfg(test)] code sits in ordinary source files and cannot be told apart by name: InlineRustTests
-// finds it, and the task commands refuse such solutions.
+// src/<name>Test folders are not test folders. Rust's inline #[cfg(test)] code sits in ordinary source files and
+// cannot be told apart by name, nor can Python doctests or Vitest in-source tests (InlineTests): the task commands
+// refuse solutions that change them.
 func IsTestFile(p string) bool {
 	for _, dir := range strings.Split(path.Dir(p), "/") {
 		switch dir {
-		case "test", "tests", "spec", "__tests__", "__mocks__", "testdata", "fixtures", "__fixtures__", "__snapshots__", "e2e":
+		case "test", "tests", "spec", "__tests__", "__mocks__", "testdata", "fixtures", "__fixtures__", "__snapshots__", "e2e", "test_utils":
 			return true
 		}
 	}
@@ -41,7 +46,8 @@ func IsTestFile(p string) bool {
 	case strings.HasSuffix(base, "_test.go"), strings.HasSuffix(base, "_spec.rb"):
 		return true
 	case strings.HasSuffix(base, ".py"):
-		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "tests.py" || base == "conftest.py"
+		return strings.HasPrefix(base, "test_") || strings.HasSuffix(base, "_test.py") || base == "tests.py" || base == "conftest.py" ||
+			strings.HasSuffix(base, "_tests.py")
 	case strings.HasSuffix(base, ".java"), strings.HasSuffix(base, ".kt"):
 		return jvmTest.MatchString(base) && !inMainSource(p)
 	default:
