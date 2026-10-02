@@ -266,6 +266,7 @@ func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bo
 			rec.CostEstimated = true
 			rec.Notes = append(rec.Notes, fmt.Sprintf("Claude Code reported no cost: estimated from the transcript's requests at the list prices of %s", pricing.Date))
 		}
+		rec.IsolatedCostUSD = isolatedCost(rec)
 		if rec.Metrics.UnpricedRequests > 0 {
 			rec.Notes = append(rec.Notes, fmt.Sprintf("%d request(s) on models without a list price are not in the cost", rec.Metrics.UnpricedRequests))
 		}
@@ -385,6 +386,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	if !m.SawResult && m.EstimatedCostUSD > 0 {
 		rec.Metrics.CostUSD, rec.CostEstimated = m.EstimatedCostUSD, true
 	}
+	rec.IsolatedCostUSD = isolatedCost(rec)
 	rec.Notes = append(rec.Notes, fmt.Sprintf("start file unreadable (%v): moved to %s; judge spend, if any, is not included", parseErr, aside))
 	return &Orphan{Record: rec, Unreadable: aside}, "", nil
 }
