@@ -162,41 +162,56 @@
       - deny by default; the default and every explicit deny carry the grade's tag (`NewTag`, `LogPredicate`). Found: an explicit deny without `(with message ...)` is logged untagged, so a credential or data-folder denial would be missed;
       - Claude Code's process, sysctl and `/dev/null` rules; process information, signals and task ports only within the sandbox;
       - Mach lookups as step 0 recommended (no security server); no `iokit-open`, no distributed notifications; `/dev/tty` neither controlled (no `TIOCSTI` into the user's shell) nor written;
-      - loopback by step 0's three rules, or no network (`Loopback`);
-      - reads and writes as designed: the data folder, `Denied`, the credential stores (plus pip's and uv's) and the deps' private folders denied in every form; the grading copy, cache, temp root and deps readable again; denied paths inside them denied again; metadata only of the denied folders above them; writes to the copy, cache, temp root and output devices only.
-    - *Refused:* a writable folder that holds the home folder, the data folder, the deps or a credential store, or lies inside the deps or a credential store; a relative path or a control character; a profile file inside a writable folder (a build could rewrite it, and the grade's next command would run unsandboxed); an existing profile file (`WriteFile`: new, owner-only, returns the text's SHA-256).
-    - *`Wrap`* turns a `runner.Spec` into `/usr/bin/sandbox-exec -f <file> /bin/sh -c <command>` (or the arguments); the process and its group stay the command's.
-    - *`Canary`* runs `/usr/bin/true`, writes the temp root, and must fail to list and to write the data folder; any other result, a missing `sandbox-exec`, a refused or nested profile, is `ErrUnavailable`.
+      - loopback by step 0's three rules, which match every address of this machine (Limits), or no network (`Loopback`);
+      - POSIX IPC: semaphores only under Python multiprocessing's `/mp-` prefix; no shared memory, except reading `notifyd`'s `apple.shm.notification_center` (every process reads it; the grade cannot create or write it);
+      - reads and writes as designed: the data folder, `Denied`, the credential stores and the deps' private folders denied in every form. The credential stores are every sandbox's plus pip's, uv's, Maven's `settings.xml` and `settings-security.xml`, Gradle's `gradle.properties` and Cargo's `credentials(.toml)`; the grader's offline recipe reads none of them;
+      - the grading copy, cache, temp root and deps readable again; denied paths inside them denied again; metadata only of the denied folders above them;
+      - writes only to the copy, the cache, the temp root, `/dev/null`, and descriptors the grade already holds open for writing (`/dev/fd/<n>`, where `/dev/stdout` and `/dev/stderr` resolve). The first version listed `/dev/stdout` and `/dev/stderr` themselves, which never match (review F1).
+    - *Refused:* a writable folder that is or holds the home folder, the data folder, the deps, a credential store or a system folder (`/tmp`, `/private`, `/usr`, `/Library`, `/System` and others), or lies inside the deps or a credential store; a relative path, an empty denied path or a control character; a profile file inside a writable folder (a build could rewrite it, and the grade's next command would run unsandboxed); an existing profile file (`WriteFile`: new, owner-only, returns the text's SHA-256).
+    - *`Wrap`* turns a `runner.Spec` into `/usr/bin/sandbox-exec -f <file> -- /bin/sh -c <command>` (or the arguments); the process and its group stay the command's.
+    - *`Canary`* first checks the profile file against `WriteFile`'s SHA-256 (`CheckFile`), then runs `/usr/bin/true`, writes the temp root, and must fail to list and to write the data folder. Any other result, a changed file, a missing `sandbox-exec`, a refused or nested profile, is `ErrUnavailable`.
     - *Tests:* goldens (`testdata/*.sb`) and refusals, plus darwin-only tests that run `sandbox-exec`:
       - a hostile build cannot read its own records, other runs' records and workspaces, the shared cache, the database, the deps' Gradle home, the user's repository or the credential stores;
-      - it cannot write the deps, the data folder, the profile file, the home folder, the user's temp folder or another `/tmp` entry, directly, through planted links, or by a hard link;
+      - it cannot write the deps, the data folder, the profile file, the home folder, the user's temp folder or another `/tmp` entry, directly, through planted links, or by a hard link; nor read or write a denied folder inside its own cache; nor write through a read-only descriptor's `/dev/fd/<n>`;
+      - it can write `/dev/stdout`, `/dev/stderr`, `tee /dev/stderr` and `/dev/fd/1`;
+      - Python multiprocessing's semaphore names work; other semaphore names and every shared memory name are refused;
       - it cannot signal a process outside the sandbox;
-      - TEST-NET addresses are refused by the sandbox at once; loopback servers work only with `Loopback`;
+      - TEST-NET addresses are refused by the sandbox at once; loopback servers work only with `Loopback`; listening on the machine's network address and on the wildcard address is logged as the known gap;
       - the real account's keychain cannot be listed, opened by path or found in the search list (probes only);
       - the log shows the security server's lookup and a credential read denied under the tag;
-      - the canary refuses a missing, broken, permissive or partial profile;
+      - the canary refuses a missing, broken, permissive, partial or changed profile file;
       - `go test` with an `httptest` server, and `javac` and `java` with a `::1` server, run under the profile.
-      Each deny test was checked against a weakened profile (writes, network or signals allowed, the inner denies or credential stores dropped, the security server allowed): each one fails.
+      To check that the tests can fail, the profile was weakened ten ways, one at a time: writes allowed everywhere; outbound network allowed; signals allowed; the inner read deny, the inner write deny, the credential stores or the `/dev/fd` rule dropped; the security server, every semaphore name or shared memory allowed. Each weakening failed at least one test. The Mach list beyond the security server and the sysctl list were not weakened; `check`'s refusals have unit tests.
+    - *Fixtures* (review F2), rerun under the final profile with the agent's recipe (`claude.Invocation`'s environment, deps warmed by `buildtool`'s steps, `JAVA_TOOL_OPTIONS` and `GRADLE_DAEMON_BIND_ADDRESS` as in Design), the host first with the same environment:
+      - pytest, click `06b2a67`: 2240 passed, 25 skipped, 1 xfailed in both. Step 0's collection error is gone: the Python recipe now installs the project's metadata;
+      - Maven, jackson-core `cacf488`: 1983 run, 0 failed, 2 skipped in both;
+      - Gradle, junit-pioneer `b8b747c`: Checkstyle passed and 37 tests passed in both;
+      - Cargo with `build.rs`, bytes `7930d93`: 1305 passed in both;
+      - Go: a module (Masterminds/semver) and this repository's `internal/stats` and `internal/store` (cgo and SQLite, modules from the user's module cache, offline) passed in both.
+
+      The sandboxed runs logged no POSIX IPC denial under the final profile. Before the `notifyd` read was allowed, every process logged one read of `apple.shm.notification_center`, without failing. Python multiprocessing (locks, queues, spawn and fork pools) works under the prefix (checked by hand under these IPC rules, with Python 3.9 and 3.12); its `shared_memory` module is refused. The harness was throwaway and not committed.
     - *Limits:*
-      - the wildcard-bind gap stays, as step 0 found (`Profile.Loopback` records it);
-      - loopback is shared with every local process, concurrent grades included;
+      - seatbelt's `localhost` is every address of this machine (found in review: step 0 saw the wildcard only). With loopback a grade can listen on the machine's network address or the wildcard and accept connections from the network. It can also connect to any service on any of the machine's addresses: a database, a dev server, concurrent grades, and where they run, a local HTTP or SOCKS proxy (internet access), a browser's debugging port or Docker's TCP socket. Other hosts are refused. `Profile.Loopback` records it; no narrower rule exists;
+      - semaphores under `/mp-` remain a narrow channel between a grade and later processes (names and counts, which the reader must guess); Python's `shared_memory` module is refused;
       - Unix sockets are denied, so tests that bind one fail;
-      - every process's `/dev/dtracehelper` write and `security`'s analytics lookups are logged denials unrelated to the grade, so step 3 must ignore them;
+      - some logged denials have nothing to do with the grade, and step 3 must ignore them: every process's `/dev/dtracehelper` write, `bash`'s `/dev/tty`, `security`'s analytics lookups, and the JVM's `hsperfdata` files in the user's temp folder, `configd` lookup and `mDNSResponder` socket;
       - the rest of the machine stays readable;
       - pip's and uv's credential stores are not denied to agents yet, since that changes the run goldens: a follow-up;
-      - Maven, Gradle, Cargo and pytest were not rerun under the generated profile (step 0 ran its hand-written equivalent); step 4 reruns them.
     - *For steps 2 and 3:*
       - write the profile file outside every writable folder (for example in the run's records), after the copy, cache and temp root exist;
       - pass the agent's `DeniedPaths` and `run.Env.denied` as `Denied`: the grade's own folders are re-allowed as roots;
-      - run the canary before each grade;
+      - run the canary before each grade, and `CheckFile` before each of its commands (`sandbox-exec` reads the file again each time);
       - exit 65 is ambiguous after the canary (a test can return it);
-      - the lock names `Version`, not the per-run digest (paths differ per run).
+      - the lock names `Version`, not the per-run digest (paths differ per run);
+      - `setsid` works inside the sandbox, so a grade's process can leave the process group `runner` kills (step 3).
+    - *Review (PR #125):* changes requested; F1 (`/dev/fd`), F2 (POSIX IPC), F3 (loopback reach, more credential files), F4 (tests), F5 (empty denied paths), F6 (the canary checks the file) and the nits were fixed on the same branch. F7 is in step 3.
 - [ ] **2. The grading environment:** the per-run grading cache from a clone of the seed, and the agent's recipe for the grader. **Risk: high** (hidden tests, concurrent runs).
   - *Threats:* the seed is written only by validation and warm-ups, never by a grade; two grades never share a writable cache; the clone is removed even on cancel.
   - *Packages:* `internal/buildtool`, `internal/run`.
 - [ ] **3. Wiring and records:** sandboxed grading in `run.Once` and sandboxed validation in `task.Validator`; `grader` in records, validations and the lock; readiness refuses tasks validated in another mode; canary outcomes and flagged denials; report lines; a `--grader` flag. **Risk: high** (hidden tests, persistence, concurrent runs).
   - *Acceptance:* tests for resuming an old lock, for a mixed-mode refusal, for the canary turning into infrastructure, and for a hidden-test pass staying a pass.
   - *Packages:* `internal/run`, `internal/task`, `internal/experiment`, `internal/report`, `internal/cli`.
+  - *From step 1's review (F7):* a sandboxed process can call `setsid` and leave the process group that `runner` kills when a command ends, times out or is cancelled. A grade's processes must still die with it: check how `runner` treats a new session, and find and stop what a grade leaves (for example by the sandbox, or by the grade's folders in use), with a test that a `setsid` child of a grade does not outlive it.
 - [ ] **4. Real check and docs.** Risk: medium.
   - *Free part:* re-validate this repository's and the Java/Rust pilot's tasks in sandbox mode; grade kept agent trees in both modes and record agreement; a hostile fixture (a stub agent, not Claude Code) whose `build.rs`, `conftest.py` and Gradle script try to write deps, read the data folder, connect out and read the keychain: every attempt denied, the grade recorded.
   - *Paid part (approval):* one small sandbox-mode experiment, 4 runs, about $3.
