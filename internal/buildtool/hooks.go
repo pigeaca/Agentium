@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,6 +74,51 @@ func ReadWarmSkipped(dir string) (names []string, transient bool) {
 	return names, transient
 }
 
+// WarmInput is what a profile's WarmFunc works with.
+type WarmInput struct {
+	Dir  string // the throwaway checkout of the base commit
+	Deps string // the project's deps folder
+	// Environ is the base environment of the commands (the user's; runner.Environ filters it), whose PATH finds the
+	// host's tools, and Env Agentium's command environment, added to it (CommandEnv, CommandEnvFor).
+	Environ, Env []string
+	Log          io.Writer     // the commands' output (setup.log)
+	Started      func(pid int) // learns each command's process group, as the run's other commands
+	Timeout      time.Duration // per command; 0: none beyond ctx
+	Now          time.Time     // the date a resolve without a lock file is noted with
+}
+
+// Warmed is what the warm-ups of a base commit found for its runs, kept in the run's stamp (JSON) so that later runs of
+// the same base get the same: the venv, and notes every run of it repeats (a resolve without a lock file).
+type Warmed struct {
+	Venv  string   `json:"venv,omitempty"`
+	Notes []string `json:"notes,omitempty"`
+	// Failed explains a warm-up that did not finish; the base is not stamped, and the next run tries again.
+	Failed string `json:"-"`
+}
+
+// WarmFuncs runs the selected profiles' WarmFunc hooks and joins what they found: the first failure stops the rest.
+func WarmFuncs(ctx context.Context, selected []Profile, in WarmInput) (Warmed, error) {
+	var all Warmed
+	for _, p := range selected {
+		if p.WarmFunc == nil {
+			continue
+		}
+		w, err := p.WarmFunc(ctx, in)
+		if err != nil {
+			return Warmed{}, fmt.Errorf("%s: warm-up: %w", p.Name, err)
+		}
+		if w.Venv != "" {
+			all.Venv = w.Venv
+		}
+		all.Notes = append(all.Notes, w.Notes...)
+		if w.Failed != "" {
+			all.Failed = p.Name + ": " + w.Failed
+			return all, nil
+		}
+	}
+	return all, nil
+}
+
 // PrepareDeps runs the selected profiles' PrepareDeps hooks.
 func PrepareDeps(selected []Profile, deps string) error {
 	for _, p := range selected {
@@ -89,7 +135,7 @@ func PrepareDeps(selected []Profile, deps string) error {
 func NeedsWarming(selected []Profile) []string {
 	var names []string
 	for _, p := range selected {
-		if p.Warm != nil {
+		if p.Warm != nil || p.WarmFunc != nil {
 			names = append(names, p.Name)
 		}
 	}

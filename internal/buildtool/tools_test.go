@@ -717,7 +717,8 @@ func TestBuildCachesAreOffAndDenied(t *testing.T) {
 			t.Errorf("a Maven warm-up with the build cache extension on: %q", step.Command)
 		}
 	}
-	if denied := DepsDenied(deps); !slices.Equal(denied, []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}) {
+	// Python's download caches and resolve reports follow (see TestPythonDepsDeniedWhole).
+	if denied := DepsDenied(deps); !slices.Equal(denied[:2], []string{filepath.Join(deps, "gradle"), filepath.Join(deps, "build-cache")}) {
 		t.Errorf("denied %q: the whole Gradle home and the build cache", denied)
 	}
 }
