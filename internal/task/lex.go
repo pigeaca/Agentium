@@ -12,6 +12,8 @@ const (
 	langJava lang = iota
 	langKotlin
 	langRust
+	langPython
+	langTS // TypeScript and JavaScript
 )
 
 // token kinds returned by lexAt.
@@ -28,6 +30,9 @@ const (
 // "..." stops at its line's end instead, so one stray quote cannot swallow the file). It is a deliberately small lexer:
 // it knows enough to skip what could hide a brace or a literal, nothing more.
 func lexAt(src string, i int, l lang) (end, bodyStart, bodyEnd, kind int) {
+	if l == langPython || l == langTS {
+		return lexScript(src, i, l)
+	}
 	switch c := src[i]; {
 	case c == '/' && i+1 < len(src) && src[i+1] == '/':
 		j := strings.IndexByte(src[i:], '\n')
@@ -202,4 +207,84 @@ func decodeEscapes(s string, l lang, escapes bool) string {
 		}
 	}
 	return b.String()
+}
+
+// lexScript is lexAt for Python and for TypeScript or JavaScript. Python: # comments, '...' and "..." strings (one
+// line, backslash escapes) and triple-quoted strings (tokRaw, docstrings included). TypeScript: // and /* */ comments,
+// one-line quoted strings and template literals (tokString; a ${...} inside is skipped by nesting). A quote in a
+// regular-expression literal or in JSX text can start a string that runs to the line's end; a template literal
+// that is never closed runs to the file's end. Python string prefixes (r, b, f) stay separate identifier tokens.
+func lexScript(src string, i int, l lang) (end, bodyStart, bodyEnd, kind int) {
+	c := src[i]
+	switch {
+	case l == langPython && c == '#', l == langTS && c == '/' && i+1 < len(src) && src[i+1] == '/':
+		j := strings.IndexByte(src[i:], '\n')
+		if j < 0 {
+			return len(src), 0, 0, tokComment
+		}
+		return i + j, 0, 0, tokComment
+	case l == langTS && c == '/' && i+1 < len(src) && src[i+1] == '*':
+		j := strings.Index(src[i+2:], "*/")
+		if j < 0 {
+			return len(src), 0, 0, tokComment
+		}
+		return i + 2 + j + 2, 0, 0, tokComment
+	case l == langPython && (c == '"' || c == '\'') && strings.HasPrefix(src[i:], strings.Repeat(string(c), 3)):
+		closing := strings.Repeat(string(c), 3)
+		for j := i + 3; j < len(src); {
+			switch {
+			case src[j] == '\\':
+				j += 2
+			case strings.HasPrefix(src[j:], closing):
+				return j + 3, i + 3, j, tokRaw
+			default:
+				j++
+			}
+		}
+		return len(src), i + 3, len(src), tokRaw
+	case c == '"' || c == '\'':
+		j := i + 1
+		for j < len(src) && src[j] != c && src[j] != '\n' {
+			if src[j] == '\\' {
+				j++
+			}
+			j++
+		}
+		if j >= len(src) {
+			return len(src), i + 1, len(src), tokString
+		}
+		if src[j] == '\n' { // unterminated: stop at the line's end
+			return j, i + 1, j, tokString
+		}
+		return j + 1, i + 1, j, tokString
+	case l == langTS && c == '`':
+		j := i + 1
+		for j < len(src) {
+			switch {
+			case src[j] == '\\':
+				j += 2
+			case src[j] == '`':
+				return j + 1, i + 1, j, tokString
+			case src[j] == '$' && j+1 < len(src) && src[j+1] == '{':
+				depth := 1
+				for j += 2; j < len(src) && depth > 0; {
+					if e, _, _, k := lexScript(src, j, l); k != tokNone {
+						j = max(e, j+1)
+						continue
+					}
+					switch src[j] {
+					case '{':
+						depth++
+					case '}':
+						depth--
+					}
+					j++
+				}
+			default:
+				j++
+			}
+		}
+		return len(src), i + 1, len(src), tokString
+	}
+	return i, 0, 0, tokNone
 }

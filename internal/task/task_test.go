@@ -26,6 +26,14 @@ func TestIsTestFile(t *testing.T) {
 		"docs/testing.md": false, "contest.py": false, "latest/x.go": false,
 		"app/tests.py": true, "spec/models/user_spec.rb": true, "lib/user_spec.rb": true, "src/__mocks__/fs.js": true,
 		"fixtures/users.json": true, "app/fixture.go": false, "specs.md": false,
+		// Python and TypeScript (plan 2026-10-02-python-ts): the new rules and the production names they must not take.
+		"pkg/unit_tests.py": true, "pkg/test_utils/helpers.py": true, "tests/test_utils/test_x.py": true,
+		"src/click/testing.py": false, "src/flask/testing.py": false, "numpy/testing/_private/utils.py": false,
+		"src/testing.py": false, "src/test_utils.py": true, "pkg/utils_test.py": true, "pkg/latest_tests.py": true,
+		"pkg/tests_data.py": false, "pkg/testutils.py": false,
+		"src/a.test-d.ts": true, "src/a.spec-d.mts": true, "bench/a.bench.ts": true, "src/a.bench.js": true,
+		"src/a.d.ts": false, "src/benchmark.ts": false, "src/a.bench.json": false, "src/test-d.ts": false, "src/a.testd.ts": false,
+		"src/testing.ts": false, "src/test-utils.ts": false,
 	} {
 		if got := IsTestFile(p); got != want {
 			t.Errorf("IsTestFile(%q) = %v, want %v", p, got, want)
