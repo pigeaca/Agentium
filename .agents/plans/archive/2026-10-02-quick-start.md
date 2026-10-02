@@ -1,7 +1,7 @@
 # Quick start: from a fresh clone to a running experiment
 
 - Date: 2026-10-02
-- Status: Planned (2026-10-02): a wave-2 feature track in the [next chapter](2026-10-01-next-chapter.md), which the user approved. Step 1 starts after refactor step 2 (#65). Steps 2 and 3 change experiment code, so they run after the [model A/B](archive/2026-10-01-model-ab.md) step that changes it too. No paid runs are needed beyond the wave's exit gate, which has its own approval.
+- Status: Done (2026-10-02): a wave-2 feature track in the [next chapter](../2026-10-01-next-chapter.md). Steps 1-3 shipped as PRs; steps 4 and 5 (the real check and the README pictures) close it. The wave's exit gate, a decisive verdict on an external repository, was run separately with the user's approval ([report](../../../docs/examples/model-ab-report.md)).
 - Scope: the north star's "setup in 3 commands". Today a first experiment takes about 12 commands across four README sections, and two of them (calibration and validation) are easy to forget.
 
 ## Why
@@ -159,29 +159,67 @@ Each step is one PR with green CI and a review.
     ```
     A later `start` printed four "(skipped)" lines, then the same preview, in 0.3 s. The "not calibrated" line is expected until step 2.
   - **Deviations from the brief:** the `--accept-mined` flag (without it the review gate makes the one-command preview impossible); A/A calibrations do not count toward the north star.
-- [ ] **4. Real check (free up to the preview)** on a public repository, then docs. The wave-2 verdict on samber/lo ([report](../../docs/examples/model-ab-report.md)) used the manual commands, plus `run calibrate`, which predates calibration inside `experiment run` (#75). A plain `agentium start` on a fresh clone is still to record.
-- [ ] **5. README pictures** (the user's decision on 2026-10-02: refresh them once, after quick start, not before). The pictures date from 2026-09-30. Since then `plan`, `report` and the status line have changed, and the README's claim that they show today's output no longer holds.
-  - **Redo from stored data with today's binary:** `experiment plan`, the run summary, `experiment report` and `run show`. Re-record the live status-line animation with the stand-in agent.
-  - **Add:**
-    - `agentium start`, as the first picture;
-    - `task mine --dry-run`;
-    - the report's Judge section from the `judge-check` experiment, whose judge called a passing run "partly" fixed.
-  - **Caption:** state the date and the Claude Code version of the data.
-  - **Tools:** `scripts/readme_images/`, saved from the 2026-09-30 session, standard library only:
-    - `ptyrun.py` captures a command's styled output on a pseudo-terminal;
-    - `ansi2svg.py` renders it as a terminal window;
-    - `cast2svg.py` animates a timed recording given as JSON `[[seconds, text], …]`.
-
-    A timed recorder for the animation is still to write, and a short usage note goes beside the tools.
-  - **Cost:** free; no new agent runs.
-  - Then archive this plan.
+- [x] **4. Real check (free up to the preview)** (2026-10-02). On a fresh full clone of Masterminds/semver (MIT, 311 commits, Go; it has no `CLAUDE.md` or `AGENTS.md`), with a scratch `AGENTIUM_HOME`, Claude Code 2.1.285, stdin not a terminal.
+  - **Commands:** `agentium start`, then `agentium start --accept-mined`. No `--yes`, no prompt, no paid run, $0.00 spent.
+  - **Timings:** first command 14.6 s in all (register and snapshot under 1 s; mining 67 candidates in 311 commits, 8 imported; validating them in two contexts, 2 at a time, 10 s; then one more task mined and validated, 2 s). It stopped at the review gate: "8 valid, 0 ready of the 8 an experiment needs". The second command took 4.2 s (the one remaining mining and validation round, 2 s, then the experiment and its preview) and exited 0 at the preview. On a second fresh data folder, `start --accept-mined` alone did everything in about 20 s (tasks stage 16 s), same result.
+  - **Sample** (trimmed; paths shortened):
+    ```text
+    $ agentium start
+    Registered semver (project 1)
+      repository   ~/src/semver @ dd2b995c61c3
+      tests        go test ./...; make test
+      context      about 0 tokens at session start (estimated) from 0 file(s); ...
+    warning: No CLAUDE.md or AGENTS.md: there is no project context to compare yet.
+    Context: saved snapshot baseline from HEAD (dd2b995c61c3): 0 file(s)
+    Mining: 67 candidate(s) in 311 commit(s) read; imported 8 of 8 tried (verify: go test ./...)
+    Validating 8 task(s) in 2 context(s), 2 at a time
+      7 valid of 8, in 10s; set aside: migrating-fuzz-testing-to-go-built-in-e485a0d: invalid
+    Mining: 59 candidate(s) in 311 commit(s) read; imported 1 of 1 tried (verify: go test ./...)
+    Validating 1 task(s) in 2 context(s), 2 at a time
+      1 valid of 1, in 2s
+    Tasks: 8 valid, 0 ready of the 8 an experiment needs: the others wait for your review
+      Read each instruction for solution leaks: agentium task show NAME, then agentium task edit NAME --reviewed
+      ...
+    $ agentium start --accept-mined
+    Accepted 8 mined instruction(s) without your review (--accept-mined): ...
+    Tasks: 8 ready (needs 8), in 4s
+    Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs, budget $42.00
+    Before it runs:
+      ok       context baseline on claude-sonnet-5 is not calibrated: calibrated when the experiment runs, about $0.09
+      ok       8 task(s), each valid in every arm's context
+    This experiment     8          1    16     $25.79      $48.00       25-30%        63-67 pp       56-60 pp  success
+    Calibration: 1 context calibration(s) are made when the experiment runs, about $0.09 in all and at most $0.50
+    First decisive verdict: none yet ($0.00 spent since init)
+    Nothing was run and nothing was spent. To run it (...first 1 calibration run(s) of about $0.09, up to $42.00): agentium experiment run quick-aa-baseline
+    ```
+  - **Result:** 8 tasks, an A/A experiment (the repository has no second context) of 16 runs, estimated $25.79 (worst case $48.00), budget $42.00 (a quarter above the estimate); detectable effects 25-30% on cost and 63-67 pp on success, so success stays exploratory.
+  - **Surprises:**
+    - The first command does not stop at the preview but at the review gate, so one command to a preview needs `--accept-mined`; without that flag it needs a person to read 8 instructions.
+    - With `--accept-mined`, the "Accepted" line names a task that validation had set aside (`migrating-fuzz-...`, invalid); it was not counted toward the 8 and mining went on, but the list is misleading. A follow-up.
+    - A repository with no context file gives an A/A over an empty context ("0 file(s)"), which tells nothing about context; the preview's note says so.
+    - The preview also says "validated with fewer than 3 repeats" (start validates once); nothing failed.
+- [x] **5. README pictures** (2026-10-02; the user decided to refresh them once, after quick start). All pictures redone with today's binary (built from this branch at b6df097), 120 columns, scrubbed of personal paths and names (grep-checked), with a usage note in `scripts/readme_images/README.md`.
+  - **Pictures and their data:**
+    - `console-start.svg` (new, first): `agentium start --accept-mined` on a fresh semver clone, 2026-10-02, trimmed after the sizes table.
+    - `console-mine.svg` (new): `task mine --dry-run --limit 4` on the same project.
+    - `console-plan.svg`: `experiment plan ab`, from a copy of `~/.agentium-acceptance` (a copy, since no command may write there).
+    - `console-run.svg`: the event lines recorded during the real `ab` run on 2026-09-29 (they cannot be regenerated without a paid run; kept in `scripts/readme_images/run-ab-events.ansi`), then today's `experiment show ab`.
+    - `console-live.svg`: re-recorded with the stand-in agent at real speed (about 1.7 s of runs).
+    - `console-report.svg`: `experiment report ab`, trimmed to the headline, metrics and per-task results.
+    - `console-judge.svg` (new): the Judge section of `experiment report judge-check`; one judge reason is cut where it quotes a path with a user name.
+    - `console-run-show.svg`: `run show` of the failing minimal-docs run of `ab` (unchanged output).
+    - `console-verdict.svg` (new): headline and metrics of `experiment report opus-vs-sonnet` from `~/.agentium-verdict`.
+  - **Choice of data:** the `ab` data stays for plan, run, report and one run, because the README tells its story (exploratory, one failed task) and `run show` needs a real failed run. The verdict data is the better headline, so it gets its own picture next to the paragraph on the first decisive verdict, and `judge-check` is the only experiment with a Judge section.
+  - **Recorder:** `TestRecordLiveRun` (`internal/cli/record_live_test.go`) runs `experiment run` as on a terminal, on the test fixture with the stand-in agent, timestamps each write and writes the JSON `cast2svg.py` reads. It is skipped unless `AGENTIUM_RECORD_LIVE` names a file.
+  - **Caption:** the README states the date, the Claude Code version of each data source and that the pictures show today's output.
+  - **Limit:** the plan's "Claude Code version" in `console-plan.svg` is today's (2.1.285), as the data is re-printed; the stored runs used 2.1.281.
 
 ## Verification and handoff
 Hermetic CLI tests with a fake Claude Code, `harness.py check changed`, CI, and a reviewer per step. The wave-2 exit gate (a decisive verdict on an external repository, about $60) is run separately, with the user's approval.
 
 ## Metrics
-- Agent: <client> / <exact model id> / <effort>
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Agent: Claude Code / claude-sonnet-5-5 / medium (steps 4 and 5; steps 1-3 by earlier implementers)
+- Elapsed: about 60m for steps 4 and 5
+- Check-fix loops: 0 before the harness run
+- User corrections: 0
+- Review: pending (docs and a skipped test; the coordinator reviews)

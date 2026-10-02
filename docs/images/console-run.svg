@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="780" viewBox="0 0 1064 780" role="img" aria-label="agentium experiment run ab">
-<rect width="1064" height="780" rx="8" fill="#1e1e1e"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="799" viewBox="0 0 1064 799" role="img" aria-label="agentium experiment run ab">
+<rect width="1064" height="799" rx="8" fill="#1e1e1e"/>
 <circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
 <text x="532" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium experiment run ab</text>
 <g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
@@ -40,5 +40,6 @@
 <text x="16" y="700">A&#160;&#160;&#160;&#160;full&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;4/6&#160;&#160;&#160;&#160;&#160;4&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;4&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;$3.45</text>
 <text x="16" y="719">B&#160;&#160;&#160;&#160;minimal&#160;&#160;&#160;&#160;&#160;&#160;4/6&#160;&#160;&#160;&#160;&#160;4&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;3&#160;&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;0&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;1&#160;&#160;$3.88</text>
 <text x="16" y="738"><tspan fill="#8b8b8b">Successes&#160;need&#160;a&#160;pass&#160;with&#160;the&#160;hidden&#160;tests;&#160;unfair&#160;(drifted),&#160;infrastructure&#160;and&#160;cancelled&#160;runs&#160;are&#160;not&#160;counted.</tspan></text>
-<text x="16" y="757"><tspan fill="#e5c07b">Stopped.</tspan>&#160;To&#160;continue:&#160;<tspan fill="#29b8db">agentium&#160;experiment&#160;run&#160;ab</tspan></text>
+<text x="16" y="757"></text>
+<text x="16" y="776"><tspan fill="#e5c07b">Stopped.</tspan>&#160;To&#160;continue:&#160;<tspan fill="#29b8db">agentium&#160;experiment&#160;run&#160;ab</tspan></text>
 </g></svg>
