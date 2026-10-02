@@ -128,10 +128,11 @@ func groupSequentialBounds(fractions []float64, spend func(float64) float64, two
 	return bounds
 }
 
-// seqAlpha is the note's two-sided error for efficacy (improved, regressed). A first long run at 5% gave 5.12%
-// [4.99, 5.24] false differences under normal noise (the t-interval at nominal levels runs slightly liberal with 7–15
-// degrees of freedom), so the design spends 4.5%, and the gate is checked on that.
-const seqAlpha = 0.045
+// seqAlpha is the note's two-sided error for efficacy (improved, regressed), as the user decided on 2026-10-02. At 5%
+// a first long run gave 5.12% [4.99, 5.24] false differences under normal noise (the t-interval at nominal levels runs
+// slightly liberal with 7–15 degrees of freedom). At 4.5% the arm-specific noise shapes gave 5.66% [5.53, 5.79]. 3.5%
+// is the level at which every null group keeps its Wilson upper bound at or under 5%.
+const seqAlpha = 0.035
 
 // seqDesign is a group-sequential cost design: looks after Looks[k] tasks (the last is the maximum), the nominal
 // two-sided level of each look's efficacy interval (improved, regressed) and of its equivalence interval (each side a
@@ -467,7 +468,7 @@ func recordedDifferences() []float64 {
 }
 
 // TestGroupSequentialFalseVerdicts is the trust guard's evidence for the note's design: looks after 8, 12 and 16
-// tasks × 1 run per arm, O'Brien–Fleming-type spending of a two-sided 4.5% (efficacy: seqAlpha) and of a one-sided 5%
+// tasks × 1 run per arm, O'Brien–Fleming-type spending of a two-sided 3.5% (efficacy: seqAlpha) and of a one-sided 5%
 // per side (equivalence), Decide at each look's nominal levels (bootstrap and t-interval must agree), non-binding
 // futility at conditional power below 10%. With no true mean difference, false differences (improved, regressed) are
 // counted ignoring futility stops (the non-binding worst case), in five groups of scenarios:
@@ -485,10 +486,9 @@ func recordedDifferences() []float64 {
 //   - at AGENTIUM_LONG_SIM ≥ gateFactor (the wave-3 exit gate's simulation half): at most 5.0% with its Wilson 95%
 //     upper bound at most 5.0% too.
 //
-// At the time of writing the long run fails that gate for the arm-specific shapes (5.66% [5.53, 5.79]; up to 7.6%
-// when both arms are strongly and oppositely skewed) and, by its upper bound only, for the recorded differences (4.90%
-// [4.78, 5.03]); see the note. phase1-v2's fixed 8-task design, logged for comparison, does worse on the same
-// arm-specific scenarios.
+// At 4.5% the long run failed that gate for the arm-specific shapes (5.66% [5.53, 5.79]); seqAlpha is 3.5% since.
+// phase1-v2's fixed 8-task design, logged for comparison, stays above 5% on the arm-specific shapes: a known
+// limitation of the shipped method.
 //
 // It also checks "equivalent" at a true +10% (the margin): at most 5%. Bootstrap draws are 200 a look, not the
 // analysis's 10,000: with one run per cell the bootstrap resamples tasks only and its percentile interval is narrower
@@ -566,13 +566,19 @@ func TestGroupSequentialFalseVerdicts(t *testing.T) {
 		}
 	}
 	// For comparison, not asserted: phase1-v2's fixed design (one look at 8 tasks, 95% and 90% intervals) on the
-	// arm-specific shapes.
+	// arm-specific shapes and the recorded differences.
 	var fixed seqOutcome
 	for _, o := range runCells(newSeqDesign([]int{8}, 0.05, 0.05, 0), arms.cells, reps, draws, 1300) {
 		fixed.add(o)
 	}
 	t.Logf("phase1-v2's fixed 8 tasks on the arm-specific shapes, %d experiments: false differences %s (t alone %s)",
 		fixed.reps, rate(fixed.differencesNoFutility, fixed.reps), rate(fixed.differencesTOnly, fixed.reps))
+	var fixedRecorded seqOutcome
+	for _, o := range runCells(newSeqDesign([]int{8}, 0.05, 0.05, 0), recorded.cells, reps, draws, 1400) {
+		fixedRecorded.add(o)
+	}
+	t.Logf("phase1-v2's fixed 8 tasks on the recorded differences, %d experiments: false differences %s (t alone %s)",
+		fixedRecorded.reps, rate(fixedRecorded.differencesNoFutility, fixedRecorded.reps), rate(fixedRecorded.differencesTOnly, fixedRecorded.reps))
 	t.Logf("null, all groups, pooled over %d experiments: false differences %s ignoring futility (t alone %s); A/A only: %s; stops at looks %v (futility obeyed)",
 		all.reps, rate(all.differencesNoFutility, all.reps), rate(all.differencesTOnly, all.reps), rate(allAA.differencesNoFutility, allAA.reps), all.stopsAt)
 	if r := float64(all.differencesTOnly) / float64(all.reps); r > 0.055 {
