@@ -29,7 +29,9 @@ import (
 // reports it cost (default 0.30). "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
 // end, one step further. "subagent" lines ("s2-t1 model") make a run call an investigator subagent on that model;
 // with "subagent-by-arm", the arm "lean" calls it on claude-sonnet-5-5 and the other on claude-sonnet-5. With
-// "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl.
+// "read-value", every run reads value.txt with the Read tool. It leaves its settings argument and process ID in ctrl, and
+// its --model and --effort ("args-e1-s0-t1": "MODEL EFFORT"); it reports the model it was given, or the one in
+// "report-model".
 func experimentAgent(t *testing.T, ctrl string) string {
 	t.Helper()
 	script := `#!/bin/sh
@@ -47,10 +49,13 @@ esac
 [ -f "$CTRL/init-version" ] && version=$(cat "$CTRL/init-version")
 ws=$(basename "$(dirname "$PWD")")
 key=${ws#*-}
-prev=""; for a in "$@"; do [ "$prev" = "--settings" ] && printf '%s' "$a" > "$CTRL/settings-$ws"; prev=$a; done
+model=claude-sonnet-5; effort=
+prev=""; for a in "$@"; do [ "$prev" = "--settings" ] && printf '%s' "$a" > "$CTRL/settings-$ws"; [ "$prev" = "--model" ] && model=$a; [ "$prev" = "--effort" ] && effort=$a; prev=$a; done
+printf '%s %s\n' "$model" "$effort" > "$CTRL/args-$ws"
+[ -f "$CTRL/report-model" ] && model=$(cat "$CTRL/report-model")
 echo $$ > "$CTRL/pid-$ws"
-echo '{"type":"system","subtype":"init","claude_code_version":"'"$version"'","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash","Edit","Read"],"skills":["review"],"slash_commands":["compact"]}'
-echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"claude-sonnet-5","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000,"cache_read_input_tokens":0,"output_tokens":10},"content":[]}}'
+echo '{"type":"system","subtype":"init","claude_code_version":"'"$version"'","model":"'"$model"'","permissionMode":"acceptEdits","tools":["Bash","Edit","Read"],"skills":["review"],"slash_commands":["compact"]}'
+echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m1","model":"'"$model"'","usage":{"input_tokens":1000,"cache_creation_input_tokens":20000,"cache_read_input_tokens":0,"output_tokens":10},"content":[]}}'
 limit() { echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":'"$1"',"resetsAt":'"$resets"'},"seven_day":{"utilization":0.2,"resetsAt":'"$resets"'}}}}'; }
 [ -f "$CTRL/usage" ] && { read used step resets < "$CTRL/usage"; limit "$used"; }
 sub=$(grep "^$key " "$CTRL/subagent" 2>/dev/null | cut -d' ' -f2)

@@ -28,6 +28,8 @@ func (r Report) Markdown(w io.Writer) error {
 	fmt.Fprintf(&b, "# Experiment %s\n\n", r.Experiment)
 	if r.Template == experiment.TemplateAA {
 		fmt.Fprintf(&b, "A/A calibration of context `%s` (both arms).\n\n", r.Arms[0].Context)
+	} else if d.PerArmProfiles() {
+		fmt.Fprintf(&b, "%s\n\n", modelABLine(r, d, "`"))
 	} else {
 		fmt.Fprintf(&b, "Context A/B: A = `%s`, B = `%s`. Goal: %s.\n\n", r.Arms[0].Context, r.Arms[1].Context,
 			map[string]string{experiment.GoalCheaper: "cheaper, without losing success", experiment.GoalBetter: "more successful"}[d.Goal])
@@ -37,8 +39,9 @@ func (r Report) Markdown(w io.Writer) error {
 			fmt.Fprintf(&b, "- %s\n", headline(res, d))
 		}
 	}
+	model, effort := modelEffort(d)
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
-		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, d.Model, orDefault(d.Effort), l.ClaudeCode, l.SignIn,
+		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
 		l.LockedAt.Format("2006-01-02 15:04 UTC"), l.Method)
 	if r.NorthStar != nil {
 		fmt.Fprintf(&b, "\n%s.\n", r.NorthStar.Line())

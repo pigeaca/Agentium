@@ -128,21 +128,25 @@ func BuildEnv(layout home.Layout) ([]string, error) {
 
 // Record is a finished run.
 type Record struct {
-	ID       string         `json:"id"`
-	Task     string         `json:"task"`
-	Arm      string         `json:"arm"`
-	Snapshot string         `json:"snapshot,omitempty"`
-	Model    string         `json:"model"`
-	SignIn   string         `json:"sign_in"`
-	Outcome  string         `json:"outcome"`          // claude.Outcome*
-	Passed   *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
-	Drift    []string       `json:"drift,omitempty"`
-	Notes    []string       `json:"notes,omitempty"`
-	Metrics  claude.Metrics `json:"metrics"`
-	Behavior Behavior       `json:"behavior"`
-	Setup    []task.Command `json:"setup,omitempty"`
-	Verify   []task.Command `json:"verify,omitempty"`
-	ExitCode int            `json:"exit_code"`
+	ID       string `json:"id"`
+	Task     string `json:"task"`
+	Arm      string `json:"arm"`
+	Snapshot string `json:"snapshot,omitempty"`
+	Model    string `json:"model"`
+	Effort   string `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
+	// EffortRecorded marks a record made when runs recorded their effort: without it an empty Effort is unknown (an
+	// older record), with it the CLI's default.
+	EffortRecorded bool           `json:"effort_recorded,omitempty"`
+	SignIn         string         `json:"sign_in"`
+	Outcome        string         `json:"outcome"`          // claude.Outcome*
+	Passed         *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
+	Drift          []string       `json:"drift,omitempty"`
+	Notes          []string       `json:"notes,omitempty"`
+	Metrics        claude.Metrics `json:"metrics"`
+	Behavior       Behavior       `json:"behavior"`
+	Setup          []task.Command `json:"setup,omitempty"`
+	Verify         []task.Command `json:"verify,omitempty"`
+	ExitCode       int            `json:"exit_code"`
 	// WarmWait: the run ended as an infrastructure failure because it waited out another run's dependency warm-up
 	// (Once); an experiment does not count it toward an outage.
 	WarmWait    bool      `json:"warm_wait,omitempty"`
@@ -210,7 +214,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
-	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model,
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)

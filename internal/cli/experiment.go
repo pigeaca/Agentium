@@ -23,6 +23,11 @@ var experimentUsage = `Usage:
                      a context A/B: arm A (default: base, each task's own context) against snapshot B
   agentium experiment new NAME --template aa [--a CONTEXT] [...]
                      an A/A calibration: one context in both arms, which must find no difference
+  agentium experiment new NAME --template model-ab --a MODEL[:EFFORT] --b MODEL[:EFFORT] [--context SNAPSHOT] [--run-budget-a USD]
+                     [--run-budget-b USD] [...]
+                     a model A/B: two Claude Code profiles (a model, and an effort level: low, medium, high, xhigh or
+                     max) on the same tasks in one context (default: base). Calibrate each arm's model first
+                     (agentium run calibrate --model MODEL); the plan lists what is missing
   agentium experiment plan NAME
                      the runs, the estimated cost and the effects each size can detect; what is missing before it runs
   agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait]
@@ -86,9 +91,13 @@ func runExperiment(ctx context.Context, env Env, args []string) int {
 func experimentNew(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment new", flag.ContinueOnError)
 	var o experiment.NewOptions
-	fs.StringVar(&o.Template, "template", experiment.TemplateContextAB, "context-ab or aa")
-	fs.StringVar(&o.ContextA, "a", experiment.BaseContext, "arm A's context: base or a snapshot")
-	fs.StringVar(&o.ContextB, "b", "", "arm B's context: a snapshot (context-ab only)")
+	fs.StringVar(&o.Template, "template", experiment.TemplateContextAB, "context-ab, aa or model-ab")
+	var a, b, contextName string
+	fs.StringVar(&a, "a", "", "arm A's context: base (default) or a snapshot; with model-ab, its MODEL[:EFFORT]")
+	fs.StringVar(&b, "b", "", "arm B's context: a snapshot (context-ab only); with model-ab, its MODEL[:EFFORT]")
+	fs.StringVar(&contextName, "context", "", "model-ab only: the context both arms run: base (default) or a snapshot")
+	fs.Float64Var(&o.RunBudgetA, "run-budget-a", 0, "model-ab only: stop arm A's runs at this cost in USD (default --run-budget)")
+	fs.Float64Var(&o.RunBudgetB, "run-budget-b", 0, "model-ab only: stop arm B's runs at this cost in USD (default --run-budget)")
 	fs.StringVar(&o.Tier, "tier", "", "quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
 	var tasks stringList
 	fs.Var(&tasks, "task", "a task to include (repeatable; instead of a tier)")
@@ -116,6 +125,9 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	}
 	name := rest[0]
 	o.Tasks = tasks
+	if err := setExperimentArms(&o, fs, a, b, contextName); err != nil {
+		return failNew(env, err)
+	}
 	if err := o.Prepare(name); err != nil {
 		return failNew(env, err)
 	}
@@ -130,6 +142,30 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	}
 	created.Write(env.Stdout, env.style(), name)
 	return ExitOK
+}
+
+// setExperimentArms puts --a, --b and --context where the template reads them: contexts for the context templates,
+// models for model-ab (whose --model and --effort, left at their defaults, are the arms' own to set).
+func setExperimentArms(o *experiment.NewOptions, fs *flag.FlagSet, a, b, contextName string) error {
+	if o.Template != experiment.TemplateModelAB {
+		if contextName != "" {
+			return experiment.UsageError("--context belongs to the model-ab template; the others take --a and --b")
+		}
+		if o.ContextA, o.ContextB = a, b; a == "" {
+			o.ContextA = experiment.BaseContext
+		}
+		return nil
+	}
+	o.ProfileA, o.ProfileB, o.ContextA = a, b, contextName
+	if contextName == "" {
+		o.ContextA = experiment.BaseContext
+	}
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+	if !given["model"] {
+		o.Model = ""
+	}
+	return nil
 }
 
 // failNew reports what experiment new's services return: a usage error under the command's name, the tasks that cannot
@@ -219,13 +255,21 @@ func experimentList(ctx context.Context, env Env, args []string) int {
 		if status == store.StatusRunning && !w.layout.RunsBusy() {
 			status = store.StatusStopped // its process ended without saying so
 		}
-		table.Row(e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats), d.Model, fmt.Sprintf("$%.2f", budget),
+		table.Row(e.Name, e.Template, arms, fmt.Sprintf("%d × %d", len(d.Tasks), d.Repeats), listModel(d), fmt.Sprintf("$%.2f", budget),
 			st.Status(status), e.CreatedAt.Format("2006-01-02 15:04"))
 	}
 	if err := table.Write(env.Stdout); err != nil {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// listModel is the model column: the design's, or each arm's profile in a model-ab experiment.
+func listModel(d experiment.Design) string {
+	if !d.PerArmProfiles() {
+		return d.Model
+	}
+	return experiment.Profile(d.Arms[0].Model, d.Arms[0].Effort) + " / " + experiment.Profile(d.Arms[1].Model, d.Arms[1].Effort)
 }
 
 func experimentRemove(ctx context.Context, env Env, args []string) int {
