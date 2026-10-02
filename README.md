@@ -21,8 +21,20 @@ Success was exploratory at 8 tasks. [Full report](docs/examples/model-ab-report.
 
 - **Your tasks, not a benchmark.** A past commit becomes a task: its parent is the start, its test changes are hidden tests.
 - **Context versions as arms.** Snapshot `CLAUDE.md`, rules and skills, change them, compare head to head.
-- **Fair, isolated runs.** A fresh checkout and a sandbox without network; no hidden tests, solutions, other runs or credentials.
+- **Fair, isolated runs.** Every arm gets the same fresh checkout and the same sandbox ([below](#safety-and-isolation)).
 - **Plain verdicts.** Paired runs: improved, regressed, no loss beyond the margin, or inconclusive, with intervals. Cost experiments look after 8, 12 and 16 tasks and stop as soon as the answer is clear (or can't become clear).
+
+## Safety and isolation
+
+| | Today | Next |
+|---|---|---|
+| **The agent** | Claude Code's macOS sandbox. It sees a fresh checkout of the base commit only, with no hidden tests or solution. Its commands have no network. Your keychain, SSH keys, cloud and Git credentials, caches, other runs and Agentium's data folder are denied. | — |
+| **Validation and grading** | Your build tool on your machine, outside any sandbox, as if you ran the tests yourself | A macOS sandbox by default (in progress) |
+| **Untrusted code** | Not supported: use repositories you trust | An opt-in container mode through Docker, for other people's repositories, pull-request branches and Linux |
+
+The sandbox needs no setup and keeps your native toolchains. Containers isolate more, but they need Docker running and build on Linux. That's why the sandbox stays the default and containers are an opt-in ([plan](.agents/plans/2026-10-02-isolation.md)).
+
+Agentium never writes to your repository. Nothing paid runs without your consent. It starts no background processes: it is a command that you, a hook or an AI calls.
 
 ## Requirements
 
