@@ -558,3 +558,29 @@ var errAlreadyTask = mine.ErrAlreadyTask
 func (w *workspace) mineTask(ctx context.Context, c mine.Candidate, t store.Task, names map[string]bool) (store.Task, error) {
 	return w.importer(names).One(ctx, c, t)
 }
+
+// A partial clone (--filter) is refused by `task mine` and by start's mining step before any history is read, with the
+// remedy; the same repository without the setting still mines.
+func TestMineRefusesPartialClone(t *testing.T) {
+	t.Parallel()
+	repo, _ := mineRepo(t)
+	data := filepath.Join(t.TempDir(), "data")
+	run := cliIn(t, repo, data)
+	expect(t, run("init"), ExitOK)
+	expect(t, run("task", "mine", "--dry-run"), ExitOK, "3 candidate(s)")
+
+	gitIn(t, repo, "config", "extensions.partialClone", "origin")
+	gitIn(t, repo, "config", "remote.origin.promisor", "true")
+	want := "agentium: this is a partial clone (--filter): mining needs the full history offline; run `git fetch --refetch` or clone without --filter"
+	got := run("task", "mine", "--dry-run")
+	expect(t, got, ExitError, want)
+	if got.stdout != "" {
+		t.Errorf("a refused mine printed on stdout: %s", got.stdout)
+	}
+	expect(t, run("task", "mine"), ExitError, want)
+	expect(t, run("start", "--accept-mined"), ExitError, "this is a partial clone (--filter)")
+
+	gitIn(t, repo, "config", "--unset", "extensions.partialClone")
+	gitIn(t, repo, "config", "--unset", "remote.origin.promisor")
+	expect(t, run("task", "mine", "--dry-run"), ExitOK, "3 candidate(s)")
+}

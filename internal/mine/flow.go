@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -36,9 +37,19 @@ type Prepared struct {
 	Names   map[string]bool // the project's task names, which unique names avoid
 }
 
+// ErrPartialClone refuses a repository cloned with --filter: mining reads history offline, and its missing objects
+// would fail with errors that do not say why.
+var ErrPartialClone = errors.New("this is a partial clone (--filter): mining needs the full history offline; " +
+	"run `git fetch --refetch` or clone without --filter")
+
 // Prepare reads the project's tasks (their commits are excluded from the scan), works out the tests mining picks
 // commits by, and scans the history.
 func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
+	if partial, err := gitx.PartialClone(ctx, in.Root); err != nil {
+		return Prepared{}, err
+	} else if partial {
+		return Prepared{}, ErrPartialClone
+	}
 	opts := in.Options
 	opts.Exclude = map[string]bool{}
 	existing, err := in.DB.Tasks(ctx, in.ProjectID)
