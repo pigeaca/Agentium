@@ -59,7 +59,7 @@ func OutputEnv(ctx context.Context, env []string, stdin io.Reader, args ...strin
 func PartialClone(ctx context.Context, dir string) (bool, error) {
 	out, err := Run(ctx, "-C", dir, "config", "--local", "--list")
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("check for a partial clone: %w", err)
 	}
 	for _, line := range strings.Split(out, "\n") { // git prints keys lowercased: key=value
 		key, value, _ := strings.Cut(line, "=")

@@ -253,8 +253,9 @@ const maxMineFactor = 3
 // acceptMined marks waiting tasks that start itself mined (now or in an earlier run: minedFile) as reviewed when the
 // automatic checks find nothing: no section that may give the solution away, no reference-file name in the
 // instruction, and no requirement of the hidden tests that nothing states. A task from a pull request, a ticket or
-// `task import` is never accepted, nor is one validation set aside (invalid, flaky, unchecked). It returns the accepted names and leaves the reasons it held back others in s.held;
-// a mined instruction that explains the fix in plain words passes these checks, which is why the flag is opt-in.
+// `task import` is never accepted, nor is one validation set aside (invalid, flaky, unchecked). It returns the accepted
+// names and leaves the reasons it held back others in s.held; a mined instruction that explains the fix in plain words
+// passes these checks, which is why the flag is opt-in.
 func (s *starter) acceptMined(ctx context.Context) ([]string, error) {
 	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
 	if err != nil {
