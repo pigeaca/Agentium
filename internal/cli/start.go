@@ -260,7 +260,7 @@ func (s *starter) experimentName() string {
 	return "quick-" + s.a + "-vs-" + s.b
 }
 
-// createExperiment stores the cost-floor experiment unless it exists.
+// createExperiment stores the cost experiment (method seq-v1) on up to its maximum of tasks unless it exists.
 func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	w, out, name := s.w, s.env.Stdout, s.experimentName()
 	floor := experiment.FloorsFor(experiment.MethodVersion)
@@ -281,7 +281,7 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	o.Tasks = experiment.Sample(eligible, floor.CostTasks, o.Seed)
+	o.Tasks = experiment.Sample(eligible, experiment.SeqTier().Tasks, o.Seed) // a cost experiment: up to its maximum, at least the floor
 	created, err := experiment.Create(ctx, w.service(), name, o, s.env.Now())
 	if err != nil {
 		return "", err

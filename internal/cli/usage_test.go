@@ -29,7 +29,7 @@ func TestExperimentPausesAtTheUsageLimit(t *testing.T) {
 		}
 	}
 	writeUsage(0.70, resets)
-	expect(t, f.run(ctx, "experiment", "new", "limits", "--b", "lean", "--task", "value", "--repeats", "3", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "limits", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "3", "--concurrency", "1"), ExitOK)
 
 	// No reading yet: the first pair starts; its runs report 76% and 82%, and the next pair (6% a run) would pass 85%.
 	first := f.run(ctx, "experiment", "run", "limits")
@@ -79,7 +79,7 @@ func TestExperimentStopsWhenASubagentChangesModel(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "subagent"), []byte("s0-t1 claude-sonnet-5\ns1-t1 claude-sonnet-5\ns2-t1 claude-sonnet-5-5\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "new", "roles", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "roles", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--concurrency", "1"), ExitOK)
 	out := f.run(ctx, "experiment", "run", "roles")
 	expect(t, out, ExitError, "subagent investigator ran on claude-sonnet-5-5; earlier runs used claude-sonnet-5: later runs would not compare")
 	runs := experimentRuns(t, f, "roles")
@@ -96,7 +96,7 @@ func TestUsagePreviewLeavesOutCalibrationRuns(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "new", "ab", "--b", "lean", "--task", "value", "--repeats", "2"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2"), ExitOK)
 	now := time.Now()
 	older, latest := now.Add(-2*time.Hour).Truncate(time.Second), now.Add(2*time.Hour).Truncate(time.Second)
 	read := func(kind string, first, last float64, resets time.Time) store.Run {
@@ -131,7 +131,7 @@ func TestExperimentAllowsArmsWithDifferentSubagentModels(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "subagent-by-arm"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "new", "arms", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "arms", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--concurrency", "1"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "arms"), ExitOK, "Every run is done")
 }
 
@@ -153,6 +153,6 @@ func TestExperimentWithAnAPIKeyNeverPauses(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ctrl, "usage"), []byte(fmt.Sprintf("0.84 0.06 %d\n", time.Now().Add(time.Hour).Unix())), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(ctx, "experiment", "new", "keyed", "--b", "lean", "--task", "value", "--repeats", "2", "--concurrency", "1"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "keyed", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--concurrency", "1"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "keyed"), ExitOK, "sign-in api-key", "Every run is done")
 }

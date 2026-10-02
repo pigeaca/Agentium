@@ -81,7 +81,7 @@ func TestStartReachesAPreviewWithoutPromptsOrPaidRuns(t *testing.T) {
 	got := f.run(ctx, "start", "--accept-mined")
 	expect(t, got, ExitOK, "Registered ", "Context: saved snapshot baseline from HEAD", "Mining: ", "imported 8 of 8 tried (verify: make test)",
 		"Validating 8 task(s) in 2 context(s)", "8 valid of 8", "Tasks: 8 ready (needs 8), in ", "Experiment quick-aa-baseline: created, 8 task(s) × 1 run per arm = 16 runs",
-		"A/A calibration of baseline", "Before it runs:", "Sizes (runs count both arms):", "is not calibrated: calibrated when the experiment runs, about $",
+		"A/A calibration of baseline", "Before it runs:", "Looks (method seq-v1; runs count both arms):", "is not calibrated: calibrated when the experiment runs, about $",
 		"Calibration: 1 context calibration(s)", "Nothing was run and nothing was spent. To run it (real Claude Code runs, first 1 calibration run(s) of about $",
 		"agentium experiment run quick-aa-baseline", "First decisive verdict: none yet ($0.00 spent since init)")
 	if stored, started := paidRuns(t, f, ctrl); stored != 0 || started != 0 {

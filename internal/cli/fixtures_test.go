@@ -68,7 +68,7 @@ type template struct {
 }
 
 // templates is keyed by the fixture's name; the map is fixed at start-up, so only each entry's Once needs locking.
-var templates = map[string]*template{"run": {}, "experiment": {}}
+var templates = map[string]*template{"run": {}, "experiment": {}, "seq": {}}
 
 // build runs setup once, with the first caller's t, into a fresh folder per directory name, and returns the
 // directories. Later callers fail at once if the first build failed (it reported why).
