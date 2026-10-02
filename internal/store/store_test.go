@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -651,11 +652,8 @@ func TestRetirementMigrationOnAPopulatedDatabase(t *testing.T) {
 	if err := old.LockExperiment(ctx, e.ID, []byte(`{"tasks":[{"name":"fix-parser"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	// The pre-migration binary's run INSERT: SaveRun now names columns of later migrations.
-	if _, err := old.db.ExecContext(ctx, `
-		INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
-		                  experiment_id, slot, attempt)
-		VALUES ('r1', ?, 1, 'fix-parser', 'task', 'A', 'ok', NULL, 0, '{}', ?, ?, ?, 0, 1)`, app.ID, formatTime(now), formatTime(now), e.ID); err != nil {
+	if err := old.SaveRun(ctx, Run{ID: "r1", ProjectID: app.ID, TaskID: 1, TaskName: "fix-parser", Arm: "A", Outcome: "ok", Record: []byte(`{}`),
+		Started: now, Finished: now, ExperimentID: e.ID, Slot: 0, Attempt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	old.Close()
@@ -831,3 +829,278 @@ func TestMigrationVersionsAreUnique(t *testing.T) {
 		t.Errorf("distinct versions: %d, %v, %v", latest, all, err)
 	}
 }
+
+// The watch's tables and run columns, as migration 11 created them before the watch was removed. New databases never
+// get them; this is only for testing the databases that do.
+var watchSchemaNames = []string{"watch_consents", "watch_loops", "watch_passes", "watch_enrolments", "screen_checks",
+	"drift_panels", "drift_checks", "drift_points", "runs_by_watch_pass", "runs_by_drift_check", "runs_by_finish"}
+
+// A fresh database records version 11 (the removed watch) and gets none of the watch's tables, indexes, triggers or
+// run columns.
+func TestRemovedWatchMigrationCreatesNothing(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	var applied int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 11`).Scan(&applied); err != nil || applied != 1 {
+		t.Fatalf("version 11 recorded %d times (%v)", applied, err)
+	}
+	for _, name := range watchSchemaNames {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, name).Scan(&n); err != nil || n != 0 {
+			t.Errorf("a fresh database has %s (%d, %v)", name, n, err)
+		}
+	}
+	var triggers int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'watch%'`).Scan(&triggers); err != nil || triggers != 0 {
+		t.Errorf("a fresh database has %d watch triggers (%v)", triggers, err)
+	}
+	var columns int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('runs') WHERE name IN ('watch_pass_id', 'drift_check_id')`).Scan(&columns); err != nil || columns != 0 {
+		t.Errorf("a fresh database's runs has %d watch columns (%v)", columns, err)
+	}
+}
+
+// A database that applied the old migration 11 (from the hour the watch was on main) still opens, applies any later
+// migrations, and saves, lists and deletes as before; its leftover tables, columns and rows are left alone and never
+// read.
+func TestDatabaseWithTheRemovedWatchStillWorks(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	now := time.Date(2026, 10, 2, 15, 0, 0, 0, time.UTC)
+	old, err := openOnce(ctx, file, 11)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What the binary from that hour did: migration 11 with the watch's SQL, recorded as version 11.
+	if err := old.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, removedWatchSQL); err != nil {
+			return err
+		}
+		_, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations (version, applied_at) VALUES (11, ?)`, formatTime(now))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	app, err := old.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := old.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix it.", Source: "manual", BaseCommit: "base",
+		Verify: []string{"go test ./..."}, CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enrolled, err := old.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "enrolled", Template: "context-ab", Design: []byte(`{}`), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rows the watch could have left: a pass, a drift check, an enrolment, a screen check and a run that carries both.
+	for _, statement := range []string{
+		`INSERT INTO watch_passes (id, started_by, agentium_version, started_at) VALUES (1, 'terminal', 'dev', '2026-10-02T15:00:00Z')`,
+		`INSERT INTO drift_panels (id, project_id, model, effort, snapshot, snapshot_name, seed, tasks, created_at)
+		 VALUES (1, 1, 'sonnet', 'high', 'abc', 'base', 7, '[]', '2026-10-02T15:00:00Z')`,
+		`INSERT INTO drift_checks (id, panel_id, claude_version, started_at) VALUES (1, 1, '2.1.0', '2026-10-02T15:00:00Z')`,
+		`INSERT INTO screen_checks (project_id, head_commit, base_commit, experiment_id, created_at, updated_at)
+		 VALUES (1, 'head', 'base', 1, '2026-10-02T15:00:00Z', '2026-10-02T15:00:00Z')`,
+		`INSERT INTO watch_enrolments (project_id, experiment_id, added_at) VALUES (1, 1, '2026-10-02T15:00:00Z')`,
+		`INSERT INTO runs (id, project_id, task_id, task_name, kind, arm, outcome, passed, cost_usd, record, started_at, finished_at,
+		                   experiment_id, slot, attempt, watch_pass_id, drift_check_id)
+		 VALUES ('r0', 1, 1, 'fix', 'drift', 'base', 'ok', 1, 0.5, '{}', '2026-10-02T15:00:00Z', '2026-10-02T15:05:00Z', NULL, NULL, NULL, 1, 1)`,
+	} {
+		if _, err := old.db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	old.Close()
+
+	s := open(t, file)
+	var applied int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = 11`).Scan(&applied); err != nil || applied != 1 {
+		t.Fatalf("version 11 recorded %d times (%v)", applied, err)
+	}
+	latest, _, err := latestMigration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var newest int
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&newest); err != nil || newest != latest {
+		t.Errorf("schema version = %d (%v), want %d", newest, err, latest)
+	}
+	e, err := s.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "lean", Template: "context-ab", Design: []byte(`{}`), CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	passed := true
+	for _, run := range []Run{
+		{ID: "r1", ProjectID: app.ID, TaskID: task.ID, TaskName: "fix", Arm: "A", Outcome: "ok", Passed: &passed, CostUSD: 1.25, Record: []byte(`{"a":1}`),
+			Started: now.Add(time.Hour), Finished: now.Add(2 * time.Hour), ExperimentID: e.ID, Slot: 3, Attempt: 1},
+		{ID: "r2", ProjectID: app.ID, TaskID: task.ID, TaskName: "fix", Kind: "calibration", Arm: "B", Outcome: "timeout", Record: []byte(`{}`),
+			Started: now.Add(3 * time.Hour), Finished: now.Add(4 * time.Hour)},
+	} {
+		if err := s.SaveRun(ctx, run); err != nil {
+			t.Fatalf("SaveRun %s on a database with the watch's columns: %v", run.ID, err)
+		}
+	}
+	runs, err := s.Runs(ctx, app.ID)
+	if err != nil || len(runs) != 3 {
+		t.Fatalf("runs = %+v, %v", runs, err)
+	}
+	if r := runs[1]; r.ID != "r1" || r.ExperimentID != e.ID || r.Slot != 3 || r.Attempt != 1 || r.Passed == nil || !*r.Passed || r.CostUSD != 1.25 {
+		t.Errorf("the saved run = %+v", r)
+	}
+	if r := runs[0]; r.ID != "r0" || r.Kind != "drift" || r.TaskID != task.ID {
+		t.Errorf("the watch's run = %+v", r)
+	}
+	for _, name := range watchSchemaNames {
+		var n int
+		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE name = ?`, name).Scan(&n); err != nil || n != 1 {
+			t.Errorf("the old %s is not left alone (%d, %v)", name, n, err)
+		}
+	}
+	var leftover int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runs WHERE watch_pass_id IS NOT NULL OR drift_check_id IS NOT NULL`).Scan(&leftover); err != nil || leftover != 1 {
+		t.Errorf("runs with watch columns = %d (%v), want only the old one", leftover, err)
+	}
+	// Deletes still pass the leftover foreign keys: the enrolment cascades and the screen check lets go.
+	if err := s.DeleteExperiment(ctx, app.ID, enrolled.Name); err != nil {
+		t.Errorf("deleting an enrolled experiment: %v", err)
+	}
+	if err := s.DeleteTask(ctx, app.ID, "fix"); err != nil {
+		t.Errorf("deleting a task with runs: %v", err)
+	}
+	if got, err := s.ExperimentRuns(ctx, e.ID); err != nil || len(got) != 1 || got[0].TaskID != 0 {
+		t.Errorf("the experiment's runs after its task went = %+v, %v", got, err)
+	}
+}
+
+// removedWatchSQL is the removed migration 11 as it was on main (its comments dropped).
+const removedWatchSQL = `
+
+CREATE TABLE watch_consents (
+    id               INTEGER PRIMARY KEY,
+    enabled          INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+    weekly_usd       REAL    NOT NULL CHECK (weekly_usd >= 0),
+    run_cap_usd      REAL    NOT NULL CHECK (run_cap_usd >= 0),
+    pass_share       REAL    NOT NULL CHECK (pass_share >= 0 AND pass_share <= 1),
+    weekly_share     REAL    NOT NULL CHECK (weekly_share >= 0 AND weekly_share <= 1),
+    start_five_hour  REAL    NOT NULL CHECK (start_five_hour >= 0 AND start_five_hour <= 1),
+    start_seven_day  REAL    NOT NULL CHECK (start_seven_day >= 0 AND start_seven_day <= 1),
+    sign_in          TEXT    NOT NULL CHECK (sign_in IN ('login', 'token-file', 'api-key')),
+    sign_in_identity TEXT    NOT NULL DEFAULT '',
+    confirmed        INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
+    granted_by       TEXT    NOT NULL CHECK (granted_by <> ''),
+    agentium_version TEXT    NOT NULL,
+    granted_at       TEXT    NOT NULL
+);
+CREATE TRIGGER watch_consents_no_update BEFORE UPDATE ON watch_consents
+BEGIN
+    SELECT RAISE(ABORT, 'watch consents are append-only');
+END;
+CREATE TRIGGER watch_consents_no_delete BEFORE DELETE ON watch_consents
+BEGIN
+    SELECT RAISE(ABORT, 'watch consents are append-only');
+END;
+CREATE TRIGGER watch_consents_raise BEFORE INSERT ON watch_consents
+WHEN NEW.confirmed = 0 AND NEW.enabled = 1 AND NOT EXISTS (
+    SELECT 1 FROM watch_consents AS p
+    WHERE p.id = (SELECT MAX(id) FROM watch_consents)
+      AND p.enabled = 1 AND p.sign_in = NEW.sign_in AND p.sign_in_identity = NEW.sign_in_identity
+      AND NEW.weekly_usd <= p.weekly_usd AND NEW.run_cap_usd <= p.run_cap_usd
+      AND NEW.pass_share <= p.pass_share AND NEW.weekly_share <= p.weekly_share
+      AND NEW.start_five_hour <= p.start_five_hour AND NEW.start_seven_day <= p.start_seven_day)
+BEGIN
+    SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal raises it');
+END;
+
+CREATE TABLE watch_loops (
+    project_id  INTEGER PRIMARY KEY REFERENCES projects (id) ON DELETE CASCADE,
+    experiments INTEGER NOT NULL CHECK (experiments IN (0, 1)),
+    drift       INTEGER NOT NULL CHECK (drift IN (0, 1)),
+    screens     INTEGER NOT NULL CHECK (screens IN (0, 1)),
+    confirmed   INTEGER NOT NULL CHECK (confirmed IN (0, 1)),
+    set_by      TEXT    NOT NULL CHECK (set_by <> ''),
+    set_at      TEXT    NOT NULL
+);
+CREATE TRIGGER watch_loops_enable BEFORE INSERT ON watch_loops
+WHEN NEW.confirmed = 0 AND NEW.experiments + NEW.drift + NEW.screens > 0
+BEGIN
+    SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal enables a loop');
+END;
+CREATE TRIGGER watch_loops_raise BEFORE UPDATE ON watch_loops
+WHEN NEW.confirmed = 0 AND (NEW.experiments > OLD.experiments OR NEW.drift > OLD.drift OR NEW.screens > OLD.screens)
+BEGIN
+    SELECT RAISE(ABORT, 'watch consent raise: only agentium watch enable at a terminal enables a loop');
+END;
+
+CREATE TABLE watch_passes (
+    id               INTEGER PRIMARY KEY,
+    started_by       TEXT    NOT NULL,
+    agentium_version TEXT    NOT NULL,
+    started_at       TEXT    NOT NULL,
+    finished_at      TEXT    NOT NULL DEFAULT '',
+    stop_reason      TEXT    NOT NULL DEFAULT ''
+);
+
+CREATE TABLE screen_checks (
+    id            INTEGER PRIMARY KEY,
+    project_id    INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    head_commit   TEXT    NOT NULL,
+    base_commit   TEXT    NOT NULL,
+    status        TEXT    NOT NULL DEFAULT 'queued',
+    note          TEXT    NOT NULL DEFAULT '',
+    experiment_id INTEGER REFERENCES experiments (id) ON DELETE SET NULL,
+    created_at    TEXT    NOT NULL,
+    updated_at    TEXT    NOT NULL,
+    UNIQUE (project_id, head_commit)
+);
+
+CREATE TABLE watch_enrolments (
+    id              INTEGER PRIMARY KEY,
+    project_id      INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    experiment_id   INTEGER UNIQUE REFERENCES experiments (id) ON DELETE CASCADE,
+    screen_check_id INTEGER UNIQUE REFERENCES screen_checks (id) ON DELETE CASCADE,
+    added_at        TEXT    NOT NULL,
+    CHECK ((experiment_id IS NULL) <> (screen_check_id IS NULL))
+);
+CREATE INDEX watch_enrolments_by_project ON watch_enrolments (project_id, id);
+
+CREATE TABLE drift_panels (
+    id            INTEGER PRIMARY KEY,
+    project_id    INTEGER NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    model         TEXT    NOT NULL,
+    effort        TEXT    NOT NULL,
+    snapshot      TEXT    NOT NULL,
+    snapshot_name TEXT    NOT NULL,
+    seed          INTEGER NOT NULL,
+    tasks         TEXT    NOT NULL,
+    created_at    TEXT    NOT NULL,
+    closed_at     TEXT    NOT NULL DEFAULT '',
+    close_reason  TEXT    NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX drift_panels_open ON drift_panels (project_id, model, effort) WHERE closed_at = '';
+CREATE TABLE drift_checks (
+    id             INTEGER PRIMARY KEY,
+    panel_id       INTEGER NOT NULL REFERENCES drift_panels (id) ON DELETE CASCADE,
+    claude_version TEXT    NOT NULL,
+    status         TEXT    NOT NULL DEFAULT 'open',
+    note           TEXT    NOT NULL DEFAULT '',
+    started_at     TEXT    NOT NULL,
+    ended_at       TEXT    NOT NULL DEFAULT ''
+);
+CREATE UNIQUE INDEX drift_checks_open ON drift_checks (panel_id) WHERE status = 'open';
+CREATE TABLE drift_points (
+    check_id       INTEGER PRIMARY KEY REFERENCES drift_checks (id) ON DELETE CASCADE,
+    panel_id       INTEGER NOT NULL REFERENCES drift_panels (id) ON DELETE CASCADE,
+    y              REAL    NOT NULL,
+    claude_version TEXT    NOT NULL,
+    tasks          INTEGER NOT NULL CHECK (tasks > 0),
+    created_at     TEXT    NOT NULL
+);
+CREATE INDEX drift_points_by_panel ON drift_points (panel_id, check_id);
+
+ALTER TABLE runs ADD COLUMN watch_pass_id INTEGER REFERENCES watch_passes (id);
+ALTER TABLE runs ADD COLUMN drift_check_id INTEGER REFERENCES drift_checks (id) ON DELETE SET NULL;
+CREATE INDEX runs_by_watch_pass ON runs (watch_pass_id);
+CREATE INDEX runs_by_drift_check ON runs (drift_check_id);
+CREATE INDEX runs_by_finish ON runs (finished_at);
+`

@@ -206,7 +206,7 @@ func TestClassifyTable(t *testing.T) {
 		{name: "MCP servers", head: set(".mcp.json", `{"mcpServers":{}}`), verdict: VerdictHarness, harness: []string{".mcp.json"}},
 		{name: "local settings", head: set(".claude/settings.local.json", "{}"), verdict: VerdictHarness, harness: []string{".claude/settings.local.json"}},
 		{name: "other .claude file", head: set(".claude/output-styles/terse.md", "Be terse\n"), verdict: VerdictHarness, harness: []string{".claude/output-styles/terse.md"}},
-		{name: "agentium.toml", head: set("agentium.toml", "[watch]\nweekly_budget = 1000\n"), verdict: VerdictHarness, harness: []string{"agentium.toml"}},
+		{name: "agentium.toml", head: set("agentium.toml", "[screen]\nbudget = 10\n"), verdict: VerdictHarness, harness: []string{"agentium.toml"}},
 		{name: "nested agentium.toml", head: set("pkg/Agentium.toml", "x = 1\n"), verdict: VerdictHarness, harness: []string{"pkg/Agentium.toml"}},
 		{name: "nested settings", head: set("pkg/.claude/settings.json", "{}"), verdict: VerdictHarness, harness: []string{"pkg/.claude/settings.json"}},
 		{name: "nested MCP servers", head: set("pkg/.mcp.json", "{}"), verdict: VerdictHarness, harness: []string{"pkg/.mcp.json"}},

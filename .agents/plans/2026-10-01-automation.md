@@ -6,6 +6,7 @@
   - **Revised the same day** after an independent review: the $5 check could not start, time and tokens get no verdict, the smoke check was dishonest, and teammates' settings changes are a security gap.
   - **Phases** follow the [next chapter](2026-10-01-next-chapter.md): the free context-lint hook in wave 2, headless mode in wave 3, the rest in wave 4.
   - **Paid steps** need their own approval.
+  - **The watch is cancelled (the user, 2026-10-02):** "It should be just a tool that you, hooks or AI calls; no watch subprocesses at all; remove it." Its merged code is deleted. Standing rule: Agentium starts no background or detached processes on its own. So section 3 (A5) is cancelled, nothing runs on a schedule, and the screen (A4) is a foreground command that hooks or an AI call, with its own per-call budget still to design.
 - Scope: how Agentium runs on its own in the user's development apps: on changes to AI context, on a schedule, and as new code lands.
 
 ## Why
@@ -31,10 +32,10 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 ### 1. Supply: a task pool that keeps itself fresh (wave 4; [plan](2026-10-02-task-pool.md))
 - **Triggers:**
   - git `post-merge` (after `git pull`) and `post-rewrite` (`pull --rebase` does not fire `post-merge`);
-  - the scheduled pass.
+  - ~~the scheduled pass~~ (cancelled with the watch).
 
   Not `FETCH_HEAD`: IDEs fetch all the time.
-- **Does:** `agentium pool update --background` runs `task mine --since <last>`, validates the candidates in a batch, re-validates stale tasks, and retires tasks whose base is too old.
+- **Does:** `agentium pool update` (its `--background` mode is parked by the no-background rule) runs `task mine --since <last>`, validates the candidates in a batch, re-validates stale tasks, and retires tasks whose base is too old.
 - **Cost:** no agent runs.
 - **Shows:** pool health: valid, flaky, weak, awaiting review.
 
@@ -43,7 +44,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 - **What it can honestly say:** only cost gets a verdict, since time and tokens are reported but never decided (`experiment/analyze.go`). At the floor (8 tasks × 1 run per arm) it detects changes of about 25–30%. So it is a *screen*, never a gate.
 - **Trigger:** a git `pre-push` hook, when the pushed commits change context files that the runs actually read (from context use).
   - Not MCP, model or Claude Code version changes: runs pass `--strict-mcp-config` with no servers and use the design's own model, so those arms would behave identically.
-  - The job records the result against the head commit. The pull request often does not exist yet at push time, so the comment is posted when the scheduled pass finds the pull request.
+  - The job records the result against the head commit. The pull request often does not exist yet at push time; ~~the scheduled pass posts the comment later~~ (cancelled with the watch), so when and how a later call posts it is part of the per-call design.
 - **Budget:**
   - at least $15 per check. Validation needs two run caps ($6 at the $3 default; $18 with the judge's 3 repeats). With the base arm reused (wave 3), the head arm is about $8–12;
   - off by default on a subscription, where 16 runs take about half of a five-hour window.
@@ -62,9 +63,10 @@ Each can run on a trigger, inside a budget, and report where the team already lo
   - In automated mode, refuse any context change to harness settings (settings, hooks, MCP: `claudectx`'s harness files) unless the commit is the user's own.
   - Add a real probe of what project hooks and `env` can do in a run (paid, small; approval).
   - The opt-in label is not trust, since anyone with triage access can add it.
-- **Queue:** the run lock fails with `ErrBusy` after about 2 s (`home/lock.go`), so background jobs need a small queue: a queue file in the data folder, one consumer, each head commit at most once. That is new work.
+- **Queue:** ~~a background queue with one consumer~~ parked by the no-background rule: a hook or an AI calls the screen in the foreground, and a busy run lock is reported to the caller.
 
-### 3. Deep watch (wave 4, after the statistics note; [plan](2026-10-02-watch-and-screen.md))
+### 3. Deep watch: cancelled by the user (2026-10-02)
+Kept for history; nothing below is planned. The user removed the watch, its merged state (consent, weekly ledger, drift-chart storage) and launchd; see the status line and the [watch and screen plan](2026-10-02-watch-and-screen.md).
 - **Redesigned (the user, 2026-10-02):** the drift chart is un-deferred (note §4), budgets come in dollars and usage-window share, consent lives in the data folder, and the digest stays local.
 - **Trigger:** a launchd calendar entry (nightly) runs `agentium watch --once`, a single budgeted pass in an idle usage window. It also posts deferred pull request comments.
 - **Does:**
@@ -80,7 +82,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
   - no prompts;
   - `agentium start --yes`;
   - a committed `agentium.toml` (triggers, budgets, task selection, the judge), which Agentium reads and never writes.
-- **Installing:** `agentium hooks print git|claude|launchd` prints the hooks, chained with existing ones such as this repository's `.githooks`. The user installs them; Agentium never writes the repository or the user's settings.
+- **Installing:** `agentium hooks print git|claude` prints the hooks, chained with existing ones such as this repository's `.githooks`. The user installs them; Agentium never writes the repository or the user's settings.
 - **Credentials:**
   - **On the Mac:** the existing Claude Code login and the `gh` login, which must be allowed to comment on pull requests and set commit statuses.
   - **On hosted runners (later):** an `ANTHROPIC_API_KEY` secret (billed per token), or a `claude setup-token` token written to a file that `AGENTIUM_CLAUDE_TOKEN_FILE` names (the subscription's usage windows, shared with the user's own sessions; check the plan's terms for automated use).
@@ -89,7 +91,7 @@ Each can run on a trigger, inside a budget, and report where the team already lo
     - GitHub gives no secrets to workflows from fork pull requests.
 
 ## Later: autopilot (exploratory)
-- **The idea:** Agentium proposes context changes from its own data, for example dropping files and skills no run read ([context use](archive/2026-09-30-task-checks-context-use.md)), tests them in the deep watch, and opens a pull request with the winner.
+- **The idea:** Agentium proposes context changes from its own data, for example dropping files and skills no run read ([context use](archive/2026-09-30-task-checks-context-use.md)), tests them in an experiment the user starts, and opens a pull request with the winner.
 - **When:** only after decisive verdicts are routine, and only through the user, who merges.
 
 ## Phases
@@ -97,23 +99,23 @@ Each can run on a trigger, inside a budget, and report where the team already lo
 |---|---|---|---|
 | Lint hook | 2 | The free context check on edits, through a Claude Code hook | quick start |
 | A1 Headless | 3 | `--json`, exit codes, `start --yes`, `agentium.toml` | quick start |
-| [A2 Supply](2026-10-02-task-pool.md) | 4 | `pool update --background`, pool health, the git hooks, the queue | task mining, A1 |
+| [A2 Supply](2026-10-02-task-pool.md) | 4 | `pool update`, pool health; the background mode, git hooks and queue parked (no background processes) | task mining, A1 |
 | A3 Linux runs | Later | A short paid spike, only for hosted runners | temp isolation |
-| [A4 Cost screen](2026-10-02-watch-and-screen.md) | 4 | The warn-only screen, honest broken-task listing, the harness-settings refusal and its probe, deferred comments, commit status; redesigned on fresh `seq-v1` runs, without reuse | A1, A2, `seq-v1`, A5's pass |
-| [A5 Deep watch](2026-10-02-watch-and-screen.md) | 4 | `watch --once` from launchd, sequential continuation, drift control chart (un-deferred), digest; budgets in dollars and window share | A1, A2, `seq-v1` |
-| A6 Autopilot | Later | Propose, test and open pull requests with context changes | A4, A5 |
+| [A4 Cost screen](2026-10-02-watch-and-screen.md) | 4 | The warn-only screen, honest broken-task listing, the harness-settings refusal and its probe, deferred comments, commit status; redesigned on fresh `seq-v1` runs, without reuse; a foreground command that hooks or an AI call | A1, A2's pool, `seq-v1`, a per-call budget design |
+| ~~A5 Deep watch~~ | — | **Cancelled by the user (2026-10-02)**; its merged code removed | — |
+| A6 Autopilot | Later | Propose, test and open pull requests with context changes | A4 |
 
 ## Acceptance (per phase, refined when it starts)
 1. **Lint hook:** editing `CLAUDE.md` in a session shows the size change and warnings within a second, at no cost. The hook never fires inside Agentium's runs.
 2. **A1:** a fresh clone reaches a preview with no prompts. Every command's `--json` is documented, and exit codes are fixed by tests.
-3. **A2:** after `git pull` or `pull --rebase`, the pool gains the new commit's task, with no agent runs. Pool health is printed and in JSON. Jobs queue rather than fail on a busy lock.
+3. **A2:** after `git pull` or `pull --rebase`, the pool gains the new commit's task, with no agent runs. Pool health is printed and in JSON. (The queue for a busy lock is parked.)
 4. **A4:**
    - A push that changes a read context file records a check.
-   - The comment and commit status land when the pull request exists.
+   - The comment and commit status land when the pull request exists (when and through which call: part of the per-call design).
    - The listing of broken tasks re-runs flagged tasks, and shows the count chance alone would give.
    - A teammate's harness-settings change is refused.
    - Measured: dollars, minutes and the usage-window share per check.
-5. **A5:** a nightly pass continues an experiment under the sequential design within the weekly budget. A Claude Code version change produces a drift reading on the control chart, not a fresh test.
+5. ~~**A5**~~: cancelled by the user (2026-10-02).
 
 ## Boundaries
 - Agentium never writes the user's repository or settings: comments, statuses and digests go through `gh`.
