@@ -382,3 +382,42 @@ func TestInsideDeniedFollowsOnlyWhatDeniedPathsResolved(t *testing.T) {
 		}
 	}
 }
+
+// A Bash call Claude Code denied (listed in the result's permission_denials) never ran: the attrs pilot's agent had
+// only a denied `...; python -m pytest` and its behavior said "ran tests". The same commands with the call allowed, or
+// in a transcript cut off before its result event (no denials listed), do count.
+func TestDeniedCommandsDoNotCount(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("testdata", "denied-tests.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verify := []string{"python -m pytest tests/test_make.py"}
+	parse := func(stream string) claude.Metrics {
+		t.Helper()
+		m, err := claude.Parse(strings.NewReader(stream))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	denied := parse(string(fixture))
+	if denied.Denials != 1 || len(denied.Commands) != 2 || len(denied.RanCommands) != 1 {
+		t.Fatalf("denials %d, commands %q, ran %q", denied.Denials, denied.Commands, denied.RanCommands)
+	}
+	if tests, checks := commandFlags(denied, verify); tests || checks {
+		t.Errorf("a denied pytest counted: ran tests %v, ran the checks %v", tests, checks)
+	}
+	allowed := parse(strings.Replace(string(fixture), `"permission_denials":[{"tool_name":"Bash","tool_use_id":"b2","tool_input":{"command":"sed -i '' 's/a/b/' src/attr/_make.py; python -m pytest tests/test_make.py -q"}}]`,
+		`"permission_denials":[]`, 1))
+	if allowed.Denials != 0 {
+		t.Fatalf("the fixture's denial was not removed: %d", allowed.Denials)
+	}
+	if tests, checks := commandFlags(allowed, verify); !tests || !checks {
+		t.Errorf("an allowed pytest: ran tests %v, ran the checks %v", tests, checks)
+	}
+	lines := strings.Split(strings.TrimSpace(string(fixture)), "\n")
+	cut := parse(strings.Join(lines[:len(lines)-1], "\n"))
+	if tests, _ := commandFlags(cut, verify); !tests || cut.SawResult {
+		t.Errorf("no result event: ran tests %v (denials are unknown, so every command counts)", tests)
+	}
+}

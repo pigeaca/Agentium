@@ -6,10 +6,10 @@ SHELL=/bin/zsh
 TMPDIR=/golden/tmp
 LANG=en_US.UTF-8
 XDG_CACHE_HOME=/golden/home/xdg
-GOFLAGS=-buildvcs=false
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
 PYTHONPATH=/golden/data/workspaces/r1/repo
+MYPYPATH=/golden/data/workspaces/r1/repo
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
 HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
@@ -24,7 +24,6 @@ UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 DISABLE_AUTOUPDATER=1
 ENABLE_CLAUDEAI_MCP_SERVERS=false
-GOCACHE=/golden/data/workspaces/r1/go-build
 CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 -- denied paths
 /golden/data/projects
@@ -131,10 +130,10 @@ SHELL=/bin/zsh
 TMPDIR=/golden/tmp
 LANG=en_US.UTF-8
 XDG_CACHE_HOME=/golden/home/xdg
-GOFLAGS=-buildvcs=false
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
 PYTHONPATH=/golden/data/workspaces/r1/repo/src:/golden/data/deps/1/py-meta/fedcba9876543210
+MYPYPATH=/golden/data/workspaces/r1/repo/src
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
 HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
@@ -149,7 +148,6 @@ UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 DISABLE_AUTOUPDATER=1
 ENABLE_CLAUDEAI_MCP_SERVERS=false
-GOCACHE=/golden/data/workspaces/r1/go-build
 CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 -- denied paths
 /golden/data/projects
@@ -257,8 +255,8 @@ SHELL=/bin/zsh
 TMPDIR=/golden/tmp
 LANG=en_US.UTF-8
 XDG_CACHE_HOME=/golden/home/xdg
-GOFLAGS=-buildvcs=false
 PYTHONPATH=/golden/data/workspaces/r1/repo
+MYPYPATH=/golden/data/workspaces/r1/repo
 PYTHONPYCACHEPREFIX=/golden/data/workspaces/r1/go-build/pycache
 HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/workspaces/r1/go-build/hypothesis
 PYTEST_ADDOPTS=-p no:cacheprovider
@@ -272,7 +270,6 @@ UV_CACHE_DIR=/golden/data/workspaces/r1/go-build/uv
 CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
 DISABLE_AUTOUPDATER=1
 ENABLE_CLAUDEAI_MCP_SERVERS=false
-GOCACHE=/golden/data/workspaces/r1/go-build
 CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 -- denied paths
 /golden/data/projects
@@ -379,6 +376,7 @@ PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
 VIRTUAL_ENV=/golden/data/deps/1/py/0123456789abcdef/venv
 PATH=/golden/data/deps/1/py/0123456789abcdef/venv/bin:/usr/local/bin:/usr/bin:/bin
 PYTHONPATH=/golden/data/workspaces/r1/graded/src:/golden/data/deps/1/py-meta/fedcba9876543210
+MYPYPATH=/golden/data/workspaces/r1/graded/src
 PYTHONPYCACHEPREFIX=/golden/data/cache/pycache
 HYPOTHESIS_STORAGE_DIRECTORY=/golden/data/cache/hypothesis/be84c126bad8f8f9
 PYTEST_ADDOPTS=-p no:cacheprovider

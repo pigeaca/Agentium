@@ -240,14 +240,20 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err error) {
 	w, out := s.w, s.env.Stdout
 	prep, err := mine.Prepare(ctx, mine.PrepareInput{DB: w.db, ProjectID: w.project.ID, Root: w.root,
-		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines}, DefaultVerify: w.defaultVerify()})
+		Options:       mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: s.args.requireLock},
+		DefaultVerify: w.defaultVerify()})
 	if err != nil {
 		return false, err
 	}
 	candidates := slices.DeleteFunc(slices.Clone(prep.Result.Candidates), func(c mine.Candidate) bool { return s.dismissed[c.Hash] })
 	found := len(candidates)
 	if found == 0 {
-		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read\n", prep.Result.Scanned)
+		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read", prep.Result.Scanned)
+		if n := prep.Result.Counts()[mine.ReasonUnlocked]; s.args.requireLock && n > 0 {
+			// The flag alone can empty a Python project's history: say so, not just "no more".
+			fmt.Fprintf(out, "; --require-lock set aside %d Python commit(s) whose base pins no dependencies (without it they are mined)", n)
+		}
+		fmt.Fprintln(out)
 		return true, nil
 	}
 	imp := mine.Import(ctx, mine.ImportInput{Importer: w.importer(prep.Names), Candidates: candidates, Limit: want,

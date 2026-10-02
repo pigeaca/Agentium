@@ -295,10 +295,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// before it costs anything.
 	// Where Python code imports from is decided here too, once: the agent, setup and grading agree on it whatever the
 	// agent adds or removes under src/.
-	tools, importRoot, err := baseLayout(ctx, env.Bare, spec.Task.Base)
+	l, err := baseLayout(ctx, env.Bare, spec.Task.Base)
 	if err != nil {
 		return rec, err
 	}
+	tools, importRoot := l.tools, l.importRoot
 	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
 		return rec, err
 	}
@@ -394,8 +395,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	// The repository's build tools (profiles) choose the agent's environment and sandbox, add their caches to the
 	// environment of Agentium's own commands, and warm the dependencies the agent will read.
-	inv.Tools, inv.Deps, inv.AllowLocalBinding = tools, env.depsFolder(), env.AllowLocalBinding
-	profiles := buildtool.Select(inv.Tools)
+	inv.Tools, inv.AgentTools, inv.Deps, inv.AllowLocalBinding = tools, l.agentTools, env.depsFolder(), env.AllowLocalBinding
+	profiles := buildtool.SelectRun(inv.Tools, inv.AgentTools)
 	if slices.Contains(inv.Tools, "maven") || slices.Contains(inv.Tools, "gradle") {
 		inv.JavaHome = buildtool.ResolveJavaHome(ctx, env.Environ, buildtool.CommandOutput)
 	}
@@ -435,8 +436,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	if len(spec.Task.Setup) > 0 {
-		// Setup builds into the agent's own cache, so a warming step (`go build ./...`) spares every agent a cold
-		// build; the workspace holds no hidden tests yet.
+		// Setup builds into the agent's own cache (the profiles' AgentCaches: Go's GOCACHE where the base has a go.mod
+		// or go.work, or no other build tool), so a warming step (`go build ./...`) spares every agent a cold build; the
+		// workspace holds no hidden tests yet. Elsewhere (a Python project without Go) setup's Go builds go to the data
+		// folder's cache (CommandEnv), as Agentium's other commands' do.
 		setup := env
 		setup.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
@@ -661,8 +664,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	}
 	rec.Behavior.BashCommands = len(rec.Metrics.Commands)
 	rec.Behavior.Denials = rec.Metrics.Denials
-	rec.Behavior.RanTests = ranTests(rec.Metrics.Commands)
-	rec.Behavior.RanChecks = ranChecks(rec.Metrics.Commands, spec.Task.Verify)
+	rec.Behavior.RanTests, rec.Behavior.RanChecks = commandFlags(rec.Metrics, spec.Task.Verify)
 	for _, p := range changed {
 		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
 	}
@@ -1090,6 +1092,12 @@ func measure(numstat string, b *Behavior) []string {
 // Python), then other runners.
 var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPatterns(),
 	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
+
+// commandFlags are the behavior flags "ran tests" and "ran the checks" (verify): from the agent's Bash commands that
+// ran, not those Claude Code denied (claude.Metrics.RanCommands), which never started.
+func commandFlags(m claude.Metrics, verify []string) (tests, checks bool) {
+	return ranTests(m.RanCommands), ranChecks(m.RanCommands, verify)
+}
 
 func ranTests(commands []string) bool {
 	for _, c := range commands {

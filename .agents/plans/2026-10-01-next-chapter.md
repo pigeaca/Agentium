@@ -1,7 +1,7 @@
 # The next chapter: decisive verdicts, fast and affordable
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-02): waves 1 and 2 done, and wave 2's exit gate passed (see [Wave 2 results](#wave-2-results)). Wave 3 is next.
+- Status: In Progress (2026-10-02): waves 1–3 done, each exit gate passed (see [Wave 3 results](#wave-3-results) and [Wave 2 results](#wave-2-results)). Wave 4 is in progress.
   - **Approvals:** the user approved this plan and, with it, these paid checks: the temp-folder probes (done, $0.14) and the judge's small real check. The wave-2 external verdict (about $60) and the Java and Rust pilot get their own approval, with an estimate.
   - **Revised the same day** after an independent review, which the user accepted in full ("apply all"). The review found:
     - a north-star unit that counted "inconclusive";
@@ -44,7 +44,7 @@
 | 0 (done) | The judge in experiments (#54); tasks from tickets (#55) | — | merged |
 | 1 Finish | [Task mining](archive/2026-10-01-task-mine.md); [judge](archive/2026-10-01-llm-judge.md) step 3 (reports), then its small real check | [Temp isolation](archive/2026-10-01-run-temp-isolation.md), then [refactor](archive/2026-10-01-refactor-round.md) steps 1–2 | The walkthrough is measured |
 | 2 First decisive verdict | [Quick start](archive/2026-10-02-quick-start.md) (`agentium start`, calibration inside `experiment run`, the free context-lint hook, north-star tracking); [model and effort A/B](archive/2026-10-01-model-ab.md) (big effects: the likeliest first decisive verdict) | Refactor steps 3–4; [Java and Rust](archive/2026-09-30-java-rust.md) step 3 | A decisive verdict on an external public repository (about $60; approval) |
-| 3 Cheaper verdicts | The [statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md), then group-sequential stopping (`seq-v1`, α 3.5%) and the isolated-run cost; run reuse and the drift chart deferred by the user ([plan](2026-10-02-cheaper-verdicts.md)) | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The long simulation on production `seq-v1` shows at most 5% false verdicts, and a real `seq-v1` A/A smoke check runs (about $3, approved) |
+| 3 Cheaper verdicts | The [statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md), then group-sequential stopping (`seq-v1`, α 3.5%) and the isolated-run cost; run reuse and the drift chart deferred by the user ([plan](archive/2026-10-02-cheaper-verdicts.md)) | [Automation](2026-10-01-automation.md) A1 (headless: `--json`, exit codes) | The long simulation on production `seq-v1` shows at most 5% false verdicts, and a real `seq-v1` A/A smoke check runs (about $3, approved) |
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) cancelled by the user (2026-10-02) | A Python or TypeScript smoke test ([plan](2026-10-02-python-ts.md)); the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
 | Judge (no gate) | [Judge pairs](2026-10-01-judge-pairs.md) (1b) and [ticket grading](2026-10-01-ticket-tasks.md) (step 2), after `seq-v1`, labeled unvalidated and exploratory (the user, 2026-10-02) | `seq-v1` | — |
 | Isolation | [Isolation](2026-10-02-isolation.md): sandboxed grading on macOS (on by default), then a container mode driving Docker directly (the user, 2026-10-02) | — | — |
@@ -71,6 +71,25 @@ The user decided to integrate judge pairs and ticket grading without this gate (
   - check the judge's claims by running them: its "partly" verdicts on passing runs, turned into tests;
   - pre-register the thresholds before measuring, as the pilot did.
 - **Only if it passes:** pairs step 1b and ticket step 2 start. Until then the judge stays a per-run second opinion.
+
+## Wave 3 results
+- **Merged:**
+  - the [statistics note](../../docs/research/2026-10-02-wave3-statistics-note.md) (#88);
+  - the isolated-run cost (#92, and the report column in #107);
+  - `seq-v1`, the group-sequential cost method at α 3.5%, now the default for new cost experiments (#99);
+  - headless mode, A1 (#94, #108);
+  - the smoke checks' fixes: Sonnet 5.5 as the default model, the overshoot allowance on every cap, runs cut short marked (#117); per-model estimates (#122).
+- **Exit gate: passed.**
+  - **Simulation:** the long run on production `seq-v1` keeps every null group's false differences at or under 5% (largest upper bound 4.62%).
+  - **Real A/A smoke check:** on samber/lo, 16 tasks on Sonnet 5.5 ([report](../../docs/examples/seq-v1-smoke-55-report.md)). It made look 1 (inconclusive, conditional power 27%) and look 2 (inconclusive, 0%), then stopped for futility, with no verdict, as an A/A should. 24 runs, $2.25, 7 minutes; the stage barrier held.
+  - **The first attempt** on `claude-sonnet-5` ran into its $3.50 budget before look 1 ($2.62); its findings became #117.
+- **North star:** unchanged at 65 min and $3.34 (wave 2). The smoke check shows what a 12-task A/A costs on Sonnet 5.5: $2.25 and 5% of a five-hour window.
+- **Trust guard:** the A/A ended inconclusive, and the simulation's bound held.
+- **Deferred by the user:** run reuse (steps 3–5); the drift chart was cancelled with the watch. Follow-ups: a cost-verdict rule for runs cut short (a new method version), and a skew-robust interval (research).
+- **Lessons:**
+  - Caps are soft: Claude Code checks the cap after each turn, so every reserve now holds an allowance per run.
+  - A preview with no runs of the experiment's model should say so, not quote its cap; #122 does.
+  - A shared five-hour window can pause a run for hours; usage per run is now estimated per model.
 
 ## Wave 2 results
 - **Merged:** #67–#75.

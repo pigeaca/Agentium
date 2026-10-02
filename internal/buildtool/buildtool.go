@@ -15,7 +15,8 @@
 // every project before profiles existed, so a Go project's runs stay exactly as they were) and those Detect finds at
 // the repository's root. Everything but UserCaches follows the selection: the allowlist, the agent's environment and
 // caches, the environment of Agentium's own commands, the sandbox's settings, and the hooks that warm and stop a run's
-// tools. UserCaches stay global, whatever the project: a user's cache of any tool may hold hidden tests that an earlier
+// tools. An Always profile the repository does not have, while it has another's (a Python project with no go.mod), is
+// selected without its agent side (see Profile.Always). UserCaches stay global, whatever the project: a user's cache of any tool may hold hidden tests that an earlier
 // build compiled, and an agent in any repository could read it.
 //
 // Dependencies offline (Cargo, Maven, Gradle and Python; the recipes were proved in real sessions, see the Java and Rust
@@ -34,6 +35,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -44,8 +46,21 @@ import (
 // hook entries apply to a repository only when Select chooses it, except UserCaches, which apply to all.
 type Profile struct {
 	Name string
-	// Always selects the profile for every repository, whatever Detect finds (Go's, for compatibility).
+	// Always selects the profile for every repository, whatever Detect finds (Go's, for compatibility): its caches for
+	// Agentium's own commands, test patterns and languages apply everywhere. Its agent side (EnvNames, EnvPrefixes,
+	// AgentEnv, AgentCaches) is off only where the repository has another profile and none of its AgentMarkers anywhere
+	// (SelectRun): a Python project's agent gets no GOFLAGS or GOCACHE, while one with any Go file (a module in a
+	// subfolder, a go.work at its root, a lone scripts/gen.go for go run) keeps them (without the run's GOCACHE, go falls
+	// back to the user's cache, which the sandbox denies, and fails at once). Where no profile is detected, the agent side
+	// stays on, as before profiles.
+	// A marker errs toward the agent side on, which only passes Go's settings to an agent that may not need them.
 	Always bool
+	// AgentMarkers are file-name patterns (path.Match, on the name alone) that, anywhere in the base commit, keep an
+	// Always profile's agent side on though Detect finds nothing at the root (Go: go.mod, go.work, *.go). See AgentKept.
+	AgentMarkers []string
+	// implicit marks an Always profile Select chose though the repository has another profile and not this one: its
+	// agent side is off (agentSide) unless SelectRun keeps it.
+	implicit bool
 	// Detect are files at the repository root that mark a project of this tool; discovery asks TestCommand only when
 	// one of them is present.
 	Detect []string
@@ -178,14 +193,55 @@ func DetectIn(dir string) []string {
 }
 
 // Select returns the profiles for a repository: the Always ones and those named (see DetectedNames), in table order.
+// An Always profile not named while others are is marked implicit: selected without its agent side (Profile.Always).
 func Select(names []string) []Profile {
 	var out []Profile
 	for _, p := range Profiles() {
-		if p.Always || slices.Contains(names, p.Name) {
+		named := slices.Contains(names, p.Name)
+		if p.Always || named {
+			p.implicit = p.Always && !named && len(names) > 0
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+// SelectRun is Select for a run's agent: kept names Always profiles whose agent side stays on though they are not
+// detected at the root (AgentKept of the base commit's paths).
+func SelectRun(names, kept []string) []Profile {
+	out := Select(names)
+	for i := range out {
+		if slices.Contains(kept, out[i].Name) {
+			out[i].implicit = false
+		}
+	}
+	return out
+}
+
+// AgentKept names the Always profiles with one of their AgentMarkers anywhere among paths (a commit's files,
+// slash-separated): their agent side stays on in a run (SelectRun). It adds nothing to the detected names, which would
+// add the profile's test command to mined tasks' verify commands.
+func AgentKept(paths []string) []string {
+	var kept []string
+	for _, p := range Profiles() {
+		if !p.Always || len(p.AgentMarkers) == 0 {
+			continue
+		}
+		if slices.ContainsFunc(paths, func(f string) bool {
+			return slices.ContainsFunc(p.AgentMarkers, func(pattern string) bool {
+				ok, _ := path.Match(pattern, path.Base(f))
+				return ok
+			})
+		}) {
+			kept = append(kept, p.Name)
+		}
+	}
+	return kept
+}
+
+// agentSide reports whether the profile's agent variables (allowlist, AgentEnv, AgentCaches) apply.
+func (p Profile) agentSide() bool {
+	return !p.implicit
 }
 
 // DetectedNames names the profiles whose Detect files has reports: what a run keeps (Select) for its repository.
@@ -213,8 +269,9 @@ func goProfile() Profile {
 		EnvNames: []string{"GOPATH", "GOROOT", "GOBIN", "GOCACHE", "GOMODCACHE", "GOENV", "GOFLAGS", "GOTOOLCHAIN", "GOPROXY",
 			"GOPRIVATE", "GONOPROXY", "GONOSUMDB", "GOSUMDB", "GOINSECURE", "GOWORK", "GO111MODULE", "GOTMPDIR", "GOEXPERIMENT",
 			"GODEBUG", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOOS", "GOARCH", "GOAMD64", "GOARM64"},
-		EnvPrefixes: []string{"CGO_"},
-		Always:      true,
+		EnvPrefixes:  []string{"CGO_"},
+		Always:       true,
+		AgentMarkers: []string{"go.mod", "go.work", "*.go"},
 		// GOCACHEPROG is cleared so hidden tests go to no cache program (one set with `go env -w` still applies).
 		CommandCaches: []CacheVar{{Name: "GOCACHE", Dir: "go-build"}, {Name: "GOCACHEPROG", Clear: true}},
 		TempVars:      []string{"GOTMPDIR"},
@@ -341,10 +398,13 @@ func CommandEnvFor(selected []Profile, cache string) []string {
 	return env
 }
 
-// AgentCacheEnv points the selected profiles' agent caches into the run's own build cache.
+// AgentCacheEnv points the selected profiles' agent caches into the run's own build cache (none of an implicit one).
 func AgentCacheEnv(selected []Profile, buildCache string) []string {
 	var env []string
 	for _, p := range selected {
+		if !p.agentSide() {
+			continue
+		}
 		for _, c := range p.AgentCaches {
 			env = append(env, c.Value(buildCache))
 		}
@@ -356,6 +416,9 @@ func AgentCacheEnv(selected []Profile, buildCache string) []string {
 func AgentCacheNames(selected []Profile) []string {
 	var names []string
 	for _, p := range selected {
+		if !p.agentSide() {
+			continue
+		}
 		for _, c := range p.AgentCaches {
 			names = append(names, c.Name)
 		}
@@ -363,11 +426,11 @@ func AgentCacheNames(selected []Profile) []string {
 	return names
 }
 
-// AgentEnv is the selected profiles' AgentEnv, in table order.
+// AgentEnv is the selected profiles' AgentEnv, in table order (none of an implicit one: see Profile.Always).
 func AgentEnv(selected []Profile, c AgentContext) []string {
 	var env []string
 	for _, p := range selected {
-		if p.AgentEnv != nil {
+		if p.AgentEnv != nil && p.agentSide() {
 			env = append(env, p.AgentEnv(c)...)
 		}
 	}
@@ -473,9 +536,12 @@ func DepsDenied(deps string) []string {
 	return paths
 }
 
-// EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes.
+// EnvAllowlist is the selected profiles' EnvNames and EnvPrefixes (none of an implicit one: see Profile.Always).
 func EnvAllowlist(selected []Profile) (names, prefixes []string) {
 	for _, p := range selected {
+		if !p.agentSide() {
+			continue
+		}
 		names = append(names, p.EnvNames...)
 		prefixes = append(prefixes, p.EnvPrefixes...)
 	}

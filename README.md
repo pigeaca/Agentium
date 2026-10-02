@@ -22,13 +22,13 @@ Success was exploratory at 8 tasks. [Full report](docs/examples/model-ab-report.
 - **Your tasks, not a benchmark.** A past commit becomes a task: its parent is the start, its test changes are hidden tests.
 - **Context versions as arms.** Snapshot `CLAUDE.md`, rules and skills, change them, compare head to head.
 - **Fair, isolated runs.** A fresh checkout and a sandbox without network; no hidden tests, solutions, other runs or credentials.
-- **Plain verdicts.** Paired runs with repeats: improved, regressed, no loss beyond the margin, or inconclusive, with intervals.
+- **Plain verdicts.** Paired runs: improved, regressed, no loss beyond the margin, or inconclusive, with intervals. Cost experiments look after 8, 12 and 16 tasks and stop as soon as the answer is clear (or can't become clear).
 
 ## Requirements
 
 - Go 1.27.1 and a C compiler (SQLite uses cgo); Git
 - [Claude Code](https://claude.com/claude-code), signed in (or `ANTHROPIC_API_KEY`)
-- Your project's build tool: Go, Maven, Gradle or Cargo (notes in the [guide](docs/guide.md#build-tools-and-offline-dependencies))
+- Your project's build tool: Go, Maven, Gradle, Cargo or Python (notes in the [guide](docs/guide.md#build-tools-and-offline-dependencies))
 
 ## Quick start
 
