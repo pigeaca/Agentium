@@ -677,6 +677,8 @@ class FakeGitHub:
                                "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "baseRefOid": "c" * 40, **next_of(self.prs)})
         if args == ("api", "repos/o/r"):
             return json.dumps({"default_branch": "main"})
+        if args[0] == "api" and "/branches/" in args[1]:
+            return json.dumps({"commit": {"sha": "d" * 40}})  # main's current tip, ahead of the stale baseRefOid
         if args[0] == "api" and "/compare/" in args[1]:
             return json.dumps({"behind_by": next_of(self.behind)})
         if args[0] == "api" and "/actions/runs?" in args[1]:
@@ -717,7 +719,10 @@ class PullRequestLanding(unittest.TestCase):
         self.assertTrue(all("--repo" in call or call[0] == "api" for call in fake.calls))
         apis = [call[1] for call in fake.calls if call[0] == "api"]
         self.assertIn(f"repos/o/r/actions/runs?head_sha={a}&event=pull_request&per_page=100", apis)
-        self.assertIn(f"repos/o/r/compare/{'c' * 40}...{a}", apis)
+        # The head is compared with the base branch's current tip, never with the PR's stale baseRefOid (c…).
+        self.assertIn("repos/o/r/branches/main", apis)
+        self.assertIn(f"repos/o/r/compare/{'d' * 40}...{a}", apis)
+        self.assertFalse(any("compare/" + "c" * 40 in api for api in apis))
 
     def test_failure_and_cancellation_never_merge_and_name_the_run(self):
         for conclusion in ("failure", "cancelled"):

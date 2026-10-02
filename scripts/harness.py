@@ -15,6 +15,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import tempfile
 import time
 import traceback
@@ -648,11 +649,18 @@ def landing_refusal(pr: dict[str, Any], default: str) -> str | None:
     return None
 
 
-def commits_behind(repo: str, pr: dict[str, Any]) -> int:
-    """How many commits of the base branch's current tip the head lacks. Zero means the head contains the base, so
-    CI on the head tested exactly what the merge produces. This asks git ancestry directly; a CI run's recorded base
-    SHA would only say what the base was when CI started, and is empty for some events."""
-    return int(gh_json("api", f"repos/{repo}/compare/{pr['baseRefOid']}...{pr['headRefOid']}")["behind_by"])
+def base_tip(repo: str, branch: str) -> str:
+    """The base branch's current tip. `gh pr view`'s baseRefOid is not it: it is the base the PR last saw (when it was
+    opened or its branch last updated), so comparing against it lets a PR that is behind the moved base look up to date."""
+    return gh_json("api", f"repos/{repo}/branches/{urllib.parse.quote(branch, safe='')}")["commit"]["sha"]
+
+
+def commits_behind(repo: str, pr: dict[str, Any]) -> tuple[int, str]:
+    """How many commits of the base branch's current tip the head lacks, and that tip. Zero means the head contains the
+    base, so CI on the head tested exactly what the merge produces. This asks git ancestry directly; a CI run's recorded
+    base SHA would only say what the base was when CI started, and is empty for some events."""
+    tip = base_tip(repo, pr["baseRefName"])
+    return int(gh_json("api", f"repos/{repo}/compare/{tip}...{pr['headRefOid']}")["behind_by"]), tip
 
 
 def ci_runs(repo: str, sha: str, number: int) -> list[dict[str, Any]]:
@@ -709,7 +717,7 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
         elif sha is None:
             print(f"[harness] PR #{number} ({pr.get('url')}): head {pr['headRefOid'][:12]} on {pr['headRefName']}", flush=True)
         sha = pr["headRefOid"]
-        behind = read(lambda: commits_behind(repo, pr))
+        behind, tip = read(lambda: commits_behind(repo, pr))
         if behind:
             detail = f"head is {behind} commit(s) behind {default}"
             if not update:
@@ -719,10 +727,10 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
                 print(f"[harness] dry run: {detail}; would update the branch (gh pr update-branch {number} --repo {repo}), "
                       f"then wait up to {timeout_minutes:g} min for CI on the new head and merge only if it passes.")
                 return
-            if updated_for != (sha, pr["baseRefOid"]):  # once per head and base; GitHub needs a moment to show the result
+            if updated_for != (sha, tip):  # once per head and base; GitHub needs a moment to show the result
                 print(f"[harness] PR #{number}: {detail}; updating the branch", flush=True)
                 gh("pr", "update-branch", str(number), "--repo", repo)
-                updated_for = (sha, pr["baseRefOid"])
+                updated_for = (sha, tip)
         else:
             state, detail = ci_state(read(lambda: ci_runs(repo, sha, number)))
             if dry_run:
