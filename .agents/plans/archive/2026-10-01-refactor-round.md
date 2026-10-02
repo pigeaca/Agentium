@@ -40,7 +40,7 @@ Refactors only: no new features, no new Go modules, no change to output.
 Unchanged tests and golden files, `harness.py check changed`, CI, and a reviewer per step.
 
 ## Metrics
-- Agent: Claude Code / claude-opus-5-5 / high (coordinator, implementers and reviewers)
+- Agent: Claude Code desktop / claude-opus-5-5 / high (coordinator, reviewers); implementer subagents on claude-sonnet-5-5 medium
 - Elapsed: about 300m of wall clock over two days, beside other work
 - Check-fix loops: 6
 - User corrections: 1 (the user asked where refactoring had gone; it was added back to the roadmap)
