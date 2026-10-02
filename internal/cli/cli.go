@@ -66,6 +66,7 @@ Commands:
   init [path]   Register the repository at path (default: current directory) and report what Agentium found
   context       Show what Claude Code loads; save, list and compare versions (agentium context for details)
   task          Add, import and validate coding tasks (agentium task for details)
+  pool          Keep the task pool fresh: mine new commits, re-validate and retire tasks; no agent runs (agentium pool for details)
   run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
   experiment    Design, preview and run context experiments (agentium experiment for details)
   version       Print the version and build information
@@ -107,6 +108,8 @@ func dispatch(ctx context.Context, env Env, command string, args []string) int {
 		return runContext(ctx, env, args)
 	case "task":
 		return runTask(ctx, env, args)
+	case "pool":
+		return runPool(ctx, env, args)
 	case "run":
 		return runRun(ctx, env, args)
 	case "experiment":

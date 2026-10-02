@@ -32,7 +32,8 @@ Shape:
 | `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations and experiments |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |
-| `internal/mine` | Task candidates from git history: explained scores, rejections, import |
+| `internal/mine` | Task candidates from git history: explained scores, rejections, import; the pool's bounded range scan with patch IDs |
+| `internal/pool` | The task pool: state, watermark, a pass and its recovery; stale, retire and health rules; toolchain versions |
 | `internal/gitx` | Every git call (hooks, fsmonitor, prompts and optional index writes off; inherited `GIT_*` dropped); hook-free fetch of task bases |
 | `internal/ghx` | GitHub through the user's own `gh` (never inside a run): the open pull request of a commit, one marked comment edited in place (only the user's own), a warn-only commit status; the repository from the git remote |
 | `internal/source` | Read-only views of a commit or the working tree; symlinks followed only to the repository's own files |
