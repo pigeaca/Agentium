@@ -40,8 +40,9 @@ it asks instead. --budget raises the experiment's total in USD. Mined tasks wait
 solution leaks (agentium task show NAME, then agentium task edit NAME --reviewed). --accept-mined accepts, without
 your review, the tasks start itself mined: it checks only solution headings, reference-file names and unstated test
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
-accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks or finished) and never asks; it
-cannot be combined with --yes yet. Without a terminal on stdin, start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget.
+accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks, finished, or ran with --yes) and
+never asks: only --yes runs the experiment, and then the document holds the run's result too. Without a terminal on stdin,
+start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget.
 `
 
 // startArgs is what start was asked for.
@@ -71,12 +72,9 @@ func runStart(ctx context.Context, env Env, args []string) int {
 	}
 	s := &starter{env: env, args: a, importedNow: map[string]bool{}, held: map[string]string{}}
 	if env.JSON {
-		// start reports through its own document: the stages' text is kept as its "log" and no stage emits one. It never asks,
-		// and it never runs the experiment: that output is experiment run's, which takes --json in part 1b.
-		if a.yes {
-			fmt.Fprintln(env.Stderr, "agentium start: --yes runs the experiment, whose output is not JSON yet: use start --json to preview, then agentium experiment run NAME")
-			return ExitUsage
-		}
+		// start reports through its own document: the stages' text is kept as its "log" and no stage emits one. It never
+		// asks; only --yes runs the experiment, and the run's result goes into the document (executeExperiment, as
+		// experiment run --json).
 		s.log = &bytes.Buffer{}
 		s.env.Stdout, s.env.JSON = s.log, false
 	}
@@ -126,6 +124,8 @@ type starter struct {
 	// tasks wait for a person's review rather than because too few exist.
 	counts         *taskCounts
 	awaitingReview bool
+	// ran is the experiment's result when --json --yes ran it.
+	ran *runResultDoc
 }
 
 // notRegisteredError is openProject's failure for a repository that was not registered with init.
@@ -359,12 +359,16 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if code := s.northStar(ctx); code != ExitOK {
 		return code
 	}
-	if s.log != nil { // JSON: the preview is the result; a person (or a script with consent) runs the command it names
-		status := "preview"
-		if !review.Readiness.Ready {
-			status = "not_ready"
+	if s.log != nil { // JSON: the preview is the result, unless --yes ran the experiment
+		switch {
+		case !review.Readiness.Ready && s.args.yes: // asked to run while not ready: as in human mode, a failure
+			return s.emitJSON(ctx, "not_ready", ExitError, name, &review, budget)
+		case !review.Readiness.Ready:
+			return s.emitJSON(ctx, "not_ready", ExitOK, name, &review, budget)
+		case !s.args.yes:
+			return s.emitJSON(ctx, "preview", ExitOK, name, &review, budget)
 		}
-		return s.emitJSON(ctx, status, ExitOK, name, &review, budget)
+		return s.runJSON(ctx, name, &review, budget)
 	}
 	runCommand := "agentium experiment run " + name
 	if s.args.budget > 0 {
@@ -393,6 +397,20 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	s.w.Close()
 	s.w = nil // experimentRun opens the project itself
 	return experimentRun(ctx, env, runArgs)
+}
+
+// runJSON runs the experiment (--json --yes) and emits start's document with the run's result in it. The run's own
+// failures (no document of its own) become the error document of start.
+func (s *starter) runJSON(ctx context.Context, name string, review *experiment.Review, budget budgetPlan) int {
+	s.w.Close()
+	s.w = nil // the run opens the project itself
+	res, code := executeExperiment(ctx, s.env, name, experiment.RunOptions{Budget: s.args.budget, UsageLimit: experiment.DefaultUsageLimit}, true)
+	if res == nil {
+		return code
+	}
+	s.ran = res
+	s.w, _ = openProject(ctx, s.env) // for the document's project and north star; without it they are null
+	return s.emitJSON(ctx, "ran", code, name, review, budget)
 }
 
 // failStart reports an error from the stages after the preview's start: a usage error as one, the rest as failures.

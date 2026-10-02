@@ -1,0 +1,284 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"strings"
+	"testing"
+	"time"
+)
+
+const (
+	startKeys           = "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run,run_command,schema,status,tasks_awaiting_review,tasks_ready"
+	startExperimentKeys = "budget_usd,looks,method,model,name,repeats_per_arm,runs,spend,tasks,template"
+	experimentKeys      = "arms,budget_usd,concurrency,goal,judge,method,name,repeats_per_arm,run_budget_usd,runs,tasks,template"
+	expArmKeys          = "context,effort,model,name"
+	lookKeys            = "analysed,conditional_power,decision,interval,level,look,note,tasks_counted,tasks_planned,verdict"
+	intervalKeys        = "estimate,high,low"
+	spendKeys           = "expected_tasks,expected_usd,if_cut_usd,known,max_usd,worst_case_usd"
+	lookPlanKeys        = "efficacy_level,equivalence_level,estimated_usd,look,runs,tasks,worst_case_usd"
+	runResultKeys       = "budget_usd,ended_by,judge_paused,looks,method,next_command,north_star,note,resume_at,runs,spent_usd,status,stopped_at_look,verdict"
+	verdictKeys         = "decisive,metrics,summary"
+	metricKeys          = "a,b,decisive,interval,level,metric,note,role,tasks,verdict"
+	progressKeys        = "arms,budget_usd,calibration_usd,ended_by,judge_usd,looks,settled,slots,spent_usd,unjudged_runs"
+	armProgKeys         = "cancelled,context,cost_usd,fair,infra,name,settled,successes,unfair"
+	lockKeys            = "budget_changes,claude_code,local_binding,locked_at,method,price_table,sign_in"
+)
+
+// Every experiment command's document has the keys its schema fixes, nested objects included, in the states a script
+// meets: before the first run, after a seq-v1 experiment stopped early at its first look, and for a fixed design.
+func TestJSONExperimentCommandKeys(t *testing.T) {
+	t.Parallel()
+	f, ctrl := seqFixture(t)
+	control(t, ctrl, map[string]string{"cost-lean": "0.15", "cost-jitter": ""})
+
+	empty := jsonRun(t, f, ExitOK, "experiment", "list")
+	assertKeys(t, empty.doc, "command,experiments,schema")
+	if got, ok := empty.get("experiments").([]any); !ok || len(got) != 0 {
+		t.Errorf("experiment list with none: %s", empty.stdout)
+	}
+
+	created := jsonRun(t, f, ExitOK, "experiment", "new", "lean-seq", "--b", "lean", "--seed", "5")
+	assertKeys(t, created.doc, "command,eligible_tasks,experiment,notes,plan_command,schema")
+	assertKeys(t, created.get("experiment"), experimentKeys)
+	assertKeys(t, created.get("experiment", "arms").([]any)[0], expArmKeys)
+	if created.get("experiment", "method") != "seq-v1" || created.get("experiment", "runs") != float64(32) || created.get("plan_command") != "agentium experiment plan lean-seq" {
+		t.Errorf("experiment new: %s", created.stdout)
+	}
+
+	plan := jsonRun(t, f, ExitOK, "experiment", "plan", "lean-seq")
+	assertKeys(t, plan.doc, "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend")
+	assertKeys(t, plan.get("spend"), spendKeys)
+	looks := plan.get("looks").([]any)
+	assertKeys(t, looks[0], lookPlanKeys)
+	if len(looks) != 3 || len(plan.get("sizes").([]any)) != 0 || plan.get("spend", "max_usd") == nil || plan.get("spend", "worst_case_usd") != float64(96) ||
+		plan.get("spend", "expected_usd").(float64) >= plan.get("spend", "max_usd").(float64) {
+		t.Errorf("experiment plan, a seq-v1 design: %s", plan.stdout)
+	}
+	assertKeys(t, plan.get("readiness").([]any)[0], "status,text")
+
+	before := jsonRun(t, f, ExitOK, "experiment", "show", "lean-seq")
+	assertKeys(t, before.doc, "calibration_usd,command,experiment,lock,locked,progress,schema,status,status_note")
+	if before.get("locked") != false || before.get("lock") != nil || before.get("progress") != nil || before.get("status") != "draft" {
+		t.Errorf("experiment show before the run: %s", before.stdout)
+	}
+
+	// Without --yes, a paid run is refused, and nothing is opened, locked or spent.
+	refused := jsonRun(t, f, ExitError, "experiment", "run", "lean-seq")
+	assertKeys(t, refused.doc, "command,experiment,run,schema")
+	assertKeys(t, refused.get("run"), runResultKeys)
+	if refused.get("run", "status") != "refused" || refused.get("run", "verdict") != nil || len(refused.get("run", "looks").([]any)) != 0 {
+		t.Errorf("experiment run without --yes: %s", refused.stdout)
+	}
+	if n := len(experimentRuns(t, f, "lean-seq")); n != 0 || len(storedLock(t, f, "lean-seq")) != 0 {
+		t.Errorf("a refused run changed the experiment: %d run(s)", n)
+	}
+
+	run := jsonRun(t, f, ExitOK, "experiment", "run", "lean-seq", "--yes")
+	t.Log("experiment run --json, stopped at look 1:\n" + run.stdout)
+	assertKeys(t, run.doc, "command,experiment,run,schema")
+	res := run.get("run")
+	assertKeys(t, res, runResultKeys)
+	assertKeys(t, run.get("run", "looks").([]any)[0], lookKeys)
+	assertKeys(t, run.get("run", "looks").([]any)[0].(map[string]any)["interval"], intervalKeys)
+	assertKeys(t, run.get("run", "verdict"), verdictKeys)
+	assertKeys(t, run.get("run", "verdict", "metrics").([]any)[0], metricKeys)
+	assertKeys(t, run.get("run", "runs"), "pending,settled,total")
+	assertKeys(t, run.get("run", "north_star"), "decisive,experiment,metric,seconds,spent_usd,verdict")
+	if run.get("run", "status") != "done" || run.get("run", "ended_by") != "stop" || run.get("run", "stopped_at_look") != float64(1) ||
+		run.get("run", "method") != "seq-v1" || run.get("run", "runs", "settled") != float64(16) || run.get("run", "runs", "pending") != float64(16) ||
+		run.get("run", "runs", "total") != float64(32) || run.get("run", "verdict", "decisive") != true || run.get("run", "north_star", "decisive") != true ||
+		run.get("run", "next_command") != "agentium experiment report lean-seq" || run.get("run", "resume_at") != nil {
+		t.Errorf("experiment run: %s", run.stdout)
+	}
+	look := run.get("run", "looks").([]any)[0].(map[string]any)
+	if look["look"] != float64(1) || look["tasks_counted"] != float64(8) || look["verdict"] != "improved" || look["decision"] != "stop" || look["level"].(float64) < 0.998 {
+		t.Errorf("look 1: %v", look)
+	}
+	var cost map[string]any
+	for _, m := range run.get("run", "verdict", "metrics").([]any) {
+		if m.(map[string]any)["metric"] == "cost" {
+			cost = m.(map[string]any)
+		}
+	}
+	if cost == nil || cost["role"] != "primary" || cost["verdict"] != "improved" || cost["decisive"] != true || cost["interval"].(map[string]any)["high"].(float64) >= 1 {
+		t.Errorf("the cost verdict: %v", cost)
+	}
+	if strings.Contains(run.stdout, "[1/32]") || strings.Contains(run.stdout, "started") {
+		t.Errorf("progress lines in the document:\n%s", run.stdout)
+	}
+	if n := len(experimentRuns(t, f, "lean-seq")); n != 16 {
+		t.Errorf("%d runs stored, want stage 1's 16", n)
+	}
+
+	after := jsonRun(t, f, ExitOK, "experiment", "show", "lean-seq")
+	assertKeys(t, after.doc, "calibration_usd,command,experiment,lock,locked,progress,schema,status,status_note")
+	assertKeys(t, after.get("lock"), lockKeys)
+	assertKeys(t, after.get("progress"), progressKeys)
+	assertKeys(t, after.get("progress", "arms").([]any)[0], armProgKeys)
+	assertKeys(t, after.get("progress", "looks").([]any)[0], lookKeys)
+	if after.get("status") != "done" || after.get("locked") != true || after.get("progress", "settled") != float64(16) || after.get("progress", "ended_by") != "stop" ||
+		after.get("lock", "claude_code") != "2.1.281" {
+		t.Errorf("experiment show after the run: %s", after.stdout)
+	}
+
+	// Resuming a finished experiment runs nothing and says the same.
+	again := jsonRun(t, f, ExitOK, "experiment", "run", "lean-seq", "--yes")
+	if again.get("run", "status") != "done" || again.get("run", "runs", "settled") != float64(16) || len(experimentRuns(t, f, "lean-seq")) != 16 {
+		t.Errorf("a resumed finished experiment: %s", again.stdout)
+	}
+
+	// A fixed design (a success experiment) has sizes, not looks.
+	tasks := storedTasks(t, f.data)
+	jsonRun(t, f, ExitOK, "experiment", "new", "fixed", "--b", "lean", "--goal", "better", "--task", tasks[0].Name, "--task", tasks[1].Name)
+	fixed := jsonRun(t, f, ExitOK, "experiment", "plan", "fixed")
+	assertKeys(t, fixed.doc, "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend")
+	assertKeys(t, fixed.get("sizes").([]any)[0], "cost_usd,judge_usd,name,repeats_per_arm,runs,short,tasks,worst_case_usd")
+	if len(fixed.get("looks").([]any)) != 0 || fixed.get("spend", "expected_tasks") != nil || fixed.get("experiment", "method") != "phase1-v2" {
+		t.Errorf("experiment plan, a fixed design: %s", fixed.stdout)
+	}
+
+	list := jsonRun(t, f, ExitOK, "experiment", "list")
+	assertKeys(t, list.get("experiments").([]any)[0], "arms,budget_usd,created,goal,method,model,name,repeats_per_arm,status,tasks,template")
+	assertKeys(t, list.get("experiments").([]any)[0].(map[string]any)["arms"].([]any)[0], "context,name")
+	if got := list.get("experiments").([]any); len(got) != 2 {
+		t.Errorf("experiment list: %s", list.stdout)
+	}
+	removed := jsonRun(t, f, ExitOK, "experiment", "rm", "fixed")
+	assertKeys(t, removed.doc, "command,removed,schema")
+	jsonRun(t, f, ExitError, "experiment", "rm", "lean-seq") // it has run: it stays
+}
+
+// Failures are error documents with the exit code; usage mistakes exit 2.
+func TestJSONExperimentErrors(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t, t.TempDir()+"/data")
+	for _, c := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"experiment", "show", "nope"}, ExitError},
+		{[]string{"experiment", "plan"}, ExitUsage},
+		{[]string{"experiment", "new", "x"}, ExitUsage}, // arm B missing
+		{[]string{"experiment", "list", "extra"}, ExitUsage},
+		{[]string{"experiment", "run", "x", "--usage-limit", "0"}, ExitUsage},
+	} {
+		got := jsonRun(t, f, c.code, c.args...)
+		assertKeys(t, got.get("error"), "code,message")
+		if got.get("error", "code") != float64(c.code) || got.get("error", "message") == "" {
+			t.Errorf("%v: %s", c.args, got.stdout)
+		}
+	}
+}
+
+// experiment run --json never asks or reads stdin, even at a terminal, and without --yes it opens nothing.
+func TestJSONExperimentRunNeverAsks(t *testing.T) {
+	t.Parallel()
+	f := newRunFixture(t, t.TempDir()+"/data")
+	stop := make(chan struct{})
+	defer close(stop)
+	done := make(chan cliResult, 1)
+	go func() {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: []string{"experiment", "run", "x", "--json"}, Stdin: blockingReader{stop}, StdinTerminal: true, Terminal: true,
+			Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Getenv: func(k string) string { return f.vars[k] },
+			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+		done <- cliResult{code, stdout.String(), stderr.String()}
+	}()
+	select {
+	case res := <-done:
+		got := checkJSON(t, f, res, ExitError, []string{"experiment", "run", "x"})
+		if got.get("run", "status") != "refused" || strings.Contains(res.stdout, "[y/N]") {
+			t.Errorf("experiment run --json at a terminal: %s", res.stdout)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("experiment run --json blocked")
+	}
+}
+
+// A budget stop is a result, not a failure (exit 0, as in human mode): the document says where it stopped, the look it
+// has, and how to go on; a higher budget finishes it; a lower one is a usage error.
+func TestJSONExperimentRunBudgetStop(t *testing.T) {
+	t.Parallel()
+	f, ctrl := seqFixture(t)
+	control(t, ctrl, map[string]string{"cost-jitter": ""})
+	jsonRun(t, f, ExitOK, "experiment", "new", "short", "--b", "lean", "--no-futility", "--run-budget", "1", "--budget", "8", "--seed", "3")
+	stopped := jsonRun(t, f, ExitOK, "experiment", "run", "short", "--yes")
+	assertKeys(t, stopped.get("run"), runResultKeys)
+	pending, settled := stopped.get("run", "runs", "pending").(float64), stopped.get("run", "runs", "settled").(float64)
+	if stopped.get("run", "status") != "budget" || stopped.get("run", "ended_by") != nil || stopped.get("run", "stopped_at_look") != nil ||
+		len(stopped.get("run", "looks").([]any)) != 1 || pending <= 0 || settled <= 16 || settled+pending != 32 ||
+		stopped.get("run", "budget_usd") != float64(8) || stopped.get("run", "spent_usd").(float64) > 8 ||
+		stopped.get("run", "next_command") != "agentium experiment run short --budget USD" || stopped.get("run", "verdict", "decisive") != false {
+		t.Errorf("a budget stop: %s", stopped.stdout)
+	}
+	t.Log("experiment run --json, stopped at the budget:\n" + stopped.stdout)
+	lower := jsonRun(t, f, ExitUsage, "experiment", "run", "short", "--yes", "--budget", "2")
+	if !strings.Contains(lower.get("error", "message").(string), "can only be raised") {
+		t.Errorf("a lower budget: %s", lower.stdout)
+	}
+	resumed := jsonRun(t, f, ExitOK, "experiment", "run", "short", "--yes", "--budget", "30")
+	if resumed.get("run", "status") != "done" || resumed.get("run", "ended_by") != "final" || resumed.get("run", "stopped_at_look") != nil ||
+		resumed.get("run", "runs", "pending") != float64(0) || len(resumed.get("run", "looks").([]any)) != 3 || resumed.get("run", "budget_usd") != float64(30) {
+		t.Errorf("the resumed run: %s", resumed.stdout)
+	}
+}
+
+// start --json --yes runs the experiment and answers with start's document and the run's result; without --yes it
+// stays a preview that spends nothing, and asked to run while not ready it fails with the readiness in the document.
+func TestJSONStartYesRunsTheExperiment(t *testing.T) {
+	t.Parallel()
+	f, ctrl := readyFixture(t)
+	preview := jsonRun(t, f, ExitOK, "start")
+	assertKeys(t, preview.doc, startKeys)
+	assertKeys(t, preview.get("experiment"), startExperimentKeys)
+	assertKeys(t, preview.get("experiment", "spend"), spendKeys)
+	assertKeys(t, preview.get("experiment", "looks").([]any)[0], lookPlanKeys)
+	if preview.get("status") != "preview" || preview.get("run") != nil || preview.get("nothing_was_run") != true || preview.get("experiment", "method") != "seq-v1" {
+		t.Errorf("start preview: %s", preview.stdout)
+	}
+	if _, started := paidRuns(t, f, ctrl); started != 0 {
+		t.Fatalf("the preview started %d run(s)", started)
+	}
+
+	ran := jsonRun(t, f, ExitOK, "start", "--yes")
+	t.Log("start --json --yes:\n" + ran.stdout)
+	assertKeys(t, ran.doc, startKeys)
+	assertKeys(t, ran.get("run"), runResultKeys)
+	assertKeys(t, ran.get("run", "verdict"), verdictKeys)
+	assertKeys(t, ran.get("project"), "id,name")
+	if ran.get("status") != "ran" || ran.get("nothing_was_run") != false || ran.get("run", "status") != "done" || ran.get("experiment", "name") != "quick-aa-baseline" ||
+		ran.get("run", "runs", "settled") != float64(18) || ran.get("run", "runs", "pending") != float64(0) || ran.get("run", "ended_by") != "final" {
+		t.Errorf("start --yes: %s", ran.stdout)
+	}
+	if stored, _ := paidRuns(t, f, ctrl); stored < 18 {
+		t.Errorf("%d runs stored, want at least the 18 slots", stored)
+	}
+	if strings.Contains(ran.stdout, "[1/18]") || strings.Contains(ran.stdout, "Running up to") {
+		t.Errorf("progress text leaked into the document:\n%s", ran.stdout)
+	}
+	// The experiment is done: a second start --yes finds it finished and runs nothing more.
+	_, before := paidRuns(t, f, ctrl)
+	again := jsonRun(t, f, ExitOK, "start", "--yes")
+	if _, after := paidRuns(t, f, ctrl); again.get("status") != "finished" || after != before {
+		t.Errorf("a second start --yes: status %v, %d -> %d runs started", again.get("status"), before, after)
+	}
+}
+
+func TestJSONStartYesWhileNotReadyFails(t *testing.T) {
+	t.Parallel()
+	f, ctrl := startFixture(t, 9)
+	f.vars["AGENTIUM_CLAUDE"] = "/nonexistent/claude"
+	got := jsonRun(t, f, ExitError, "start", "--accept-mined", "--yes")
+	if got.get("status") != "not_ready" || got.get("ready") != false || got.get("run") != nil || got.get("nothing_was_run") != true {
+		t.Errorf("start --yes, not ready: %s", got.stdout)
+	}
+	if stored, started := paidRuns(t, f, ctrl); stored != 0 || started != 0 {
+		t.Errorf("a start that was not ready ran the agent: %d stored, %d started", stored, started)
+	}
+	if again := jsonRun(t, f, ExitOK, "start"); again.get("status") != "not_ready" {
+		t.Errorf("without --yes, not ready is a preview with exit 0: %s", again.stdout)
+	}
+}

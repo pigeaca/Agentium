@@ -6,21 +6,25 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
 func experimentRun(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment run", flag.ContinueOnError)
 	var o experiment.RunOptions
+	var yes bool
 	fs.Float64Var(&o.Budget, "budget", 0, "raise the experiment's budget to this total in USD (recorded in its lock)")
 	fs.Float64Var(&o.UsageLimit, "usage-limit", experiment.DefaultUsageLimit, "with a subscription, start no pair past this share of the five-hour window (percent)")
 	fs.BoolVar(&o.Wait, "wait", false, "at the usage limit, wait for the window to reset instead of pausing")
+	fs.BoolVar(&yes, "yes", false, "consent to the paid run, which --json needs (it never asks); a run you start yourself needs none")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
@@ -29,12 +33,30 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, experimentUsage)
 		return ExitUsage
 	}
+	name := rest[0]
+	if env.JSON && !yes { // a script's consent is its flag: nothing is opened, locked or spent without it
+		return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: refusedRun(name, o.Budget)}, ExitError)
+	}
+	res, code := executeExperiment(ctx, env, name, o, env.JSON)
+	if res == nil {
+		return code
+	}
+	return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: *res}, code)
+}
+
+// executeExperiment locks (the first time) and runs an experiment. With asJSON it prints nothing (the scheduler's progress,
+// the checks and the live status line go nowhere) and returns how the run ended for a document; the exit code follows
+// the status (runExitCode). Without it, it prints the summary and returns nil. A failure is reported as every command's
+// and returns a nil result: in JSON mode the caller's error document says why.
+func executeExperiment(ctx context.Context, env Env, name string, o experiment.RunOptions, asJSON bool) (*runResultDoc, int) {
+	if asJSON {
+		env.Stdout = io.Discard
+	}
 	env, live := liveEnv(env)
 	defer live.Stop() // covers early returns and interrupts; the summary below stops it first
-	name := rest[0]
 	w, err := openProject(ctx, env)
 	if err != nil {
-		return fail(env, err)
+		return nil, fail(env, err)
 	}
 	defer w.Close()
 	runner, release := experimentRunner(env, w, live)
@@ -43,17 +65,24 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	var usage experiment.UsageError
 	if errors.As(err, &usage) {
 		fmt.Fprintf(env.Stderr, "agentium experiment run: %s\n", usage)
-		return ExitUsage
+		return nil, ExitUsage
 	} else if err != nil {
-		return fail(env, err)
+		return nil, fail(env, err)
 	}
 	if outcome.Err != nil {
-		return fail(env, outcome.Err)
+		return nil, fail(env, outcome.Err)
+	}
+	if asJSON {
+		res, err := runResultOf(ctx, env, w, name, outcome)
+		if err != nil {
+			return nil, fail(env, err)
+		}
+		return &res, runExitCode(outcome.Status)
 	}
 	if !outcome.Conclude(env.Stdout, env.style(), name, env.Now()) {
-		return ExitError
+		return nil, ExitError
 	}
-	return ExitOK
+	return nil, ExitOK
 }
 
 // experimentRunner is what an experiment's execution needs from the command line, with its live status line and its
@@ -174,6 +203,9 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	out := env.Stdout
+	if env.JSON {
+		return experimentShowJSON(ctx, env, w, rest[0], stored, d)
+	}
 	if stored.Lock == nil {
 		fmt.Fprintf(out, "Experiment %s: %s; not run yet. Preview: %s\n", rest[0], experiment.DescribeArms(d), env.style().Command("agentium experiment plan "+rest[0]))
 		if spent, err := w.service().CalibrationSpend(ctx, stored.ID); err != nil {
@@ -200,6 +232,30 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// experimentShowJSON is experiment show's document: the design (the lock's, with a raised budget, once it is locked),
+// the lock and the progress.
+func experimentShowJSON(ctx context.Context, env Env, w *workspace, name string, stored store.Experiment, d experiment.Design) int {
+	doc := experimentShowDoc{header: hdr("experiment show"), Status: storedStatus(w, stored), StatusNote: env.redact(stored.StatusNote)}
+	spent, err := w.service().CalibrationSpend(ctx, stored.ID)
+	if err != nil {
+		return fail(env, err)
+	}
+	doc.CalibrationUSD = spent
+	if stored.Lock != nil {
+		var lock experiment.Lock
+		if err := json.Unmarshal(stored.Lock, &lock); err != nil {
+			return fail(env, fmt.Errorf("experiment %s: its lock cannot be read: %w", name, err))
+		}
+		progress, err := w.service().LoadProgress(ctx, name, stored.ID, lock)
+		if err != nil {
+			return fail(env, err)
+		}
+		d, doc.Locked, doc.Lock, doc.Progress = lock.Design, true, lockOf(lock), progressOf(progress)
+	}
+	doc.Experiment = experimentOf(name, d)
+	return env.emit(doc)
 }
 
 // runStatus is what an experiment's live status line says, kept from the scheduler's events. The scheduler reports
