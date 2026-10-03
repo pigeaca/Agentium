@@ -8,15 +8,14 @@
 - Scope: Agentium's human console output only. It follows the [no web UI decision](../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
 
 ## Outcome
-- **A running experiment** shows a live panel. It redraws in place on a terminal, about four times a second:
-  - the experiment, its method and the current look;
-  - each arm (context or model, effort) with its tally;
-  - bars for tasks, budget and the usage window, with its reset;
-  - each look's result as it lands;
-  - grading (sandbox, canary, flagged denials);
-  - a spinner for runs in flight.
+- **A running experiment** shows a live **data-flow picture** (the user, 2026-10-03, showing a picture of connected boxes), redrawn in place on a terminal:
+  - the experiment's box (runs and spend as bars, the time elapsed) **splits** into one box per arm, side by side (its tally, and a spinner on the run in flight);
+  - the arms **merge** into grading (sandbox, canary, flagged denials);
+  - an arrow leads to the current look (its interval bar and verdict so far), and the usage window shows as a bar when it matters.
+
+  See the [sample](../../docs/images/console-flow.svg). Each box holds two or three lines; the rest is in the log.
 - **A log streams under it**, so scrollback keeps every line. The panel lives in a bottom-anchored region that the log scrolls above, as `docker build` does.
-- **Reports, run details and previews** get the same visual language: boxed panels; bars; interval bars that show where zero falls; colour per arm and per outcome.
+- **Reports, run details and previews** get the same visual language: boxed panels; bars; interval bars that show where zero falls; colour per arm and per outcome. `run show` is a vertical **chain**: checkout → agent → grading → record, with the time of each stage.
 - **Two views for a running experiment.** The dashboard is the default on a terminal. `--view log` (or `AGENTIUM_VIEW=log`, set once) gives the styled, append-only log instead:
   - a coloured line per run;
   - a boxed panel with bars at each look and at the end;
@@ -26,11 +25,18 @@
 - **Nothing changes for machines.** With `--json`, a pipe, `NO_COLOR`, `TERM=dumb` or a narrow terminal (below 60 columns), output is today's plain text, byte for byte. Golden tests keep pinning it.
 
 ## Design rules
-- **One palette, used everywhere:**
+- **Restraint over decoration** (the user, 2026-10-03: "keep all UI not so overloaded"):
+  - each box holds only what matters now, two or three lines; details belong in the log view, `run show` or the report;
+  - no number shown twice, and no label that restates the obvious;
+  - breathing room: gaps between side-by-side boxes, a blank line between flow rows only where it helps, no nested boxes;
+  - at most one spinner per box; nothing blinks and no colour animates;
+  - wide terminals get more space, not more content (boxes keep their width; the flow is at most 100 columns).
+- **One small palette, used everywhere** (no rainbow):
   - arm A and arm B each get their own colour;
   - outcomes: ok is green, failed red, infrastructure yellow, left out dim;
-  - verdicts: improved green, regressed red, no loss blue, inconclusive dim;
-  - money and the window warn as they near their limit.
+  - verdicts: improved and no loss green, regressed red, inconclusive dim;
+  - money and the window turn yellow, then red, as they near their limit;
+  - borders, connectors, spinners and secondary text in one muted grey.
 - **Box drawing and block characters,** falling back to ASCII when the locale is not UTF-8. Widths are measured in display cells and fitted to the terminal; a resize redraws.
 - **Live region rules:**
   - at most about 10 redraws a second, and only on change or for the spinner;
@@ -47,10 +53,14 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
   - Capability detection: terminal, colour, UTF-8 and width.
   - Tests: golden renders at several widths, ASCII fallback, plain fallback, the renderer's cleanup on cancel, and no escapes on a pipe.
   - Risk: medium (concurrency in the renderer).
-  - Done: `Capabilities`/`DetectCapabilities`, `Role` and `Style.Paint` (8, 256 and 24-bit), `Width` in cells (wide characters), `Truncate`/`Pad`/`Wrap`, `Shapes` (`Panel`, `Bar`, `IntervalBar`, `Legend`, `Spinner`), `Display`/`NewDisplay`. Goldens in `internal/term/testdata` (40, 80 and 120 columns; color, ASCII, plain); the live region is driven through a fake terminal (`vt_test.go`) and on a real pseudo-terminal. No screen uses them yet. Sample (`AGENTIUM_TERM_DEMO`, then `ansi2svg.py`): the shapes, and a still of the live view with the log above the dashboard:
+  - Done: `Capabilities`/`DetectCapabilities`, `Role` and `Style.Paint` (8, 256 and 24-bit), `Width` in cells (wide characters), `Truncate`/`Pad`/`Wrap`/`Sanitize`, `Shapes` (`Panel`, `Bar`, `IntervalBar`, `Legend`, `Spinner`), `Display`/`NewDisplay`. Goldens in `internal/term/testdata` (40, 80 and 120 columns; color, ASCII, plain); the live region is driven through a fake terminal (`vt_test.go`) and on a real pseudo-terminal. No screen uses them yet.
+  - Added for the data-flow layout: `Row` (boxes side by side, equal or weighted widths, padded to the tallest, stacked when too narrow), connectors at the boxes' middles (an arrow, a split, a merge, ┬/┴ on the borders, ASCII `+ | - v`) and `Flow` (rows top to bottom, joined). Goldens at 40, 60, 80 and 120 columns.
+  - Samples (`AGENTIUM_TERM_DEMO`, then `ansi2svg.py`): a still of the live view, the log above the experiment flow, and `run show` as a chain; and every shape.
 
-    ![The console's shapes and a still of the live dashboard](../../docs/images/console-shapes.svg)
-- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+    ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
+
+    ![The console's shapes](../../docs/images/console-shapes.svg)
+- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the experiment flow above: `Shapes.Flow` in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
@@ -58,7 +68,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
   - notes as dim lines.
 
   Markdown and JSON are unchanged. Risk: low.
-- [ ] **4. `run show`:** the run as a pipeline: checkout → agent (its sandbox, tools, turns, cost) → grading (host or `sandbox-v1`, canary, denials) → record, with time per stage. Risk: low.
+- [ ] **4. `run show`:** the run as a vertical data-flow chain (`Shapes.Flow`, one box per row): checkout → agent (its sandbox, tools, turns, cost) → grading (host or `sandbox-v1`, canary, denials) → record, each box two lines at most, with its time on the right. Risk: low.
 - [ ] **5. `start`, `experiment plan` and `pool status`:** the looks and spend as bars; the pool's health (valid, weak, flaky, invalid, awaiting review, retired) as bars. Risk: low.
 - [ ] **6. Pictures:** re-record the README and gallery images, plus an animated SVG of the live dashboard for the README, with `scripts/readme_images`. Risk: low.
 
