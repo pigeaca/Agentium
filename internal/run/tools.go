@@ -98,7 +98,8 @@ func (env Env) warmState(deps string) string {
 // stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set by the current
 // recipe: the name holds buildtool.WarmVersion, so a stamp left by an older recipe (or from before versions) is never
 // found and the base is warmed again. It holds what the warm-up found for the base's runs (buildtool.Warmed, as JSON:
-// Python's venv and notes); tools that find nothing leave it empty.
+// Python's venv and notes); tools that find nothing leave it empty. Its modification time is the base's last use
+// (markUsed), which cleanup (PlanClean) ages the base's dependencies by.
 
 func (env Env) stampPath(deps, base string, names []string) string {
 	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+"-"+filepath.Base(base))
@@ -146,8 +147,11 @@ func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, i
 		// The stamp is the base's own (no other warm-up writes it), so it can be read after the lock is released.
 		// Unstamped, what this warm-up made ready still serves this run (a venv whose metadata failed).
 		var ok bool
-		if warmed, ok = readStamp(env.stampPath(inv.Deps, base, names), profiles); !ok {
+		stamp := env.stampPath(inv.Deps, base, names)
+		if warmed, ok = readStamp(stamp, profiles); !ok {
 			warmed = fresh
+		} else {
+			markUsed(stamp) // the base's dependencies' last use, for cleanup
 		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
@@ -348,8 +352,11 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 			return task.CheckoutCommands{}, err
 		}
 		var ok bool
-		if warmed, ok = readStamp(env.stampPath(deps, base, names), profiles); !ok {
+		stamp := env.stampPath(deps, base, names)
+		if warmed, ok = readStamp(stamp, profiles); !ok {
 			warmed = fresh
+		} else {
+			markUsed(stamp) // the base's dependencies' last use, for cleanup
 		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
