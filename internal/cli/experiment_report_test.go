@@ -14,8 +14,9 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// On a terminal the report is rendered for reading (no Markdown markup, colored unless NO_COLOR); --markdown, --out
-// and a pipe keep the Markdown, byte for byte; --json is unchanged.
+// On a terminal the report is the answer in plain words (reportView); --details renders every number for reading
+// there (no Markdown markup, colored unless NO_COLOR, which also gets it without --details); --markdown, --out and a
+// pipe keep the Markdown, byte for byte; --json is unchanged.
 func TestExperimentReportOnATerminal(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
@@ -27,7 +28,10 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 	expect(t, piped, ExitOK, "# Experiment lean-ab", "**Success**: no result", "| value | ●●● 3/3 | ●●● 3/3 | $0.300 → $0.300 |")
 
 	*f.terminal = true
-	colored := f.run(ctx, "experiment", "report", "lean-ab")
+	designed := f.run(ctx, "experiment", "report", "lean-ab")
+	expect(t, cliResult{designed.code, term.Plain(designed.stdout), designed.stderr}, ExitOK, "the answer", "3 of 3 runs passed",
+		"agentium experiment report lean-ab --details")
+	colored := f.run(ctx, "experiment", "report", "lean-ab", "--details")
 	expect(t, cliResult{colored.code, term.Plain(colored.stdout), colored.stderr}, ExitOK, "Experiment lean-ab", "Success: no result (fewer than two tasks", "6 of 6 runs settled")
 	if !strings.Contains(colored.stdout, "\x1b[") {
 		t.Errorf("a terminal report has no styles:\n%s", colored.stdout)

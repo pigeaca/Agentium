@@ -30,6 +30,34 @@ type PairRuns struct {
 // PairsOf pairs an experiment's stored runs by its lock's schedule, in the schedule's order of pairs. Runs of no slot of
 // the schedule, and runs that did not settle (infrastructure failures, cancelled runs), are left out.
 func PairsOf(lock Lock, runs []store.Run) ([]PairRuns, error) {
+	var decoded []PairRun
+	for _, r := range runs {
+		if r.Slot < 0 || r.Slot >= len(lock.Schedule) || !Settles(r.Outcome) {
+			continue
+		}
+		var rec run.Record
+		if err := json.Unmarshal(r.Record, &rec); err != nil {
+			return nil, fmt.Errorf("run %s: %w", r.ID, err)
+		}
+		decoded = append(decoded, PairRun{ID: r.ID, Slot: r.Slot, Rec: rec})
+	}
+	return pair(lock, decoded)
+}
+
+// PairRecords pairs runs whose records are already read (a report's), as PairsOf pairs stored ones: runs of no slot
+// of the schedule, and runs whose outcome did not settle, are left out.
+func PairRecords(lock Lock, runs []PairRun) ([]PairRuns, error) {
+	var settled []PairRun
+	for _, r := range runs {
+		if r.Slot >= 0 && r.Slot < len(lock.Schedule) && Settles(r.Rec.Outcome) {
+			settled = append(settled, r)
+		}
+	}
+	return pair(lock, settled)
+}
+
+// pair places settled runs of the schedule's slots in their pairs.
+func pair(lock Lock, runs []PairRun) ([]PairRuns, error) {
 	if len(lock.Design.Arms) != 2 {
 		return nil, fmt.Errorf("an experiment has two arms, not %d", len(lock.Design.Arms))
 	}
@@ -43,16 +71,9 @@ func PairsOf(lock Lock, runs []store.Run) ([]PairRuns, error) {
 		}
 	}
 	for _, r := range runs {
-		if r.Slot < 0 || r.Slot >= len(lock.Schedule) || !Settles(r.Outcome) {
-			continue
-		}
 		slot := lock.Schedule[r.Slot]
-		var rec run.Record
-		if err := json.Unmarshal(r.Record, &rec); err != nil {
-			return nil, fmt.Errorf("run %s: %w", r.ID, err)
-		}
 		p := &out[index[slot.Pair]]
-		settled := &PairRun{ID: r.ID, Slot: r.Slot, Rec: rec}
+		settled := &PairRun{ID: r.ID, Slot: r.Slot, Rec: r.Rec}
 		switch slot.Arm {
 		case armA:
 			p.A = settled

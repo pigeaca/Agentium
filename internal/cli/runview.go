@@ -266,6 +266,9 @@ type answerState struct {
 	Next        int      // seq-v1: the tasks the next check counts; 0 when no check is left
 	All         int      // the experiment's tasks
 	Ended       string   // how the execution ended: "" while it runs, else its status (done, budget, usage or stopped)
+	// Settle is about how many tasks would settle an answer that is not sure (MetricResult.TasksToResolve); 0 when
+	// unknown.
+	Settle int
 }
 
 // Final reports whether the box holds the answer rather than the answer so far.
@@ -324,7 +327,7 @@ func answerOfAnalysis(an experiment.Analysis, tasks int) (answerState, bool) {
 			continue
 		}
 		a := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: r.Tasks >= 2, A: r.A, B: r.B,
-			All: tasks, Ended: experiment.StatusDone}
+			All: tasks, Ended: experiment.StatusDone, Settle: r.TasksToResolve}
 		if math.IsNaN(a.Estimate) || math.IsInf(a.Estimate, 0) {
 			a.HasEstimate = false
 		}
@@ -350,7 +353,12 @@ func answerWords(a answerState, labels [2]string, aa bool) (headline, status str
 		parts = append(parts, "stopped early", "more tasks are unlikely to settle it")
 	case a.Decision == experiment.LookFinal || a.Final():
 		parts = append(parts, afterAll(a.All))
-		if !a.decisive() && a.Verdict != "" {
+		switch {
+		case a.decisive():
+			parts = append(parts, "sure enough")
+		case a.Verdict != "" && a.Settle > 0 && !aa: // an A/A has nothing to settle
+			parts = append(parts, "not sure yet", fmt.Sprintf("about %d tasks would settle it", a.Settle))
+		case a.Verdict != "":
 			parts = append(parts, "not sure")
 		}
 	case a.Seq && a.Decision == "":

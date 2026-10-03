@@ -253,6 +253,7 @@ func TestAnswerWords(t *testing.T) {
 			Margin: 0.15, All: 12, Ended: experiment.StatusDone}
 	}
 	ended := func(a answerState, status string) answerState { a.Ended = status; return a }
+	settle := func(a answerState, tasks int) answerState { a.Settle = tasks; return a }
 	for _, tc := range []struct {
 		name string
 		in   answerState
@@ -282,7 +283,7 @@ func TestAnswerWords(t *testing.T) {
 		{"the last check, inconclusive", cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), false,
 			"the answer: no clear difference in cost · after all 16 tasks · not sure"},
 		{"the last check, improved", cost(stats.Improved, 0.70, experiment.LookFinal, 0), false,
-			"the answer: trimmed is cheaper: 30% less · after all 16 tasks"},
+			"the answer: trimmed is cheaper: 30% less · after all 16 tasks · sure enough"},
 		{"exploratory", cost(stats.Exploratory, 1.04, experiment.LookFinal, 0), false,
 			"the answer: too few tasks to tell (+4%) · after all 16 tasks · not sure"},
 		{"stopped at the budget between checks", ended(cost(stats.Inconclusive, 1.04, experiment.LookContinue, 12), experiment.StatusBudget), false,
@@ -296,15 +297,19 @@ func TestAnswerWords(t *testing.T) {
 		{"a fixed design, done without an answer", answerState{Metric: experiment.MetricSuccess, All: 12, Ended: experiment.StatusDone}, false,
 			"the answer so far: too early to tell · every run is done: the report has the answer"},
 		{"success improved", success(stats.Improved, 0.60, 0.75), false,
-			"the answer: trimmed passes more tasks (trimmed 75%, baseline 60%) · after all 12 tasks"},
+			"the answer: trimmed passes more tasks (trimmed 75%, baseline 60%) · after all 12 tasks · sure enough"},
 		{"success small", success(stats.ImprovedSmall, 0.60, 0.65), false,
-			"the answer: trimmed passes a few more tasks (trimmed 65%, baseline 60%) · after all 12 tasks"},
+			"the answer: trimmed passes a few more tasks (trimmed 65%, baseline 60%) · after all 12 tasks · sure enough"},
 		{"success regressed", success(stats.Regressed, 0.60, 0.45), false,
-			"the answer: trimmed passes fewer tasks (trimmed 45%, baseline 60%) · after all 12 tasks"},
+			"the answer: trimmed passes fewer tasks (trimmed 45%, baseline 60%) · after all 12 tasks · sure enough"},
 		{"success no loss", success(stats.NoLoss, 0.60, 0.62), false,
-			"the answer: trimmed passes no fewer tasks, within 15 points (trimmed 62%, baseline 60%) · after all 12 tasks"},
+			"the answer: trimmed passes no fewer tasks, within 15 points (trimmed 62%, baseline 60%) · after all 12 tasks · sure enough"},
 		{"success equivalent", success(stats.Equivalent, 0.60, 0.62), false,
-			"the answer: they pass about as many tasks, within 15 points (trimmed 62%, baseline 60%) · after all 12 tasks"},
+			"the answer: they pass about as many tasks, within 15 points (trimmed 62%, baseline 60%) · after all 12 tasks · sure enough"},
+		{"the last check, not sure, with the tasks that would settle it", settle(cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), 30), false,
+			"the answer: no clear difference in cost · after all 16 tasks · not sure yet · about 30 tasks would settle it"},
+		{"an A/A has nothing to settle", settle(cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), 30), true,
+			"the answer: no clear difference in cost · after all 16 tasks · not sure"},
 		{"success inconclusive", success(stats.Inconclusive, 0.60, 0.70), false,
 			"the answer: no clear difference in passed tasks (trimmed 70%, baseline 60%) · after all 12 tasks · not sure"},
 		{"an A/A that differs", cost(stats.Improved, 0.80, experiment.LookStop, 12), true,

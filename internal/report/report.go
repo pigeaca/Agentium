@@ -65,6 +65,9 @@ type Report struct {
 	// Summary is a model-ab experiment's verdicts in one sentence, naming the arm by profile.
 	Summary string `json:"summary,omitempty"`
 	Judge   *Judge `json:"judge,omitempty"` // only with the judge
+	// Pairs is the pair judge's preference (experiment.PairPreferenceOf: clustered by task), only with the pair judge.
+	// Unvalidated and exploratory. Only the terminal view shows it: the Markdown and JSON reports are unchanged.
+	Pairs *experiment.PairPreference `json:"-"`
 	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
 	// project's other experiments).
 	NorthStar *NorthStar `json:"north_star,omitempty"`
@@ -262,6 +265,18 @@ func Build(in Input) (Report, error) {
 		}
 	}
 	rep.Judge = judgeSummary(in)
+	if l.Design.JudgePairs != nil {
+		var records []experiment.PairRun
+		for _, r := range in.Runs {
+			records = append(records, experiment.PairRun{ID: r.ID, Slot: r.Slot, Rec: r.Record})
+		}
+		pairs, err := experiment.PairRecords(l, records)
+		if err != nil {
+			return Report{}, err
+		}
+		preference := experiment.PairPreferenceOf(pairs)
+		rep.Pairs = &preference
+	}
 	rep.Notes = notes(rep, in)
 	return rep, nil
 }
@@ -776,6 +791,12 @@ func plural(n int, noun string) string {
 func title(metric string) string {
 	return map[string]string{experiment.MetricSuccess: "Success", experiment.MetricCost: "Cost", experiment.MetricTime: "Time",
 		experiment.MetricOutput: "Output tokens"}[metric]
+}
+
+// VerdictInterval is the interval a verdict rests on (see verdictInterval), without its level.
+func VerdictInterval(r experiment.MetricResult) stats.Interval {
+	i, _ := verdictInterval(r)
+	return i
 }
 
 // verdictInterval is the interval a verdict rests on: the wider of the bootstrap and the t-interval, at 90% for "no
