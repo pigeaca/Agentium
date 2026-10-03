@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -113,13 +112,8 @@ func printSetAside(env Env, rows []setAside) error {
 	return table.Write(env.Stdout)
 }
 
-// cut shortens text to at most n characters, ending with an ellipsis when it cut.
-func cut(text string, n int) string {
-	if utf8.RuneCountInString(text) <= n {
-		return text
-	}
-	return string([]rune(text)[:n-1]) + "…"
-}
+// cut shortens text to at most n cells, the unit the table pads by, ending with an ellipsis when it cut.
+func cut(text string, n int) string { return term.Truncate(text, n, "…") }
 
 // validateAll validates the project's tasks (those with status, when given) jobs at a time and prints one table.
 func validateAll(ctx context.Context, env Env, w *workspace, status string, o task.ValidateOptions, jobs int) int {

@@ -1,0 +1,30 @@
+\e[36m#\e[39m A lean context   \e[35m#\e[39m B full context   \e[32m#\e[39m ok   \e[31m#\e[39m failed   \e[33m#\e[39m infrastructure
+\e[2m#\e[22m left out
+\e[2m+-\e[22m \e[1mExperiment lean-ab\e[22m \e[2m-----------------------------------------\e[22m \e[2m|\e[22m look 2 of 3 \e[2m-\e[22m\e[2m+\e[22m
+\e[2m|\e[22m \e[36mA\e[39m lean   \e[32m7 ok\e[39m  \e[31m2 failed\e[39m  \e[33m1 infra\e[39m                                             \e[2m|\e[22m
+\e[2m|\e[22m \e[35mB\e[39m full   \e[32m9 ok\e[39m  \e[31m1 failed\e[39m                                                      \e[2m|\e[22m
+\e[2m|\e[22m \e[2ma note far too long to fit on one line of a narrow panel, so it is cut wi...\e[22m \e[2m|\e[22m
+\e[2m|\e[22m wide: 日本語のタスク名 and an emoji 🙂 measured in cells                     \e[2m|\e[22m
+\e[2m+------------------------------------------------------------------------------+\e[22m
+\e[2m+-\e[22m \e[1mA title much too long for a narrow panel to hold in full\e[22m \e[2m-------------------\e[22m\e[2m+\e[22m
+\e[2m|\e[22m Wrapped: \e[32mno loss beyond the margin\e[39m on success; cost is inconclusive with     \e[2m|\e[22m
+\e[2m|\e[22m these tasks and needs another look.                                          \e[2m|\e[22m
+\e[2m+------------------------------------------------------------------------------+\e[22m
+\e[2m+-\e[22m\e[2m-----------------------------------------------------------------------------\e[22m\e[2m+\e[22m
+\e[2m+------------------------------------------------------------------------------+\e[22m
+tasks    ################################\e[2m......................\e[22m         12 of 20
+budget   \e[32m##################\e[39m\e[2m....................................\e[22m     $4.00 of $12
+window   \e[33m##########################################\e[39m\e[2m............\e[22m 78% resets 14:05
+spent    \e[31m###################################################\e[39m\e[2m...\e[22m    $11.40 of $12
+none     \e[2m......................................................\e[22m                0
+a sliver #\e[2m.....................................................\e[22m             0.1%
+almost   #####################################################\e[2m.\e[22m            99.9%
+full     \e[32m######################################################\e[39m             100%
+beyond   ######################################################          clamped
+NaN      \e[2m......................................................\e[22m            empty
+success  \e[2m------------------------\e[22m|\e[2m--\e[22m\e[32m=========o=========\e[39m\e[2m---\e[22m     +12 pts [+3, +21]
+cost     \e[2m---\e[22m\e[32m================o====\e[39m|\e[32m=========\e[39m\e[2m--:------------\e[22m -$0.10 [-0.42, +0.18]
+turns    \e[2m--------------------------------\e[22m|\e[2m--\e[22m\e[31m==========o===\e[39m      beyond the scale
+time     \e[2m--------\e[22m\e[2m================\e[22m|\e[2mo====================\e[22m\e[2m---\e[22m          inconclusive
+nothing  \e[2m------------------------\e[22m|\e[2m------------------------\e[22m               no data
+spinner \e[2m|\e[22m \e[2m/\e[22m \e[2m-\e[22m \e[2m\\e[22m and a cut line that does not fit at all at forty

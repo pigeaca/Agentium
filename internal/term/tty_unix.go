@@ -21,17 +21,28 @@ func Columns(f *os.File) int {
 	return cols
 }
 
+// Size is the width and height of the terminal f in cells, or zeros when f is not a terminal.
+func Size(f *os.File) (cols, rows int) {
+	cols, rows, _ = winsizeRows(f)
+	return cols, rows
+}
+
 func winsize(f *os.File) (cols int, ok bool) {
+	cols, _, ok = winsizeRows(f)
+	return cols, ok
+}
+
+func winsizeRows(f *os.File) (cols, rows int, ok bool) {
 	conn, err := f.SyscallConn()
 	if err != nil {
-		return 0, false
+		return 0, 0, false
 	}
 	var ws struct{ rows, cols, xpixel, ypixel uint16 }
 	var errno syscall.Errno
 	if err := conn.Control(func(fd uintptr) {
 		_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCGWINSZ), uintptr(unsafe.Pointer(&ws)))
 	}); err != nil || errno != 0 {
-		return 0, false
+		return 0, 0, false
 	}
-	return int(ws.cols), true
+	return int(ws.cols), int(ws.rows), true
 }

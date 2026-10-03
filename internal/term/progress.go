@@ -227,19 +227,15 @@ func (s *StatusLine) width() int {
 	return 80
 }
 
-// truncate cuts plain text to at most max columns, ending with an ellipsis when it cut.
+// truncate cuts plain text to at most max cells, ending with an ellipsis when it cut (a single cell gets no ellipsis).
 func truncate(text string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if Width(text) <= max {
-		return text
-	}
-	r := []rune(text)
 	if max == 1 {
-		return string(r[:1])
+		return Truncate(text, 1, "")
 	}
-	return string(r[:max-1]) + "…"
+	return Truncate(text, max, "…")
 }
 
 // Elapsed formats a duration for a status line: 8s, 3m05s, 1h02m.

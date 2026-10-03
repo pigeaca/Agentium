@@ -1,19 +1,26 @@
 // Package term styles console output. Color and emphasis are used only on a terminal, so pipes, files and tests get
 // plain text with the same words; tables are sized to their content either way.
+//
+// It also holds the designed console's primitives: Capabilities (what the output can show), a palette by Role, widths
+// in display cells, Shapes (panels, bars, interval bars, legends and spinners, with an ASCII fallback) and a Display
+// (a live region redrawn in place under a log, or plain lines where it cannot be drawn).
 package term
 
 import (
 	"regexp"
 	"strings"
-	"unicode/utf8"
 )
 
 // Style applies color and emphasis when they are on. When they are off (the zero Style), every method returns its
-// text unchanged.
-type Style struct{ on bool }
+// text unchanged. The named styles below (Heading, Good, ...) always use the basic colors, so their output does not
+// depend on the terminal; Paint uses the palette at the Style's color depth.
+type Style struct {
+	on    bool
+	depth ColorDepth // when on: Basic unless raised by WithDepth
+}
 
-// Colored is a Style with color and emphasis on, whatever the output is.
-func Colored() Style { return Style{on: true} }
+// Colored is a Style with color and emphasis on, whatever the output is, in the basic colors.
+func Colored() Style { return Style{on: true, depth: Basic} }
 
 // Detect decides whether output gets color and emphasis:
 //   - a non-empty NO_COLOR turns them off (no-color.org);
@@ -29,9 +36,12 @@ func Detect(terminal bool, getenv func(string) string) Style {
 		return Style{}
 	}
 	if force := getenv("FORCE_COLOR"); force != "" && force != "0" {
-		return Style{on: true}
+		return Colored()
 	}
-	return Style{on: terminal && getenv("TERM") != "dumb"}
+	if terminal && getenv("TERM") != "dumb" {
+		return Colored()
+	}
+	return Style{}
 }
 
 // On reports whether the Style adds escape codes.
@@ -122,12 +132,6 @@ func (s Style) Status(text string) string {
 
 // escape matches the SGR escape codes this package writes (and any other CSI sequence).
 var escape = regexp.MustCompile(`\x1b\[[0-9;?]*[A-Za-z]`)
-
-// Width is how many columns text takes on a terminal: its characters, without escape codes. It counts each rune as
-// one column; Agentium prints no wide (East Asian) characters of its own.
-func Width(text string) int {
-	return utf8.RuneCountInString(escape.ReplaceAllString(text, ""))
-}
 
 // Plain removes escape codes from text.
 func Plain(text string) string { return escape.ReplaceAllString(text, "") }
