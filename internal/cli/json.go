@@ -76,6 +76,7 @@ var jsonCommands = map[string][]string{
 	// experiment report has its own --json (the lock and every run); it is left as it is.
 	"experiment": {"new", "plan", "show", "list", "run", "rm"},
 	"pool":       {"update", "status"},
+	"clean":      {""},
 }
 
 // splitJSONFlag removes the bare --json flag (before any "--") from args and reports whether the command takes it.
