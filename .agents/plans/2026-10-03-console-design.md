@@ -8,17 +8,27 @@
 - Scope: Agentium's human console output only. It follows the [no web UI decision](../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
 
 ## Outcome
-- **A running experiment** shows a live **data-flow picture** (the user, 2026-10-03, showing a picture of connected boxes), redrawn in place on a terminal:
-  - the experiment's box (runs and spend as bars, the time elapsed) **splits** into one box per arm, side by side (its tally, and a spinner on the run in flight);
-  - the arms **merge** into grading (sandbox, canary, flagged denials);
-  - an arrow leads to the current look (its interval bar and verdict so far), and the usage window shows as a bar when it matters.
-
-  See the [sample](../../docs/images/console-flow.svg). Each box holds two or three lines; the rest is in the log.
+- **A running experiment** shows **each arm's current task as a row of step boxes joined by dotted lines**, redrawn in place on a terminal. The user settled this on 2026-10-03 after a series of previews: one panel was "too difficult to understand… too many strange words"; tracks were rejected for "keep boxes but with lines"; then "dot line like on the screenshot and dot that move"; then "remove arrow at the end, just dot line".
+  - **Header:** the question in plain words, coloured by arm ("BASELINE vs TRIMMED · does trimmed save money?"). Under it, one line with the money spent against the budget, the share of the Claude plan used and each arm's progress ("baseline 11/16 · trimmed 10/16"). A legend explains the sandbox once ("sandbox: no internet, your secrets hidden").
+  - **Each arm:** its name and current task, then four step boxes: **fresh copy → Claude works → hidden tests → result**.
+    - **Done steps:** a green border, and ✓ with the time.
+    - **The current step:** the arm's colour, with a spinner and its time.
+    - **Later steps:** grey.
+    - **The result box:** ✓ passed or ✗ failed. The run then drops into the log, and the arm's next task starts again at fresh copy.
+  - **The sandbox:** Claude works and hidden tests each sit inside a dashed purple outline labelled "sandbox". It reads "docker" in the container mode to come; with `--grader host` there is no outline around grading, and a warning instead.
+  - **Connectors:** thin grey dotted lines (`╌`) between the boxes, with no arrowheads; they never change. When a step finishes, **a dot in the arm's colour travels along the dotted line** to the next box, passing through the sandbox's edge.
+  - **The answer so far:** a green box in plain words ("about the same cost (+4%) · not sure yet · next check after 16 tasks"). At the end it becomes "the answer", e.g. "no clear difference in cost · stopped early · more tasks would not help".
+  - **Plain words throughout:** no "look", "futility", "interval", "window", "arm A/B" or bracketed numbers on this screen. Those stay in `experiment report` and `--json`.
+  - **Colours** (from the user's screenshot): baseline blue, trimmed orange, the sandbox purple, done and the answer green, failures red, everything else grey.
+  - **Animation:** up to about 10 frames a second; the dot slides between boxes, spinners turn, and bars and counts update as runs finish. Nothing blinks.
+  - **Previews** (`AGENTIUM_TERM_DEMO`-style frames turned into an animated SVG) are shown to the user before any of this merges.
+  - The agreed preview, animated: ![The running experiment: step boxes joined by dotted lines, a dot moving from box to box through the sandbox outlines](../../docs/images/console-dashboard-preview.svg) (sample data).
+- **The connected-box flow** for one run (`run show`) uses the same boxes, dotted lines and sandbox outlines: fresh copy → Claude works → hidden tests → result, with each step's time and cost. A one-time "how this experiment works" flow when an experiment is created is optional, to be previewed first.
 - **A log streams under it**, so scrollback keeps every line. The panel lives in a bottom-anchored region that the log scrolls above, as `docker build` does.
-- **Reports, run details and previews** get the same visual language: boxed panels; bars; interval bars that show where zero falls; colour per arm and per outcome. `run show` is a vertical **chain**: checkout → agent → grading → record, with the time of each stage.
+- **Reports, run details and previews** get the same visual language: boxes with coloured borders, dotted connectors, plain words, colour per arm and per outcome. Interval bars stay in `experiment report`, explained in words beside them.
 - **Two views for a running experiment.** The dashboard is the default on a terminal. `--view log` (or `AGENTIUM_VIEW=log`, set once) gives the styled, append-only log instead:
   - a coloured line per run;
-  - a boxed panel with bars at each look and at the end;
+  - a small box at each check of the answer and at the end;
   - nothing redrawn, so it suits SSH, tmux, recordings and slow terminals.
 
   `--view dashboard` forces the dashboard (`AGENTIUM_VIEW=dashboard`). Off a terminal, both give today's plain text.
@@ -66,7 +76,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
 
     ![The console's shapes](../../docs/images/console-shapes.svg)
-- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the experiment flow above: `Shapes.Flow` in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the step boxes, dotted connectors and moving dot above, in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
