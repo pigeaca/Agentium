@@ -61,6 +61,10 @@ type Lock struct {
 	// Sequential is a seq-v1 lock's design: its looks, alpha, spending, nominal levels and futility setting. Absent
 	// from the other methods' locks, which read and encode as they did.
 	Sequential *Sequential `json:"sequential,omitempty"`
+	// Grader is the mode every run of the experiment grades in: task.GraderHost, or the sandbox by its profile's version
+	// (task.GraderSandbox), not a profile's digest (each grade's paths differ). Empty in locks made before modes, which
+	// graded on the host and resume so (task.GraderOf). One experiment never mixes modes.
+	Grader string `json:"grader,omitempty"`
 }
 
 // LockedArm is an arm's context and the environment its runs must see.
@@ -165,6 +169,10 @@ func (l Lock) Check(cliVersion, signIn string) error {
 		if err := l.checkSequential(); err != nil {
 			return err
 		}
+	}
+	if !task.KnownGrader(l.Grader) {
+		return fmt.Errorf("its runs were graded in %s, which this Agentium does not grade in (it grades on the host or in %s): its later runs would not compare; start a new experiment",
+			l.Grader, task.GraderSandbox)
 	}
 	switch {
 	case cliVersion != l.ClaudeCode:

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -317,6 +318,12 @@ type CommandsEnv struct {
 	Timeout    time.Duration
 	WarmWait   time.Duration
 	Now        func() time.Time
+	// Grader is the mode validation grades in (task.GraderOf). In sandbox mode the stages' verification runs as a
+	// run's grade does (task.CheckoutCommands.Sandboxed), denied what a run's agent is: Agentium's data, the user's
+	// repository (ProjectRoot) and its worktrees, and the credential stores under Home (and AccountHome, the account's
+	// own home folder when HOME is redirected).
+	Grader                         string
+	Home, AccountHome, ProjectRoot string
 }
 
 // CheckoutCommands warms a base commit's build tools for Agentium's own commands outside a run (validation), as a
@@ -357,8 +364,30 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		}
 		notes = append(notes, buildtool.MissingRunners(ctx, warmed.Venv, verify, env.environ())...)
 	}
+	var sandboxed func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error)
+	if task.GraderOf(c.Grader) != task.GraderHost {
+		if err := SandboxUsable(ctx, c.Grader); err != nil {
+			return task.CheckoutCommands{}, err
+		}
+		full, err := fullCommitOf(ctx, c.Bare, base)
+		if err != nil {
+			return task.CheckoutCommands{}, err
+		}
+		env.Home, env.AccountHome, env.ProjectRoot = c.Home, c.AccountHome, c.ProjectRoot
+		deny, err := env.denied(ctx, "")
+		if err != nil {
+			return task.CheckoutCommands{}, err
+		}
+		agent := claude.Invocation{Home: c.Home, AccountHome: c.AccountHome, Deny: deny, Tools: tools, AgentTools: l.agentTools, Deps: env.depsFolder(),
+			Venv: warmed.Venv, ProjectMetadata: warmed.Metadata, ImportRoot: importRoot, SignIn: claude.SignInLogin}
+		if slices.Contains(tools, "maven") || slices.Contains(tools, "gradle") {
+			agent.JavaHome = buildtool.ResolveJavaHome(ctx, env.environ(), buildtool.CommandOutput)
+		}
+		sandboxed = env.sandboxedCommands(agent, full)
+	}
 	return task.CheckoutCommands{
-		Environ: runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
+		Sandboxed: sandboxed,
+		Environ:   runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
 		Env: func(dir string) []string {
 			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
 				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})

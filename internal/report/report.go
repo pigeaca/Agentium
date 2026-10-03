@@ -20,6 +20,7 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // Run is one stored run of the experiment.
@@ -165,8 +166,42 @@ type RunRow struct {
 	ContextUse     *run.ContextUse `json:"context_use,omitempty"`
 	Judge          *judge.Verdict  `json:"judge,omitempty"` // the judge's verdict, its texts scrubbed
 	Verify         []taskCommand   `json:"verify,omitempty"`
-	Started        string          `json:"started"`
-	Finished       string          `json:"finished"`
+	// Grader is the mode the run was graded in (absent in runs recorded before modes: the host), and Sandbox what the
+	// grading sandbox reported, as counts: the denials' targets are what the grade chose, so they stay in the records.
+	Grader   string      `json:"grader,omitempty"`
+	Sandbox  *SandboxRow `json:"sandbox,omitempty"`
+	Started  string      `json:"started"`
+	Finished string      `json:"finished"`
+}
+
+// SandboxRow is a sandboxed grade as shared: whether the canary passed, how many denials the kernel logged (noise left
+// out), how many of them the agent's own sandbox does not impose, and their operations.
+type SandboxRow struct {
+	Canary            string   `json:"canary"` // "passed" or "failed"
+	Denials           int      `json:"denials"`
+	Flagged           int      `json:"flagged"`
+	FlaggedOperations []string `json:"flagged_operations,omitempty"`
+	DenialsUnread     bool     `json:"denials_unread,omitempty"`
+}
+
+// SandboxOf shares what a record's sandbox reported: counts and operations, never the denials' targets; nil for nil.
+func SandboxOf(g *task.SandboxGrade) *SandboxRow { return sandboxRow(g) }
+
+// sandboxRow shares what a record's sandbox reported.
+func sandboxRow(g *task.SandboxGrade) *SandboxRow {
+	if g == nil {
+		return nil
+	}
+	row := &SandboxRow{Canary: "failed", Denials: g.DenialCount, Flagged: g.FlaggedCount, DenialsUnread: g.Unread != ""}
+	if g.Canary == task.CanaryPassed {
+		row.Canary = "passed"
+	}
+	for _, d := range g.Flagged {
+		if !slices.Contains(row.FlaggedOperations, d.Operation) {
+			row.FlaggedOperations = append(row.FlaggedOperations, d.Operation)
+		}
+	}
+	return row
 }
 
 type taskCommand struct {
@@ -202,7 +237,8 @@ func Build(in Input) (Report, error) {
 		row := RunRow{ID: r.ID, Slot: r.Slot, Attempt: r.Attempt, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
 			CostEstimated: rec.Spend().AgentEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
-			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Judge: in.shareVerdict(rec.Judge), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
+			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Judge: in.shareVerdict(rec.Judge),
+			Grader: rec.Grader, Sandbox: sandboxRow(rec.Sandbox), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
 			Finished: rec.Finished.UTC().Format("2006-01-02T15:04:05Z")}
 		for _, c := range rec.Verify {
 			row.Verify = append(row.Verify, taskCommand{Command: c.Command, ExitCode: c.ExitCode, Seconds: c.Seconds})
@@ -560,6 +596,9 @@ func notes(rep Report, in Input) []string {
 	if len(drift) > 0 {
 		out = append(out, "Environment drift in unfair runs: "+strings.Join(drift, "; ")+".")
 	}
+	if note := sandboxNote(in.Runs); note != "" {
+		out = append(out, note)
+	}
 	if note := cappedNote(rep); note != "" {
 		out = append(out, note)
 	}
@@ -755,6 +794,64 @@ func wider(t, boot stats.Interval) string {
 		return "the bootstrap, the wider of the two here,"
 	}
 	return "the wider of the t-interval and the bootstrap on each side"
+}
+
+// sandboxNote says what the grading sandbox did to the runs: those left out because it did not hold (the canary) or
+// because their failed grade had denials the agent's own sandbox does not impose (both infrastructure, retried or left
+// out), and the passing grades with such denials, which stay passes. Empty when no run was graded in the sandbox.
+func sandboxNote(runs []Run) string {
+	canary, flaggedFails, flaggedPasses, unread, graded := 0, 0, 0, 0, 0
+	for _, r := range runs {
+		g := r.Record.Sandbox
+		if g == nil {
+			continue
+		}
+		graded++
+		switch {
+		case g.Canary != task.CanaryPassed:
+			canary++
+		case g.FlaggedCount > 0 && r.Record.Passed == nil:
+			flaggedFails++
+		case g.FlaggedCount > 0:
+			flaggedPasses++
+		}
+		if g.Unread != "" {
+			unread++
+		}
+	}
+	if graded == 0 || canary+flaggedFails+flaggedPasses+unread == 0 {
+		return ""
+	}
+	var parts []string
+	if canary > 0 {
+		parts = append(parts, fmt.Sprintf("%d grade(s) did not run because the sandbox did not hold (its canary failed)", canary))
+	}
+	if flaggedFails > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed grade(s) logged denials the agents' own sandbox does not impose", flaggedFails))
+	}
+	if flaggedPasses > 0 {
+		parts = append(parts, fmt.Sprintf("%d passing grade(s) logged such denials and stay passes", flaggedPasses))
+	}
+	if unread > 0 {
+		parts = append(parts, fmt.Sprintf("the denials of %d grade(s) could not be read, so their results stand as the tests gave them", unread))
+	}
+	note := "Grading sandbox: " + strings.Join(parts, "; ") + "."
+	if canary+flaggedFails > 0 {
+		note += " The first two are infrastructure failures: retried, or left out."
+	}
+	return note
+}
+
+// graderNote says where the experiment's runs were graded; empty for a lock made before grader modes (the host).
+func graderNote(l experiment.Lock) string {
+	switch {
+	case l.Grader == "":
+		return ""
+	case task.GraderOf(l.Grader) == task.GraderHost:
+		return "Graded on the host, without a sandbox: the agents' code ran its builds and tests with the user's access (--grader host)."
+	}
+	return fmt.Sprintf("Graded in Agentium's grading sandbox (%s): no network but this machine's, writes only to each grade's own folders. "+
+		"On macOS the sandbox's localhost is every address of the machine, so a grade could accept connections from the network.", l.Grader)
 }
 
 // localBindingNote is shown when the experiment's lock records the sandbox's local binding.

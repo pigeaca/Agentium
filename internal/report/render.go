@@ -58,6 +58,12 @@ func (r Report) Markdown(w io.Writer) error {
 		}
 		b.WriteString(localBindingNote + "\n")
 	}
+	if note := graderNote(l); note != "" {
+		if l.LocalBinding || r.NorthStar != nil {
+			b.WriteString("\n")
+		}
+		b.WriteString(note + "\n")
+	}
 
 	bootHead, tHead := r.intervalHeads()
 	fmt.Fprintf(&b, "\n## Metrics\n\n%s\n\n", r.metricsIntro())

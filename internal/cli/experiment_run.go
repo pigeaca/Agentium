@@ -14,6 +14,7 @@ import (
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -139,6 +140,9 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 		},
 		WaitUntil: func(ctx context.Context, until time.Time) error { return waitUntil(ctx, env, until) },
 		Backoff:   env.Backoff,
+		Revalidate: func(ctx context.Context, names []string, arms []task.Arm, grader string) error {
+			return revalidate(ctx, env, w, live, names, arms, grader)
+		},
 	}
 	r.Observer = experiment.Observer{
 		Begin: func(lock experiment.Lock, s experiment.Standing) {
@@ -153,6 +157,35 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 		Finish: live.Stop,
 	}
 	return r, release
+}
+
+// revalidate validates the named tasks again in grader mode and the arms' contexts, before a sandbox experiment locks
+// (experiment.Runner.Revalidate): as many at a time as the project's jobs setting, each stage as many times as the
+// most any of them was last validated with, keeping their weak-tests results, and stores each validation. Readiness
+// then checks the results; an interrupt is an error.
+func revalidate(ctx context.Context, env Env, w *workspace, live *term.StatusLine, names []string, arms []task.Arm, grader string) error {
+	repeat := 1
+	var tasks []store.Task
+	for _, name := range names {
+		t, err := w.db.TaskByName(ctx, w.project.ID, name)
+		if err != nil {
+			return err
+		}
+		tasks = append(tasks, t)
+		repeat = max(repeat, task.ValidationOf(t).RepeatCount())
+	}
+	buildEnv, err := run.BuildEnv(w.layout)
+	if err != nil {
+		return err
+	}
+	settings := w.settings()
+	o := task.ValidateOptions{Arms: arms, Repeat: repeat, Timeout: verifyTimeoutOf(settings), Grader: grader, KeepWeakTests: true}
+	v := w.validating(env, buildEnv, o.Timeout, grader)
+	if v.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
+		return err
+	}
+	v.Batch(ctx, task.BatchOutput{Out: env.Stdout, Style: env.style(), Show: live.Show}, tasks, o, jobsOf(settings))
+	return ctx.Err()
 }
 
 // progressLines prints one line per scheduler event: a run started, finished, to be retried, or waiting for the usage

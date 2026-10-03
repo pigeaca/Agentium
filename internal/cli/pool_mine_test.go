@@ -80,7 +80,7 @@ func cliNow(t *testing.T, dir, data string) func(args ...string) cliResult {
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	return func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: dir, Getenv: func(key string) string { return vars[key] },
+		code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdout: &stdout, Stderr: &stderr, Dir: dir, Getenv: func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
 		return cliResult{code, stdout.String(), stderr.String()}
 	}
@@ -317,7 +317,7 @@ func TestTaskValidateAllInterrupted(t *testing.T) {
 	done := make(chan int, 1)
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir()}
 	go func() {
-		done <- Run(ctx, Env{Args: []string{"task", "validate", "--all", "--jobs", "1"}, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+		done <- Run(ctx, Env{DefaultGrader: "host", Args: []string{"task", "validate", "--all", "--jobs", "1"}, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv: func(key string) string { return vars[key] }, LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 			Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }})
 	}()
@@ -438,7 +438,7 @@ func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
 	done := make(chan int, 1)
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir()}
 	go func() {
-		done <- Run(context.Background(), Env{Args: []string{"task", "validate", "--all", "--jobs", "2"}, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+		done <- Run(context.Background(), Env{DefaultGrader: "host", Args: []string{"task", "validate", "--all", "--jobs", "2"}, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv: func(key string) string { return vars[key] }, LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 			Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }})
 	}()
@@ -468,7 +468,7 @@ func TestTaskValidateAllKeepsEditsMadeMeanwhile(t *testing.T) {
 		"--verify", "touch "+gate+"/single; while [ ! -e "+gate+"/go2 ]; do sleep 0.05; done"), ExitOK)
 	var out, errOut bytes.Buffer
 	go func() {
-		done <- Run(context.Background(), Env{Args: []string{"task", "validate", "single"}, Stdout: &out, Stderr: &errOut, Dir: repo,
+		done <- Run(context.Background(), Env{DefaultGrader: "host", Args: []string{"task", "validate", "single"}, Stdout: &out, Stderr: &errOut, Dir: repo,
 			Getenv: func(key string) string { return vars[key] }, LookPath: func(string) (string, error) { return "", os.ErrNotExist },
 			Now: func() time.Time { return time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC) }})
 	}()

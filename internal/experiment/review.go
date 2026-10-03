@@ -39,7 +39,7 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
-	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
+	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms, d.Grader)
 	if err != nil {
 		return Review{}, err
 	}

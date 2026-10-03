@@ -41,7 +41,7 @@ func hookInReader(t *testing.T, dir, data string, stdin io.Reader) cliResult {
 	t.Helper()
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "FORCE_COLOR": "1"}
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), Env{
+	code := Run(context.Background(), Env{DefaultGrader: "host",
 		Args: []string{"context", "lint", "--hook"}, Stdin: stdin, Stdout: &stdout, Stderr: &stderr, Dir: dir,
 		Getenv: func(key string) string { return vars[key] },
 		Now:    func() time.Time { return time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC) },

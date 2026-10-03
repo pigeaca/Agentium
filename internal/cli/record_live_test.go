@@ -49,7 +49,7 @@ func TestRecordLiveRun(t *testing.T) {
 	f.vars["TERM"] = "xterm"
 	w := &timedWriter{}
 	var stderr bytes.Buffer
-	code := Run(ctx, Env{Args: []string{"experiment", "run", "lean-ab"}, Stdout: w, Stderr: &stderr, Dir: f.repo, Terminal: true,
+	code := Run(ctx, Env{DefaultGrader: "host", Args: []string{"experiment", "run", "lean-ab"}, Stdout: w, Stderr: &stderr, Dir: f.repo, Terminal: true,
 		Getenv:   func(key string) string { return f.vars[key] },
 		Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
 		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,

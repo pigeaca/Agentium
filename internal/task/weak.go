@@ -215,7 +215,7 @@ func (v Validator) tryWithout(ctx context.Context, spec Spec, h Hunk, n int, bas
 	if err := h.undo(dir, base, solution); err != nil {
 		return false, false, err
 	}
-	commands, passed, err := v.run(ctx, log, dir, spec.Verify)
+	commands, passed, _, err := v.verify(ctx, log, dir, label, spec.Verify)
 	if err != nil {
 		return false, false, err
 	}

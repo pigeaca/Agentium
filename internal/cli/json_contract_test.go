@@ -33,7 +33,7 @@ func assertKeys(t *testing.T, v any, want string) {
 const (
 	taskInfoKeys = "base_commit,graded_by,hidden_test_files,name,needs_review,reference_files,solution_commit,source,status,status_summary,unstated_requirements,untested_hunks"
 	behaviorKeys = "bash_commands,checks_changed,commits,config_changed,denials,files_changed,lines_added,lines_removed,outside_reads,ran_checks,ran_tests,tests_changed,tests_removed"
-	runKeys      = "arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,id,judge_cost_usd,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sign_in,skills,started,task,tools,turns"
+	runKeys      = "arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,grader,id,judge_cost_usd,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
 )
 
 func TestJSONFieldNamesAreFixed(t *testing.T) {
@@ -75,7 +75,7 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	edited := jsonRun(t, f, ExitOK, "task", "edit", "again", "--reviewed")
 	keys(edited, "command,schema,task,updated")
 	validated := jsonRun(t, f, ExitOK, "task", "validate", "value", "--weak-tests")
-	keys(validated, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
+	keys(validated, "arms,command,grader,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
 	assertKeys(t, validated.get("weak_tests"), "checked,reason,skipped,timed_out,untested")
 	all := jsonRun(t, f, ExitOK, "task", "validate", "--all")
 	keys(all, "command,interrupted,schema,tasks,total,valid")
@@ -118,7 +118,7 @@ func TestJSONJudgeGradedValidateHasNoNulls(t *testing.T) {
 	gitIn(t, f.repo, "commit", "-q", "-m", "Make the value newer")
 	jsonRun(t, f, ExitOK, "task", "add", "judged", "--base", "HEAD~1", "--solution", "HEAD", "--judge-graded", "--instruction", "Make the value newer.", "--verify", "true")
 	got := jsonRun(t, f, ExitOK, "task", "validate", "judged")
-	assertKeys(t, got.doc, "arms,command,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
+	assertKeys(t, got.doc, "arms,command,grader,harness_changed,judge,needs_review,repeats,schema,status,summary,task,unstated_requirement_details,warnings,weak_tests")
 	for _, k := range []string{"arms", "unstated_requirement_details", "harness_changed", "warnings"} {
 		if got.doc[k] == nil {
 			t.Errorf("%s is null:\n%s", k, got.stdout)

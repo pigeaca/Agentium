@@ -54,7 +54,7 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 		return c, err
 	}
 	p := s.w.service()
-	if c.ready, _, err = p.EligibleTasks(ctx, arms); err != nil {
+	if c.ready, _, err = p.EligibleTasks(ctx, arms, defaultGrader(s.env)); err != nil {
 		return c, err
 	}
 	tasks, err := s.w.db.Tasks(ctx, s.w.project.ID)
@@ -71,9 +71,9 @@ func (s *starter) countTasks(ctx context.Context, attempted map[string]bool) (ta
 		case t.Validation == nil && !attempted[t.Name]:
 			c.pending = append(c.pending, t)
 		case t.Validation == nil:
-		case v.Status == task.StatusValid && experiment.Ineligible(cand, arms) == "" && t.NeedsReview:
+		case v.Status == task.StatusValid && experiment.Ineligible(cand, arms, defaultGrader(s.env)) == "" && t.NeedsReview:
 			c.waiting = append(c.waiting, t.Name)
-		case v.Status == task.StatusValid && experiment.Ineligible(cand, arms) != "" && !attempted[t.Name]:
+		case v.Status == task.StatusValid && experiment.Ineligible(cand, arms, defaultGrader(s.env)) != "" && !attempted[t.Name]:
 			c.pending = append(c.pending, t) // valid in the base only: the arms' contexts are missing
 		}
 	}
@@ -174,7 +174,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 			snaps = append(snaps, name)
 		}
 	}
-	arms, err := s.w.validating(s.env, nil, 0).Arms(ctx, s.w.project.ID, snaps)
+	arms, err := s.w.validating(s.env, nil, 0, "").Arms(ctx, s.w.project.ID, snaps)
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 	began := s.env.Now()
 	quiet := s.env
 	quiet.Stdout = io.Discard // the batch's own table is long; the summary below is what start shows
-	results, err := validateBatch(ctx, quiet, s.w, tasks, task.ValidateOptions{Arms: arms, Repeat: 1, Timeout: verifyTimeoutOf(settings)}, jobs)
+	results, err := validateBatch(ctx, quiet, s.w, tasks, task.ValidateOptions{Arms: arms, Repeat: 1, Timeout: verifyTimeoutOf(settings), Grader: defaultGrader(s.env)}, jobs)
 	if err != nil {
 		return err
 	}

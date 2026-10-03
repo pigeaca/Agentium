@@ -273,8 +273,7 @@ func TestExperimentFromBeforeResumesAndReports(t *testing.T) {
 func TestUsageListsNoHiddenOrRemovedFlag(t *testing.T) {
 	t.Parallel()
 	flagName := regexp.MustCompile(`--([a-z][a-z-]*)`)
-	hidden := append(slices.Clone(experimentHidden), runHidden...)
-	for _, usage := range []string{experimentUsage, runUsage} {
+	for usage, hidden := range map[string][]string{experimentUsage: experimentHidden, runUsage: runHidden} { // --grader: experiment new's only
 		for _, m := range flagName.FindAllStringSubmatch(usage, -1) {
 			if slices.Contains(hidden, m[1]) {
 				t.Errorf("the help lists the expert flag --%s", m[1])

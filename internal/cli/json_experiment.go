@@ -15,6 +15,7 @@ import (
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // The --json documents of the experiment commands (docs/guide.md, "Scripting and automation"). They carry no path and
@@ -43,12 +44,13 @@ type experimentDoc struct {
 	Concurrency   int                `json:"concurrency"`
 	Judge         bool               `json:"judge"`
 	JudgePairs    bool               `json:"judge_pairs"` // the pair judge, unvalidated: exploratory, never a verdict
+	Grader        string             `json:"grader"`      // host, or the sandbox's version (sandbox-v1): where its runs are graded
 }
 
 func experimentOf(name string, d experiment.Design) experimentDoc {
 	doc := experimentDoc{Name: name, Template: d.Template, Goal: d.Goal, Method: d.LockMethod(), Arms: []experimentArmDoc{}, Tasks: list(slices.Clone(d.Tasks)),
 		RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: d.BudgetUSD, RunBudgetUSD: d.RunBudgetUSD, Concurrency: d.Concurrency, Judge: d.Judge != nil,
-		JudgePairs: d.JudgePairs != nil}
+		JudgePairs: d.JudgePairs != nil, Grader: task.GraderOf(d.Grader)}
 	for _, a := range d.Arms {
 		doc.Arms = append(doc.Arms, experimentArmDoc{Name: a.Name, Context: a.Context, Model: d.ArmModel(a), Effort: d.ArmEffort(a)})
 	}

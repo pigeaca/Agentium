@@ -89,7 +89,7 @@ func signInMode(env Env) (mode, tokenFile string) {
 }
 
 // runHidden are run once's expert flags: they parse, but runUsage leaves them out (docs/guide.md, "Advanced flags").
-var runHidden = []string{"timeout", "verify-timeout", "keep"}
+var runHidden = []string{"timeout", "verify-timeout", "keep", "grader"}
 
 // runOnceRemoved are run once's removed flags, each with what replaces it.
 var runOnceRemoved = map[string]string{"effort": "put the effort in --model: --model MODEL:EFFORT"}
@@ -103,6 +103,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop the run after this long")
 	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
 	keep := fs.Bool("keep", false, "keep the workspace and the verification copy")
+	grader := addGraderFlag(fs)
 	removeFlags(fs, runOnceRemoved)
 	rest, code, ok := parseArgs(env, fs, args, runUsage)
 	if !ok {
@@ -112,9 +113,9 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, runUsage)
 		return ExitUsage
 	}
-	model, effort, err := experiment.ParseProfile(*profile)
+	model, effort, mode, err := onceProfile(env, *profile, grader)
 	if err != nil {
-		fmt.Fprintf(env.Stderr, "agentium run once: --model %v\n", err)
+		fmt.Fprintf(env.Stderr, "agentium run once: %v\n", err)
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -143,14 +144,14 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	runEnv.Step = live.Step
+	runEnv.Step, runEnv.Grader = live.Step, mode
 	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, model); {
 	case err != nil:
 		return fail(env, err)
 	case cal != nil:
 		runEnv.Expect = *cal
 	}
-	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, *budget)
+	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, task.DescribeGrader(mode), *budget)
 	release, err := startRuns(ctx, env, w)
 	if err != nil {
 		return fail(env, err)
@@ -168,6 +169,15 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	}
 	printRun(env, rec)
 	return ExitOK
+}
+
+// onceProfile reads run once's --model and --grader.
+func onceProfile(env Env, profile string, grader graderFlag) (model, effort, mode string, err error) {
+	if model, effort, err = experiment.ParseProfile(profile); err != nil {
+		return "", "", "", fmt.Errorf("--model %w", err)
+	}
+	mode, err = grader.mode(env)
+	return model, effort, mode, err
 }
 
 // liveEnv returns env with its output printing above a live status line where Stdout is a terminal (the status line
@@ -350,6 +360,9 @@ func printRun(env Env, rec run.Record) {
 	if m.UsageFirst != nil && m.UsageLast != nil {
 		fmt.Fprintf(out, "  usage        five-hour window %.0f%% → %.0f%%, seven-day %.0f%%\n", 100*m.UsageFirst.FiveHour, 100*m.UsageLast.FiveHour, 100*m.UsageLast.SevenDay)
 	}
+	if line := gradingLine(rec); line != "" {
+		fmt.Fprintf(out, "  grading      %s\n", line)
+	}
 	for _, d := range rec.Drift {
 		fmt.Fprintf(out, "%s %s\n", st.Warn("unfair:"), d)
 	}
@@ -357,6 +370,28 @@ func printRun(env Env, rec run.Record) {
 		fmt.Fprintln(out, note(st, n))
 	}
 	fmt.Fprintf(out, "  records      %s\n", rec.RecordsDir)
+}
+
+// gradingLine says where a run was graded and what the sandbox reported; empty for a record made before grader modes.
+func gradingLine(rec run.Record) string {
+	if rec.Grader == "" {
+		return ""
+	}
+	line := task.DescribeGrader(rec.Grader)
+	if g := rec.Sandbox; g != nil {
+		switch {
+		case g.Canary != task.CanaryPassed:
+			line += ": the canary failed, nothing was graded"
+		case g.Unread != "":
+			line += ", canary passed, denials unread"
+		default:
+			line += fmt.Sprintf(", canary passed, %d denial(s), %d the agent's sandbox does not impose", g.DenialCount, g.FlaggedCount)
+			if g.FlaggedCount > 0 {
+				line += " (" + g.FlaggedOperations() + ")"
+			}
+		}
+	}
+	return line
 }
 
 func runList(ctx context.Context, env Env, args []string) int {

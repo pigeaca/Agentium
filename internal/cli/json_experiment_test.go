@@ -19,7 +19,7 @@ import (
 const (
 	startKeys           = "calibration_estimate_usd,calibration_runs_needed,command,context_a,context_b,experiment,log,north_star,nothing_was_run,project,readiness,ready,run,run_command,schema,status,tasks_awaiting_review,tasks_ready"
 	startExperimentKeys = "budget_usd,looks,method,model,name,repeats_per_arm,runs,spend,tasks,template"
-	experimentKeys      = "arms,budget_usd,concurrency,goal,judge,judge_pairs,method,name,repeats_per_arm,run_budget_usd,runs,tasks,template"
+	experimentKeys      = "arms,budget_usd,concurrency,goal,grader,judge,judge_pairs,method,name,repeats_per_arm,run_budget_usd,runs,tasks,template"
 	expArmKeys          = "context,effort,model,name"
 	lookKeys            = "analysed,conditional_power,decision,interval,level,look,note,tasks_counted,tasks_planned,verdict"
 	intervalKeys        = "estimate,high,low"
@@ -208,7 +208,7 @@ func TestJSONExperimentRunNeverAsks(t *testing.T) {
 	done := make(chan cliResult, 1)
 	go func() {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{Args: []string{"experiment", "run", "x", "--json"}, Stdin: blockingReader{stop}, StdinTerminal: true, Terminal: true,
+		code := Run(context.Background(), Env{DefaultGrader: "host", Args: []string{"experiment", "run", "x", "--json"}, Stdin: blockingReader{stop}, StdinTerminal: true, Terminal: true,
 			Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Getenv: func(k string) string { return f.vars[k] },
 			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})

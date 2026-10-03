@@ -36,6 +36,8 @@ type ValidateOptions struct {
 	// KeepWeakTests carries a task's last weak-tests result into a validation made without that check (Batch), so a
 	// re-validation does not drop it: the result depends only on the task's reference and hidden tests, which are fixed.
 	KeepWeakTests bool
+	// Grader is the mode the verification runs in (Validator.Grader); empty is host.
+	Grader string
 }
 
 // Validating is what validating tasks needs: the project's database and Agentium's repository, where checkouts and logs
@@ -52,7 +54,8 @@ type Validating struct {
 	ReferenceDiff func(ctx context.Context, base, solution string, reference []string) (string, error)
 	// Toolchain is recorded in each validation (Validator.Toolchain); nil records none.
 	Toolchain Toolchain
-	// Checkout warms each validated task's build tools as runs do (Validator.Checkout); nil warms nothing.
+	// Checkout warms each validated task's build tools as runs do (Validator.Checkout); nil warms nothing. In sandbox
+	// mode (ValidateOptions.Grader) it must offer sandboxed commands (CheckoutCommands.Sandboxed).
 	Checkout func(ctx context.Context, base string, verify []string, logPath string) (CheckoutCommands, error)
 	// SkipInUse makes StoreValidation store nothing for a task that a locked experiment able to run still uses: it
 	// returns store.ErrTaskInUse instead (store.SetTaskValidationIdle). The task pool's re-validations set it; task
@@ -115,7 +118,7 @@ func (v Validating) Validator(t store.Task, o ValidateOptions) Validator {
 	folder := filepath.Join(v.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), v.Now().UTC().Format("20060102T150405Z"))
 	return Validator{Bare: v.Bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
 		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Cache: v.Cache, Now: v.Now,
-		Toolchain: v.Toolchain, Checkout: v.Checkout}
+		Toolchain: v.Toolchain, Checkout: v.Checkout, Grader: o.Grader}
 }
 
 // StoreValidation records result as t's validation, if t still has the verify and setup commands it was validated
