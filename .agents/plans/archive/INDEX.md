@@ -22,3 +22,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Java and Rust projects](2026-09-30-java-rust.md) — 2026-09-30 to 2026-10-02 (Maven, Gradle and Cargo profiles; pilot; #77, #79, #81, #86)
 - [Cheaper verdicts: sequential stopping (wave 3)](2026-10-02-cheaper-verdicts.md) — 2026-10-02 (#88, #92, #99, #107, #117, #122; the gate's real A/A stopped for futility at look 2, $2.25)
 - [A simpler command line](2026-10-02-simpler-cli.md) — 2026-10-02 to 2026-10-03 (#128, #129; visible flags 66 → 40, project settings set once, one way to mine)
+- [agentium clean: free the space of caches nothing uses](2026-10-03-clean-command.md) — 2026-10-03 (#132)
