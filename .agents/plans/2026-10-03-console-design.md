@@ -55,6 +55,12 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
   - Risk: medium (concurrency in the renderer).
   - Done: `Capabilities`/`DetectCapabilities`, `Role` and `Style.Paint` (8, 256 and 24-bit), `Width` in cells (wide characters), `Truncate`/`Pad`/`Wrap`/`Sanitize`, `Shapes` (`Panel`, `Bar`, `IntervalBar`, `Legend`, `Spinner`), `Display`/`NewDisplay`. Goldens in `internal/term/testdata` (40, 80 and 120 columns; color, ASCII, plain); the live region is driven through a fake terminal (`vt_test.go`) and on a real pseudo-terminal. No screen uses them yet.
   - Added for the data-flow layout: `Row` (boxes side by side, equal or weighted widths, padded to the tallest, stacked when too narrow), connectors at the boxes' middles (an arrow, a split, a merge, ┬/┴ on the borders, ASCII `+ | - v`) and `Flow` (rows top to bottom, joined). Goldens at 40, 60, 80 and 120 columns.
+  - Review fixes (PR #133): `Frame` is `func(width, height, tick int)`, so a frame compacts to the rows it gets instead of being cut; `Panel.MaxWidth` and `Flow.MaxWidth` default to `MaxContentWidth` (100); `Accent` is gone (it clashed with arm A); `Log` waits while `MaxPending` (1000) lines are queued; every styled line in the region ends with a reset and `Close` resets and shows the cursor; a failing `Over` stream drops only its own lines; `Sanitize` also drops raw C1 bytes, invalid UTF-8 and bidirectional overrides.
+  - Limits:
+    - A stacked row (three boxes under about 66 columns, two under about 43) reads top to bottom: arrows enter its first box and leave its last, so the split and merge lose their meaning there.
+    - Shrinking the terminal's height leaves a stale copy of the region in the scrollback; a narrowing resize assumes the terminal reflows lines (Terminal.app, iTerm2, kitty), and on one that does not (xterm) it can erase a few log lines from the screen.
+    - A frame must not call the display's methods (`Flush`, or a `Log` that waits for room, would deadlock); a killed process (SIGKILL, `os.Exit` without `Close`) leaves the cursor hidden.
+    - The plain display passes text through as today; screens `Sanitize` text from outside Agentium.
   - Samples (`AGENTIUM_TERM_DEMO`, then `ansi2svg.py`): a still of the live view, the log above the experiment flow, and `run show` as a chain; and every shape.
 
     ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
