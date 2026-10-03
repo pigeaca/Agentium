@@ -52,7 +52,7 @@
 - **Follow-up:** #131's validation grade roots (`<artifacts>/tasks/<id>/<ts>/grading/<label>`) are cleaned by neither recovery nor clean; a validation that dies leaves one.
 
 ## Console sample
-Offline, on a scratch data folder: a Python (uv) repository cloned locally; `init`; two tasks imported and validated, which warmed two real venvs. The seeds, the quarantined folder and the stopped run were made by hand (nothing makes seeds before #131 lands); then `task rm sub` and the modification times set back two or three days to stand for time passing. `<data>` replaces the scratch path. After it, `task validate mul` was still valid.
+Offline, on a scratch data folder: a Python (uv) repository cloned locally; `init`; two tasks imported and validated, which warmed two real venvs. The seeds, the quarantined folder and the stopped run were made by hand (the sample was made before #131 wired seeds into grading); then `task rm sub` and the modification times set back two or three days to stand for time passing. `<data>` replaces the scratch path. After it, `task validate mul` was still valid.
 
 ```
 $ agentium clean
