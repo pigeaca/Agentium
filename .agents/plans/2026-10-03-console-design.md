@@ -2,7 +2,8 @@
 
 - Date: 2026-10-03
 - Status: Planned. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
-  - a **live dashboard** for a running experiment, redrawn in place (not only a styled log);
+  - a **live dashboard** for a running experiment, redrawn in place;
+  - **and a log format too** ("But also should be dashboard and just log format"): a styled, append-only log, chosen per call or once;
   - all four screen groups: `experiment run`, `experiment report`, `run show`, and `start` / `experiment plan` / `pool status`.
 - Scope: Agentium's human console output only. It follows the [no web UI decision](../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
 
@@ -16,6 +17,12 @@
   - a spinner for runs in flight.
 - **A log streams under it**, so scrollback keeps every line. The panel lives in a bottom-anchored region that the log scrolls above, as `docker build` does.
 - **Reports, run details and previews** get the same visual language: boxed panels; bars; interval bars that show where zero falls; colour per arm and per outcome.
+- **Two views for a running experiment.** The dashboard is the default on a terminal. `--view log` (or `AGENTIUM_VIEW=log`, set once) gives the styled, append-only log instead:
+  - a coloured line per run;
+  - a boxed panel with bars at each look and at the end;
+  - nothing redrawn, so it suits SSH, tmux, recordings and slow terminals.
+
+  `--view dashboard` forces the dashboard (`AGENTIUM_VIEW=dashboard`). Off a terminal, both give today's plain text.
 - **Nothing changes for machines.** With `--json`, a pipe, `NO_COLOR`, `TERM=dumb` or a narrow terminal (below 60 columns), output is today's plain text, byte for byte. Golden tests keep pinning it.
 
 ## Design rules
@@ -40,7 +47,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
   - Capability detection: terminal, colour, UTF-8 and width.
   - Tests: golden renders at several widths, ASCII fallback, plain fallback, the renderer's cleanup on cancel, and no escapes on a pipe.
   - Risk: medium (concurrency in the renderer).
-- [ ] **2. `experiment run`:** the live dashboard, fed by the executor's events. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
@@ -53,14 +60,14 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
 - [ ] **6. Pictures:** re-record the README and gallery images, plus an animated SVG of the live dashboard for the README, with `scripts/readme_images`. Risk: low.
 
 ## Acceptance
-1. On a terminal, each screen above shows its designed form. A real console sample (a screenshot or a recorded SVG) of each is in this plan.
+1. On a terminal, each screen above shows its designed form; `experiment run` in both views. A real console sample (a screenshot or a recorded SVG) of each is in this plan.
 2. Every existing golden and plain-output test passes unchanged. `--json` and piped output are byte for byte as before.
 3. The live region never corrupts output:
    - a test drives it with a fake terminal (a pty or a writer capturing escapes) through updates, a resize and a cancel;
    - it leaves the screen clean;
    - nothing is written to a non-terminal except plain lines.
 4. `NO_COLOR`, `TERM=dumb`, a non-UTF-8 locale and a 40-column terminal each give a readable result.
-5. Docs: the guide's output section describes the dashboard and how to turn it off (`NO_COLOR`, `--plain` if added, or piping).
+5. Docs: the guide's output section describes both views, `--view` and `AGENTIUM_VIEW`, and plain output (`NO_COLOR` or piping).
 
 ## Boundaries
 - No new modules, no paid runs, no change to what is computed: only how it is shown.
