@@ -50,7 +50,8 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 // profile here (it fails nested inside another sandbox, Agentium run from an agent's shell, and outside macOS), and
 // this account can read the kernel's sandbox denials from the unified log (LogReadable): without them a failed grade
 // could never be told from a sandbox failure (decision 3), so sandbox mode is refused rather than run blind. It is
-// not the canary, which every grade still runs. Errors wrap ErrUnavailable, except cancellation.
+// not the canary, which every grade still runs. Errors wrap ErrUnavailable (and, for the log, ErrDenialsUnread too),
+// except cancellation.
 func Usable(ctx context.Context) error {
 	if _, err := os.Stat(Exec); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
@@ -71,7 +72,7 @@ func Usable(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return fmt.Errorf("%w: the unified log does not show the sandbox's denials to this account (%v), so a failed grade could not be told "+
+		return fmt.Errorf("%w: the unified log does not show the sandbox's denials to this account (%w), so a failed grade could not be told "+
 			"from a sandbox failure: grade on the host (--grader host), or run Agentium from an account whose `log show` shows kernel messages", ErrUnavailable, err)
 	}
 	return nil

@@ -28,6 +28,7 @@ func TestReadDenials(t *testing.T) {
 	other.sh("cat " + strconv.Quote(other.path("home/.aws/credentials")) + " >/dev/null 2>&1")
 	began := time.Now()
 	denials, err := ReadDenials(context.Background(), g.file, g.profile, since, 20*time.Second, probes)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,12 +57,16 @@ func TestReadDenials(t *testing.T) {
 	}
 }
 
-// Usable passes where sandbox-exec applies a profile, as it does for these tests, and fails nested inside another
-// sandbox (Agentium started from an agent's shell): a grade there would be infrastructure after the agent spent.
+// Usable passes where sandbox-exec applies a profile and the log shows its denials, as it does for these tests, and
+// refuses inside another sandbox (Agentium started from an agent's shell): a grade there would be infrastructure after
+// the agent spent. Where nesting is refused depends on macOS: locally the nested sandbox-exec fails; on GitHub's
+// macOS runners it applies, and the log probe then fails inside it. Either way Usable must refuse.
 func TestUsable(t *testing.T) {
 	needSandbox(t)
 	needLog(t)
-	if err := Usable(context.Background()); err != nil {
+	err := Usable(context.Background())
+	skipLogBlind(t, err)
+	if err != nil {
 		t.Fatal(err)
 	}
 	bin, err := os.Executable()
@@ -72,16 +77,9 @@ func TestUsable(t *testing.T) {
 	cmd.Env = []string{"PATH=/usr/bin:/bin", helperVar + "=usable"}
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
-	if !errors.As(err, &exit) || exit.ExitCode() != 3 || !strings.Contains(string(out), "inside another sandbox") {
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || !strings.Contains(string(out), ErrUnavailable.Error()) ||
+		!strings.Contains(string(out), "inside another sandbox") && !strings.Contains(string(out), "the unified log does not show") {
 		t.Errorf("nested: %v %s", err, out)
 	}
-}
-
-// needLog skips unless this account's unified log shows the kernel's sandbox denials (LogReadable): not every account
-// or CI runner does, and there Usable refuses sandbox mode, so Usable refuses sandbox mode there.
-func needLog(t *testing.T) {
-	t.Helper()
-	if err := LogReadable(context.Background(), 15*time.Second); err != nil {
-		t.Skipf("the unified log does not show sandbox denials here: %v", err)
-	}
+	t.Logf("nested: refused: %s", strings.TrimSpace(string(out)))
 }

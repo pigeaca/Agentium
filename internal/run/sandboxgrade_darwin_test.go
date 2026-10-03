@@ -21,14 +21,40 @@ import (
 	"github.com/pigeaca/agentium/internal/task"
 )
 
-// needSandbox skips unless sandbox-exec can apply a profile here (macOS, not nested in another sandbox).
+// needSandbox skips unless sandbox-exec can apply a profile here (macOS, not nested in another sandbox) and the
+// unified log shows its denials (sandbox.Usable).
 func needSandbox(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("starts sandboxed processes")
 	}
-	if err := sandbox.Usable(context.Background()); err != nil {
+	err := sandbox.Usable(context.Background())
+	skipLogBlind(t, err)
+	if err != nil {
 		t.Skipf("the grading sandbox: %v", err)
+	}
+}
+
+// logBlindSkip starts the message of every test skipped because this account's unified log did not show the
+// sandbox's denials (in time): CI lists the skipped tests, and this names the reason.
+const logBlindSkip = "LOG-BLIND: the unified log did not show the sandbox's denials here (in time)"
+
+// skipLogBlind skips when err says the log did not show the sandbox's denials (sandbox.ErrDenialsUnread): on GitHub's
+// macOS runners logd is slow and at times never shows a probe's denial, so a run's Usable check (or a grade's denial
+// read) can fail after needSandbox passed.
+func skipLogBlind(t *testing.T, err error) {
+	t.Helper()
+	if errors.Is(err, sandbox.ErrDenialsUnread) {
+		t.Skipf("%s: %v", logBlindSkip, err)
+	}
+}
+
+// needDenials skips when a grade's denials could not be read (task.SandboxGrade.Unread): what the test asserts of them
+// is unknown then.
+func needDenials(t *testing.T, g *task.SandboxGrade) {
+	t.Helper()
+	if g != nil && g.Unread != "" {
+		t.Skipf("%s: %s", logBlindSkip, g.Unread)
 	}
 }
 
@@ -111,12 +137,14 @@ func TestOnceGradesInTheSandbox(t *testing.T) {
 	needSandbox(t)
 	f := newOnceFixture(t, "printf 'new\\n' > value.txt", "grep -q new value.txt\n")
 	rec, err := Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Grader != task.GraderSandbox {
 		t.Fatalf("solved: %s, passed %v, grader %q, notes %v", rec.Outcome, rec.Passed, rec.Grader, rec.Notes)
 	}
+	needDenials(t, rec.Sandbox)
 	if g := rec.Sandbox; g == nil || g.Canary != task.CanaryPassed || len(g.Profile) != 64 || g.Unread != "" || g.FlaggedCount != 0 {
 		t.Errorf("the sandbox's report: %+v", g)
 	}
@@ -130,12 +158,14 @@ func TestOnceGradesInTheSandbox(t *testing.T) {
 	must(t, os.MkdirAll(filepath.Join(f.env.Home, ".ssh"), 0o700))
 	writeFile(t, filepath.Join(f.env.Home, ".ssh", "id_test"), "not a key\n")
 	rec, err = Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
 		t.Fatalf("idle: %s, passed %v, notes %v", rec.Outcome, rec.Passed, rec.Notes)
 	}
+	needDenials(t, rec.Sandbox)
 	if g := rec.Sandbox; g == nil || g.DenialCount == 0 || g.FlaggedCount != 0 {
 		t.Errorf("the idle run's denials: %+v", g)
 	}
@@ -144,6 +174,7 @@ func TestOnceGradesInTheSandbox(t *testing.T) {
 	f = newOnceFixture(t, "printf 'new\\n' > value.txt", "grep -q new value.txt\n")
 	f.spec.Keep = true
 	rec, err = Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil || rec.Passed == nil || !*rec.Passed {
 		t.Fatalf("kept: %v, %v", rec.Passed, err)
 	}
@@ -165,6 +196,7 @@ func TestOnceCanaryFailureIsInfrastructure(t *testing.T) {
 		return nil, fmt.Errorf("%w: sandbox-exec exited 65 (nested)", sandbox.ErrUnavailable)
 	}
 	rec, err := Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +223,11 @@ func TestOnceFlaggedDenials(t *testing.T) {
 	lookup := "/usr/bin/security find-generic-password -s agentium-made-up-service >/dev/null 2>&1; "
 	f := newOnceFixture(t, "", lookup+"grep -q new value.txt\n")
 	rec, err := Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	needDenials(t, rec.Sandbox)
 	if rec.Outcome != OutcomeSandboxFlagged || rec.Passed != nil || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 ||
 		rec.Sandbox.FlaggedOperations() != "mach-lookup" || !strings.Contains(strings.Join(rec.Notes, "\n"), "not counted and not tried again") {
 		t.Errorf("a flagged failure: %s, passed %v, sandbox %+v, notes %v", rec.Outcome, rec.Passed, rec.Sandbox, rec.Notes)
@@ -206,9 +240,11 @@ func TestOnceFlaggedDenials(t *testing.T) {
 
 	f = newOnceFixture(t, "printf 'new\\n' > value.txt", lookup+"grep -q new value.txt\n")
 	rec, err = Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	needDenials(t, rec.Sandbox)
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 {
 		t.Errorf("a flagged pass: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
 	}
@@ -218,9 +254,11 @@ func TestOnceFlaggedDenials(t *testing.T) {
 	f = newOnceFixture(t, "", lookup+"grep -q new value.txt\n")
 	f.spec.HarmlessDenials = []task.DenialKey{{Operation: "mach-lookup", Target: "com.apple.SecurityServer"}}
 	rec, err = Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
 	}
+	needDenials(t, rec.Sandbox)
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount != 0 || rec.Sandbox.Harmless == 0 {
 		t.Errorf("a harmless denial: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
 	}
@@ -235,6 +273,7 @@ func TestOnceGradeWarningsStayInTheLog(t *testing.T) {
 	leftover := `/usr/bin/perl -e 'use POSIX; exit 0 if fork; POSIX::setsid(); chdir "/"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null"; $0 = "hidden-SECRET"; sleep 300'`
 	f := newOnceFixture(t, "printf 'new\\n' > value.txt", leftover+"\ngrep -q new value.txt\n")
 	rec, err := Once(context.Background(), f.env, f.spec)
+	skipLogBlind(t, err)
 	if err != nil || rec.Passed == nil || !*rec.Passed {
 		t.Fatalf("%v, %v, notes %v", rec.Passed, err, rec.Notes)
 	}
@@ -266,6 +305,7 @@ func TestSetsidChildDiesWithTheGrade(t *testing.T) {
 	in := sandboxGrade{Root: f.root, Copy: f.copy, Agent: claude.Invocation{Tools: []string{"go"}, Home: homeDir, Deps: f.deps, SignIn: claude.SignInLogin}, Base: commitA,
 		Commands: []string{child}, Timeout: time.Minute, Log: &log, Running: func(int) {}, Warn: func(w string) { warnings = append(warnings, w) }}
 	_, ok, report, err := f.env.gradeInSandbox(context.Background(), in)
+	skipLogBlind(t, err)
 	if err != nil || !ok || report == nil || report.Canary != task.CanaryPassed {
 		t.Fatalf("the grade: ok %v, %+v, %v\n%s", ok, report, err, log.String())
 	}
@@ -292,6 +332,7 @@ func TestSetsidChildDiesWithTheGrade(t *testing.T) {
 	in.Root, in.Copy = filepath.Join(filepath.Dir(f.root), "grading-2"), f.newCopy(f.root)
 	in.Commands = []string{`! mv "$TMPDIR" "${TMPDIR}x" 2>/dev/null && ! rm -rf "$TMPDIR" 2>/dev/null && test -d "$TMPDIR" && ! mv "$PWD" "${PWD}x" 2>/dev/null`}
 	if _, ok, _, err := f.env.gradeInSandbox(context.Background(), in); err != nil || !ok {
+		skipLogBlind(t, err)
 		t.Errorf("the grade could move its own folders: %v, %v", ok, err)
 	}
 

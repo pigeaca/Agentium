@@ -43,6 +43,26 @@ func needSandbox(t *testing.T) {
 	}
 }
 
+// logBlindSkip starts the message of every test skipped because this account's unified log did not show the
+// sandbox's denials (in time): CI lists the skipped tests, and this names the reason.
+const logBlindSkip = "LOG-BLIND: the unified log did not show the sandbox's denials here (in time)"
+
+// needLog skips unless this account's unified log shows the kernel's sandbox denials (LogReadable). Not every
+// account does, and on GitHub's macOS runners logd is slow and at times never shows the probe's denial: there Usable
+// refuses sandbox mode, and these tests skip with logBlindSkip.
+func needLog(t *testing.T) {
+	t.Helper()
+	skipLogBlind(t, LogReadable(context.Background(), 15*time.Second))
+}
+
+// skipLogBlind skips when err says the log did not show the sandbox's denials (ErrDenialsUnread).
+func skipLogBlind(t *testing.T, err error) {
+	t.Helper()
+	if errors.Is(err, ErrDenialsUnread) {
+		t.Skipf("%s: %v", logBlindSkip, err)
+	}
+}
+
 // grade is a written profile over a fake layout, and a way to run commands under it.
 type grade struct {
 	t       *testing.T
