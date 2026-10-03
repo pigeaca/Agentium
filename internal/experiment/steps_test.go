@@ -9,8 +9,8 @@ import (
 	"github.com/pigeaca/agentium/internal/run"
 )
 
-// A slot's run reports each step it begins as a "step" event with its slot and attempt, for a live display, and its
-// grade comes back in the result; without an observer of events, the run gets no step callback at all.
+// A slot's run reports each step it begins as a "step" event with its slot and attempt, for a live display that asks
+// for them, and its grade comes back in the result; otherwise the run gets no step callback at all.
 func TestSlotReportsItsSteps(t *testing.T) {
 	x, _ := pairExecution(t)
 	x.tries, x.storedTries, x.seenSubagents = map[int]int{}, map[int]int{}, map[string]map[string][]string{}
@@ -19,7 +19,7 @@ func TestSlotReportsItsSteps(t *testing.T) {
 	}
 	var events []Event
 	x.event = func(e Event) { events = append(events, e) }
-	x.r.Observer.Event = func(Event) {}
+	x.r.Observer.Event, x.r.Observer.Steps = func(Event) {}, true
 	stepped := false
 	passed := true
 	x.r.ExecuteRun = func(_ context.Context, e run.Env, _ RunMeta, _ run.Spec) (run.Record, error) {
@@ -47,9 +47,13 @@ func TestSlotReportsItsSteps(t *testing.T) {
 		t.Errorf("steps %v", steps)
 	}
 
-	events, stepped = nil, false
-	x.r.Observer.Event = nil
-	if _, err := x.slot(context.Background(), slot, 3, nil); err != nil || stepped || len(events) != 0 {
-		t.Errorf("without an observer: stepped %v, %d event(s), %v", stepped, len(events), err)
+	// An observer that takes events but not steps (the plain lines, JSON) gets none: a stalled terminal there must not
+	// hold a run at a step boundary. Nor does an execution without an observer of events.
+	for _, o := range []Observer{{Event: func(Event) {}}, {Steps: true}} {
+		events, stepped = nil, false
+		x.r.Observer = o
+		if _, err := x.slot(context.Background(), slot, 3, nil); err != nil || stepped || len(events) != 0 {
+			t.Errorf("observer with events %v, steps %v: stepped %v, %d event(s), %v", o.Event != nil, o.Steps, stepped, len(events), err)
+		}
 	}
 }

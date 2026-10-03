@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -338,5 +340,77 @@ func TestLogViewGoldens(t *testing.T) {
 	checkWords(t, "the log view", plain)
 	if strings.Contains(color, "\r") || regexp.MustCompile(`\x1b\[[0-9;]*[A-HJK]`).MatchString(color) {
 		t.Errorf("the log view moves the cursor:\n%q", color)
+	}
+}
+
+// Ctrl-C on the dashboard: the region is cleared at once, the cursor comes back, and the question, every run of the
+// execution (the interrupted one as stopped) and the answer so far stay in the scrollback, above the plain summary.
+func TestDashboardCtrlC(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	expect(t, f.run(context.Background(), "experiment", "new", "stop", "--b", "lean", "--task", "value", "--repeats", "1", "--concurrency", "1"), ExitOK)
+	writeFile(t, ctrl, "hang", "s1-t1\n")
+	terminalVars(f)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		waitFor(t, "the second run's agent", func() bool {
+			_, err := os.Stat(filepath.Join(ctrl, "hanging-e1-s1-t1"))
+			return err == nil
+		})
+		cancel()
+	}()
+	r := f.run(ctx, "experiment", "run", "stop")
+	expect(t, r, ExitError)
+	if !strings.Contains(r.stdout, "\x1b[?25l") {
+		t.Fatal("the dashboard was never drawn")
+	}
+	lines, shown := vtScreen(r.stdout)
+	screen := term.Plain(strings.Join(lines, "\n"))
+	if !shown {
+		t.Error("the cursor stays hidden after Ctrl-C")
+	}
+	for _, gone := range []string{"Claude works", "fresh copy", "─ log ─"} {
+		if strings.Contains(screen, gone) {
+			t.Errorf("the region was left on screen (%q):\n%s", gone, screen)
+		}
+	}
+	tail := screen[strings.LastIndex(screen, "BASELINE  vs  LEAN"):]
+	for _, want := range []string{"✓ passed", "stopped (not counted)", "the answer so far", "stopped · run it again to go on",
+		"Experiment stop: stopped: interrupted", "To continue: agentium experiment run stop"} {
+		if !strings.Contains(tail, want) {
+			t.Errorf("the scrollback lacks %q:\n%s", want, tail)
+		}
+	}
+}
+
+// An error or a panic that ends the execution before its end still leaves what it ran: closing the screen prints the
+// question, every run's line and the answer, as stopped.
+func TestScreenCloseLeavesTheRuns(t *testing.T) {
+	t.Parallel()
+	for _, view := range []string{viewDashboard, viewLog} {
+		out := &syncBuffer{}
+		caps := term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}
+		_, screen := newRunScreen(context.Background(), Env{Stdout: out, Stderr: out, Now: time.Now}, view, caps, 85)
+		lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+		obs := screen.observer(nil)
+		obs.Begin(lock, experiment.Standing{Settled: map[int]bool{}})
+		passed := true
+		for pos := range 2 {
+			obs.Event(experiment.Event{Kind: "start", Slot: lock.Schedule[pos], Attempt: 1})
+			obs.Event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: 0.1}})
+		}
+		if err := screen.Close(); err != nil { // no Finish: the execution failed
+			t.Fatal(err)
+		}
+		lines, shown := vtScreen(out.String())
+		screen2 := term.Plain(strings.Join(lines, "\n"))
+		if !shown || strings.Count(screen2, "✓ passed") != 2 || !strings.Contains(screen2, "does trimmed save money?") ||
+			!strings.Contains(screen2, "stopped · run it again to go on") || strings.Contains(screen2, "fresh copy") {
+			t.Errorf("%s after an error:\n%s", view, screen2)
+		}
+		before := out.String()
+		if err := screen.Close(); err != nil || out.String() != before {
+			t.Errorf("%s: a second close printed again (%v)", view, err)
+		}
 	}
 }

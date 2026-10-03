@@ -25,8 +25,9 @@ const (
 // dotTime is how long the dot takes to travel from a finished step's box to the next one's.
 const dotTime = time.Second
 
-// logKeep is how many log lines a frame may show; the state keeps every line of the execution for the end.
-const logKeep = 8
+// logRows is the dashboard's log: the last 4 runs' results, in a fixed area. The state keeps every line of the
+// execution for the scrollback at the end.
+const logRows = 4
 
 // stateRun is one run as the screens follow it: its task and how far it got.
 type stateRun struct {
@@ -59,10 +60,16 @@ type runState struct {
 	until    time.Time // waiting for the plan's usage to reset
 	answer   answerState
 	log      []logEntry
+	// note is the dashboard's status line: the latest retry, pause, warning or comparison, in words, until it no longer
+	// applies (a retry's slot or a paused execution starts again). notePos is a retry's slot, else -1.
+	note     string
+	noteRole term.Role
+	notePos  int
 }
 
 func newRunState(f runFacts, s experiment.Standing, now func() time.Time) *runState {
-	st := &runState{facts: f, now: now, runs: map[int]*stateRun{}, settled: map[int]bool{}, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage}
+	st := &runState{facts: f, now: now, runs: map[int]*stateRun{}, settled: map[int]bool{}, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage,
+		notePos: -1}
 	for pos := range s.Settled {
 		st.settled[pos] = true
 	}
@@ -87,9 +94,13 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 	taskName := term.Sanitize(e.Slot.Task)
 	sentence := func(role term.Role, text string) {
 		added = append(added, logEntry{at: now, arm: -1, words: text, role: role, sentence: true})
+		s.note, s.noteRole, s.notePos = text, role, -1
 	}
 	switch e.Kind {
 	case "start":
+		if !s.until.IsZero() || s.notePos == e.Slot.Position {
+			s.note = ""
+		}
 		s.until = time.Time{}
 		s.spent = max(s.spent, e.SpentUSD)
 		r := &stateRun{pos: e.Slot.Position, arm: arm, attempt: e.Attempt, task: taskName, started: now}
@@ -134,8 +145,8 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		}
 	case "retry":
 		s.spent = max(s.spent, e.SpentUSD)
-		sentence(term.OutcomeInfra, fmt.Sprintf("trying %s again for %s in %s (it failed for a reason that is not Claude's)",
-			taskName, label, term.Elapsed(e.RetryIn)))
+		sentence(term.OutcomeInfra, fmt.Sprintf("retrying %s for %s in %s: it failed, not by Claude's doing", taskName, label, term.Elapsed(e.RetryIn)))
+		s.notePos = e.Slot.Position
 	case "wait":
 		s.until = e.Until
 		s.read(claude.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
@@ -145,9 +156,12 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		if e.Look == nil {
 			break
 		}
-		ended := s.answer.Ended
+		prev := s.answer
 		s.answer = answerOfLook(*e.Look, s.facts.looks, s.facts.tasks)
-		s.answer.Margin, s.answer.Ended = s.facts.margin, ended
+		s.answer.Margin, s.answer.Ended = s.facts.margin, prev.Ended
+		if !e.Look.Analysed && prev.Verdict != "" { // no task counted since: the last analysed check's answer stands, as in the report
+			s.answer.Verdict, s.answer.Estimate, s.answer.HasEstimate = prev.Verdict, prev.Estimate, prev.HasEstimate
+		}
 		headline, _ := answerWords(s.answer, s.facts.labels, s.facts.aa)
 		entry := logEntry{at: now, arm: -1, role: term.OutcomeOK, sentence: true, check: true,
 			words: fmt.Sprintf("checked the answer after %d tasks: %s", e.Look.Planned, headline)}
@@ -235,7 +249,8 @@ func (r *stateRun) finish(res experiment.Result, requeued bool, now time.Time) {
 func (s *runState) view() stateView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer}
+	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer,
+		note: s.note, noteRole: s.noteRole}
 	for pos := range s.settled {
 		if pos >= 0 && pos < len(s.facts.slotArm) {
 			v.settled[s.facts.slotArm[pos]]++
@@ -255,7 +270,11 @@ func (s *runState) view() stateView {
 			v.shown[arm], v.have[arm] = *shown, true
 		}
 	}
-	v.log = append([]logEntry(nil), s.log[max(len(s.log)-logKeep, 0):]...)
+	for i := len(s.log) - 1; i >= 0 && len(v.log) < logRows; i-- { // the latest runs' results, oldest first
+		if !s.log[i].sentence {
+			v.log = append([]logEntry{s.log[i]}, v.log...)
+		}
+	}
 	return v
 }
 
@@ -270,5 +289,7 @@ type stateView struct {
 	hasUsage bool
 	until    time.Time
 	answer   answerState
-	log      []logEntry
+	log      []logEntry // the last logRows runs' results
+	note     string
+	noteRole term.Role
 }

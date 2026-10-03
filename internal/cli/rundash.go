@@ -82,9 +82,8 @@ func dashboardFrame(v stateView, sh term.Shapes, now time.Time, width, height, t
 		if level >= 2 {
 			lay = oneLineLayout(width)
 		}
-		lines = v.panel(sh, lay, level, now, tick)
-		if len(lines) <= height || level == 3 {
-			lines = append(lines, v.logSection(sh, lay.total, min(width, term.MaxContentWidth), height-len(lines), level)...)
+		lines = append(v.panel(sh, lay, level, now, tick), v.logSection(sh, lay.total, min(width, term.MaxContentWidth), level)...)
+		if len(lines) <= height {
 			break
 		}
 	}
@@ -95,21 +94,18 @@ func dashboardFrame(v stateView, sh term.Shapes, now time.Time, width, height, t
 }
 
 // panel is the dashboard without its log at a level of compaction: 0 is everything, 1 drops the legend, 2 draws each
-// box on one line and the answer on one line, 3 draws each arm on one line.
+// box on one line and the answer on two, without the line of terms, 3 draws each arm on one line.
 func (v stateView) panel(sh term.Shapes, lay rowLayout, level int, now time.Time, tick int) []string {
 	m := marksFor(sh)
 	w := lay.total
-	center := func(line string) string { return strings.Repeat(" ", max((w-term.Width(line))/2, 0)) + line }
+	center := func(line string) string { return centered(w, line) }
 	var out []string
 	out = append(out, center(questionLine(sh, m, v.facts)))
 	if level < 3 {
 		out = append(out, " "+sh.Style.Paint(term.Muted, strings.Repeat(m.rule, max(w-1, 1))))
 	}
 	out = append(out, center(v.statusLine(sh, m, now)))
-	if !v.until.IsZero() {
-		out = append(out, center(sh.Style.Paint(term.LevelCaution, fmt.Sprintf("waiting for your Claude plan's usage to reset at %s %s in %s",
-			experiment.Clock(v.until, now), m.sep, term.Elapsed(max(v.until.Sub(now), 0))))))
-	}
+	out = append(out, v.infoLines(sh, m, w, level, now)...)
 	if !v.facts.sandboxed {
 		out = append(out, center(hostWarning(sh, m)))
 	}
@@ -140,6 +136,36 @@ func (v stateView) panel(sh term.Shapes, lay rowLayout, level int, now time.Time
 		out = append(out, answerLine(sh, m, v.answer, v.facts))
 	}
 	return out
+}
+
+// infoLines is the status line under the header, in rows that do not change with what it says: the latest pause,
+// retry or warning while it applies, else how the runs are run (on two lines where one is too narrow, and cut to one
+// on a short terminal).
+func (v stateView) infoLines(sh term.Shapes, m marks, w, level int, now time.Time) []string {
+	terms := packParts(v.facts.terms, w)
+	if level >= 2 {
+		terms = []string{v.facts.terms}
+	}
+	note, role := v.note, v.noteRole
+	if !v.until.IsZero() {
+		note, role = fmt.Sprintf("waiting for your Claude plan's usage to reset at %s %s in %s", experiment.Clock(v.until, now), m.sep,
+			term.Elapsed(max(v.until.Sub(now), 0))), term.LevelCaution
+	}
+	out := make([]string, len(terms))
+	for i, line := range terms {
+		if note == "" {
+			out[i] = centered(w, sh.Style.Paint(term.Muted, sh.Fit(m.words(line), w)))
+		}
+	}
+	if note != "" {
+		out[0] = centered(w, sh.Style.Paint(role, sh.Fit(m.words(note), w)))
+	}
+	return out
+}
+
+// centered puts line in the middle of w cells.
+func centered(w int, line string) string {
+	return strings.Repeat(" ", max((w-term.Width(line))/2, 0)) + line
 }
 
 // statusLine is the money spent against the budget, the plan's share used (a subscription's only) and each arm's
@@ -358,22 +384,23 @@ func putParts(c *term.Canvas, x, y, room int, parts []part) int {
 	return x
 }
 
-// logSection is the latest log lines under the panel, in room rows: a blank line and a heading first (the heading
-// alone on a short terminal), and nothing when there is no room for a line or no line yet.
-func (v stateView) logSection(sh term.Shapes, ruleWidth, width, room, level int) []string {
+// logSection is the log under the panel: a heading, then a fixed area of logRows rows with the latest runs' results,
+// blank until they come, so the frame never grows or jumps; a new run's line takes the oldest one's place. Pauses,
+// retries and warnings are the status line's, and the answer's checks the answer box's. A blank line comes first
+// unless the terminal is short.
+func (v stateView) logSection(sh term.Shapes, ruleWidth, width, level int) []string {
 	m := marksFor(sh)
-	var head []string
+	var out []string
 	if level < 2 {
-		head = append(head, "")
+		out = append(out, "")
 	}
-	head = append(head, " "+sh.Style.Paint(term.Muted, m.rule+" log "+strings.Repeat(m.rule, max(ruleWidth-7, 1))))
-	n := min(room-len(head), len(v.log))
-	if n <= 0 {
-		return nil
-	}
-	out := head
-	for _, e := range v.log[len(v.log)-n:] {
-		out = append(out, e.format(sh, m, v.facts, width))
+	out = append(out, " "+sh.Style.Paint(term.Muted, m.rule+" log "+strings.Repeat(m.rule, max(ruleWidth-7, 1))))
+	for i := range logRows {
+		line := ""
+		if i < len(v.log) {
+			line = v.log[i].format(sh, m, v.facts, width)
+		}
+		out = append(out, line)
 	}
 	return out
 }

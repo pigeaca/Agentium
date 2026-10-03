@@ -59,6 +59,9 @@ type Observer struct {
 	Begin  func(lock Lock, standing Standing)
 	Event  func(Event)
 	Finish func(Summary)
+	// Steps asks for each run's steps as events too (Kind "step"): only for a display that keeps up, since Event is
+	// called on the run's goroutine at each step boundary, and a stalled one would hold the run there.
+	Steps bool
 }
 
 // Runner runs an experiment: what it needs from the command line, as parameters. It holds no state of its own.
@@ -498,24 +501,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 			return RunOutcome{}, err
 		}
 	}
-	judging := ""
-	if design.Judge != nil {
-		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
-	}
-	comparing := ""
-	if design.JudgePairs != nil {
-		comparing = fmt.Sprintf("; each pair's comparison up to $%.2f", design.PairJudgeCapUSD())
-	}
-	runCap := fmt.Sprintf("$%.2f", design.RunBudgetUSD)
-	if design.PerArmProfiles() {
-		runCap = fmt.Sprintf("$%.2f", design.ArmRunBudgetUSD(design.Arms[0]))
-		if capB := design.ArmRunBudgetUSD(design.Arms[1]); capB != design.ArmRunBudgetUSD(design.Arms[0]) {
-			runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), capB)
-		}
-	}
-	fmt.Fprintf(out, "Running up to %d at a time; each run up to %s%s and %s%s; budget $%.2f. Ctrl-C stops it; run it again to resume.\n",
-		design.Concurrency, runCap, judging, design.Timeout, comparing, design.BudgetUSD)
-	if r.Observer.Begin != nil {
+	if r.Observer.Begin != nil { // the plain lines' observer prints RunningLine here
 		r.Observer.Begin(lock, standing)
 	}
 	backoff := r.Backoff
@@ -569,6 +555,28 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, errors.Join(runErr, err)
 	}
 	return RunOutcome{Summary: sum, JudgePaused: x.judgePaused.Load(), Err: runErr}, nil
+}
+
+// RunningLine is how the runs are run, as the plain lines say it before the first run: "Running up to 2 at a time; each
+// run up to $3.00 and 20m0s; budget $18.00. Ctrl-C stops it; run it again to resume."
+func RunningLine(design Design) string {
+	judging := ""
+	if design.Judge != nil {
+		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
+	}
+	comparing := ""
+	if design.JudgePairs != nil {
+		comparing = fmt.Sprintf("; each pair's comparison up to $%.2f", design.PairJudgeCapUSD())
+	}
+	runCap := fmt.Sprintf("$%.2f", design.RunBudgetUSD)
+	if design.PerArmProfiles() {
+		runCap = fmt.Sprintf("$%.2f", design.ArmRunBudgetUSD(design.Arms[0]))
+		if capB := design.ArmRunBudgetUSD(design.Arms[1]); capB != design.ArmRunBudgetUSD(design.Arms[0]) {
+			runCap = fmt.Sprintf("$%.2f (arm A) or $%.2f (arm B)", design.ArmRunBudgetUSD(design.Arms[0]), capB)
+		}
+	}
+	return fmt.Sprintf("Running up to %d at a time; each run up to %s%s and %s%s; budget $%.2f. Ctrl-C stops it; run it again to resume.",
+		design.Concurrency, runCap, judging, design.Timeout, comparing, design.BudgetUSD)
 }
 
 // priorAttempts turns the stored runs into the scheduler's earlier attempts, counts each slot's stored runs, and reads
@@ -737,7 +745,7 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	e.Expect = arm.Expect(lock.ClaudeCode)
 	e.Workspace = experimentWorkspace(x.stored.ID, slot.Position, try)
 	e.DenyExtra = nil
-	if x.event != nil && r.Observer.Event != nil { // each step of the run, for a live display
+	if x.event != nil && r.Observer.Event != nil && r.Observer.Steps { // each step of the run, for a live display
 		e.Step = func(step string) { x.event(Event{Kind: "step", Slot: slot, Attempt: attempt, Step: step}) }
 	}
 	for _, q := range overlap { // in this execution a slot runs at most MaxAttempts more times

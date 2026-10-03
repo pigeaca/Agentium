@@ -92,6 +92,9 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 	runner.Quiet = asJSON
 	defer release() // the run lock is held until the summary is printed
 	outcome, err := runner.Run(ctx, name, o)
+	if screen != nil {
+		screen.end(nil) // after an error from the runs, what they did prints before why they stopped
+	}
 	var usage experiment.UsageError
 	if errors.As(err, &usage) {
 		prefix := "agentium experiment run"
@@ -168,6 +171,7 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 	}
 	r.Observer = experiment.Observer{
 		Begin: func(lock experiment.Lock, s experiment.Standing) {
+			fmt.Fprintln(env.Stdout, experiment.RunningLine(lock.Design))
 			status = &runStatus{total: len(lock.Schedule), budget: lock.Design.BudgetUSD, settled: s.Settled, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage}
 			report = progressLines(env, lock)
 			live.Show(func() string { return status.text(env.Now()) })

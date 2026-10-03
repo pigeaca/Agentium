@@ -2,6 +2,7 @@
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
                spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+ 2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
                   ┆ sandbox: no internet, your secrets hidden
 
   baseline · map-keys
@@ -24,10 +25,17 @@
                   │           too early to tell            │
                   │       first check after 8 tasks        │
                   └────────────────────────────────────────┘
+
+ ─ log ────────────────────────────────────────────────────────────────────────
+
+
+
+
 === 99 columns, 40 rows
                   BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────────────────────────────
                     spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+     2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
                       ┆ sandbox: no internet, your secrets hidden
 
   baseline · map-keys
@@ -50,10 +58,17 @@
                        │           too early to tell            │
                        │       first check after 8 tasks        │
                        └────────────────────────────────────────┘
+
+ ─ log ─────────────────────────────────────────────────────────────────────────────────
+
+
+
+
 === 119 columns, 40 rows
                   BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────────────────────────────
                     spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+     2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
                       ┆ sandbox: no internet, your secrets hidden
 
   baseline · map-keys
@@ -76,10 +91,17 @@
                        │           too early to tell            │
                        │       first check after 8 tasks        │
                        └────────────────────────────────────────┘
+
+ ─ log ─────────────────────────────────────────────────────────────────────────────────
+
+
+
+
 === 79 columns, 23 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ─────────────────────────────────────────────────────────────────────────────
                spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
 
   baseline · map-keys
   │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
@@ -88,22 +110,29 @@
 
  the answer so far: too early to tell
    first check after 8 tasks
+ ─ log ───────────────────────────────────────────────────────────────────────
+
+
+
+
 === 79 columns, 12 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
- ─────────────────────────────────────────────────────────────────────────────
                spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
+ baseline · map-keys      ⠸ copy 1s ╌╌ – Claude ╌╌ – tests ╌╌ – result
+ trimmed · map-keys       ⠸ copy 1s ╌╌ – Claude ╌╌ – tests ╌╌ – result
+ the answer so far: too early to tell · first check after 8 tasks
+ ─ log ───────────────────────────────────────────────────────────────────────
 
-  baseline · map-keys
-  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
-  trimmed · map-keys
-  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
 
- the answer so far: too early to tell
-   first check after 8 tasks
+
+
 === 64 columns, 40 rows
      BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────
        spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+          2 at a time · each run up to $3 and 20 min
+               Ctrl-C stops; run again to go on
           ┆ sandbox: no internet, your secrets hidden
 
   baseline · map-keys
@@ -126,10 +155,17 @@
           │           too early to tell            │
           │       first check after 8 tasks        │
           └────────────────────────────────────────┘
+
+ ─ log ────────────────────────────────────────────────────────
+
+
+
+
 === ASCII, 79 columns, 40 rows
              BASELINE  vs  TRIMMED   -   does trimmed save money?
  ------------------------------------------------------------------------------
                spent $0.00 of $5 - baseline 0/16 - trimmed 0/16
+ 2 at a time - each run up to $3 and 20 min - Ctrl-C stops; run again to go on
                   : sandbox: no internet, your secrets hidden
 
   baseline - map-keys
@@ -152,3 +188,10 @@
                   |           too early to tell            |
                   |       first check after 8 tasks        |
                   +----------------------------------------+
+
+ - log ------------------------------------------------------------------------
+
+
+
+
+=== end

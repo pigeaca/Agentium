@@ -134,6 +134,7 @@ type runFacts struct {
 	limit     float64 // the usage limit, a share of the plan (0.85)
 	taskWidth int     // the widest task name shown, in cells
 	margin    float64 // the primary metric's margin
+	terms     string  // how the runs are run, in words (termsOf)
 }
 
 // maxNameWidth caps the arms' and tasks' names on the screen.
@@ -150,6 +151,7 @@ func factsOf(lock experiment.Lock, usageLimit float64) runFacts {
 		}
 	}
 	f.question = runQuestion(d, f.labels)
+	f.terms = termsOf(d, f.labels)
 	for _, s := range lock.Schedule {
 		i := f.arms[s.Arm]
 		f.slotArm = append(f.slotArm, i)
@@ -191,6 +193,50 @@ func armLabels(d experiment.Design) [2]string {
 		l[0], l[1] = l[0]+" 1", l[1]+" 2"
 	}
 	return l
+}
+
+// termsOf is how the runs are run, in plain words, as the plain lines' "Running up to …" says it: "2 at a time · each
+// run up to $3 and 20 min · Ctrl-C stops; run again to go on". The budget is in the status line.
+func termsOf(d experiment.Design, labels [2]string) string {
+	parts := []string{fmt.Sprintf("%d at a time", d.Concurrency)}
+	if d.Concurrency == 1 {
+		parts[0] = "one at a time"
+	}
+	capA := money(d.ArmRunBudgetUSD(d.Arms[0]))
+	runCap := capA
+	if capB := money(d.ArmRunBudgetUSD(d.Arms[len(d.Arms)-1])); d.PerArmProfiles() && capB != capA {
+		runCap = fmt.Sprintf("%s (%s) or %s (%s)", capA, labels[0], capB, labels[1])
+	}
+	parts = append(parts, "each run up to "+runCap+" and "+minutes(d.Timeout))
+	if d.Judge != nil {
+		parts = append(parts, "its judge up to "+money(d.JudgeCapUSD()))
+	}
+	if d.JudgePairs != nil {
+		parts = append(parts, "each pair's comparison up to "+money(d.PairJudgeCapUSD()))
+	}
+	return strings.Join(append(parts, "Ctrl-C stops; run again to go on"), " · ")
+}
+
+// packParts lays text's " · "-separated parts on as few lines of at most width cells as they fit (a part wider than
+// a line has one to itself).
+func packParts(text string, width int) []string {
+	var lines []string
+	for _, p := range strings.Split(text, " · ") {
+		if n := len(lines); n > 0 && term.Width(lines[n-1])+3+term.Width(p) <= width {
+			lines[n-1] += " · " + p
+			continue
+		}
+		lines = append(lines, p)
+	}
+	return lines
+}
+
+// minutes is a duration in words: "20 min", or "1m30s".
+func minutes(d time.Duration) string {
+	if d > 0 && d%time.Minute == 0 {
+		return fmt.Sprintf("%d min", d/time.Minute)
+	}
+	return term.Elapsed(d)
 }
 
 // runQuestion is what the experiment asks, in plain words.
@@ -276,7 +322,7 @@ func answerOfAnalysis(an experiment.Analysis, tasks int) (answerState, bool) {
 		if r.Role != experiment.RolePrimary {
 			continue
 		}
-		a := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: r.Tasks > 0, A: r.A, B: r.B,
+		a := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: r.Tasks >= 2, A: r.A, B: r.B,
 			All: tasks, Ended: experiment.StatusDone}
 		if math.IsNaN(a.Estimate) || math.IsInf(a.Estimate, 0) {
 			a.HasEstimate = false
@@ -300,18 +346,18 @@ func answerWords(a answerState, labels [2]string, aa bool) (headline, status str
 	case a.Decision == experiment.LookStop:
 		parts = append(parts, "stopped early: sure enough")
 	case a.Decision == experiment.LookFutility:
-		parts = append(parts, "stopped early", "more tasks would not help")
+		parts = append(parts, "stopped early", "more tasks are unlikely to settle it")
 	case a.Decision == experiment.LookFinal || a.Final():
 		parts = append(parts, afterAll(a.All))
-		if !a.decisive() {
+		if !a.decisive() && a.Verdict != "" {
 			parts = append(parts, "not sure")
 		}
 	case a.Seq && a.Decision == "":
-		parts = append(parts, nextCheck(a, "first check after %d tasks"))
+		parts = append(parts, nextCheck(a, "first check after %s"))
 	case a.Seq && a.Verdict == "":
-		parts = append(parts, "too few tasks finished in both", nextCheck(a, "next check after %d tasks"))
+		parts = append(parts, "too few tasks finished in both", nextCheck(a, "next check after %s"))
 	case a.Seq:
-		parts = append(parts, "not sure yet", nextCheck(a, "next check after %d tasks"))
+		parts = append(parts, "not sure yet", nextCheck(a, "next check after %s"))
 	default:
 		parts = append(parts, "the answer comes once "+allTasks(a.All)+" done")
 	}
@@ -351,7 +397,7 @@ func nextCheck(a answerState, format string) string {
 	if a.Next <= 0 {
 		return ""
 	}
-	return fmt.Sprintf(format, a.Next)
+	return fmt.Sprintf(format, taskCount(a.Next))
 }
 
 // slicesWithout drops the empty parts and those starting with any of prefixes.
@@ -411,12 +457,17 @@ func costWords(a answerState, b string, aa bool) string {
 		margin = "the margin"
 	}
 	switch {
+	case a.Verdict == "" && a.Final():
+		return "no answer: too few tasks finished in both"
 	case a.Verdict == "":
 		return "too early to tell"
+	case a.Verdict == stats.Exploratory:
+		return "too few tasks to tell" + est
 	case !a.HasEstimate:
 		return "no clear difference in cost"
 	case aa && (a.Verdict == stats.Improved || a.Verdict == stats.ImprovedSmall || a.Verdict == stats.Regressed):
-		return fmt.Sprintf("the two differ by %.0f%% with nothing changed: results vary a lot", math.Abs(math.Round(100*(a.Estimate-1))))
+		return fmt.Sprintf("the two differ by %.0f%% with nothing changed: a false alarm, or something besides the context differs",
+			math.Abs(math.Round(100*(a.Estimate-1))))
 	case aa && a.Verdict == stats.Equivalent:
 		return "no difference in cost, as expected" + est
 	case a.Verdict == stats.Improved:
@@ -429,8 +480,6 @@ func costWords(a answerState, b string, aa bool) string {
 		return "the same cost, within " + margin + est
 	case a.Verdict == stats.NoLoss:
 		return b + " costs no more, within " + margin + est
-	case a.Verdict == stats.Exploratory:
-		return "too few tasks to tell" + est
 	case a.Final():
 		return "no clear difference in cost"
 	case math.Abs(a.Estimate-1) <= a.Margin:
@@ -449,12 +498,16 @@ func successWords(a answerState, labels [2]string, aa bool) string {
 	}
 	points := fmt.Sprintf("%.0f points", 100*a.Margin)
 	switch {
+	case a.Verdict == "" && a.Final():
+		return "no answer: too few tasks finished in both"
 	case a.Verdict == "":
 		return "too early to tell"
+	case a.Verdict == stats.Exploratory:
+		return "too few tasks to tell" + rates
 	case !a.HasEstimate:
 		return "no clear difference in passed tasks"
 	case aa && (a.Verdict == stats.Improved || a.Verdict == stats.ImprovedSmall || a.Verdict == stats.Regressed):
-		return "the two differ with nothing changed: results vary a lot" + rates
+		return "the two differ with nothing changed: a false alarm, or something besides the context differs" + rates
 	case aa && (a.Verdict == stats.Equivalent || a.Verdict == stats.NoLoss):
 		return "no difference in passed tasks, as expected" + rates
 	case a.Verdict == stats.Improved:
@@ -467,8 +520,6 @@ func successWords(a answerState, labels [2]string, aa bool) string {
 		return "they pass about as many tasks, within " + points + rates
 	case a.Verdict == stats.NoLoss:
 		return b + " passes no fewer tasks, within " + points + rates
-	case a.Verdict == stats.Exploratory:
-		return "too few tasks to tell" + rates
 	case a.Final():
 		return "no clear difference in passed tasks" + rates
 	case math.Abs(a.Estimate) <= a.Margin:

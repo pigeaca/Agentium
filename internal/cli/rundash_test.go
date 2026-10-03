@@ -25,6 +25,7 @@ var updateGoldens = flag.Bool("update", false, "rewrite the dashboard's golden f
 // order (A then B), graded in the sandbox; seq adds checks after 8, 12 and 16 tasks.
 func screenLock(template, goal string, sandbox, seq bool) experiment.Lock {
 	d := experiment.Design{Template: template, Goal: goal, Repeats: 1, BudgetUSD: 5, CostMargin: 0.10, SuccessMargin: 0.15,
+		Concurrency: 2, RunBudgetUSD: 3, Timeout: 20 * time.Minute,
 		Arms: []experiment.Arm{{Name: "A", Context: experiment.BaseContext}, {Name: "B", Context: "trimmed", Snapshot: "abc"}}}
 	if template == experiment.TemplateAA {
 		d.Arms[1] = experiment.Arm{Name: "B", Context: experiment.BaseContext}
@@ -126,7 +127,8 @@ var (
 // checkGolden compares got with testdata/name, or writes it with -update.
 func checkGolden(t *testing.T, name, got string) {
 	t.Helper()
-	got = strings.ReplaceAll(got, "\x1b", `\e`)
+	// A frame ends with the log's blank rows: the marker keeps them, and a golden never ends with blank lines.
+	got = strings.ReplaceAll(got, "\x1b", `\e`) + "=== end\n"
 	path := filepath.Join("testdata", name)
 	if *updateGoldens {
 		if err := os.MkdirAll("testdata", 0o755); err != nil {
@@ -224,6 +226,19 @@ func TestDashboardGoldens(t *testing.T) {
 	}
 }
 
+// oneTask is a fixed cost design's answer when one task has cost in both arms: the analysis stops before its
+// intervals, so there is no estimate to show (not "-100%").
+func oneTask() answerState {
+	one := 1.0
+	an := experiment.Analysis{Results: []experiment.MetricResult{{Metric: experiment.MetricCost, Role: experiment.RolePrimary, Ratio: true, Tasks: 1,
+		A: &one, B: &one, Verdict: stats.Exploratory, Note: "fewer than two tasks have counted runs in both arms"}}}
+	a, ok := answerOfAnalysis(an, 12)
+	if !ok {
+		panic("no primary result")
+	}
+	return a
+}
+
 // TestAnswerWords is the verdict-to-words table: every verdict, check and stop reason in plain words.
 func TestAnswerWords(t *testing.T) {
 	t.Parallel()
@@ -263,7 +278,7 @@ func TestAnswerWords(t *testing.T) {
 		{"equivalent", cost(stats.Equivalent, 1.02, experiment.LookStop, 16), false,
 			"the answer: the same cost, within 10% (+2%) · stopped early: sure enough"},
 		{"futility", cost(stats.Inconclusive, 1.03, experiment.LookFutility, 16), false,
-			"the answer: no clear difference in cost · stopped early · more tasks would not help"},
+			"the answer: no clear difference in cost · stopped early · more tasks are unlikely to settle it"},
 		{"the last check, inconclusive", cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), false,
 			"the answer: no clear difference in cost · after all 16 tasks · not sure"},
 		{"the last check, improved", cost(stats.Improved, 0.70, experiment.LookFinal, 0), false,
@@ -293,7 +308,11 @@ func TestAnswerWords(t *testing.T) {
 		{"success inconclusive", success(stats.Inconclusive, 0.60, 0.70), false,
 			"the answer: no clear difference in passed tasks (trimmed 70%, baseline 60%) · after all 12 tasks · not sure"},
 		{"an A/A that differs", cost(stats.Improved, 0.80, experiment.LookStop, 12), true,
-			"the answer: the two differ by 20% with nothing changed: results vary a lot · stopped early: sure enough"},
+			"the answer: the two differ by 20% with nothing changed: a false alarm, or something besides the context differs · stopped early: sure enough"},
+		{"the last check, too few tasks", answerState{Metric: experiment.MetricCost, Seq: true, Decision: experiment.LookFinal, All: 16}, false,
+			"the answer: no answer: too few tasks finished in both · after all 16 tasks"},
+		{"a fixed cost design with one paired task", oneTask(), false,
+			"the answer: too few tasks to tell · after all 12 tasks · not sure"},
 		{"an A/A as expected", cost(stats.Equivalent, 1.01, experiment.LookStop, 12), true,
 			"the answer: no difference in cost, as expected (+1%) · stopped early: sure enough"},
 	} {
@@ -362,7 +381,12 @@ func TestDotTravelsAlongTheLine(t *testing.T) {
 	lay := layoutFor(79)
 	row := func() string { // the title row of baseline's boxes, at the connector from fresh copy to Claude works
 		lines := strings.Split(s.frame(plainUnicode, 79, 40, 0), "\n")
-		r := []rune(lines[8])
+		var r []rune
+		for _, l := range lines {
+			if strings.Contains(l, "│ fresh copy │") && r == nil {
+				r = []rune(l)
+			}
+		}
 		return string(r[lay.x[0]+lay.box : lay.x[1]])
 	}
 	var seen []string
@@ -376,5 +400,117 @@ func TestDotTravelsAlongTheLine(t *testing.T) {
 	want := []string{"●╌╌╌╌┆╌", "●╌╌╌╌┆╌", "╌●╌╌╌┆╌", "╌╌●╌╌┆╌", "╌╌●╌╌┆╌", "╌╌╌●╌┆╌", "╌╌╌╌●┆╌", "╌╌╌╌●┆╌", "╌╌╌╌╌●╌", "╌╌╌╌╌┆●"}
 	if strings.Join(seen, " ") != strings.Join(want, " ") {
 		t.Errorf("the dot's way, every 100ms:\n got %q\nwant %q", seen, want)
+	}
+}
+
+// A check that counted no task since the last one keeps the last answer, as the report does; a last check that never
+// had one says so.
+func TestUnanalysedCheckKeepsTheLastAnswer(t *testing.T) {
+	t.Parallel()
+	s := newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+	s.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 1, Planned: 8, Counted: 8, Analysed: true, Verdict: stats.Inconclusive,
+		Interval: &stats.Interval{Estimate: 0.84, Low: 0.6, High: 1.1}, Decision: experiment.LookContinue}, Looks: 3})
+	s.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 2, Planned: 12, Counted: 8, Decision: experiment.LookContinue}, Looks: 3})
+	a := s.state.view().answer
+	headline, status := answerWords(a, s.state.facts.labels, false)
+	if got := headline + " · " + status; got != "trimmed may be cheaper (16% less) · not sure yet · next check after 16 tasks" {
+		t.Errorf("after a check with no new task: %q", got)
+	}
+	s.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 3, Planned: 16, Counted: 8, Decision: experiment.LookFinal}, Looks: 3})
+	headline, status = answerWords(s.state.view().answer, s.state.facts.labels, false)
+	if got := headline + " · " + status; got != "no clear difference in cost · after all 16 tasks · not sure" {
+		t.Errorf("the last check: %q", got)
+	}
+}
+
+// A step reported for another attempt of the slot (a run that was retried) does not move the run on screen.
+func TestStepOfAnotherAttemptIsIgnored(t *testing.T) {
+	t.Parallel()
+	s := newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+	s.event(experiment.Event{Kind: "start", Slot: s.lock.Schedule[0], Attempt: 2})
+	s.event(experiment.Event{Kind: "step", Slot: s.lock.Schedule[0], Attempt: 1, Step: run.StepAgent})
+	if r := s.state.view().shown[0]; r.step != stepCopy || r.attempt != 2 {
+		t.Errorf("a stale step moved the run: step %d, attempt %d", r.step, r.attempt)
+	}
+	s.event(experiment.Event{Kind: "step", Slot: s.lock.Schedule[0], Attempt: 2, Step: run.StepAgent})
+	if r := s.state.view().shown[0]; r.step != stepAgent {
+		t.Errorf("the run's own step: step %d", r.step)
+	}
+}
+
+// The dashboard's log is a fixed area of the last 4 runs' results, from the first frame to the last: the frame never
+// grows, shrinks or jumps. Pauses, retries and warnings take the status line instead, and the checks the answer box.
+func TestDashboardLogIsFourFixedRows(t *testing.T) {
+	t.Parallel()
+	s := newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+	type size struct{ w, h int }
+	heights := map[size]int{}
+	check := func(when string) {
+		t.Helper()
+		for _, sz := range []size{{79, 40}, {79, 23}, {99, 30}} {
+			lines := strings.Split(s.frame(plainUnicode, sz.w, sz.h, 0), "\n")
+			head := -1
+			for i, l := range lines {
+				if strings.Contains(l, "─ log ─") {
+					head = i
+				}
+			}
+			if head < 0 || len(lines)-head-1 != logRows {
+				t.Errorf("%s at %v: the log area is %d rows:\n%s", when, sz, len(lines)-head-1, strings.Join(lines, "\n"))
+				continue
+			}
+			for _, l := range lines[head+1:] {
+				if strings.Contains(l, "checked") || strings.Contains(l, "retrying") || strings.Contains(l, "waiting") {
+					t.Errorf("%s at %v: a sentence in the log area: %q", when, sz, l)
+				}
+			}
+			if h, ok := heights[sz]; ok && h != len(lines) {
+				t.Errorf("%s at %v: the frame went from %d to %d rows", when, sz, h, len(lines))
+			}
+			heights[sz] = len(lines)
+		}
+	}
+	check("before any run")
+	for pos := range 12 {
+		s.whole(pos, pos%2 == 0)
+		check(fmt.Sprintf("after run %d", pos))
+		if pos == 3 {
+			s.event(experiment.Event{Kind: "retry", Slot: s.lock.Schedule[4], Attempt: 1, RetryIn: 30 * time.Second})
+			check("a retry")
+			if !strings.Contains(s.frame(plainUnicode, 79, 40, 0), "retrying uniq-by for baseline in 30s: it failed, not by Claude's doing") {
+				t.Errorf("the retry is not in the status line:\n%s", s.frame(plainUnicode, 79, 40, 0))
+			}
+		}
+		if pos == 7 {
+			s.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 1, Planned: 8, Counted: 8, Analysed: true, Verdict: stats.Inconclusive,
+				Interval: &stats.Interval{Estimate: 0.9, Low: 0.7, High: 1.1}, Decision: experiment.LookContinue}, Looks: 3})
+			s.event(experiment.Event{Kind: "wait", Until: s.clock.Now().Add(20 * time.Minute), Usage: 0.86})
+			check("a check and a pause")
+			if !strings.Contains(s.frame(plainUnicode, 79, 40, 0), "waiting for your Claude plan's usage to reset at 16:") {
+				t.Errorf("the pause is not in the status line:\n%s", s.frame(plainUnicode, 79, 40, 0))
+			}
+		}
+	}
+	// The last 4 runs, oldest first.
+	frame := s.frame(plainUnicode, 79, 40, 0)
+	tail := strings.Split(frame, "\n")
+	got := strings.Join(tail[len(tail)-4:], "\n")
+	for _, task := range []string{"zip", "flatten-deep"} {
+		if !strings.Contains(got, task) {
+			t.Errorf("the log area lacks %s:\n%s", task, got)
+		}
+	}
+	// The pause ended with the next run: the status line says how runs are run again.
+	s.start(12)
+	if f := s.frame(plainUnicode, 79, 40, 0); strings.Contains(f, "waiting for") || !strings.Contains(f, "2 at a time") {
+		t.Errorf("after the pause:\n%s", f)
+	}
+}
+
+// The boxes keep their full names on a terminal of 74 columns or more (a frame of 73), as the guide says.
+func TestLayoutNarrowsBelow74Columns(t *testing.T) {
+	t.Parallel()
+	if full, narrow := layoutFor(73), layoutFor(72); full.box != 14 || narrow.box != 10 || full.total > 73 {
+		t.Errorf("at 73 cells: %+v; at 72: %+v", full, narrow)
 	}
 }
