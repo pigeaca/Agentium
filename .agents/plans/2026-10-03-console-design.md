@@ -1,7 +1,7 @@
 # A designed console: a live dashboard and visual reports
 
 - Date: 2026-10-03
-- Status: Planned. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
+- Status: In Progress (2026-10-03): step 1 merged (#133), the design settled with the user over previews (#134), step 2 in progress. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
   - a **live dashboard** for a running experiment, redrawn in place;
   - **and a log format too** ("But also should be dashboard and just log format"): a styled, append-only log, chosen per call or once;
   - all four screen groups: `experiment run`, `experiment report`, `run show`, and `start` / `experiment plan` / `pool status`.

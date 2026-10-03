@@ -1,7 +1,7 @@
 # `agentium clean`: free the space of caches nothing uses
 
 - Date: 2026-10-03
-- Status: Planned. The user asked (2026-10-03), after hearing what accumulates: "Yes" to adding a cleanup command.
+- Status: Done (2026-10-03): merged in #132, reviewed (changes requested, then fixed). The user asked (2026-10-03), after hearing what accumulates: "Yes" to adding a cleanup command.
 - Scope: a new command that removes what Agentium keeps for reuse but no longer needs. Today nothing trims `~/.agentium/cache` and `~/.agentium/deps`: offline dependencies (Go modules, the Maven repository, Cargo, Python venvs per key), the grading seeds (one per project, tool set and base commit, #130) and the quarantine. Our pilots used 66–109 MB per project, growing with every new base commit and toolchain.
 
 ## Outcome
