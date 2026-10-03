@@ -65,6 +65,12 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		}
 		b.WriteString(st.Warn(localBindingNote) + "\n")
 	}
+	if note := graderNote(l); note != "" {
+		if l.LocalBinding || r.NorthStar != nil {
+			b.WriteString("\n")
+		}
+		b.WriteString(note + "\n")
+	}
 
 	section("Metrics", r.metricsIntro())
 	bootHead, tHead := r.intervalHeads()

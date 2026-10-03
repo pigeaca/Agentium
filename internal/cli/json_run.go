@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // The --json documents of the run commands. They carry no path: not the records folder, the workspace or Claude Code's.
@@ -38,8 +40,12 @@ type runInfo struct {
 	Behavior           behaviorDoc `json:"behavior"`
 	Drift              []string    `json:"drift"`
 	Notes              []string    `json:"notes"`
-	Started            time.Time   `json:"started"`
-	Finished           time.Time   `json:"finished"`
+	// Grader is where the run was graded: "host" or the sandbox's version ("sandbox-v1"); "host" for runs recorded
+	// before modes. Sandbox is what the grading sandbox reported, as counts (report.SandboxRow); null on the host.
+	Grader   string             `json:"grader"`
+	Sandbox  *report.SandboxRow `json:"sandbox"`
+	Started  time.Time          `json:"started"`
+	Finished time.Time          `json:"finished"`
 }
 
 // behaviorDoc is run.Behavior as the public schema has it, owned here so that a storage change cannot change the schema.
@@ -71,7 +77,8 @@ func runInfoOf(env Env, rec run.Record) runInfo {
 		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
 		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),
-		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Started: rec.Started, Finished: rec.Finished}
+		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Grader: task.GraderOf(rec.Grader), Sandbox: report.SandboxOf(rec.Sandbox),
+		Started: rec.Started, Finished: rec.Finished}
 }
 
 type runOnceDoc struct {

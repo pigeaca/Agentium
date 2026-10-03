@@ -16,6 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -44,6 +45,9 @@ type NewOptions struct {
 	PairJudgeModel, PairJudgeEffort string
 	// NoFutility turns off a cost experiment's futility stops (Design.NoFutility).
 	NoFutility bool
+	// Grader is the mode its runs grade in (Design.Grader): task.GraderHost or task.GraderSandbox. The command line
+	// gives the platform's default (task.DefaultGrader) unless --grader names one; empty is host.
+	Grader string
 
 	tier         Tier
 	profA, profB profile // model-ab: ProfileA and ProfileB, parsed
@@ -175,6 +179,9 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 		Goal: o.Goal, CostMargin: DefaultCostMargin, SuccessMargin: DefaultSuccessMargin, RunBudgetUSD: o.RunBudget,
 		BudgetUSD: o.Budget, Timeout: o.Timeout, VerifyTimeout: o.VerifyTimeout, Concurrency: o.Concurrency, Seed: o.Seed,
 		Method: NewMethod(o.Goal), NoFutility: o.NoFutility}
+	if task.GraderOf(o.Grader) != task.GraderHost { // a host design is stored as before modes, byte for byte
+		d.Grader = o.Grader
+	}
 	d.Version = d.WantVersion()
 	if o.Judge {
 		s := llmjudge.Settings{Model: o.JudgeModel, Effort: o.JudgeEffort}.WithDefaults()
@@ -266,7 +273,7 @@ func unknownBasis(d Design, ests ArmEstimates) string {
 // chooseTasks sets d.Tasks: the named tasks (each must be eligible), or the tier's seeded sample of the eligible ones.
 // It returns the eligible tasks; with none to sample from, the error is a *NoTasksError.
 func (p Project) chooseTasks(ctx context.Context, d *Design, o NewOptions) ([]string, error) {
-	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
+	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms, d.Grader)
 	if err != nil {
 		return nil, err
 	}

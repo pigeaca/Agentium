@@ -230,11 +230,15 @@ func validateBatchWith(ctx context.Context, env Env, w *workspace, tasks []store
 	if len(tasks) == 0 {
 		return []task.BatchResult{}, nil
 	}
+	// Once per command: sandbox-exec and a log that shows its denials (each task's preparation checks sandbox-exec only).
+	if err := run.SandboxUsable(ctx, o.Grader); err != nil {
+		return nil, err
+	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
 		return nil, err
 	}
-	v := w.validating(env, buildEnv, o.Timeout)
+	v := w.validating(env, buildEnv, o.Timeout, o.Grader)
 	if v.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
 		return nil, err
 	}

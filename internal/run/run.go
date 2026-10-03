@@ -31,6 +31,7 @@ import (
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/runner"
+	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/task"
@@ -53,6 +54,9 @@ type Spec struct {
 	// the resolver finds it) before the context commit: calibration asks the agent to repeat it, which proves that
 	// file really loads.
 	Probe string
+	// HarmlessDenials are the flagged denials the task's reference logged while passing its validation in the sandbox
+	// (task.Validation.Harmless, as the experiment's lock fixed them): a sandboxed grade does not flag them.
+	HarmlessDenials []task.DenialKey
 	// Judge, when set, has the judge give a graded run a verdict (Env.Judge), after grading and inside the run, so the
 	// experiment's concurrency bounds the calls too. It never changes the run's outcome or result.
 	Judge *judge.Settings
@@ -96,8 +100,20 @@ type Env struct {
 	// WarmWait bounds the wait for another warm-up of the project's dependencies; zero: DefaultWarmWait.
 	WarmWait time.Duration
 	// CommandEnv is added to the setup and verification commands' environment (BuildEnv); setup also gets the agent's
-	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE).
+	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE). A sandboxed grade does not use it: it gets the agent's
+	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
+	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
+	// experiment's lock decides it, run once its --grader. The record names it.
+	Grader string
+	// gradeAgent and gradeBase are what a sandboxed grade needs of the run, set by Once once the run's tools are known:
+	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
+	gradeAgent *claude.Invocation
+	gradeBase  string
+	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold), and readDenials
+	// sandbox.ReadDenials (tests make the log lag).
+	canary      func(ctx context.Context, file, digest string, p sandbox.Profile) ([]int, error)
+	readDenials func(ctx context.Context, file string, p sandbox.Profile, since time.Time, wait time.Duration, ignore []int) ([]sandbox.Denial, error)
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
@@ -183,6 +199,12 @@ type Record struct {
 	// Recovered says how a run left behind by a dead Agentium process was stored: RecoveredStopped (it was cut short,
 	// and is cancelled) or RecoveredFinished (it had finished).
 	Recovered string `json:"recovered,omitempty"`
+	// Grader is the mode the run was graded in, or would have been (task.GraderHost or task.GraderSandbox); empty in
+	// records made before modes, which were graded on the host (task.GraderOf).
+	Grader string `json:"grader,omitempty"`
+	// Sandbox is what the grading sandbox reported (sandbox mode, once grading began): the canary's outcome, the
+	// profile's digest and the denials, flagged ones apart.
+	Sandbox *task.SandboxGrade `json:"sandbox,omitempty"`
 	// HarnessChanged lists what the arm's context changes that runs (hooks, settings, MCP), not only what the agent reads.
 	HarnessChanged []string `json:"harness_changed,omitempty"`
 	// ProjectSkills and ProjectCommands are the arm's own skill and command names at the context commit; calibration
@@ -238,7 +260,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
-		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID)}
+		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)
 	repo := filepath.Join(workspace, "repo")
@@ -290,6 +312,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if found := claudectx.InstructionFilesAbove(repo); len(found) > 0 {
 		return rec, fmt.Errorf("%s: Claude Code would load it into every run from above the workspace; move it, or set AGENTIUM_HOME elsewhere", strings.Join(found, ", "))
 	}
+	// A grade that cannot be sandboxed would be infrastructure after the agent spent: refused before anything starts
+	// (every grade still runs the full canary).
+	if err := sandboxApplies(ctx, env.Grader); err != nil {
+		return rec, err
+	}
 	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so
 	// change one arm's sandbox, warm-up or environment. A run that needs the user's opt-in for local binding stops here,
 	// before it costs anything.
@@ -302,6 +329,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	tools, importRoot := l.tools, l.importRoot
 	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
 		return rec, err
+	}
+	if env.sandboxed() {
+		if env.gradeBase, err = fullCommitOf(ctx, env.Bare, spec.Task.Base); err != nil {
+			return rec, err
+		}
 	}
 	prompt := spec.Instruction + suffix
 	if spec.PlainPrompt {
@@ -424,6 +456,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// tests run with the same settings for the agent and for grading.
 	inv.Venv, inv.ProjectMetadata, inv.ImportRoot = warmed.Venv, warmed.Metadata, importRoot
 	env = env.withCheckoutTools(profiles, inv.Deps, warmed, importRoot)
+	// A pointer to the run's invocation, not a copy: the grade reads it after the agent ran, by when only Started has
+	// changed (which the grade does not use); its folders, tools and denied paths are the agent's.
+	env.gradeAgent = &inv
 	rec.Notes = append(rec.Notes, buildtool.MissingRunners(ctx, warmed.Venv, spec.Task.Verify, env.environ())...)
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
@@ -580,8 +615,18 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
 	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
-		if err := env.grade(ctx, spec, repo, graded, &rec, running); err != nil {
+		if err := env.grade(ctx, spec, repo, graded, &rec, running); errors.Is(err, sandbox.ErrUnavailable) && ctx.Err() == nil {
+			// Fail closed: the sandbox did not hold, so nothing was graded, and the run is not the agent's result.
+			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+			note := gradeInfraNote(rec.Sandbox, err)
+			rec.Notes = append(rec.Notes, note)
+			env.progress("  %s", env.Style.Warn("warning: "+note))
+			return rec, nil
+		} else if err != nil {
 			return unfinished(err)
+		}
+		if rec.Passed == nil { // the grade was infrastructure (flagged sandbox denials): nothing to judge
+			break
 		}
 		if spec.Judge != nil {
 			// The graded run is complete. Judging can take repeats × judge.CallTimeout, so the records are redacted and
@@ -709,7 +754,20 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			failed = true
 		}
 	}
-	if !failed {
+	if !failed && env.sandboxed() {
+		ok, err := env.verifySandboxed(ctx, spec, graded, rec, running)
+		if err != nil {
+			return err
+		}
+		failed = !ok
+		if rec.Sandbox.FlaggedFailure(ok) { // decision 3: a failure the sandbox may have caused is not counted, nor tried again
+			rec.Outcome, rec.Passed = OutcomeSandboxFlagged, nil
+			note := gradeInfraNote(rec.Sandbox, nil)
+			rec.Notes = append(rec.Notes, note)
+			env.progress("  verification: %s", env.Style.Warn("left out: "+note))
+			return nil
+		}
+	} else if !failed {
 		var commands []task.Command
 		var ok bool
 		verify := env
@@ -728,6 +786,47 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	rec.Passed = &passed
 	env.progress("  verification: %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
 	return nil
+}
+
+// verifySandboxed runs the verification commands on the grading copy in the grading sandbox (gradeInSandbox), in the
+// run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept
+// (the copy then comes back to graded). It records the commands and what the sandbox reported, and adds a note for
+// denials it could not read and for what the grade left behind. An error wrapping sandbox.ErrUnavailable means
+// nothing was graded.
+func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, rec *Record, running func(pid int)) (bool, error) {
+	if env.gradeAgent == nil || env.gradeBase == "" {
+		return false, errors.New("a sandboxed grade needs the run's agent and base (Once sets them)")
+	}
+	log, err := os.OpenFile(filepath.Join(rec.RecordsDir, "verify.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("log: %w", err)
+	}
+	defer log.Close()
+	// What the grade left behind is told in verify.log and on the console, never in the record's notes, which reports
+	// share: a process name or a file name in a warning is the grade's choice.
+	warnings := 0
+	in := sandboxGrade{Root: filepath.Join(rec.RecordsDir, gradingFolder), Copy: graded, Agent: *env.gradeAgent, Base: env.gradeBase,
+		Commands: spec.Task.Verify, Harmless: spec.HarmlessDenials, Timeout: env.VerifyTimeout, Log: log, Running: running,
+		Warn: func(w string) {
+			warnings++
+			fmt.Fprintf(log, "[agentium] warning: %s\n", w)
+			env.progress("  %s", env.Style.Warn("warning: "+w))
+		}}
+	if spec.Keep {
+		in.Keep = graded
+	}
+	commands, ok, report, err := env.gradeInSandbox(ctx, in)
+	rec.Verify, rec.Sandbox = commands, report
+	if warnings > 0 {
+		rec.Notes = append(rec.Notes, fmt.Sprintf("grading: %d warning(s) about what the grade left behind (processes stopped, a folder quarantined): see verify.log", warnings))
+	}
+	if err != nil {
+		return false, err
+	}
+	if report.Unread != "" {
+		rec.Notes = append(rec.Notes, "graded in the sandbox, but its denials could not be read; the result stands as the tests gave it")
+	}
+	return ok, nil
 }
 
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
@@ -918,8 +1017,8 @@ func (env Env) progress(format string, args ...any) {
 func (env Env) redactRecords(dir string) error {
 	return filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
-			if d != nil && d.IsDir() && d.Name() == "verify" {
-				return filepath.SkipDir // the verification copy is the agent's work tree, removed after grading
+			if d != nil && d.IsDir() && (d.Name() == "verify" || d.Name() == gradingFolder && filepath.Dir(p) == dir) {
+				return filepath.SkipDir // the verification copy (and a sandboxed grade's folder) is the agent's work tree, removed after grading
 			}
 			return err
 		}

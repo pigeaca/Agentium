@@ -47,6 +47,9 @@ type Env struct {
 	Backoff func(attempt int) time.Duration
 	// Sleep waits for d or until ctx is cancelled (experiment run --wait); nil means a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// DefaultGrader is the grader mode commands use without --grader (task.GraderHost or task.GraderSandbox); empty
+	// means the platform's (task.DefaultGrader: the sandbox on macOS). main leaves it empty.
+	DefaultGrader string
 
 	// JSON is set by Run for a command given --json: the handler prints its document with emit instead of text, never
 	// asks a question, and uses no styles. Plain is the styling half alone (no escape codes whatever the terminal or

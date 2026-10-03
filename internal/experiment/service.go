@@ -109,10 +109,11 @@ func (p Project) EstimatesFor(ctx context.Context, d Design) (ArmEstimates, erro
 	return out, nil
 }
 
-// EligibleTasks returns the names of the tasks that can be in an experiment with these arms, and why each other task
-// cannot. Retired tasks (the task pool's) are out. Only designs not yet locked consult it (new, plan, the first run):
-// a locked experiment keeps its locked tasks, so resuming and reporting never check eligibility again.
-func (p Project) EligibleTasks(ctx context.Context, arms []Arm) ([]string, map[string]string, error) {
+// EligibleTasks returns the names of the tasks that can be in an experiment with these arms and grader mode
+// (Ineligible), and why each other task cannot. Retired tasks (the task pool's) are out. Only designs not yet locked
+// consult it (new, plan, the first run): a locked experiment keeps its locked tasks, so resuming and reporting never
+// check eligibility again.
+func (p Project) EligibleTasks(ctx context.Context, arms []Arm, grader string) ([]string, map[string]string, error) {
 	all, err := p.DB.Tasks(ctx, p.ID)
 	if err != nil {
 		return nil, nil, err
@@ -130,13 +131,34 @@ func (p Project) EligibleTasks(ctx context.Context, arms []Arm) ([]string, map[s
 		}
 		if t.Retired() {
 			reasons[t.Name] = "it is retired: " + t.RetiredReason
-		} else if why := Ineligible(c, arms); why != "" {
+		} else if why := Ineligible(c, arms, grader); why != "" {
 			reasons[t.Name] = why
 		} else {
 			eligible = append(eligible, t.Name)
 		}
 	}
 	return eligible, reasons, nil
+}
+
+// Revalidations lists the tasks of d that were validated in another mode than d's and that d validates again when it
+// locks (NeedsRevalidation), in d's order.
+func (p Project) Revalidations(ctx context.Context, d Design) ([]string, error) {
+	var names []string
+	for _, name := range d.Tasks {
+		t, err := p.DB.TaskByName(ctx, p.ID, name)
+		if err != nil {
+			continue // removed: readiness reports it
+		}
+		c := Candidate{Name: t.Name}
+		if t.Validation != nil {
+			v := task.ValidationOf(t)
+			c.Validation = &v
+		}
+		if NeedsRevalidation(c, d.Grader) {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 // WriteIneligible lists why tasks cannot be in an experiment, by name.

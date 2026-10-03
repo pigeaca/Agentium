@@ -58,6 +58,12 @@ func (r Report) Markdown(w io.Writer) error {
 		}
 		b.WriteString(localBindingNote + "\n")
 	}
+	if note := graderNote(l); note != "" {
+		if l.LocalBinding || r.NorthStar != nil {
+			b.WriteString("\n")
+		}
+		b.WriteString(note + "\n")
+	}
 
 	bootHead, tHead := r.intervalHeads()
 	fmt.Fprintf(&b, "\n## Metrics\n\n%s\n\n", r.metricsIntro())
@@ -298,6 +304,9 @@ func headlineParts(res experiment.MetricResult, d experiment.Design) (bold, mid,
 	case stats.Inconclusive:
 		if res.TasksToResolve > 0 {
 			verdict += fmt.Sprintf(" (about %d tasks would resolve it; this experiment has %d)", res.TasksToResolve, res.Tasks)
+		}
+		if res.Note != "" { // demoted by the per-arm sandbox check
+			verdict += " (" + res.Note + ")"
 		}
 	case stats.Exploratory:
 		verdict = "exploratory: too few tasks or runs for a verdict"

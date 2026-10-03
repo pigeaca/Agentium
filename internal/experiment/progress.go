@@ -16,7 +16,10 @@ import (
 type ArmProgress struct {
 	Name, Context                                              string
 	Fair, Successes, Passed, Unfair, Infra, Cancelled, Settled int
-	CostUSD                                                    float64
+	// LeftOutSandbox counts runs left out because their sandboxed grade failed with flagged denials
+	// (run.OutcomeSandboxFlagged): settled, not counted, not tried again. Infra does not count them.
+	LeftOutSandbox int
+	CostUSD        float64
 }
 
 // Progress is where an experiment stands, from its stored runs: what WriteProgress prints and the experiment commands'
@@ -89,6 +92,8 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 			c.Unfair++
 		case r.Outcome == "cancelled":
 			c.Cancelled++
+		case r.Outcome == run.OutcomeSandboxFlagged:
+			c.LeftOutSandbox++
 		default:
 			c.Infra++
 		}
@@ -163,6 +168,10 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 	for _, c := range pr.Arms {
 		table.Row(c.Name, c.Context, fmt.Sprintf("%d/%d", c.Settled, pr.Slots/2), strconv.Itoa(c.Fair), strconv.Itoa(c.Successes),
 			strconv.Itoa(c.Unfair), strconv.Itoa(c.Infra), strconv.Itoa(c.Cancelled), fmt.Sprintf("$%.2f", c.CostUSD))
+		if c.LeftOutSandbox > 0 {
+			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d run(s) left out for sandbox denials the agent's sandbox does not impose (%s): settled, not counted, not tried again",
+				c.Name, c.LeftOutSandbox, run.OutcomeSandboxFlagged)))
+		}
 		if c.Passed > c.Successes {
 			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", c.Name, c.Passed-c.Successes)))
 		}

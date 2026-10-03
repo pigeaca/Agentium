@@ -315,7 +315,7 @@ func TestExperimentHelperProcess(t *testing.T) {
 		t.Skip("run by TestExperimentSurvivesAKill")
 	}
 	dir, _ := os.Getwd()
-	code := Run(context.Background(), Env{Args: strings.Split(os.Getenv("AGENTIUM_TEST_ARGS"), " "), Stdout: os.Stdout, Stderr: os.Stderr,
+	code := Run(context.Background(), Env{DefaultGrader: "host", Args: strings.Split(os.Getenv("AGENTIUM_TEST_ARGS"), " "), Stdout: os.Stdout, Stderr: os.Stderr,
 		Dir: dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
 		Backoff: func(int) time.Duration { return 10 * time.Millisecond }})
 	os.Exit(code)

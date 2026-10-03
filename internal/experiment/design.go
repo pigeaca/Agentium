@@ -56,16 +56,20 @@ type Arm struct {
 // DesignVersion is the version of a context experiment's stored form. A model-ab design is stored as
 // DesignVersionModelAB: an older Agentium, which would run both arms on arm A's model, refuses it. A seq-v1 design, of
 // any template, is stored as DesignVersionSeq: an older Agentium, which would run its 16 tasks as one fixed design at
-// 95%, refuses it.
+// 95%, refuses it. A design that grades in the sandbox, of any template and method, is stored as DesignVersionSandbox:
+// an older Agentium, which would grade its runs on the host, refuses it.
 const (
 	DesignVersion        = 1
 	DesignVersionModelAB = 2
 	DesignVersionSeq     = 3
+	DesignVersionSandbox = 4
 )
 
-// WantVersion is the stored version a design of its template and method carries.
+// WantVersion is the stored version a design of its template, method and grader carries.
 func (d Design) WantVersion() int {
 	switch {
+	case task.GraderOf(d.Grader) != task.GraderHost:
+		return DesignVersionSandbox
 	case d.Method == MethodSeq:
 		return DesignVersionSeq
 	case d.Template == TemplateModelAB:
@@ -129,6 +133,10 @@ type Design struct {
 	Method string `json:"method,omitempty"`
 	// NoFutility turns a seq-v1 design's futility stops off (they are on by default, and non-binding either way).
 	NoFutility bool `json:"no_futility,omitempty"`
+	// Grader is the mode the runs are graded in, which the lock fixes: task.GraderSandbox, or empty for the host (a host
+	// design is stored as designs were before modes, and those grade on the host: task.GraderOf). An existing
+	// experiment keeps its mode.
+	Grader string `json:"grader,omitempty"`
 }
 
 // Default margins (the study's §5.6).
@@ -393,6 +401,9 @@ func (d Design) Validate() error {
 		errs = append(errs, fmt.Errorf("the seed must be at most %d", uint64(MaxSeed)))
 	}
 	errs = append(errs, d.validateMethod()...)
+	if !task.KnownGrader(d.Grader) {
+		errs = append(errs, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", d.Grader, task.GraderSandbox))
+	}
 	if j := d.Judge; j != nil {
 		if j.Repeats < 1 || j.Repeats > MaxJudgeRepeats {
 			errs = append(errs, fmt.Errorf("the judge's repeats must be 1 to %d", MaxJudgeRepeats))
@@ -474,11 +485,13 @@ type Candidate struct {
 	Validation  *task.Validation // nil when never validated
 }
 
-// Ineligible says why a task cannot be in an experiment with these arms, or returns "" when it can: it must be
-// reviewed for solution leaks, and its hidden tests must fail on the base and pass with the reference in every arm's
-// context (the last `task validate`). Judge-graded tasks are refused: experiments grade by tests only, and must not
-// count such a task's runs as if its verification commands decided them.
-func Ineligible(c Candidate, arms []Arm) string {
+// Ineligible says why a task cannot be in an experiment with these arms and grader mode, or returns "" when it can: it
+// must be reviewed for solution leaks, and its hidden tests must fail on the base and pass with the reference in every
+// arm's context (the last `task validate`), in the experiment's mode. A task validated in another mode is refused by a
+// host experiment; a sandbox experiment takes it, and validates it again in the sandbox when it locks
+// (NeedsRevalidation). Judge-graded tasks are refused: experiments grade by tests only, and must not count such a
+// task's runs as if its verification commands decided them.
+func Ineligible(c Candidate, arms []Arm, grader string) string {
 	if c.Grading == task.GradingJudge {
 		return "it is judge-graded (its solution has no tests); experiments take judge-graded tasks in a later version"
 	}
@@ -501,7 +514,19 @@ func Ineligible(c Candidate, arms []Arm) string {
 			return fmt.Sprintf("not validated in context %s", a.Context) + validateHint(c.Name, arms)
 		}
 	}
+	if mode := task.GraderOf(grader); task.GraderOf(v.Grader) != mode && mode == task.GraderHost {
+		return fmt.Sprintf("it was validated %s, but this experiment grades on the host (%s --grader host)", task.DescribeGrader(v.Grader),
+			validateCommand(c.Name, arms))
+	}
 	return ""
+}
+
+// NeedsRevalidation reports whether a task an experiment in mode grader may take was validated in another mode, so the
+// experiment validates it again in its own when it locks (the isolation plan's decision 5: time, no money). Only a
+// sandbox experiment does that; a host one refuses such a task (Ineligible).
+func NeedsRevalidation(c Candidate, grader string) bool {
+	mode := task.GraderOf(grader)
+	return c.Validation != nil && mode != task.GraderHost && task.GraderOf(c.Validation.Grader) != mode
 }
 
 func validateHint(name string, arms []Arm) string {

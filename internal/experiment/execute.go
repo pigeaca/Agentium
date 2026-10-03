@@ -250,7 +250,11 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 	var stopNote, pauseNote string
 	var runErr error
 	var streak []int // slots of the infrastructure failures in a row
-	warmWaits := 0   // attempts that waited out another run's dependency warm-up (not part of the streak)
+	// flagged is the slots of the runs left out for sandbox denials in a row (run.OutcomeSandboxFlagged): they settle
+	// without a retry, but many in a row on several slots is a toolchain the grading sandbox breaks, which more runs would
+	// only pay for.
+	var flagged []int
+	warmWaits := 0 // attempts that waited out another run's dependency warm-up (not part of the streak)
 	done := ctx.Done()
 	for {
 		if pauseNote == "" && p.Paused != nil {
@@ -425,8 +429,16 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				runErr = fmt.Errorf("slot %d (task %s, arm %s): %w", f.pos, p.Schedule[f.pos].Task, p.Schedule[f.pos].Arm, f.err)
 			}
 			switch outcome := f.result.Outcome; {
-			case Settles(outcome):
+			case LeftOutForSandbox(outcome):
 				s.settled, streak = true, nil
+				flagged = append(flagged, f.pos)
+				if len(flagged) >= InfraStreak && distinct(flagged) > 1 && stopNote == "" {
+					stopNote = fmt.Sprintf("%d runs in a row were left out for sandbox denials the agents' sandbox does not impose "+
+						"(a toolchain the grading sandbox breaks?): read a run's verify.log and denials, then resume, or start an experiment with --grader host",
+						len(flagged))
+				}
+			case Settles(outcome):
+				s.settled, streak, flagged = true, nil, nil
 			case requeued:
 				// run again later; not an attempt
 			default: // infrastructure, or no outcome at all
