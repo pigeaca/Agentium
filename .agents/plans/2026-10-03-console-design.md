@@ -76,7 +76,22 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
 
     ![The console's shapes](../../docs/images/console-shapes.svg)
-- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the step boxes, dotted connectors and moving dot above, in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+- [x] **2. `experiment run`** (and `start --yes`): the live dashboard (the step boxes, dotted connectors and moving dot above, in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+  - Done:
+    - **Events:** a run's steps reach the observer as `Event{Kind: "step"}` (`run.StepPreparing`, `StepAgent`, `StepGrading`, `StepJudging`, the words `Env.Step` already sent), only when an observer takes events. `Result.Passed` carries the grade, and `Observer.Finish` gets the `Summary`. Records, JSON and the plain lines are unchanged.
+    - **The screens** (`internal/cli`): `runstate.go` keeps the state behind a lock and copies it for each frame; `rundash.go` draws the dashboard on a `term.Canvas`; `runview.go` holds the words; `runscreen.go` wires either view to the observer.
+    - **Compaction:** the dashboard drops the legend, then draws boxes on one line, then each arm on one line. Below 73 columns it uses 10-cell boxes with short names.
+    - **The end:** the region clears, and the question, every run's line and the answer stay in the scrollback.
+    - **Plain words:** the answer's wording is one table (`answerWords`, tested case by case). A fixed design's answer is read from its analysis once every run is done.
+    - **Palette:** the arms are blue (75) and orange (215), the sandbox purple (141) and green 114; the term color goldens were rewritten for it.
+    - **Choosing the view:** `chooseView` gives the plain lines off a terminal, on `TERM=dumb`, below 60 columns, with `--json`, and with `NO_COLOR` unless a view is asked for.
+  - Samples, recorded from the real code with the test stand-in for Claude Code (2 s a run, no paid runs): the dashboard, animated ([`console-run-dashboard.svg`](../../docs/images/console-run-dashboard.svg)) and still ([`console-run-dashboard-still.svg`](../../docs/images/console-run-dashboard-still.svg)), and the log view ([`console-run-log.svg`](../../docs/images/console-run-log.svg)), with `scripts/readme_images/frames2svg.py`.
+  - Limits:
+    - The summary printed after the run (`WriteProgress`, shared with `experiment show`) still says "Looks" and "look 1 of 3": that is step 3's and step 5's.
+    - Revalidation and calibration before the first run print their lines as before, with no spinner on the dashboard's terminal.
+    - A run that is never graded leaves its tests box at "–".
+    - With concurrency above 2, each arm shows its latest run.
+    - The in-frame log shows up to 8 lines.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
