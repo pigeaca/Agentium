@@ -39,7 +39,7 @@
 - Package ownership: a new `internal/cli/clean.go` and a small service (in `internal/run` or a new `internal/cleanup`). Isolation step 3 (#131) is in flight in `internal/run` and `internal/cli`: avoid its files, and merge main before landing.
 
 ## Work
-- [ ] **1. The command** (risk: medium-high: it deletes data). Rules, the dry run, `--yes`, the stamps, tests, docs.
+- [x] **1. The command** (risk: medium-high: it deletes data). Rules, the dry run, `--yes`, the stamps, tests, docs. Done: `internal/run/clean.go`, `clean_leftovers.go` and `internal/cli/clean.go`; last use is the seed folder's and the warm-up stamp's modification time (`markUsed`); nothing used in the last hour goes (validations take no run lock); removals go through the quarantine.
 
 ## Verification
 - `python3 scripts/harness.py check changed`, the new tests, and a review with the threat checklist (crash and recovery, persistence, concurrent runs).
