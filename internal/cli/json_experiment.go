@@ -15,6 +15,7 @@ import (
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // The --json documents of the experiment commands (docs/guide.md, "Scripting and automation"). They carry no path and
@@ -43,12 +44,13 @@ type experimentDoc struct {
 	Concurrency   int                `json:"concurrency"`
 	Judge         bool               `json:"judge"`
 	JudgePairs    bool               `json:"judge_pairs"` // the pair judge, unvalidated: exploratory, never a verdict
+	Grader        string             `json:"grader"`      // host, or the sandbox's version (sandbox-v1): where its runs are graded
 }
 
 func experimentOf(name string, d experiment.Design) experimentDoc {
 	doc := experimentDoc{Name: name, Template: d.Template, Goal: d.Goal, Method: d.LockMethod(), Arms: []experimentArmDoc{}, Tasks: list(slices.Clone(d.Tasks)),
 		RepeatsPerArm: d.Repeats, Runs: d.Runs(), BudgetUSD: d.BudgetUSD, RunBudgetUSD: d.RunBudgetUSD, Concurrency: d.Concurrency, Judge: d.Judge != nil,
-		JudgePairs: d.JudgePairs != nil}
+		JudgePairs: d.JudgePairs != nil, Grader: task.GraderOf(d.Grader)}
 	for _, a := range d.Arms {
 		doc.Arms = append(doc.Arms, experimentArmDoc{Name: a.Name, Context: a.Context, Model: d.ArmModel(a), Effort: d.ArmEffort(a)})
 	}
@@ -359,15 +361,17 @@ type lockDoc struct {
 }
 
 type armProgressDoc struct {
-	Name      string  `json:"name"`
-	Context   string  `json:"context"`
-	Settled   int     `json:"settled"`
-	Fair      int     `json:"fair"`
-	Successes int     `json:"successes"`
-	Unfair    int     `json:"unfair"`
-	Infra     int     `json:"infra"`
-	Cancelled int     `json:"cancelled"`
-	CostUSD   float64 `json:"cost_usd"` // the agent's alone
+	Name      string `json:"name"`
+	Context   string `json:"context"`
+	Settled   int    `json:"settled"`
+	Fair      int    `json:"fair"`
+	Successes int    `json:"successes"`
+	Unfair    int    `json:"unfair"`
+	Infra     int    `json:"infra"`
+	// LeftOutSandbox counts runs left out for flagged sandbox denials (infra-sandbox): settled, never retried.
+	LeftOutSandbox int     `json:"left_out_sandbox"`
+	Cancelled      int     `json:"cancelled"`
+	CostUSD        float64 `json:"cost_usd"` // the agent's alone
 }
 
 // progressDoc is where a locked experiment stands. Slots are the schedule's runs (both arms); Settled counts slots with
@@ -394,7 +398,7 @@ func progressOf(p experiment.Progress) *progressDoc {
 		Arms: []armProgressDoc{}, Looks: looksOf(p.Sequential)}
 	for _, a := range p.Arms {
 		doc.Arms = append(doc.Arms, armProgressDoc{Name: a.Name, Context: a.Context, Settled: a.Settled, Fair: a.Fair, Successes: a.Successes,
-			Unfair: a.Unfair, Infra: a.Infra, Cancelled: a.Cancelled, CostUSD: a.CostUSD})
+			Unfair: a.Unfair, Infra: a.Infra, LeftOutSandbox: a.LeftOutSandbox, Cancelled: a.Cancelled, CostUSD: a.CostUSD})
 	}
 	if s := p.Sequential; s != nil && s.Ended != "" {
 		doc.EndedBy = &s.Ended

@@ -911,6 +911,7 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	maxHunks := fs.Int("max-hunks", task.DefaultMaxHunks, "with --weak-tests: how many hunks to try, in file and line order")
 	a.set = addSettingFlags(fs, "timeout", settingJobs, settingVerifyTimeout)
 	keep := fs.Bool("keep", false, "keep the checkouts for inspection")
+	grader := addGraderFlag(fs) // hidden: the guide's "Advanced flags"
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return a, code, false
@@ -918,7 +919,7 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 	given := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) {
 		given[f.Name] = true
-		if f.Name != "weak-tests" && f.Name != "max-hunks" {
+		if f.Name != "weak-tests" && f.Name != "max-hunks" && f.Name != "grader" {
 			a.notApplied = append(a.notApplied, "--"+f.Name)
 		}
 	})
@@ -957,7 +958,11 @@ func parseValidate(env Env, args []string) (a validateArgs, code int, ok bool) {
 		a.name = rest[0]
 	}
 	a.all, a.status, a.weak = *all, *status, *weak
-	a.opts = task.ValidateOptions{Repeat: *repeat, Weak: *weak, MaxHunks: *maxHunks, Keep: *keep} // Timeout: the project's
+	mode, err := grader.mode(env)
+	if err != nil {
+		return usage("%v", err)
+	}
+	a.opts = task.ValidateOptions{Repeat: *repeat, Weak: *weak, MaxHunks: *maxHunks, Keep: *keep, Grader: mode} // Timeout: the project's
 	return a, ExitOK, true
 }
 
@@ -975,7 +980,7 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 	o := a.opts
 	o.Timeout = verifyTimeoutOf(settings)
 	if a.all {
-		if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+		if o.Arms, err = w.validating(env, nil, 0, "").Arms(ctx, w.project.ID, a.snapshots); err != nil {
 			return fail(env, err)
 		}
 		return validateAll(ctx, env, w, a.status, o, jobsOf(settings))
@@ -1000,14 +1005,14 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 			return fail(env, err)
 		}
 	}
-	if o.Arms, err = w.validating(env, nil, 0).Arms(ctx, w.project.ID, a.snapshots); err != nil {
+	if o.Arms, err = w.validating(env, nil, 0, "").Arms(ctx, w.project.ID, a.snapshots); err != nil {
 		return fail(env, err)
 	}
 	buildEnv, err := run.BuildEnv(w.layout)
 	if err != nil {
 		return fail(env, err)
 	}
-	val := w.validating(env, buildEnv, o.Timeout)
+	val := w.validating(env, buildEnv, o.Timeout, o.Grader)
 	if val.Toolchain, err = w.hostToolchain(ctx, env); err != nil {
 		return fail(env, err)
 	}
@@ -1017,13 +1022,17 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 // validateOne validates t with o in the arms o names, with a live line and the stages' progress, stores the validation
 // and reports it.
 func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating, t store.Task, o task.ValidateOptions) int {
+	if err := run.SandboxUsable(ctx, o.Grader); err != nil { // once per command: the log probe is not repeated per stage
+		return fail(env, err)
+	}
 	env, live := liveEnv(env)
 	defer live.Stop()
 	v := val.Validator(t, o)
 	v.Progress, v.Style = env.Stdout, env.style()
 	v.Started = func(arm, stage string) { live.Step("validating " + t.Name + ": " + arm + ", " + stage) }
 	st := env.style()
-	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s)", t.Name, len(o.Arms))), strings.Join(t.Verify, "; "))
+	fmt.Fprintf(env.Stdout, "%s: %s\n", st.Heading(fmt.Sprintf("Validating %s in %d arm(s), %s", t.Name, len(o.Arms), task.DescribeGrader(o.Grader))),
+		strings.Join(t.Verify, "; "))
 	result, err := v.Validate(ctx, task.SpecOf(t), o.Arms)
 	live.Stop()
 	if err != nil {
@@ -1053,9 +1062,10 @@ func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating
 
 // validating is what validating w's tasks needs; buildEnv is the environment commands run in (run.BuildEnv). With
 // one, each validation warms its base's build tools as runs do (run.CheckoutCommands: Python's venv), so it runs the
-// verification as grading will, each warm-up command within timeout: the call's verify timeout (the project's setting
-// or the command's own override; 0: the setting).
-func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration) task.Validating {
+// verification as grading will, in grader mode (in the sandbox, as a run's grade: the validations' ValidateOptions
+// must name the same mode), each warm-up command within timeout: the call's verify timeout (the project's setting or
+// the command's own override; 0: the setting).
+func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration, grader string) task.Validating {
 	if timeout <= 0 {
 		timeout = verifyTimeoutOf(w.settings())
 	}
@@ -1068,7 +1078,12 @@ func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration
 		if env.Environ != nil {
 			environ = env.Environ()
 		}
-		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now}
+		accountHome := ""
+		if env.AccountHome != nil {
+			accountHome = env.AccountHome()
+		}
+		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now,
+			Grader: grader, Home: env.Getenv("HOME"), AccountHome: accountHome, ProjectRoot: w.root}
 		v.Checkout = func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return run.CheckoutCommands(ctx, c, base, verify, logPath)
 		}
@@ -1084,7 +1099,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 	if len(notApplied) > 0 {
 		fmt.Fprintln(out, note(st, strings.Join(notApplied, ", ")+" do(es) not apply: nothing runs for a judge-graded task"))
 	}
-	val := w.validating(env, nil, 0)
+	val := w.validating(env, nil, 0, "")
 	result, diff, err := val.Judged(ctx, t, env.Now())
 	if err != nil {
 		return fail(env, err)
@@ -1110,7 +1125,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 			st.Command("task edit "+t.Name+" --reviewed"))
 	}
 	if env.JSON {
-		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview,
+		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview, Grader: task.GraderOf(result.Grader),
 			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, Warnings: []string{},
 			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
 				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}

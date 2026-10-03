@@ -49,7 +49,7 @@ func TestTaskImportValidateAndManage(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv: func(key string) string { return vars[key] },
 			LookPath: func(name string) (string, error) {
@@ -183,7 +183,7 @@ func TestTaskFairnessGaps(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv:   func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
@@ -248,7 +248,7 @@ func TestTaskValidateWeakTests(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir()}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+		code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv:   func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
 		return cliResult{code, stdout.String(), stderr.String()}
@@ -289,7 +289,7 @@ func TestTaskRefusesInlineRustTests(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv:   func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },
@@ -362,7 +362,7 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(t.TempDir(), "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv:   func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },

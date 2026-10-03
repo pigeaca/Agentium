@@ -301,7 +301,7 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	floor := experiment.FloorsFor(experiment.MethodVersion)
 	o := experiment.NewOptions{Template: experiment.TemplateAA, ContextA: s.a, Repeats: floor.CostRepeats, Model: experiment.DefaultExperimentModel,
 		Goal: experiment.GoalCheaper, RunBudget: experiment.DefaultRunBudgetUSD, Budget: s.args.budget, Concurrency: experiment.DefaultConcurrency,
-		Timeout: experiment.DefaultRunTimeout, VerifyTimeout: verifyTimeoutOf(s.settings())}
+		Timeout: experiment.DefaultRunTimeout, VerifyTimeout: verifyTimeoutOf(s.settings()), Grader: defaultGrader(s.env)}
 	if s.b != "" {
 		o.Template, o.ContextB = experiment.TemplateContextAB, s.b
 	}
@@ -312,7 +312,7 @@ func (s *starter) createExperiment(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	eligible, _, err := w.service().EligibleTasks(ctx, arms)
+	eligible, _, err := w.service().EligibleTasks(ctx, arms, o.Grader)
 	if err != nil {
 		return "", err
 	}

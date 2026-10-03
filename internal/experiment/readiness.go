@@ -43,6 +43,10 @@ type ReadinessEnv struct {
 	Claude func() (string, error) // where Claude Code is
 	SignIn string                 // how runs would sign in now (claude.SignInAPIKey, ...)
 	Style  term.Style             // styles the commands the checks suggest
+	// Locking is set when the experiment locks: by then its tasks validated in another mode were validated again in
+	// its own (Runner.Revalidate), so one that still is not keeps it from running. Otherwise (plan) such a task is
+	// one the first run validates again.
+	Locking bool
 }
 
 // checker collects a readiness report's lines.
@@ -65,6 +69,7 @@ func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, el
 	c.contexts(ctx, p, e, d, version)
 	c.prices(d)
 	c.tasks(d, eligible, reasons)
+	c.graders(ctx, p, e, d)
 	c.fairness(ctx, p, e, d, eligible)
 	if c.r.Ready {
 		c.check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
@@ -160,6 +165,22 @@ func (c *checker) tasks(d Design, eligible []string, reasons map[string]string) 
 	}
 	if len(missing) > 0 {
 		c.line(false, "task(s) removed since the experiment was made: %s", strings.Join(missing, ", "))
+	}
+}
+
+// graders checks that the tasks were validated in the experiment's grader mode, or says that the first run validates
+// them again in it (a sandbox experiment, before it locks).
+func (c *checker) graders(ctx context.Context, p Project, e ReadinessEnv, d Design) {
+	names, err := p.Revalidations(ctx, d)
+	switch {
+	case err != nil:
+		c.line(false, "the tasks' validation modes could not be read: %v", err)
+	case len(names) > 0 && e.Locking:
+		c.line(false, "task(s) not validated %s, the experiment's grader: %s (%s)", task.DescribeGrader(d.Grader), strings.Join(names, ", "),
+			e.Style.Command("agentium task validate NAME --grader sandbox"+snapshotFlags(d.Arms)))
+	case len(names) > 0:
+		c.line(true, "%d task(s) validated in another mode are validated again %s when the experiment runs, before it locks (time, no money): %s",
+			len(names), task.DescribeGrader(d.Grader), strings.Join(names, ", "))
 	}
 }
 

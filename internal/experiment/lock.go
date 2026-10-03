@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -61,6 +62,14 @@ type Lock struct {
 	// Sequential is a seq-v1 lock's design: its looks, alpha, spending, nominal levels and futility setting. Absent
 	// from the other methods' locks, which read and encode as they did.
 	Sequential *Sequential `json:"sequential,omitempty"`
+	// Grader is the mode every run of the experiment grades in: task.GraderHost, or the sandbox by its profile's version
+	// (task.GraderSandbox), not a profile's digest (each grade's paths differ). Empty in locks made before modes, which
+	// graded on the host and resume so (task.GraderOf). One experiment never mixes modes.
+	Grader string `json:"grader,omitempty"`
+	// Harmless are, per task, the flagged denials its reference logged while passing its sandbox validation
+	// (task.Validation.Harmless), fixed at the lock: a sandboxed grade of the task does not flag them. Absent for host
+	// locks and tasks without any.
+	Harmless map[string][]task.DenialKey `json:"harmless_denials,omitempty"`
 }
 
 // LockedArm is an arm's context and the environment its runs must see.
@@ -166,6 +175,10 @@ func (l Lock) Check(cliVersion, signIn string) error {
 			return err
 		}
 	}
+	if !task.KnownGrader(l.Grader) {
+		return fmt.Errorf("its runs were graded in %s, which this Agentium does not grade in (it grades on the host or in %s): its later runs would not compare; start a new experiment",
+			l.Grader, task.GraderSandbox)
+	}
 	switch {
 	case cliVersion != l.ClaudeCode:
 		return fmt.Errorf("Claude Code is %s now, but the experiment's runs used %s: install %s again to continue, or start a new experiment", cliVersion, l.ClaudeCode, l.ClaudeCode)
@@ -206,9 +219,17 @@ func Fair(outcome string) bool {
 }
 
 // Settles reports whether a run settles its slot. Fair runs do; so do unfair ones (their environment drifted: they
-// are excluded, not retried, since a retry would drift the same way). Infrastructure failures are retried, and
-// cancelled runs are run again.
-func Settles(outcome string) bool { return Fair(outcome) || outcome == claude.OutcomeUnfair }
+// are excluded, not retried, since a retry would drift the same way), and sandboxed grades that failed with denials
+// the agent's sandbox does not impose (run.OutcomeSandboxFlagged: excluded, not retried, or an arm could re-roll its
+// failures; per-arm counts guard the verdicts, see SandboxCheck). Infrastructure failures are retried, and cancelled
+// runs are run again.
+func Settles(outcome string) bool {
+	return Fair(outcome) || outcome == claude.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
+}
+
+// LeftOutForSandbox reports whether a run was left out because its sandboxed grade failed with denials the agent's own
+// sandbox does not impose (run.OutcomeSandboxFlagged).
+func LeftOutForSandbox(outcome string) bool { return outcome == run.OutcomeSandboxFlagged }
 
 // Success reports whether a run counts as a success: a fair run that passed the verification with the hidden tests,
 // graded without test-runner configuration the agent changed beyond what the task's reference changes.

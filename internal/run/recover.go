@@ -429,7 +429,13 @@ func cleanGrade(layout home.Layout, dir string, warn func(string)) {
 			return
 		}
 	}
-	killed, err := stopUsing(buildtool.Profiles(), filepath.Join(grade, "cache"), grade, verify)
+	// The grade's own sandbox first, while its folder may still be locked (grading.stop), then what uses its folders.
+	killed, sandboxErr := stopSandboxed(filepath.Join(grade, "tmp"), dir)
+	more, err := stopUsing(buildtool.Profiles(), filepath.Join(grade, "cache"), grade, verify)
+	killed, err = append(killed, more...), errors.Join(sandboxErr, err)
+	if info, statErr := os.Lstat(grade); statErr == nil && info.IsDir() {
+		os.Chmod(grade, 0o700) // a dead grade's folder may still be locked; the removal makes it writable anyway
+	}
 	for _, k := range killed {
 		warn(fmt.Sprintf("run %s: its grade left a process running; it was stopped: %s", filepath.Base(dir), k))
 	}

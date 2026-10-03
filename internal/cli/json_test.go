@@ -296,7 +296,7 @@ func TestStartNeverBlocksOnStdin(t *testing.T) {
 		done := make(chan cliResult, 1)
 		go func() {
 			var stdout, stderr bytes.Buffer
-			code := Run(context.Background(), Env{Args: args, Stdin: blockingReader{stop}, StdinTerminal: terminal, Terminal: terminal, Stdout: &stdout,
+			code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdin: blockingReader{stop}, StdinTerminal: terminal, Terminal: terminal, Stdout: &stdout,
 				Stderr: &stderr, Dir: f.repo, Getenv: func(k string) string { return f.vars[k] },
 				Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
 				LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
