@@ -46,13 +46,10 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 	return spec, nil
 }
 
-// Usable checks, before anything is spent, that this machine can grade in the sandbox: sandbox-exec exists and applies a
-// profile here (it fails nested inside another sandbox, Agentium run from an agent's shell, and outside macOS), and
-// this account can read the kernel's sandbox denials from the unified log (LogReadable): without them a failed grade
-// could never be told from a sandbox failure (decision 3), so sandbox mode is refused rather than run blind. It is
-// not the canary, which every grade still runs. Errors wrap ErrUnavailable (and, for the log, ErrDenialsUnread too),
-// except cancellation.
-func Usable(ctx context.Context) error {
+// Applies checks that sandbox-exec exists and applies a profile here: it fails nested inside another sandbox (Agentium
+// run from an agent's shell) and outside macOS. It is quick (one short process), so every run checks it before its
+// agent starts. Errors wrap ErrUnavailable, except cancellation.
+func Applies(ctx context.Context) error {
 	if _, err := os.Stat(Exec); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
@@ -67,6 +64,19 @@ func Usable(ctx context.Context) error {
 	case !result.Passed():
 		return fmt.Errorf("%w: sandbox-exec exited %d (%s): is Agentium running inside another sandbox?", ErrUnavailable, result.ExitCode,
 			strings.TrimSpace(out.String()))
+	}
+	return nil
+}
+
+// Usable checks, before anything is spent, that this machine can grade in the sandbox: sandbox-exec applies a profile
+// here (Applies), and this account can read the kernel's sandbox denials from the unified log (LogReadable): without
+// them a failed grade could never be told from a sandbox failure (decision 3), so sandbox mode is refused rather than
+// run blind. The log probe takes about a second, so it runs once per command (an experiment's lock or resume, a
+// validation command), not per run. It is not the canary, which every grade still runs. Errors wrap ErrUnavailable
+// (and, for the log, ErrDenialsUnread too), except cancellation.
+func Usable(ctx context.Context) error {
+	if err := Applies(ctx); err != nil {
+		return err
 	}
 	if err := LogReadable(ctx, logReadableWait); err != nil {
 		if ctx.Err() != nil {

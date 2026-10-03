@@ -130,15 +130,18 @@ type Analysis struct {
 // SandboxCheck counts, per arm, the runs left out because their sandboxed grade failed with denials the agent's own
 // sandbox does not impose (run.OutcomeSandboxFlagged), against the counted pairs. Such runs settle without a retry, so
 // an arm cannot re-roll its failures; but an arm whose code trips the sandbox more often would lose its failures from
-// the count. So when the arms differ (Imbalanced) the cost and success verdicts are demoted to inconclusive, and AsFails
-// says what they would be with those runs counted as failures (a sensitivity check).
+// the count. So whenever any run was left out, AsFails says what the verdicts would be with those runs counted as
+// failures (a sensitivity check); when the arms differ (Imbalanced) every cost and success verdict is demoted to
+// inconclusive, and when they are balanced, those AsFails disagrees with (Disagrees).
 type SandboxCheck struct {
 	Flagged    map[string]int `json:"flagged"` // runs left out per arm
 	Pairs      int            `json:"pairs"`   // pairs with a counted run in both arms
 	Imbalanced bool           `json:"imbalanced"`
 	// AsFails maps each metric with a verdict (cost, success) to its verdict with the left-out runs counted as fails;
-	// only when Imbalanced.
+	// whenever any run was left out.
 	AsFails map[string]string `json:"as_fails,omitempty"`
+	// Disagrees lists the metrics demoted because AsFails gives another verdict, though the arms are balanced.
+	Disagrees []string `json:"disagrees,omitempty"`
 }
 
 // imbalanced reports whether flagged exclusions differ between arms a and b enough to demote the verdicts: one arm has
@@ -335,13 +338,16 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	return out, primaryZ, nil
 }
 
-// demote runs the per-arm check of flagged exclusions (sandboxCheck): when the arms differ, every cost and success
-// verdict becomes inconclusive, with a note, and the check records what they would be with those runs counted as
-// failures. A seq-v1 look is analysed here too, so it never stops on a verdict this demotes.
+// demote runs the per-arm check of flagged exclusions (sandboxCheck). Whenever any run was left out, it re-analyses
+// the runs with those counted as failures (AsFails: a sensitivity check the report always shows). A cost or success
+// verdict becomes inconclusive, with a note, when the arms differ (Imbalanced: all of them), or when counting the
+// left-out runs as fails gives another verdict (that one): a stricter reading of decision 3 than the per-arm threshold
+// alone, which a verdict could cross unnoticed. A seq-v1 look is analysed here too, so it never stops on a verdict this
+// demotes.
 func demote(l Lock, runs []RunData, lv lookLevels, out *Analysis) error {
 	c := sandboxCheck(l, runs)
 	out.Sandbox = c
-	if c == nil || !c.Imbalanced {
+	if c == nil || c.Flagged[l.Design.Arms[0].Name]+c.Flagged[l.Design.Arms[1].Name] == 0 {
 		return nil
 	}
 	lv.noSandboxCheck = true
@@ -360,9 +366,18 @@ func demote(l Lock, runs []RunData, lv lookLevels, out *Analysis) error {
 		if r.Role == RoleSecondary || r.Verdict == stats.Exploratory {
 			continue
 		}
+		switch {
+		case c.Imbalanced:
+			out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: the arms' runs left out for sandbox denials differ (%s %d, %s %d); "+
+				"counting them as fails gives %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric])
+		case c.AsFails[r.Metric] != r.Verdict:
+			c.Disagrees = append(c.Disagrees, r.Metric)
+			out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: with the runs left out for sandbox denials (%s %d, %s %d) counted as fails "+
+				"it is %s, not %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric], r.Verdict)
+		default:
+			continue
+		}
 		out.Results[i].Verdict = stats.Inconclusive
-		out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: the arms' runs left out for sandbox denials differ (%s %d, %s %d); "+
-			"counting them as fails gives %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric])
 	}
 	return nil
 }

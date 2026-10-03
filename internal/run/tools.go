@@ -366,7 +366,7 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	}
 	var sandboxed func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error)
 	if task.GraderOf(c.Grader) != task.GraderHost {
-		if err := SandboxUsable(ctx, c.Grader); err != nil {
+		if err := sandboxApplies(ctx, c.Grader); err != nil {
 			return task.CheckoutCommands{}, err
 		}
 		full, err := fullCommitOf(ctx, c.Bare, base)

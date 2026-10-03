@@ -96,7 +96,8 @@ func TestReportShowsFlaggedExclusionsPerArm(t *testing.T) {
 	rep.Terminal(&txt, term.Style{})
 	rep.JSON(&js)
 	for name, out := range map[string]string{"Markdown": md.String(), "terminal": txt.String(), "JSON": js.String()} {
-		for _, want := range []string{"were left out, not tried again (A 0, B 1;", "the cost and success verdicts are demoted to inconclusive (counting them as fails gives cost",
+		for _, want := range []string{"were left out, not tried again (A 0, B 1;", "counting them as fails gives cost ",
+			"the arms differ, so the cost and success verdicts are demoted to inconclusive",
 			"1 left out for sandbox denials (not tried again)"} {
 			if !strings.Contains(out, want) {
 				t.Errorf("%s lacks %q", name, want)
@@ -108,5 +109,34 @@ func TestReportShowsFlaggedExclusionsPerArm(t *testing.T) {
 	}
 	if !strings.Contains(js.String(), `"imbalanced": true`) || !strings.Contains(js.String(), `"as_fails"`) {
 		t.Error("the JSON analysis lacks the sandbox check")
+	}
+}
+
+// The lock's harmless sandbox denials name paths under the user's home and text a grade chose: the report shares a
+// count per task, in every format, never the denials.
+func TestReportSharesNoHarmlessDenial(t *testing.T) {
+	in := fixture()
+	in.Lock.Grader = task.GraderSandbox
+	name := in.Lock.Tasks[0].Name
+	in.Lock.Harmless = map[string][]task.DenialKey{name: {{Operation: "file-read-data", Target: "/Users/someone/.m2/settings.xml"},
+		{Operation: "mach-lookup", Target: "com.apple.SecretLeakingName"}}}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, txt, js bytes.Buffer
+	rep.Markdown(&md)
+	rep.Terminal(&txt, term.Style{})
+	rep.JSON(&js)
+	for format, out := range map[string]string{"Markdown": md.String(), "terminal": txt.String(), "JSON": js.String()} {
+		if strings.Contains(out, "SecretLeakingName") || strings.Contains(out, "settings.xml") || strings.Contains(out, "/Users/someone") {
+			t.Errorf("%s shares a harmless denial", format)
+		}
+	}
+	if !strings.Contains(js.String(), "(2 harmless denials)") {
+		t.Error("the JSON lock lacks the per-task count")
+	}
+	if got := in.Lock.Harmless[name][1].Target; got != "com.apple.SecretLeakingName" {
+		t.Error("the input's lock was changed")
 	}
 }

@@ -227,6 +227,10 @@ func Settles(outcome string) bool {
 	return Fair(outcome) || outcome == claude.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
 }
 
+// LeftOutForSandbox reports whether a run was left out because its sandboxed grade failed with denials the agent's own
+// sandbox does not impose (run.OutcomeSandboxFlagged).
+func LeftOutForSandbox(outcome string) bool { return outcome == run.OutcomeSandboxFlagged }
+
 // Success reports whether a run counts as a success: a fair run that passed the verification with the hidden tests,
 // graded without test-runner configuration the agent changed beyond what the task's reference changes.
 func Success(outcome string, passed *bool, configChanged []string) bool {

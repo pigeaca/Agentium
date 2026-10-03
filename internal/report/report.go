@@ -315,7 +315,8 @@ func (in Input) scrubAll(texts []string) []string {
 	return out
 }
 
-// redactLock keeps the lock for sharing: skill and command names, which can be personal, become counts, and Claude
+// redactLock keeps the lock for sharing: skill and command names, which can be personal, and the tasks' harmless
+// sandbox denials (paths and a grade's text) become counts, and Claude
 // Code's path (often under the user's home folder) its file name. The tasks' instructions and commands stay: they are
 // what was run.
 func redactLock(l experiment.Lock) experiment.Lock {
@@ -325,6 +326,14 @@ func redactLock(l experiment.Lock) experiment.Lock {
 	for i := range out.Arms {
 		out.Arms[i].Skills = []string{fmt.Sprintf("(%d %s)", len(l.Arms[i].Skills), plural(len(l.Arms[i].Skills), "skill"))}
 		out.Arms[i].SlashCommands = []string{fmt.Sprintf("(%d %s)", len(l.Arms[i].SlashCommands), plural(len(l.Arms[i].SlashCommands), "slash command"))}
+	}
+	// The tasks' harmless sandbox denials name paths (the grader's credential stores, sockets) and text a grade chose:
+	// shared as a count per task.
+	if len(l.Harmless) > 0 {
+		out.Harmless = map[string][]task.DenialKey{}
+		for name, keys := range l.Harmless {
+			out.Harmless[name] = []task.DenialKey{{Operation: fmt.Sprintf("(%d harmless %s)", len(keys), plural(len(keys), "denial"))}}
+		}
 	}
 	return out
 }
@@ -843,10 +852,18 @@ func sandboxNote(rep Report, runs []Run) string {
 			arms = append(arms, fmt.Sprintf("%s %d", a.Name, check.Flagged[a.Name]))
 		}
 		part := fmt.Sprintf("failed grades with denials the agents' own sandbox does not impose were left out, not tried again (%s; %d counted pair(s)); "+
-			"a task left out in one arm drops out of the paired comparison, and the other arm's run of it counts only in that arm's own rates",
-			strings.Join(arms, ", "), check.Pairs)
-		if check.Imbalanced {
-			part += "; the arms differ, so the cost and success verdicts are demoted to inconclusive (" + asFailsText(check) + ")"
+			"with one run per arm a task left out in one arm drops out of the paired comparison (with repeats it stays paired on its other runs), "+
+			"and the other arm's run of it counts in that arm's own rates; %s",
+			strings.Join(arms, ", "), check.Pairs, asFailsText(check))
+		switch {
+		case check.Imbalanced:
+			part += "; the arms differ, so the cost and success verdicts are demoted to inconclusive"
+		case len(check.Disagrees) > 0:
+			which := "that verdict is"
+			if len(check.Disagrees) > 1 {
+				which = "those verdicts are"
+			}
+			part += "; that changes the " + strings.Join(check.Disagrees, " and ") + " verdict, so " + which + " demoted to inconclusive"
 		}
 		parts = append(parts, part)
 	}

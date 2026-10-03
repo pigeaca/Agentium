@@ -110,8 +110,10 @@ type Env struct {
 	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
 	gradeAgent *claude.Invocation
 	gradeBase  string
-	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold).
-	canary func(ctx context.Context, file, digest string, p sandbox.Profile) ([]int, error)
+	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold), and readDenials
+	// sandbox.ReadDenials (tests make the log lag).
+	canary      func(ctx context.Context, file, digest string, p sandbox.Profile) ([]int, error)
+	readDenials func(ctx context.Context, file string, p sandbox.Profile, since time.Time, wait time.Duration, ignore []int) ([]sandbox.Denial, error)
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
@@ -312,7 +314,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	// A grade that cannot be sandboxed would be infrastructure after the agent spent: refused before anything starts
 	// (every grade still runs the full canary).
-	if err := SandboxUsable(ctx, env.Grader); err != nil {
+	if err := sandboxApplies(ctx, env.Grader); err != nil {
 		return rec, err
 	}
 	// The build tools come from the task's base commit, not the checkout: an arm's snapshot cannot add a build file and so

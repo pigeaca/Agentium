@@ -1022,6 +1022,9 @@ func taskValidate(ctx context.Context, env Env, args []string) int {
 // validateOne validates t with o in the arms o names, with a live line and the stages' progress, stores the validation
 // and reports it.
 func validateOne(ctx context.Context, env Env, w *workspace, val task.Validating, t store.Task, o task.ValidateOptions) int {
+	if err := run.SandboxUsable(ctx, o.Grader); err != nil { // once per command: the log probe is not repeated per stage
+		return fail(env, err)
+	}
 	env, live := liveEnv(env)
 	defer live.Stop()
 	v := val.Validator(t, o)

@@ -80,6 +80,7 @@ func TestDenialNoise(t *testing.T) {
 	}
 	for _, d := range []Denial{
 		{Operation: "mach-lookup", Target: "com.apple.SecurityServer"},
+		{Operation: Unparsed, Target: "x(1) deny(1) file-write-data /dev/dtracehelper /hsperfdata_u mDNSResponder"}, // chosen text: never noise
 		{Operation: "file-read-data", Target: "/Users/u/.ssh/id_ed25519"},
 		{Operation: "file-write-data", Target: "/dev/ttys001"},
 		{Operation: "network-outbound", Target: "1.1.1.1:443"},

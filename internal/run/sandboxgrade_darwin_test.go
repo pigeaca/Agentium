@@ -372,3 +372,21 @@ func TestRecoverALockedSandboxedGrade(t *testing.T) {
 	endsSoon(t, "a dead run's sandboxed grade process", ended)
 	gone(t, grade)
 }
+
+// A log that does not show one grade's denials in time neither stops the run (nor so an experiment) nor changes its
+// result: the denials are recorded as unread, with a note, and the tests' result stands.
+func TestOnceWithALaggingLog(t *testing.T) {
+	needSandbox(t)
+	f := newOnceFixture(t, "printf 'new\\n' > value.txt", "grep -q new value.txt\n")
+	f.env.readDenials = func(context.Context, string, sandbox.Profile, time.Time, time.Duration, []int) ([]sandbox.Denial, error) {
+		return nil, fmt.Errorf("%w: the probe's denial did not reach the unified log within 10s", sandbox.ErrDenialsUnread)
+	}
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatalf("a lagging log stopped the run: %v", err)
+	}
+	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || !strings.Contains(rec.Sandbox.Unread, "did not reach") ||
+		!strings.Contains(strings.Join(rec.Notes, "\n"), "its denials could not be read") {
+		t.Errorf("%s, passed %v, sandbox %+v, notes %v", rec.Outcome, rec.Passed, rec.Sandbox, rec.Notes)
+	}
+}

@@ -85,6 +85,9 @@ type Stage struct {
 	SetupFailedRuns int  `json:"setup_failed_runs,omitempty"`
 	TimedOutRuns    int  `json:"timed_out_runs,omitempty"`
 	Flaky           bool `json:"flaky,omitempty"`
+	// repeats are the runs fold folded into this stage (with --repeat above 1), for the sandbox checks that must see
+	// every run's denials (harmlessFailure); not stored.
+	repeats []Stage
 }
 
 // Validation is the outcome of validating a task.
@@ -116,9 +119,10 @@ type Validation struct {
 	// Grader is the mode the stages' verification ran in (GraderHost or GraderSandbox); empty in validations made before
 	// modes, which ran on the host (GraderOf). An experiment takes only tasks validated in its own mode.
 	Grader string `json:"grader,omitempty"`
-	// Harmless are the flagged denials (DenialKey) the reference stages logged while passing in the sandbox, in every
-	// arm: shown harmless for this task and toolchain, so a later grade's denial among them is not flagged. Absent in
-	// host validations and those made before it was kept: then every flagged denial counts.
+	// Harmless are the flagged denials (DenialKey) the passing reference stages logged in the sandbox: the union over
+	// the arms (and over each stage's repeats), so a denial any arm's reference logged counts. Shown harmless for this
+	// task and toolchain, a later grade's denial among them is not flagged. Absent in host validations and those made
+	// before it was kept: then every flagged denial counts.
 	Harmless []DenialKey `json:"harmless_denials,omitempty"`
 }
 
@@ -434,7 +438,10 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 		}
 	}
 	if len(stages) == 2 && harmlessFailure(stages[0], stages[1]) {
-		stages[0].OK = true
+		stages[0].OK, stages[0].Flaky = true, false
+		if stages[0].Runs > 0 {
+			stages[0].OKRuns = stages[0].Runs
+		}
 		if v.Progress != nil {
 			fmt.Fprintf(v.Progress, "  %-10s %-13s %s\n", arm.Name, StageHiddenTests,
 				v.Style.Status("ok: its sandbox denials are the reference's too, which passed with them"))
@@ -444,41 +451,79 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 	return stages, overlay.HarnessChanged, kept, nil
 }
 
-// flaggedOnly reports whether a stage is not OK only for its flagged sandbox denials: it failed as a hidden-tests stage
-// wants, without a timeout, a setup failure or flaky runs, but with denials the agent's sandbox does not impose.
-func flaggedOnly(s Stage) bool {
-	return !s.OK && s.Want == "fail" && !s.Passed && !s.SetupFailed && !s.Flaky && !timedOut(s.Commands) && s.Sandbox.FlaggedFailure(false)
+// stageRuns are a stage's runs: the repeats it folded, or the stage itself.
+func stageRuns(s Stage) []Stage {
+	if len(s.repeats) > 0 {
+		return s.repeats
+	}
+	return []Stage{s}
 }
 
-// harmlessFailure reports whether hidden, a hidden-tests stage not OK only for its flagged denials (flaggedOnly), failed
-// for its tests after all: the reference stage passed (OK) with every one of those denials (each kept, none beyond
-// task.MaxDenials). Then they are the task's toolchain's, not the sandbox's doing.
-func harmlessFailure(hidden, reference Stage) bool {
-	if hidden.Stage != StageHiddenTests || reference.Stage != StageReference || !flaggedOnly(hidden) || !reference.OK || !reference.Passed ||
-		reference.Sandbox == nil {
+// flaggedOnly reports whether a stage is not OK only for flagged sandbox denials: every run failed as a hidden-tests
+// stage wants, without a timeout or a setup failure, and each run that is not OK for all that logged denials the
+// agent's sandbox does not impose (with repeats, such runs are what made the stage flaky).
+func flaggedOnly(s Stage) bool {
+	if s.OK || s.Want != "fail" {
 		return false
 	}
-	listed := 0
-	for _, d := range hidden.Sandbox.Flagged {
-		listed += max(d.Repeats, 1)
-		if !slices.ContainsFunc(reference.Sandbox.Flagged, func(r sandbox.Denial) bool { return KeyOf(r) == KeyOf(d) }) {
+	flagged := false
+	for _, r := range stageRuns(s) {
+		if r.Passed || r.SetupFailed || timedOut(r.Commands) {
+			return false
+		}
+		if !r.OK {
+			if !r.Sandbox.FlaggedFailure(false) {
+				return false
+			}
+			flagged = true
+		}
+	}
+	return flagged
+}
+
+// harmlessFailure reports whether hidden, a hidden-tests stage not OK only for its flagged denials (flaggedOnly),
+// failed for its tests after all: the reference stage passed (OK) with every one of the denials of each of hidden's runs
+// that is not OK, all of them listed (a list cut at MaxDenials proves nothing about the rest). Then they are the task's
+// toolchain's, not the sandbox's doing.
+func harmlessFailure(hidden, reference Stage) bool {
+	if hidden.Stage != StageHiddenTests || reference.Stage != StageReference || !flaggedOnly(hidden) || !reference.OK || !reference.Passed {
+		return false
+	}
+	seen := harmlessOf([]Stage{reference})
+	for _, r := range stageRuns(hidden) {
+		if r.OK {
+			continue
+		}
+		listed := 0
+		for _, d := range r.Sandbox.Flagged {
+			listed += max(d.Repeats, 1)
+			if !slices.Contains(seen, KeyOf(d)) {
+				return false
+			}
+		}
+		if listed != r.Sandbox.FlaggedCount {
 			return false
 		}
 	}
-	return listed == hidden.Sandbox.FlaggedCount // a list cut at MaxDenials proves nothing about the rest
+	return true
 }
 
-// harmlessOf is the flagged denials the passing reference stages logged, each once, in stage order: shown harmless for
-// the task (Validation.Harmless).
+// harmlessOf is the flagged denials the passing reference stages logged (in every run of each, and so in every arm's),
+// each once, in stage order: shown harmless for the task (Validation.Harmless).
 func harmlessOf(stages []Stage) []DenialKey {
 	var keys []DenialKey
 	for _, s := range stages {
-		if s.Stage != StageReference || !s.OK || !s.Passed || s.Sandbox == nil {
+		if s.Stage != StageReference || !s.OK || !s.Passed {
 			continue
 		}
-		for _, d := range s.Sandbox.Flagged {
-			if k := KeyOf(d); !slices.Contains(keys, k) {
-				keys = append(keys, k)
+		for _, r := range stageRuns(s) {
+			if r.Sandbox == nil {
+				continue
+			}
+			for _, d := range r.Sandbox.Flagged {
+				if k := KeyOf(d); !slices.Contains(keys, k) {
+					keys = append(keys, k)
+				}
 			}
 		}
 	}
@@ -532,6 +577,7 @@ func fold(runs []Stage, n int) Stage {
 		}
 	}
 	stage.Runs = len(runs)
+	stage.repeats = runs
 	stage.PassedRuns, stage.OKRuns, stage.SetupFailedRuns, stage.TimedOutRuns = 0, 0, 0, 0
 	for _, r := range runs {
 		if r.Passed {

@@ -42,8 +42,9 @@ const DenialsWait = 10 * time.Second
 func (env Env) sandboxed() bool { return task.GraderOf(env.Grader) != task.GraderHost }
 
 // SandboxUsable checks, before anything is spent, that this Agentium can grade in mode: a mode it knows, and for the
-// sandbox, a sandbox-exec that applies a profile here (macOS, not nested in another sandbox). Every grade still runs
-// the full canary.
+// sandbox, a sandbox-exec that applies a profile here and a unified log that shows its denials (sandbox.Usable). It
+// takes about a second, so commands check it once (an experiment's lock and resume, a validation command); each run
+// and validated task checks only sandboxApplies. Every grade still runs the full canary.
 func SandboxUsable(ctx context.Context, mode string) error {
 	if !task.KnownGrader(mode) {
 		return fmt.Errorf("grader %s: this Agentium grades on the host or in %s", mode, task.GraderSandbox)
@@ -52,6 +53,19 @@ func SandboxUsable(ctx context.Context, mode string) error {
 		return nil
 	}
 	return sandbox.Usable(ctx)
+}
+
+// sandboxApplies is the check every run and every validated task makes before it starts: a mode this Agentium knows,
+// and for the sandbox, a sandbox-exec that applies a profile here (sandbox.Applies). The log was proven readable once,
+// when the command began (SandboxUsable); a grade whose denials the log does not show in time records them as unread.
+func sandboxApplies(ctx context.Context, mode string) error {
+	if !task.KnownGrader(mode) {
+		return fmt.Errorf("grader %s: this Agentium grades on the host or in %s", mode, task.GraderSandbox)
+	}
+	if task.GraderOf(mode) == task.GraderHost {
+		return nil
+	}
+	return sandbox.Applies(ctx)
 }
 
 // fullCommitOf resolves commit in the bare repository to its full ID: a grading seed is per base commit, and a branch
@@ -158,7 +172,11 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 				break
 			}
 		}
-		denials, err := sandbox.ReadDenials(ctx, file, written, since, DenialsWait, probes)
+		read := sandbox.ReadDenials
+		if env.readDenials != nil {
+			read = env.readDenials
+		}
+		denials, err := read(ctx, file, written, since, DenialsWait, probes)
 		switch {
 		case ctx.Err() != nil:
 			return ctx.Err()

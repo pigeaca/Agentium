@@ -45,7 +45,10 @@ type fakeSandbox struct {
 	flag, down bool
 	// always flags the denial in every grade, passing ones too (the reference's toolchain makes it).
 	always bool
-	roots  []string
+	// deny, when set, decides each grade's flagged denials and their count from its root (its stage and repeat) and
+	// whether it passed; it overrides flag and always.
+	deny  func(root string, passed bool) ([]sandbox.Denial, int)
+	roots []string
 }
 
 func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error) {
@@ -80,6 +83,11 @@ func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, comm
 		}
 	}
 	g := &SandboxGrade{Canary: CanaryPassed, Profile: "digest"}
+	if f.deny != nil {
+		g.Flagged, g.FlaggedCount = f.deny(root, ok)
+		g.DenialCount = g.FlaggedCount
+		return results, ok, g, nil
+	}
 	if f.flag && !ok || f.always {
 		d := sandbox.Denial{Process: "java", Operation: "mach-lookup", Target: "com.apple.FontServer", Repeats: 1}
 		g.DenialCount, g.FlaggedCount, g.Denials, g.Flagged = 1, 1, []sandbox.Denial{d}, []sandbox.Denial{d}
@@ -192,5 +200,57 @@ func TestValidateInTheSandbox(t *testing.T) {
 	v.Grader = "sandbox-v0"
 	if _, err := v.Validate(ctx, spec, arms); err == nil {
 		t.Error("an unknown grader validated")
+	}
+}
+
+// With repeats, every run of the hidden-tests stage that is not OK is checked: each one's flagged denials must all be
+// among those the reference logged while passing (in any of its runs), and listed in full. A run with a denial the
+// reference never made, or a list cut short (more denials than listed), keeps the stage not OK.
+func TestHarmlessFailureChecksEveryRepeat(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	hidden, reference, err := Split(ctx, f.base, f.solution, "--git-dir", f.bare)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Base: f.base, Solution: f.solution, HiddenTests: hidden, Reference: reference, Verify: []string{"sh run_tests.sh"}}
+	font := sandbox.Denial{Process: "java", Operation: "mach-lookup", Target: "com.apple.FontServer", Repeats: 1}
+	other := sandbox.Denial{Process: "java", Operation: "mach-lookup", Target: "com.apple.lsd.mapdb", Repeats: 1}
+	validate := func(deny func(root string, passed bool) ([]sandbox.Denial, int)) Validation {
+		t.Helper()
+		v, _ := validator(t, f.bare)
+		v.Grader, v.Repeats = GraderSandbox, 3
+		fake := &fakeSandbox{deny: deny}
+		v.Checkout = func(context.Context, string, []string, string) (CheckoutCommands, error) {
+			return CheckoutCommands{Sandboxed: fake.run}, nil
+		}
+		result, err := v.Validate(ctx, spec, []Arm{{Name: "base"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	// The reference logs font in its second run only; the hidden-tests runs log font in r1 and r3.
+	byRun := func(hiddenR3 []sandbox.Denial, count3 int) func(string, bool) ([]sandbox.Denial, int) {
+		return func(root string, passed bool) ([]sandbox.Denial, int) {
+			switch base := filepath.Base(root); {
+			case base == "base-reference-r2":
+				return []sandbox.Denial{font}, 1
+			case base == "base-hidden-tests-r1":
+				return []sandbox.Denial{font}, 1
+			case base == "base-hidden-tests-r3":
+				return hiddenR3, count3
+			}
+			return nil, 0
+		}
+	}
+	if got := validate(byRun([]sandbox.Denial{font}, 1)); got.Status != StatusValid || got.Stages[0].Flaky || got.Stages[0].OKRuns != 3 {
+		t.Errorf("every run's denials are the reference's: %s (%+v)", got.Summary(), got.Stages[0])
+	}
+	if got := validate(byRun([]sandbox.Denial{other}, 1)); got.Status == StatusValid {
+		t.Errorf("a repeat with a denial the reference never made: %s", got.Summary())
+	}
+	if got := validate(byRun([]sandbox.Denial{font}, 25)); got.Status == StatusValid {
+		t.Errorf("a repeat whose list was cut short: %s", got.Summary())
 	}
 }

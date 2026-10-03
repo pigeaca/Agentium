@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -194,12 +195,25 @@ func TestSandboxCheckDemotesImbalancedArms(t *testing.T) {
 		t.Errorf("the sensitivity check: %v", c.AsFails)
 	}
 
-	balanced := mustAnalyze(t, l, leaveOut(runs, 0, 3)) // one each
-	if c := balanced.Sandbox; c == nil || c.Imbalanced || c.Flagged["A"] != 1 || c.Flagged["B"] != 1 || len(c.AsFails) != 0 {
-		t.Errorf("balanced: %+v", c)
+	// Balanced arms: the sensitivity check still runs. A verdict it agrees with stands (cost); one it changes is demoted
+	// with a note saying so (success here: the left-out runs were passes, counted as fails), a stricter reading of
+	// decision 3 than the threshold alone.
+	main := mustAnalyze(t, lockFor(GoalCheaper, 24, 3), runs) // the same runs on the host: nothing left out
+	balanced := mustAnalyze(t, l, leaveOut(runs, 0, 3))       // one each
+	c = balanced.Sandbox
+	if c == nil || c.Imbalanced || c.Flagged["A"] != 1 || c.Flagged["B"] != 1 || len(c.AsFails) != 2 {
+		t.Fatalf("balanced: %+v", c)
 	}
-	if cost := result(t, balanced, MetricCost); cost.Verdict != stats.Improved {
-		t.Errorf("balanced arms keep the verdict: %+v", cost)
+	if cost := result(t, balanced, MetricCost); cost.Verdict != stats.Improved || cost.Note != "" || c.AsFails[MetricCost] != stats.Improved {
+		t.Errorf("balanced arms keep an agreeing verdict: %+v", cost)
+	}
+	success := result(t, balanced, MetricSuccess)
+	if result(t, main, MetricSuccess).Verdict == stats.Inconclusive {
+		t.Fatal("the scenario needs a success verdict to demote")
+	}
+	if !slices.Equal(c.Disagrees, []string{MetricSuccess}) || success.Verdict != stats.Inconclusive ||
+		!strings.Contains(success.Note, "counted as fails it is "+c.AsFails[MetricSuccess]+", not ") {
+		t.Errorf("a disagreeing verdict: %+v (check %+v)", success, c)
 	}
 	// More than max(1, 10% of 68 pairs) apart: 9 against 1.
 	var nine []int
@@ -268,5 +282,62 @@ func TestFlaggedFailureSettlesWithoutARetry(t *testing.T) {
 	b := slices.IndexFunc(Schedule(d), func(s Slot) bool { return s.Arm == "B" })
 	if attempts[b] != 1 || attempts[1-b] != 2 || sum.Settled != 2 {
 		t.Errorf("attempts %v, summary %+v", attempts, sum)
+	}
+}
+
+// asFails counts the runs left out for flagged sandbox denials as fair failures at their cost, and leaves every other
+// run, and its input, as they were.
+func TestAsFails(t *testing.T) {
+	yes := true
+	runs := []RunData{
+		{Slot: 0, Arm: "A", Outcome: claude.OutcomeOK, Passed: &yes, CostUSD: 1},
+		{Slot: 1, Arm: "B", Outcome: run.OutcomeSandboxFlagged, CostUSD: 2},
+		{Slot: 2, Arm: "B", Outcome: claude.OutcomeInfra},
+	}
+	got := asFails(runs)
+	if !reflect.DeepEqual(got[0], runs[0]) || !reflect.DeepEqual(got[2], runs[2]) {
+		t.Errorf("other runs changed: %+v", got)
+	}
+	if r := got[1]; r.Outcome != claude.OutcomeOK || r.Passed == nil || *r.Passed || r.CostUSD != 2 || !Fair(r.Outcome) || Success(r.Outcome, r.Passed, nil) {
+		t.Errorf("the left-out run: %+v", r)
+	}
+	if runs[1].Outcome != run.OutcomeSandboxFlagged || runs[1].Passed != nil {
+		t.Error("the input changed")
+	}
+}
+
+// Runs left out for sandbox denials settle without a retry, but many in a row on several slots stop the experiment, as
+// an outage does: a toolchain the grading sandbox breaks would otherwise run, and pay for, every slot. A counted run in
+// between starts the count again.
+func TestFlaggedStreakStopsTheExperiment(t *testing.T) {
+	d := validDesign()
+	d.Tasks, d.Repeats = []string{"t1", "t2", "t3"}, 1
+	exec := func(counted map[int]bool) (Summary, map[int]int) {
+		attempts := map[int]int{}
+		sum, err := Execute(context.Background(), Plan{Schedule: Schedule(d), Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: MaxAttempts,
+			Backoff: func(int) time.Duration { return 0 }}, func(_ context.Context, s Slot, _ int, _ []int) (Result, error) {
+			attempts[s.Position]++
+			if counted[s.Position] {
+				return Result{Outcome: claude.OutcomeOK, CostUSD: 0.1}, nil
+			}
+			return Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.1}, nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sum, attempts
+	}
+	sum, attempts := exec(nil)
+	if sum.Status != StatusStopped || !strings.Contains(sum.Note, "3 runs in a row were left out for sandbox denials") || len(attempts) != 3 {
+		t.Errorf("every run left out: %+v, attempts %v", sum, attempts)
+	}
+	for _, n := range attempts {
+		if n != 1 {
+			t.Errorf("a left-out run was tried again: %v", attempts)
+		}
+	}
+	sum, _ = exec(map[int]bool{2: true, 4: true})
+	if sum.Status != StatusDone || sum.Settled != 6 {
+		t.Errorf("counted runs between them: %+v", sum)
 	}
 }

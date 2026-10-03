@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -188,4 +189,158 @@ func TestRunOnceInTheSandbox(t *testing.T) {
 		t.Errorf("run once --json: %v", r)
 	}
 	assertKeys(t, r["sandbox"], "canary,denials,flagged")
+}
+
+// storedTask reads task name from the fixture's database.
+func storedTask(t *testing.T, f runFixture, name string) store.Task {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tk, err := db.TaskByName(ctx, projects[0].ID, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tk
+}
+
+// harmlessTask makes the experiment fixture's task "value" call the security server in its verification (a Mach lookup
+// the grading sandbox denies and flags) and stores its earlier validation again, as one made in the sandbox whose
+// reference logged harmless while passing.
+func harmlessTask(t *testing.T, f runFixture, harmless []task.DenialKey) {
+	t.Helper()
+	ctx := context.Background()
+	v := task.ValidationOf(storedTask(t, f, "value"))
+	expect(t, f.run(ctx, "task", "edit", "value", "--verify",
+		"/usr/bin/security find-generic-password -s agentium-made-up-service >/dev/null 2>&1; sh run_tests.sh"), ExitOK)
+	v.Grader, v.Harmless = task.GraderSandbox, harmless
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tk := storedTask(t, f, "value")
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if ok, err := db.SetTaskValidation(ctx, tk.ID, tk.Verify, tk.Setup, encoded, time.Now()); err != nil || !ok {
+		t.Fatalf("store the validation: %v, %v", ok, err)
+	}
+}
+
+// skipUnreadDenials skips when a run's denials could not be read (the log lagged): what the test asserts of them is
+// unknown then.
+func skipUnreadDenials(t *testing.T, recs ...run.Record) {
+	t.Helper()
+	for _, r := range recs {
+		if r.Sandbox != nil && r.Sandbox.Unread != "" {
+			t.Skipf("LOG-BLIND: the unified log did not show the sandbox's denials here (in time): %s", r.Sandbox.Unread)
+		}
+	}
+}
+
+// The task's harmless denials reach its grades: through the experiment's lock to each run of a sandbox experiment, and
+// from the task's validation to run once. An agent that fails the hidden test, whose verification makes the lookup
+// the reference made too, fails: the lookup is harmless, not a reason to leave the run out.
+func TestHarmlessDenialsReachTheRuns(t *testing.T) {
+	needGradingSandbox(t)
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	*f.grader = task.GraderSandbox
+	harmlessTask(t, f, []task.DenialKey{{Operation: "mach-lookup", Target: "com.apple.SecurityServer"}})
+	writeFile(t, ctrl, "no-change", "")
+
+	once := jsonRun(t, f, ExitOK, "run", "once", "value", "--grader", "sandbox")
+	id, _ := once.get("run").(map[string]any)["id"].(string)
+	var rec run.Record
+	for _, r := range records(t, runsOf(t, f)) {
+		if r.ID == id {
+			rec = r
+		}
+	}
+	skipUnreadDenials(t, rec)
+	if rec.Outcome != "ok" || rec.Passed == nil || *rec.Passed || rec.Sandbox == nil || rec.Sandbox.Harmless == 0 || rec.Sandbox.FlaggedCount != 0 {
+		t.Errorf("run once: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
+	}
+
+	expect(t, f.run(ctx, "experiment", "new", "boxed", "--b", "lean", "--task", "value", "--budget", "10"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "boxed"), ExitOK)
+	var lock experiment.Lock
+	if err := json.Unmarshal(storedLock(t, f, "boxed"), &lock); err != nil {
+		t.Fatal(err)
+	}
+	if got := lock.Harmless["value"]; len(got) != 1 || got[0].Target != "com.apple.SecurityServer" {
+		t.Errorf("the lock's harmless denials: %v", lock.Harmless)
+	}
+	runs := records(t, experimentRuns(t, f, "boxed"))
+	skipUnreadDenials(t, runs...)
+	if len(runs) == 0 {
+		t.Fatal("no runs")
+	}
+	for _, r := range runs {
+		if r.Outcome != "ok" || r.Passed == nil || *r.Passed || r.Sandbox == nil || r.Sandbox.Harmless == 0 || r.Sandbox.FlaggedCount != 0 {
+			t.Errorf("run %s: %s, passed %v, sandbox %+v", r.ID, r.Outcome, r.Passed, r.Sandbox)
+		}
+	}
+}
+
+// runsOf is every stored run of the fixture's project.
+func runsOf(t *testing.T, f runFixture) []store.Run {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	runs, err := db.Runs(ctx, projects[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runs
+}
+
+// Runs left out for flagged sandbox denials have their own count, in experiment show and its JSON, apart from
+// infrastructure failures; each was run once.
+func TestLeftOutRunsShowInProgress(t *testing.T) {
+	needGradingSandbox(t)
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	*f.grader = task.GraderSandbox
+	harmlessTask(t, f, nil)
+	writeFile(t, ctrl, "no-change", "")
+	expect(t, f.run(ctx, "experiment", "new", "boxed", "--b", "lean", "--task", "value", "--budget", "10"), ExitOK)
+	f.run(ctx, "experiment", "run", "boxed")
+	runs := records(t, experimentRuns(t, f, "boxed"))
+	skipUnreadDenials(t, runs...)
+	if len(runs) != 2 {
+		t.Fatalf("%d runs, want one per slot", len(runs))
+	}
+	for _, r := range runs {
+		if r.Outcome != "infra-sandbox" {
+			t.Errorf("run %s: %s, sandbox %+v", r.ID, r.Outcome, r.Sandbox)
+		}
+	}
+	expect(t, f.run(ctx, "experiment", "show", "boxed"), ExitOK, "arm A: 1 run(s) left out for sandbox denials", "arm B: 1 run(s) left out for sandbox denials")
+	show := jsonRun(t, f, ExitOK, "experiment", "show", "boxed")
+	arms, _ := show.get("progress").(map[string]any)["arms"].([]any)
+	for _, a := range arms {
+		if m := a.(map[string]any); m["left_out_sandbox"] != float64(1) || m["infra"] != float64(0) {
+			t.Errorf("arm %v", m)
+		}
+	}
 }
