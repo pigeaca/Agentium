@@ -534,3 +534,127 @@ func TestNotesFade(t *testing.T) {
 		t.Errorf("the retry's note faded before its run:\n%s", f)
 	}
 }
+
+// TestDashboardMomentsGoldens draws the moments inside the boxes (copying, fetching dependencies, setup, starting the
+// sandbox, running the tests, cleaning up) and the sandbox's news (unavailable: a caution outline and a row note;
+// flagged denials: the row note; a folder quarantined: the status line), as baseline's row at 79 and 64 columns, and in
+// color at 79.
+func TestDashboardMomentsGoldens(t *testing.T) {
+	t.Parallel()
+	var plain, color strings.Builder
+	draw := func(name string, s *scene) {
+		v := s.state.view()
+		for _, width := range []int{79, 64} {
+			lay := layoutFor(width)
+			fmt.Fprintf(&plain, "=== %s, %d columns\n", name, width)
+			for _, l := range v.infoLines(plainUnicode, unicodeMarks, lay.total, 0, s.clock.Now()) {
+				fmt.Fprintln(&plain, l)
+			}
+			fmt.Fprintln(&plain, strings.Join(v.armBoxes(plainUnicode, unicodeMarks, lay, 0, s.clock.Now(), 2), "\n"))
+		}
+		lay := layoutFor(79)
+		fmt.Fprintf(&color, "=== %s\n%s\n", name, strings.Join(v.armBoxes(color256, marksFor(color256), lay, 0, s.clock.Now(), 2), "\n"))
+	}
+	moments := func(sandbox bool) *scene {
+		return newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, sandbox, true), experiment.Standing{})
+	}
+	s := moments(true)
+	s.start(0)
+	s.step(0, run.StepPreparing)
+	s.clock.add(2 * time.Second)
+	draw("copying", s)
+	s.step(0, run.StepDependencies)
+	s.clock.add(72 * time.Second)
+	draw("fetching dependencies", s)
+	s.step(0, run.StepSetup)
+	s.clock.add(4 * time.Second)
+	draw("running the setup", s)
+	s.step(0, run.StepAgent)
+	s.clock.add(2 * time.Minute)
+	s.step(0, run.StepGrading)
+	s.step(0, run.StepSandbox)
+	s.clock.add(1500 * time.Millisecond)
+	draw("starting the sandbox", s)
+	s.step(0, run.StepTests)
+	s.clock.add(38 * time.Second)
+	draw("running the tests", s)
+	s.step(0, run.StepCleanup)
+	s.clock.add(1500 * time.Millisecond)
+	draw("cleaning up", s)
+	s.step(0, run.StepQuarantined)
+	draw("a folder quarantined", s)
+	yes := true
+	s.finish(0, claude.OutcomeOK, &yes, 0.09)
+	draw("passed", s)
+
+	host := moments(false)
+	host.start(0)
+	host.step(0, run.StepAgent)
+	host.step(0, run.StepGrading)
+	host.step(0, run.StepTests)
+	host.clock.add(9 * time.Second)
+	draw("running the tests on the host", host)
+
+	down := moments(true)
+	down.start(0)
+	down.step(0, run.StepAgent)
+	down.step(0, run.StepGrading)
+	down.step(0, run.StepSandbox)
+	down.step(0, run.StepSandboxDown)
+	down.step(0, run.StepCleanup)
+	down.finish(0, claude.OutcomeInfra, nil, 0.08)
+	down.event(experiment.Event{Kind: "retry", Slot: down.lock.Schedule[0], Attempt: 1, RetryIn: 30 * time.Second})
+	down.clock.add(2 * time.Second) // the dot has arrived
+	draw("the sandbox unavailable", down)
+
+	flagged := moments(true)
+	flagged.start(0)
+	flagged.step(0, run.StepAgent)
+	flagged.step(0, run.StepGrading)
+	flagged.step(0, run.StepSandbox)
+	flagged.step(0, run.StepTests)
+	flagged.event(experiment.Event{Kind: "finish", Slot: flagged.lock.Schedule[0], Attempt: 1, SpentUSD: 0.1,
+		Result: experiment.Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.1, SandboxFlagged: "mach-lookup, file-read-data, mach-register"}})
+	flagged.clock.add(2 * time.Second)
+	draw("flagged denials", flagged)
+	if got := flagged.state.entries()[0].format(plainUnicode, unicodeMarks, flagged.state.facts, noWidth); !strings.Contains(got, "left out (sandbox)") {
+		t.Errorf("the flagged run's log line: %q", got)
+	}
+	if got := down.state.entries()[0].format(plainUnicode, unicodeMarks, down.state.facts, noWidth); !strings.Contains(got, "sandbox unavailable (not counted)") {
+		t.Errorf("the unavailable run's log line: %q", got)
+	}
+	if dir := os.Getenv("AGENTIUM_RUN_DEMO"); dir != "" { // a still of the sandbox's news in color, for scripts/readme_images
+		var b strings.Builder
+		for _, sc := range []struct {
+			name string
+			s    *scene
+		}{{"the sandbox unavailable", down}, {"flagged denials", flagged}} {
+			fmt.Fprintf(&b, "\x1b[2m# %s\x1b[22m\n%s\n", sc.name, strings.Join(sc.s.state.view().armBoxes(color256, marksFor(color256), layoutFor(79), 0, sc.s.clock.Now(), 2), "\n"))
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sandbox-news.ans"), []byte(b.String()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkWords(t, "the moments", plain.String())
+	checkGolden(t, "dashboard-moments.golden", plain.String())
+	checkGolden(t, "dashboard-moments-color.golden", color.String())
+	if !strings.Contains(color.String(), "\x1b[38;5;220m╭┄ sandbox") {
+		t.Error("the unavailable sandbox's outline is not in the caution color")
+	}
+}
+
+func TestBlockedWords(t *testing.T) {
+	t.Parallel()
+	for ops, want := range map[string]string{
+		"mach-lookup": "a system service lookup",
+		"mach-lookup, file-read-data, mach-register": "a system service lookup, a file read",
+		"network-outbound, file-write-create":        "a network connection, a file write",
+		"something-new":                              "an operation the agent's own sandbox allows",
+		"":                                           "an operation the agent's own sandbox allows",
+		"file-read\x1b[2J-data":                      "a file read",
+	} {
+		if got := blockedWords(ops); got != want {
+			t.Errorf("blockedWords(%q) = %q, want %q", ops, got, want)
+		}
+	}
+}

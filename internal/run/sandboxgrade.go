@@ -98,6 +98,9 @@ type sandboxGrade struct {
 	Running  func(pid int)
 	// Warn is told what the grade left behind that was cleaned up (processes stopped, a folder quarantined).
 	Warn func(string)
+	// Testing, Cleaning and Quarantined, when set, are told when the commands start (the canary passed), when the
+	// grade's cleanup starts, and when it moved a folder into the quarantine: for a live display (Env.Step).
+	Testing, Cleaning, Quarantined func()
 }
 
 // gradeInSandbox runs the commands in the grading sandbox, until one fails, and returns their results, whether all
@@ -120,7 +123,7 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 	}
 	report = &task.SandboxGrade{}
 	err = withGrading(ctx, gradingInput{Root: in.Root, Seed: seed, Copy: in.Copy, Keep: in.Keep, Agent: in.Agent, Environ: env.environ(),
-		Quarantine: quarantine(env.Layout), Warn: in.Warn}, func(g grading) error {
+		Quarantine: quarantine(env.Layout), Warn: in.Warn, Cleaning: in.Cleaning, Quarantined: in.Quarantined}, func(g grading) error {
 		tag, err := sandbox.NewTag()
 		if err != nil {
 			return err
@@ -147,6 +150,9 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 			return err
 		}
 		report.Canary = task.CanaryPassed
+		if in.Testing != nil {
+			in.Testing()
+		}
 		ok = true
 		for _, command := range in.Commands {
 			if err := sandbox.CheckFile(file, digest); err != nil {

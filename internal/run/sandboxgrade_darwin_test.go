@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -136,10 +137,16 @@ func gone(t *testing.T, paths ...string) {
 func TestOnceGradesInTheSandbox(t *testing.T) {
 	needSandbox(t)
 	f := newOnceFixture(t, "printf 'new\\n' > value.txt", "grep -q new value.txt\n")
+	var steps []string
+	f.env.Step = func(s string) { steps = append(steps, s) }
 	rec, err := Once(context.Background(), f.env, f.spec)
 	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Each moment, in order, for a live display: the grade's cleanup, then the run's.
+	if want := []string{StepPreparing, StepDependencies, StepAgent, StepGrading, StepSandbox, StepTests, StepCleanup, StepCleanup}; !slices.Equal(steps, want) {
+		t.Errorf("steps %q, want %q", steps, want)
 	}
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Grader != task.GraderSandbox {
 		t.Fatalf("solved: %s, passed %v, grader %q, notes %v", rec.Outcome, rec.Passed, rec.Grader, rec.Notes)
@@ -195,7 +202,13 @@ func TestOnceCanaryFailureIsInfrastructure(t *testing.T) {
 	f.env.canary = func(context.Context, string, string, sandbox.Profile) ([]int, error) {
 		return nil, fmt.Errorf("%w: sandbox-exec exited 65 (nested)", sandbox.ErrUnavailable)
 	}
+	var steps []string
+	f.env.Step = func(s string) { steps = append(steps, s) }
 	rec, err := Once(context.Background(), f.env, f.spec)
+	// The display hears that the sandbox did not start, and never that the tests ran.
+	if want := []string{StepPreparing, StepDependencies, StepAgent, StepGrading, StepSandbox, StepCleanup, StepSandboxDown, StepCleanup}; err == nil && !slices.Equal(steps, want) {
+		t.Errorf("steps %q, want %q", steps, want)
+	}
 	skipLogBlind(t, err)
 	if err != nil {
 		t.Fatal(err)

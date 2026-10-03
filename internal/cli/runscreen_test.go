@@ -503,3 +503,25 @@ func TestScreenCloseLeavesTheRuns(t *testing.T) {
 		}
 	}
 }
+
+// The moments inside a step reach the dashboard: with a task whose setup takes a while, a frame shows "setup" in the
+// fresh copy's box (the moments' every wording is in dashboard-moments.golden).
+func TestDashboardShowsTheMoments(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "task", "edit", "value", "--setup", "sleep 0.6", "--reviewed"), ExitOK)
+	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "new", "moments", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
+	terminalVars(f)
+	r := f.run(ctx, "experiment", "run", "moments")
+	expect(t, r, ExitOK)
+	plain := term.Plain(r.stdout)
+	for _, want := range []*regexp.Regexp{
+		regexp.MustCompile(`│ *[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] setup( \d+s)? *│`),
+	} {
+		if !want.MatchString(plain) {
+			t.Errorf("no frame showed %s:\n%s", want, plain)
+		}
+	}
+}

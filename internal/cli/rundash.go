@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -194,8 +195,36 @@ func (v stateView) statusLine(sh term.Shapes, m marks, now time.Time) string {
 	return line
 }
 
-// boxes is how each of an arm's step boxes looks now.
-func (v stateView) boxes(sh term.Shapes, m marks, arm int, now time.Time, tick int) [stepCount]boxState {
+// subWords are the moments within a step in words, in three lengths for the room a box has: "fetching dependencies",
+// "downloads", "deps". A moment without words shows its time alone.
+var subWords = map[string][3]string{
+	run.StepPreparing:    {"copying", "copying", "copy"},
+	run.StepDependencies: {"fetching dependencies", "downloads", "deps"},
+	run.StepSetup:        {"running setup", "setup", "setup"},
+	run.StepSandbox:      {"starting sandbox", "starting", "start"},
+	run.StepTests:        {"running tests", "testing", "test"},
+	run.StepCleanup:      {"cleaning up", "cleanup", "clean"},
+	run.StepJudging:      {"judging", "judging", "judge"},
+}
+
+// fitStatus is what follows a box's mark in inner cells: for each form of the words, longest first, the words and the
+// time with a cell to spare, then the words alone (with a cell to spare, then without); else the time alone.
+func fitStatus(mark string, forms [3]string, since string, inner int) string {
+	room := inner - term.Width(mark) - 1 // after the mark and its space
+	for _, f := range forms {
+		switch {
+		case f == "":
+		case since != "" && term.Width(f)+1+term.Width(since) <= room-1:
+			return f + " " + since
+		case term.Width(f) <= room:
+			return f
+		}
+	}
+	return since
+}
+
+// boxes is how each of an arm's step boxes looks now, for boxes whose status has inner cells.
+func (v stateView) boxes(sh term.Shapes, m marks, arm int, now time.Time, tick, inner int) [stepCount]boxState {
 	r, have := v.shown[arm], v.have[arm]
 	spin := term.Plain(sh.Spinner(tick))
 	role := armRole(arm)
@@ -205,22 +234,57 @@ func (v stateView) boxes(sh term.Shapes, m marks, arm int, now time.Time, tick i
 		switch {
 		case !have:
 			out[i] = later
+		case i == stepTests && r.sandboxDown: // never shown as if it ran
+			out[i] = boxState{border: term.LevelCaution, title: term.Default, mark: m.warn, markRole: term.LevelCaution,
+				text: fitStatus(m.warn, [3]string{"sandbox unavailable", "no sandbox", "down"}, "", inner)}
 		case i == stepResult && r.finished:
-			words, _, outcome := outcomeWords(r.result, r.requeued, m)
+			words, _, outcome := outcomeWords(r.result, r.requeued, r.sandboxDown, m)
 			out[i] = boxState{border: outcome, title: term.Default, mark: words, markRole: outcome, noTitle: true}
-		case r.finished && i > r.reached: // a step the run never reached: it was not graded
+		case i < r.step && r.began[i].IsZero(): // a step the run never began: it was not graded
 			out[i] = later
 		case i < r.step:
 			out[i] = boxState{border: term.OutcomeOK, title: term.Default, mark: m.ok, markRole: term.OutcomeOK, text: term.Elapsed(r.took[i])}
-		case i == r.step && i == stepResult: // the judge is reading it
-			out[i] = boxState{border: role, title: role, bold: true, mark: spin, markRole: role, text: "judging", noTitle: true}
 		case i == r.step:
-			out[i] = boxState{border: role, title: role, bold: true, mark: spin, markRole: role, text: term.Elapsed(now.Sub(r.began[i]))}
+			b := boxState{border: role, title: role, bold: true, mark: spin, markRole: role}
+			since := r.began[i]
+			if words, ok := subWords[r.sub]; ok {
+				b.text, b.noTitle = fitStatus(spin, words, term.Elapsed(now.Sub(r.subAt)), inner), true
+			} else {
+				b.text = term.Elapsed(now.Sub(since))
+			}
+			out[i] = b
 		default:
 			out[i] = later
 		}
 	}
 	return out
+}
+
+// outlineRole is the color of the sandbox's outline around step i of an arm's row: the caution color when the
+// grading sandbox could not start for the run shown.
+func (v stateView) outlineRole(arm, i int) term.Role {
+	if i == stepTests && v.have[arm] && v.shown[arm].sandboxDown {
+		return term.LevelCaution
+	}
+	return term.Sandbox
+}
+
+// rowNote is what the sandbox did to the run shown, in plain words, for its name line: in full, and without what the
+// result box says already for a narrow line; "" when nothing.
+func (v stateView) rowNote(arm int, m marks) (full, short string) {
+	r := v.shown[arm]
+	switch {
+	case !v.have[arm]:
+		return "", ""
+	case r.sandboxDown && r.retrying:
+		return "sandbox unavailable " + m.sep + " retrying", "sandbox unavailable"
+	case r.sandboxDown:
+		return "sandbox unavailable " + m.sep + " not counted", "sandbox unavailable"
+	case r.finished && r.result.Outcome == run.OutcomeSandboxFlagged:
+		blocked := "blocked: " + blockedWords(r.result.SandboxFlagged)
+		return blocked + " " + m.sep + " this run doesn't count", blocked
+	}
+	return "", ""
 }
 
 // nameLine is an arm's name and its current task.
@@ -233,6 +297,14 @@ func (v stateView) nameLine(c *term.Canvas, m marks, x, y, arm int) int {
 	x = c.Put(x, y, " "+m.sep+" "+term.Truncate(r.task, maxNameWidth, m.ellipsis), term.Muted, false)
 	if r.attempt > 1 {
 		x = c.Put(x, y, fmt.Sprintf(" %s try %d", m.sep, r.attempt), term.Muted, false)
+	}
+	if full, short := v.rowNote(arm, m); full != "" { // on the name line, so the frame keeps its height
+		room := max(c.Width()-x-3, 0)
+		note := full
+		if term.Width(full) > room {
+			note = term.Truncate(short, room, m.ellipsis)
+		}
+		x = c.Put(x, y, "   "+note, term.LevelCaution, false)
 	}
 	return x
 }
@@ -250,8 +322,8 @@ func (v stateView) connectors(c *term.Canvas, m marks, lay rowLayout, arm, y int
 	}
 	for i := range stepCount {
 		if v.sandboxedStep(i) {
-			c.Put(lay.x[i]-2, y, m.outV, term.Sandbox, false)
-			c.Put(lay.x[i]+lay.box+1, y, m.outV, term.Sandbox, false)
+			c.Put(lay.x[i]-2, y, m.outV, v.outlineRole(arm, i), false)
+			c.Put(lay.x[i]+lay.box+1, y, m.outV, v.outlineRole(arm, i), false)
 		}
 	}
 	r := v.shown[arm]
@@ -272,7 +344,7 @@ func (v stateView) connectors(c *term.Canvas, m marks, lay rowLayout, arm, y int
 func (v stateView) armBoxes(sh term.Shapes, m marks, lay rowLayout, arm int, now time.Time, tick int) []string {
 	c := term.NewCanvas(lay.total, 7)
 	v.nameLine(c, m, lay.x[0], 0, arm)
-	states := v.boxes(sh, m, arm, now, tick)
+	states := v.boxes(sh, m, arm, now, tick, lay.box-2)
 	inner := lay.box - 2
 	for i, b := range states {
 		x := lay.x[i]
@@ -287,26 +359,26 @@ func (v stateView) armBoxes(sh term.Shapes, m marks, lay rowLayout, arm int, now
 	}
 	for i := range stepCount {
 		if v.sandboxedStep(i) {
-			outline(c, m, lay.x[i]-2, 1, lay.box+4, 6)
+			outline(c, m, lay.x[i]-2, 1, lay.box+4, 6, v.outlineRole(arm, i))
 		}
 	}
 	v.connectors(c, m, lay, arm, 3, now) // last: the dot passes over the outline's edge
 	return c.Lines(sh.Style)
 }
 
-// outline draws the sandbox's dashed outline, labelled, w cells wide and h rows high at x, y.
-func outline(c *term.Canvas, m marks, x, y, w, h int) {
+// outline draws the sandbox's dashed outline, labelled, w cells wide and h rows high at x, y, in role.
+func outline(c *term.Canvas, m marks, x, y, w, h int, role term.Role) {
 	label := " sandbox "
-	c.Put(x, y, m.outTL, term.Sandbox, false)
-	c.Put(x+1, y, m.outH, term.Sandbox, false)
-	end := c.Put(x+2, y, label, term.Sandbox, false)
-	c.HLine(end, y, x+w-1-end, m.outH, term.Sandbox)
-	c.Put(x+w-1, y, m.outTR, term.Sandbox, false)
-	c.VLine(x, y+1, h-2, m.outV, term.Sandbox)
-	c.VLine(x+w-1, y+1, h-2, m.outV, term.Sandbox)
-	c.Put(x, y+h-1, m.outBL, term.Sandbox, false)
-	c.HLine(x+1, y+h-1, w-2, m.outH, term.Sandbox)
-	c.Put(x+w-1, y+h-1, m.outBR, term.Sandbox, false)
+	c.Put(x, y, m.outTL, role, false)
+	c.Put(x+1, y, m.outH, role, false)
+	end := c.Put(x+2, y, label, role, false)
+	c.HLine(end, y, x+w-1-end, m.outH, role)
+	c.Put(x+w-1, y, m.outTR, role, false)
+	c.VLine(x, y+1, h-2, m.outV, role)
+	c.VLine(x+w-1, y+1, h-2, m.outV, role)
+	c.Put(x, y+h-1, m.outBL, role, false)
+	c.HLine(x+1, y+h-1, w-2, m.outH, role)
+	c.Put(x+w-1, y+h-1, m.outBR, role, false)
 }
 
 // armOneLine is an arm's block on two rows: its name, then each box on one line between its borders.
@@ -315,7 +387,7 @@ func (v stateView) armOneLine(sh term.Shapes, m marks, lay rowLayout, arm int, n
 	v.nameLine(c, m, lay.x[0], 0, arm)
 	v.connectors(c, m, lay, arm, 1, now)
 	inner := lay.box - 2
-	for i, b := range v.boxes(sh, m, arm, now, tick) {
+	for i, b := range v.boxes(sh, m, arm, now, tick, lay.box-2) {
 		x := lay.x[i]
 		c.Put(x, 1, m.boxV, b.border, false)
 		c.Put(x+lay.box-1, 1, m.boxV, b.border, false)
@@ -338,7 +410,7 @@ func (v stateView) armText(sh term.Shapes, m marks, arm int, now time.Time, tick
 		c.Put(x, 0, " "+m.sep+" "+term.Truncate(v.shown[arm].task, taskWidth, m.ellipsis), term.Muted, false)
 	}
 	x = nameWidth + 3
-	for i, b := range v.boxes(sh, m, arm, now, tick) {
+	for i, b := range v.boxes(sh, m, arm, now, tick, 30) {
 		if i > 0 {
 			x = c.Put(x, 0, " "+m.line+m.line+" ", term.Muted, false)
 		}

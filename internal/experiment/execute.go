@@ -53,6 +53,9 @@ type Result struct {
 	Overshoot string
 	// Passed is the run's grade, for progress displays: nil when it was not graded.
 	Passed *bool
+	// SandboxFlagged, for a run left out for flagged sandbox denials (run.OutcomeSandboxFlagged), lists their
+	// operations ("mach-lookup, file-read-data"), never their paths: for progress displays.
+	SandboxFlagged string
 }
 
 // AgentUSD is the agent's share of what the attempt spent: CostUSD without the judgement's.
@@ -67,8 +70,8 @@ type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (
 // planned), a pair compared by the pair judge (Kind "pair", from its own goroutine: Slot is the pair's arm-B slot,
 // Result.Judge the comparison in words and Result.JudgeUSD what it spent; SpentUSD is not set), or a step of a run in
 // flight beginning (Kind "step", from the run's goroutine, between its "start" and its "finish": Slot, Attempt and Step,
-// one of run.StepPreparing, StepAgent, StepGrading and StepJudging; SpentUSD is not set), for an observer that asks for
-// them (Observer.Steps). Steps only feed a live display.
+// one of run's Step constants, the finer moments and the sandbox's news included; SpentUSD is not set), for an observer
+// that asks for them (Observer.Steps). Steps only feed a live display.
 type Event struct {
 	Kind     string // "start", "finish", "retry", "wait", "look", "pair" or "step"
 	Slot     Slot

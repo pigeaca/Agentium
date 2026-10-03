@@ -768,6 +768,9 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
 		result.Overshoot = run.OvershootNote(*o)
 	}
+	if rec.Outcome == run.OutcomeSandboxFlagged && rec.Sandbox != nil {
+		result.SandboxFlagged = rec.Sandbox.FlaggedOperations()
+	}
 	if v := rec.Judge; v != nil {
 		result.Judge = run.Describe(*v)
 		if v.Stopped == llmjudge.StoppedLimit {
