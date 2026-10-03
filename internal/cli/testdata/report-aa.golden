@@ -41,8 +41,8 @@ BASELINE 1  vs  BASELINE 2   ·   checking how much results …
   task-9    ✗  $0.23      ✓  $0.31
   + 3 tasks where both ended the same: 3 passed
 
-  the numbers behind this: agentium experiment report
-  aa-1run --details
+  the numbers behind this:
+  agentium experiment report aa-1run --details
 === 80 columns
         BASELINE 1  vs  BASELINE 2   ·   checking how much results vary
  ───────────────────────────────────────────────────────────────────────────────

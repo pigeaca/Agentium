@@ -6,6 +6,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 // PairJudge is the pair judge's comparisons of an experiment's passing pairs: present only when the experiment was
@@ -16,7 +17,8 @@ type PairJudge struct {
 	Effort string `json:"effort"`
 	// Tasks is the preference clustered by task (experiment.PairPreferenceOf): one vote per task, the version its
 	// comparisons preferred more often. The share, its 95% Wilson interval, the exact binomial p and the floor of
-	// judge.MinPreferences (Enough) count these votes.
+	// judge.MinPreferences (Enough) count these votes. A vote is never a flip, so Tasks.Flips is always 0: the flips
+	// are in Pairs and in each task's row.
 	Tasks judge.PreferenceSummary `json:"tasks"`
 	// Pairs counts the comparisons one by one: complete, incomplete, empty, ties and flips.
 	Pairs judge.PreferenceSummary `json:"pairs"`
@@ -87,7 +89,7 @@ func pairJudgeSummary(in Input) (*PairJudge, error) {
 				row.Flips++
 			}
 			if row.Reason == "" && (vote.Prefer == judge.PreferA || vote.Prefer == judge.PreferB) && v.Prefer == vote.Prefer {
-				row.Reason = oneLine(in.scrub(v.AB.Reason))
+				row.Reason = oneLine(term.Sanitize(in.scrub(v.AB.Reason))) // no escape codes, no line breaks
 			}
 		}
 		out.PerTask = append(out.PerTask, row)

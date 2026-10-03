@@ -6,6 +6,7 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │              lean is cheaper: 22% less               │
+  │  whether lean passes as many tasks: too few to tell  │
   │           after all 10 tasks · sure enough           │
   │                                                      │
   │  cheaper ◀ ───━━━━●━━━━━─│────────────── ▶ costlier  │
@@ -39,8 +40,8 @@
   task-9    ✗  $0.23      ✓  $0.20
   + 3 tasks where both ended the same: 3 passed
 
-  the numbers behind this: agentium experiment report
-  lean-ab-1run --details
+  the numbers behind this:
+  agentium experiment report lean-ab-1run --details
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
@@ -49,6 +50,7 @@
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
           │                lean is cheaper: 22% less                 │
+          │    whether lean passes as many tasks: too few to tell    │
           │             after all 10 tasks · sure enough             │
           │                                                          │
           │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
@@ -83,6 +85,7 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 22% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
                     │             after all 10 tasks · sure enough             │
                     │                                                          │
                     │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
@@ -117,6 +120,7 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 22% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
                     │             after all 10 tasks · sure enough             │
                     │                                                          │
                     │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │

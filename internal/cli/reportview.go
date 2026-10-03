@@ -217,22 +217,48 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 	return out
 }
 
-// guardWords is the guard metric's result in words (success, for a cost question), when it says more than "too few
-// tasks": "lean passes no fewer tasks, within 15 points (lean 76%, baseline 73%)".
+// guardWords is what the answer says of the other side of the question (success, for a cost question; cost, for a
+// success one), so that an answer is never read as an unqualified yes: the guard's verdict in words when it has one
+// ("lean passes no fewer tasks, within 15 points (lean 76%, baseline 73%)"), else that there are too few to tell
+// ("whether lean passes as many tasks: too few to tell"), muted. "" for an A/A, or without such a metric.
 func guardWords(rep report.Report, f runFacts) (string, term.Role) {
-	for _, r := range rep.Analysis.Results {
-		if r.Role != experiment.RoleGuard || r.Tasks < 2 || r.Verdict == stats.Exploratory || r.Verdict == "" {
-			continue
-		}
-		g := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: true, A: r.A, B: r.B, All: f.tasks,
-			Ended: experiment.StatusDone, Margin: rep.Lock.Design.SuccessMargin}
-		if r.Metric == experiment.MetricCost {
-			g.Margin = rep.Lock.Design.CostMargin
-			return costWords(g, f.labels[1], f.aa), g.Role()
-		}
-		return successWords(g, f.labels, f.aa), g.Role()
+	if f.aa {
+		return "", term.Default
 	}
-	return "", term.Default
+	var guard *experiment.MetricResult
+	primary := ""
+	for i, r := range rep.Analysis.Results {
+		switch r.Role {
+		case experiment.RolePrimary:
+			primary = r.Metric
+		case experiment.RoleGuard:
+			guard = &rep.Analysis.Results[i]
+		}
+	}
+	if guard == nil { // seq-v1: success is exploratory, but still the question's other side
+		for i, r := range rep.Analysis.Results {
+			if (primary == experiment.MetricCost && r.Metric == experiment.MetricSuccess) || (primary == experiment.MetricSuccess && r.Metric == experiment.MetricCost) {
+				guard = &rep.Analysis.Results[i]
+			}
+		}
+	}
+	if guard == nil {
+		return "", term.Default
+	}
+	r := *guard
+	if r.Tasks < 2 || r.Verdict == stats.Exploratory || r.Verdict == "" {
+		if r.Metric == experiment.MetricCost {
+			return "whether " + f.labels[1] + " costs no more: too few to tell", term.Muted
+		}
+		return "whether " + f.labels[1] + " passes as many tasks: too few to tell", term.Muted
+	}
+	g := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: true, A: r.A, B: r.B, All: f.tasks,
+		Ended: experiment.StatusDone, Margin: rep.Lock.Design.SuccessMargin}
+	if r.Metric == experiment.MetricCost {
+		g.Margin = rep.Lock.Design.CostMargin
+		return costWords(g, f.labels[1], f.aa), g.Role()
+	}
+	return successWords(g, f.labels, f.aa), g.Role()
 }
 
 // noiseWords is what an A/A shows of the noise in plain words: how much the same setup's cost varies from run to run
@@ -469,7 +495,7 @@ func wrapped(st term.Style, lead, text string, role term.Role, width int) []stri
 		if i > 0 {
 			prefix = strings.Repeat(" ", term.Width(lead))
 		}
-		out = append(out, prefix+st.Paint(role, l))
+		out = append(out, prefix+st.Paint(role, strings.ReplaceAll(l, nbsp, " ")))
 	}
 	return out
 }
@@ -566,7 +592,7 @@ func taskCell(st term.Style, m marks, c report.TaskCell) string {
 	if c.CostUSD != nil {
 		cost = fmt.Sprintf("$%.2f", *c.CostUSD)
 		if c.Capped+c.TimedOut > 0 {
-			cost = "≥" + cost
+			cost = m.atLeast + cost
 		}
 	}
 	return b.String() + "  " + st.Paint(term.Muted, cost)
@@ -628,6 +654,34 @@ func pairLine(st term.Style, f runFacts, t judge.PreferenceSummary) string {
 	return line + st.Paint(term.Muted, " (unvalidated)")
 }
 
+// nbsp joins words that wrapped keeps on one line.
+const nbsp = "\u00a0"
+
+// earlyStopNote says, after a seq-v1 experiment stopped at an early look with a verdict, that an early stop overstates
+// the effect, as the Markdown's note does: "it stopped early: the true saving is likely smaller than 50%". "" otherwise.
+func earlyStopNote(rep report.Report, f runFacts) string {
+	s := rep.Analysis.Sequential
+	if s == nil || s.Ended != experiment.LookStop {
+		return ""
+	}
+	l := s.ReportedLook()
+	if l == nil || l.Look >= len(s.Planned) {
+		return ""
+	}
+	a, _ := reportAnswerState(rep, f)
+	if !a.HasEstimate {
+		return "it stopped early: the true difference is likely smaller than the estimate"
+	}
+	size := math.Round(100 * math.Abs(a.Estimate-1))
+	switch a.Verdict {
+	case stats.Improved, stats.ImprovedSmall:
+		return fmt.Sprintf("it stopped early: the true saving is likely smaller than %.0f%%", size)
+	case stats.Regressed:
+		return fmt.Sprintf("it stopped early: the true extra cost is likely smaller than %.0f%%", size)
+	}
+	return "it stopped early: the true difference is likely smaller than the estimate"
+}
+
 // reportNotes are the dim one-liners that matter: what was left out, what the answer leans on, and where the numbers
 // are.
 func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []string {
@@ -662,7 +716,12 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 	if !f.sandboxed && rep.Lock.Grader != "" {
 		notes = append(notes, "hidden tests ran on your machine, outside the sandbox")
 	}
-	notes = append(notes, "the numbers behind this: agentium experiment report "+term.Sanitize(rep.Experiment)+" --details")
+	if note := earlyStopNote(rep, f); note != "" {
+		notes = append(notes, note)
+	}
+	// The command stays whole: its spaces do not break (wrapped turns them back into spaces).
+	command := strings.Join([]string{"agentium", "experiment", "report", term.Sanitize(rep.Experiment), "--details"}, nbsp)
+	notes = append(notes, "the numbers behind this: "+command)
 	var out []string
 	for _, n := range notes {
 		out = append(out, wrapped(st, "  ", m.words(n), term.Muted, w-1)...)

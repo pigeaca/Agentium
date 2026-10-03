@@ -5,6 +5,7 @@
           \e[38;5;114m┌──────────────────────────────────────────────────────────┐\e[39m
           \e[38;5;114m│\e[39m                        \e[1mthe answer\e[22m                        \e[38;5;114m│\e[39m
           \e[38;5;114m│\e[39m                \e[38;5;114mlean is cheaper: 22% less\e[39m                 \e[38;5;114m│\e[39m
+          \e[38;5;114m│\e[39m    \e[38;5;243mwhether lean passes as many tasks: too few to tell\e[39m    \e[38;5;114m│\e[39m
           \e[38;5;114m│\e[39m             \e[38;5;243mafter all 10 tasks · sure enough\e[39m             \e[38;5;114m│\e[39m
           \e[38;5;114m│\e[39m                                                          \e[38;5;114m│\e[39m
           \e[38;5;114m│\e[39m  cheaper ◀ \e[38;5;243m───\e[39m\e[38;5;114m━━━━━●━━━━━━\e[39m\e[38;5;243m─\e[39m│\e[38;5;243m────────────────\e[39m ▶ costlier  \e[38;5;114m│\e[39m

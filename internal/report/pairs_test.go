@@ -21,7 +21,7 @@ func TestReportJudgePairsGolden(t *testing.T) {
 	goldenJSON(t, "lean-ab-pairs.json", []byte(js))
 	golden(t, "lean-ab-pairs.txt", []byte(txt))
 	for _, want := range []string{"## Judge pairs", "Judge prefers: B in ", "unvalidated and exploratory", "flip", "| Task | Prefers | Compared | Why (Change 1 is A's) |",
-		`keeps the parser's contract \| Change 2 widens it`, "<agentium data>/records/x"} {
+		`keeps the parser's contract \| Change 2 widens it; see <agentium data>/records/x`, "<agentium data>/records/x"} {
 		if !strings.Contains(md, want) {
 			t.Errorf("the Markdown lacks %q", want)
 		}
@@ -29,6 +29,15 @@ func TestReportJudgePairsGolden(t *testing.T) {
 	for _, text := range []string{md, js, txt} {
 		if strings.Contains(text, "sk-ant-api03-zz") || strings.Contains(text, "/home/someone") {
 			t.Errorf("a reason's key or path is shown:\n%s", text)
+		}
+		// The reason is on one line, without its escape codes: a Markdown row stays one row, a terminal stays clean.
+		if strings.Contains(text, "\x1b") || strings.Contains(text, `\u001b`) || strings.Contains(text, "[31m") || strings.Contains(text, "widens it;\n") || strings.Contains(text, `widens it;\n`) {
+			t.Errorf("a reason's line break or escape code is shown:\n%q", text)
+		}
+	}
+	for _, line := range strings.Split(md[strings.Index(md, "| Task | Prefers"):strings.Index(md, "## Notes")], "\n") {
+		if line != "" && !strings.HasPrefix(line, "| ") && !strings.HasPrefix(line, "|---") {
+			t.Errorf("the pair table is broken by %q", line)
 		}
 	}
 	if !strings.Contains(txt, "\nJudge pairs\n") || !strings.Contains(txt, "Judge prefers: B in ") {

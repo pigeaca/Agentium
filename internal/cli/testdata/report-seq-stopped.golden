@@ -6,6 +6,7 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │              lean is cheaper: 50% less               │
+  │  whether lean passes as many tasks: too few to tell  │
   │              stopped early: sure enough              │
   │                                                      │
   │  cheaper ◀ ───━━●━━━─────│────────────── ▶ costlier  │
@@ -30,8 +31,10 @@
 
   every task ended the same in both: 8 passed
 
-  the numbers behind this: agentium experiment report
-  lean-seq --details
+  it stopped early: the true saving is likely smaller than
+  50%
+  the numbers behind this:
+  agentium experiment report lean-seq --details
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
@@ -40,6 +43,7 @@
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
           │                lean is cheaper: 50% less                 │
+          │    whether lean passes as many tasks: too few to tell    │
           │                stopped early: sure enough                │
           │                                                          │
           │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
@@ -56,6 +60,7 @@
 
   every task ended the same in both: 8 passed
 
+  it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details
 === 100 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
@@ -65,6 +70,7 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 50% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
                     │                stopped early: sure enough                │
                     │                                                          │
                     │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
@@ -81,6 +87,7 @@
 
   every task ended the same in both: 8 passed
 
+  it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details
 === 120 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
@@ -90,6 +97,7 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 50% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
                     │                stopped early: sure enough                │
                     │                                                          │
                     │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
@@ -106,5 +114,6 @@
 
   every task ended the same in both: 8 passed
 
+  it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details
 === end

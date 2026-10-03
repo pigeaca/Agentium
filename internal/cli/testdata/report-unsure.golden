@@ -6,8 +6,9 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │             no clear difference in cost              │
+  │  whether lean passes as many tasks: too few to tell  │
   │          after all 10 tasks · not sure yet           │
-  │            about 57 tasks would settle it            │
+  │        about 57 tasks in all could settle it         │
   │                                                      │
   │  cheaper ◀ ──────━━━━━━━━│●━━━━━━━━━━─── ▶ costlier  │
   │                        same                          │
@@ -40,21 +41,23 @@
   task-9    ✗  $0.23      ✓  $0.31
   + 3 tasks where both ended the same: 3 passed
 
-  the numbers behind this: agentium experiment report
-  lean-ab-unsure --details
+  the numbers behind this:
+  agentium experiment report lean-ab-unsure --details
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
                    10 tasks · 20 runs · $7.32 spent · 20 min
 
-   ┌────────────────────────────────────────────────────────────────────────┐
-   │                               the answer                               │
-   │                      no clear difference in cost                       │
-   │   after all 10 tasks · not sure yet · about 57 tasks would settle it   │
-   │                                                                        │
-   │  cheaper ◀ ─────────━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━───── ▶ costlier  │
-   │    likely 14% less to 19% more  same                                   │
-   └────────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                                the answer                                │
+  │                       no clear difference in cost                        │
+  │            whether lean passes as many tasks: too few to tell            │
+  │                    after all 10 tasks · not sure yet                     │
+  │                  about 57 tasks in all could settle it                   │
+  │                                                                          │
+  │  cheaper ◀ ──────────━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━━───── ▶ costlier  │
+  │     likely 14% less to 19% more  same                                    │
+  └──────────────────────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
   │             baseline              │    │               lean                │
@@ -81,14 +84,15 @@
  ───────────────────────────────────────────────────────────────────────────────────────────────────
                              10 tasks · 20 runs · $7.32 spent · 20 min
 
-             ┌────────────────────────────────────────────────────────────────────────┐
-             │                               the answer                               │
-             │                      no clear difference in cost                       │
-             │   after all 10 tasks · not sure yet · about 57 tasks would settle it   │
-             │                                                                        │
-             │  cheaper ◀ ─────────━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━───── ▶ costlier  │
-             │    likely 14% less to 19% more  same                                   │
-             └────────────────────────────────────────────────────────────────────────┘
+         ┌───────────────────────────────────────────────────────────────────────────────┐
+         │                                  the answer                                   │
+         │                          no clear difference in cost                          │
+         │              whether lean passes as many tasks: too few to tell               │
+         │   after all 10 tasks · not sure yet · about 57 tasks in all could settle it   │
+         │                                                                               │
+         │  cheaper ◀ ───────────━━━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━━━━───── ▶ costlier  │
+         │        likely 14% less to 19% more  same                                      │
+         └───────────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
@@ -115,14 +119,15 @@
  ───────────────────────────────────────────────────────────────────────────────────────────────────
                              10 tasks · 20 runs · $7.32 spent · 20 min
 
-             ┌────────────────────────────────────────────────────────────────────────┐
-             │                               the answer                               │
-             │                      no clear difference in cost                       │
-             │   after all 10 tasks · not sure yet · about 57 tasks would settle it   │
-             │                                                                        │
-             │  cheaper ◀ ─────────━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━───── ▶ costlier  │
-             │    likely 14% less to 19% more  same                                   │
-             └────────────────────────────────────────────────────────────────────────┘
+         ┌───────────────────────────────────────────────────────────────────────────────┐
+         │                                  the answer                                   │
+         │                          no clear difference in cost                          │
+         │              whether lean passes as many tasks: too few to tell               │
+         │   after all 10 tasks · not sure yet · about 57 tasks in all could settle it   │
+         │                                                                               │
+         │  cheaper ◀ ───────────━━━━━━━━━━━━━━━━│●━━━━━━━━━━━━━━━━━━━━───── ▶ costlier  │
+         │        likely 14% less to 19% more  same                                      │
+         └───────────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │

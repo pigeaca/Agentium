@@ -270,8 +270,8 @@ func Seq(ratio float64, end int, futility bool, status string) (Experiment, erro
 }
 
 // JudgedPairs is Judged with the pair judge on: of each pair whose two runs passed, lean's (B's) change is preferred in
-// most, base's in some, and a few are ties, one of them a flip; one comparison is incomplete. A reason names a local
-// path and a key, and one holds a table bar.
+// most, base's in some, and a few are ties, one of them a flip; one comparison is incomplete. Base's reason names a
+// local path and a key, holds a table bar, runs over two lines and carries an escape code.
 func JudgedPairs() Experiment {
 	e := Judged()
 	e.Name = "lean-ab-pairs"
@@ -286,7 +286,7 @@ func JudgedPairs() Experiment {
 			v.Prefer, v.BA, v.Errors = "", judge.PairOrder{}, []string{"exit 1, not JSON"}
 		case n%5 == 1:
 			v.Prefer, v.AB.Answer, v.BA.Answer = judge.PreferA, "first", "second"
-			v.AB.Reason = "Change 1 keeps the parser's contract | Change 2 widens it; see /home/someone/.agentium/records/x with sk-ant-api03-" + // secret-scan: allow
+			v.AB.Reason = "Change 1 keeps the parser's \x1b[31mcontract\x1b[0m | Change 2 widens it;\n  see /home/someone/.agentium/records/x with sk-ant-api03-" + // secret-scan: allow
 				strings.Repeat("z", 40)
 		case n%5 == 3:
 			v.Prefer, v.Flip, v.AB.Answer, v.BA.Answer = judge.PreferTie, true, "first", "first"

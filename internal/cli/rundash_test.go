@@ -307,7 +307,7 @@ func TestAnswerWords(t *testing.T) {
 		{"success equivalent", success(stats.Equivalent, 0.60, 0.62), false,
 			"the answer: they pass about as many tasks, within 15 points (trimmed 62%, baseline 60%) · after all 12 tasks · sure enough"},
 		{"the last check, not sure, with the tasks that would settle it", settle(cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), 30), false,
-			"the answer: no clear difference in cost · after all 16 tasks · not sure yet · about 30 tasks would settle it"},
+			"the answer: no clear difference in cost · after all 16 tasks · not sure yet · about 30 tasks in all could settle it"},
 		{"an A/A has nothing to settle", settle(cost(stats.Inconclusive, 0.93, experiment.LookFinal, 0), 30), true,
 			"the answer: no clear difference in cost · after all 16 tasks · not sure"},
 		{"success inconclusive", success(stats.Inconclusive, 0.60, 0.70), false,

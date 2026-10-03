@@ -7,9 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/report"
 	"github.com/pigeaca/agentium/internal/report/reporttest"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -105,7 +108,7 @@ func TestReportViewGoldens(t *testing.T) {
 func TestReportViewReusesTheAnswerWords(t *testing.T) {
 	want := map[string][2]string{
 		"decisive":     {"lean is cheaper: 22% less", "after all 10 tasks · sure enough"},
-		"unsure":       {"no clear difference in cost", "after all 10 tasks · not sure yet · about 57 tasks would settle it"},
+		"unsure":       {"no clear difference in cost", "after all 10 tasks · not sure yet · about 57 tasks in all could settle it"},
 		"aa":           {"no clear difference in cost", "after all 10 tasks · not sure"},
 		"seq-stopped":  {"lean is cheaper: 50% less", "stopped early: sure enough"},
 		"seq-futility": {"no clear difference in cost", "stopped early · more tasks are unlikely to settle it"},
@@ -177,6 +180,7 @@ func TestReportViewCollapsedGrid(t *testing.T) {
 // Text from outside Agentium (task and context names) is sanitized: no escape reaches the terminal but the view's own.
 func TestReportViewSanitizes(t *testing.T) {
 	e := reporttest.OneRun(experiment.MethodV2, experiment.TemplateContextAB)
+	e.Name = "lean\x1b[2J-ab\x07"
 	evil := "\x1b]0;owned\x07lean\x1b[2J"
 	e.Lock.Design.Arms[1].Context, e.Lock.Arms[1].Context = evil, evil
 	for i := range e.Lock.Tasks {
@@ -195,7 +199,8 @@ func TestReportViewSanitizes(t *testing.T) {
 		}
 	}
 	view := strings.Join(reportView(buildReport(t, e), plainUnicode, 80), "\n")
-	if strings.ContainsAny(view, "\x1b\x07") || !strings.Contains(view, "lean") || !strings.Contains(view, "task-1") {
+	if strings.ContainsAny(view, "\x1b\x07") || !strings.Contains(view, "lean") || !strings.Contains(view, "task-1") ||
+		!strings.Contains(view, "agentium experiment report lean-ab --details") {
 		t.Errorf("an escape from outside reached the view:\n%q", view)
 	}
 }
@@ -217,5 +222,156 @@ func TestReportViewWrappedLinesKeepTheirColor(t *testing.T) {
 		color256.Style.Paint(term.Muted, " (unvalidated, may be chance)"), term.Default, 60)
 	if len(judgeLine) != 2 || !strings.HasPrefix(strings.TrimLeft(judgeLine[1], " "), open) {
 		t.Errorf("the judge's wrapped line lost its grey: %q", judgeLine)
+	}
+}
+
+// The answer is never an unqualified yes: the other side of the question shows in the box, in words from the guard's
+// verdict when it has one, else as too few to tell.
+func TestReportViewGuardWords(t *testing.T) {
+	scenes := reportScenes(t)
+	rep := buildReport(t, scenes["decisive"])
+	f := factsOf(rep.Lock, 0)
+	if words, role := guardWords(rep, f); words != "whether lean passes as many tasks: too few to tell" || role != term.Muted {
+		t.Errorf("without a verdict: %q (%v)", words, role)
+	}
+	for i, r := range rep.Analysis.Results {
+		if r.Role == experiment.RoleGuard {
+			rep.Analysis.Results[i].Verdict = stats.NoLoss
+		}
+	}
+	words, role := guardWords(rep, f)
+	if words != "lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)" || role != term.VerdictNoLoss {
+		t.Errorf("with a verdict: %q (%v)", words, role)
+	}
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); !strings.Contains(view, words) {
+		t.Errorf("the box lacks the guard:\n%s", view)
+	}
+	seq := buildReport(t, scenes["seq-stopped"]) // seq-v1: success is exploratory, still said
+	if words, _ := guardWords(seq, factsOf(seq.Lock, 0)); words != "whether lean passes as many tasks: too few to tell" {
+		t.Errorf("seq-v1: %q", words)
+	}
+	aa := buildReport(t, scenes["aa"])
+	if words, _ := guardWords(aa, factsOf(aa.Lock, 0)); words != "" {
+		t.Errorf("an A/A: %q", words)
+	}
+}
+
+// An early seq-v1 stop says that the saving is likely smaller than its estimate, as the Markdown does; a futility
+// stop and a fixed design do not.
+func TestReportViewEarlyStopNote(t *testing.T) {
+	scenes := reportScenes(t)
+	for name, want := range map[string]bool{"seq-stopped": true, "seq-futility": false, "decisive": false} {
+		view := strings.Join(reportView(buildReport(t, scenes[name]), plainUnicode, 100), "\n")
+		if got := strings.Contains(view, "it stopped early: the true saving is likely smaller than 50%"); got != want && name == "seq-stopped" ||
+			name != "seq-stopped" && strings.Contains(view, "it stopped early:") {
+			t.Errorf("%s: early-stop note shown %v, want %v:\n%s", name, got, want, view)
+		}
+	}
+}
+
+// A seq-v1 experiment whose last look counted nothing new keeps the last analysed look's answer, as the report does.
+func TestReportViewKeepsTheLastAnalysedLook(t *testing.T) {
+	e, err := reporttest.Seq(0.8, 26, false, experiment.StatusStopped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runs []reporttest.Run
+	for _, r := range e.Runs {
+		if r.Slot >= 16 && r.Slot < 24 { // stage 2: three infrastructure failures a slot, so look 2 counts nothing new
+			for attempt := 1; attempt <= 3; attempt++ {
+				failed := r
+				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = attempt, claude.OutcomeInfra, nil
+				runs = append(runs, failed)
+			}
+			continue
+		}
+		runs = append(runs, r)
+	}
+	e.Runs = runs
+	rep := buildReport(t, e)
+	s := rep.Analysis.Sequential
+	if len(s.Looks) != 2 || s.Looks[1].Analysed || !s.Looks[0].Analysed {
+		t.Fatalf("looks %+v: want look 1 analysed and look 2 not", s.Looks)
+	}
+	f := factsOf(rep.Lock, 0)
+	a, _ := reportAnswerState(rep, f)
+	if a.Verdict != s.Looks[0].Verdict || !a.HasEstimate {
+		t.Errorf("answer %+v: want look 1's verdict %q", a, s.Looks[0].Verdict)
+	}
+	headline, _ := answerWords(a, f.labels, f.aa)
+	view := strings.Join(reportView(rep, plainUnicode, 100), "\n")
+	if !strings.Contains(view, headline) || strings.Contains(view, "too few tasks finished") || strings.Contains(view, "too early to tell") {
+		t.Errorf("the view lost look 1's answer %q:\n%s", headline, view)
+	}
+}
+
+// A lopsided preference that a binomial test tells from an even split still says it is unvalidated, and no more that
+// it may be chance.
+func TestReportViewLopsidedPairs(t *testing.T) {
+	e := reporttest.JudgedPairs()
+	for i := range e.Runs {
+		if c := e.Runs[i].Record.PairJudge; c != nil {
+			c.Verdict.Prefer, c.Verdict.Flip = judge.PreferB, false
+			c.Verdict.AB.Answered, c.Verdict.BA.Answered = true, true
+		}
+	}
+	rep := buildReport(t, e)
+	if p := rep.PairJudge.Tasks; p.A != 0 || p.B < 6 || p.P >= 0.05 {
+		t.Fatalf("pairs %+v: want a lopsided preference", p)
+	}
+	view := strings.Join(reportView(rep, plainUnicode, 100), "\n")
+	want := fmt.Sprintf("the judge preferred lean's fix in %d of %d tasks (unvalidated)", rep.PairJudge.Tasks.B, rep.PairJudge.Tasks.Complete)
+	if !strings.Contains(view, want) || strings.Contains(view, "may be chance") {
+		t.Errorf("want %q:\n%s", want, view)
+	}
+}
+
+// A cost a run cut short makes a lower bound: "≥", or ">=" where the locale is not UTF-8.
+func TestReportViewAtLeastMark(t *testing.T) {
+	e := reporttest.OneRun(experiment.MethodV2, experiment.TemplateContextAB)
+	for i := range e.Runs {
+		if r := &e.Runs[i].Record; r.Task == "task-1" && r.Arm == "B" {
+			r.Outcome = claude.OutcomeCapped
+		}
+	}
+	rep := buildReport(t, e)
+	unicode, ascii := strings.Join(reportView(rep, plainUnicode, 80), "\n"), strings.Join(reportView(rep, plainASCII, 80), "\n")
+	if !strings.Contains(unicode, "≥$0.27") || !strings.Contains(ascii, ">=$0.27") || strings.Contains(ascii, "≥") {
+		t.Errorf("the lower bound's mark:\n%s\n%s", unicode, ascii)
+	}
+	if !strings.Contains(unicode, "! 1 run cut short at the cap") {
+		t.Errorf("the arm's box lacks the run cut short:\n%s", unicode)
+	}
+}
+
+// The last note's command stays whole on a narrow terminal.
+func TestReportViewKeepsTheCommandWhole(t *testing.T) {
+	scenes := reportScenes(t)
+	view := reportView(buildReport(t, scenes["seq-futility"]), plainUnicode, term.MinWidth)
+	if !strings.Contains(strings.Join(view, "\n"), "  agentium experiment report lean-seq-futility --details") {
+		t.Errorf("the command was split:\n%s", strings.Join(view, "\n"))
+	}
+}
+
+// fitParts keeps the status's height: it drops its least important parts, never cuts one that fits alone.
+func TestFitParts(t *testing.T) {
+	status := "after all 16 tasks · not sure yet · about 57 tasks in all could settle it"
+	for width, want := range map[int]string{
+		80: status,
+		60: "not sure yet · about 57 tasks in all could settle it",
+		40: "not sure yet",
+		8:  "not sur…",
+	} {
+		if got := fitParts(status, width, unicodeMarks); got != want {
+			t.Errorf("width %d: %q, want %q", width, got, want)
+		}
+	}
+	if got := fitParts("stopped early · more tasks are unlikely to settle it", 30, unicodeMarks); got != "more tasks are unlikely to se…" {
+		t.Errorf("futility at 30: %q", got)
+	}
+	lines := answerBox(plainUnicode, unicodeMarks, answerState{Metric: experiment.MetricCost, Verdict: stats.Inconclusive, Decision: experiment.LookFinal,
+		Seq: true, All: 16, Settle: 57}, factsOf(screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), 85), 44)
+	if len(lines) != 5 || strings.Contains(strings.Join(lines, "\n"), "…") || !strings.Contains(lines[3], "not sure yet") {
+		t.Errorf("a narrow answer box:\n%s", strings.Join(lines, "\n"))
 	}
 }
