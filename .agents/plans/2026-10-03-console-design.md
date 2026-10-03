@@ -94,6 +94,22 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     - A run that is never graded leaves its tests box at "–".
     - With concurrency above 2, each arm shows its latest run.
     - Before the first run, the status line shows only the latest line printed. The checks' warnings reach the screen at the end, in the scrollback.
+  - Follow-up, approved by the user on 2026-10-03 ("Add follow ups"):
+    - **Moments inside the boxes:** no new boxes. A box in progress names its slow moment: copying, fetching dependencies, setup, starting the sandbox, running the tests, cleaning up, judging.
+      - Where room is short, the words shorten ("downloads", "starting", "testing", "cleanup") and the time is left out.
+      - They come from finer run steps (`run.StepDependencies`, `StepSetup`, `StepSandbox`, `StepTests`, `StepCleanup`), still opt-in (`Observer.Steps`).
+    - **The sandbox's news:**
+      - A sandbox that cannot start (`run.StepSandboxDown`) turns the row's outline the caution color, shows "! no sandbox" and "not graded", and says "sandbox unavailable · retrying" on the row's name line.
+      - A grade left out for flagged denials says "blocked: <operation classes in words>" there; its log line reads "left out (sandbox)".
+      - A folder quarantined by a grade's cleanup (`run.StepQuarantined`) gets a fading status-line note.
+      - The row notes sit on the name line rather than under the row, so the frame never changes height.
+    - **Samples:**
+      - The animated dashboard and its still, re-recorded: the still shows "starting" and "testing".
+      - [`console-run-sandbox-news.svg`](../../docs/images/console-run-sandbox-news.svg), drawn from the test scenes: the stand-in cannot make the real sandbox fail.
+    - **Limits:**
+      - At 80 columns the moments' words fit only without their time.
+      - Moments under a second flash by, or never show between two redraws.
+      - `run once` and `run calibrate` status lines now name these moments too (terminal only; their plain output is unchanged).
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;

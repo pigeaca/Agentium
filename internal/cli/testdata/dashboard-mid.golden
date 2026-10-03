@@ -106,7 +106,7 @@
   baseline · chunk
   │  ✓ copy 2s   │╌╌┆╌│⠸ Claude 2m21s│╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
   trimmed · chunk
-  │  ✓ copy 2s   │╌╌┆╌│✓ Claude 2m01s│╌┆┆╌│ ✓ tests 20s  │╌●╌╌│  ⠸ judging   │
+  │  ✓ copy 2s   │╌╌┆╌│✓ Claude 2m01s│╌┆┆╌│ ✓ tests 20s  │╌●╌╌│ ⠸ judging 0s │
 
  the answer so far: about the same cost (+4%)
    not sure yet · next check after 12 tasks
@@ -146,7 +146,7 @@ spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
                  ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
   ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
   │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌●╌╌╌│ result │
-  │  ✓ 2s  │     ┆ │✓ 2m01s │ ┆   ┆ │ ✓ 20s  │ ┆     │   ⠸    │
+  │  ✓ 2s  │     ┆ │✓ 2m01s │ ┆   ┆ │ ✓ 20s  │ ┆     │⠸ judge │
   └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
                  ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
 

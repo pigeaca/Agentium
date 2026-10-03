@@ -32,16 +32,22 @@ const logRows = 4
 // stateRun is one run as the screens follow it: its task and how far it got.
 type stateRun struct {
 	pos, arm, attempt int
-	task              string // sanitized
-	step              int    // the step in progress: stepResult once finished
-	reached           int    // the last step that began, once finished (a run that was not graded never reached the tests)
-	began             [stepCount]time.Time
+	task              string               // sanitized
+	step              int                  // the step in progress: stepResult once finished
+	began             [stepCount]time.Time // zero for a step the run never began (one not graded skips the tests)
 	took              [stepCount]time.Duration
 	moved             time.Time // when the last step ended: the dot travels from step-1 to step until dotTime after it
 	started           time.Time
-	judging, finished bool
+	finished          bool
 	requeued          bool
 	result            experiment.Result
+	// sub is the moment of the step in progress (a run.Step constant: fetching dependencies, starting the sandbox, …),
+	// since subAt; "" for none.
+	sub   string
+	subAt time.Time
+	// sandboxDown: the grading sandbox could not start (run.StepSandboxDown), so the run was not graded; retrying: the
+	// scheduler will try it again.
+	sandboxDown, retrying bool
 }
 
 // runState is what the designed views know of a running experiment: the facts from its lock, and what the scheduler's
@@ -117,13 +123,25 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 			break
 		}
 		switch e.Step {
+		case run.StepPreparing, run.StepDependencies, run.StepSetup:
+			if r.step == stepCopy {
+				r.sub, r.subAt = e.Step, now
+			}
 		case run.StepAgent:
 			r.advance(stepAgent, now)
 		case run.StepGrading:
 			r.advance(stepTests, now)
-		case run.StepJudging:
+		case run.StepSandbox, run.StepTests:
+			if r.step == stepTests {
+				r.sub, r.subAt = e.Step, now
+			}
+		case run.StepCleanup, run.StepJudging:
 			r.advance(stepResult, now)
-			r.judging = true
+			r.sub, r.subAt = e.Step, now
+		case run.StepSandboxDown:
+			r.sandboxDown = true
+		case run.StepQuarantined:
+			sentence(term.LevelCaution, "cleanup quarantined a folder it could not remove")
 		}
 	case "finish":
 		r := s.runs[e.Slot.Position]
@@ -140,7 +158,8 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		if u := e.Result.Usage; u != nil {
 			s.read(*u)
 		}
-		entry := logEntry{at: now, arm: arm, task: taskName, result: e.Result, requeued: e.Requeued, took: now.Sub(r.started)}
+		entry := logEntry{at: now, arm: arm, task: taskName, result: e.Result, requeued: e.Requeued, took: now.Sub(r.started),
+			sandboxDown: r.sandboxDown}
 		if e.Result.Judge != "" {
 			entry.judge = term.Sanitize(e.Result.Judge)
 		}
@@ -150,6 +169,9 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		}
 	case "retry":
 		s.spent = max(s.spent, e.SpentUSD)
+		if r := s.last[arm]; r != nil && r.pos == e.Slot.Position {
+			r.retrying = true
+		}
 		sentence(term.OutcomeInfra, fmt.Sprintf("retrying %s for %s in %s: it failed, not by Claude's doing", taskName, label, term.Elapsed(e.RetryIn)))
 		s.notePos = e.Slot.Position
 	case "wait":
@@ -234,20 +256,17 @@ func (r *stateRun) advance(to int, now time.Time) {
 		return
 	}
 	r.took[r.step] = now.Sub(r.began[r.step])
-	r.step, r.moved = to, now
+	r.step, r.moved, r.sub = to, now, ""
 	r.began[to] = now
 }
 
 // finish ends the run with its result: the step in progress ends, and the steps it never reached are skipped.
 func (r *stateRun) finish(res experiment.Result, requeued bool, now time.Time) {
-	r.reached = r.step
 	if r.step < stepResult {
 		r.took[r.step] = now.Sub(r.began[r.step])
 		r.step, r.moved = stepResult, now
-	} else {
-		r.reached = stepTests
 	}
-	r.finished, r.judging, r.result, r.requeued = true, false, res, requeued
+	r.finished, r.sub, r.result, r.requeued = true, "", res, requeued
 }
 
 // view copies what a frame draws, at now.

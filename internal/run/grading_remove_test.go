@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -373,6 +374,35 @@ func TestResistingGradeIsQuarantined(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(q); len(entries) != 0 {
 		t.Errorf("quarantine after emptying = %v", entries)
+	}
+}
+
+// A grade folder that resists removal is quarantined after withGrading, and a live display hears of it (Quarantined),
+// after the cleanup began (Cleaning).
+func TestWithGradingTellsOfTheQuarantine(t *testing.T) {
+	f := newGradeFixture(t)
+	q := quarantine(f.env.Layout)
+	var heard []string
+	in := f.input(f.root, "", "go")
+	in.Quarantine, in.Warn = q, func(string) { heard = append(heard, "warn") }
+	in.Cleaning, in.Quarantined = func() { heard = append(heard, "cleaning") }, func() { heard = append(heard, "quarantined") }
+	in.remove = func(string) error { return errors.New("it resists") }
+	if err := withGrading(context.Background(), in, func(grading) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(heard, []string{"cleaning", "warn", "quarantined"}) {
+		t.Errorf("heard %q", heard)
+	}
+	if entries, _ := os.ReadDir(q); len(entries) != 1 {
+		t.Errorf("quarantine = %v", entries)
+	}
+	// A folder that goes: no quarantine to tell of.
+	heard = nil
+	f = newGradeFixture(t)
+	in = f.input(f.root, "", "go")
+	in.Quarantine, in.Cleaning, in.Quarantined = quarantine(f.env.Layout), func() { heard = append(heard, "cleaning") }, func() { heard = append(heard, "quarantined") }
+	if err := withGrading(context.Background(), in, func(grading) error { return nil }); err != nil || !slices.Equal(heard, []string{"cleaning"}) {
+		t.Errorf("heard %q, %v", heard, err)
 	}
 }
 

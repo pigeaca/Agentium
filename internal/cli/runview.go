@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -531,8 +532,11 @@ func successWords(a answerState, labels [2]string, aa bool) string {
 }
 
 // outcomeWords is a finished run's result in words: the result box's (short) and the log's, and their color.
-func outcomeWords(r experiment.Result, requeued bool, m marks) (box, log string, role term.Role) {
+// sandboxDown says the grading sandbox could not start (run.StepSandboxDown): the run was not graded.
+func outcomeWords(r experiment.Result, requeued, sandboxDown bool, m marks) (box, log string, role term.Role) {
 	switch {
+	case sandboxDown && !experiment.Settles(r.Outcome):
+		return "not graded", "sandbox unavailable (not counted)", term.OutcomeLeftOut
 	case r.Outcome == "" && requeued:
 		return "stopped", "stopped before Claude began · runs again next time", term.OutcomeLeftOut
 	case experiment.Fair(r.Outcome) && r.Passed == nil:
@@ -544,7 +548,7 @@ func outcomeWords(r experiment.Result, requeued bool, m marks) (box, log string,
 	case r.Outcome == "unfair":
 		return "left out", "left out: setup changed", term.OutcomeLeftOut
 	case r.Outcome == run.OutcomeSandboxFlagged:
-		return "left out", "left out: sandbox may have caused it", term.OutcomeLeftOut
+		return "left out", "left out (sandbox)", term.OutcomeLeftOut
 	case r.Outcome == claude.OutcomeCancelled:
 		return "stopped", "stopped (not counted)", term.OutcomeLeftOut
 	case r.Outcome == claude.OutcomeInfra:
@@ -569,12 +573,14 @@ type logEntry struct {
 	task     string
 	result   experiment.Result // a run's
 	requeued bool
-	took     time.Duration
-	judge    string    // the judge's verdict in words, when judged
-	words    string    // a sentence
-	role     term.Role // a sentence's color
-	sentence bool
-	check    bool // the sentence tells a check of the answer (the log view draws its box instead)
+	// sandboxDown: the run's grading sandbox could not start
+	sandboxDown bool
+	took        time.Duration
+	judge       string    // the judge's verdict in words, when judged
+	words       string    // a sentence
+	role        term.Role // a sentence's color
+	sentence    bool
+	check       bool // the sentence tells a check of the answer (the log view draws its box instead)
 }
 
 // format draws the entry in width cells (cut with an ellipsis; noWidth: whole, for lines that stay): the time, the arm
@@ -585,7 +591,7 @@ func (e logEntry) format(sh term.Shapes, m marks, f runFacts, width int) string 
 	if e.sentence {
 		return term.Truncate(" "+at+"  "+st.Paint(e.role, m.words(e.words)), width, sh.Ellipsis())
 	}
-	_, words, role := outcomeWords(e.result, e.requeued, m)
+	_, words, role := outcomeWords(e.result, e.requeued, e.sandboxDown, m)
 	words = m.words(words)
 	labelWidth := max(term.Width(f.labels[0]), term.Width(f.labels[1]))
 	arm := term.Pad(st.Paint(armRole(e.arm), f.labels[e.arm]), labelWidth)
@@ -684,4 +690,44 @@ func box(c *term.Canvas, m marks, x, y, w, h int, role term.Role) {
 	c.Put(x, y+h-1, m.boxBL, role, false)
 	c.HLine(x+1, y+h-1, w-2, m.boxH, role)
 	c.Put(x+w-1, y+h-1, m.boxBR, role, false)
+}
+
+// operationWords are the classes of sandbox operations, in plain words, by the start of their names (the sandbox's
+// own: mach-lookup, file-read-data, network-outbound, …). Never a path or a name: those are the grade's choice.
+var operationWords = []struct{ prefix, words string }{
+	{"mach-", "a system service lookup"},
+	{"file-read", "a file read"},
+	{"file-write", "a file write"},
+	{"network", "a network connection"},
+	{"ipc", "shared memory"},
+	{"process", "starting a program"},
+	{"sysctl", "a system setting"},
+	{"iokit", "a device"},
+	{"signal", "a signal to a process"},
+}
+
+// blockedWords is a left-out run's flagged denials in plain words, each class once: "a system service lookup, a file
+// read". ops is the record's FlaggedOperations ("mach-lookup, file-read-data").
+func blockedWords(ops string) string {
+	var words []string
+	for _, op := range strings.Split(ops, ",") {
+		op = strings.TrimSpace(term.Sanitize(op))
+		if op == "" {
+			continue
+		}
+		w := "an operation the agent's own sandbox allows"
+		for _, c := range operationWords {
+			if strings.HasPrefix(op, c.prefix) {
+				w = c.words
+				break
+			}
+		}
+		if !slices.Contains(words, w) {
+			words = append(words, w)
+		}
+	}
+	if len(words) == 0 {
+		return "an operation the agent's own sandbox allows"
+	}
+	return strings.Join(words, ", ")
 }

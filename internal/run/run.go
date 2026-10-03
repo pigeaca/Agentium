@@ -82,8 +82,10 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
-	// Step, when set, is called as each step begins (StepPreparing, StepAgent, StepGrading, StepJudging), so a caller can
-	// show what is in progress. It is called on the run's goroutine; it only feeds a status display and must not print.
+	// Step, when set, is called as each step and finer moment begins (StepPreparing, StepDependencies, StepSetup,
+	// StepAgent, StepGrading, StepSandbox, StepTests, StepJudging, StepCleanup), and with the sandbox's news, which is
+	// no work in progress (StepSandboxDown, StepQuarantined: see InProgress), so a caller can show what is going on. It
+	// is called on the run's goroutine; it only feeds a status display and must not print.
 	Step func(step string)
 	Now  func() time.Time
 	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
@@ -283,7 +285,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			startErr = err
 		}
 	}
+	prepared := false // the workspace was begun: there is something to clean up
 	defer func() {
+		if prepared {
+			env.step(StepCleanup)
+		}
 		rec.Finished = env.Now().UTC()
 		if recordsReady {
 			if startErr := writeStart(true); startErr != nil && err == nil {
@@ -398,6 +404,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	env.step(StepPreparing)
+	prepared = true
 	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
@@ -448,6 +455,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			rec.Notes = append(rec.Notes, "a build tool could not be stopped: "+stopErr.Error())
 		}
 	}
+	env.step(StepDependencies)
 	warmed, notes, err := env.prepareTools(ctx, profiles, inv, spec.Task.Base, filepath.Join(rec.RecordsDir, "setup.log"), running)
 	rec.Notes = append(rec.Notes, notes...)
 	// What the warm-up found (Python's venv and the project's metadata) goes to the agent, and to Agentium's own commands in a checkout: the task's
@@ -471,6 +479,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	if len(spec.Task.Setup) > 0 {
+		env.step(StepSetup)
 		// Setup builds into the agent's own cache (the profiles' AgentCaches: Go's GOCACHE where the base has a go.mod
 		// or go.work, or no other build tool), so a warming step (`go build ./...`) spares every agent a cold build; the
 		// workspace holds no hidden tests yet. Elsewhere (a Python project without Go) setup's Go builds go to the data
@@ -616,6 +625,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	switch rec.Outcome {
 	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
 		if err := env.grade(ctx, spec, repo, graded, &rec, running); errors.Is(err, sandbox.ErrUnavailable) && ctx.Err() == nil {
+			env.step(StepSandboxDown)
 			// Fail closed: the sandbox did not hold, so nothing was graded, and the run is not the agent's result.
 			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
 			note := gradeInfraNote(rec.Sandbox, err)
@@ -775,6 +785,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			verify.CommandEnv = append(slices.Clone(env.CommandEnv), env.checkoutEnv(graded)...)
 			verify.commandBase = env.checkoutBase
 		}
+		env.step(StepTests)
 		commands, ok, err = verify.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
@@ -811,10 +822,13 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 			warnings++
 			fmt.Fprintf(log, "[agentium] warning: %s\n", w)
 			env.progress("  %s", env.Style.Warn("warning: "+w))
-		}}
+		},
+		Testing: func() { env.step(StepTests) }, Cleaning: func() { env.step(StepCleanup) },
+		Quarantined: func() { env.step(StepQuarantined) }}
 	if spec.Keep {
 		in.Keep = graded
 	}
+	env.step(StepSandbox)
 	commands, ok, report, err := env.gradeInSandbox(ctx, in)
 	rec.Verify, rec.Sandbox = commands, report
 	if warnings > 0 {
@@ -1002,12 +1016,29 @@ func (env Env) repositoryPaths(ctx context.Context) []string {
 
 // The steps of a run that Env.Step reports, in order; a run that is not graded (an unfair or infrastructure outcome)
 // ends after StepAgent, and only a judged run has StepJudging. The words are what status lines show.
+//
+// Within them come finer moments, so a display never looks stuck on a slow one: StepDependencies and StepSetup while
+// preparing; StepSandbox (the grading sandbox's seed, profile and canary) and StepTests while grading; StepCleanup when
+// a grade's or the run's folders go (it may come more than once). StepSandboxDown says the grading sandbox could not
+// start (the run is infrastructure, retried), and StepQuarantined that a grade's cleanup moved a folder it could not
+// remove into the quarantine: they are news, not steps.
 const (
-	StepPreparing = "preparing the workspace" // the fresh checkout, the arm's context, the warm-up and the setup
-	StepAgent     = "Claude Code is working"
-	StepGrading   = "grading" // the hidden tests
-	StepJudging   = "judging"
+	StepPreparing    = "preparing the workspace" // the fresh checkout, the arm's context, the warm-up and the setup
+	StepDependencies = "fetching dependencies"   // the build tools' warm-up: a base's first run may download for minutes
+	StepSetup        = "running the setup"
+	StepAgent        = "Claude Code is working"
+	StepGrading      = "grading" // the hidden tests
+	StepSandbox      = "starting the grading sandbox"
+	StepTests        = "running the tests"
+	StepJudging      = "judging"
+	StepCleanup      = "cleaning up"
+	StepSandboxDown  = "the grading sandbox is unavailable"
+	StepQuarantined  = "a folder was moved to the quarantine"
 )
+
+// InProgress reports whether step is work in progress (a step or a moment), rather than news of what happened
+// (StepSandboxDown, StepQuarantined): a status line that shows the step in progress shows only those.
+func InProgress(step string) bool { return step != StepSandboxDown && step != StepQuarantined }
 
 // step tells the caller a step is starting.
 func (env Env) step(name string) {

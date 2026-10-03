@@ -704,3 +704,16 @@ func TestBuildCaches(t *testing.T) {
 		t.Errorf("Agentium's temporary folder: %v, %v; want it owner-only", info, err)
 	}
 }
+
+// A status line shows only work in progress: the sandbox's news is not a step.
+func TestProgressStepLeavesOutNews(t *testing.T) {
+	t.Parallel()
+	var shown []string
+	step := progressStep(func(s string) { shown = append(shown, s) })
+	for _, s := range []string{run.StepPreparing, run.StepSandbox, run.StepSandboxDown, run.StepCleanup, run.StepQuarantined} {
+		step(s)
+	}
+	if want := []string{run.StepPreparing, run.StepSandbox, run.StepCleanup}; strings.Join(shown, "|") != strings.Join(want, "|") {
+		t.Errorf("shown %q, want %q", shown, want)
+	}
+}
