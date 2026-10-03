@@ -8,12 +8,21 @@
 - Scope: Agentium's human console output only. It follows the [no web UI decision](../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
 
 ## Outcome
-- **A running experiment** shows a live **data-flow picture** (the user, 2026-10-03, showing a picture of connected boxes), redrawn in place on a terminal:
-  - the experiment's box (runs and spend as bars, the time elapsed) **splits** into one box per arm, side by side (its tally, and a spinner on the run in flight);
-  - the arms **merge** into grading (sandbox, canary, flagged denials);
-  - an arrow leads to the current look (its interval bar and verdict so far), and the usage window shows as a bar when it matters.
+- **A running experiment** shows **one compact panel**, redrawn in place on a terminal. This follows the user's choice (2026-10-03) after seeing the six-box flow: "Can we compact view somehow? Seems like we have a lot elements under one picture"; they picked "One panel".
+  - **Title:** the experiment, the current look and the time elapsed.
+  - **Arms:** one row each, with a bar, its tally and the run in flight (a spinner) or the last result.
+  - **The look:** one line with its interval bar and its verdict so far.
+  - **The bottom border:** spend against the budget, the usage window and the grading state (sandbox ok, or flagged denials).
 
-  See the [sample](../../docs/images/console-flow.svg). Each box holds two or three lines; the rest is in the log.
+  About five lines in all:
+  ```
+  ╭─ lean-vs-trimmed · look 2 of 3 ─────────────── 4m02s ─╮
+  │ A baseline  ████████████░░░░  11/16 ok  ⠸ map-keys  │
+  │ B trimmed   ██████████░░░░░░  10/16 ok  ✓ chunk     │
+  │ cost  ├──────┼──●──────┤  +4%  [-16%, +28%]  stop  │
+  ╰─ $2.17 of $5 · window 64% · sandbox ok ─────────────╯
+  ```
+- **The connected-box flow** (the user's first picture) stays only in `run show`, as a short chain: checkout → agent → grading → record. The user chose this on 2026-10-03. The [flow sample](../../docs/images/console-flow.svg) shows the primitives; the experiment screens don't use the split and merge layout.
 - **A log streams under it**, so scrollback keeps every line. The panel lives in a bottom-anchored region that the log scrolls above, as `docker build` does.
 - **Reports, run details and previews** get the same visual language: boxed panels; bars; interval bars that show where zero falls; colour per arm and per outcome. `run show` is a vertical **chain**: checkout → agent → grading → record, with the time of each stage.
 - **Two views for a running experiment.** The dashboard is the default on a terminal. `--view log` (or `AGENTIUM_VIEW=log`, set once) gives the styled, append-only log instead:
@@ -66,7 +75,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
 
     ![The console's shapes](../../docs/images/console-shapes.svg)
-- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the experiment flow above: `Shapes.Flow` in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the one compact panel above: a `Panel` with bars and an interval bar in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
