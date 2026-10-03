@@ -4,7 +4,7 @@
                            \e[2m+---------------------\e[0m\e[2m+\e[22m\e[2m----------------------+\e[22m
                        \e[2m+-------------------------+-------------------------+\e[22m
                        \e[2mv\e[22m                                                   \e[2mv\e[22m
-      \e[2m+-\e[22m \e[1m\e[36mA\e[39m lean context\e[22m \e[2m-----------------\e[22m\e[2m+\e[22m                \e[2m+-\e[22m \e[1m\e[35mB\e[39m full context\e[22m \e[2m-----------------\e[22m\e[2m+\e[22m
+      \e[2m+-\e[22m \e[1m\e[36mA\e[39m lean context\e[22m \e[2m-----------------\e[22m\e[2m+\e[22m                \e[2m+-\e[22m \e[1m\e[33mB\e[39m full context\e[22m \e[2m-----------------\e[22m\e[2m+\e[22m
       \e[2m|\e[22m \e[32m5 ok\e[39m  \e[31m1 failed\e[39m                   \e[2m|\e[22m                \e[2m|\e[22m \e[32m5 ok\e[39m  \e[31m1 failed\e[39m                   \e[2m|\e[22m
       \e[2m|\e[22m \e[2m\\e[22m \e[2mparse-iso-weeks\e[22m                \e[2m|\e[22m                \e[2m|\e[22m \e[2m\\e[22m \e[2mcsv-quoting\e[22m                    \e[2m|\e[22m
       \e[2m+----------------\e[0m\e[2m+\e[22m\e[2m-----------------+\e[22m                \e[2m+----------------\e[0m\e[2m+\e[22m\e[2m-----------------+\e[22m
