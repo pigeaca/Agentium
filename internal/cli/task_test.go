@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/term"
 )
 
 func TestTaskImportValidateAndManage(t *testing.T) {
@@ -430,5 +431,21 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 
 	if after := repoState(t, repo); after != before {
 		t.Errorf("task commands modified the repository:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+func TestCutCountsCells(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		n    int
+		want string
+	}{
+		{"fix the login redirect", 10, "fix the l…"},
+		{"short", 10, "short"},
+		{"修复登录重定向问题", 10, "修复登录…"}, // wide characters take two cells: the table pads by cells
+	} {
+		if got := cut(tc.text, tc.n); got != tc.want || term.Width(got) > tc.n {
+			t.Errorf("cut(%q, %d) = %q (%d cells), want %q", tc.text, tc.n, got, term.Width(got), tc.want)
+		}
 	}
 }
