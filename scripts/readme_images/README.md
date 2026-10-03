@@ -9,9 +9,8 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
 - `ansi2svg.py TITLE COLS < output.ans > picture.svg` renders it as a terminal window. The output's first line is
   usually `\x1b[36m$\x1b[39m agentium ...` to show the command. It knows 8, 256 and 24-bit colors.
 - `AGENTIUM_TERM_DEMO=/tmp/demo COLS=100 go test ./internal/term -run TestDemo -count=1` writes `shapes.ans` (every
-  shape: `console-shapes.svg`) and `flow.ans` (a still of the live experiment flow, then `run show` as a chain:
-  `console-flow.svg`) into an existing folder; `AGENTIUM_TERM_DEMO=tty` draws the shapes, and a live flow, on your
-  terminal.
+  shape) and `flow.ans` (a flow of boxes) into an existing folder, for checking the primitives by eye;
+  `AGENTIUM_TERM_DEMO=tty` draws them, and a live flow, on your terminal.
 - `cast2svg.py TITLE COLS PROMPT < rec.json > animation.svg` animates a timed recording, JSON `[[seconds, text], ...]`.
 - `frames2svg.py TITLE COLS ROWS PROMPT [--from S] [--fps N] [--still S|last] < rec.json > out.svg` replays a live
   display's recording (cursor movement and erasing included) as a terminal of COLS by ROWS and animates each change as a
@@ -26,8 +25,6 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
   `AGENTIUM_RECORD_PACE=2 AGENTIUM_RECORD_COST=0.25`, then `frames2svg.py "…" 80 34 "…" --from 31 --fps 8` (the checks
   and the sandbox's revalidation, shown as "getting ready", take the first 30 seconds); its still is `--still 64.435`, and `console-run-log.svg` is
   the log view's `--still last` at 80 by 40.
-- `run-ab-events.ansi` holds the event lines recorded during the real `ab` run on 2026-09-29, which cannot be
-  regenerated without paid runs. `console-run.svg` shows them above today's `experiment show ab`.
 - `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestDashboardMomentsGoldens -count=1` writes `sandbox-news.ans`
   (a row whose grading sandbox could not start, and one left out for flagged denials, from the test scenes: the stand-in
   cannot make the real sandbox fail); `console-run-sandbox-news.svg` is it through `ansi2svg.py`, at 80 columns.
