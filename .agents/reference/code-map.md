@@ -7,7 +7,7 @@ Where each part of Agentium lives. Loaded on demand (not default context): read 
 | `AGENTS.md`, `CLAUDE.md`, `.agents/` | Shared instructions: rules, references, roles, skills, templates, plans, decisions |
 | `go.mod`, `cmd/agentium` | Go module (pinned toolchain) and the `agentium` binary's entrypoint |
 | `internal/cli` | Command-line parsing, dispatch and printing; each handler calls one service; `start` composes setup |
-| `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables |
+| `internal/term` | Console styles (terminal only, `NO_COLOR`) and fitted tables; the designed console's primitives: capabilities (terminal, color depth, UTF-8, size), a palette by role, widths in cells, panels, bars, interval bars, legends, spinners, and the `Display` (a live region redrawn under a log, or plain lines off a terminal) |
 | `internal/home` | The owner-only data folder (`~/.agentium` or `AGENTIUM_HOME`), outside every repository: database, artifacts, workspaces, records, `deps/`, Agentium's own caches and temp files, the run lock and file locks that wait until cancelled |
 | `internal/store` | SQLite through `mattn/go-sqlite3` (cgo, WAL, foreign keys); embedded, ordered migrations; projects, snapshots, tasks, runs, calibrations, experiments |
 | `internal/project` | Read-only discovery for `init`: git root and commit, Claude Code path and version, sign-in mode (presence only), test commands, instruction files |

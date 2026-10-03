@@ -41,12 +41,15 @@
 
 ## Work
 Step 1 comes first; steps 2–5 build on it and can run two at a time.
-- [ ] **1. `internal/term` primitives.**
+- [x] **1. `internal/term` primitives.**
   - Panels (boxes with titles), bars (with partial blocks), interval bars, the palette, a spinner and width fitting.
   - A **live region** renderer (bottom-anchored, throttled, resize-aware, safe on exit).
   - Capability detection: terminal, colour, UTF-8 and width.
   - Tests: golden renders at several widths, ASCII fallback, plain fallback, the renderer's cleanup on cancel, and no escapes on a pipe.
   - Risk: medium (concurrency in the renderer).
+  - Done: `Capabilities`/`DetectCapabilities`, `Role` and `Style.Paint` (8, 256 and 24-bit), `Width` in cells (wide characters), `Truncate`/`Pad`/`Wrap`, `Shapes` (`Panel`, `Bar`, `IntervalBar`, `Legend`, `Spinner`), `Display`/`NewDisplay`. Goldens in `internal/term/testdata` (40, 80 and 120 columns; color, ASCII, plain); the live region is driven through a fake terminal (`vt_test.go`) and on a real pseudo-terminal. No screen uses them yet. Sample (`AGENTIUM_TERM_DEMO`, then `ansi2svg.py`): the shapes, and a still of the live view with the log above the dashboard:
+
+    ![The console's shapes and a still of the live dashboard](../../docs/images/console-shapes.svg)
 - [ ] **2. `experiment run`** (and `start --yes`): the live dashboard and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
