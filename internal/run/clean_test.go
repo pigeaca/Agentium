@@ -120,6 +120,7 @@ func TestCleanKeepsWhatIsInUseAndRemovesTheRest(t *testing.T) {
 	// Project 2: no task uses any of its bases; its whole folder goes, with its stamps but not its lock.
 	p2 := filepath.Join(l.Deps, "2")
 	fill(t, filepath.Join(p2, "cargo"), 7000)
+	usedAgo(t, p2, now, 3*24*time.Hour) // the folder's own last use (markUsed)
 	stampD := writeStamp(t, l, "2", baseD, "", "")
 	usedAgo(t, stampD, now, 3*24*time.Hour)
 	steps := stampD + ".steps"
@@ -190,15 +191,22 @@ func TestCleanKeepsALockedExperimentsBases(t *testing.T) {
 	now := time.Now()
 	seed := seedPath(l, "3", "mvn-44444444", baseA)
 	fill(t, seed, 100)
-	usedAgo(t, seed, now, 10*24*time.Hour)
+	usedAgo(t, seed, now, 40*24*time.Hour)
 	fill(t, filepath.Join(l.Deps, "3", "m2"), 100)
-	usedAgo(t, writeStamp(t, l, "3", baseA, "", ""), now, 10*24*time.Hour)
-	in := CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge, InUse: map[string]map[string]BaseUse{"3": {baseA: {Experiments: []string{"ab"}}}}}
+	usedAgo(t, filepath.Join(l.Deps, "3"), now, 40*24*time.Hour)
+	usedAgo(t, writeStamp(t, l, "3", baseA, "", ""), now, 40*24*time.Hour)
+	// A task's base, as old: it goes for its age; the experiment's stays whatever its age (a paused experiment's next
+	// slots must find what its earlier ones had).
+	taskSeed := seedPath(l, "3", "mvn-44444444", baseB)
+	fill(t, taskSeed, 100)
+	usedAgo(t, taskSeed, now, 40*24*time.Hour)
+	in := CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge, InUse: map[string]map[string]BaseUse{"3": {
+		baseA: {Experiments: []string{"ab"}}, baseB: {Tasks: []string{"value"}}}}}
 	plan, err := PlanClean(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Remove) != 0 {
+	if len(plan.Remove) != 1 || plan.Remove[0].Path != taskSeed || plan.Remove[0].Reason != CleanOld {
 		t.Errorf("removes %+v", plan.Remove)
 	}
 	for _, path := range []string{seed, filepath.Join(l.Deps, "3")} {
@@ -206,14 +214,76 @@ func TestCleanKeepsALockedExperimentsBases(t *testing.T) {
 			t.Errorf("%s: kept %v, %q %q", path, ok, it.Reason, it.Detail)
 		}
 	}
-	// Unused for longer than --older-than, it goes all the same.
-	in.OlderThan = 7 * 24 * time.Hour
-	plan, err = PlanClean(context.Background(), in)
+	// A base both use: the task's age no longer counts while the experiment holds it.
+	in.InUse["3"][baseA] = BaseUse{Tasks: []string{"other"}, Experiments: []string{"ab"}}
+	if plan, _ = PlanClean(context.Background(), in); len(plan.Remove) != 1 {
+		t.Errorf("a base a task and an experiment use: removes %+v", plan.Remove)
+	}
+}
+
+// The reviewer's case: a project whose only stamp is a stale one, on a base nothing uses, while an active task's base
+// has no stamp (its warm-up failed or waited out): the task uses the folder, so it stays, aged by the folder's own
+// last use.
+func TestCleanKeepsTheDepsOfATaskWithoutAStamp(t *testing.T) {
+	t.Parallel()
+	l := cleanLayout(t)
+	now := time.Now()
+	dir := filepath.Join(l.Deps, "5")
+	fill(t, filepath.Join(dir, "m2"), 1000)
+	usedAgo(t, writeStamp(t, l, "5", baseA, "", ""), now, 3*24*time.Hour)
+	usedAgo(t, dir, now, 3*24*time.Hour)
+	in := CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge, InUse: map[string]map[string]BaseUse{"5": {baseB: {Tasks: []string{"value"}}}}}
+	plan, err := PlanClean(context.Background(), in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(plan.Remove) != 2 || plan.Remove[0].Reason != CleanOld || plan.Remove[1].Reason != CleanOld {
-		t.Errorf("with --older-than 7d: %+v", plan.Remove)
+	if it, ok := byPath(plan.Keep, dir); !ok || it.Reason != CleanKeptTask || len(plan.Remove) != 0 {
+		t.Errorf("kept %v %+v; removes %+v", ok, it, plan.Remove)
+	}
+	// Unused for longer than --older-than (the folder's last use), it goes as old.
+	in.OlderThan = 2 * 24 * time.Hour
+	if plan, _ = PlanClean(context.Background(), in); len(plan.Remove) != 1 || plan.Remove[0].Reason != CleanOld {
+		t.Errorf("--older-than 2d: %+v", plan.Remove)
+	}
+	// Nothing in use, but the folder was used within the grace (a validation of a new candidate, say): it stays.
+	in = CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge}
+	markUsed(dir)
+	if plan, _ = PlanClean(context.Background(), in); len(plan.Remove) != 0 {
+		t.Errorf("a folder used just now: removes %+v", plan.Remove)
+	}
+	if it, ok := byPath(plan.Keep, dir); !ok || it.Reason != CleanKeptRecent {
+		t.Errorf("kept %v %+v", ok, it)
+	}
+}
+
+// What a warm-up is making, or set aside a moment ago, stays for the grace: a seed's .tmp, a venv no stamp names yet.
+func TestCleanGraceCoversWhatIsBeingMade(t *testing.T) {
+	t.Parallel()
+	l := cleanLayout(t)
+	now := time.Now()
+	tmp := seedPath(l, "1", "go-88888888", baseA) + ".tmp"
+	fill(t, tmp, 10)
+	usedAgo(t, tmp, now, 10*time.Minute)
+	dir := filepath.Join(l.Deps, "1")
+	fresh, old := filepath.Join(dir, "py", "new"), filepath.Join(dir, "py", "orphan")
+	fill(t, fresh, 10)
+	fill(t, old, 10)
+	usedAgo(t, fresh, now, 10*time.Minute)
+	usedAgo(t, old, now, 2*time.Hour)
+	usedAgo(t, writeStamp(t, l, "1", baseA, "", ""), now, time.Hour*48)
+	in := CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge, InUse: map[string]map[string]BaseUse{"1": {baseA: {Tasks: []string{"value"}}}}}
+	plan, err := PlanClean(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if it, ok := byPath(plan.Keep, tmp); !ok || it.Reason != CleanKeptRecent {
+		t.Errorf("a seed in the making: kept %v %+v", ok, it)
+	}
+	if _, ok := byPath(plan.Remove, fresh); ok {
+		t.Error("a venv made 10 minutes ago, before its stamp, is removed")
+	}
+	if it, ok := byPath(plan.Remove, old); !ok || it.Reason != CleanUnused {
+		t.Errorf("a venv no stamp names, 2 hours old: %v %+v", ok, it)
 	}
 }
 
@@ -341,6 +411,7 @@ func TestCleanEmptiesTheQuarantine(t *testing.T) {
 	fill(t, filepath.Join(stuck, "ro"), 10)
 	must(t, os.Chmod(filepath.Join(stuck, "ro"), 0o500)) // what made removeTree's first try fail
 	must(t, os.WriteFile(filepath.Join(quarantine(l), "a-file"), []byte("x"), 0o600))
+	must(t, os.Symlink(t.TempDir(), filepath.Join(quarantine(l), "a-link"))) // never listed: cleanup removes no link
 	plan, err := PlanClean(context.Background(), CleanInput{Layout: l, Now: time.Now(), OlderThan: CleanDefaultAge})
 	if err != nil || len(plan.Remove) != 2 || plan.Remove[0].Reason != CleanQuarantined {
 		t.Fatalf("plan %+v, %v", plan.Remove, err)
@@ -350,8 +421,8 @@ func TestCleanEmptiesTheQuarantine(t *testing.T) {
 			t.Errorf("%s: %v", plan.Remove[i].Path, err)
 		}
 	}
-	if entries, _ := os.ReadDir(quarantine(l)); len(entries) != 0 {
-		t.Errorf("the quarantine holds %d entries", len(entries))
+	if entries, _ := os.ReadDir(quarantine(l)); len(entries) != 1 || entries[0].Name() != "a-link" {
+		t.Errorf("the quarantine holds %v", entries)
 	}
 }
 

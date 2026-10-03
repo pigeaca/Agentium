@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func newCleanFixture(t *testing.T) cleanFixture {
 		writeFile(t, dir, "data", strings.Repeat("x", 4096))
 	}
 	writeFile(t, filepath.Join(f.layout.Cache, "warm-state", f.project), "maven-v1-"+f.base, "")
-	for _, p := range []string{f.usedSeed, f.unusedSeed, filepath.Join(f.layout.Cache, "warm-state", f.project, "maven-v1-"+f.base)} {
+	for _, p := range []string{f.usedSeed, f.unusedSeed, filepath.Join(f.layout.Cache, "warm-state", f.project, "maven-v1-"+f.base), f.deps} {
 		if err := os.Chtimes(p, now.Add(-48*time.Hour), now.Add(-48*time.Hour)); err != nil {
 			t.Fatal(err)
 		}
@@ -150,11 +151,18 @@ func TestCleanKeepsTheBaseOfALockedExperimentsRetiredTask(t *testing.T) {
 	if err := db.LockExperiment(context.Background(), e.ID, lock); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
-	expect(t, f.run(context.Background(), "clean", "--yes"), ExitOK, "in use by experiment ab")
-	if _, err := os.Lstat(f.usedSeed); err != nil {
-		t.Errorf("the experiment's seed was removed: %v", err)
+	// Locked and unfinished in any status but done: running, stopped, over its budget or paused for usage. Its bases
+	// stay whatever their age (--older-than does not apply to them).
+	for _, status := range []string{store.StatusRunning, store.StatusStopped, store.StatusBudget, store.StatusUsage} {
+		if err := db.SetExperimentStatus(context.Background(), e.ID, status, ""); err != nil {
+			t.Fatal(err)
+		}
+		expect(t, f.run(context.Background(), "clean", "--yes", "--older-than", "1d"), ExitOK, "in use by experiment ab")
+		if _, err := os.Lstat(f.usedSeed); err != nil {
+			t.Errorf("status %s: the experiment's seed was removed: %v", status, err)
+		}
 	}
+	db.Close()
 
 	// Once the experiment is done, nothing uses the retired task's base.
 	db, err = store.Open(context.Background(), f.layout.Database)
@@ -187,6 +195,24 @@ func TestCleanRemovesWhatAStoppedRunLeft(t *testing.T) {
 	for _, gone := range []string{workspace, dir} {
 		if _, err := os.Lstat(gone); err == nil {
 			t.Errorf("%s is still there", gone)
+		}
+	}
+}
+
+// An orphaned agent may still be running: clean --yes refuses as every run's start does, and removes nothing.
+func TestCleanRefusesWhileAStoppedRunsAgentMayStillRun(t *testing.T) {
+	t.Parallel()
+	f := newCleanFixture(t)
+	dir := filepath.Join(f.layout.Records, "20261003-alive")
+	start, _ := json.Marshal(map[string]any{"record": map[string]any{"id": "20261003-alive", "records": dir},
+		"workspace": filepath.Join(f.layout.Workspaces, "20261003-alive"), "agent_started": true, "pgid": syscall.Getpgrp()})
+	writeFile(t, dir, "started.json", string(start))
+	expect(t, f.run(context.Background(), "clean"), ExitOK, "records/20261003-alive", "--yes refuses until it ends")
+	expect(t, f.run(context.Background(), "clean", "--yes"), ExitError, "may still be running")
+	// (Recovery itself empties the quarantine first, as at every run's start; seeds and dependencies stay.)
+	for _, kept := range []string{f.unusedSeed, f.deps} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Errorf("%s was removed although clean refused", kept)
 		}
 	}
 }
@@ -228,6 +254,23 @@ func TestCleanJSON(t *testing.T) {
 			t.Errorf("not removed: %v", it)
 		}
 	}
+	// Under --yes the kinds count what went: a seed whose lock a warm-up holds stays, and is not counted.
+	g := newCleanFixture(t)
+	unlock, err := home.LockFile(context.Background(), g.unusedSeed+".lock", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	busy := checkJSON(t, g.runFixture, g.run(context.Background(), "clean", "--yes", "--json"), ExitOK, []string{"clean"})
+	unlock()
+	seeds := busy.get("kinds").([]any)[0].(map[string]any)
+	if seeds["kind"] != "seeds" || seeds["remove"] != float64(0) || seeds["remove_bytes"] != float64(0) {
+		t.Errorf("--yes kinds: %v", seeds)
+	}
+	item := busy.get("remove").([]any)[0].(map[string]any)
+	if item["removed"] != false || item["problem"] == nil {
+		t.Errorf("the busy seed's item: %v", item)
+	}
+
 	// Usage errors are documents too.
 	bad := f.run(context.Background(), "clean", "--older-than", "10m", "--json")
 	doc := checkJSON(t, f.runFixture, bad, ExitUsage, []string{"clean"})

@@ -139,6 +139,9 @@ func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, boo
 // every run of the base repeats its notes.
 func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
 	if names := buildtool.NeedsWarming(profiles); inv.Deps != "" && len(names) > 0 {
+		// The deps folder's last use, for cleanup (projectLast), on every path: a failed or waited-out warm-up writes
+		// no stamp, yet the run may build from what is there.
+		defer markUsed(inv.Deps)
 		var fresh buildtool.Warmed
 		note, err := env.warmInThrowawayFor(ctx, profiles, inv.Deps, base, logPath, running, &fresh)
 		if err != nil {
@@ -342,7 +345,10 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	}
 	var warmed buildtool.Warmed
 	var notes []string
+	var used []string // what each command marks used (markUsed): a validation can outlast cleanup's grace
 	if deps, names := env.depsFolder(), buildtool.NeedsWarming(profiles); deps != "" && len(names) > 0 {
+		used = append(used, deps)
+		markUsed(deps) // before the warm-up, so a failed one counts as a use too
 		var fresh buildtool.Warmed
 		note, err := env.warmInThrowawayFor(ctx, profiles, deps, base, logPath, func(int) {}, &fresh)
 		switch {
@@ -356,7 +362,10 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		if warmed, ok = readStamp(stamp, profiles); !ok {
 			warmed = fresh
 		} else {
-			markUsed(stamp) // the base's dependencies' last use, for cleanup
+			used = append(used, stamp) // the base's dependencies' last use, for cleanup
+		}
+		for _, p := range used {
+			markUsed(p)
 		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
@@ -367,6 +376,9 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	return task.CheckoutCommands{
 		Environ: runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
 		Env: func(dir string) []string {
+			for _, p := range used { // each command of each stage: last use stays fresh however long validation takes
+				markUsed(p)
+			}
 			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
 				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
 		},

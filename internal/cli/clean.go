@@ -29,11 +29,13 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
     experiment uses, or that nothing has used for --older-than (they are made again on their next use);
   - the quarantine: what a grade's cleanup could not remove;
   - what runs stopped by a dead Agentium left (workspaces, temp and grading folders), as recovery removes it.
-Nothing used in the last hour goes. Your repositories, the database, run records, reports and snapshots are never
-touched. Without --yes it writes nothing.
+Nothing used in the last hour goes, and nothing a locked, unfinished experiment uses. Your repositories, reports and
+snapshots are never touched. Without --yes it writes nothing; with --yes it first runs the recovery every run starts
+with, which stores runs a dead Agentium left as cancelled, redacts their records, and removes the records folder of
+one that stopped before its agent started.
 
 Flags:
-  --older-than DURATION  what is in use goes too once unused this long: 30d (the default), 12h, 90m; at least 1h
+  --older-than DURATION  what a task uses goes too once unused this long: 30d (the default), 12h, 90m; at least 1h
   --yes                  remove what it lists; it takes the run lock, so not while runs are in progress
   --json                 print one JSON document (docs/guide.md, "Scripting and automation")
 `
@@ -61,6 +63,11 @@ func runClean(ctx context.Context, env Env, args []string) int {
 	}
 	res, err := clean(ctx, env, layout, age, *yes)
 	if err != nil {
+		if !env.JSON {
+			for _, n := range res.notes { // runs recovery stored before it refused
+				fmt.Fprintln(env.Stdout, note(env.style(), n))
+			}
+		}
 		return fail(env, err)
 	}
 	code = ExitOK
@@ -107,6 +114,17 @@ type cleanResult struct {
 	leftoversChecked bool              // false while runs are in progress (a dry run then leaves leftovers out)
 	names            map[string]string // project folder names (IDs) to project names
 	notes, warnings  []string
+}
+
+// removed counts, with --yes, the items of a kind that went and their sizes.
+func (r cleanResult) removed(kind string) (n int, bytes int64) {
+	for i, it := range r.plan.Remove {
+		if it.Kind == kind && i < len(r.errs) && r.errs[i] == nil {
+			n++
+			bytes += it.Bytes
+		}
+	}
+	return n, bytes
 }
 
 // failed counts removals that failed for a reason other than being in use (run.ErrCleanUsed, run.ErrCleanBusy).
@@ -174,7 +192,7 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 	}
 	res.errs = make([]error, len(res.plan.Remove))
 	var others []int
-	leftovers := false
+	leftovers := slices.ContainsFunc(res.plan.Keep, func(it run.CleanItem) bool { return it.Kind == run.CleanLeftovers })
 	for i, it := range res.plan.Remove {
 		if it.Kind == run.CleanLeftovers {
 			leftovers = true
@@ -183,7 +201,11 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 		}
 	}
 	if leftovers {
-		recErr := recoverForClean(ctx, env, layout, db, &res)
+		// As at every run's start (startRuns): a run that may still be running, or a recovery that fails, stops the
+		// whole cleanup before anything else goes.
+		if err := recoverForClean(ctx, env, layout, db, &res); err != nil {
+			return res, err
+		}
 		for i, it := range res.plan.Remove {
 			if it.Kind != run.CleanLeftovers {
 				continue
@@ -191,7 +213,7 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 			gone := it.Gone()
 			res.freed += gone
 			if gone < it.Bytes {
-				res.errs[i] = cmpErr(recErr, errors.New("recovery left part of it"))
+				res.errs[i] = errors.New("recovery left part of it (see the warnings)")
 			}
 		}
 	}
@@ -206,14 +228,6 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 		}
 	}
 	return res, nil
-}
-
-// cmpErr is err, or else fallback.
-func cmpErr(err, fallback error) error {
-	if err != nil {
-		return err
-	}
-	return fallback
 }
 
 // openForClean opens the database: read-only for a dry run, which writes nothing, and normally with --yes, which may
@@ -281,7 +295,7 @@ func basesInUse(ctx context.Context, db *store.Store, names map[string]string) (
 
 // recoverForClean runs the recovery every run starts with (startRuns), with the run lock held by clean: it removes
 // what dead runs left and stores those whose agent started, as cancelled with what they spent. A run whose agent may
-// still be running is left, with a warning.
+// still be running is an error, as in startRuns (*run.AliveError): the caller then removes nothing else.
 func recoverForClean(ctx context.Context, env Env, layout home.Layout, db *store.Store, res *cleanResult) error {
 	if db == nil {
 		return errors.New("the data folder has no database to store recovered runs in")
@@ -317,11 +331,6 @@ func recoverForClean(ctx context.Context, env Env, layout home.Layout, db *store
 		}
 		res.notes = append(res.notes, fmt.Sprintf("recovered run %s (task %s, arm %s), left behind by a stopped Agentium: cancelled, $%.2f",
 			o.Record.ID, o.Record.Task, o.Record.Arm, o.Record.Spend().AgentUSD))
-	}
-	var alive *run.AliveError
-	if errors.As(recErr, &alive) {
-		warn(alive.Error())
-		return nil
 	}
 	return recErr
 }
@@ -406,13 +415,7 @@ func printClean(env Env, layout home.Layout, res cleanResult) {
 		k := t[kind]
 		removed, removedBytes := k.remove, k.removeBytes
 		if !res.dryRun {
-			removed, removedBytes = 0, 0
-			for i, it := range res.plan.Remove {
-				if it.Kind == kind && res.errs[i] == nil {
-					removed++
-					removedBytes += it.Bytes
-				}
-			}
+			removed, removedBytes = res.removed(kind)
 		}
 		table.Row(kind, strconv.Itoa(removed), formatBytes(removedBytes), strconv.Itoa(k.keep), formatBytes(k.keepBytes))
 		all.remove, all.removeBytes, all.keep, all.keepBytes = all.remove+removed, all.removeBytes+removedBytes, all.keep+k.keep, all.keepBytes+k.keepBytes
@@ -451,7 +454,7 @@ func printClean(env Env, layout home.Layout, res cleanResult) {
 	}
 	switch {
 	case res.dryRun && len(res.plan.Remove) > 0:
-		fmt.Fprintf(out, "\nRun %s to remove it. What is in use goes too once unused for %s (--older-than).\n", st.Command("agentium clean --yes"), ago(res.age))
+		fmt.Fprintf(out, "\nRun %s to remove it. What a task uses goes too once unused for %s (--older-than); what a locked, unfinished experiment uses stays.\n", st.Command("agentium clean --yes"), ago(res.age))
 	case res.dryRun:
 		fmt.Fprintln(out, "\nNothing to remove.")
 	}
@@ -507,6 +510,9 @@ func cleanDocument(env Env, layout home.Layout, res cleanResult) cleanDoc {
 	t := totals(res.plan)
 	for _, kind := range run.CleanKinds {
 		k := t[kind]
+		if !res.dryRun { // what went, as the console says; the items' "removed" tell the rest
+			k.remove, k.removeBytes = res.removed(kind)
+		}
 		doc.Kinds = append(doc.Kinds, cleanKindDoc{Kind: kind, Remove: k.remove, RemoveBytes: k.removeBytes, Keep: k.keep, KeepBytes: k.keepBytes})
 		doc.RemoveBytes += k.removeBytes
 	}

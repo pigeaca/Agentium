@@ -18,7 +18,8 @@ import (
 //   - A run with a start file: kept while its process group exists (it may still be running); otherwise its workspace,
 //     temp root, grading copy and grade folder, and the judges' folders of a finished run, or its whole records folder
 //     when its agent never started. A run whose agent started keeps its records: recovery stores it as cancelled.
-//   - A run whose start file cannot be read is kept: recovery decides when it is safe (recoverUnreadable).
+//   - A run whose start file cannot be read is kept: recovery decides when it is safe (recoverUnreadable), and the
+//     caller's --yes runs it, so the item says so.
 //
 // Call it holding the run lock, or knowing that no run is in progress: a live run between two commands looks dead.
 func (c *planner) leftovers(ctx context.Context) error {
@@ -65,11 +66,11 @@ func (c *planner) leftovers(ctx context.Context) error {
 			err = fmt.Errorf("its start file names a workspace outside %s", layout.Workspaces)
 		}
 		if err != nil {
-			c.addLeftover(it, verdict{reason: CleanKeptUnreadable, detail: "its start file cannot be read: recovery decides"})
+			c.addLeftover(it, verdict{reason: CleanKeptUnreadable, detail: "its start file cannot be read: --yes runs recovery, which may recover it, as every run's start does"})
 			continue
 		}
 		if s.PGID > 0 && !s.Finished && groupExists(s.PGID) {
-			c.addLeftover(it, verdict{reason: CleanKeptRunning, detail: fmt.Sprintf("its process group %d still exists", s.PGID)})
+			c.addLeftover(it, verdict{reason: CleanKeptRunning, detail: fmt.Sprintf("its process group %d still exists: --yes refuses until it ends", s.PGID)})
 			continue
 		}
 		paths := []string{workspace, filepath.Join(dir, "verify"), filepath.Join(dir, gradingFolder)}

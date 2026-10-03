@@ -28,11 +28,12 @@ import (
 //   - leftovers: the workspaces, temp roots and grading copies of runs whose Agentium process died, which recovery
 //     (RecoverWarn) removes; PlanClean only lists them (planLeftovers), and the caller runs the recovery.
 //
-// A seed, and a base's dependencies, stay while a task in the pool or a locked, unfinished experiment uses the base
-// (CleanInput.InUse), unless they have not been used for CleanInput.OlderThan; they are made again on their next use.
-// Last use is the seed folder's, or the base's warm-up stamp's, modification time: markUsed sets it whenever a run or a
-// validation uses them, so age means "unused for", not "created". Nothing used within CleanGrace goes, in use or not:
-// validation does not take the run lock, so one may be using it right now.
+// A seed, and a base's dependencies, stay while a locked, unfinished experiment uses the base, and while a task in the
+// pool does unless they have not been used for CleanInput.OlderThan (CleanInput.InUse, judge); they are made again on
+// their next use. Last use is the seed folder's, the base's warm-up stamp's or the deps folder's modification time:
+// markUsed sets it whenever a run or a validation uses them (each validation command, too), so age means "unused
+// for", not "created". Nothing used within CleanGrace goes, in use or not: validation does not take the run lock, so
+// one may be using it right now.
 //
 // Only folders inside the data folder's cache and deps folders are ever removed, reached through real folders only
 // (cleanable); each is first moved into the quarantine, whole (an atomic rename: a crash never leaves half a seed or
@@ -87,7 +88,8 @@ type CleanInput struct {
 	// Stored reports whether a run is stored (the database's runs); nil leaves leftovers out (runs are in progress).
 	Stored func(id string) (bool, error)
 	Now    time.Time
-	// OlderThan is how long an item in use may go unused before it goes all the same; below CleanGrace counts as it.
+	// OlderThan is how long an item a task uses may go unused before it goes all the same (never one a locked,
+	// unfinished experiment uses); below CleanGrace counts as it.
 	OlderThan time.Duration
 }
 
@@ -179,15 +181,17 @@ type verdict struct {
 	reason, detail string
 }
 
-// judge decides for a project's base: kept while in use and used within OlderThan, or used within CleanGrace;
-// otherwise it goes, as old (in use) or unused.
+// judge decides for a project's base: kept while a task uses it and it was used within OlderThan, whatever its age
+// while a locked, unfinished experiment uses it (a paused experiment's next slots must find the dependencies its
+// earlier ones had: a venv resolved again could get newer versions), or when used within CleanGrace; otherwise it
+// goes, as old (a task's) or unused.
 func (c *planner) judge(project, base string, last time.Time) verdict {
 	use, inUse := c.in.InUse[project][base]
 	age := c.in.Now.Sub(last)
 	switch {
-	case inUse && age < c.in.OlderThan && len(use.Tasks) > 0:
+	case inUse && len(use.Tasks) > 0 && age < c.in.OlderThan:
 		return verdict{reason: CleanKeptTask, detail: "in use by " + names("task", use.Tasks)}
-	case inUse && age < c.in.OlderThan:
+	case inUse && len(use.Experiments) > 0:
 		return verdict{reason: CleanKeptExperiment, detail: "in use by " + names("experiment", use.Experiments)}
 	case age < CleanGrace:
 		return verdict{reason: CleanKeptRecent, detail: "used " + ago(age) + " ago"}
@@ -341,12 +345,11 @@ func readStamps(state string) ([]stamp, error) {
 	return stamps, nil
 }
 
-// projectLast is a deps folder's last use: its newest stamp's, or with none, the folder's own modification time.
+// projectLast is a deps folder's last use: the newest of its stamps' and of the folder's own modification time, which
+// every run's setup and validation of the project sets (markUsed), warmed or not: a failed or waited-out warm-up
+// writes no stamp, yet what is there is used.
 func projectLast(dir string, stamps []stamp) time.Time {
-	if len(stamps) == 0 {
-		return modTime(dir)
-	}
-	var last time.Time
+	last := modTime(dir)
 	for _, s := range stamps {
 		if s.used.After(last) {
 			last = s.used
@@ -401,32 +404,43 @@ func (c *planner) deps(ctx context.Context) error {
 			stamps: state, recheck: recheck}
 		kept, best := 0, verdict{}
 		var gone []verdict
-		for _, s := range stamps {
-			v := c.judge(project, s.base, s.used)
+		judged := func(v verdict) {
 			if v.gone {
 				gone = append(gone, v)
-				continue
+				return
 			}
 			kept++
 			if best.reason == "" || rank(v.reason) < rank(best.reason) {
 				best = v
 			}
 		}
-		if len(stamps) == 0 { // nothing warmed (or every warm-up failed): the project as a whole decides
-			v := c.judgeProject(project, whole.LastUsed)
-			if !v.gone {
-				kept, best = 1, v
-			} else {
-				gone = append(gone, v)
+		stamped := map[string]bool{}
+		for _, s := range stamps {
+			stamped[s.base] = true
+			judged(c.judge(project, s.base, s.used))
+		}
+		// A base in use with no stamp (its warm-up failed, waited out or never ran) uses the folder all the same: it
+		// counts with the folder's last use.
+		for base := range c.in.InUse[project] {
+			if !stamped[base] {
+				judged(c.judge(project, base, whole.LastUsed))
 			}
+		}
+		if age := c.in.Now.Sub(whole.LastUsed); age < CleanGrace {
+			judged(verdict{reason: CleanKeptRecent, detail: "used " + ago(age) + " ago"})
 		}
 		if kept == 0 {
 			whole.Bytes = treeSize(dir)
-			v := gone[0]
+			v := verdict{gone: true, reason: CleanUnused}
+			if len(gone) > 0 {
+				v = gone[0]
+			}
 			if slices.ContainsFunc(gone, func(v verdict) bool { return v.reason == CleanOld }) {
 				v = verdict{gone: true, reason: CleanOld, detail: "in use, but not used for " + ago(c.in.Now.Sub(whole.LastUsed))}
 			} else if len(stamps) > 0 {
 				v.detail = fmt.Sprintf("no task or experiment uses its %d warmed base(s)", len(stamps))
+			} else {
+				v.detail = "no task or experiment uses its project"
 			}
 			c.add(whole, v)
 			continue
@@ -495,31 +509,6 @@ func (c *planner) unit(project, sub, path, key string, stamps []stamp) (CleanIte
 		return it, gone[i], true
 	}
 	return it, gone[0], true
-}
-
-// judgeProject decides for a deps folder with no stamp: kept while any base of the project is in use and the folder
-// changed within OlderThan, or changed within CleanGrace.
-func (c *planner) judgeProject(project string, last time.Time) verdict {
-	var use BaseUse
-	for _, u := range c.in.InUse[project] {
-		use.Tasks, use.Experiments = append(use.Tasks, u.Tasks...), append(use.Experiments, u.Experiments...)
-	}
-	slices.Sort(use.Tasks)
-	slices.Sort(use.Experiments)
-	use.Tasks, use.Experiments = slices.Compact(use.Tasks), slices.Compact(use.Experiments)
-	inUse := len(use.Tasks)+len(use.Experiments) > 0
-	age := c.in.Now.Sub(last)
-	switch {
-	case inUse && age < c.in.OlderThan && len(use.Tasks) > 0:
-		return verdict{reason: CleanKeptTask, detail: "in use by " + names("task", use.Tasks)}
-	case inUse && age < c.in.OlderThan:
-		return verdict{reason: CleanKeptExperiment, detail: "in use by " + names("experiment", use.Experiments)}
-	case age < CleanGrace:
-		return verdict{reason: CleanKeptRecent, detail: "changed " + ago(age) + " ago"}
-	case inUse:
-		return verdict{gone: true, reason: CleanOld, detail: "in use, but unchanged for " + ago(age)}
-	}
-	return verdict{gone: true, reason: CleanUnused, detail: "no task or experiment uses its project"}
 }
 
 // rank orders the reasons to keep: a task first, then an experiment, then recent use.
@@ -598,6 +587,52 @@ func markUsed(path string) {
 	}
 	now := time.Now()
 	_ = os.Chtimes(path, now, now)
+}
+
+// seedTaken is prepareSeed's first look: whether seed is a finished seed, read and marked used (markUsed) under a shared
+// lock on its lock file. Cleanup takes that lock exclusively, rechecks the seed's last use and only then moves it away:
+// so it either sees this mark and keeps the seed, or moved the seed before this look, which then finds none and makes
+// it again. What remains is the time from here to the grade's clone, which CleanGrace covers: a seed marked within it
+// is never removed. A missing seed takes no lock and creates nothing.
+func seedTaken(ctx context.Context, seed string) (bool, error) {
+	if _, err := os.Lstat(seed); errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	unlock, err := lockShared(ctx, seed+".lock")
+	if err != nil {
+		return false, fmt.Errorf("grading seed lock: %w", err)
+	}
+	defer unlock()
+	ready, err := seedReady(seed)
+	if ready {
+		markUsed(seed)
+	}
+	return ready, err
+}
+
+// lockShared takes a shared lock on path (created when missing), waiting until ctx ends: it excludes home.LockFile's
+// exclusive lock, not other shared ones.
+func lockShared(ctx context.Context, path string) (unlock func(), err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_SH|syscall.LOCK_NB)
+		if err == nil {
+			return func() { syscall.Flock(int(f.Fd()), syscall.LOCK_UN); f.Close() }, nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			f.Close()
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			f.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 // Errors of RemoveClean for items it left in place.
