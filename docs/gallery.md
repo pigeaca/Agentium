@@ -4,7 +4,8 @@ Real console output from Agentium. Back to the [README](../README.md); commands 
 
 This is real output, printed by today's `agentium` (built from `main` at b6df097 on 2026-10-02) in a 120-column terminal; the pictures were redone from stored data on that date. Paths into the home folder are shortened to `~`, and `…` marks lines left out. Where the data comes from:
 - **`start` and `pool update --dry-run`:** a fresh clone of [Masterminds/semver](https://github.com/Masterminds/semver), free runs that stop before any agent run (Claude Code 2.1.285). The candidates picture was redone on 2026-10-03 with the build that made `pool update` the way to mine, on a new data folder: the pool reads the last 270 days, so older commits are counted as outside it.
-- **The `ab` experiment** (plan, run, report, one run): Phase 1's acceptance runs on 2026-09-29, Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. It compared today's docs (`full`) with a minimal version (`minimal`) and was stopped after 4 complete pairs to fit one usage window, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner. The event lines of the run were recorded then; everything else is re-printed from the stored data.
+- **The `ab` experiment** (plan, report, one run): Phase 1's acceptance runs on 2026-09-29, Claude Code 2.1.281 with claude-sonnet-5, on tasks taken from this repository. It compared today's docs (`full`) with a minimal version (`minimal`) and was stopped after 4 complete pairs, so every verdict is "exploratory": the report says the data is too thin instead of naming a winner.
+- **The run screens:** recorded on 2026-10-03 from a real `experiment run` with the stand-in agent, no paid runs.
 - **The Judge section:** the `judge-check` experiment, 2026-10-01 (Claude Code 2.1.285).
 - **The decisive verdict:** the model A/B on samber/lo, 2026-10-02 (Claude Code 2.1.285).
 
@@ -20,13 +21,13 @@ This is real output, printed by today's `agentium` (built from `main` at b6df097
 
 <img src="images/console-plan.svg" alt="agentium experiment plan ab: the arms, checks marked ok, and a table of sizes with their cost and detectable effects">
 
-**4. Run it:** pairs of runs, interleaved, within the budget. It was stopped here with Ctrl-C, and `experiment run ab` would resume it. The lines are the ones recorded during the run, in today's colors; the summary under them is today's `experiment show ab`.
+**4. Run it:** the live screen. Each version's current task moves through fresh copy, Claude works and hidden tests (both in a sandbox) to the result, and the answer updates as results come in. Recorded from a real `experiment run` with a stand-in agent (Agentium's test double for Claude Code), at its real pace:
 
-<img src="images/console-run.svg" alt="agentium experiment run ab: checks marked ok, twelve runs started and finished in pairs with their cost, two cancelled, and a summary per arm">
+<img src="images/console-run-dashboard.svg" alt="agentium experiment run: for each version, the current task moving through the steps with a dot travelling between them; the answer so far in a green box; the last four results below">
 
-While runs go, a status line under the events shows the progress and redraws in place. This animation is a short run with a stand-in agent (Agentium's test double for Claude Code), at its real speed:
+With `--view log` (or `AGENTIUM_VIEW=log`) it is a plain, append-only log instead: a line per run and a small box at each check of the answer.
 
-<img src="images/console-live.svg" alt="An animation of agentium experiment run: event lines appear while a status line below them counts runs settled and in flight, spend and usage, then the summary">
+<img src="images/console-run-log.svg" alt="agentium experiment run --view log: a coloured line per run and a box each time the answer is checked">
 
 **5. Report it:** verdicts in words, then the metrics with both intervals, noise, context and cost per arm, what the runs used of their context (files read on demand, project skills, subagents), behavior (tests run, files changed, denials), per-task results and notes. On a terminal it looks like this; piped, with `--out FILE` or with `--markdown`, it is Markdown you can paste into a pull request, like the [full report](examples/context-ab-report.md) (`--json` for everything).
 
