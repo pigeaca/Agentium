@@ -53,10 +53,10 @@ func (d Shapes) Ellipsis() string { return d.glyphs().ellipsis }
 // Fit cuts text to width cells with the shapes' ellipsis (see Truncate).
 func (d Shapes) Fit(text string, width int) string { return Truncate(text, width, d.Ellipsis()) }
 
-// Spinner is the spinner's frame for tick, in the accent color.
+// Spinner is the spinner's frame for tick, muted: it shows motion, so it needs no color.
 func (d Shapes) Spinner(tick int) string {
 	frames := d.glyphs().spinner
-	return d.Style.Paint(Accent, frames[((tick%len(frames))+len(frames))%len(frames)])
+	return d.Style.Paint(Muted, frames[((tick%len(frames))+len(frames))%len(frames)])
 }
 
 // Overflow is what a panel does with a line wider than its inside.

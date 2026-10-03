@@ -47,7 +47,7 @@ func showcase(d Shapes, width int, wide bool) string {
 	add(d.Panel(p, width)...)
 	add(d.Panel(Panel{
 		Title: "A title much too long for a narrow panel to hold in full", Right: "dropped when there is no room",
-		Overflow: WrapText, Border: Accent,
+		Overflow: WrapText,
 		Lines: []string{"Wrapped: " + s.Paint(VerdictNoLoss, "no loss beyond the margin") +
 			" on success; cost is inconclusive with these tasks and needs another look."},
 	}, width)...)

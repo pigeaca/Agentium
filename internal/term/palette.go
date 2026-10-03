@@ -83,7 +83,7 @@ var (
 		OutcomeLeftOut:      greyShade,
 		VerdictImproved:     greenShade,
 		VerdictRegressed:    redShade,
-		VerdictNoLoss:       shade{"34", 69, [3]uint8{95, 135, 255}},
+		VerdictNoLoss:       greenShade, // the palette stays small: no loss is a good result too
 		VerdictInconclusive: greyShade,
 		LevelCalm:           greenShade,
 		LevelCaution:        yellowShade,
