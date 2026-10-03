@@ -94,7 +94,7 @@ func newRunScreen(ctx context.Context, env Env, view string, caps term.Capabilit
 		// Force: chooseView picked the dashboard for a terminal wide enough; NO_COLOR only takes its color away. Errors
 		// (standard error) print above the region at once.
 		s.disp = term.NewDisplay(ctx, env.Stdout, caps, term.DisplayOptions{Force: true, Size: size})
-		env.Stdout, env.Stderr = heldWriter{s}, s.disp.Over(env.Stderr)
+		env.Stdout, env.Stderr, env.notice = heldWriter{s}, s.disp.Over(env.Stderr), s.disp.Writer()
 		s.redrawWaiting()
 	}
 	s.out = env.Stdout

@@ -59,6 +59,17 @@ type Env struct {
 	// the caller's: tests and main leave them false.
 	JSON, Plain bool
 	json        *jsonState
+	// notice, when set, is where notices go that must reach the screen at once even while a screen holds standard output
+	// (the dashboard holds it until the run ends): a run recovered from a dead Agentium, say. nil means Stdout.
+	notice io.Writer
+}
+
+// noticeOut is where a notice that must not wait goes (Env.notice): standard output, or above the dashboard at once.
+func (env Env) noticeOut() io.Writer {
+	if env.notice != nil {
+		return env.notice
+	}
+	return env.Stdout
 }
 
 const usage = `agentium measures how coding agents, models and project context change coding-agent results.

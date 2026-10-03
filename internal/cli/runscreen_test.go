@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -115,6 +117,93 @@ func TestExperimentRunDrawsTheDashboardOnATerminal(t *testing.T) {
 	}
 	answer := screen[strings.Index(screen, "BASELINE"):strings.Index(screen, "Experiment lean-ab:")]
 	checkWords(t, "the dashboard's last lines", answer)
+	// What was printed before the first run was held while the dashboard ran: it reaches the terminal after the last
+	// frame, not above the region.
+	if locked, last := strings.Index(r.stdout, "\nLocked:"), strings.LastIndex(r.stdout, "fresh copy"); locked < last {
+		t.Errorf("\"Locked:\" printed at %d, before the last frame at %d: the output was not held", locked, last)
+	}
+}
+
+// The dashboard asks for each run's steps and draws them: with a stand-in that takes its time, a frame shows Claude
+// Code at work in its own box (a spinner under "Claude works", which only a step event starts).
+func TestDashboardDrawsTheSteps(t *testing.T) {
+	t.Parallel()
+	f, ctrl := experimentFixture(t)
+	ctx := context.Background()
+	writeFile(t, ctrl, "agent-sleep", "0.6")
+	expect(t, f.run(ctx, "experiment", "new", "steps", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
+	terminalVars(f)
+	r := f.run(ctx, "experiment", "run", "steps")
+	expect(t, r, ExitOK)
+	working := regexp.MustCompile(`┆ │\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s\s+│ ┆`)
+	if !working.MatchString(term.Plain(r.stdout)) {
+		t.Errorf("no frame showed Claude Code at work:\n%s", term.Plain(r.stdout))
+	}
+	_, screen := newRunScreen(ctx, Env{Stdout: io.Discard, Stderr: io.Discard, Now: time.Now}, viewDashboard,
+		term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}, 85)
+	defer screen.Close()
+	_, logView := newRunScreen(ctx, Env{Stdout: io.Discard, Now: time.Now}, viewLog, term.Capabilities{Terminal: true, Width: 100}, 85)
+	if !screen.observer(nil).Steps || logView.observer(nil).Steps {
+		t.Error("only the dashboard asks for the runs' steps")
+	}
+}
+
+// After an error from the runs, what was held prints before the error, on one terminal: the checks, then why it
+// stopped.
+func TestDashboardHeldLinesComeBeforeTheError(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "experiment", "new", "unready", "--b", "lean", "--task", "value", "--repeats", "1"), ExitOK)
+	expect(t, f.run(ctx, "task", "edit", "value", "--setup", "true"), ExitOK) // a changed task waits for its review again
+	terminalVars(f)
+	var out syncBuffer // standard output and error on one terminal
+	code := Run(ctx, Env{DefaultGrader: "host", Args: []string{"experiment", "run", "unready"}, Stdout: &out, Stderr: &out, Dir: f.repo, Terminal: true,
+		Getenv:   func(key string) string { return f.vars[key] },
+		Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home} },
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
+	lines, _ := vtScreen(out.String()) // what stays on the terminal (the status line said "Checking …" too, then went)
+	plain := term.Plain(strings.Join(lines, "\n"))
+	checks, failed := strings.Index(plain, "Checking experiment unready"), strings.Index(plain, "not ready to run: see above")
+	if code != ExitError || checks < 0 || failed < 0 || checks > failed {
+		t.Errorf("exit %d; the checks at %d, the error at %d:\n%s", code, checks, failed, plain)
+	}
+
+	// The screen itself: held lines, then end, then the error.
+	var shared syncBuffer
+	env, screen := newRunScreen(ctx, Env{Stdout: &shared, Stderr: &shared, Now: time.Now}, viewDashboard,
+		term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}, 85)
+	fmt.Fprintln(env.Stdout, "held one")
+	fmt.Fprintln(env.Stdout, "held two")
+	screen.end(nil)
+	fmt.Fprintln(env.Stderr, "the error")
+	if err := screen.Close(); err != nil {
+		t.Fatal(err)
+	}
+	lines, _ = vtScreen(shared.String())
+	if got := strings.Join(lines, "|"); got != "held one|held two|the error" {
+		t.Errorf("the order: %q", got)
+	}
+}
+
+// A notice that must not wait (a run recovered from a dead Agentium) prints above the dashboard at once, while the
+// rest of what is printed is held until the end.
+func TestDashboardNoticesPrintAtOnce(t *testing.T) {
+	t.Parallel()
+	var out syncBuffer
+	env, screen := newRunScreen(context.Background(), Env{Stdout: &out, Stderr: &out, Now: time.Now}, viewDashboard,
+		term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}, 85)
+	fmt.Fprintln(env.Stdout, "held")
+	fmt.Fprintln(env.noticeOut(), "Recovered run 1")
+	waitFor(t, "the notice", func() bool { return strings.Contains(out.String(), "Recovered run 1") })
+	lines, _ := vtScreen(out.String())
+	if slices.Contains(lines, "held") || !slices.Contains(lines, "Recovered run 1") { // "held" shows only in the status line
+		t.Errorf("before the end: %q", lines)
+	}
+	screen.Close()
+	if plain := (Env{Stdout: &out}).noticeOut(); plain != &out {
+		t.Error("without a screen, notices go to standard output")
+	}
 }
 
 // --view log, and AGENTIUM_VIEW=log, print styled lines and redraw nothing; NO_COLOR keeps the view without color.

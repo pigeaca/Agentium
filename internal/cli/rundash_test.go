@@ -514,3 +514,23 @@ func TestLayoutNarrowsBelow74Columns(t *testing.T) {
 		t.Errorf("at 73 cells: %+v; at 72: %+v", full, narrow)
 	}
 }
+
+// A comparison's or a warning's note fades from the status line after noteTime; a retry's stays until its run starts.
+func TestNotesFade(t *testing.T) {
+	t.Parallel()
+	s := newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+	s.event(experiment.Event{Kind: "pair", Slot: s.lock.Schedule[1], Result: experiment.Result{Judge: "tie", JudgeUSD: 0.09}})
+	if f := s.frame(plainUnicode, 79, 40, 0); !strings.Contains(f, "compared the two passing runs") {
+		t.Fatalf("no note:\n%s", f)
+	}
+	v := s.state.view() // a frame drawn from this copy fades it by its own clock
+	s.clock.add(noteTime)
+	if f := strings.Join(dashboardFrame(v, plainUnicode, s.clock.Now(), 79, 40, 0), "\n"); strings.Contains(f, "compared") || !strings.Contains(f, "2 at a time") {
+		t.Errorf("the note stayed:\n%s", f)
+	}
+	s.event(experiment.Event{Kind: "retry", Slot: s.lock.Schedule[2], Attempt: 1, RetryIn: 2 * time.Minute})
+	s.clock.add(time.Minute)
+	if f := s.frame(plainUnicode, 79, 40, 0); !strings.Contains(f, "retrying chunk") {
+		t.Errorf("the retry's note faded before its run:\n%s", f)
+	}
+}

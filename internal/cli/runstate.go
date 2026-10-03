@@ -61,11 +61,16 @@ type runState struct {
 	answer   answerState
 	log      []logEntry
 	// note is the dashboard's status line: the latest retry, pause, warning or comparison, in words, until it no longer
-	// applies (a retry's slot or a paused execution starts again). notePos is a retry's slot, else -1.
+	// applies (a retry's slot or a paused execution starts again) or, for the rest, noteTime after it came. notePos is a
+	// retry's slot, else -1; noteAt when it came.
 	note     string
 	noteRole term.Role
 	notePos  int
+	noteAt   time.Time
 }
+
+// noteTime is how long a note that nothing else ends (a comparison, a warning) stays in the status line.
+const noteTime = 10 * time.Second
 
 func newRunState(f runFacts, s experiment.Standing, now func() time.Time) *runState {
 	st := &runState{facts: f, now: now, runs: map[int]*stateRun{}, settled: map[int]bool{}, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage,
@@ -94,7 +99,7 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 	taskName := term.Sanitize(e.Slot.Task)
 	sentence := func(role term.Role, text string) {
 		added = append(added, logEntry{at: now, arm: -1, words: text, role: role, sentence: true})
-		s.note, s.noteRole, s.notePos = text, role, -1
+		s.note, s.noteRole, s.notePos, s.noteAt = text, role, -1, now
 	}
 	switch e.Kind {
 	case "start":
@@ -250,7 +255,7 @@ func (s *runState) view() stateView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer,
-		note: s.note, noteRole: s.noteRole}
+		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt}
 	for pos := range s.settled {
 		if pos >= 0 && pos < len(s.facts.slotArm) {
 			v.settled[s.facts.slotArm[pos]]++
@@ -280,16 +285,26 @@ func (s *runState) view() stateView {
 
 // stateView is a copy of the state for one frame.
 type stateView struct {
-	facts    runFacts
-	shown    [2]stateRun
-	have     [2]bool
-	settled  [2]int
-	spent    float64
-	usage    claude.UsageReading
-	hasUsage bool
-	until    time.Time
-	answer   answerState
-	log      []logEntry // the last logRows runs' results
-	note     string
-	noteRole term.Role
+	facts     runFacts
+	shown     [2]stateRun
+	have      [2]bool
+	settled   [2]int
+	spent     float64
+	usage     claude.UsageReading
+	hasUsage  bool
+	until     time.Time
+	answer    answerState
+	log       []logEntry // the last logRows runs' results
+	note      string
+	noteRole  term.Role
+	noteFades bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
+	noteAt    time.Time
+}
+
+// noteNow is the status line's note at now: empty once it has faded.
+func (v stateView) noteNow(now time.Time) string {
+	if v.noteFades && now.Sub(v.noteAt) >= noteTime {
+		return ""
+	}
+	return v.note
 }

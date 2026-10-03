@@ -146,7 +146,7 @@ func (v stateView) infoLines(sh term.Shapes, m marks, w, level int, now time.Tim
 	if level >= 2 {
 		terms = []string{v.facts.terms}
 	}
-	note, role := v.note, v.noteRole
+	note, role := v.noteNow(now), v.noteRole
 	if !v.until.IsZero() {
 		note, role = fmt.Sprintf("waiting for your Claude plan's usage to reset at %s %s in %s", experiment.Clock(v.until, now), m.sep,
 			term.Elapsed(max(v.until.Sub(now), 0))), term.LevelCaution
