@@ -1,0 +1,154 @@
+=== 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+               spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+                  ┆ sandbox: no internet, your secrets hidden
+
+  baseline · map-keys
+                     ╭┄ sandbox ┄┄┄┄┄┄╮   ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐     ┆ ┌────────────┐ ┆   ┆ ┌────────────┐ ┆     ┌────────────┐
+  │ fresh copy │╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │     ┆ │     –      │ ┆   ┆ │     –      │ ┆     │     –      │
+  └────────────┘     ┆ └────────────┘ ┆   ┆ └────────────┘ ┆     └────────────┘
+                     ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · map-keys
+                     ╭┄ sandbox ┄┄┄┄┄┄╮   ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐     ┆ ┌────────────┐ ┆   ┆ ┌────────────┐ ┆     ┌────────────┐
+  │ fresh copy │╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │     ┆ │     –      │ ┆   ┆ │     –      │ ┆     │     –      │
+  └────────────┘     ┆ └────────────┘ ┆   ┆ └────────────┘ ┆     └────────────┘
+                     ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+                  ┌────────────────────────────────────────┐
+                  │           the answer so far            │
+                  │           too early to tell            │
+                  │       first check after 8 tasks        │
+                  └────────────────────────────────────────┘
+=== 99 columns, 40 rows
+                  BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────────────────────────────
+                    spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+                      ┆ sandbox: no internet, your secrets hidden
+
+  baseline · map-keys
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │        ┆ │     –      │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · map-keys
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │        ┆ │     –      │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+                       ┌────────────────────────────────────────┐
+                       │           the answer so far            │
+                       │           too early to tell            │
+                       │       first check after 8 tasks        │
+                       └────────────────────────────────────────┘
+=== 119 columns, 40 rows
+                  BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────────────────────────────
+                    spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+                      ┆ sandbox: no internet, your secrets hidden
+
+  baseline · map-keys
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │        ┆ │     –      │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · map-keys
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ⠸ 1s    │        ┆ │     –      │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+                       ┌────────────────────────────────────────┐
+                       │           the answer so far            │
+                       │           too early to tell            │
+                       │       first check after 8 tasks        │
+                       └────────────────────────────────────────┘
+=== 79 columns, 23 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ─────────────────────────────────────────────────────────────────────────────
+               spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+
+  baseline · map-keys
+  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+  trimmed · map-keys
+  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+
+ the answer so far: too early to tell
+   first check after 8 tasks
+=== 79 columns, 12 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ─────────────────────────────────────────────────────────────────────────────
+               spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+
+  baseline · map-keys
+  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+  trimmed · map-keys
+  │  ⠸ copy 1s   │╌╌┆╌│   – Claude   │╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+
+ the answer so far: too early to tell
+   first check after 8 tasks
+=== 64 columns, 40 rows
+     BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────
+       spent $0.00 of $5 · baseline 0/16 · trimmed 0/16
+          ┆ sandbox: no internet, your secrets hidden
+
+  baseline · map-keys
+                 ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
+  ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
+  │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌╌╌╌╌│ result │
+  │  ⠸ 1s  │     ┆ │   –    │ ┆   ┆ │   –    │ ┆     │   –    │
+  └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
+                 ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · map-keys
+                 ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
+  ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
+  │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌╌╌╌╌│ result │
+  │  ⠸ 1s  │     ┆ │   –    │ ┆   ┆ │   –    │ ┆     │   –    │
+  └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
+                 ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+          ┌────────────────────────────────────────┐
+          │           the answer so far            │
+          │           too early to tell            │
+          │       first check after 8 tasks        │
+          └────────────────────────────────────────┘
+=== ASCII, 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   -   does trimmed save money?
+ ------------------------------------------------------------------------------
+               spent $0.00 of $5 - baseline 0/16 - trimmed 0/16
+                  : sandbox: no internet, your secrets hidden
+
+  baseline - map-keys
+                     .. sandbox .......   .. sandbox .......
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+  | fresh copy |.....:.|Claude works|.:...:.|hidden tests|.:.....|   result   |
+  |    \ 1s    |     : |     -      | :   : |     -      | :     |     -      |
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+                     '................'   '................'
+  trimmed - map-keys
+                     .. sandbox .......   .. sandbox .......
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+  | fresh copy |.....:.|Claude works|.:...:.|hidden tests|.:.....|   result   |
+  |    \ 1s    |     : |     -      | :   : |     -      | :     |     -      |
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+                     '................'   '................'
+
+                  +----------------------------------------+
+                  |           the answer so far            |
+                  |           too early to tell            |
+                  |       first check after 8 tasks        |
+                  +----------------------------------------+

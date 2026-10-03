@@ -32,8 +32,10 @@ type Env struct {
 	// StdinTerminal is whether Stdin is a terminal. A command that asks a question asks only when both Stdin and Stdout
 	// are terminals; tests leave it false and are never asked.
 	StdinTerminal bool
-	// Columns is the terminal's width in columns, for the live status line; nil or 0 means unknown.
-	Columns  func() int
+	// Columns is the terminal's width in columns, for the live status line and the dashboard; nil or 0 means unknown.
+	Columns func() int
+	// Rows is the terminal's height in rows, for the dashboard; nil or 0 means unknown ($LINES, else 24).
+	Rows     func() int
 	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)

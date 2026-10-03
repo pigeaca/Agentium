@@ -53,11 +53,12 @@ type Standing struct {
 }
 
 // Observer follows an execution: Begin comes before the first run, Event with every scheduler event (from several
-// goroutines), and Finish once the final status is stored, before the summary is printed. Each may be nil.
+// goroutines, one at a time), and Finish once the final status is stored, with how the execution ended, before the
+// summary is printed. Each may be nil.
 type Observer struct {
 	Begin  func(lock Lock, standing Standing)
 	Event  func(Event)
-	Finish func()
+	Finish func(Summary)
 }
 
 // Runner runs an experiment: what it needs from the command line, as parameters. It holds no state of its own.
@@ -432,6 +433,8 @@ type execution struct {
 	judgePaused atomic.Bool
 	// pairs compares the pairs beside the runs, with the pair judge; nil without it.
 	pairs *pairJudge
+	// event reports a step of a run in flight (Kind "step") to the observer, as the scheduler's events are.
+	event func(Event)
 }
 
 // execute runs the locked experiment's slots (after judging what a stopped execution left unjudged) and writes where
@@ -475,6 +478,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 			r.Observer.Event(e)
 		}
 	}
+	x.event = event
 	var judgeNote string
 	var judgeErr error
 	unfunded := 0                 // runs the budget left no room to judge
@@ -558,7 +562,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, errors.Join(runErr, err)
 	}
 	if r.Observer.Finish != nil {
-		r.Observer.Finish()
+		r.Observer.Finish(sum)
 	}
 	fmt.Fprintln(out)
 	if err := p.WriteProgress(context.WithoutCancel(ctx), out, r.Style, name, stored.ID, lock); err != nil {
@@ -733,6 +737,9 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	e.Expect = arm.Expect(lock.ClaudeCode)
 	e.Workspace = experimentWorkspace(x.stored.ID, slot.Position, try)
 	e.DenyExtra = nil
+	if x.event != nil && r.Observer.Event != nil { // each step of the run, for a live display
+		e.Step = func(step string) { x.event(Event{Kind: "step", Slot: slot, Attempt: attempt, Step: step}) }
+	}
 	for _, q := range overlap { // in this execution a slot runs at most MaxAttempts more times
 		for t := 1; t <= x.storedTries[q]+lock.MaxAttempts; t++ {
 			e.DenyExtra = append(e.DenyExtra, e.Predicted(experimentWorkspace(x.stored.ID, q, t))...)
@@ -749,7 +756,7 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm), HarmlessDenials: lock.Harmless[t.Name],
 		Timeout: design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
-	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
+	result.Outcome, result.Usage, result.WarmWait, result.Passed = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait, rec.Passed
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
 		result.Overshoot = run.OvershootNote(*o)
 	}

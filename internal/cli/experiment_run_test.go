@@ -91,7 +91,8 @@ fi
 [ -f "$CTRL/read-value" ] && echo '{"type":"assistant","parent_tool_use_id":null,"message":{"id":"m-read","model":"claude-sonnet-5","content":[{"type":"tool_use","id":"read1","name":"Read","input":{"file_path":"'"$PWD"'/value.txt"}}]}}'
 grep -qx "$key" "$CTRL/infra" 2>/dev/null && exit 1
 if grep -qx "$key" "$CTRL/hang" 2>/dev/null; then touch "$CTRL/hanging-$ws"; sleep 60; fi
-sleep 0.2
+pace=0.2; [ -f "$CTRL/agent-sleep" ] && pace=$(cat "$CTRL/agent-sleep") # a slower stand-in, for recordings
+sleep "$pace"
 [ -f "$CTRL/no-change" ] || printf 'new\n' > value.txt
 if [ -f "$CTRL/fix-lib" ] && [ -f lib.sh ]; then i=1; while [ $i -le 16 ]; do echo "f$i() { echo v$i; }" >> lib.sh; i=$((i+1)); done; fi
 if [ -f "$CTRL/usage" ]; then

@@ -1,0 +1,183 @@
+=== 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+       spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+                  ┆ sandbox: no internet, your secrets hidden
+
+  baseline · chunk
+                     ╭┄ sandbox ┄┄┄┄┄┄╮   ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐     ┆ ┌────────────┐ ┆   ┆ ┌────────────┐ ┆     ┌────────────┐
+  │ fresh copy │╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌│   result   │
+  │    ✓ 2s    │     ┆ │  ⠸ 2m21s   │ ┆   ┆ │     –      │ ┆     │     –      │
+  └────────────┘     ┆ └────────────┘ ┆   ┆ └────────────┘ ┆     └────────────┘
+                     ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · chunk
+                     ╭┄ sandbox ┄┄┄┄┄┄╮   ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐     ┆ ┌────────────┐ ┆   ┆ ┌────────────┐ ┆     ┌────────────┐
+  │ fresh copy │╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌┆╌│hidden tests│╌┆╌●╌╌╌│   result   │
+  │    ✓ 2s    │     ┆ │  ✓ 2m01s   │ ┆   ┆ │   ✓ 20s    │ ┆     │ ⠸ judging  │
+  └────────────┘     ┆ └────────────┘ ┆   ┆ └────────────┘ ┆     └────────────┘
+                     ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+               ┌──────────────────────────────────────────────┐
+               │              the answer so far               │
+               │          about the same cost (+4%)           │
+               │   not sure yet · next check after 12 tasks   │
+               └──────────────────────────────────────────────┘
+
+ ─ log ────────────────────────────────────────────────────────────────────────
+ 15:36:55  baseline  map-keys      ✓ passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      ✗ failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cost (+4%)
+=== 99 columns, 40 rows
+                  BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────────────────────────────
+            spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+                      ┆ sandbox: no internet, your secrets hidden
+
+  baseline · chunk
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ✓ 2s    │        ┆ │  ⠸ 2m21s   │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · chunk
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌●╌╌╌╌╌│   result   │
+  │    ✓ 2s    │        ┆ │  ✓ 2m01s   │ ┆      ┆ │   ✓ 20s    │ ┆        │ ⠸ judging  │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+                    ┌──────────────────────────────────────────────┐
+                    │              the answer so far               │
+                    │          about the same cost (+4%)           │
+                    │   not sure yet · next check after 12 tasks   │
+                    └──────────────────────────────────────────────┘
+
+ ─ log ─────────────────────────────────────────────────────────────────────────────────
+ 15:36:55  baseline  map-keys      ✓ passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      ✗ failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cost (+4%)
+=== 119 columns, 40 rows
+                  BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────────────────────────────
+            spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+                      ┆ sandbox: no internet, your secrets hidden
+
+  baseline · chunk
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌╌╌╌│   result   │
+  │    ✓ 2s    │        ┆ │  ⠸ 2m21s   │ ┆      ┆ │     –      │ ┆        │     –      │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · chunk
+                        ╭┄ sandbox ┄┄┄┄┄┄╮      ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐        ┆ ┌────────────┐ ┆      ┆ ┌────────────┐ ┆        ┌────────────┐
+  │ fresh copy │╌╌╌╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌╌╌╌┆╌│hidden tests│╌┆╌╌●╌╌╌╌╌│   result   │
+  │    ✓ 2s    │        ┆ │  ✓ 2m01s   │ ┆      ┆ │   ✓ 20s    │ ┆        │ ⠸ judging  │
+  └────────────┘        ┆ └────────────┘ ┆      ┆ └────────────┘ ┆        └────────────┘
+                        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯      ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+                    ┌──────────────────────────────────────────────┐
+                    │              the answer so far               │
+                    │          about the same cost (+4%)           │
+                    │   not sure yet · next check after 12 tasks   │
+                    └──────────────────────────────────────────────┘
+
+ ─ log ─────────────────────────────────────────────────────────────────────────────────
+ 15:36:55  baseline  map-keys      ✓ passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      ✗ failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cost (+4%)
+=== 79 columns, 23 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ─────────────────────────────────────────────────────────────────────────────
+       spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+
+  baseline · chunk
+  │  ✓ copy 2s   │╌╌┆╌│⠸ Claude 2m21s│╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+  trimmed · chunk
+  │  ✓ copy 2s   │╌╌┆╌│✓ Claude 2m01s│╌┆┆╌│ ✓ tests 20s  │╌●╌╌│  ⠸ judging   │
+
+ the answer so far: about the same cost (+4%)
+   not sure yet · next check after 12 tasks
+ ─ log ───────────────────────────────────────────────────────────────────────
+ 15:36:55  baseline  map-keys      ✓ passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      ✗ failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cost (+4%)
+=== 79 columns, 12 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ─────────────────────────────────────────────────────────────────────────────
+       spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+
+  baseline · chunk
+  │  ✓ copy 2s   │╌╌┆╌│⠸ Claude 2m21s│╌┆┆╌│   – tests    │╌┆╌╌│   – result   │
+  trimmed · chunk
+  │  ✓ copy 2s   │╌╌┆╌│✓ Claude 2m01s│╌┆┆╌│ ✓ tests 20s  │╌●╌╌│  ⠸ judging   │
+
+ the answer so far: about the same cost (+4%)
+   not sure yet · next check after 12 tasks
+=== 64 columns, 40 rows
+     BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────
+spent $2.35 of $5 · plan 64% used · baseline 1/16 · trimmed 1/16
+          ┆ sandbox: no internet, your secrets hidden
+
+  baseline · chunk
+                 ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
+  ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
+  │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌╌╌╌╌│ result │
+  │  ✓ 2s  │     ┆ │⠸ 2m21s │ ┆   ┆ │   –    │ ┆     │   –    │
+  └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
+                 ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
+  trimmed · chunk
+                 ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
+  ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
+  │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌●╌╌╌│ result │
+  │  ✓ 2s  │     ┆ │✓ 2m01s │ ┆   ┆ │ ✓ 20s  │ ┆     │   ⠸    │
+  └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
+                 ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
+
+       ┌──────────────────────────────────────────────┐
+       │              the answer so far               │
+       │          about the same cost (+4%)           │
+       │   not sure yet · next check after 12 tasks   │
+       └──────────────────────────────────────────────┘
+
+ ─ log ────────────────────────────────────────────────────────
+ 15:36:55  baseline  map-keys      ✓ passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      ✗ failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cos…
+=== ASCII, 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   -   does trimmed save money?
+ ------------------------------------------------------------------------------
+       spent $2.35 of $5 - plan 64% used - baseline 1/16 - trimmed 1/16
+                  : sandbox: no internet, your secrets hidden
+
+  baseline - chunk
+                     .. sandbox .......   .. sandbox .......
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+  | fresh copy |.....:.|Claude works|.:...:.|hidden tests|.:.....|   result   |
+  |    + 2s    |     : |  \ 2m21s   | :   : |     -      | :     |     -      |
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+                     '................'   '................'
+  trimmed - chunk
+                     .. sandbox .......   .. sandbox .......
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+  | fresh copy |.....:.|Claude works|.:...:.|hidden tests|.:.o...|   result   |
+  |    + 2s    |     : |  + 2m01s   | :   : |   + 20s    | :     | \ judging  |
+  +------------+     : +------------+ :   : +------------+ :     +------------+
+                     '................'   '................'
+
+               +----------------------------------------------+
+               |              the answer so far               |
+               |          about the same cost (+4%)           |
+               |   not sure yet - next check after 12 tasks   |
+               +----------------------------------------------+
+
+ - log ------------------------------------------------------------------------
+ 15:36:55  baseline  map-keys      + passed  $0.09  2m55s
+ 15:39:50  trimmed   map-keys      x failed  $0.09  2m55s
+ 15:39:50  checked the answer after 8 tasks: about the same cost (+4%)

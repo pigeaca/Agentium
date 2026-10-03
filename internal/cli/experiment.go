@@ -38,7 +38,7 @@ var experimentUsage = `Usage:
                      sandbox when it locks
   agentium experiment plan NAME
                      the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
-  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes]
+  agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes] [--view dashboard|log]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
                      the budget; infrastructure failures are retried. First, each context without a calibration on this Claude Code
                      and model is calibrated (a short paid run each, in the budget; a failed calibration stops the
@@ -46,7 +46,9 @@ var experimentUsage = `Usage:
                      With a subscription, no pair starts past --usage-limit (default 85) of the five-hour window:
                      it pauses, or with --wait waits for the window to reset. --yes is consent to spend for a script:
                      with --json (one JSON document when the run ends, no progress), a run without --yes starts
-                     nothing and exits 1; a person's own run needs no --yes
+                     nothing and exits 1; a person's own run needs no --yes. On a terminal it shows a live dashboard
+                     (each arm's run as step boxes, the answer so far, the log); --view log, or AGENTIUM_VIEW=log,
+                     prints styled lines instead, nothing redrawn. Piped, or with NO_COLOR, it prints plain lines
   agentium experiment show NAME
                      the lock and the progress per arm
   agentium experiment report NAME [--json | --markdown] [--out FILE]

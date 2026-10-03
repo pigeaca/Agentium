@@ -22,7 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--json]
+const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--view dashboard|log] [--json]
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
@@ -43,7 +43,8 @@ your review, the tasks start itself mined: it checks only solution headings, ref
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
 accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks, finished, or ran with --yes) and
 never asks: only --yes runs the experiment, and then the document holds the run's result too. Without a terminal on stdin,
-start never asks either. --b must name a snapshot; --budget can only raise an experiment's budget. Mining, validation
+start never asks either. On a terminal the run shows as a live dashboard; --view log (or AGENTIUM_VIEW=log) gives styled
+lines instead, and piped or with NO_COLOR it prints plain lines. --b must name a snapshot; --budget can only raise an experiment's budget. Mining, validation
 and the experiment's verification follow the project's settings (agentium init: verify and setup commands, require
 lock, jobs, verify timeout).
 `
@@ -54,6 +55,7 @@ type startArgs struct {
 	set              *settingFlags // --require-lock: a hidden override of the project's setting
 	budget           float64
 	b                string // the snapshot to compare the context with; "" for an A/A calibration
+	view             viewFlag
 }
 
 // errReported is returned by a stage that has already told the user why it stopped.
@@ -67,9 +69,14 @@ func runStart(ctx context.Context, env Env, args []string) int {
 	a.set = addSettingFlags(fs, settingVerifyTimeout, settingRequireLock)
 	fs.Float64Var(&a.budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
 	fs.StringVar(&a.b, "b", "", "compare the context with this snapshot (default: an A/A calibration)")
+	fs.Var(&a.view, "view", "how the run shows on a terminal: dashboard (the default) or log")
 	rest, code, ok := parseArgs(env, fs, args, startUsage)
 	if !ok {
 		return code
+	}
+	if _, err := askedView(a.view, env.Getenv); err != nil {
+		fmt.Fprintf(env.Stderr, "agentium start: %s\n", err)
+		return ExitUsage
 	}
 	if len(rest) != 0 || a.budget < 0 || (a.b != "" && !snapshot.ValidName(a.b)) {
 		fmt.Fprint(env.Stderr, startUsage)
@@ -404,6 +411,9 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if s.args.budget > 0 {
 		runArgs = append(runArgs, "--budget", strconv.FormatFloat(s.args.budget, 'f', -1, 64))
 	}
+	if s.args.view != "" {
+		runArgs = append(runArgs, "--view", string(s.args.view))
+	}
 	s.w.Close()
 	s.w = nil // experimentRun opens the project itself
 	return experimentRun(ctx, env, runArgs)
@@ -414,7 +424,7 @@ func (s *starter) finish(ctx context.Context, name string) int {
 func (s *starter) runJSON(ctx context.Context, name string, review *experiment.Review, budget budgetPlan) int {
 	s.w.Close()
 	s.w = nil // the run opens the project itself
-	res, code := executeExperiment(ctx, s.env, name, experiment.RunOptions{Budget: s.args.budget, UsageLimit: experiment.DefaultUsageLimit}, true)
+	res, code := executeExperiment(ctx, s.env, name, experiment.RunOptions{Budget: s.args.budget, UsageLimit: experiment.DefaultUsageLimit}, true, "")
 	if res == nil {
 		return code
 	}

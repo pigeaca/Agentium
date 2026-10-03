@@ -51,6 +51,8 @@ type Result struct {
 	// Overshoot, when set, says the run passed its cost cap by more than the allowance the budget held for it
 	// (run.OvershootNote), for progress lines.
 	Overshoot string
+	// Passed is the run's grade, for progress displays: nil when it was not graded.
+	Passed *bool
 }
 
 // AgentUSD is the agent's share of what the attempt spent: CostUSD without the judgement's.
@@ -62,12 +64,15 @@ type Executor func(ctx context.Context, slot Slot, attempt int, overlap []int) (
 
 // Event reports progress: a run starting, finishing, or waiting to be retried, the execution waiting for the usage
 // window to reset (Kind "wait": Until and Usage, the window's share used), a seq-v1 look (Kind "look": Look, of Looks
-// planned), or a pair compared by the pair judge (Kind "pair", from its own goroutine: Slot is the pair's arm-B slot,
-// Result.Judge the comparison in words and Result.JudgeUSD what it spent; SpentUSD is not set).
+// planned), a pair compared by the pair judge (Kind "pair", from its own goroutine: Slot is the pair's arm-B slot,
+// Result.Judge the comparison in words and Result.JudgeUSD what it spent; SpentUSD is not set), or a step of a run in
+// flight beginning (Kind "step", from the run's goroutine, between its "start" and its "finish": Slot, Attempt and Step,
+// one of run.StepPreparing, StepAgent, StepGrading and StepJudging; SpentUSD is not set). Steps only feed a live display.
 type Event struct {
-	Kind     string // "start", "finish", "retry", "wait", "look" or "pair"
+	Kind     string // "start", "finish", "retry", "wait", "look", "pair" or "step"
 	Slot     Slot
 	Attempt  int
+	Step     string // "step": the step beginning
 	Result   Result
 	Requeued bool // "finish": the run was stopped, not counted as an attempt, and runs again on resume
 	SpentUSD float64
