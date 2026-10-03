@@ -59,17 +59,33 @@ func reportFacts(rep report.Report, sh term.Shapes, m marks, f runFacts) string 
 	for _, a := range rep.Arms {
 		runs += a.Counted
 	}
-	parts := []string{taskCount(f.tasks), fmt.Sprintf("%d %s", runs, plural(runs, "run", "runs")), fmt.Sprintf("$%.2f spent", rep.SpentUSD)}
+	tasks := taskCount(f.tasks)
+	if ran := ranTasks(rep); ran < f.tasks { // a seq-v1 experiment that stopped early, or one not finished
+		tasks = fmt.Sprintf("%d of %d tasks", ran, f.tasks)
+	}
+	parts := []string{tasks, fmt.Sprintf("%d %s", runs, plural(runs, "run", "runs")), fmt.Sprintf("$%.2f spent", rep.SpentUSD)}
 	if took := runSpan(rep.Runs); took > 0 {
 		parts = append(parts, spanWords(took))
 	}
 	line := st.Paint(term.Muted, strings.Join(parts, " "+m.sep+" "))
-	if rep.Status != experiment.StatusDone {
-		if words := stoppedWords(rep.Status); words != "" && rep.Status != experiment.StatusDone {
-			line += st.Paint(term.Muted, " "+m.sep+" ") + st.Paint(term.LevelCaution, m.words(words))
-		}
+	if words := stoppedWords(rep.Status); words != "" && rep.Status != experiment.StatusDone {
+		line += st.Paint(term.Muted, " "+m.sep+" ") + st.Paint(term.LevelCaution, m.words(words))
 	}
 	return line
+}
+
+// ranTasks counts the tasks with a counted run in either version.
+func ranTasks(rep report.Report) int {
+	n := 0
+	for _, t := range rep.Tasks {
+		for _, c := range t.Arms {
+			if c.Counted > 0 {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 func plural(n int, one, many string) string {
@@ -155,11 +171,25 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 		role term.Role
 		bold bool
 	}
-	lines := []line{{a.Title(), term.Default, true}, {headline, a.Role(), false}}
-	if guard != "" {
-		lines = append(lines, line{m.words(guard), guardRole, false})
+	lines := []line{{a.Title(), term.Default, true}}
+	// A line too wide for the box breaks: the status between its parts, the rest at spaces.
+	add := func(text string, role term.Role) {
+		parts := term.Wrap(text, inner-2)
+		if sep := " " + m.sep + " "; strings.Contains(text, sep) {
+			parts = nil
+			for _, p := range packParts(strings.ReplaceAll(text, sep, " · "), inner-2) {
+				parts = append(parts, term.Wrap(m.words(p), inner-2)...)
+			}
+		}
+		for _, p := range parts {
+			lines = append(lines, line{p, role, false})
+		}
 	}
-	lines = append(lines, line{status, term.Muted, false})
+	add(headline, a.Role())
+	if guard != "" {
+		add(m.words(guard), guardRole)
+	}
+	add(status, term.Muted)
 	var scale []string
 	if primary != nil && primary.Tasks >= 2 && a.HasEstimate {
 		scale = rangePicture(sh, m, *primary, a, inner-4)
@@ -243,35 +273,39 @@ func rangePicture(sh term.Shapes, m marks, res experiment.MetricResult, a answer
 	}
 	labelL, labelR := left+" "+arrowL, arrowR+" "+right
 	bar := sh.IntervalBar(term.Interval{Label: labelL, Low: lo, Estimate: est, High: hi, Min: -bound, Max: bound, Value: labelR, Role: role}, width)
-	// Under the bar: "same" under the line of no change, and the range in words under the range when they do not
-	// overlap (else the words alone).
+	// Under the bar: "same" under the line of no change, always, and the range in words under the range; beside
+	// "same" when they would overlap, or on a line of their own when there is no room beside it.
 	n := width - term.Width(labelL) - term.Width(labelR) - 2
 	col := func(v float64) int {
 		return term.Width(labelL) + 1 + int(math.Round((min(max(v, -bound), bound)+bound)/(2*bound)*float64(n-1)))
 	}
 	words := rangeWords(res, lo, hi)
-	c := term.NewCanvas(width, 1)
-	ww, zero := term.Width(words), col(0)
-	sx := zero - 2 // "same", centred under the line of no change
+	ww := term.Width(words)
+	sx := min(max(col(0)-2, 0), width-4) // "same", centred under the line of no change
 	wx := min(max(col((lo+hi)/2)-ww/2, 0), width-ww)
+	apart := func(x int) bool { return x+ww <= sx-2 || x >= sx+6 }
+	fitsLeft, fitsRight := sx-2-ww >= 0, sx+6+ww <= width
+	crosses := lo < 0 && hi > 0
 	switch {
-	case wx+ww <= sx-2 || wx >= sx+6: // apart already
-	case hi <= 0 && sx-2-ww >= 0: // the range is on the left: the words go left of "same"
+	case apart(wx):
+	case fitsLeft && (hi <= 0 || crosses): // the range is on the left (or on both sides): the words go left of "same"
 		wx = sx - 2 - ww
-	case lo >= 0 && sx+6+ww <= width:
+	case fitsRight && (lo >= 0 || crosses):
 		wx = sx + 6
-	default:
-		sx = -1 // no room for both: the words alone
-	}
-	if sx >= 0 {
+	default: // no room on the range's side of "same": the words go under it
+		c := term.NewCanvas(width, 2)
 		c.Put(sx, 0, "same", term.Muted, false)
+		c.Put(max((width-ww)/2, 0), 1, words, term.Muted, false)
+		return append([]string{bar}, c.Lines(sh.Style)...)
 	}
+	c := term.NewCanvas(width, 1)
+	c.Put(sx, 0, "same", term.Muted, false)
 	c.Put(wx, 0, words, term.Muted, false)
 	return append([]string{bar}, c.Lines(sh.Style)...)
 }
 
-// rangeWords is the range in words: "likely 15% to 21% less", "likely between 4% less and 9% more"; for success,
-// "likely 3 to 12 points more pass".
+// rangeWords is the range in words: "likely 15% to 21% less", "likely 4% less to 9% more"; for success, "likely 3 to
+// 12 points more pass".
 func rangeWords(res experiment.MetricResult, lo, hi float64) string {
 	if res.Ratio {
 		less, more := "less", "more"
@@ -284,7 +318,7 @@ func rangeWords(res experiment.MetricResult, lo, hi float64) string {
 		case lo >= 0:
 			return fmt.Sprintf("likely %.0f%% to %.0f%% %s", math.Round(lo), math.Round(hi), more)
 		}
-		return fmt.Sprintf("likely between %.0f%% %s and %.0f%% %s", math.Abs(math.Round(lo)), less, math.Round(hi), more)
+		return fmt.Sprintf("likely %.0f%% %s to %.0f%% %s", math.Abs(math.Round(lo)), less, math.Round(hi), more)
 	}
 	switch {
 	case hi <= 0:
@@ -292,7 +326,7 @@ func rangeWords(res experiment.MetricResult, lo, hi float64) string {
 	case lo >= 0:
 		return fmt.Sprintf("likely %.0f to %.0f points more pass", math.Round(lo), math.Round(hi))
 	}
-	return fmt.Sprintf("likely between %.0f points fewer and %.0f more pass", math.Abs(math.Round(lo)), math.Round(hi))
+	return fmt.Sprintf("likely %.0f points fewer to %.0f more pass", math.Abs(math.Round(lo)), math.Round(hi))
 }
 
 // armSide is one version's results in its panel.
@@ -453,9 +487,15 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 		ca, cb report.TaskCell
 	}
 	var differ []row
-	bothPassed, bothFailed, same := 0, 0, 0
+	bothPassed, bothFailed, same, uncounted := 0, 0, 0, 0
 	for _, t := range rep.Tasks {
 		ca, cb := t.Arms[a], t.Arms[b]
+		if ca.Counted == 0 && cb.Counted == 0 {
+			if ca.Marks+cb.Marks != "" {
+				uncounted++ // every run left out
+			}
+			continue // else not run: a seq-v1 experiment stopped before it
+		}
 		if ca.Successes == cb.Successes && ca.Counted == cb.Counted {
 			switch {
 			case ca.Counted > 0 && ca.Successes == ca.Counted:
@@ -492,10 +532,13 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 	if same > 0 {
 		rest = append(rest, fmt.Sprintf("%d mixed", same))
 	}
-	if n := bothPassed + bothFailed + same; n > 0 {
+	if uncounted > 0 {
+		rest = append(rest, fmt.Sprintf("%d not counted", uncounted))
+	}
+	if n := bothPassed + bothFailed + same + uncounted; n > 0 {
 		lead := fmt.Sprintf("+ %s where both ended the same", taskCount(n))
 		if len(differ) == 0 {
-			lead = fmt.Sprintf("every task ended the same in both")
+			lead = "every task ended the same in both"
 		}
 		out = append(out, "  "+st.Paint(term.Muted, m.words(lead+": "+strings.Join(rest, " · "))))
 	}
@@ -506,6 +549,9 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 // run was cut short.
 func taskCell(st term.Style, m marks, c report.TaskCell) string {
 	var b strings.Builder
+	if c.Marks == "" {
+		b.WriteString(st.Paint(term.Muted, m.none)) // not run
+	}
 	for _, r := range c.Marks {
 		switch r {
 		case '●':
@@ -546,7 +592,7 @@ func judgeLines(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) [
 			lines = append(lines, st.Paint(term.Muted, fmt.Sprintf("%d %s not judged yet", j.Pending, plural(j.Pending, "run", "runs"))))
 		}
 	}
-	if p := rep.Pairs; p != nil {
+	if p := rep.PairJudge; p != nil {
 		lines = append(lines, pairLine(st, f, p.Tasks))
 	}
 	if len(lines) == 0 {
@@ -560,11 +606,13 @@ func judgeLines(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) [
 }
 
 // pairLine is the pair judge's preference over tasks in words: "the judge preferred lean's fix in 7 of 10 tasks
-// (unvalidated)", or "too few to say" below the floor of judge.MinPreferences.
+// (unvalidated)", counting the tasks it compared (ties included), and "may be chance" when the binomial test cannot
+// tell it from an even split; "too few to say" below the floor of judge.MinPreferences.
 func pairLine(st term.Style, f runFacts, t judge.PreferenceSummary) string {
 	compared := t.Complete
 	if !t.Enough {
-		return fmt.Sprintf("which fix is better: too few to say (%s compared, %d needed)", taskCount(compared), judge.MinPreferences)
+		return fmt.Sprintf("which fix is better: too few to say (%d %s with a preference; it takes %d)", t.A+t.B, plural(t.A+t.B, "task", "tasks"),
+			judge.MinPreferences)
 	}
 	arm, n := 1, t.B
 	if t.A > t.B {

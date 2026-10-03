@@ -214,6 +214,28 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		}
 	}
 
+	if r.PairJudge != nil {
+		v := r.pairView()
+		section("Judge pairs", v.intro)
+		for _, line := range v.lines {
+			b.WriteString(line + "\n")
+		}
+		if len(v.rows) > 0 {
+			b.WriteString("\n")
+			// The reason is a sentence: it goes on its own line under the row, as the noise table's basis does.
+			t = table(term.Left(pairColumns[0]), term.Left(pairColumns[1]), term.Right(pairColumns[2]))
+			for _, row := range v.rows {
+				t.Row(row[:3]...)
+				if row[3] != "-" {
+					t.Line("  " + st.Note(row[3]))
+				}
+			}
+			if err := t.Write(&b); err != nil {
+				return err
+			}
+		}
+	}
+
 	section("Notes", "")
 	for _, n := range r.Notes {
 		b.WriteString(st.Note("- "+n) + "\n")

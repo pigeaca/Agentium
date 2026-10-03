@@ -160,14 +160,14 @@ func PairPreferenceOf(pairs []PairRuns) PairPreference {
 	}
 	var votes []judge.PairVerdict
 	for _, t := range slices.Sorted(slices.Values(tasks)) {
-		votes = append(votes, taskVote(byTask[t]))
+		votes = append(votes, TaskVote(byTask[t]))
 	}
 	return PairPreference{Pairs: judge.Preference(verdicts), Tasks: judge.Preference(votes)}
 }
 
-// taskVote is a task's comparisons as one: the arm they preferred more often, a tie when neither, incomplete when none
+// TaskVote is a task's comparisons as one: the arm they preferred more often, a tie when neither, incomplete when none
 // is complete, and Empty when every one is.
-func taskVote(verdicts []judge.PairVerdict) judge.PairVerdict {
+func TaskVote(verdicts []judge.PairVerdict) judge.PairVerdict {
 	a, b, complete, empty := 0, 0, 0, 0
 	for _, v := range verdicts {
 		switch {

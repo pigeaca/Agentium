@@ -1,7 +1,7 @@
 # A designed console: a live dashboard and visual reports
 
 - Date: 2026-10-03
-- Status: In Progress (2026-10-03): step 1 merged (#133), the design settled with the user over previews (#134), step 2 in progress. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
+- Status: In Progress (2026-10-04): step 1 merged (#133), the design settled with the user over previews (#134), step 2 merged (#136, #137), step 3 done on `claude/feat/report-redesign`. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
   - a **live dashboard** for a running experiment, redrawn in place;
   - **and a log format too** ("But also should be dashboard and just log format"): a styled, append-only log, chosen per call or once;
   - all four screen groups: `experiment run`, `experiment report`, `run show`, and `start` / `experiment plan` / `pool status`.
@@ -106,13 +106,32 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
       - At 80 columns the moments' words fit only without their time.
       - Moments under a second flash by, or never show between two redraws.
       - `run once` and `run calibrate` status lines now name these moments too (terminal only; their plain output is unchanged).
-- [ ] **3. `experiment report`:**
+- [x] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
   - a per-task grid (each task's outcome per arm, coloured);
   - notes as dim lines.
 
   Markdown and JSON are unchanged. Risk: low.
+  - Done (2026-10-04), the user approved the prototype's four previews ("Ok"):
+    - **The view** (`internal/cli/reportview.go`), on a terminal that shows the designed console (`Capabilities.Designed`):
+      - the dashboard's question line, then the tasks (run of planned, for a stopped seq-v1), runs, spend and time;
+      - the answer in a green box, worded by the dashboard's `answerWords`, with the guard in words (an A/A: how much the same setup's cost varies), and a "cheaper ◀ │ ▶ costlier" interval bar with "same" under the line of no change and the range in words ("likely 6% to 35% less");
+      - each arm's box in its color, side by side (stacked below 74 columns): passes as a bar and a count, typical cost and time, runs cut short or left out by the sandbox;
+      - "where they differ": only the tasks the arms ended differently (✓/✗ per run, mean cost), the rest counted in one line; tasks a stopped seq-v1 never ran are left out;
+      - the judges' opinion, labelled as an AI's: passing fixes the judge thinks right per arm, and the pair judge's preference by task ("may be chance" when the binomial test cannot tell it from an even split, "too few to say" below 5);
+      - dim notes that matter, wrapped (a wrapped line keeps its grey), ending with the `--details` command.
+    - **`--details`** shows the full terminal report as before. Piped, `--markdown`, `--out`, `--json`, `NO_COLOR`, `TERM=dumb` and below 60 columns are unchanged.
+    - **Shared wording** (approved): the dashboard's final answer now says "sure enough" when decisive and "not sure yet · about N tasks would settle it" otherwise (`answerState.Settle`, from `TasksToResolve`; not in an A/A).
+    - **Judge pairs:** step 2 of the [judge pairs plan](2026-10-01-judge-pairs.md) (`Report.PairJudge`, `pair_judge` in the JSON, a Judge pairs section in the Markdown and `--details`), only for experiments made with `--judge-pairs`.
+    - **Fixtures:** the report's test fixtures moved to `internal/report/reporttest` (with `Seq`, `JudgedPairs` and `FewPairs`), so the view's tests build real reports. The A/A fixture's design now names the lock's second arm (an evaluation-order slip); no golden changed, as every rendering names contexts from the lock's arms.
+    - **Proof:** with a scratch test writing the Markdown, JSON and `--details` text (plain and colored) of ten fixtures without `--judge-pairs` (the A/B, one-run A/B under both methods, the A/A, the judged one and five seq-v1 states), the 40 files from this branch and from `origin/main` (`4b7eb9b`) are byte for byte identical.
+    - **Tests:** goldens of seven scenes at 60, 80, 100 and 120 columns (`internal/cli/testdata/report-*.golden`), the decisive one in 256 colors and ASCII; the answer's words are `answerWords`' in every scene; the judge lines and the floor; the collapsed grid; sanitized names; wrapped colors; the fallbacks (`TERM=dumb`, 50 columns, `NO_COLOR`).
+    - **Samples** (`AGENTIUM_REPORT_DEMO=dir go test ./internal/cli -run TestReportViewPreview`, then `ansi2svg.py` at 80 columns): [decisive](../../docs/images/console-report-decisive.svg), [not sure yet](../../docs/images/console-report-unsure.svg), [A/A](../../docs/images/console-report-aa.svg), [both judges](../../docs/images/console-report-judged.svg), [too few pairs](../../docs/images/console-report-few-pairs.svg), [seq-v1 stopped early](../../docs/images/console-report-seq-stopped.svg), [seq-v1 futility](../../docs/images/console-report-seq-futility.svg).
+    - **Limits:**
+      - `experiment show` and the summary after a run (`WriteProgress`) keep their words: step 5's.
+      - The time is from the first run's start to the last one's end, pauses included.
+      - The grid's costs are the arms' means per task; a task's reason for the pair judge's vote is only in `--details` and the Markdown.
 - [ ] **4. `run show`:** the run as a vertical data-flow chain (`Shapes.Flow`, one box per row): checkout → agent (its sandbox, tools, turns, cost) → grading (host or `sandbox-v1`, canary, denials) → record, each box two lines at most, with its time on the right. Risk: low.
 - [ ] **5. `start`, `experiment plan` and `pool status`:** the looks and spend as bars; the pool's health (valid, weak, flaky, invalid, awaiting review, retired) as bars. Risk: low.
 - [ ] **6. Pictures:** re-record the README and gallery images, plus an animated SVG of the live dashboard for the README, with `scripts/readme_images`. Risk: low.

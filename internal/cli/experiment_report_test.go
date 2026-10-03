@@ -50,6 +50,16 @@ func TestExperimentReportOnATerminal(t *testing.T) {
 	}
 	delete(f.vars, "NO_COLOR")
 
+	// TERM=dumb and a terminal narrower than term.MinWidth get the --details text too, as NO_COLOR does.
+	for name, value := range map[string]string{"TERM": "dumb", "COLUMNS": "50"} {
+		f.vars[name] = value
+		got := f.run(ctx, "experiment", "report", "lean-ab")
+		if got.code != ExitOK || strings.Contains(term.Plain(got.stdout), "the answer") || !strings.Contains(got.stdout, "6 of 6 runs settled") {
+			t.Errorf("%s=%s: want the --details text:\n%s", name, value, got.stdout)
+		}
+		delete(f.vars, name)
+	}
+
 	// --markdown forces Markdown on a terminal: what a pipe gets.
 	if forced := f.run(ctx, "experiment", "report", "lean-ab", "--markdown"); forced.code != ExitOK || forced.stdout != piped.stdout {
 		t.Errorf("--markdown on a terminal differs from the piped report (exit %d):\n%s", forced.code, forced.stdout)

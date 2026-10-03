@@ -65,9 +65,8 @@ type Report struct {
 	// Summary is a model-ab experiment's verdicts in one sentence, naming the arm by profile.
 	Summary string `json:"summary,omitempty"`
 	Judge   *Judge `json:"judge,omitempty"` // only with the judge
-	// Pairs is the pair judge's preference (experiment.PairPreferenceOf: clustered by task), only with the pair judge.
-	// Unvalidated and exploratory. Only the terminal view shows it: the Markdown and JSON reports are unchanged.
-	Pairs *experiment.PairPreference `json:"-"`
+	// PairJudge is the pair judge's preference, only with the pair judge (--judge-pairs): unvalidated and exploratory.
+	PairJudge *PairJudge `json:"pair_judge,omitempty"`
 	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
 	// project's other experiments).
 	NorthStar *NorthStar `json:"north_star,omitempty"`
@@ -265,17 +264,8 @@ func Build(in Input) (Report, error) {
 		}
 	}
 	rep.Judge = judgeSummary(in)
-	if l.Design.JudgePairs != nil {
-		var records []experiment.PairRun
-		for _, r := range in.Runs {
-			records = append(records, experiment.PairRun{ID: r.ID, Slot: r.Slot, Rec: r.Record})
-		}
-		pairs, err := experiment.PairRecords(l, records)
-		if err != nil {
-			return Report{}, err
-		}
-		preference := experiment.PairPreferenceOf(pairs)
-		rep.Pairs = &preference
+	if rep.PairJudge, err = pairJudgeSummary(in); err != nil {
+		return Report{}, err
 	}
 	rep.Notes = notes(rep, in)
 	return rep, nil

@@ -1,0 +1,110 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+       8 of 16 tasks · 16 runs · $5.48 spent · 16 min
+
+  ┌──────────────────────────────────────────────────────┐
+  │                      the answer                      │
+  │              lean is cheaper: 50% less               │
+  │              stopped early: sure enough              │
+  │                                                      │
+  │  cheaper ◀ ───━━●━━━─────│────────────── ▶ costlier  │
+  │                        same                          │
+  │                likely 34% to 61% less                │
+  └──────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────┐
+  │                        baseline                        │
+  │ ██████████████████████████████████████████████████████ │
+  │ 8 of 8 passed                                          │
+  │ typical cost  $0.45 a task                             │
+  │ typical time  40s a task                               │
+  └────────────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────┐
+  │                          lean                          │
+  │ ██████████████████████████████████████████████████████ │
+  │ 8 of 8 passed                                          │
+  │ typical cost  $0.23 a task                             │
+  │ typical time  40s a task                               │
+  └────────────────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report
+  lean-seq --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+                 8 of 16 tasks · 16 runs · $5.48 spent · 16 min
+
+          ┌──────────────────────────────────────────────────────────┐
+          │                        the answer                        │
+          │                lean is cheaper: 50% less                 │
+          │                stopped early: sure enough                │
+          │                                                          │
+          │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
+          │  likely 34% to 61% less  same                            │
+          └──────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
+  │             baseline              │    │               lean                │
+  │ █████████████████████████████████ │    │ █████████████████████████████████ │
+  │ 8 of 8 passed                     │    │ 8 of 8 passed                     │
+  │ typical cost  $0.45 a task        │    │ typical cost  $0.23 a task        │
+  │ typical time  40s a task          │    │ typical time  40s a task          │
+  └───────────────────────────────────┘    └───────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report lean-seq --details
+=== 100 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                           8 of 16 tasks · 16 runs · $5.48 spent · 16 min
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │                lean is cheaper: 50% less                 │
+                    │                stopped early: sure enough                │
+                    │                                                          │
+                    │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
+                    │  likely 34% to 61% less  same                            │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████████████████ │    │ ███████████████████████████████████████████ │
+  │ 8 of 8 passed                               │    │ 8 of 8 passed                               │
+  │ typical cost  $0.45 a task                  │    │ typical cost  $0.23 a task                  │
+  │ typical time  40s a task                    │    │ typical time  40s a task                    │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report lean-seq --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                           8 of 16 tasks · 16 runs · $5.48 spent · 16 min
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │                lean is cheaper: 50% less                 │
+                    │                stopped early: sure enough                │
+                    │                                                          │
+                    │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
+                    │  likely 34% to 61% less  same                            │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████████████████ │    │ ███████████████████████████████████████████ │
+  │ 8 of 8 passed                               │    │ 8 of 8 passed                               │
+  │ typical cost  $0.45 a task                  │    │ typical cost  $0.23 a task                  │
+  │ typical time  40s a task                    │    │ typical time  40s a task                    │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report lean-seq --details
+=== end

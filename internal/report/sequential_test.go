@@ -2,56 +2,24 @@ package report
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
-	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/report/reporttest"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// seqInput is a seq-v1 context A/B of 16 tasks with runs for the slots before end: arm B costs ratio times arm A.
+// seqInput is reporttest.Seq as a report's input.
 func seqInput(t *testing.T, ratio float64, end int, futility bool, status string) Input {
 	t.Helper()
-	at := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
-	d := experiment.Design{Version: experiment.DesignVersionSeq, Method: experiment.MethodSeq, Template: experiment.TemplateContextAB,
-		Arms:    []experiment.Arm{{Name: "A", Context: "base"}, {Name: "B", Context: "lean", Snapshot: "b808beb3"}},
-		Repeats: 1, Model: "claude-sonnet-5", Goal: experiment.GoalCheaper, CostMargin: 0.10, SuccessMargin: 0.15, RunBudgetUSD: 3, BudgetUSD: 60,
-		Timeout: 20 * time.Minute, VerifyTimeout: 10 * time.Minute, Concurrency: 2, Seed: 42, NoFutility: !futility}
-	for i := range 16 {
-		d.Tasks = append(d.Tasks, fmt.Sprintf("task-%02d", i))
-	}
-	seq, err := experiment.NewSequential(16, futility)
+	e, err := reporttest.Seq(ratio, end, futility, status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := experiment.Lock{Method: experiment.MethodSeq, LockedAt: at, ClaudeCode: "2.1.281", SignIn: claude.SignInLogin, PriceTable: "2026-09-29",
-		Design: d, Schedule: experiment.Schedule(d), MaxAttempts: 3, Sequential: &seq}
-	for _, a := range d.Arms {
-		l.Arms = append(l.Arms, experiment.LockedArm{Arm: a, Model: "claude-sonnet-5"})
-	}
-	for _, name := range d.Tasks {
-		l.Tasks = append(l.Tasks, experiment.LockedTask{Name: name})
-	}
-	in := Input{Name: "lean-seq", Lock: l, Status: status}
-	yes := true
-	for _, s := range l.Schedule[:end] {
-		var ti int
-		fmt.Sscanf(s.Task, "task-%d", &ti)
-		cost := 0.30 * (1 + 0.2*float64(ti%4)) * (1 + 0.03*float64((s.Position*7)%11))
-		if s.Arm == "B" {
-			cost *= ratio
-		}
-		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, Outcome: claude.OutcomeOK, Passed: &yes,
-			Started: at.Add(time.Duration(s.Position) * time.Minute), Finished: at.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
-			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: 40000, OutputTokens: 3000, SawInit: true, SawResult: true}}
-		in.Runs = append(in.Runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
-	}
-	return in
+	return inputOf(e)
 }
 
 func renderings(t *testing.T, rep Report) (md, plain string) {

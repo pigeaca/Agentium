@@ -158,6 +158,21 @@ func TestExperimentJudgesPairs(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "experiment", "show", "pairs"), ExitOK, "Pair judge: claude-opus-5-5 at effort high, both orders of each pair of passing runs (unvalidated, exploratory)")
 
+	// The report: one vote for the one task, below the floor, in all three formats and the terminal view.
+	expect(t, f.run(ctx, "experiment", "report", "pairs"), ExitOK, "## Judge pairs", "Judge prefers: too few to say (1 task with a preference, 5 needed).",
+		"| value | B | 2 |")
+	rep := jsonResult{cliResult: f.run(ctx, "experiment", "report", "pairs", "--json")}
+	if err := json.Unmarshal([]byte(rep.stdout), &rep.doc); err != nil {
+		t.Fatalf("experiment report --json: %v\n%s", err, rep.stdout)
+	}
+	if rep.get("pair_judge", "tasks", "b") != 1.0 || rep.get("pair_judge", "pairs", "complete") != 2.0 || rep.get("pair_judge", "uncompared") != 0.0 {
+		t.Errorf("experiment report --json: %s", rep.stdout)
+	}
+	*f.terminal = true
+	expect(t, f.run(ctx, "experiment", "report", "pairs"), ExitOK, "which fix is better: too few to say (1 task with a preference; it takes 5)")
+	expect(t, f.run(ctx, "experiment", "report", "pairs", "--details"), ExitOK, "Judge pairs", "Judge prefers: too few to say")
+	*f.terminal = false
+
 	// Done: a resume compares nothing again.
 	if again := f.run(ctx, "experiment", "run", "pairs"); strings.Contains(again.stdout, "Compared pair") {
 		t.Errorf("a pair was compared twice:\n%s", again.stdout)
@@ -173,6 +188,7 @@ func TestExperimentJudgesPairs(t *testing.T) {
 		Effort: "high", CostUSD: 0.05, Stopped: llmjudge.StoppedCall, Errors: []string{"Agentium stopped while judging"}}}
 	setRecord(t, f, b[2].ID, cut)
 	expect(t, f.run(ctx, "experiment", "show", "pairs"), ExitOK, "2 pair(s) of passing runs still need the pair judge: agentium experiment run pairs")
+	expect(t, f.run(ctx, "experiment", "report", "pairs"), ExitOK, "2 pair(s) still to compare: agentium experiment run pairs compares them.")
 	resumed := f.run(ctx, "experiment", "run", "pairs")
 	expect(t, resumed, ExitOK, "Compared pair value, repeat 1 (pair judge, unvalidated): prefers B, $0.18",
 		"Compared pair value, repeat 2 (pair judge, unvalidated): prefers B, $0.18", "Experiment pairs: done",
