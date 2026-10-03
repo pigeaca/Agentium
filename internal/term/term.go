@@ -91,7 +91,7 @@ var statuses = map[string]func(Style, string) string{
 	// not counted, not settled, or worth a look
 	"WARNING": Style.Warn, "warning": Style.Warn, "exploratory": Style.Warn, "inconclusive": Style.Warn,
 	"cancelled": Style.Warn, "paused": Style.Warn, "retrying": Style.Warn, "stopped": Style.Warn, "usage": Style.Warn,
-	"budget": Style.Warn, "infra": Style.Warn, "unfair": Style.Warn, "unchecked": Style.Warn,
+	"budget": Style.Warn, "infra": Style.Warn, "infra-sandbox": Style.Warn, "unfair": Style.Warn, "unchecked": Style.Warn,
 	"unverified": Style.Warn, "not validated": Style.Warn,
 	// failed
 	"MISSING": Style.Bad, "NOT OK": Style.Bad, "invalid": Style.Bad, "flaky": Style.Bad, "no": Style.Bad, "fail": Style.Bad,

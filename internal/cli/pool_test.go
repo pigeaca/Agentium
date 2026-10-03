@@ -45,7 +45,7 @@ func newPoolFixture(t *testing.T, features, named int) *poolFixture {
 func (p *poolFixture) at(offset time.Duration, args ...string) cliResult {
 	now := p.clock.Add(offset)
 	var stdout, stderr bytes.Buffer
-	code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: p.repo,
+	code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdout: &stdout, Stderr: &stderr, Dir: p.repo,
 		Getenv:   func(key string) string { return p.vars[key] },
 		Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + p.home} },
 		LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: func() time.Time { return now }})

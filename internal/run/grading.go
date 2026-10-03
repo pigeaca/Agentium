@@ -18,8 +18,8 @@ import (
 )
 
 // The grading environment of sandboxed grading (the isolation plan, Part 1, step 2): what a grade gets besides its
-// grading copy, made by functions the wiring (step 3) calls. Nothing here is wired into Once or validation yet: grading
-// still runs on the host, with the shared CommandEnv, exactly as before.
+// grading copy. Sandbox mode (sandboxgrade.go) grades runs and validation stages with it; host mode grades on the host,
+// with the shared CommandEnv, exactly as before, and never uses a seed.
 //
 // A grade runs the agent's own code (its build scripts, conftest.py, build.rs), so a cache it writes is a poisoning
 // path: a cache later grades read could turn another run's fail into a pass. So:
@@ -37,7 +37,9 @@ import (
 //     What a grade adds to its clone (the hidden tests' builds) goes with the clone;
 //   - seeds are for sandboxed grades only. A host-mode grade runs unsandboxed and could write the seed itself, so it is
 //     never offered one (step 3 gates seed use on the sandbox mode);
-//   - what a grade left running is stopped before its folders go (stopGrade), and the removal never follows a link
+//   - what a grade left running is stopped before its folders go (grading.stop): every process of the grade's own
+//     sandbox (found by what its sandbox allows, so a `setsid` child that left the folders is found too) and every
+//     process that uses the folders; and the removal never follows a link
 //     (removeTree): a grade's process may still swap any entry for a link to the user's files. What cannot be removed is
 //     moved aside into the quarantine (removeOrQuarantine), so a hostile grade can never block later runs.
 //
@@ -189,6 +191,9 @@ type gradingInput struct {
 	// is told when that happens.
 	Quarantine string
 	Warn       func(string)
+	// Keep, when set, is where the copy is moved back to once the grade is done and what it left running is stopped
+	// (--keep): the rest of the grade's folder is removed as always. It must not exist; normally it is Copy.
+	Keep string
 }
 
 // grading is one grade's own folders and environment.
@@ -287,10 +292,20 @@ func (g grading) remove() error {
 	return errors.Join(err, removeTree(g.Root))
 }
 
-// stop ends what the grade left running (stopUsing) in the grade's folder, where its copy is and its processes work.
-// It returns what it killed, one line each.
+// stop ends what the grade left running and returns what it killed, one line each: first every process of the grade's
+// own sandbox (stopSandboxed: one whose sandbox may write the grade's temp root but not the folder above the grade's,
+// so a `setsid` child that changed its working folder away and closed every file is found too), while the grade's
+// folder is still locked (lock) and the temp root cannot have been moved; then what uses the grade's folders
+// (stopUsing: the profiles' StopRun on the cache, and any process working there or holding a file, which also covers a
+// host-mode grade's processes); then it makes the folder writable again, for the removal.
 func (g grading) stop() ([]string, error) {
-	return stopUsing(g.profiles, g.Cache, g.Root)
+	killed, err := stopSandboxed(g.Temp, filepath.Dir(g.Root))
+	more, useErr := stopUsing(g.profiles, g.Cache, g.Root)
+	var chmodErr error
+	if info, statErr := os.Lstat(g.Root); statErr == nil && info.IsDir() {
+		chmodErr = os.Chmod(g.Root, 0o700)
+	}
+	return append(killed, more...), errors.Join(err, useErr, chmodErr)
 }
 
 // profileFile is where WriteProfile writes the grade's sandbox profile: in Root, outside the folders the grade writes
@@ -314,7 +329,8 @@ func (g grading) writeProfile(p sandbox.Profile) (written sandbox.Profile, file,
 }
 
 // withGrading prepares a grade (prepareGrading), runs grade with it, then stops what it left running and removes it,
-// whatever happens: on success, on an error, on cancellation, and when grade panics. A folder that cannot be removed
+// whatever happens: on success, on an error, on cancellation, and when grade panics. With in.Keep, the copy is moved
+// there first, once nothing of the grade runs any more. A folder that cannot be removed
 // is moved into in.Quarantine with a warning (removeOrQuarantine); only when that fails too is it an error.
 func withGrading(ctx context.Context, in gradingInput, grade func(g grading) error) (err error) {
 	g, err := prepareGrading(ctx, in)
@@ -332,6 +348,11 @@ func withGrading(ctx context.Context, in gradingInput, grade func(g grading) err
 		}
 		if stopErr != nil {
 			warn("the grade left processes that could not all be stopped: " + stopErr.Error())
+		}
+		if in.Keep != "" {
+			if err := os.Rename(g.Copy, in.Keep); err != nil {
+				warn("the grading copy could not be kept: " + err.Error())
+			}
 		}
 		warning, rmErr := removeOrQuarantine(g.Root, in.Quarantine)
 		if warning != "" {

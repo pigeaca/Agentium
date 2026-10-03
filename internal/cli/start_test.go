@@ -214,7 +214,7 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			var out strings.Builder
-			s := &starter{env: Env{Stdin: strings.NewReader(c.input), StdinTerminal: c.stdinTTY, Terminal: c.stdoutTTY, Stdout: &out}}
+			s := &starter{env: Env{DefaultGrader: "host", Stdin: strings.NewReader(c.input), StdinTerminal: c.stdinTTY, Terminal: c.stdoutTTY, Stdout: &out}}
 			if got := s.confirm(context.Background(), 12.5, ""); got != c.want {
 				t.Errorf("confirm = %v, want %v", got, c.want)
 			}
@@ -224,7 +224,7 @@ func TestStartPromptOnlyOnATerminal(t *testing.T) {
 		})
 	}
 	var out strings.Builder
-	if (&starter{env: Env{Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(context.Background(), 1, "") || out.Len() != 0 {
+	if (&starter{env: Env{DefaultGrader: "host", Terminal: true, StdinTerminal: true, Stdout: &out}}).confirm(context.Background(), 1, "") || out.Len() != 0 {
 		t.Error("a terminal without a stdin reader was asked")
 	}
 }
@@ -245,7 +245,7 @@ func readyFixture(t *testing.T) (runFixture, string) {
 // terminalRun runs start as a person at a terminal would, answering the prompt with stdin.
 func terminalRun(f runFixture, ctx context.Context, stdin io.Reader, args ...string) cliResult {
 	var stdout, stderr bytes.Buffer
-	code := Run(ctx, Env{Args: args, Stdin: stdin, StdinTerminal: true, Terminal: true, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
+	code := Run(ctx, Env{DefaultGrader: "host", Args: args, Stdin: stdin, StdinTerminal: true, Terminal: true, Stdout: &stdout, Stderr: &stderr, Dir: f.repo,
 		Getenv: func(key string) string {
 			if key == "NO_COLOR" {
 				return "1"
@@ -292,7 +292,7 @@ func TestStartPromptStopsOnCancel(t *testing.T) {
 	defer pw.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	var out strings.Builder
-	s := &starter{env: Env{Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: &out}}
+	s := &starter{env: Env{DefaultGrader: "host", Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: &out}}
 	done := make(chan bool)
 	go func() { done <- s.confirm(ctx, 5, "") }()
 	cancel()
@@ -679,7 +679,7 @@ func TestStartCtrlCAtThePromptExitsOne(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pw.Close()
 	out, errOut := &promptCanceller{cancel: cancel}, &bytes.Buffer{}
-	code := Run(ctx, Env{Args: []string{"start"}, Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: out, Stderr: errOut, Dir: f.repo,
+	code := Run(ctx, Env{DefaultGrader: "host", Args: []string{"start"}, Stdin: pr, StdinTerminal: true, Terminal: true, Stdout: out, Stderr: errOut, Dir: f.repo,
 		Getenv: func(key string) string {
 			if key == "NO_COLOR" {
 				return "1"
@@ -707,7 +707,7 @@ func TestStartDriftChecksIncludedDocuments(t *testing.T) {
 	gitIn(t, f.repo, "commit", "-q", "-m", "Add a guide")
 	expect(t, f.run(ctx, "context", "snapshot", "baseline", "--include", "docs/guide.md"), ExitOK)
 	var out strings.Builder
-	env := Env{Dir: f.repo, Stdout: &out, Stderr: &out, Getenv: func(k string) string { return f.vars[k] }}
+	env := Env{DefaultGrader: "host", Dir: f.repo, Stdout: &out, Stderr: &out, Getenv: func(k string) string { return f.vars[k] }}
 	w, err := openProject(ctx, env)
 	if err != nil {
 		t.Fatal(err)

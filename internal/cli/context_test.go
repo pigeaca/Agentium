@@ -20,7 +20,7 @@ func cliIn(t *testing.T, dir, data string) func(args ...string) cliResult {
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": t.TempDir(), "AGENTIUM_CLAUDE": filepath.Join(t.TempDir(), "no-claude")}
 	return func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: dir,
 			Getenv:   func(key string) string { return vars[key] },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist },

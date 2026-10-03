@@ -37,3 +37,29 @@ jobs:
 
       - name: Go vulnerability scan (govulncheck at the harness's pinned version)
         run: python3 scripts/harness.py check vuln
+
+  # The grading sandbox is macOS's (sandbox-exec and the unified log), so its tests skip on the Linux job above. Pull
+  # requests only, to save macOS minutes. A runner where sandbox-exec cannot apply a profile, or whose unified log
+  # hides the kernel's sandbox denials, makes those tests skip with the reason (go test -v prints it).
+  macos-sandbox:
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Grading sandbox tests (race)
+        env:
+          GOTOOLCHAIN: local
+        run: go test -race -count=1 -v ./internal/sandbox ./internal/run 2>&1 | tee test.log; exit "${PIPESTATUS[0]}"
+
+      - name: Sandbox tests skipped (and why)
+        if: always()
+        run: grep -A1 -- '--- SKIP' test.log || echo "none skipped"

@@ -64,7 +64,7 @@ func TestRunOnceGradesWithHiddenTestsAndIsolation(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": home, "AGENTIUM_CLAUDE_TOKEN_FILE": tokenFile}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{
+		code := Run(context.Background(), Env{DefaultGrader: "host",
 			Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv: func(key string) string { return vars[key] },
 			Environ: func() []string {
@@ -162,7 +162,7 @@ func TestRunOnceRefusesInstructionFilesAboveTheWorkspace(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": filepath.Join(outer, "data"), "HOME": t.TempDir(), "AGENTIUM_CLAUDE": "/bin/false"}
 	run := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
+		code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo,
 			Getenv: func(key string) string { return vars[key] }, Environ: func() []string { return nil },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
 		return cliResult{code, stdout.String(), stderr.String()}
@@ -201,6 +201,8 @@ type runFixture struct {
 	terminal *bool
 	// account is what Env.AccountHome returns: the account's home folder ("" unknown).
 	account *string
+	// grader is Env.DefaultGrader: host, so tests grade on the host unless they test the sandbox.
+	grader *string
 }
 
 // newRunFixture is a project with one commit that adds a hidden test and the task "value" imported from it, initialized
@@ -239,9 +241,11 @@ func runFixtureAt(repo, data, home string) runFixture {
 	f.sleep = new(func(ctx context.Context, d time.Duration) error)
 	f.terminal = new(bool)
 	f.account = new(string)
+	f.grader = new(string)
+	*f.grader = "host"
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(ctx, Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
+		code := Run(ctx, Env{DefaultGrader: *f.grader, Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
 			Getenv: func(key string) string { return f.vars[key] },
 			Environ: func() []string {
 				environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home}
@@ -562,7 +566,7 @@ func TestRunFlagsChangedRunnerConfiguration(t *testing.T) {
 	vars := map[string]string{"AGENTIUM_HOME": data, "HOME": home}
 	cli := func(args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo, Getenv: func(k string) string { return vars[k] },
+		code := Run(context.Background(), Env{DefaultGrader: "host", Args: args, Stdout: &stdout, Stderr: &stderr, Dir: repo, Getenv: func(k string) string { return vars[k] },
 			Environ:  func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + home} },
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now})
 		return cliResult{code, stdout.String(), stderr.String()}

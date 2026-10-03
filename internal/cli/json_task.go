@@ -175,12 +175,15 @@ type validatedDoc struct {
 	Judge          *judgeCheckDoc      `json:"judge"` // judge-graded tasks only
 	// Warnings are what the verify commands keep from grading (task.Validation.Warnings); they never change the status.
 	Warnings []string `json:"warnings"`
+	// Grader is where the stages' verification ran: "host" or the sandbox's version ("sandbox-v1"). A judge-graded
+	// task runs nothing; its validation names no mode, which reads as "host" (task.GraderOf).
+	Grader string `json:"grader"`
 }
 
 func validatedDocument(ctx context.Context, env Env, w *workspace, t store.Task, o task.ValidateOptions, result task.Validation) validatedDoc {
 	doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), Arms: []string{}, Repeats: result.RepeatCount(),
 		NeedsReview: t.NeedsReview, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, WeakTests: weakTestsOf(result.WeakTests),
-		Warnings: list(env.redactAll(result.Warnings))}
+		Warnings: list(env.redactAll(result.Warnings)), Grader: task.GraderOf(result.Grader)}
 	for _, a := range o.Arms {
 		doc.Arms = append(doc.Arms, a.Name)
 	}

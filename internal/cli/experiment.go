@@ -20,7 +20,7 @@ import (
 var experimentUsage = `Usage:
   agentium experiment new NAME [--b SNAPSHOT|MODEL[:EFFORT]] [--a CONTEXT|MODEL[:EFFORT]] [--context SNAPSHOT]
                      [--task NAME...] [--model MODEL[:EFFORT]] [--goal cheaper|better] [--run-budget USD] [--budget USD]
-                     [--judge[=MODEL[:EFFORT]]] [--judge-pairs[=MODEL[:EFFORT]]]
+                     [--judge[=MODEL[:EFFORT]]] [--judge-pairs[=MODEL[:EFFORT]]] [--grader sandbox|host]
                      --b decides what the experiment compares:
                        no --b             an A/A calibration: one context (--a, default base: each task's own
                                           context) in both arms, which must find no difference
@@ -31,7 +31,11 @@ var experimentUsage = `Usage:
                                           medium, high, xhigh or max (default: the CLI's). Each arm's model is
                                           calibrated when the experiment runs, if it is not yet
                      A --b that names both a snapshot and a model is refused. --model (default ` + experiment.DefaultExperimentModel + `) is
-                     the model a context experiment runs on; --run-budget stops each run, in both arms, at its cost
+                     the model a context experiment runs on; --run-budget stops each run, in both arms, at its cost.
+                     --grader is where its runs are graded: sandbox (Agentium's grading sandbox, the default on
+                     macOS: no network but this machine's, writes only to the grade's own folders) or host (unsandboxed,
+                     the default elsewhere). The lock fixes it; tasks validated on the host are validated again in the
+                     sandbox when it locks
   agentium experiment plan NAME
                      the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
   agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes]
@@ -142,6 +146,7 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	judge, pairs := judgeFlag{name: "judge"}, judgeFlag{name: "judge-pairs"}
 	fs.Var(&judge, "judge", "ask the LLM judge about every graded run, on its default model or MODEL[:EFFORT] (a second opinion)")
 	fs.Var(&pairs, "judge-pairs", "ask the pair judge which arm fixed each task better, when both pass (unvalidated, exploratory)")
+	grader := addGraderFlag(fs)
 	// Hidden (experimentHidden): the guide's "Advanced flags".
 	fs.StringVar(&o.Tier, "tier", "", "--goal better: quick (12 tasks × 3 runs) or confident (23 × 5); default quick unless --task is given")
 	fs.IntVar(&o.Repeats, "repeats", 0, "--goal better: runs per task per arm (default: the tier's, or 3); a cost experiment runs 1")
@@ -164,6 +169,11 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 		return ExitUsage
 	}
 	o.Tasks = tasks
+	mode, err := grader.mode(env)
+	if err != nil {
+		return failNew(env, experiment.UsageError(err.Error()))
+	}
+	o.Grader = mode
 	o.Judge, o.JudgeModel, o.JudgeEffort = judge.on, judge.model, judge.effort
 	o.JudgePairs, o.PairJudgeModel, o.PairJudgeEffort = pairs.on, pairs.model, pairs.effort
 	if pairs.on && pairs.model == "" { // a bare --judge-pairs takes --judge's model and effort, as one --judge-model set both

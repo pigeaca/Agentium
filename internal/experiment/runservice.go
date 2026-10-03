@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,8 +85,14 @@ type Runner struct {
 	ExecuteRun func(ctx context.Context, e run.Env, meta RunMeta, spec run.Spec) (run.Record, error)
 	// WaitUntil waits for the usage window to reset (Wait); nil without it.
 	WaitUntil func(ctx context.Context, until time.Time) error
-	Backoff   func(attempt int) time.Duration // nil: 30 seconds, then 2 minutes
-	Observer  Observer
+	// Revalidate validates the named tasks again, in grader mode and the arms' contexts, and stores the validations:
+	// before a sandbox experiment locks, its tasks validated in another mode are validated in the sandbox (the isolation
+	// plan's decision 5). It reports progress to Out itself. nil: such tasks keep the experiment from locking.
+	Revalidate func(ctx context.Context, tasks []string, arms []task.Arm, grader string) error
+	// SandboxUsable checks that this machine can grade in a mode; nil: run.SandboxUsable (tests replace it).
+	SandboxUsable func(ctx context.Context, mode string) error
+	Backoff       func(attempt int) time.Duration // nil: 30 seconds, then 2 minutes
+	Observer      Observer
 	// Quiet says Out goes nowhere (a --json run): errors then must not point at output.
 	Quiet bool
 }
@@ -165,7 +172,13 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		d.BudgetUSD = o.Budget
 	}
 	fmt.Fprintln(out, r.Style.Heading(fmt.Sprintf("Checking experiment %s before its first run:", name)))
-	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms)
+	if err := r.sandboxUsable(ctx, d.Grader); err != nil { // its runs could not be graded: stop before anything is spent
+		return Lock{}, err
+	}
+	if err := r.revalidate(ctx, d); err != nil {
+		return Lock{}, err
+	}
+	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms, d.Grader)
 	if err != nil {
 		return Lock{}, err
 	}
@@ -173,7 +186,9 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if err != nil {
 		return Lock{}, err
 	}
-	ready := CheckReadiness(ctx, p, r.Readiness, d, eligible, reasons, est)
+	readiness := r.Readiness
+	readiness.Locking = true // a task still validated in another mode now is missing, not one to validate later
+	ready := CheckReadiness(ctx, p, readiness, d, eligible, reasons, est)
 	ready.Write(out, r.Style)
 	if !ready.Ready || ctx.Err() != nil {
 		if r.Quiet { // the checks above went nowhere
@@ -207,8 +222,8 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	if raised != nil {
 		fmt.Fprintf(out, "Budget raised to $%.2f (recorded in the lock).\n", raised.To)
 	}
-	fmt.Fprintf(out, "Locked: Claude Code %s, %s, sign-in %s, %d runs in a seeded order (seed %d), prices of %s.\n",
-		lock.ClaudeCode, d.ModelLabel(), lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable)
+	fmt.Fprintf(out, "Locked: Claude Code %s, %s, sign-in %s, %d runs in a seeded order (seed %d), prices of %s, graded %s.\n",
+		lock.ClaudeCode, d.ModelLabel(), lock.SignIn, len(lock.Schedule), d.Seed, lock.PriceTable, task.DescribeGrader(lock.Grader))
 	if d.Judge != nil {
 		fmt.Fprintf(out, "The judge: %s.\n", DescribeJudge(*d.Judge))
 	}
@@ -216,6 +231,44 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		fmt.Fprintf(out, "The pair judge (unvalidated): %s.\n", DescribePairJudge(*d.JudgePairs))
 	}
 	return lock, nil
+}
+
+// revalidate validates d's tasks that were validated in another mode again, in d's (Revalidations): only a sandbox
+// experiment has any. Without Revalidate it does nothing, and readiness reports them.
+func (r Runner) revalidate(ctx context.Context, d Design) error {
+	names, err := r.Project.Revalidations(ctx, d)
+	if err != nil || len(names) == 0 || r.Revalidate == nil {
+		return err
+	}
+	fmt.Fprintf(r.Out, "Validating %d task(s) again %s, the experiment's grader: they were validated in another mode (time, no money).\n",
+		len(names), task.DescribeGrader(d.Grader))
+	return r.Revalidate(ctx, names, ValidationArms(d.Arms), task.GraderOf(d.Grader))
+}
+
+// ValidationArms are the contexts a validation covers for an experiment's arms: the base's own first, then each
+// distinct snapshot.
+func ValidationArms(arms []Arm) []task.Arm {
+	out := []task.Arm{{Name: BaseContext}}
+	for _, a := range arms {
+		if a.Snapshot != "" && !slices.ContainsFunc(out, func(t task.Arm) bool { return t.Snapshot == a.Snapshot }) {
+			out = append(out, task.Arm{Name: a.Context, Snapshot: a.Snapshot})
+		}
+	}
+	return out
+}
+
+// sandboxUsable checks that this Agentium can grade in mode (Runner.SandboxUsable, else run.SandboxUsable), before an
+// experiment locks or resumes: a mode it knows, and for the sandbox, a sandbox-exec that works here and a log that
+// shows its denials.
+func (r Runner) sandboxUsable(ctx context.Context, mode string) error {
+	usable := run.SandboxUsable
+	if r.SandboxUsable != nil {
+		usable = r.SandboxUsable
+	}
+	if err := usable(ctx, mode); err != nil {
+		return fmt.Errorf("the experiment grades %s: %w (with --grader host, a new experiment grades on the host)", task.DescribeGrader(mode), err)
+	}
+	return nil
 }
 
 // checkRefusals runs the checks that need no calibration, before anything is spent: each snapshot still names the
@@ -314,6 +367,9 @@ func (r Runner) resume(ctx context.Context, stored store.Experiment, name, versi
 	if host := runtime.GOOS + "/" + runtime.GOARCH; host != lock.Host {
 		return Lock{}, fmt.Errorf("experiment %s cannot continue: its runs ran on %s, this is %s", name, lock.Host, host)
 	}
+	if err := r.sandboxUsable(ctx, lock.Grader); err != nil {
+		return Lock{}, fmt.Errorf("experiment %s cannot continue: %w", name, err)
+	}
 	if err := r.checkResumeLocalBinding(ctx, name, lock); err != nil {
 		return Lock{}, err
 	}
@@ -393,6 +449,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	// The lock decides: a resumed experiment never gets local binding its first run did not have (and not after the user
 	// turned it off, either: NewRunEnv holds the project's setting now).
 	runEnv.AllowLocalBinding = runEnv.AllowLocalBinding && lock.LocalBinding
+	runEnv.Grader = task.GraderOf(lock.Grader)                                                // the lock's mode, whatever the default is now: one experiment never mixes modes
 	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
 	if err := p.DB.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return RunOutcome{}, err
@@ -689,8 +746,8 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	}
 	rec, err := r.ExecuteRun(ctx, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.ArmModel(arm.Arm), Effort: design.ArmEffort(arm.Arm),
-		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm),
-		Timeout:   design.Timeout, Judge: design.Judge})
+		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm), HarmlessDenials: lock.Harmless[t.Name],
+		Timeout: design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
@@ -915,7 +972,7 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 	p := r.Project
 	l := Lock{Method: d.LockMethod(), Agentium: r.Version, LockedAt: r.Now().UTC(), ClaudeCode: version,
 		ClaudePath: cli, SignIn: r.SignIn, Host: runtime.GOOS + "/" + runtime.GOARCH, PriceTable: pricing.Date, Design: d,
-		Schedule: Schedule(d), MaxAttempts: MaxAttempts}
+		Schedule: Schedule(d), MaxAttempts: MaxAttempts, Grader: task.GraderOf(d.Grader)}
 	if d.Sequential() {
 		seq, err := NewSequential(len(d.Tasks), !d.NoFutility)
 		if err != nil {
@@ -956,6 +1013,12 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 		}
 		l.Tasks = append(l.Tasks, NewLockedTask(t.Name, t.Instruction, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit,
 			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}))
+		if v := task.ValidationOf(t); l.Grader != task.GraderHost && v.Grader == l.Grader && len(v.Harmless) > 0 {
+			if l.Harmless == nil {
+				l.Harmless = map[string][]task.DenialKey{}
+			}
+			l.Harmless[t.Name] = v.Harmless
+		}
 	}
 	return l, nil
 }

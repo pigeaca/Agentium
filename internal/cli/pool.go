@@ -253,7 +253,8 @@ func (p *poolPass) validateNew(ctx context.Context, tasks []store.Task) error {
 		fmt.Fprintln(p.env.Stdout, note(st, "an experiment is running: the new tasks are validated one at a time, not "+strconv.Itoa(p.jobs)))
 	}
 	fmt.Fprintf(p.env.Stdout, "%s, %d at a time\n", st.Heading(fmt.Sprintf("Validating %d mined task(s)", len(tasks))), jobs)
-	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: p.timeout}, jobs)
+	results, err := validateBatch(ctx, p.env, p.w, tasks, task.ValidateOptions{Arms: []task.Arm{{Name: "base"}}, Repeat: 1, Timeout: p.timeout,
+		Grader: defaultGrader(p.env)}, jobs)
 	p.validated = results
 	return err
 }
@@ -390,17 +391,25 @@ func (p *poolPass) revalidate(ctx context.Context, stale []pool.Revalidation) (r
 				fmt.Fprintf(env.Stdout, "  %s: %s\n", r.Task.Name, strings.Join(r.Stale.Reasons, "; "))
 			}
 		}
-		// A chunk: up to --jobs tasks of one group.
-		first := stale[order[k]].Stale
+		// A chunk: up to --jobs tasks of one group, validated again as they were last: the same contexts, repeats and
+		// grader mode (one this Agentium no longer grades in gets the default).
+		graderOf := func(i int) string {
+			if mode := task.ValidationOf(stale[i].Task).Grader; task.KnownGrader(mode) {
+				return task.GraderOf(mode)
+			}
+			return defaultGrader(env)
+		}
+		first, firstGrader := stale[order[k]].Stale, graderOf(order[k])
 		chunk := []int{}
-		for k < len(order) && len(chunk) < p.jobs && slices.Equal(stale[order[k]].Stale.Arms, first.Arms) && stale[order[k]].Stale.Repeat == first.Repeat {
+		for k < len(order) && len(chunk) < p.jobs && slices.Equal(stale[order[k]].Stale.Arms, first.Arms) && stale[order[k]].Stale.Repeat == first.Repeat &&
+			graderOf(order[k]) == firstGrader {
 			chunk, k = append(chunk, order[k]), k+1
 		}
 		tasks := make([]store.Task, len(chunk))
 		for c, j := range chunk {
 			tasks[c] = stale[j].Task
 		}
-		o := task.ValidateOptions{Arms: first.Arms, Repeat: first.Repeat, Timeout: p.timeout, KeepWeakTests: true}
+		o := task.ValidateOptions{Arms: first.Arms, Repeat: first.Repeat, Timeout: p.timeout, KeepWeakTests: true, Grader: firstGrader}
 		got, err := validateBatchWith(ctx, env, p.w, tasks, o, p.jobs, true)
 		if err != nil {
 			return nil, nil, err

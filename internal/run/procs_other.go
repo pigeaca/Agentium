@@ -8,3 +8,6 @@ func processesUnder([]string) ([]int, error) { return nil, nil }
 
 // stopProcessesUnder stops nothing outside macOS (see processesUnder).
 func stopProcessesUnder([]string) ([]string, error) { return nil, nil }
+
+// stopSandboxed stops nothing outside macOS (see processesUnder).
+func stopSandboxed(string, string) ([]string, error) { return nil, nil }
