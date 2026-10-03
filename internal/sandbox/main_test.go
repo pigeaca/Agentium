@@ -1,6 +1,7 @@
 package sandbox
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -24,7 +25,8 @@ func TestMain(m *testing.M) {
 //   - dial <addr>: a TCP connection to addr, 2 seconds at most;
 //   - serve <addr>: listen on addr (tcp), then connect to the listening address from the same process;
 //   - listen <addr>: listen on addr (tcp) only;
-//   - shm <name>, sem <name>: create a POSIX shared memory object or semaphore of that name, then remove it.
+//   - shm <name>, sem <name>: create a POSIX shared memory object or semaphore of that name, then remove it;
+//   - usable -: Usable (the sandbox applies a profile here).
 func helper(mode, arg string) int {
 	var err error
 	switch mode {
@@ -35,6 +37,8 @@ func helper(mode, arg string) int {
 		}
 	case "shm", "sem":
 		err = ipcProbe(mode, arg)
+	case "usable":
+		err = Usable(context.Background())
 	case "dial":
 		var c net.Conn
 		if c, err = net.DialTimeout("tcp", arg, 2*time.Second); err == nil {

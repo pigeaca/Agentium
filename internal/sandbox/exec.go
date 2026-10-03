@@ -46,6 +46,28 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 	return spec, nil
 }
 
+// Usable checks that sandbox-exec exists and applies a profile here: it fails nested inside another sandbox
+// (Agentium run from an agent's shell) and outside macOS. It is a quick check before anything is spent, not the
+// canary, which every grade still runs. Errors wrap ErrUnavailable, except cancellation.
+func Usable(ctx context.Context) error {
+	if _, err := os.Stat(Exec); err != nil {
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	var out bytes.Buffer
+	result, err := runner.Run(ctx, runner.Spec{Dir: "/", Args: []string{Exec, "-p", "(version 1)(allow default)", "--", "/usr/bin/true"},
+		Environ: []string{"PATH=/usr/bin:/bin"}, Timeout: canaryTimeout, Output: &out})
+	switch {
+	case err != nil && ctx.Err() != nil:
+		return ctx.Err()
+	case err != nil:
+		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	case !result.Passed():
+		return fmt.Errorf("%w: sandbox-exec exited %d (%s): is Agentium running inside another sandbox?", ErrUnavailable, result.ExitCode,
+			strings.TrimSpace(out.String()))
+	}
+	return nil
+}
+
 // canaryTimeout bounds each canary probe: they start a few small system tools.
 const canaryTimeout = 30 * time.Second
 
@@ -70,18 +92,31 @@ func CheckFile(profileFile, digest string) error {
 // probe returns an error wrapping ErrUnavailable; cancellation returns ctx's error. Probes run with a minimal
 // environment and their output is kept only for the error message.
 func Canary(ctx context.Context, profileFile, digest string, p Profile) error {
+	_, err := CanaryProbes(ctx, profileFile, digest, p)
+	return err
+}
+
+// CanaryProbes is Canary, and returns the process IDs of the probes it ran, whose denials (the data folder's) are the
+// canary's, not the grade's (ReadDenials).
+func CanaryProbes(ctx context.Context, profileFile, digest string, p Profile) (pids []int, err error) {
+	defer func() {
+		if err != nil {
+			pids = nil
+		}
+	}()
 	if _, err := os.Stat(Exec); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
 	if err := CheckFile(profileFile, digest); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := os.ReadDir(p.Data); err != nil {
-		return fmt.Errorf("%w: the canary's denied folder: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: the canary's denied folder: %v", ErrUnavailable, err)
 	}
 	probe := func(args ...string) (int, string, error) {
 		var out bytes.Buffer
-		spec, err := Wrap(runner.Spec{Dir: p.Temp, Args: args, Environ: []string{"PATH=/usr/bin:/bin"}, Timeout: canaryTimeout, Output: &out}, profileFile)
+		spec, err := Wrap(runner.Spec{Dir: p.Temp, Args: args, Environ: []string{"PATH=/usr/bin:/bin"}, Timeout: canaryTimeout, Output: &out,
+			Started: func(pid int) { pids = append(pids, pid) }}, profileFile)
 		if err != nil {
 			return 0, "", err
 		}
@@ -98,28 +133,28 @@ func Canary(ctx context.Context, profileFile, digest string, p Profile) error {
 		return result.ExitCode, strings.TrimSpace(out.String()), nil
 	}
 	if code, out, err := probe("/usr/bin/true"); err != nil {
-		return err
+		return pids, err
 	} else if code != 0 {
-		return fmt.Errorf("%w: sandbox-exec exited %d (%s)", ErrUnavailable, code, out)
+		return pids, fmt.Errorf("%w: sandbox-exec exited %d (%s)", ErrUnavailable, code, out)
 	}
 	mark := filepath.Join(p.Temp, ".agentium-canary-"+p.Tag)
 	code, out, err := probe("/usr/bin/touch", mark)
 	if err != nil {
-		return err
+		return pids, err
 	}
 	_, statErr := os.Lstat(mark)
 	os.Remove(mark)
 	if code != 0 || statErr != nil {
-		return fmt.Errorf("%w: the canary cannot write the temp root (exit %d: %s)", ErrUnavailable, code, out)
+		return pids, fmt.Errorf("%w: the canary cannot write the temp root (exit %d: %s)", ErrUnavailable, code, out)
 	}
 	if code, _, err := probe("/bin/ls", p.Data); err != nil {
-		return err
+		return pids, err
 	} else if code == 0 {
-		return fmt.Errorf("%w: the canary can list the data folder %s", ErrUnavailable, p.Data)
+		return pids, fmt.Errorf("%w: the canary can list the data folder %s", ErrUnavailable, p.Data)
 	}
 	outside := filepath.Join(p.Data, ".agentium-canary-"+p.Tag)
 	if _, err := os.Lstat(outside); err == nil {
-		return fmt.Errorf("%w: %s exists before the canary writes it", ErrUnavailable, outside)
+		return pids, fmt.Errorf("%w: %s exists before the canary writes it", ErrUnavailable, outside)
 	}
 	code, _, err = probe("/usr/bin/touch", outside)
 	_, statErr = os.Lstat(outside)
@@ -127,10 +162,10 @@ func Canary(ctx context.Context, profileFile, digest string, p Profile) error {
 		os.Remove(outside)
 	}
 	if err != nil {
-		return err
+		return pids, err
 	}
 	if code == 0 || statErr == nil {
-		return fmt.Errorf("%w: the canary can write the data folder %s", ErrUnavailable, p.Data)
+		return pids, fmt.Errorf("%w: the canary can write the data folder %s", ErrUnavailable, p.Data)
 	}
-	return nil
+	return pids, nil
 }
