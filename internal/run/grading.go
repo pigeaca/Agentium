@@ -92,11 +92,20 @@ func quarantine(layout home.Layout) string {
 // wait for one maker, and a folder that exists is a finished seed. Before the rename, what the warm step left running
 // is stopped (the profiles' StopRun, then every process still using the folder), so nothing writes the seed once it is
 // published. What a dead maker left (seed+".tmp") is removed under the lock before the next one starts.
-func prepareSeed(ctx context.Context, profiles []buildtool.Profile, deps, seed string, warm func(ctx context.Context, dir string) error) error {
+//
+// Every call that returns a seed marks it used (markUsed): the seed folder's modification time is its last use, which
+// cleanup (PlanClean) ages it by. A seed already there is found and marked under a shared lock (seedTaken), so cleanup,
+// which takes the lock exclusively and rechecks the mark before it moves a seed away, never takes one being handed out.
+func prepareSeed(ctx context.Context, profiles []buildtool.Profile, deps, seed string, warm func(ctx context.Context, dir string) error) (err error) {
 	if !filepath.IsAbs(seed) {
 		return fmt.Errorf("the grading seed %q is not absolute", seed)
 	}
-	if ready, err := seedReady(seed); ready || err != nil {
+	defer func() {
+		if err == nil {
+			markUsed(seed)
+		}
+	}()
+	if ready, err := seedTaken(ctx, seed); ready || err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(seed), 0o700); err != nil {

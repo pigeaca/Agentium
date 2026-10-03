@@ -99,7 +99,8 @@ func (env Env) warmState(deps string) string {
 // stampPath is the file whose existence says the base commit's dependencies are warmed for the tool set by the current
 // recipe: the name holds buildtool.WarmVersion, so a stamp left by an older recipe (or from before versions) is never
 // found and the base is warmed again. It holds what the warm-up found for the base's runs (buildtool.Warmed, as JSON:
-// Python's venv and notes); tools that find nothing leave it empty.
+// Python's venv and notes); tools that find nothing leave it empty. Its modification time is the base's last use
+// (markUsed), which cleanup (PlanClean) ages the base's dependencies by.
 
 func (env Env) stampPath(deps, base string, names []string) string {
 	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+"-"+filepath.Base(base))
@@ -139,6 +140,9 @@ func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, boo
 // every run of the base repeats its notes.
 func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
 	if names := buildtool.NeedsWarming(profiles); inv.Deps != "" && len(names) > 0 {
+		// The deps folder's last use, for cleanup (projectLast), on every path: a failed or waited-out warm-up writes
+		// no stamp, yet the run may build from what is there.
+		defer markUsed(inv.Deps)
 		var fresh buildtool.Warmed
 		note, err := env.warmInThrowawayFor(ctx, profiles, inv.Deps, base, logPath, running, &fresh)
 		if err != nil {
@@ -147,8 +151,11 @@ func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, i
 		// The stamp is the base's own (no other warm-up writes it), so it can be read after the lock is released.
 		// Unstamped, what this warm-up made ready still serves this run (a venv whose metadata failed).
 		var ok bool
-		if warmed, ok = readStamp(env.stampPath(inv.Deps, base, names), profiles); !ok {
+		stamp := env.stampPath(inv.Deps, base, names)
+		if warmed, ok = readStamp(stamp, profiles); !ok {
 			warmed = fresh
+		} else {
+			markUsed(stamp) // the base's dependencies' last use, for cleanup
 		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
@@ -345,7 +352,10 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	}
 	var warmed buildtool.Warmed
 	var notes []string
+	var used []string // what each command marks used (markUsed): a validation can outlast cleanup's grace
 	if deps, names := env.depsFolder(), buildtool.NeedsWarming(profiles); deps != "" && len(names) > 0 {
+		used = append(used, deps)
+		markUsed(deps) // before the warm-up, so a failed one counts as a use too
 		var fresh buildtool.Warmed
 		note, err := env.warmInThrowawayFor(ctx, profiles, deps, base, logPath, func(int) {}, &fresh)
 		switch {
@@ -355,8 +365,14 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 			return task.CheckoutCommands{}, err
 		}
 		var ok bool
-		if warmed, ok = readStamp(env.stampPath(deps, base, names), profiles); !ok {
+		stamp := env.stampPath(deps, base, names)
+		if warmed, ok = readStamp(stamp, profiles); !ok {
 			warmed = fresh
+		} else {
+			used = append(used, stamp) // the base's dependencies' last use, for cleanup
+		}
+		for _, p := range used {
+			markUsed(p)
 		}
 		notes = append(notes, warmed.Notes...)
 		if note != "" {
@@ -389,6 +405,9 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		Sandboxed: sandboxed,
 		Environ:   runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
 		Env: func(dir string) []string {
+			for _, p := range used { // each command of each stage: last use stays fresh however long validation takes
+				markUsed(p)
+			}
 			return buildtool.CheckoutEnv(profiles, buildtool.AgentContext{Allowed: env.environ(), Environ: env.environ(), Repo: dir,
 				BuildCache: c.Layout.Cache, Deps: env.depsFolder(), Venv: warmed.Venv, Metadata: warmed.Metadata, ImportRoot: importRoot})
 		},

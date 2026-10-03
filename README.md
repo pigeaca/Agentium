@@ -77,6 +77,7 @@ Mined instructions need your review for solution leaks (`agentium task show NAME
 | `experiment new --judge` | Add an LLM second opinion; tests still decide |
 | `experiment new --judge-pairs` | Ask which arm fixed each task better (unvalidated, exploratory) |
 | `experiment new --b MODEL[:EFFORT]` | Compare two models or efforts on one context (`--b` decides the template) |
+| `clean` | Show the space unused grading seeds, dependencies and leftovers take; `--yes` frees it (free) |
 
 Everything else is in the [guide](docs/guide.md).
 
