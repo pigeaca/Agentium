@@ -24,7 +24,10 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
   (the status line); `AGENTIUM_RECORD_PACE` is the stand-in's seconds a run, `AGENTIUM_RECORD_COST` the second
   context's cost a run. `console-run-dashboard.svg` is
   `AGENTIUM_RECORD_PACE=2 AGENTIUM_RECORD_COST=0.25`, then `frames2svg.py "…" 80 34 "…" --from 31 --fps 8` (the checks
-  and the sandbox's revalidation, shown as "getting ready", take the first 30 seconds); its still is `--still 61.013`, and `console-run-log.svg` is
+  and the sandbox's revalidation, shown as "getting ready", take the first 30 seconds); its still is `--still 64.435`, and `console-run-log.svg` is
   the log view's `--still last` at 80 by 40.
 - `run-ab-events.ansi` holds the event lines recorded during the real `ab` run on 2026-09-29, which cannot be
   regenerated without paid runs. `console-run.svg` shows them above today's `experiment show ab`.
+- `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestDashboardMomentsGoldens -count=1` writes `sandbox-news.ans`
+  (a row whose grading sandbox could not start, and one left out for flagged denials, from the test scenes: the stand-in
+  cannot make the real sandbox fail); `console-run-sandbox-news.svg` is it through `ansi2svg.py`, at 80 columns.
