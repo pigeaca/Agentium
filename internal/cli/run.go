@@ -159,7 +159,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	defer release()
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
 		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
-		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep})
+		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep, HarmlessDenials: harmlessFor(t, mode)})
 	live.Stop()
 	if err != nil {
 		return fail(env, err)
@@ -169,6 +169,14 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	}
 	printRun(env, rec)
 	return ExitOK
+}
+
+// harmlessFor is the flagged denials t's reference logged while passing its last validation, when that ran in mode.
+func harmlessFor(t store.Task, mode string) []task.DenialKey {
+	if v := task.ValidationOf(t); task.GraderOf(v.Grader) == task.GraderOf(mode) {
+		return v.Harmless
+	}
+	return nil
 }
 
 // onceProfile reads run once's --model and --grader.

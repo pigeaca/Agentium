@@ -7,7 +7,10 @@ import (
 	"math/rand/v2"
 	"slices"
 
+	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
+	"github.com/pigeaca/agentium/internal/task"
 )
 
 // RunData is what the analysis reads from one stored run of an experiment. Runs come in the order they started: the
@@ -120,6 +123,74 @@ type Analysis struct {
 	// Sequential is a seq-v1 experiment's looks. Every other field then describes the runs of the reported look's
 	// stages only (or every run, before any look was analysed).
 	Sequential *SeqStatus `json:"sequential,omitempty"`
+	// Sandbox is the per-arm check of runs left out for flagged sandbox denials (sandbox-mode experiments only).
+	Sandbox *SandboxCheck `json:"sandbox,omitempty"`
+}
+
+// SandboxCheck counts, per arm, the runs left out because their sandboxed grade failed with denials the agent's own
+// sandbox does not impose (run.OutcomeSandboxFlagged), against the counted pairs. Such runs settle without a retry, so
+// an arm cannot re-roll its failures; but an arm whose code trips the sandbox more often would lose its failures from
+// the count. So when the arms differ (Imbalanced) the cost and success verdicts are demoted to inconclusive, and AsFails
+// says what they would be with those runs counted as failures (a sensitivity check).
+type SandboxCheck struct {
+	Flagged    map[string]int `json:"flagged"` // runs left out per arm
+	Pairs      int            `json:"pairs"`   // pairs with a counted run in both arms
+	Imbalanced bool           `json:"imbalanced"`
+	// AsFails maps each metric with a verdict (cost, success) to its verdict with the left-out runs counted as fails;
+	// only when Imbalanced.
+	AsFails map[string]string `json:"as_fails,omitempty"`
+}
+
+// imbalanced reports whether flagged exclusions differ between arms a and b enough to demote the verdicts: one arm has
+// some and the other none, or they differ by more than max(1, 10% of the counted pairs).
+func (c SandboxCheck) imbalanced(a, b string) bool {
+	fa, fb := c.Flagged[a], c.Flagged[b]
+	if (fa > 0) != (fb > 0) {
+		return true
+	}
+	return math.Abs(float64(fa-fb)) > math.Max(1, 0.1*float64(c.Pairs))
+}
+
+// sandboxCheck counts the flagged exclusions per arm and the counted pairs (by the lock's schedule) in runs; nil for an
+// experiment that does not grade in the sandbox.
+func sandboxCheck(l Lock, runs []RunData) *SandboxCheck {
+	if task.GraderOf(l.Grader) == task.GraderHost {
+		return nil
+	}
+	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	c := &SandboxCheck{Flagged: map[string]int{a: 0, b: 0}}
+	counted := map[int]map[string]bool{} // pair: arms with a counted run
+	for _, r := range runs {
+		switch {
+		case r.Outcome == run.OutcomeSandboxFlagged:
+			c.Flagged[r.Arm]++
+		case Fair(r.Outcome) && r.Slot >= 0 && r.Slot < len(l.Schedule):
+			pair := l.Schedule[r.Slot].Pair
+			if counted[pair] == nil {
+				counted[pair] = map[string]bool{}
+			}
+			counted[pair][r.Arm] = true
+		}
+	}
+	for _, arms := range counted {
+		if arms[a] && arms[b] {
+			c.Pairs++
+		}
+	}
+	c.Imbalanced = c.imbalanced(a, b)
+	return c
+}
+
+// asFails is runs with the flagged exclusions counted as fair failures, at their cost.
+func asFails(runs []RunData) []RunData {
+	out := slices.Clone(runs)
+	failed := false
+	for i, r := range out {
+		if r.Outcome == run.OutcomeSandboxFlagged {
+			out[i].Outcome, out[i].Passed = claude.OutcomeOK, &failed
+		}
+	}
+	return out
 }
 
 type metric struct {
@@ -149,6 +220,8 @@ type lookLevels struct {
 	eff, eq   float64
 	look      int  // from 1: each look draws its own bootstrap streams
 	noVerdict bool // no look was analysed: the primary metric gets no verdict
+	// noSandboxCheck skips the per-arm check of flagged exclusions (SandboxCheck): its own sensitivity analysis.
+	noSandboxCheck bool
 }
 
 // analyze is Analyze at lv's levels; it also returns the primary metric's t-statistic (0 without one).
@@ -254,7 +327,44 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	}
 	out.NotDiscriminating = stats.NotDiscriminating(success, a, b)
 	out.Noise = noise(tables[MetricCost], success, a, b, l.Design)
+	if !lv.noSandboxCheck {
+		if err := demote(l, runs, lv, &out); err != nil {
+			return Analysis{}, 0, err
+		}
+	}
 	return out, primaryZ, nil
+}
+
+// demote runs the per-arm check of flagged exclusions (sandboxCheck): when the arms differ, every cost and success
+// verdict becomes inconclusive, with a note, and the check records what they would be with those runs counted as
+// failures. A seq-v1 look is analysed here too, so it never stops on a verdict this demotes.
+func demote(l Lock, runs []RunData, lv lookLevels, out *Analysis) error {
+	c := sandboxCheck(l, runs)
+	out.Sandbox = c
+	if c == nil || !c.Imbalanced {
+		return nil
+	}
+	lv.noSandboxCheck = true
+	sens, _, err := analyze(l, asFails(runs), lv)
+	if err != nil {
+		return err
+	}
+	c.AsFails = map[string]string{}
+	for _, r := range sens.Results {
+		if r.Role != RoleSecondary {
+			c.AsFails[r.Metric] = r.Verdict
+		}
+	}
+	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	for i, r := range out.Results {
+		if r.Role == RoleSecondary || r.Verdict == stats.Exploratory {
+			continue
+		}
+		out.Results[i].Verdict = stats.Inconclusive
+		out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: the arms' runs left out for sandbox denials differ (%s %d, %s %d); "+
+			"counting them as fails gives %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric])
+	}
+	return nil
 }
 
 func halfWidth(i stats.Interval) float64 { return (i.High - i.Low) / 2 }

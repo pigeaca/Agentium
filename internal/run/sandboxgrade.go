@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -26,6 +28,12 @@ import (
 //
 // The denials the kernel logged under the grade's tag are read afterwards (sandbox.ReadDenials). A grade that failed
 // with denials the agent's own sandbox does not impose is infrastructure too (decision 3); a pass stays a pass.
+
+// OutcomeSandboxFlagged is the outcome of a run whose sandboxed grade failed with denials the agent's own sandbox does
+// not impose (decision 3, as the user decided on 2026-10-03): the failure may be the sandbox's, so the run is not
+// counted; and it is not tried again either, since a retry would let an arm re-roll its failures. It settles its slot
+// as an unfair run does (experiment.Settles). A canary or usability failure stays ordinary infrastructure, retried.
+const OutcomeSandboxFlagged = "infra-sandbox"
 
 // DenialsWait bounds the wait for a grade's denials to reach the unified log.
 const DenialsWait = 10 * time.Second
@@ -68,6 +76,9 @@ type sandboxGrade struct {
 	// Base is the task's base commit, a full ID: the seed's.
 	Base     string
 	Commands []string
+	// Harmless are the flagged denials the task's reference solution logged while passing its validation in the
+	// sandbox (task.Validation.Harmless): not flagged here.
+	Harmless []task.DenialKey
 	Timeout  time.Duration
 	Log      io.Writer
 	Running  func(pid int)
@@ -154,7 +165,7 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 		case err != nil:
 			report.Unread = err.Error()
 		default:
-			classify(report, written, denials)
+			classify(report, written, denials, g.Root, in.Harmless)
 		}
 		return nil
 	})
@@ -165,23 +176,44 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 }
 
 // classify counts a grade's denials, noise left out, and keeps the first task.MaxDenials, and those the agent's own
-// sandbox does not impose.
-func classify(report *task.SandboxGrade, p sandbox.Profile, denials []sandbox.Denial) {
+// sandbox does not impose (flagged), except those in harmless (the task's reference logged them while passing). Each
+// kept denial's target has the grade's folder (root, in every form) written as task.GradeFolder, so denials of two
+// grades of a task compare.
+func classify(report *task.SandboxGrade, p sandbox.Profile, denials []sandbox.Denial, root string, harmless []task.DenialKey) {
 	for _, d := range denials {
 		if d.Noise() {
 			continue
 		}
+		d.Target = inGrade(d.Target, root)
 		report.DenialCount += max(d.Repeats, 1)
 		if len(report.Denials) < task.MaxDenials {
 			report.Denials = append(report.Denials, d)
 		}
-		if p.Flagged(d) {
-			report.FlaggedCount += max(d.Repeats, 1)
-			if len(report.Flagged) < task.MaxDenials {
-				report.Flagged = append(report.Flagged, d)
-			}
+		if !p.Flagged(d) {
+			continue
+		}
+		if slices.Contains(harmless, task.KeyOf(d)) {
+			report.Harmless += max(d.Repeats, 1)
+			continue
+		}
+		report.FlaggedCount += max(d.Repeats, 1)
+		if len(report.Flagged) < task.MaxDenials {
+			report.Flagged = append(report.Flagged, d)
 		}
 	}
+}
+
+// inGrade writes the grade's folder root (in any of its forms) in target as task.GradeFolder.
+func inGrade(target, root string) string {
+	if root == "" {
+		return target
+	}
+	for _, form := range sandbox.Forms(root) {
+		if target == form || strings.HasPrefix(target, form+"/") {
+			return task.GradeFolder + strings.TrimPrefix(target, form)
+		}
+	}
+	return target
 }
 
 // lock makes the grade's folder read-only (0500) while the grade runs, so the grade cannot rename or remove its copy,
@@ -214,5 +246,6 @@ func gradeInfraNote(report *task.SandboxGrade, err error) string {
 		return "the grading sandbox is unavailable, so nothing was graded (counted as infrastructure: retried or left out): " + err.Error()
 	}
 	return fmt.Sprintf("the verification failed in the grading sandbox with %d denial(s) the agent's own sandbox does not impose (%s), "+
-		"so the failure may be the sandbox's: counted as infrastructure (retried or left out)", report.FlaggedCount, report.FlaggedOperations())
+		"so the failure may be the sandbox's: left out (%s), not counted and not tried again", report.FlaggedCount, report.FlaggedOperations(),
+		OutcomeSandboxFlagged)
 }

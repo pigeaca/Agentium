@@ -746,8 +746,8 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	}
 	rec, err := r.ExecuteRun(ctx, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.ArmModel(arm.Arm), Effort: design.ArmEffort(arm.Arm),
-		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm),
-		Timeout:   design.Timeout, Judge: design.Judge})
+		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm), HarmlessDenials: lock.Harmless[t.Name],
+		Timeout: design.Timeout, Judge: design.Judge})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
@@ -1013,6 +1013,12 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 		}
 		l.Tasks = append(l.Tasks, NewLockedTask(t.Name, t.Instruction, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit,
 			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}))
+		if v := task.ValidationOf(t); l.Grader != task.GraderHost && v.Grader == l.Grader && len(v.Harmless) > 0 {
+			if l.Harmless == nil {
+				l.Harmless = map[string][]task.DenialKey{}
+			}
+			l.Harmless[t.Name] = v.Harmless
+		}
 	}
 	return l, nil
 }

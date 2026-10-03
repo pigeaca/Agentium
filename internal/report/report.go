@@ -540,11 +540,12 @@ func notes(rep Report, in Input) []string {
 	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
-		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, claude.OutcomeCancelled}
+		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled}
 		for _, outcome := range known {
 			if n := a.Excluded[outcome]; n > 0 {
 				parts = append(parts, fmt.Sprintf("%d %s", n, map[string]string{claude.OutcomeUnfair: "unfair (the environment drifted)",
-					claude.OutcomeInfra: plural(n, "infrastructure failure"), claude.OutcomeCancelled: "cancelled"}[outcome]))
+					claude.OutcomeInfra: plural(n, "infrastructure failure"), claude.OutcomeCancelled: "cancelled",
+					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)"}[outcome]))
 			}
 		}
 		for _, outcome := range slices.Sorted(func(yield func(string) bool) {
@@ -596,7 +597,7 @@ func notes(rep Report, in Input) []string {
 	if len(drift) > 0 {
 		out = append(out, "Environment drift in unfair runs: "+strings.Join(drift, "; ")+".")
 	}
-	if note := sandboxNote(in.Runs); note != "" {
+	if note := sandboxNote(rep, in.Runs); note != "" {
 		out = append(out, note)
 	}
 	if note := cappedNote(rep); note != "" {
@@ -796,11 +797,13 @@ func wider(t, boot stats.Interval) string {
 	return "the wider of the t-interval and the bootstrap on each side"
 }
 
-// sandboxNote says what the grading sandbox did to the runs: those left out because it did not hold (the canary) or
-// because their failed grade had denials the agent's own sandbox does not impose (both infrastructure, retried or left
-// out), and the passing grades with such denials, which stay passes. Empty when no run was graded in the sandbox.
-func sandboxNote(runs []Run) string {
-	canary, flaggedFails, flaggedPasses, unread, graded := 0, 0, 0, 0, 0
+// sandboxNote says what the grading sandbox did to the runs: grades that did not run because it did not hold (the
+// canary: infrastructure, retried or left out), failed grades with denials the agents' own sandbox does not impose
+// (left out, not tried again: run.OutcomeSandboxFlagged), counted per arm against the counted pairs, with the
+// demotion when the arms differ (experiment.SandboxCheck), passing grades with such denials, and unread denials.
+// Empty when no run was graded in the sandbox.
+func sandboxNote(rep Report, runs []Run) string {
+	canary, flaggedPasses, unread, harmless, graded := 0, 0, 0, 0, 0
 	for _, r := range runs {
 		g := r.Record.Sandbox
 		if g == nil {
@@ -810,32 +813,64 @@ func sandboxNote(runs []Run) string {
 		switch {
 		case g.Canary != task.CanaryPassed:
 			canary++
-		case g.FlaggedCount > 0 && r.Record.Passed == nil:
-			flaggedFails++
-		case g.FlaggedCount > 0:
+		case g.FlaggedCount > 0 && r.Record.Outcome != run.OutcomeSandboxFlagged:
 			flaggedPasses++
 		}
 		if g.Unread != "" {
 			unread++
 		}
+		if g.Harmless > 0 {
+			harmless++
+		}
 	}
-	if graded == 0 || canary+flaggedFails+flaggedPasses+unread == 0 {
+	check := rep.Analysis.Sandbox
+	left := 0
+	if check != nil {
+		for _, n := range check.Flagged {
+			left += n
+		}
+	}
+	if graded == 0 || canary+flaggedPasses+unread+harmless+left == 0 {
 		return ""
 	}
 	var parts []string
 	if canary > 0 {
 		parts = append(parts, fmt.Sprintf("%d grade(s) did not run because the sandbox did not hold (its canary failed): infrastructure, retried or left out", canary))
 	}
-	if flaggedFails > 0 {
-		parts = append(parts, fmt.Sprintf("%d failed grade(s) logged denials the agents' own sandbox does not impose: infrastructure, retried or left out", flaggedFails))
+	if left > 0 {
+		var arms []string
+		for _, a := range rep.Arms {
+			arms = append(arms, fmt.Sprintf("%s %d", a.Name, check.Flagged[a.Name]))
+		}
+		part := fmt.Sprintf("failed grades with denials the agents' own sandbox does not impose were left out, not tried again (%s; %d counted pair(s)); "+
+			"a task left out in one arm drops out of the paired comparison, and the other arm's run of it counts only in that arm's own rates",
+			strings.Join(arms, ", "), check.Pairs)
+		if check.Imbalanced {
+			part += "; the arms differ, so the cost and success verdicts are demoted to inconclusive (" + asFailsText(check) + ")"
+		}
+		parts = append(parts, part)
 	}
 	if flaggedPasses > 0 {
 		parts = append(parts, fmt.Sprintf("%d passing grade(s) logged such denials and stay passes", flaggedPasses))
+	}
+	if harmless > 0 {
+		parts = append(parts, fmt.Sprintf("%d grade(s) logged denials the task's reference also logged while passing its validation, which count as harmless", harmless))
 	}
 	if unread > 0 {
 		parts = append(parts, fmt.Sprintf("the denials of %d grade(s) could not be read, so their results stand as the tests gave them", unread))
 	}
 	return "Grading sandbox: " + strings.Join(parts, "; ") + "."
+}
+
+// asFailsText is the sensitivity check in words: "counting them as fails gives cost improved, success inconclusive".
+func asFailsText(c *experiment.SandboxCheck) string {
+	var parts []string
+	for _, m := range []string{experiment.MetricCost, experiment.MetricSuccess} {
+		if v, ok := c.AsFails[m]; ok {
+			parts = append(parts, strings.ToLower(title(m))+" "+v)
+		}
+	}
+	return "counting them as fails gives " + strings.Join(parts, ", ")
 }
 
 // graderNote says where the experiment's runs were graded; empty for a lock made before grader modes (the host).

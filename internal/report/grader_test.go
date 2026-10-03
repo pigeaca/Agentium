@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
@@ -23,7 +24,7 @@ func TestReportShowsTheGrader(t *testing.T) {
 	in.Runs[0].Record.Outcome, in.Runs[0].Record.Passed = claude.OutcomeInfra, nil
 	in.Runs[1].Record.Grader, in.Runs[1].Record.Sandbox = task.GraderSandbox, &task.SandboxGrade{Canary: task.CanaryPassed, DenialCount: 2,
 		FlaggedCount: 1, Denials: []sandbox.Denial{flagged}, Flagged: []sandbox.Denial{flagged}}
-	in.Runs[1].Record.Outcome, in.Runs[1].Record.Passed = claude.OutcomeInfra, nil
+	in.Runs[1].Record.Outcome, in.Runs[1].Record.Passed = run.OutcomeSandboxFlagged, nil
 	passed := true
 	in.Runs[2].Record.Grader, in.Runs[2].Record.Sandbox = task.GraderSandbox, &task.SandboxGrade{Canary: task.CanaryPassed, DenialCount: 1,
 		FlaggedCount: 1, Flagged: []sandbox.Denial{flagged}}
@@ -39,7 +40,7 @@ func TestReportShowsTheGrader(t *testing.T) {
 	for name, out := range map[string]string{"Markdown": md.String(), "terminal": txt.String(), "JSON": js.String()} {
 		for _, want := range []string{"Graded in Agentium's grading sandbox (sandbox-v1)", "localhost is every address of the machine",
 			"Grading sandbox: 1 grade(s) did not run because the sandbox did not hold (its canary failed): infrastructure, retried or left out; " +
-				"1 failed grade(s) logged denials the agents' own sandbox does not impose: infrastructure, retried or left out; 1 passing grade(s) " +
+				"failed grades with denials the agents' own sandbox does not impose were left out, not tried again (A ", "1 passing grade(s) " +
 				"logged such denials and stay passes."} {
 			if name != "JSON" && !strings.Contains(out, want) || name == "JSON" && strings.HasPrefix(want, "Grading sandbox") && !strings.Contains(out, want) {
 				t.Errorf("%s lacks %q", name, want)
@@ -68,5 +69,44 @@ func TestReportShowsTheGrader(t *testing.T) {
 	rep.Markdown(&md)
 	if strings.Contains(md.String(), "Graded") {
 		t.Error("a lock from before modes names one")
+	}
+}
+
+// Runs left out for flagged sandbox denials are counted per arm in every format; when the arms differ, the verdicts
+// are demoted to inconclusive and the report says what counting them as fails gives. Balanced arms keep their verdicts.
+func TestReportShowsFlaggedExclusionsPerArm(t *testing.T) {
+	in := fixture()
+	in.Lock.Grader = task.GraderSandbox
+	b := -1
+	for i, r := range in.Runs {
+		if r.Record.Arm == "B" && r.Record.Outcome == claude.OutcomeOK {
+			b = i
+			break
+		}
+	}
+	in.Runs[b].Record.Outcome, in.Runs[b].Record.Passed = run.OutcomeSandboxFlagged, nil
+	in.Runs[b].Record.Grader, in.Runs[b].Record.Sandbox = task.GraderSandbox, &task.SandboxGrade{Canary: task.CanaryPassed, FlaggedCount: 1,
+		Flagged: []sandbox.Denial{{Process: "java", Operation: "mach-lookup", Target: "com.apple.FontServer", Repeats: 1}}}
+	rep, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var md, txt, js bytes.Buffer
+	rep.Markdown(&md)
+	rep.Terminal(&txt, term.Style{})
+	rep.JSON(&js)
+	for name, out := range map[string]string{"Markdown": md.String(), "terminal": txt.String(), "JSON": js.String()} {
+		for _, want := range []string{"were left out, not tried again (A 0, B 1;", "the cost and success verdicts are demoted to inconclusive (counting them as fails gives cost",
+			"1 left out for sandbox denials (not tried again)"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
+	}
+	if !strings.Contains(md.String(), "demoted to inconclusive: the arms' runs left out for sandbox denials differ (A 0, B 1)") {
+		t.Error("the headline does not say why the verdict is inconclusive")
+	}
+	if !strings.Contains(js.String(), `"imbalanced": true`) || !strings.Contains(js.String(), `"as_fails"`) {
+		t.Error("the JSON analysis lacks the sandbox check")
 	}
 }

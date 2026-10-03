@@ -43,7 +43,9 @@ func TestGraderModes(t *testing.T) {
 // command fails and flag is set, or the sandbox unavailable when down is set.
 type fakeSandbox struct {
 	flag, down bool
-	roots      []string
+	// always flags the denial in every grade, passing ones too (the reference's toolchain makes it).
+	always bool
+	roots  []string
 }
 
 func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error) {
@@ -78,7 +80,7 @@ func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, comm
 		}
 	}
 	g := &SandboxGrade{Canary: CanaryPassed, Profile: "digest"}
-	if f.flag && !ok {
+	if f.flag && !ok || f.always {
 		d := sandbox.Denial{Process: "java", Operation: "mach-lookup", Target: "com.apple.FontServer", Repeats: 1}
 		g.DenialCount, g.FlaggedCount, g.Denials, g.Flagged = 1, 1, []sandbox.Denial{d}, []sandbox.Denial{d}
 	}
@@ -132,17 +134,31 @@ func TestValidateInTheSandbox(t *testing.T) {
 		t.Errorf("on the host: %s (grader %q, sandbox calls %d), %v", result.Summary(), result.Grader, len(host.roots), err)
 	}
 
-	// The hidden-tests stage wants a failure, but a failure with flagged denials may be the sandbox's.
+	// The hidden-tests stage wants a failure, but a failure with flagged denials may be the sandbox's: the reference
+	// stage still runs, and passing without them shows they were not the toolchain's.
 	flagged := &fakeSandbox{flag: true}
 	v, progress := validator(t, f.bare)
 	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, []string, string) (CheckoutCommands, error) {
 		return CheckoutCommands{Sandboxed: flagged.run}, nil
 	}
 	result, err = v.Validate(ctx, spec, arms)
-	if err != nil || result.Status != StatusInvalid || result.Stages[0].OK || len(result.Stages) != 1 ||
+	if err != nil || result.Status != StatusInvalid || result.Stages[0].OK || len(result.Stages) != 2 || len(result.Harmless) != 0 ||
 		!strings.Contains(result.Summary(), "base/hidden-tests failed with sandbox denials the agent's sandbox does not impose (mach-lookup)") ||
 		!strings.Contains(progress.String(), "NOT OK (sandbox denials: mach-lookup)") {
 		t.Errorf("flagged: %s, %v\n%s", result.Summary(), err, progress.String())
+	}
+
+	// When the reference logs the same flagged denials while passing, they are the task's toolchain's: the hidden-tests
+	// failure stands as wanted, and the validation keeps them as harmless for later grades of the task.
+	always := &fakeSandbox{always: true}
+	v, progress = validator(t, f.bare)
+	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, []string, string) (CheckoutCommands, error) {
+		return CheckoutCommands{Sandboxed: always.run}, nil
+	}
+	result, err = v.Validate(ctx, spec, arms)
+	if err != nil || result.Status != StatusValid || !slices.Equal(result.Harmless, []DenialKey{{Operation: "mach-lookup", Target: "com.apple.FontServer"}}) ||
+		!strings.Contains(progress.String(), "ok: its sandbox denials are the reference's too") {
+		t.Errorf("harmless: %s, harmless %v, %v\n%s", result.Summary(), result.Harmless, err, progress.String())
 	}
 
 	down := &fakeSandbox{down: true}

@@ -194,8 +194,8 @@ func TestOnceFlaggedDenials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeInfra || rec.Passed != nil || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 ||
-		rec.Sandbox.FlaggedOperations() != "mach-lookup" || !strings.Contains(strings.Join(rec.Notes, "\n"), "counted as infrastructure") {
+	if rec.Outcome != OutcomeSandboxFlagged || rec.Passed != nil || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 ||
+		rec.Sandbox.FlaggedOperations() != "mach-lookup" || !strings.Contains(strings.Join(rec.Notes, "\n"), "not counted and not tried again") {
 		t.Errorf("a flagged failure: %s, passed %v, sandbox %+v, notes %v", rec.Outcome, rec.Passed, rec.Sandbox, rec.Notes)
 	}
 	for _, n := range rec.Notes { // shared notes never carry what the grade chose
@@ -211,6 +211,18 @@ func TestOnceFlaggedDenials(t *testing.T) {
 	}
 	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 {
 		t.Errorf("a flagged pass: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
+	}
+
+	// The same denial, logged by the task's reference while passing its validation, is harmless for the task: a failed
+	// grade with it is the agent's fail.
+	f = newOnceFixture(t, "", lookup+"grep -q new value.txt\n")
+	f.spec.HarmlessDenials = []task.DenialKey{{Operation: "mach-lookup", Target: "com.apple.SecurityServer"}}
+	rec, err = Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount != 0 || rec.Sandbox.Harmless == 0 {
+		t.Errorf("a harmless denial: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
 	}
 }
 

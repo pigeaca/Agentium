@@ -54,6 +54,9 @@ type Spec struct {
 	// the resolver finds it) before the context commit: calibration asks the agent to repeat it, which proves that
 	// file really loads.
 	Probe string
+	// HarmlessDenials are the flagged denials the task's reference logged while passing its validation in the sandbox
+	// (task.Validation.Harmless, as the experiment's lock fixed them): a sandboxed grade does not flag them.
+	HarmlessDenials []task.DenialKey
 	// Judge, when set, has the judge give a graded run a verdict (Env.Judge), after grading and inside the run, so the
 	// experiment's concurrency bounds the calls too. It never changes the run's outcome or result.
 	Judge *judge.Settings
@@ -755,11 +758,11 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			return err
 		}
 		failed = !ok
-		if rec.Sandbox.FlaggedFailure(ok) { // decision 3: a failure the sandbox may have caused is not the agent's result
-			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+		if rec.Sandbox.FlaggedFailure(ok) { // decision 3: a failure the sandbox may have caused is not counted, nor tried again
+			rec.Outcome, rec.Passed = OutcomeSandboxFlagged, nil
 			note := gradeInfraNote(rec.Sandbox, nil)
 			rec.Notes = append(rec.Notes, note)
-			env.progress("  verification: %s", env.Style.Warn("infrastructure: "+note))
+			env.progress("  verification: %s", env.Style.Warn("left out: "+note))
 			return nil
 		}
 	} else if !failed {
@@ -801,7 +804,7 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 	// share: a process name or a file name in a warning is the grade's choice.
 	warnings := 0
 	in := sandboxGrade{Root: filepath.Join(rec.RecordsDir, gradingFolder), Copy: graded, Agent: *env.gradeAgent, Base: env.gradeBase,
-		Commands: spec.Task.Verify, Timeout: env.VerifyTimeout, Log: log, Running: running,
+		Commands: spec.Task.Verify, Harmless: spec.HarmlessDenials, Timeout: env.VerifyTimeout, Log: log, Running: running,
 		Warn: func(w string) {
 			warnings++
 			fmt.Fprintf(log, "[agentium] warning: %s\n", w)

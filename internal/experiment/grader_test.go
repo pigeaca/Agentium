@@ -9,8 +9,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -142,5 +145,128 @@ func TestResumeRefusesWhereTheSandboxIsUnusable(t *testing.T) {
 	r.Project = Project{Bare: t.TempDir()}
 	if _, err := r.resume(context.Background(), store.Experiment{Lock: encoded}, "old", "2.1.281"); err != nil {
 		t.Errorf("a host lock: %v", err)
+	}
+}
+
+// sandboxLock is lockFor in sandbox mode, with a schedule whose pairs are synthetic's: slots 2k (A) and 2k+1 (B).
+func sandboxLock(goal string, tasks, repeats int) Lock {
+	l := lockFor(goal, tasks, repeats)
+	l.Grader = task.GraderSandbox
+	for s := range 2 * tasks * repeats {
+		l.Schedule = append(l.Schedule, Slot{Position: s, Pair: s / 2, Arm: []string{"A", "B"}[s%2]})
+	}
+	return l
+}
+
+// leaveOut marks the runs at slots as left out for flagged sandbox denials.
+func leaveOut(runs []RunData, slots ...int) []RunData {
+	runs = slices.Clone(runs)
+	for _, s := range slots {
+		runs[s].Outcome, runs[s].Passed = run.OutcomeSandboxFlagged, nil
+	}
+	return runs
+}
+
+// Runs left out for flagged sandbox denials are counted per arm against the counted pairs. When the arms differ (one
+// has some, the other none, or they differ by more than max(1, 10% of the pairs)) the cost and success verdicts are
+// demoted to inconclusive, with what counting them as fails would give; balanced arms keep their verdicts, and so does
+// a host lock, whatever its runs.
+func TestSandboxCheckDemotesImbalancedArms(t *testing.T) {
+	runs := synthetic(24, 3, 1.0, 0.7, func(task, repeat int, _ string) bool { return (task+repeat)%3 != 0 })
+	l := sandboxLock(GoalCheaper, 24, 3)
+	if cost := result(t, mustAnalyze(t, l, runs), MetricCost); cost.Verdict != stats.Improved {
+		t.Fatalf("no exclusions: %+v", cost)
+	}
+
+	imbalanced := mustAnalyze(t, l, leaveOut(runs, 1, 3)) // two of B's runs (odd slots)
+	c := imbalanced.Sandbox
+	if c == nil || c.Flagged["A"] != 0 || c.Flagged["B"] != 2 || c.Pairs != 70 || !c.Imbalanced {
+		t.Fatalf("the check: %+v", c)
+	}
+	for _, m := range []string{MetricCost, MetricSuccess} {
+		r := result(t, imbalanced, m)
+		if r.Verdict != stats.Inconclusive || !strings.Contains(r.Note, "demoted to inconclusive") ||
+			!strings.Contains(r.Note, "(A 0, B 2)") || !strings.Contains(r.Note, "counting them as fails gives "+c.AsFails[m]) {
+			t.Errorf("%s: %+v", m, r)
+		}
+	}
+	if c.AsFails[MetricCost] != stats.Improved {
+		t.Errorf("the sensitivity check: %v", c.AsFails)
+	}
+
+	balanced := mustAnalyze(t, l, leaveOut(runs, 0, 3)) // one each
+	if c := balanced.Sandbox; c == nil || c.Imbalanced || c.Flagged["A"] != 1 || c.Flagged["B"] != 1 || len(c.AsFails) != 0 {
+		t.Errorf("balanced: %+v", c)
+	}
+	if cost := result(t, balanced, MetricCost); cost.Verdict != stats.Improved {
+		t.Errorf("balanced arms keep the verdict: %+v", cost)
+	}
+	// More than max(1, 10% of 68 pairs) apart: 9 against 1.
+	var nine []int
+	for k := range 9 {
+		nine = append(nine, 2*k+1)
+	}
+	if c := mustAnalyze(t, l, leaveOut(runs, append(nine, 40)...)).Sandbox; c == nil || !c.Imbalanced {
+		t.Errorf("9 against 1: %+v", c)
+	}
+	if c := mustAnalyze(t, l, leaveOut(runs, 1, 3, 5, 0)).Sandbox; c == nil || c.Imbalanced {
+		t.Errorf("3 against 1 on about 70 pairs: %+v", c)
+	}
+
+	host := lockFor(GoalCheaper, 24, 3)
+	if a := mustAnalyze(t, host, leaveOut(runs, 1, 3)); a.Sandbox != nil || result(t, a, MetricCost).Verdict != stats.Improved {
+		t.Errorf("a host lock: %+v", a.Sandbox)
+	}
+}
+
+// A seq-v1 look runs the same check, so it never stops early on a verdict the check demotes.
+func TestSeqLookDoesNotStopOnADemotedVerdict(t *testing.T) {
+	l := seqLock(t, seqDesign(16))
+	l.Grader = task.GraderSandbox
+	runs := seqRuns(l, 24, 0.5) // two stages: 12 tasks
+	if status, _, err := SequentialStatus(l, runs); err != nil || status.Ended != LookStop {
+		t.Fatalf("without exclusions the first look stops: %+v, %v", status, err)
+	}
+	for i, r := range runs {
+		if r.Arm == "B" {
+			runs[i].Outcome, runs[i].Passed = run.OutcomeSandboxFlagged, nil
+			break
+		}
+	}
+	status, an, err := SequentialStatus(l, runs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Ended == LookStop || status.Reported != 2 || an.Sandbox == nil || !an.Sandbox.Imbalanced || costResult(t, an).Verdict != stats.Inconclusive {
+		t.Errorf("status %+v, check %+v", status, an.Sandbox)
+	}
+}
+
+// A run left out for flagged sandbox denials settles its slot at once: the scheduler does not try it again, so an
+// arm cannot re-roll its failures. A canary failure (ordinary infrastructure) is still retried.
+func TestFlaggedFailureSettlesWithoutARetry(t *testing.T) {
+	if !Settles(run.OutcomeSandboxFlagged) || Fair(run.OutcomeSandboxFlagged) || Settles(claude.OutcomeInfra) {
+		t.Fatal("Settles or Fair")
+	}
+	d := validDesign()
+	d.Tasks, d.Repeats = []string{"t1"}, 1
+	attempts := map[int]int{}
+	sum, err := Execute(context.Background(), Plan{Schedule: Schedule(d), Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: MaxAttempts,
+		Backoff: func(int) time.Duration { return 0 }}, func(_ context.Context, s Slot, _ int, _ []int) (Result, error) {
+		attempts[s.Position]++
+		if s.Arm == "B" {
+			return Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.2}, nil
+		}
+		if attempts[s.Position] == 1 {
+			return Result{Outcome: claude.OutcomeInfra}, nil // a canary failure: tried again
+		}
+		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := slices.IndexFunc(Schedule(d), func(s Slot) bool { return s.Arm == "B" })
+	if attempts[b] != 1 || attempts[1-b] != 2 || sum.Settled != 2 {
+		t.Errorf("attempts %v, summary %+v", attempts, sum)
 	}
 }

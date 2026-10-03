@@ -305,6 +305,9 @@ func headlineParts(res experiment.MetricResult, d experiment.Design) (bold, mid,
 		if res.TasksToResolve > 0 {
 			verdict += fmt.Sprintf(" (about %d tasks would resolve it; this experiment has %d)", res.TasksToResolve, res.Tasks)
 		}
+		if res.Note != "" { // demoted by the per-arm sandbox check
+			verdict += " (" + res.Note + ")"
+		}
 	case stats.Exploratory:
 		verdict = "exploratory: too few tasks or runs for a verdict"
 		if res.Note != "" { // a seq-v1 experiment before its first look

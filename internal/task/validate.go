@@ -116,6 +116,10 @@ type Validation struct {
 	// Grader is the mode the stages' verification ran in (GraderHost or GraderSandbox); empty in validations made before
 	// modes, which ran on the host (GraderOf). An experiment takes only tasks validated in its own mode.
 	Grader string `json:"grader,omitempty"`
+	// Harmless are the flagged denials (DenialKey) the reference stages logged while passing in the sandbox, in every
+	// arm: shown harmless for this task and toolchain, so a later grade's denial among them is not flagged. Absent in
+	// host validations and those made before it was kept: then every flagged denial counts.
+	Harmless []DenialKey `json:"harmless_denials,omitempty"`
 }
 
 // SandboxGrade is what a sandboxed grade reports beside its commands' results (a run's record, a validation stage).
@@ -136,7 +140,24 @@ type SandboxGrade struct {
 	// Unread says why the denials could not be read (sandbox.ErrDenialsUnread); the result then stands as the tests gave
 	// it, since no flagged denial is known.
 	Unread string `json:"denials_unread,omitempty"`
+	// Harmless counts the denials that would be flagged but that the task's reference solution logged too while
+	// passing its validation in the sandbox (Validation.Harmless): shown harmless for this task, they are not flagged.
+	Harmless int `json:"harmless,omitempty"`
 }
+
+// DenialKey is a flagged denial as validation keeps it, to compare with later grades of the task: its operation and
+// target, a path inside the grade's own folder written from GradeFolder on (each grade's folder has its own path).
+type DenialKey struct {
+	Operation string `json:"operation"`
+	Target    string `json:"target,omitempty"`
+}
+
+// GradeFolder stands for a grade's own folder in a denial's target (KeyOf).
+const GradeFolder = "<grade>"
+
+// KeyOf is d's key. The grade's folder in its target is already written as GradeFolder (run's classify does that for
+// every denial it keeps).
+func KeyOf(d sandbox.Denial) DenialKey { return DenialKey{Operation: d.Operation, Target: d.Target} }
 
 // MaxDenials bounds the denials a SandboxGrade keeps: a grade chooses how many it causes.
 const MaxDenials = 20
@@ -292,6 +313,9 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			}
 		}
 	}
+	if v.sandboxed() {
+		result.Harmless = harmlessOf(result.Stages)
+	}
 	if v.WeakTests {
 		if solution == nil {
 			return result, ErrNoSolution
@@ -397,18 +421,68 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 			{StageReference, true, solutionFiles(append(slices.Clone(spec.HiddenTests), spec.Reference...))},
 		}
 	}
-	for _, s := range plan {
+	for i, s := range plan {
 		stage, err := v.runStageRepeated(ctx, spec, arm, s.name, s.want, snap, overlay, solution, s.files)
 		stages = append(stages, stage)
 		if err != nil {
 			return stages, overlay.HarnessChanged, kept, err
 		}
-		if !stage.OK {
+		// A hidden-tests stage that failed as wanted but with flagged sandbox denials goes on to the reference stage:
+		// denials the reference logs too while passing are harmless for this task (harmlessFailure).
+		if !stage.OK && !(s.name == StageHiddenTests && flaggedOnly(stage) && i+1 < len(plan)) {
 			break
+		}
+	}
+	if len(stages) == 2 && harmlessFailure(stages[0], stages[1]) {
+		stages[0].OK = true
+		if v.Progress != nil {
+			fmt.Fprintf(v.Progress, "  %-10s %-13s %s\n", arm.Name, StageHiddenTests,
+				v.Style.Status("ok: its sandbox denials are the reference's too, which passed with them"))
 		}
 	}
 	sort.Strings(kept)
 	return stages, overlay.HarnessChanged, kept, nil
+}
+
+// flaggedOnly reports whether a stage is not OK only for its flagged sandbox denials: it failed as a hidden-tests stage
+// wants, without a timeout, a setup failure or flaky runs, but with denials the agent's sandbox does not impose.
+func flaggedOnly(s Stage) bool {
+	return !s.OK && s.Want == "fail" && !s.Passed && !s.SetupFailed && !s.Flaky && !timedOut(s.Commands) && s.Sandbox.FlaggedFailure(false)
+}
+
+// harmlessFailure reports whether hidden, a hidden-tests stage not OK only for its flagged denials (flaggedOnly), failed
+// for its tests after all: the reference stage passed (OK) with every one of those denials (each kept, none beyond
+// task.MaxDenials). Then they are the task's toolchain's, not the sandbox's doing.
+func harmlessFailure(hidden, reference Stage) bool {
+	if hidden.Stage != StageHiddenTests || reference.Stage != StageReference || !flaggedOnly(hidden) || !reference.OK || !reference.Passed ||
+		reference.Sandbox == nil {
+		return false
+	}
+	listed := 0
+	for _, d := range hidden.Sandbox.Flagged {
+		listed += max(d.Repeats, 1)
+		if !slices.ContainsFunc(reference.Sandbox.Flagged, func(r sandbox.Denial) bool { return KeyOf(r) == KeyOf(d) }) {
+			return false
+		}
+	}
+	return listed == hidden.Sandbox.FlaggedCount // a list cut at MaxDenials proves nothing about the rest
+}
+
+// harmlessOf is the flagged denials the passing reference stages logged, each once, in stage order: shown harmless for
+// the task (Validation.Harmless).
+func harmlessOf(stages []Stage) []DenialKey {
+	var keys []DenialKey
+	for _, s := range stages {
+		if s.Stage != StageReference || !s.OK || !s.Passed || s.Sandbox == nil {
+			continue
+		}
+		for _, d := range s.Sandbox.Flagged {
+			if k := KeyOf(d); !slices.Contains(keys, k) {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys
 }
 
 // runStageRepeated runs a stage v.Repeats times (once by default), each in a fresh checkout, and folds the runs into one
@@ -578,7 +652,7 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 		got, verdict = "setup failed", "NOT OK"
 	case !stage.OK && timedOut(stage.Commands):
 		verdict = "NOT OK (timed out)"
-	case stage.Sandbox.FlaggedFailure(stage.Passed):
+	case !stage.OK && stage.Sandbox.FlaggedFailure(stage.Passed):
 		verdict = "NOT OK (sandbox denials: " + stage.Sandbox.FlaggedOperations() + ")"
 	case !stage.OK:
 		verdict = "NOT OK"
@@ -654,7 +728,7 @@ func (v Validation) Summary() string {
 			failed = append(failed, fmt.Sprintf("%s/%s setup failed", stage.Arm, stage.Stage))
 		case !stage.OK && timedOut(stage.Commands):
 			failed = append(failed, fmt.Sprintf("%s/%s timed out", stage.Arm, stage.Stage))
-		case stage.Sandbox.FlaggedFailure(stage.Passed):
+		case !stage.OK && stage.Sandbox.FlaggedFailure(stage.Passed):
 			failed = append(failed, fmt.Sprintf("%s/%s failed with sandbox denials the agent's sandbox does not impose (%s)", stage.Arm, stage.Stage,
 				stage.Sandbox.FlaggedOperations()))
 		case !stage.OK:
