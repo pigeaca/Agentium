@@ -38,8 +38,9 @@ func TestReportShowsTheGrader(t *testing.T) {
 	rep.JSON(&js)
 	for name, out := range map[string]string{"Markdown": md.String(), "terminal": txt.String(), "JSON": js.String()} {
 		for _, want := range []string{"Graded in Agentium's grading sandbox (sandbox-v1)", "localhost is every address of the machine",
-			"Grading sandbox: 1 grade(s) did not run because the sandbox did not hold (its canary failed); 1 failed grade(s) logged denials " +
-				"the agents' own sandbox does not impose; 1 passing grade(s) logged such denials and stay passes."} {
+			"Grading sandbox: 1 grade(s) did not run because the sandbox did not hold (its canary failed): infrastructure, retried or left out; " +
+				"1 failed grade(s) logged denials the agents' own sandbox does not impose: infrastructure, retried or left out; 1 passing grade(s) " +
+				"logged such denials and stay passes."} {
 			if name != "JSON" && !strings.Contains(out, want) || name == "JSON" && strings.HasPrefix(want, "Grading sandbox") && !strings.Contains(out, want) {
 				t.Errorf("%s lacks %q", name, want)
 			}

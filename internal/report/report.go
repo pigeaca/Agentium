@@ -824,10 +824,10 @@ func sandboxNote(runs []Run) string {
 	}
 	var parts []string
 	if canary > 0 {
-		parts = append(parts, fmt.Sprintf("%d grade(s) did not run because the sandbox did not hold (its canary failed)", canary))
+		parts = append(parts, fmt.Sprintf("%d grade(s) did not run because the sandbox did not hold (its canary failed): infrastructure, retried or left out", canary))
 	}
 	if flaggedFails > 0 {
-		parts = append(parts, fmt.Sprintf("%d failed grade(s) logged denials the agents' own sandbox does not impose", flaggedFails))
+		parts = append(parts, fmt.Sprintf("%d failed grade(s) logged denials the agents' own sandbox does not impose: infrastructure, retried or left out", flaggedFails))
 	}
 	if flaggedPasses > 0 {
 		parts = append(parts, fmt.Sprintf("%d passing grade(s) logged such denials and stay passes", flaggedPasses))
@@ -835,11 +835,7 @@ func sandboxNote(runs []Run) string {
 	if unread > 0 {
 		parts = append(parts, fmt.Sprintf("the denials of %d grade(s) could not be read, so their results stand as the tests gave them", unread))
 	}
-	note := "Grading sandbox: " + strings.Join(parts, "; ") + "."
-	if canary+flaggedFails > 0 {
-		note += " The first two are infrastructure failures: retried, or left out."
-	}
-	return note
+	return "Grading sandbox: " + strings.Join(parts, "; ") + "."
 }
 
 // graderNote says where the experiment's runs were graded; empty for a lock made before grader modes (the host).

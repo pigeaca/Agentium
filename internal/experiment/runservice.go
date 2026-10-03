@@ -89,8 +89,10 @@ type Runner struct {
 	// before a sandbox experiment locks, its tasks validated in another mode are validated in the sandbox (the isolation
 	// plan's decision 5). It reports progress to Out itself. nil: such tasks keep the experiment from locking.
 	Revalidate func(ctx context.Context, tasks []string, arms []task.Arm, grader string) error
-	Backoff    func(attempt int) time.Duration // nil: 30 seconds, then 2 minutes
-	Observer   Observer
+	// SandboxUsable checks that this machine can grade in a mode; nil: run.SandboxUsable (tests replace it).
+	SandboxUsable func(ctx context.Context, mode string) error
+	Backoff       func(attempt int) time.Duration // nil: 30 seconds, then 2 minutes
+	Observer      Observer
 	// Quiet says Out goes nowhere (a --json run): errors then must not point at output.
 	Quiet bool
 }
@@ -170,7 +172,7 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		d.BudgetUSD = o.Budget
 	}
 	fmt.Fprintln(out, r.Style.Heading(fmt.Sprintf("Checking experiment %s before its first run:", name)))
-	if err := SandboxUsableFor(ctx, d.Grader); err != nil { // its runs could not be graded: stop before anything is spent
+	if err := r.sandboxUsable(ctx, d.Grader); err != nil { // its runs could not be graded: stop before anything is spent
 		return Lock{}, err
 	}
 	if err := r.revalidate(ctx, d); err != nil {
@@ -255,10 +257,15 @@ func ValidationArms(arms []Arm) []task.Arm {
 	return out
 }
 
-// SandboxUsableFor checks that this Agentium can grade in mode (run.SandboxUsable), before an experiment locks or
-// resumes: a mode it knows, and for the sandbox, a sandbox-exec that works here.
-func SandboxUsableFor(ctx context.Context, mode string) error {
-	if err := run.SandboxUsable(ctx, mode); err != nil {
+// sandboxUsable checks that this Agentium can grade in mode (Runner.SandboxUsable, else run.SandboxUsable), before an
+// experiment locks or resumes: a mode it knows, and for the sandbox, a sandbox-exec that works here and a log that
+// shows its denials.
+func (r Runner) sandboxUsable(ctx context.Context, mode string) error {
+	usable := run.SandboxUsable
+	if r.SandboxUsable != nil {
+		usable = r.SandboxUsable
+	}
+	if err := usable(ctx, mode); err != nil {
 		return fmt.Errorf("the experiment grades %s: %w (with --grader host, a new experiment grades on the host)", task.DescribeGrader(mode), err)
 	}
 	return nil
@@ -360,7 +367,7 @@ func (r Runner) resume(ctx context.Context, stored store.Experiment, name, versi
 	if host := runtime.GOOS + "/" + runtime.GOARCH; host != lock.Host {
 		return Lock{}, fmt.Errorf("experiment %s cannot continue: its runs ran on %s, this is %s", name, lock.Host, host)
 	}
-	if err := SandboxUsableFor(ctx, lock.Grader); err != nil {
+	if err := r.sandboxUsable(ctx, lock.Grader); err != nil {
 		return Lock{}, fmt.Errorf("experiment %s cannot continue: %w", name, err)
 	}
 	if err := r.checkResumeLocalBinding(ctx, name, lock); err != nil {

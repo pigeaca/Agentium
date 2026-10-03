@@ -1,10 +1,13 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // logLine is one `log show --style ndjson` event with message.
@@ -131,5 +134,83 @@ func TestDenialFlagged(t *testing.T) {
 		if p.Flagged(d) {
 			t.Errorf("flagged: %+v", d)
 		}
+	}
+}
+
+// What the grade chooses (a process name, a target) cannot rewrite a denial's process ID or operation: a message that
+// can be split more than one way is Unparsed, without a process ID, never noise and always flagged. A target holding a
+// line break is kept whole. Only the kernel's own events count (processID 0).
+func TestParseDenialsResistsForgery(t *testing.T) {
+	tag := "agentium-0123456789abcdef"
+	p := Profile{Home: t.TempDir(), Data: "/data"}
+	line := func(pid any, message string) string {
+		b, _ := json.Marshal(map[string]any{"eventMessage": message, "timestamp": "2026-10-03 09:16:59.318613+0400", "processID": pid})
+		return string(b)
+	}
+	noPID, _ := json.Marshal(map[string]any{"eventMessage": "Sandbox: cat(7) deny(1) file-read-data /x\n" + tag})
+	out := strings.Join([]string{
+		line(0, "Sandbox: cat(4242) deny(1) mach-lookup x(99) deny(1) signal y\n"+tag),                         // a forged target
+		line(0, "Sandbox: a(1) deny(1) file-read-data(77) deny(1) mach-lookup com.apple.SecurityServer\n"+tag), // a forged name
+		line(0, "Sandbox: cat(5) deny(1) file-read-data /tmp/a\nb/hsperfdata_x\n"+tag),                         // a target with a line break
+		line(321, "Sandbox: cat(6) deny(1) file-read-data /x\n"+tag),                                           // not the kernel's
+		string(noPID),
+	}, "\n")
+	got := ParseDenials([]byte(out), tag)
+	if len(got) != 3 {
+		t.Fatalf("got %d denials: %+v", len(got), got)
+	}
+	for i, d := range got[:2] {
+		if d.Operation != Unparsed || d.PID != -1 || d.Noise() || !p.Flagged(d) {
+			t.Errorf("forged %d: %+v (noise %v, flagged %v)", i, d, d.Noise(), p.Flagged(d))
+		}
+	}
+	if d := got[2]; d.Process != "cat" || d.PID != 5 || d.Operation != "file-read-data" || d.Target != "/tmp/a\nb/hsperfdata_x" {
+		t.Errorf("a target with a line break: %+v", d)
+	}
+}
+
+// A log show that returns more than maxLogBytes fails the read instead of growing without bound.
+func TestCappedOutput(t *testing.T) {
+	var c capped
+	if _, err := c.Write(make([]byte, maxLogBytes)); err != nil || c.over {
+		t.Fatalf("at the cap: %v", err)
+	}
+	if _, err := c.Write([]byte{1}); err == nil || !c.over {
+		t.Error("past the cap: no error")
+	}
+}
+
+// The log is read until the end probe's denial is there: the kernel reports late, so a read without it may lack the
+// grade's own denials too. A denial that only claims the probe's process ID (another name) does not end the wait; a
+// probe that never shows is an error, not an empty list.
+func TestCollectDenialsWaitsForTheProbe(t *testing.T) {
+	early := Denial{Process: "cat", PID: 10, Operation: "file-read-data", Target: "/x"}
+	late := Denial{Process: "java", PID: 11, Operation: "mach-lookup", Target: "com.apple.FontServer"}
+	forged := Denial{Process: "evil", PID: 42, Operation: "file-read-data", Target: "/y"}
+	probe := Denial{Process: "test", PID: 42, Operation: "file-read-data", Target: "/profile.sb"}
+	canary := Denial{Process: "ls", PID: 7, Operation: "file-read-data", Target: "/data"}
+	calls := 0
+	source := func(context.Context, time.Time, string) ([]Denial, error) {
+		calls++
+		if calls < 3 {
+			return []Denial{canary, early, forged}, nil
+		}
+		return []Denial{canary, early, forged, late, probe}, nil
+	}
+	got, err := collectDenials(context.Background(), source, time.Now(), "tag", 42, "test", 5*time.Second, []int{7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || len(got) != 3 || got[0] != early || got[1] != forged || got[2] != late {
+		t.Errorf("after %d reads: %+v", calls, got)
+	}
+	never := func(context.Context, time.Time, string) ([]Denial, error) { return []Denial{early}, nil }
+	if _, err := collectDenials(context.Background(), never, time.Now(), "tag", 42, "test", 300*time.Millisecond, nil); !errors.Is(err, ErrDenialsUnread) {
+		t.Errorf("no probe: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := collectDenials(ctx, never, time.Now(), "tag", 42, "test", time.Minute, nil); !errors.Is(err, context.Canceled) {
+		t.Errorf("cancelled: %v", err)
 	}
 }

@@ -16,9 +16,7 @@ import (
 // another grade was denied.
 func TestReadDenials(t *testing.T) {
 	needSandbox(t)
-	if _, err := os.Stat(LogTool); err != nil {
-		t.Skipf("%s: %v", LogTool, err)
-	}
+	needLog(t)
 	g := newGrade(t, nil)
 	other := newGrade(t, nil)
 	since := time.Now()
@@ -62,6 +60,7 @@ func TestReadDenials(t *testing.T) {
 // sandbox (Agentium started from an agent's shell): a grade there would be infrastructure after the agent spent.
 func TestUsable(t *testing.T) {
 	needSandbox(t)
+	needLog(t)
 	if err := Usable(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -75,5 +74,14 @@ func TestUsable(t *testing.T) {
 	var exit *exec.ExitError
 	if !errors.As(err, &exit) || exit.ExitCode() != 3 || !strings.Contains(string(out), "inside another sandbox") {
 		t.Errorf("nested: %v %s", err, out)
+	}
+}
+
+// needLog skips unless this account's unified log shows the kernel's sandbox denials (LogReadable): not every account
+// or CI runner does, and there Usable refuses sandbox mode, so Usable refuses sandbox mode there.
+func needLog(t *testing.T) {
+	t.Helper()
+	if err := LogReadable(context.Background(), 15*time.Second); err != nil {
+		t.Skipf("the unified log does not show sandbox denials here: %v", err)
 	}
 }

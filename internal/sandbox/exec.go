@@ -46,9 +46,11 @@ func Wrap(spec runner.Spec, profileFile string) (runner.Spec, error) {
 	return spec, nil
 }
 
-// Usable checks that sandbox-exec exists and applies a profile here: it fails nested inside another sandbox
-// (Agentium run from an agent's shell) and outside macOS. It is a quick check before anything is spent, not the
-// canary, which every grade still runs. Errors wrap ErrUnavailable, except cancellation.
+// Usable checks, before anything is spent, that this machine can grade in the sandbox: sandbox-exec exists and applies a
+// profile here (it fails nested inside another sandbox, Agentium run from an agent's shell, and outside macOS), and
+// this account can read the kernel's sandbox denials from the unified log (LogReadable): without them a failed grade
+// could never be told from a sandbox failure (decision 3), so sandbox mode is refused rather than run blind. It is
+// not the canary, which every grade still runs. Errors wrap ErrUnavailable, except cancellation.
 func Usable(ctx context.Context) error {
 	if _, err := os.Stat(Exec); err != nil {
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
@@ -65,8 +67,18 @@ func Usable(ctx context.Context) error {
 		return fmt.Errorf("%w: sandbox-exec exited %d (%s): is Agentium running inside another sandbox?", ErrUnavailable, result.ExitCode,
 			strings.TrimSpace(out.String()))
 	}
+	if err := LogReadable(ctx, logReadableWait); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%w: the unified log does not show the sandbox's denials to this account (%v), so a failed grade could not be told "+
+			"from a sandbox failure: grade on the host (--grader host), or run Agentium from an account whose `log show` shows kernel messages", ErrUnavailable, err)
+	}
 	return nil
 }
+
+// logReadableWait bounds Usable's wait for its probe's denial in the log.
+const logReadableWait = 10 * time.Second
 
 // canaryTimeout bounds each canary probe: they start a few small system tools.
 const canaryTimeout = 30 * time.Second

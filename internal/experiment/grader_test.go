@@ -1,10 +1,17 @@
 package experiment
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/run"
+	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -97,5 +104,43 @@ func TestValidationArms(t *testing.T) {
 	got = ValidationArms(validDesign().Arms)
 	if !slices.Equal(got, []task.Arm{{Name: "base"}, {Name: "lean", Snapshot: "abc"}}) {
 		t.Errorf("a context A/B: %v", got)
+	}
+}
+
+// A sandbox experiment resumed on a machine that cannot grade in the sandbox now (nested, no sandbox-exec, a log that
+// hides its denials) is refused before any run: never graded on the host instead. A host lock resumes there.
+func TestResumeRefusesWhereTheSandboxIsUnusable(t *testing.T) {
+	lock := Lock{Method: MethodV2, ClaudeCode: "2.1.281", SignIn: "login", Host: runtime.GOOS + "/" + runtime.GOARCH, Grader: task.GraderSandbox}
+	encoded, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked []string
+	runs := 0
+	r := Runner{Out: io.Discard, SignIn: "login",
+		SandboxUsable: func(_ context.Context, mode string) error {
+			asked = append(asked, mode)
+			if task.GraderOf(mode) == task.GraderHost {
+				return nil
+			}
+			return errors.New("the grading sandbox is unavailable: nested")
+		},
+		ExecuteRun: func(context.Context, run.Env, RunMeta, run.Spec) (run.Record, error) {
+			runs++
+			return run.Record{}, nil
+		}}
+	_, err = r.resume(context.Background(), store.Experiment{Lock: encoded}, "boxed", "2.1.281")
+	if err == nil || !strings.Contains(err.Error(), "experiment boxed cannot continue") || !strings.Contains(err.Error(), "nested") ||
+		!strings.Contains(err.Error(), "--grader host") {
+		t.Errorf("resume: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != task.GraderSandbox || runs != 0 {
+		t.Errorf("asked %v, %d run(s)", asked, runs)
+	}
+	lock.Grader = ""
+	encoded, _ = json.Marshal(lock)
+	r.Project = Project{Bare: t.TempDir()}
+	if _, err := r.resume(context.Background(), store.Experiment{Lock: encoded}, "old", "2.1.281"); err != nil {
+		t.Errorf("a host lock: %v", err)
 	}
 }

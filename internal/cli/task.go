@@ -1122,7 +1122,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 			st.Command("task edit "+t.Name+" --reviewed"))
 	}
 	if env.JSON {
-		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview,
+		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview, Grader: task.GraderOf(result.Grader),
 			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, Warnings: []string{},
 			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
 				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}

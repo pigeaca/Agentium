@@ -215,6 +215,8 @@ func (v Validator) tryWithout(ctx context.Context, spec Spec, h Hunk, n int, bas
 	if err := h.undo(dir, base, solution); err != nil {
 		return false, false, err
 	}
+	// In sandbox mode a try that fails because of the sandbox (a flagged denial) counts as a failure, so its hunk reads
+	// as tested: the weak-tests check is a warning, and a hunk wrongly called tested only hides one.
 	commands, passed, _, err := v.verify(ctx, log, dir, label, spec.Verify)
 	if err != nil {
 		return false, false, err

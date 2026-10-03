@@ -449,9 +449,7 @@ func TestSandboxRunsGoTests(t *testing.T) {
 // file denies alone do not prove. The keychain probe searches for a made-up service name: nothing real is asked for.
 func TestSandboxDenialsAreLoggedWithTheTag(t *testing.T) {
 	needSandbox(t)
-	if _, err := os.Stat("/usr/bin/log"); err != nil {
-		t.Skipf("/usr/bin/log: %v", err)
-	}
+	needLog(t)
 	g := newGrade(t, nil)
 	since := time.Now().Add(-2 * time.Second).Format("2006-01-02 15:04:05")
 	g.sh("/usr/bin/security find-generic-password -s agentium-made-up-" + g.profile.Tag + " >/dev/null 2>&1")

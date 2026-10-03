@@ -451,7 +451,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// tests run with the same settings for the agent and for grading.
 	inv.Venv, inv.ProjectMetadata, inv.ImportRoot = warmed.Venv, warmed.Metadata, importRoot
 	env = env.withCheckoutTools(profiles, inv.Deps, warmed, importRoot)
-	env.gradeAgent = &inv // a copy as it stands: the agent's folders, tools and denied paths
+	// A pointer to the run's invocation, not a copy: the grade reads it after the agent ran, by when only Started has
+	// changed (which the grade does not use); its folders, tools and denied paths are the agent's.
+	env.gradeAgent = &inv
 	rec.Notes = append(rec.Notes, buildtool.MissingRunners(ctx, warmed.Venv, spec.Task.Verify, env.environ())...)
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is

@@ -175,8 +175,8 @@ type validatedDoc struct {
 	Judge          *judgeCheckDoc      `json:"judge"` // judge-graded tasks only
 	// Warnings are what the verify commands keep from grading (task.Validation.Warnings); they never change the status.
 	Warnings []string `json:"warnings"`
-	// Grader is where the stages' verification ran: "host" or the sandbox's version ("sandbox-v1"); "" for a
-	// judge-graded task, for which nothing runs.
+	// Grader is where the stages' verification ran: "host" or the sandbox's version ("sandbox-v1"). A judge-graded
+	// task runs nothing; its validation names no mode, which reads as "host" (task.GraderOf).
 	Grader string `json:"grader"`
 }
 
