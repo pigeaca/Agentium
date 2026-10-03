@@ -33,7 +33,7 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
 5. **Docs:** README and help.
 
 ## Work
-- [ ] **1a. Pair core** (`internal/judge`): the pilot's pair prompt and schema, word for word, both orders, mapping back, flips counted as ties, and the preference statistics with their floor. Unit tests with a fake caller.
+- [x] **1a. Pair core** (done: #53) (`internal/judge`): the pilot's pair prompt and schema, word for word, both orders, mapping back, flips counted as ties, and the preference statistics with their floor. Unit tests with a fake caller.
 - [x] **1b. Experiments** (note from 1a's review: with repeats above 1, pairs of one task are not independent; add an honesty note or cluster by task): `--judge-pairs`, pairing over paired slots, the preview and the budget (after the per-run judge's step 2). Done (2026-10-02, branch `claude/feat/judge-pairs-experiments`):
   - `experiment new --judge-pairs` (with `--judge-model`/`--judge-effort`; `--judge-repeats` stays the per-run judge's) is stored as `Design.JudgePairs` (repeats 1), validated and locked with the design; `experiment show`, `plan` and `run` name it as unvalidated.
   - Pairing: `experiment.PairsOf` pairs each arm's settled run by the schedule's `Slot.Pair` (task and repeat index); a pair is compared only when both runs count as passing (`Success`) and the task has a reference in code. The comparison (`run.PairJudgement`, the 1a core's verdict and the arm-A run's ID) is stored on the pair's arm-B run, so `run.Spend` (`PairJudgeUSD`) carries it into every total.
