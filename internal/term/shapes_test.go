@@ -53,7 +53,7 @@ func showcase(d Shapes, width int, wide bool) string {
 	}, width)...)
 	add(d.Panel(Panel{}, width)...)
 	bars := []Bar{
-		{Label: "tasks", Fraction: 12.0 / 20, Value: "12 of 20", Role: Accent},
+		{Label: "tasks", Fraction: 12.0 / 20, Value: "12 of 20"},
 		{Label: "budget", Fraction: 0.3333, Value: "$4.00 of $12", Role: Level(4, 12)},
 		{Label: "window", Fraction: 0.78, Value: "78% resets 14:05", Role: Level(78, 100)},
 		{Label: "spent", Fraction: 0.95, Value: "$11.40 of $12", Role: Level(11.4, 12)},
@@ -174,5 +174,64 @@ func TestIntervalBarMarksZero(t *testing.T) {
 	got = d.IntervalBar(Interval{Low: -0.5, Estimate: 0, High: 0.5}, 11)
 	if want := "─━━━━●━━━━─"; got != want {
 		t.Errorf("an estimate at zero hides the zero line: %q, want %q", got, want)
+	}
+}
+
+func TestIntervalBarEdges(t *testing.T) {
+	d := Shapes{}
+	swapped := d.IntervalBar(Interval{Low: 1, Estimate: 0.6, High: 0.2}, 11)
+	if want := d.IntervalBar(Interval{Low: 0.2, Estimate: 0.6, High: 1}, 11); swapped != want {
+		t.Errorf("Low above High draws %q, want the same as in order: %q", swapped, want)
+	}
+	if got := d.IntervalBar(Interval{Low: 2, Estimate: 3, High: 4, Min: 1, Max: 5}, 11); strings.Contains(got, "│") {
+		t.Errorf("a scale without zero marks no zero: %q", got)
+	}
+	for _, iv := range []Interval{
+		{Low: -1, Estimate: 0, High: 1, Min: math.Inf(-1), Max: math.Inf(1)},
+		{Low: -1, Estimate: 0, High: 1, Min: -1, Max: math.Inf(1)},
+		{Low: math.Inf(-1), Estimate: 0, High: math.Inf(1)},
+		{Low: math.NaN(), Estimate: math.Inf(1), High: 2, Min: -1, Max: 1},
+	} {
+		got := d.IntervalBar(iv, 11) // must not panic: int(NaN) is no index
+		if Width(got) != 11 {
+			t.Errorf("IntervalBar(%+v) = %q", iv, got)
+		}
+	}
+	// The scale's span overflows to +Inf, so an infinite estimate maps to Inf/Inf: NaN, which is left out (int(NaN) is
+	// MinInt64 on amd64, and only 0 here on arm64, so the dot is what shows the guard).
+	huge := Interval{Low: -1, Estimate: math.Inf(1), High: 1, Min: -math.MaxFloat64, Max: math.MaxFloat64}
+	if got := d.IntervalBar(huge, 11); strings.Contains(got, "●") {
+		t.Errorf("a NaN position is drawn: %q", got)
+	}
+	if got := d.IntervalBar(Interval{Low: -1, Estimate: 0, High: 1, Min: math.Inf(-1), Max: math.Inf(1)}, 11); got != "─━━━━●━━━━─" {
+		t.Errorf("an infinite scale falls back to the automatic one: %q", got)
+	}
+}
+
+func TestPanelDropsATooLongRightTitle(t *testing.T) {
+	got := Shapes{}.Panel(Panel{Title: "Run", Right: "a right title far too long", Lines: []string{"x"}}, 20)
+	if strings.Contains(got[0], "right") || Width(got[0]) != 20 {
+		t.Errorf("top %q", got[0])
+	}
+	if got := (Shapes{}).Panel(Panel{Title: "Run", Right: "fits"}, 20)[0]; !strings.Contains(got, " fits ") {
+		t.Errorf("a right title that fits is drawn: %q", got)
+	}
+}
+
+func TestPanelAndFlowCapTheirWidth(t *testing.T) {
+	d := Shapes{}
+	if w := Width(d.Panel(Panel{Title: "x"}, 140)[0]); w != MaxContentWidth {
+		t.Errorf("a panel at 140 columns is %d wide, want %d", w, MaxContentWidth)
+	}
+	if w := Width(d.Panel(Panel{Title: "x", MaxWidth: -1}, 140)[0]); w != 140 {
+		t.Errorf("MaxWidth -1 lifts the cap: %d", w)
+	}
+	if w := Width(d.Panel(Panel{Title: "x", MaxWidth: 50}, 140)[0]); w != 50 {
+		t.Errorf("MaxWidth 50: %d", w)
+	}
+	for _, line := range d.Flow(Flow{Rows: [][]Node{{{Panel: Panel{Title: "a"}}, {Panel: Panel{Title: "b"}}}}}, 160) {
+		if Width(line) > MaxContentWidth {
+			t.Errorf("a flow line is %d wide: %q", Width(line), line)
+		}
 	}
 }

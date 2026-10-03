@@ -113,12 +113,37 @@ func TestSanitize(t *testing.T) {
 		{"two\nlines", "two\nlines", "two\nlines"},
 		{"lone \x1b", "lone ", "lone "},
 		{"\x1bc reset", " reset", " reset"},
+		{"raw csi \x9b2J here", "raw csi 2J here", "raw csi 2J here"},                    // 0x9b is not UTF-8: dropped
+		{"raw osc \x9d0;title\x9c here", "raw osc 0;title here", "raw osc 0;title here"}, // 0x9d and 0x9c too
+		{"bad \xff\xfe bytes", "bad  bytes", "bad  bytes"},
+		{"kept \ufffd", "kept \ufffd", "kept \ufffd"}, // a real replacement character stays
+		{"bidi \u202eevil\u202c \u2066iso\u2069", "bidi evil iso", "bidi evil iso"},
 	} {
 		if got := Sanitize(tc.text); got != tc.want {
 			t.Errorf("Sanitize(%q) = %q, want %q", tc.text, got, tc.want)
 		}
 		if got := keepStyles(tc.text); got != tc.styled {
 			t.Errorf("keepStyles(%q) = %q, want %q", tc.text, got, tc.styled)
+		}
+	}
+}
+
+func TestWrapAndSplitAlwaysProgress(t *testing.T) {
+	if got := Wrap("日本", 1); strings.Join(got, "|") != "日|本" {
+		t.Errorf("Wrap of wide characters at width 1 = %q", got)
+	}
+	for _, tc := range []struct {
+		text       string
+		width      int
+		head, tail string
+	}{
+		{"日x", 1, "日", "x"}, // a character wider than the width still goes to head
+		{"ab", 0, "a", "b"},
+		{"abc", 2, "ab", "c"},
+		{"日本", 3, "日", "本"},
+	} {
+		if head, tail := split(tc.text, tc.width); head != tc.head || tail != tc.tail {
+			t.Errorf("split(%q, %d) = %q, %q, want %q, %q", tc.text, tc.width, head, tail, tc.head, tc.tail)
 		}
 	}
 }

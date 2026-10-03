@@ -156,6 +156,9 @@ func Wrap(text string, width int) []string {
 			}
 			for ww > width {
 				head, tail := split(word, width)
+				if tail == "" { // one character wider than the line: it stands alone
+					break
+				}
 				lines = append(lines, head)
 				word, ww = tail, Width(tail)
 			}

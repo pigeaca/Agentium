@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -103,13 +104,41 @@ func (e *demoExperiment) step(now time.Time) string {
 }
 
 // frame is the dashboard for the state now. e is a copy, so the display's goroutine reads nothing the caller changes.
+// It compacts to fit the height: the full flow, then each box's first line, then only the arms' tallies under the
+// titles.
 func (e demoExperiment) frame(elapsed string) Frame {
-	return func(width, tick int) []string {
-		width = min(width, 100)
-		f := experimentFlow(e.sh, width, e.done, e.spent, e.arms[0].ok, e.arms[0].failed, e.arms[1].ok, e.arms[1].failed, tick,
-			elapsed)
-		return e.sh.Flow(f, width)
+	return func(width, height, tick int) []string {
+		full := experimentFlow(e.sh, width, e.done, e.spent, e.arms[0].ok, e.arms[0].failed, e.arms[1].ok,
+			e.arms[1].failed, tick, elapsed)
+		var lines []string
+		for level := 0; level < 3; level++ {
+			if lines = e.sh.Flow(compactFlow(full, level), width); len(lines) <= height {
+				break
+			}
+		}
+		return lines
 	}
+}
+
+// compactFlow keeps fewer lines in each box: all at level 0, the first at level 1, and at level 2 none but in a row
+// of several boxes (the arms).
+func compactFlow(f Flow, level int) Flow {
+	rows := make([][]Node, len(f.Rows))
+	for i, row := range f.Rows {
+		rows[i] = slices.Clone(row)
+		for j := range rows[i] {
+			lines := rows[i][j].Panel.Lines
+			switch {
+			case level == 1 || level == 2 && len(row) > 1:
+				lines = lines[:min(len(lines), 1)]
+			case level >= 2:
+				lines = nil
+			}
+			rows[i][j].Panel.Lines = lines
+		}
+	}
+	f.Rows = rows
+	return f
 }
 
 // demoStill is the made-up experiment part way, as the live view shows it: the last lines logged and the flow under
@@ -121,7 +150,7 @@ func demoStill(sh Shapes, width int) string {
 	for i := 0; i < 14; i++ {
 		lines = append(lines, e.step(at.Add(time.Duration(i)*17*time.Second)))
 	}
-	lines = append(lines[len(lines)-5:], e.frame("4m02s")(width-1, 3)...)
+	lines = append(lines[len(lines)-5:], e.frame("4m02s")(width-1, 40, 3)...)
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -142,4 +171,23 @@ func demoRun(ctx context.Context, d Display, sh Shapes) {
 		d.Update(e.frame(Elapsed(time.Since(start))))
 	}
 	d.Log(sh.Style.Good("done") + fmt.Sprintf(" %d runs, $%.2f", total, e.spent))
+}
+
+func TestDemoFrameCompactsToTheHeight(t *testing.T) {
+	e := demoExperiment{sh: Shapes{}}
+	for i := 0; i < 5; i++ {
+		e.step(time.Unix(0, 0))
+	}
+	for _, height := range []int{40, 19, 16, 14} {
+		lines := e.frame("1m")(99, height, 0)
+		if len(lines) > height {
+			t.Errorf("height %d: %d lines", height, len(lines))
+		}
+		if !strings.Contains(strings.Join(lines, "\n"), "1 failed") {
+			t.Errorf("height %d: the arms' tallies are gone:\n%s", height, strings.Join(lines, "\n"))
+		}
+	}
+	if full := e.frame("1m")(99, 40, 0); !strings.Contains(strings.Join(full, "\n"), "next look") {
+		t.Error("a tall pane shows the whole flow")
+	}
 }

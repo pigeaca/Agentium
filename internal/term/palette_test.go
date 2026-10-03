@@ -45,8 +45,14 @@ func TestNamedStylesIgnoreDepth(t *testing.T) {
 			t.Errorf("named styles changed at %v", d)
 		}
 	}
-	if Detect(true, nil).Depth() != Basic {
-		t.Error("Detect gives the basic depth")
+	// Detect gives the basic depth whatever FORCE_COLOR asks for: the named styles never go deeper.
+	for _, force := range []string{"1", "2", "3"} {
+		if got := Detect(false, env(map[string]string{"FORCE_COLOR": force})).Depth(); got != Basic {
+			t.Errorf("Detect with FORCE_COLOR=%s: depth %v, want 8 colors", force, got)
+		}
+	}
+	if Detect(true, nil).Depth() != Basic || Detect(false, nil).Depth() != NoColor {
+		t.Error("Detect gives the basic depth on a terminal and none on a pipe")
 	}
 }
 

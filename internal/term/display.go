@@ -12,10 +12,12 @@ import (
 	"time"
 )
 
-// Frame draws the live region: the lines to show for a width (the cells a line may take) and the spinner's tick. It
-// runs on the display's writer goroutine, so it must only read what the caller will not change: build it from a
-// snapshot (a copy) of the state it shows. It may run again for a resize or a spinner tick.
-type Frame func(width, tick int) []string
+// Frame draws the live region: the lines to show in width cells and at most height lines (lines past it are cut, so a
+// frame that may be taller should compact itself), and the spinner's tick. It runs on the display's writer goroutine,
+// so it must only read what the caller will not change: build it from a snapshot (a copy) of the state it shows. It
+// must not call the display's methods: Flush and a Log that waits for room would deadlock. It may run again for a
+// resize or a spinner tick.
+type Frame func(width, height, tick int) []string
 
 // Display is where a long command writes: a log of lines, and on a terminal a live region under them that is redrawn
 // in place, as docker build does. Lines logged print above the region and stay in the scrollback. All its methods are
@@ -27,7 +29,8 @@ type Display interface {
 	Live() bool
 	// Update replaces the region with f (nil hides it). It returns at once; the region is redrawn soon after.
 	Update(f Frame)
-	// Log prints text and a newline above the region.
+	// Log prints text and a newline above the region. It waits while more than MaxPending lines are queued (a terminal
+	// that cannot keep up), so memory stays bounded.
 	Log(text string)
 	// Writer is a writer for the display's output that prints each whole line written to it above the region, and
 	// what is left of a last, unfinished line at Close. Each call makes a new writer that the display keeps until
@@ -38,9 +41,9 @@ type Display interface {
 	Over(w io.Writer) io.Writer
 	// Flush draws what is pending now, ignoring the throttle, and returns when it is on screen.
 	Flush()
-	// Close prints what is pending, clears the region and shows the cursor. It is safe to call more than once, and from
-	// a deferred call during a panic. It returns the first error writing or drawing. Lines logged after it print
-	// plainly.
+	// Close prints what is pending, clears the region, resets every style and shows the cursor. It is safe to call more
+	// than once, and from a deferred call during a panic. It returns the first error writing or drawing (to an Over
+	// stream included). Lines logged after it print plainly.
 	Close() error
 }
 
@@ -146,9 +149,12 @@ const (
 	eraseDown  = "\r\x1b[J" // to the start of the line, then erase it and everything below
 )
 
-// logEntry is a line to print above the region, on w (nil: the display's output).
+// MaxPending is how many lines a live display queues before Log waits for the terminal to take them.
+const MaxPending = 1000
+
+// logEntry is a line to print above the region, on another stream's writer (nil: the display's output).
 type logEntry struct {
-	w    io.Writer
+	to   *lineWriter
 	text string
 }
 
@@ -161,6 +167,7 @@ type region struct {
 	ticks <-chan time.Time
 
 	mu       sync.Mutex
+	space    *sync.Cond // on mu: the queue has room again, or the display closed
 	frame    Frame
 	frameGen int // counts Updates, so a frame that panicked is dropped only if it is still the current one
 	pending  []logEntry
@@ -175,17 +182,20 @@ type region struct {
 	done    chan struct{}
 
 	// The writer goroutine's own state.
-	tick    int
-	drawn   []string // the region's lines on screen now
-	drawnAt int      // the width they were drawn at
-	hidden  bool     // the cursor is hidden
-	stopped bool     // ctx is done or Close was called: the region is cleared and not drawn again
-	broken  bool     // out failed: nothing more is written
+	tick     int
+	drawn    []string // the region's lines on screen now
+	drawnAt  int      // the width they were drawn at
+	hidden   bool     // the cursor is hidden
+	stopped  bool     // ctx is done or Close was called: the region is cleared and not drawn again
+	finished bool     // the styles were reset and the cursor shown after stopping
+	broken   bool     // out failed: nothing more is written to it
 }
 
 func newRegion(out io.Writer, size func() (int, int), every time.Duration, ticks <-chan time.Time) *region {
-	return &region{out: out, size: size, every: every, ticks: ticks, wake: make(chan struct{}, 1),
+	r := &region{out: out, size: size, every: every, ticks: ticks, wake: make(chan struct{}, 1),
 		flushes: make(chan chan struct{}), quit: make(chan struct{}), done: make(chan struct{})}
+	r.space = sync.NewCond(&r.mu)
+	return r
 }
 
 func (r *region) Live() bool { return true }
@@ -203,10 +213,18 @@ func (r *region) Update(f Frame) {
 
 func (r *region) Log(text string) { r.logTo(nil, text) }
 
-func (r *region) logTo(w io.Writer, text string) {
+// logTo queues text for to (nil: the display's output), waiting while the queue is full.
+func (r *region) logTo(to *lineWriter, text string) {
+	if to != nil && to.w == nil {
+		to = nil
+	}
 	r.mu.Lock()
+	for !r.closed && len(r.pending) >= MaxPending {
+		r.signal() // the writer goroutine draws at once when the queue is full
+		r.space.Wait()
+	}
 	if !r.closed {
-		r.pending = append(r.pending, logEntry{w, text})
+		r.pending = append(r.pending, logEntry{to, text})
 		r.signal()
 		r.mu.Unlock()
 		return
@@ -216,10 +234,28 @@ func (r *region) logTo(w io.Writer, text string) {
 	<-r.done
 	r.passMu.Lock()
 	defer r.passMu.Unlock()
-	if w == nil {
-		w = r.out
+	w := r.out
+	if to != nil {
+		if to.err != nil {
+			return
+		}
+		w = to.w
 	}
-	io.WriteString(w, keepStyles(text)+"\n")
+	io.WriteString(w, endStyles(keepStyles(text))+"\n")
+}
+
+// endStyles ends each line of text that has a style with a reset, so no style (a background, hidden text) outlives it.
+func endStyles(text string) string {
+	if !strings.Contains(text, "\x1b[") {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, "\x1b[") {
+			lines[i] = line + reset
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // signal wakes the writer goroutine; r.mu is held.
@@ -262,6 +298,7 @@ func (r *region) Close() error {
 	if !r.closed {
 		r.closed = true
 		close(r.quit)
+		r.space.Broadcast()
 	}
 	r.mu.Unlock()
 	<-r.done
@@ -294,6 +331,13 @@ func (r *region) run(ctx context.Context) {
 		last = time.Now()
 	}
 	request := func() {
+		r.mu.Lock()
+		full := len(r.pending) >= MaxPending
+		r.mu.Unlock()
+		if full {
+			draw() // Log is waiting for room
+			return
+		}
 		if laterC != nil {
 			return // a redraw is already due
 		}
@@ -336,6 +380,7 @@ func (r *region) draw() {
 	r.mu.Lock()
 	logs := r.pending
 	r.pending = nil
+	r.space.Broadcast()
 	frame, gen := r.frame, r.frameGen
 	r.mu.Unlock()
 	if r.broken {
@@ -346,7 +391,8 @@ func (r *region) draw() {
 	if frame != nil && !r.stopped {
 		lines = r.render(frame, gen, cols, rows)
 	}
-	if len(logs) == 0 && cols == r.drawnAt && slices.Equal(lines, r.drawn) && !(r.stopped && r.hidden) {
+	final := r.stopped && !r.finished
+	if len(logs) == 0 && cols == r.drawnAt && slices.Equal(lines, r.drawn) && !final {
 		return
 	}
 	var b bytes.Buffer
@@ -358,16 +404,23 @@ func (r *region) draw() {
 		b.WriteString("\x1b[" + strconv.Itoa(up) + "A" + eraseDown)
 	}
 	for _, l := range logs {
-		text := keepStyles(l.text)
-		if l.w == nil {
+		text := endStyles(keepStyles(l.text))
+		if l.to == nil {
 			b.WriteString(text + "\n")
 			continue
 		}
+		if l.to.err != nil {
+			continue // that stream failed before: its lines are dropped, the rest goes on
+		}
 		// A line for another stream: what is before it goes out first.
-		if !r.write(r.out, b.Bytes()) || !r.write(l.w, []byte(text+"\n")) {
+		if !r.write(b.Bytes()) {
 			return
 		}
 		b.Reset()
+		if _, err := l.to.w.Write([]byte(text + "\n")); err != nil {
+			l.to.err = err
+			r.fail(fmt.Errorf("print above the live region: %w", err))
+		}
 	}
 	if len(lines) > 0 && !r.hidden {
 		b.WriteString(hideCursor)
@@ -376,23 +429,24 @@ func (r *region) draw() {
 	for _, line := range lines {
 		b.WriteString(line + "\n")
 	}
-	if r.stopped && r.hidden {
-		b.WriteString(showCursor)
-		r.hidden = false
+	if final {
+		// Whatever a line left open, and whether or not the cursor was hidden: the terminal is the user's again.
+		b.WriteString(reset + showCursor)
+		r.hidden, r.finished = false, true
 	}
 	if redraw {
 		b.WriteString(syncEnd)
 	}
 	r.drawn, r.drawnAt = lines, cols
-	r.write(r.out, b.Bytes())
+	r.write(b.Bytes())
 }
 
-// write writes p to w, and on an error records it and stops all drawing.
-func (r *region) write(w io.Writer, p []byte) bool {
+// write writes p to the display's output, and on an error records it and stops all drawing.
+func (r *region) write(p []byte) bool {
 	if len(p) == 0 {
 		return true
 	}
-	if _, err := w.Write(p); err != nil {
+	if _, err := r.out.Write(p); err != nil {
 		r.broken = true
 		r.fail(fmt.Errorf("draw the live region: %w", err))
 		return false
@@ -416,9 +470,9 @@ func (r *region) drawnRows(cols int) int {
 }
 
 // render calls the frame and fits its lines: control characters and escape codes other than styles are removed, each
-// line is cut to cols-1 cells, so the cursor never waits at a line's end, and at
-// most rows-1 lines, so the region never scrolls its own first line away. A frame that panics is dropped and the
-// panic becomes Close's error.
+// line is cut to cols-1 cells, so the cursor never waits at a line's end, and ends with a reset when it has a style,
+// and at most rows-1 lines are kept, so the region never scrolls its own first line away. A frame that panics is
+// dropped and the panic becomes Close's error.
 func (r *region) render(f Frame, gen, cols, rows int) (lines []string) {
 	defer func() {
 		if p := recover(); p != nil {
@@ -431,14 +485,14 @@ func (r *region) render(f Frame, gen, cols, rows int) (lines []string) {
 			lines = nil
 		}
 	}()
-	width := max(cols-1, 1)
-	for _, entry := range f(width, r.tick) {
+	width, height := max(cols-1, 1), max(rows-1, 1)
+	for _, entry := range f(width, height, r.tick) {
 		for _, line := range strings.Split(entry, "\n") {
-			lines = append(lines, Truncate(keepStyles(line), width, ""))
+			lines = append(lines, endStyles(Truncate(keepStyles(line), width, "")))
 		}
 	}
-	if limit := max(rows-1, 1); len(lines) > limit {
-		lines = lines[:limit]
+	if len(lines) > height {
+		lines = lines[:height]
 	}
 	return lines
 }
@@ -447,6 +501,7 @@ func (r *region) render(f Frame, gen, cols, rows int) (lines []string) {
 type lineWriter struct {
 	r   *region
 	w   io.Writer // nil: the region's output
+	err error     // the first error writing to w: the writer goroutine's, then (after it ended) logTo's
 	mu  sync.Mutex
 	buf []byte
 }
@@ -460,7 +515,7 @@ func (l *lineWriter) Write(p []byte) (int, error) {
 		if i < 0 {
 			break
 		}
-		l.r.logTo(l.w, string(l.buf[:i]))
+		l.r.logTo(l, string(l.buf[:i]))
 		l.buf = l.buf[i+1:]
 	}
 	return len(p), nil
@@ -471,7 +526,7 @@ func (l *lineWriter) finish() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if len(l.buf) > 0 {
-		l.r.logTo(l.w, string(l.buf))
+		l.r.logTo(l, string(l.buf))
 		l.buf = nil
 	}
 }

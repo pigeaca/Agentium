@@ -147,9 +147,10 @@ func (d Shapes) placeRow(nodes []Node, width, gap, at int) placedRow {
 // up join pairwise; any other pair of rows joins through one bar (every box above into every box below). It draws
 // these simple shapes only, not general graphs.
 type Flow struct {
-	Rows [][]Node
-	Gap  int  // cells between boxes in a row; 0 means 3
-	Line Role // the connectors' color; Default means Muted, the borders' color
+	Rows     [][]Node
+	MaxWidth int  // the widest it is drawn, from the left edge: 0 means MaxContentWidth, negative means no limit
+	Gap      int  // cells between boxes in a row; 0 means 3
+	Line     Role // the connectors' color; Default means Muted, the borders' color
 }
 
 // connection is how a connector cell joins its neighbours.
@@ -178,8 +179,9 @@ func (d Shapes) join(c connection) string {
 	return unicodeJoins[c]
 }
 
-// Flow draws f in width cells.
+// Flow draws f in width cells, or MaxWidth when that is less.
 func (d Shapes) Flow(f Flow, width int) []string {
+	width = capWidth(width, f.MaxWidth)
 	gap := f.Gap
 	if gap <= 0 {
 		gap = 3

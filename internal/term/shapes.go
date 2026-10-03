@@ -67,8 +67,13 @@ const (
 	WrapText                 // wrap it at spaces onto more lines
 )
 
+// MaxContentWidth is how wide panels and flows are drawn at most by default: wide terminals get more space, not more
+// content.
+const MaxContentWidth = 100
+
 // Panel is a box with a title. Title and Right may be styled; the title is drawn bold.
 type Panel struct {
+	MaxWidth int      // the widest it is drawn: 0 means MaxContentWidth, negative means no limit
 	Title    string   // in the top border, on the left; cut to fit
 	Right    string   // in the top border, on the right; left out when there is no room for it
 	Lines    []string // the content, one entry per line (an entry with newlines is several)
@@ -83,7 +88,7 @@ const PanelMinWidth = 8
 // of padding, and a bottom border. The content is fitted to width-4 cells.
 func (d Shapes) Panel(p Panel, width int) []string {
 	g := d.glyphs()
-	width = max(width, PanelMinWidth)
+	width = max(capWidth(width, p.MaxWidth), PanelMinWidth)
 	border := p.Border
 	if border == Default {
 		border = Muted
@@ -234,7 +239,7 @@ type Interval struct {
 	Label               string
 	LabelWidth          int
 	Low, Estimate, High float64
-	Min, Max            float64 // the scale's ends; equal means symmetric about zero, holding every value with room
+	Min, Max            float64 // the scale's ends; equal or infinite means symmetric about zero, holding every value
 	Mark                float64 // a second line, such as the no-loss margin; 0 draws none
 	Value               string  // after the scale, right-aligned in ValueWidth: the numbers in words
 	ValueWidth          int
@@ -248,7 +253,7 @@ func (d Shapes) IntervalBar(iv Interval, width int) string {
 	g := d.glyphs()
 	left, right, n := d.row(iv.Label, iv.LabelWidth, iv.Value, iv.ValueWidth, width)
 	lo, hi := iv.Min, iv.Max
-	if !(hi > lo) {
+	if !(hi > lo) || math.IsInf(lo, 0) || math.IsInf(hi, 0) {
 		m := 0.0
 		for _, v := range []float64{iv.Low, iv.Estimate, iv.High, iv.Mark} {
 			if !math.IsNaN(v) && !math.IsInf(v, 0) {
@@ -265,6 +270,9 @@ func (d Shapes) IntervalBar(iv Interval, width int) string {
 			return 0, false
 		}
 		c := math.Round((v - lo) / (hi - lo) * float64(n-1))
+		if math.IsNaN(c) { // the builtin min and max keep a NaN, and int(NaN) is no index
+			return 0, false
+		}
 		return int(min(max(c, 0), float64(n-1))), true
 	}
 	cells := make([]cell, n)
@@ -319,4 +327,15 @@ func (d Shapes) Legend(width int, chips ...Chip) []string {
 		lines = append(lines, d.Fit(line, width))
 	}
 	return lines
+}
+
+// capWidth is width limited by limit: 0 means MaxContentWidth, negative means none.
+func capWidth(width, limit int) int {
+	switch {
+	case limit < 0:
+		return width
+	case limit == 0:
+		limit = MaxContentWidth
+	}
+	return min(width, limit)
 }

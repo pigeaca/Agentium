@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,7 @@ func liveCaps() Capabilities {
 	return Capabilities{Terminal: true, Color: TrueColor, UTF8: true, Width: 80, Height: 24}
 }
 
-func frameOf(lines ...string) Frame { return func(int, int) []string { return lines } }
+func frameOf(lines ...string) Frame { return func(int, int, int) []string { return lines } }
 
 // startRegion runs a region on v with a fixed size, the throttle at an hour (so only the first change and Flush
 // draw) and the spinner driven by ticks.
@@ -148,7 +149,7 @@ func TestRegionRedrawsOnlyOnChange(t *testing.T) {
 	if v.writes != writes {
 		t.Errorf("an unchanged frame was redrawn: %d writes, want %d", v.writes, writes)
 	}
-	r.Update(func(_, tick int) []string { return []string{fmt.Sprint("spin ", tick)} })
+	r.Update(func(_, _, tick int) []string { return []string{fmt.Sprint("spin ", tick)} })
 	r.Flush()
 	ticks <- time.Now()
 	r.Flush()
@@ -176,7 +177,7 @@ func TestRegionFitsTheTerminal(t *testing.T) {
 	v := newVT(20)
 	r, _ := startRegion(t, v, func() (int, int) { return 20, 5 }, nil)
 	var widths []int
-	r.Update(func(width, _ int) []string {
+	r.Update(func(width, _, _ int) []string {
 		widths = append(widths, width)
 		lines := []string{strings.Repeat("x", 50), "日本語日本語日本語日本語"}
 		for i := 0; i < 10; i++ {
@@ -202,7 +203,7 @@ func TestRegionFollowsAResize(t *testing.T) {
 	cols.Store(80)
 	r, _ := startRegion(t, v, func() (int, int) { return int(cols.Load()), 24 }, nil)
 	r.Log("log a")
-	r.Update(func(width, _ int) []string {
+	r.Update(func(width, _, _ int) []string {
 		return []string{strings.Repeat("=", width), strings.Repeat("-", width), "short"}
 	})
 	r.Flush()
@@ -272,7 +273,7 @@ func TestDeferredCloseAfterAPanic(t *testing.T) {
 func TestRegionSurvivesAPanickingFrame(t *testing.T) {
 	v := newVT(80)
 	r, _ := startRegion(t, v, nil, nil)
-	r.Update(func(int, int) []string { panic("bad frame") })
+	r.Update(func(int, int, int) []string { panic("bad frame") })
 	r.Flush()
 	r.Log("still logging")
 	r.Update(frameOf("a good frame"))
@@ -338,7 +339,7 @@ func TestRegionConcurrentUse(t *testing.T) {
 			w := d.Writer()
 			for i := 0; i < 50; i++ {
 				snapshot := fmt.Sprintf("g%d at %d", g, i)
-				d.Update(func(_, tick int) []string { return []string{snapshot, fmt.Sprint("tick ", tick)} })
+				d.Update(func(_, _, tick int) []string { return []string{snapshot, fmt.Sprint("tick ", tick)} })
 				if i%2 == 0 {
 					d.Log(fmt.Sprintf("g%d line %d", g, i))
 				} else {
@@ -387,4 +388,192 @@ func TestRegionDropsCursorMovesInLines(t *testing.T) {
 	}
 	r.Close()
 	assertClean(t, v, "agent said upand over")
+}
+
+// lastStyle is the last style code written: what stays in force on the terminal.
+func lastStyle(raw string) string {
+	codes := regexp.MustCompile(`\x1b\[[0-9;]*m`).FindAllString(raw, -1)
+	if len(codes) == 0 {
+		return ""
+	}
+	return codes[len(codes)-1]
+}
+
+func TestRegionEndsOpenStyles(t *testing.T) {
+	v := newVT(80)
+	r, _ := startRegion(t, v, nil, nil)
+	r.Log("log \x1b[8mhidden")
+	r.Log("bg \x1b[41mred\nsecond line")
+	r.Update(frameOf("frame \x1b[7minverse"))
+	r.Flush()
+	raw := v.rawString()
+	for _, want := range []string{"hidden" + reset + "\n", "red" + reset + "\nsecond line\n", "inverse" + reset + "\n"} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("a line with a style must end with a reset: no %q in %q", want, raw)
+		}
+	}
+	r.Close()
+	if got := lastStyle(v.rawString()); got != reset {
+		t.Errorf("after Close the last style code is %q, want a reset", got)
+	}
+	assertClean(t, v, "log hidden\nbg red\nsecond line")
+}
+
+func TestRegionResetsEvenWithoutAFrame(t *testing.T) {
+	v := newVT(80)
+	r, _ := startRegion(t, v, nil, nil)
+	r.Log("plain")
+	r.Close()
+	if raw := v.rawString(); !strings.HasSuffix(raw, reset+showCursor) {
+		t.Errorf("Close must end with a reset and the cursor shown: %q", raw)
+	}
+}
+
+type countingWriter struct {
+	mu     sync.Mutex
+	writes int
+	err    error
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writes++
+	if c.err != nil {
+		return 0, c.err
+	}
+	return len(p), nil
+}
+
+func TestAnOverStreamErrorKeepsTheRegion(t *testing.T) {
+	v := newVT(80)
+	r, _ := startRegion(t, v, nil, nil)
+	bad := &countingWriter{err: errors.New("stderr closed")}
+	over := r.Over(bad)
+	r.Update(frameOf("busy"))
+	over.Write([]byte("to stderr\n"))
+	over.Write([]byte("again\n"))
+	r.Log("main goes on")
+	r.Update(frameOf("busier"))
+	r.Flush()
+	if got := v.screen(); got != "main goes on\nbusier" {
+		t.Errorf("screen %q", got)
+	}
+	if bad.writes != 1 {
+		t.Errorf("a failed stream got %d writes, want 1 (then its lines are dropped)", bad.writes)
+	}
+	err := r.Close()
+	if err == nil || !strings.Contains(err.Error(), "stderr closed") {
+		t.Errorf("Close: %v", err)
+	}
+	over.Write([]byte("after close\n"))
+	if bad.writes != 1 {
+		t.Errorf("a failed stream is written after Close: %d writes", bad.writes)
+	}
+	assertClean(t, v, "main goes on")
+}
+
+func TestRegionWritesNothingAfterAWriteError(t *testing.T) {
+	out := &countingWriter{err: errors.New("broken pipe")}
+	r, _ := startRegion(t, out, nil, nil)
+	r.Update(frameOf("x"))
+	r.Flush()
+	if out.writes != 1 {
+		t.Fatalf("%d writes before the error", out.writes)
+	}
+	r.Log("y")
+	r.Update(frameOf("z"))
+	r.Flush()
+	r.Close()
+	if out.writes != 1 {
+		t.Errorf("%d writes after a write error, want none", out.writes-1)
+	}
+}
+
+func TestRegionThrottlesSpacedUpdates(t *testing.T) {
+	v := newVT(80)
+	r, _ := startRegion(t, v, nil, nil) // an hour between redraws
+	for i := 0; i < 20; i++ {
+		r.Update(frameOf(fmt.Sprint("frame ", i)))
+		time.Sleep(time.Millisecond) // let the writer goroutine see each change on its own
+	}
+	if n := strings.Count(v.rawString(), syncStart); n > 1 {
+		t.Errorf("%d draws for 20 spaced updates inside the throttle, want only the first", n)
+	}
+	r.Flush()
+	if n := strings.Count(v.rawString(), syncStart); n > 2 {
+		t.Errorf("%d draws after the flush, want 2", n)
+	}
+	if got := v.screen(); got != "frame 19" {
+		t.Errorf("screen %q", got)
+	}
+}
+
+func TestRegionDropsAPanickingFrame(t *testing.T) {
+	v := newVT(80)
+	ticks := make(chan time.Time)
+	r, _ := startRegion(t, v, nil, ticks)
+	var calls atomic.Int64
+	r.Update(func(int, int, int) []string { calls.Add(1); panic("bad") })
+	r.Flush()
+	ticks <- time.Now()
+	r.Flush()
+	if n := calls.Load(); n != 1 {
+		t.Errorf("a frame that panicked was called %d times, want once", n)
+	}
+	r.Close()
+}
+
+func TestLogWaitsWhenTheQueueIsFull(t *testing.T) {
+	out := &blockingWriter{release: make(chan struct{})}
+	r, _ := startRegion(t, out, nil, nil)
+	r.Log("first") // the writer goroutine takes it and blocks writing it
+	for out.started.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	for i := 0; i < MaxPending; i++ {
+		r.Log("queued")
+	}
+	logged := make(chan struct{})
+	go func() {
+		r.Log("one too many")
+		close(logged)
+	}()
+	select {
+	case <-logged:
+		t.Fatal("Log returned with the queue full")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(out.release)
+	select {
+	case <-logged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Log still waits after the terminal caught up")
+	}
+	r.Close()
+	if got := strings.Count(out.String(), "queued\n"); got != MaxPending {
+		t.Errorf("%d queued lines printed, want %d", got, MaxPending)
+	}
+}
+
+// blockingWriter holds every write until release is closed.
+type blockingWriter struct {
+	started atomic.Int64
+	release chan struct{}
+	mu      sync.Mutex
+	buf     bytes.Buffer
+}
+
+func (b *blockingWriter) Write(p []byte) (int, error) {
+	b.started.Add(1)
+	<-b.release
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *blockingWriter) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

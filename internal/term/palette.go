@@ -58,8 +58,7 @@ const (
 	LevelCaution // nearing the limit
 	LevelAlarm   // at or nearly at the limit
 
-	Accent // titles, spinners and commands
-	Muted  // borders, bar tracks and secondary text
+	Muted // borders, connectors, bar tracks, spinners and secondary text
 )
 
 // shade is a role's color at each depth: a basic SGR code (or dim), a 256-palette index and an RGB value.
@@ -88,7 +87,6 @@ var (
 		LevelCalm:           greenShade,
 		LevelCaution:        yellowShade,
 		LevelAlarm:          redShade,
-		Accent:              shade{"36", 38, [3]uint8{0, 175, 215}},
 		Muted:               shade{"", 243, [3]uint8{118, 118, 118}},
 	}
 )

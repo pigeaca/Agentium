@@ -3,6 +3,7 @@ package term
 import (
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // sequence matches a terminal escape sequence: a CSI sequence (styles, cursor movement, erasing), an OSC string (window
@@ -13,7 +14,9 @@ var sequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b[\]PX^_][^\x07\x1
 var style = regexp.MustCompile(`^\x1b\[[0-9;]*m$`)
 
 // Sanitize makes text from outside Agentium (an agent's output, a task's or a branch's name) safe to print: it removes
-// every escape sequence and every control character but the newline, and turns tabs into spaces. Style it afterwards.
+// every escape sequence, every control character but the newline (C1 included, whether encoded or as raw bytes), every
+// byte that is not UTF-8 and the bidirectional overrides that could reorder what is shown, and turns tabs into spaces.
+// Style it afterwards.
 func Sanitize(text string) string { return clean(text, false) }
 
 // keepStyles is Sanitize that keeps styles: what the live region applies to every line, so a line can move neither
@@ -21,16 +24,19 @@ func Sanitize(text string) string { return clean(text, false) }
 func keepStyles(text string) string { return clean(text, true) }
 
 func clean(text string, styles bool) string {
-	if !strings.ContainsFunc(text, isControl) {
+	if utf8.ValidString(text) && !strings.ContainsFunc(text, unsafeRune) {
 		return text
 	}
 	var b strings.Builder
 	plain := func(part string) {
-		for _, r := range part {
+		for part != "" {
+			r, size := utf8.DecodeRuneInString(part)
+			part = part[size:]
 			switch {
+			case r == utf8.RuneError && size == 1: // a byte that is not UTF-8, such as a raw 8-bit CSI (0x9b)
 			case r == '\t':
 				b.WriteByte(' ')
-			case !isControl(r):
+			case !unsafeRune(r):
 				b.WriteRune(r)
 			}
 		}
@@ -47,7 +53,9 @@ func clean(text string, styles bool) string {
 	return b.String()
 }
 
-// isControl is a control character other than the newline: C0, DEL and C1.
-func isControl(r rune) bool {
-	return r != '\n' && (r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0))
+// unsafeRune is a control character other than the newline (C0, DEL and C1) or a bidirectional embedding, override or
+// isolate.
+func unsafeRune(r rune) bool {
+	return r != '\n' && (r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0)) ||
+		(r >= 0x202a && r <= 0x202e) || (r >= 0x2066 && r <= 0x2069)
 }
