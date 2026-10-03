@@ -13,8 +13,14 @@ func TestPaintByDepth(t *testing.T) {
 	}{
 		{Basic, ArmA, "\x1b[36mA\x1b[39m"},
 		{Basic, Muted, "\x1b[2mA\x1b[22m"}, // grey is dim in 8 colors
-		{Color256, ArmB, "\x1b[38;5;213mA\x1b[39m"},
-		{TrueColor, OutcomeOK, "\x1b[38;2;95;215;135mA\x1b[39m"},
+		{Color256, ArmB, "\x1b[38;5;215mA\x1b[39m"},
+		{Color256, Sandbox, "\x1b[38;5;141mA\x1b[39m"},
+		{Color256, ArmA, "\x1b[38;5;75mA\x1b[39m"},
+		{TrueColor, OutcomeOK, "\x1b[38;2;135;215;135mA\x1b[39m"},
+		{Basic, ArmB, "\x1b[33mA\x1b[39m"},
+		{Basic, OutcomeInfra, "\x1b[35mA\x1b[39m"}, // not arm B's yellow
+		{Basic, LevelCaution, "\x1b[35mA\x1b[39m"},
+		{Basic, Sandbox, "\x1b[34mA\x1b[39m"},
 		{TrueColor, Default, "A"},
 		{NoColor, ArmA, "A"},
 	} {
@@ -24,6 +30,19 @@ func TestPaintByDepth(t *testing.T) {
 	}
 	if got := (Style{}).WithDepth(TrueColor).Paint(ArmA, "A"); got != "A" {
 		t.Errorf("depth must not turn color on: %q", got)
+	}
+}
+
+// At 8 colors, the arms, the sandbox and the warnings each keep a color of their own.
+func TestBasicColorsStayApart(t *testing.T) {
+	st := Colored().WithDepth(Basic)
+	seen := map[string]Role{}
+	for _, r := range []Role{ArmA, ArmB, Sandbox, OutcomeInfra, OutcomeOK, OutcomeFailed} {
+		code := st.Paint(r, "x")
+		if other, ok := seen[code]; ok {
+			t.Errorf("roles %d and %d share %q", other, r, code)
+		}
+		seen[code] = r
 	}
 }
 

@@ -82,8 +82,8 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
-	// Step, when set, is called as each step begins (preparing the workspace, Claude Code working, grading), so a
-	// caller can show what is in progress. It only feeds a status display and must not print.
+	// Step, when set, is called as each step begins (StepPreparing, StepAgent, StepGrading, StepJudging), so a caller can
+	// show what is in progress. It is called on the run's goroutine; it only feeds a status display and must not print.
 	Step func(step string)
 	Now  func() time.Time
 	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
@@ -397,7 +397,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := makeRunTemp(tempRoot); err != nil {
 		return rec, err
 	}
-	env.step("preparing the workspace")
+	env.step(StepPreparing)
 	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
@@ -540,7 +540,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	inv.Started = running
-	env.step("Claude Code is working")
+	env.step(StepAgent)
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
 	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
 	if runErr == nil && startErr != nil {
@@ -649,7 +649,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 				// Best effort: the final write follows, and a failure here only risks this spend if Agentium also dies.
 				_ = env.writeStart(start{Record: partial, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: true, Meta: env.Meta})
 			}
-			env.step("judging")
+			env.step(StepJudging)
 			judging.Judge(ctx, spec, *spec.Judge, &rec)
 		}
 	}
@@ -666,7 +666,7 @@ func OvershootNote(o claude.Overshoot) string {
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
 // verification commands.
 func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
-	env.step("grading")
+	env.step(StepGrading)
 	unreadable, err := syncWorkTree(repo, graded)
 	if err != nil {
 		return fmt.Errorf("grading copy: %w", err)
@@ -999,6 +999,15 @@ func (env Env) repositoryPaths(ctx context.Context) []string {
 	}
 	return paths
 }
+
+// The steps of a run that Env.Step reports, in order; a run that is not graded (an unfair or infrastructure outcome)
+// ends after StepAgent, and only a judged run has StepJudging. The words are what status lines show.
+const (
+	StepPreparing = "preparing the workspace" // the fresh checkout, the arm's context, the warm-up and the setup
+	StepAgent     = "Claude Code is working"
+	StepGrading   = "grading" // the hidden tests
+	StepJudging   = "judging"
+)
 
 // step tells the caller a step is starting.
 func (env Env) step(name string) {

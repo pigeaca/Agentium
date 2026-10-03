@@ -152,6 +152,14 @@ agentium experiment show lean                 # the lock and the progress per ar
 agentium experiment report lean               # verdicts, intervals, per-task results (--markdown for a pull request, --json for everything)
 ```
 
+**What a running experiment shows.** On a terminal, `experiment run` (and `start --yes`) draws a live dashboard, redrawn in place: the question in plain words ("BASELINE vs TRIMMED · does trimmed save money?"), the money spent against the budget, your plan's share used (with a subscription) and each arm's progress; each arm's current run as four steps (fresh copy, Claude works, hidden tests, result) joined by dotted lines, with a dashed outline around what runs in the sandbox; the answer so far ("about the same cost (+4%) · not sure yet · next check after 12 tasks"); and the last 4 runs' results, in a fixed area. A status line under the header says how the runs are run, or the latest pause, retry or warning, and before the first run what is being checked; nothing prints above the dashboard while it runs. It compacts to fit a short terminal, and uses narrower boxes on a terminal narrower than 74 columns. When the run ends, or stops on an error or Ctrl-C, the dashboard is cleared and the full log stays in the scrollback: what was printed before the first run, every run's line and the answer.
+
+![The dashboard of a running experiment, recorded with the test stand-in for Claude Code](images/console-run-dashboard.svg)
+
+`--view log` (or `AGENTIUM_VIEW=log`, set once) prints the same in styled lines instead, nothing redrawn: a line per finished run, and the answer in a small box at each check and at the end. It suits SSH, tmux, recordings and slow terminals. `--view dashboard` (or `AGENTIUM_VIEW=dashboard`) asks for the dashboard, even with `NO_COLOR` (without color). Piped, redirected, with `--json`, with `NO_COLOR` (unless a view is asked for), on `TERM=dumb` or below 60 columns, output is the plain lines, byte for byte as before. The report keeps the exact terms (looks, intervals, levels); the running screens say them in words.
+
+![The log view](images/console-run-log.svg)
+
 Runs use `claude-sonnet-5-5` at the CLI's default effort unless `--model MODEL[:EFFORT]` says otherwise (`experiment new` and `run once`; `--model claude-opus-5-5:high`, say); an experiment keeps the model it was made with. Estimates come only from earlier runs on the same model (and effort), so the first experiments on Sonnet 5.5 fall back to a default task run at list prices, and their default budgets and consent prompts look high until runs on it measure the project.
 
 Each run stops at its cap (`--run-budget`, default $3). Claude Code checks the cap after each turn, so a run can pass it by the turn that crosses it (the `seq-v1` smoke check: $0.507 against $0.50). The budget therefore holds back an allowance beside the cap of every run in flight: 10% of the cap, at least $0.15 on a model whose output costs what Sonnet's does, a floor that scales with the model's output price ($0.30 on Opus 5.5, $0.375 on Opus 5, the dearest price in the table for a model without one). A judge other than the default model and effort holds the same allowance per call. The preview's worst case includes it, and a run's estimate is never above its cap. A capped run records how far it went past its cap; one that passed the allowance gets a warning in the run's progress and in the report.
@@ -265,7 +273,7 @@ Planned (part 2): a committed `agentium.toml` that Agentium reads and never writ
 
 ## Data folder and environment
 
-Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off, and `FORCE_COLOR=1` keeps it through a pipe (for `less -R`).
+Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off (and gives a running experiment its plain lines), and `FORCE_COLOR=1` keeps color through a pipe (for `less -R`).
 
 **Freeing space.** Agentium keeps, for reuse, offline dependencies per project in `deps` (each base commit warms them once: Maven's repository, Gradle's home, Cargo's registry, a Python venv per lock file) and a grading seed per project, tool set and base commit in `cache/grading-seed`; nothing trims them on its own. `agentium clean` lists, by kind, what it would remove and the space it would free, and what it keeps and why; it writes nothing. `agentium clean --yes` removes what it lists:
 - a seed, or a base's dependencies, whose base no task in the pool and no locked, unfinished experiment uses (a removed or retired task's), and one a task uses that nothing has used for `--older-than` (default `30d`; also `12h`, `90m`); it is made again on its next use. What a locked experiment that is not done uses (running, stopped, over its budget or paused for usage) stays whatever its age, so its later slots find the same dependencies. A project's shared caches (Maven, Gradle, Cargo) go only with the last of its bases; a venv goes alone;
@@ -278,6 +286,7 @@ Last use is recorded whenever a run or a validation uses a seed or a project's d
 |---|---|
 | `AGENTIUM_HOME` | Data folder (default `~/.agentium`) |
 | `NO_COLOR`, `FORCE_COLOR` | Turn color off; keep it through a pipe |
+| `AGENTIUM_VIEW` | How a running experiment shows on a terminal: `dashboard` (the default) or `log` (`--view` for one command) |
 | `ANTHROPIC_API_KEY` | Claude Code credentials, as an alternative to signing in |
 | `AGENTIUM_CLAUDE_TOKEN_FILE` | A token file for Claude Code |
 

@@ -22,10 +22,12 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("experiment run", flag.ContinueOnError)
 	var o experiment.RunOptions
 	var yes bool
+	var view viewFlag
 	fs.Float64Var(&o.Budget, "budget", 0, "raise the experiment's budget to this total in USD (recorded in its lock)")
 	fs.Float64Var(&o.UsageLimit, "usage-limit", experiment.DefaultUsageLimit, "with a subscription, start no pair past this share of the five-hour window (percent)")
 	fs.BoolVar(&o.Wait, "wait", false, "at the usage limit, wait for the window to reset instead of pausing")
 	fs.BoolVar(&yes, "yes", false, "consent to the paid run, which --json needs (it never asks); a run you start yourself needs none")
+	fs.Var(&view, "view", "on a terminal: dashboard (the default, redrawn in place) or log (styled lines, nothing redrawn)")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
@@ -41,10 +43,15 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintf(env.Stderr, "agentium experiment run: --usage-limit is a percentage above 0 and at most 100\n\n%s", experimentUsage)
 		return ExitUsage
 	}
+	asked, err := askedView(view, env.Getenv)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "agentium experiment run: %s\n", err)
+		return ExitUsage
+	}
 	if env.JSON && !yes { // a script's consent is its flag: nothing is opened, locked or spent without it
 		return env.emitCode(experimentRunDoc{header: hdr("experiment run"), Experiment: name, Run: refusedRun(name, o)}, ExitError)
 	}
-	res, code := executeExperiment(ctx, env, name, o, env.JSON)
+	res, code := executeExperiment(ctx, env, name, o, env.JSON, asked)
 	if res == nil {
 		return code
 	}
@@ -54,22 +61,40 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 // executeExperiment locks (the first time) and runs an experiment. With asJSON it prints nothing (the scheduler's progress,
 // the checks and the live status line go nowhere) and returns how the run ended for a document; the exit code follows
 // the status (runExitCode). Without it, it prints the summary and returns nil. A failure is reported as every command's
-// and returns a nil result: in JSON mode the caller's error document says why.
-func executeExperiment(ctx context.Context, env Env, name string, o experiment.RunOptions, asJSON bool) (*runResultDoc, int) {
+// and returns a nil result: in JSON mode the caller's error document says why. asked is the view asked for (--view or
+// AGENTIUM_VIEW; "" for the default): chooseView decides.
+func executeExperiment(ctx context.Context, env Env, name string, o experiment.RunOptions, asJSON bool, asked string) (*runResultDoc, int) {
 	if asJSON {
 		env.Stdout = io.Discard
 	}
-	env, live := liveEnv(env)
-	defer live.Stop() // covers early returns and interrupts; the summary below stops it first
+	view, caps := chooseView(env, asked, asJSON)
+	var live *term.StatusLine
+	var screen *runScreen
+	if view == viewPlain {
+		env, live = liveEnv(env)
+		defer live.Stop() // covers early returns and interrupts; the summary below stops it first
+	} else {
+		env, screen = newRunScreen(ctx, env, view, caps, o.UsageLimit)
+		// Close clears the live region on every return, an interrupt or a panic included. Revalidation's status line is
+		// not live here: the screen shows the progress.
+		defer screen.Close()
+		live = term.NewStatusLine(env.Stdout, term.StatusOptions{})
+	}
 	w, err := openProject(ctx, env)
 	if err != nil {
 		return nil, fail(env, err)
 	}
 	defer w.Close()
 	runner, release := experimentRunner(env, w, live)
+	if screen != nil {
+		runner.Observer = screen.observer(func(lock experiment.Lock) *answerState { return fixedAnswer(context.WithoutCancel(ctx), w, name, lock) })
+	}
 	runner.Quiet = asJSON
 	defer release() // the run lock is held until the summary is printed
 	outcome, err := runner.Run(ctx, name, o)
+	if screen != nil {
+		screen.end(nil) // after an error from the runs, what they did prints before why they stopped
+	}
 	var usage experiment.UsageError
 	if errors.As(err, &usage) {
 		prefix := "agentium experiment run"
@@ -146,6 +171,7 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 	}
 	r.Observer = experiment.Observer{
 		Begin: func(lock experiment.Lock, s experiment.Standing) {
+			fmt.Fprintln(env.Stdout, experiment.RunningLine(lock.Design))
 			status = &runStatus{total: len(lock.Schedule), budget: lock.Design.BudgetUSD, settled: s.Settled, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage}
 			report = progressLines(env, lock)
 			live.Show(func() string { return status.text(env.Now()) })
@@ -154,9 +180,35 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 			status.update(e) // every event prints a line below, which redraws the status line with the new numbers
 			report(e)
 		},
-		Finish: live.Stop,
+		Finish: func(experiment.Summary) { live.Stop() },
 	}
 	return r, release
+}
+
+// fixedAnswer is a fixed design's answer once every run is done, from its stored runs, as the report analyses them;
+// nil when they cannot be read (the report then says it).
+func fixedAnswer(ctx context.Context, w *workspace, name string, lock experiment.Lock) *answerState {
+	stored, err := w.db.ExperimentByName(ctx, w.project.ID, name)
+	if err != nil {
+		return nil
+	}
+	runs, err := w.db.ExperimentRuns(ctx, stored.ID)
+	if err != nil {
+		return nil
+	}
+	data, err := experiment.RunDataOfStored(runs)
+	if err != nil {
+		return nil
+	}
+	an, err := experiment.Analyze(lock, data)
+	if err != nil {
+		return nil
+	}
+	a, ok := answerOfAnalysis(an, len(lock.Tasks))
+	if !ok {
+		return nil
+	}
+	return &a
 }
 
 // revalidate validates the named tasks again in grader mode and the arms' contexts, before a sandbox experiment locks

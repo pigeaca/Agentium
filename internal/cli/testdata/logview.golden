@@ -1,0 +1,28 @@
+
+ BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ budget $5 · 16 tasks · ┆ sandbox: no internet, your secrets hidden
+ 2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
+ ! hidden tests run on your machine, outside the sandbox
+ 15:36:05  baseline  map-keys      ✓ passed  $0.09  2m05s  judge: fixed (3 of 3)
+ 15:38:10  trimmed   map-keys      ✗ failed  $0.09  2m05s
+ 15:40:15  baseline  chunk         infra error (not counted)  $0.01  2m05s
+ 15:40:15  retrying chunk for baseline in 30s: it failed, not by Claude's doing
+ 15:42:20  trimmed   chunk         left out: setup changed  $0.08  2m05s
+ 15:44:25  baseline  uniq-by       left out: sandbox may have caused it  $0.07  2m05s
+ 15:46:30  trimmed   uniq-by       ✓ passed  $0.31  2m05s
+ 15:46:30  warning: trimmed · uniq-by: it passed its $0.30 cost cap by $0.010, more than the $0.00 allowance budgets hold for that
+ 15:48:35  baseline  keyby         stopped before Claude began · runs again next time  2m05s
+ 15:50:40  trimmed   keyby         stopped (not counted)  $0.02  2m05s
+ 15:50:40  compared the two passing runs of map-keys: prefers trimmed, $0.09 (a second opinion)
+ 15:50:40  waiting for your Claude plan's usage to reset at 16:13 (86% used); Ctrl-C stops, and running it again goes on
+ ┌──────────────────────────────────────────────┐
+ │              the answer so far               │
+ │      trimmed may be cheaper (18% less)       │
+ │   not sure yet · next check after 12 tasks   │
+ └──────────────────────────────────────────────┘
+ ┌──────────────────────────────────────────┐
+ │            the answer so far             │
+ │    trimmed may be cheaper (18% less)     │
+ │   not sure yet · stopped at the budget   │
+ └──────────────────────────────────────────┘
+=== end

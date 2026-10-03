@@ -264,11 +264,13 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 		return nil, err
 	}
 	// What a dead run's grade left that cannot be cleaned up is a warning, never a reason to stop (run.RecoverWarn).
-	warn := func(msg string) { fmt.Fprintf(env.Stdout, "%s\n", env.style().Warn("warning: "+msg)) }
+	// These notices print at once, even under the dashboard: if Agentium is killed before the run ends, they are not lost.
+	out := env.noticeOut()
+	warn := func(msg string) { fmt.Fprintf(out, "%s\n", env.style().Warn("warning: "+msg)) }
 	orphans, recoverErr := run.RecoverWarn(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now(), warn)
 	for _, o := range orphans {
 		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored
-			fmt.Fprintf(env.Stdout, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+
+			fmt.Fprintf(out, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+
 				"Its transcript shows $%.2f spent (judge spend, if any, is not included), which neither experiment budgets nor `agentium experiment show` count; the file was moved to %s\n",
 				o.Record.ID, o.Record.Spend().AgentUSD, o.Unreadable)
 			continue
@@ -284,7 +286,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 			release()
 			return nil, err
 		}
-		fmt.Fprintf(env.Stdout, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
+		fmt.Fprintf(out, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
 			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Spend().AgentUSD)
 	}
 	if recoverErr != nil {

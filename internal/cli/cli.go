@@ -32,8 +32,10 @@ type Env struct {
 	// StdinTerminal is whether Stdin is a terminal. A command that asks a question asks only when both Stdin and Stdout
 	// are terminals; tests leave it false and are never asked.
 	StdinTerminal bool
-	// Columns is the terminal's width in columns, for the live status line; nil or 0 means unknown.
-	Columns  func() int
+	// Columns is the terminal's width in columns, for the live status line and the dashboard; nil or 0 means unknown.
+	Columns func() int
+	// Rows is the terminal's height in rows, for the dashboard; nil or 0 means unknown ($LINES, else 24).
+	Rows     func() int
 	Dir      string                       // working directory; empty when it cannot be read
 	Getenv   func(string) string          // os.Getenv
 	Environ  func() []string              // os.Environ: the environment runs start from (filtered there)
@@ -57,6 +59,17 @@ type Env struct {
 	// the caller's: tests and main leave them false.
 	JSON, Plain bool
 	json        *jsonState
+	// notice, when set, is where notices go that must reach the screen at once even while a screen holds standard output
+	// (the dashboard holds it until the run ends): a run recovered from a dead Agentium, say. nil means Stdout.
+	notice io.Writer
+}
+
+// noticeOut is where a notice that must not wait goes (Env.notice): standard output, or above the dashboard at once.
+func (env Env) noticeOut() io.Writer {
+	if env.notice != nil {
+		return env.notice
+	}
+	return env.Stdout
 }
 
 const usage = `agentium measures how coding agents, models and project context change coding-agent results.

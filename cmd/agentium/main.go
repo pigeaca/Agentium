@@ -29,7 +29,11 @@ func main() {
 		Args: os.Args[1:], Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
 		StdinTerminal: term.IsTerminal(os.Stdin),
 		Columns:       func() int { return term.Columns(os.Stdout) },
-		Dir:           dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
+		Rows: func() int {
+			_, rows := term.Size(os.Stdout)
+			return rows
+		},
+		Dir: dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
 		AccountHome: accountHome,
 	})
 	stop()

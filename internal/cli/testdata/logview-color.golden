@@ -1,0 +1,28 @@
+
+ \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243mbudget $5 · 16 tasks · \e[39m\e[38;5;141m┆ sandbox\e[39m\e[38;5;243m: no internet, your secrets hidden\e[39m
+ \e[38;5;243m2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on\e[39m
+ \e[38;5;220m! hidden tests run on your machine, outside the sandbox\e[39m
+ \e[38;5;243m15:36:05\e[39m  \e[38;5;75mbaseline\e[39m  map-keys      \e[38;5;114m✓ passed\e[39m  $0.09  \e[38;5;243m2m05s\e[39m  \e[38;5;243mjudge: fixed (3 of 3)\e[39m
+ \e[38;5;243m15:38:10\e[39m  \e[38;5;215mtrimmed\e[39m   map-keys      \e[38;5;203m✗ failed\e[39m  $0.09  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:40:15\e[39m  \e[38;5;75mbaseline\e[39m  chunk         \e[38;5;220minfra error (not counted)\e[39m  $0.01  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:40:15\e[39m  \e[38;5;220mretrying chunk for baseline in 30s: it failed, not by Claude's doing\e[39m
+ \e[38;5;243m15:42:20\e[39m  \e[38;5;215mtrimmed\e[39m   chunk         \e[38;5;245mleft out: setup changed\e[39m  $0.08  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:44:25\e[39m  \e[38;5;75mbaseline\e[39m  uniq-by       \e[38;5;245mleft out: sandbox may have caused it\e[39m  $0.07  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:46:30\e[39m  \e[38;5;215mtrimmed\e[39m   uniq-by       \e[38;5;114m✓ passed\e[39m  $0.31  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:46:30\e[39m  \e[38;5;220mwarning: trimmed · uniq-by: it passed its $0.30 cost cap by $0.010, more than the $0.00 allowance budgets hold for that\e[39m
+ \e[38;5;243m15:48:35\e[39m  \e[38;5;75mbaseline\e[39m  keyby         \e[38;5;245mstopped before Claude began · runs again next time\e[39m  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:50:40\e[39m  \e[38;5;215mtrimmed\e[39m   keyby         \e[38;5;245mstopped (not counted)\e[39m  $0.02  \e[38;5;243m2m05s\e[39m
+ \e[38;5;243m15:50:40\e[39m  \e[38;5;243mcompared the two passing runs of map-keys: prefers trimmed, $0.09 (a second opinion)\e[39m
+ \e[38;5;243m15:50:40\e[39m  \e[38;5;220mwaiting for your Claude plan's usage to reset at 16:13 (86% used); Ctrl-C stops, and running it again goes on\e[39m
+ \e[38;5;114m┌──────────────────────────────────────────────┐\e[39m
+ \e[38;5;114m│\e[39m              \e[1mthe answer so far\e[22m               \e[38;5;114m│\e[39m
+ \e[38;5;114m│\e[39m      trimmed may be cheaper (18% less)       \e[38;5;114m│\e[39m
+ \e[38;5;114m│\e[39m   \e[38;5;243mnot sure yet · next check after 12 tasks\e[39m   \e[38;5;114m│\e[39m
+ \e[38;5;114m└──────────────────────────────────────────────┘\e[39m
+ \e[38;5;114m┌──────────────────────────────────────────┐\e[39m
+ \e[38;5;114m│\e[39m            \e[1mthe answer so far\e[22m             \e[38;5;114m│\e[39m
+ \e[38;5;114m│\e[39m    trimmed may be cheaper (18% less)     \e[38;5;114m│\e[39m
+ \e[38;5;114m│\e[39m   \e[38;5;243mnot sure yet · stopped at the budget\e[39m   \e[38;5;114m│\e[39m
+ \e[38;5;114m└──────────────────────────────────────────┘\e[39m
+=== end

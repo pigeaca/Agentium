@@ -42,8 +42,9 @@ type Role int
 const (
 	Default Role = iota // the terminal's own color: Paint leaves the text as it is
 
-	ArmA // the first arm of an experiment (A, the baseline)
-	ArmB // the second arm (B, the change)
+	ArmA    // the first arm of an experiment (A, the baseline): blue
+	ArmB    // the second arm (B, the change): orange
+	Sandbox // the sandbox's outline and its legend: purple
 
 	OutcomeOK       // a run that passed
 	OutcomeFailed   // a run that failed its tests
@@ -69,13 +70,18 @@ type shade struct {
 }
 
 var (
-	greenShade  = shade{"32", 78, [3]uint8{95, 215, 135}}
-	redShade    = shade{"31", 203, [3]uint8{255, 95, 95}}
-	yellowShade = shade{"33", 220, [3]uint8{255, 215, 0}}
+	greenShade = shade{"32", 114, [3]uint8{135, 215, 135}}
+	redShade   = shade{"31", 203, [3]uint8{255, 95, 95}}
+	// Yellow is magenta at 8 colors: there arm B's orange is yellow, and a warning must not read as arm B.
+	yellowShade = shade{"35", 220, [3]uint8{255, 215, 0}}
 	greyShade   = shade{"", 245, [3]uint8{138, 138, 138}}
 	shades      = map[Role]shade{
-		ArmA:                shade{"36", 117, [3]uint8{135, 215, 255}},
-		ArmB:                shade{"35", 213, [3]uint8{255, 135, 255}},
+		// The 8-color fallbacks keep the arms apart from each other, from the sandbox and from warnings: cyan is the
+		// nearest to blue that reads on a dark background, yellow the nearest to orange, and the sandbox is blue there
+		// (magenta is the warnings').
+		ArmA:                shade{"36", 75, [3]uint8{95, 175, 255}},
+		ArmB:                shade{"33", 215, [3]uint8{255, 175, 95}},
+		Sandbox:             shade{"34", 141, [3]uint8{175, 135, 255}},
 		OutcomeOK:           greenShade,
 		OutcomeFailed:       redShade,
 		OutcomeInfra:        yellowShade,

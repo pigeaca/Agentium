@@ -62,6 +62,7 @@ func TestExperimentRunShowsAStatusLineOnATerminal(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5"), ExitOK)
 	*f.terminal = true
 	f.vars["TERM"] = "xterm"
+	f.vars["NO_COLOR"] = "1" // the plain view: without NO_COLOR a terminal gets the dashboard (runscreen_test.go)
 	r := f.run(ctx, "experiment", "run", "lean-ab")
 	expect(t, r, ExitOK, "Every run is done.")
 	lines := liveChecks(t, r, "0 of 4 settled", "in flight", "$0.00 of $", "4 of 4 settled")

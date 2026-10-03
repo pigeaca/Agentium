@@ -24,7 +24,7 @@
   - **Previews** (`AGENTIUM_TERM_DEMO`-style frames turned into an animated SVG) are shown to the user before any of this merges.
   - The agreed preview, animated: ![The running experiment: step boxes joined by dotted lines, a dot moving from box to box through the sandbox outlines](../../docs/images/console-dashboard-preview.svg) (sample data).
 - **The connected-box flow** for one run (`run show`) uses the same boxes, dotted lines and sandbox outlines: fresh copy → Claude works → hidden tests → result, with each step's time and cost. A one-time "how this experiment works" flow when an experiment is created is optional, to be previewed first.
-- **A log streams under it**, so scrollback keeps every line. The panel lives in a bottom-anchored region that the log scrolls above, as `docker build` does.
+- **The log sits inside the frame while it runs**, as the approved preview has it: a fixed area of the last 4 runs' results under the answer, blank until filled, so the frame never jumps (the user, 2026-10-03: "it spams and goes somewhere, like last 3-4 only"). Nothing prints above the region during the run: the checks, calibrations, pauses, retries and warnings show as one status line in the frame. **When the screen closes**, on every exit path (the end, an error, a panic, Ctrl-C), the region clears and the full log goes to the scrollback once: what was printed before the first run, the question, every run's line and the answer.
 - **Reports, run details and previews** get the same visual language: boxes with coloured borders, dotted connectors, plain words, colour per arm and per outcome. Interval bars stay in `experiment report`, explained in words beside them.
 - **Two views for a running experiment.** The dashboard is the default on a terminal. `--view log` (or `AGENTIUM_VIEW=log`, set once) gives the styled, append-only log instead:
   - a coloured line per run;
@@ -76,7 +76,24 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     ![A still of the live view: the log above the experiment flow; then run show as a chain](../../docs/images/console-flow.svg)
 
     ![The console's shapes](../../docs/images/console-shapes.svg)
-- [ ] **2. `experiment run`** (and `start --yes`): the live dashboard (the step boxes, dotted connectors and moving dot above, in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+- [x] **2. `experiment run`** (and `start --yes`): the live dashboard (the step boxes, dotted connectors and moving dot above, in a `Display` frame) and the log view, both fed by the executor's events, with `--view dashboard|log` and `AGENTIUM_VIEW`. The plain output when not on a terminal stays as today. Include calibration, usage pauses, `--wait`, budget stops, looks, judge pairs and sandbox lines. Risk: medium.
+  - Done:
+    - **Events:** a run's steps reach the observer as `Event{Kind: "step"}` (`run.StepPreparing`, `StepAgent`, `StepGrading`, `StepJudging`, the words `Env.Step` already sent), only when an observer takes events. `Result.Passed` carries the grade, and `Observer.Finish` gets the `Summary`. Records, JSON and the plain lines are unchanged.
+    - **The screens** (`internal/cli`): `runstate.go` keeps the state behind a lock and copies it for each frame; `rundash.go` draws the dashboard on a `term.Canvas`; `runview.go` holds the words; `runscreen.go` wires either view to the observer.
+    - **Compaction:** the dashboard drops the legend, then draws boxes on one line, then each arm on one line. On a terminal narrower than 74 columns it uses 10-cell boxes with short names.
+    - **The log:** a fixed area of the last 4 runs' results in the frame. What is printed during the run (checks, calibrations, revalidation) is held and shown as the status line ("getting ready · …" before the first run). Pauses, retries, warnings and the pair judge's comparisons also take the status line, under the header (a comparison or a warning for 10 s, a retry until its run starts, a pause until it ends), in place of how the runs are run ("2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on", which replaces the plain lines' "Running up to …").
+    - **Notices that must not wait:** a run recovered from a dead Agentium, and a start file that cannot be read, print above the region at once, so a kill before the end loses neither.
+    - **The end:** the screen closes on every exit path, an error, a panic or Ctrl-C included. The region clears, and the held lines, the question, every run's line and the answer go to the scrollback once.
+    - **Steps are opt-in:** only an observer that asks for them gets steps (`Observer.Steps`). The plain and JSON observers never do, so a stalled terminal cannot hold a run at a step boundary.
+    - **Plain words:** the answer's wording is one table (`answerWords`, tested case by case). A fixed design's answer is read from its analysis once every run is done.
+    - **Palette:** the arms are blue (75) and orange (215), the sandbox purple (141) and green 114. At 8 colors, warnings and infrastructure failures are magenta (arm B is yellow there) and the sandbox blue. The term color goldens were rewritten for it.
+    - **Choosing the view:** `chooseView` gives the plain lines off a terminal, on `TERM=dumb`, below 60 columns, with `--json`, and with `NO_COLOR` unless a view is asked for.
+  - Samples, recorded from the real code with the test stand-in for Claude Code (2 s a run, no paid runs): the dashboard, animated ([`console-run-dashboard.svg`](../../docs/images/console-run-dashboard.svg)) and still ([`console-run-dashboard-still.svg`](../../docs/images/console-run-dashboard-still.svg)), and the log view ([`console-run-log.svg`](../../docs/images/console-run-log.svg)), with `scripts/readme_images/frames2svg.py`.
+  - Limits:
+    - The summary printed after the run (`WriteProgress`, shared with `experiment show`) still says "Looks" and "look 1 of 3": that is step 3's and step 5's.
+    - A run that is never graded leaves its tests box at "–".
+    - With concurrency above 2, each arm shows its latest run.
+    - Before the first run, the status line shows only the latest line printed. The checks' warnings reach the screen at the end, in the scrollback.
 - [ ] **3. `experiment report`:**
   - a verdict panel with interval bars;
   - per-arm panels;
