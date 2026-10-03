@@ -607,6 +607,17 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 	down.clock.add(2 * time.Second) // the dot has arrived
 	draw("the sandbox unavailable", down)
 
+	// Out of attempts: no retry follows, so the row says the run is not counted.
+	spent := moments(true)
+	spent.start(0)
+	spent.step(0, run.StepAgent)
+	spent.step(0, run.StepGrading)
+	spent.step(0, run.StepSandbox)
+	spent.step(0, run.StepSandboxDown)
+	spent.finish(0, claude.OutcomeInfra, nil, 0.08)
+	spent.clock.add(2 * time.Second)
+	draw("the sandbox unavailable, no retry", spent)
+
 	flagged := moments(true)
 	flagged.start(0)
 	flagged.step(0, run.StepAgent)
@@ -638,6 +649,9 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 	checkWords(t, "the moments", plain.String())
 	checkGolden(t, "dashboard-moments.golden", plain.String())
 	checkGolden(t, "dashboard-moments-color.golden", color.String())
+	if !strings.Contains(plain.String(), "sandbox unavailable · not counted") || !strings.Contains(plain.String(), "sandbox unavailable · retrying") {
+		t.Error("the unavailable sandbox's row notes")
+	}
 	if !strings.Contains(color.String(), "\x1b[38;5;220m╭┄ sandbox") {
 		t.Error("the unavailable sandbox's outline is not in the caution color")
 	}

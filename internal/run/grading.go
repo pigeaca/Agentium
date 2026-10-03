@@ -193,6 +193,8 @@ type gradingInput struct {
 	Warn       func(string)
 	// Cleaning, when set, is told when the cleanup starts, and Quarantined when it moved the folder into the quarantine.
 	Cleaning, Quarantined func()
+	// remove, when set, replaces removeTree for the grade's folder (tests make it fail).
+	remove func(string) error
 	// Keep, when set, is where the copy is moved back to once the grade is done and what it left running is stopped
 	// (--keep): the rest of the grade's folder is removed as always. It must not exist; normally it is Copy.
 	Keep string
@@ -359,7 +361,11 @@ func withGrading(ctx context.Context, in gradingInput, grade func(g grading) err
 				warn("the grading copy could not be kept: " + err.Error())
 			}
 		}
-		warning, rmErr := removeOrQuarantine(g.Root, in.Quarantine)
+		remove := removeTree
+		if in.remove != nil {
+			remove = in.remove
+		}
+		warning, rmErr := quarantineAfter(g.Root, in.Quarantine, remove)
 		if warning != "" {
 			warn(warning)
 			if in.Quarantined != nil {

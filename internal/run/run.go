@@ -82,8 +82,10 @@ type Env struct {
 	Expect   claude.Expect
 	Progress io.Writer
 	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
-	// Step, when set, is called as each step begins (StepPreparing, StepAgent, StepGrading, StepJudging), so a caller can
-	// show what is in progress. It is called on the run's goroutine; it only feeds a status display and must not print.
+	// Step, when set, is called as each step and finer moment begins (StepPreparing, StepDependencies, StepSetup,
+	// StepAgent, StepGrading, StepSandbox, StepTests, StepJudging, StepCleanup), and with the sandbox's news, which is
+	// no work in progress (StepSandboxDown, StepQuarantined: see InProgress), so a caller can show what is going on. It
+	// is called on the run's goroutine; it only feeds a status display and must not print.
 	Step func(step string)
 	Now  func() time.Time
 	// Workspace names the run's folder under Layout.Workspaces (default: ID). Experiments name it by slot and try, so
@@ -283,8 +285,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			startErr = err
 		}
 	}
+	prepared := false // the workspace was begun: there is something to clean up
 	defer func() {
-		env.step(StepCleanup)
+		if prepared {
+			env.step(StepCleanup)
+		}
 		rec.Finished = env.Now().UTC()
 		if recordsReady {
 			if startErr := writeStart(true); startErr != nil && err == nil {
@@ -399,6 +404,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	env.step(StepPreparing)
+	prepared = true
 	env.progress("%s", env.Style.Heading(fmt.Sprintf("Run %s: task %s, arm %s, model %s, sign-in %s", env.ID, spec.TaskName, spec.Arm.Name, spec.Model, env.SignIn)))
 
 	// The workspace: the base, the arm's context, the setup, then the context commit.
@@ -1029,6 +1035,10 @@ const (
 	StepSandboxDown  = "the grading sandbox is unavailable"
 	StepQuarantined  = "a folder was moved to the quarantine"
 )
+
+// InProgress reports whether step is work in progress (a step or a moment), rather than news of what happened
+// (StepSandboxDown, StepQuarantined): a status line that shows the step in progress shows only those.
+func InProgress(step string) bool { return step != StepSandboxDown && step != StepQuarantined }
 
 // step tells the caller a step is starting.
 func (env Env) step(name string) {

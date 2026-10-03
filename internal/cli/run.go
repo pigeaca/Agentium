@@ -144,7 +144,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	runEnv.Step, runEnv.Grader = live.Step, mode
+	runEnv.Step, runEnv.Grader = progressStep(live.Step), mode
 	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, model); {
 	case err != nil:
 		return fail(env, err)
@@ -186,6 +186,17 @@ func onceProfile(env Env, profile string, grader graderFlag) (model, effort, mod
 	}
 	mode, err = grader.mode(env)
 	return model, effort, mode, err
+}
+
+// progressStep passes to show only the steps that are work in progress (run.InProgress): a status line showing the
+// step in progress must not show news (the sandbox unavailable, a folder quarantined) as if it were work. The run's
+// own lines say those.
+func progressStep(show func(string)) func(string) {
+	return func(step string) {
+		if run.InProgress(step) {
+			show(step)
+		}
+	}
 }
 
 // liveEnv returns env with its output printing above a live status line where Stdout is a terminal (the status line
@@ -589,7 +600,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		len(arms), experiment.ShortCommit(head), model, runEnv.SignIn, *budget)
 	results, err := run.Calibrator{Head: head, Arms: arms, Model: model, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn, Now: env.Now,
 		Execute: func(ctx context.Context, arm task.Arm, spec run.Spec) (run.Record, error) {
-			runEnv.Step = func(step string) { live.Step("calibrating arm " + arm.Name + ": " + step) }
+			runEnv.Step = progressStep(func(step string) { live.Step("calibrating arm " + arm.Name + ": " + step) })
 			return executeRun(ctx, env, w, runEnv, runMeta{Kind: "calibration"}, spec)
 		},
 		Save: func(ctx context.Context, c run.Calibration) error { return saveCalibration(ctx, env, w, c) },

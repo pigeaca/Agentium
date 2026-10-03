@@ -188,6 +188,25 @@ retrying map-keys for baseline in 30s: it failed, not by Claud…
   │  ✓ 0s  │     ┆ │  ✓ 0s  │ ┆   ┆ │ ! down │ ┆     │not grad│
   └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
                  ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
+=== the sandbox unavailable, no retry, 79 columns
+ 2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
+  baseline · map-keys   sandbox unavailable · not counted
+                     ╭┄ sandbox ┄┄┄┄┄┄╮   ╭┄ sandbox ┄┄┄┄┄┄╮
+  ┌────────────┐     ┆ ┌────────────┐ ┆   ┆ ┌────────────┐ ┆     ┌────────────┐
+  │ fresh copy │╌╌╌╌╌┆╌│Claude works│╌┆╌╌╌┆╌│hidden tests│╌┆╌╌╌╌╌│   result   │
+  │    ✓ 0s    │     ┆ │    ✓ 0s    │ ┆   ┆ │! no sandbox│ ┆     │ not graded │
+  └────────────┘     ┆ └────────────┘ ┆   ┆ └────────────┘ ┆     └────────────┘
+                     ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
+=== the sandbox unavailable, no retry, 64 columns
+          2 at a time · each run up to $3 and 20 min
+               Ctrl-C stops; run again to go on
+  baseline · map-keys   sandbox unavailable · not counted
+                 ╭┄ sandbox ┄┄╮   ╭┄ sandbox ┄┄╮
+  ┌────────┐     ┆ ┌────────┐ ┆   ┆ ┌────────┐ ┆     ┌────────┐
+  │  copy  │╌╌╌╌╌┆╌│ Claude │╌┆╌╌╌┆╌│ tests  │╌┆╌╌╌╌╌│ result │
+  │  ✓ 0s  │     ┆ │  ✓ 0s  │ ┆   ┆ │ ! down │ ┆     │not grad│
+  └────────┘     ┆ └────────┘ ┆   ┆ └────────┘ ┆     └────────┘
+                 ╰┄┄┄┄┄┄┄┄┄┄┄┄╯   ╰┄┄┄┄┄┄┄┄┄┄┄┄╯
 === flagged denials, 79 columns
  2 at a time · each run up to $3 and 20 min · Ctrl-C stops; run again to go on
   baseline · map-keys   blocked: a system service lookup, a file read

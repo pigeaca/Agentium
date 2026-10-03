@@ -224,8 +224,13 @@ func TestOnceCanaryFailureIsInfrastructure(t *testing.T) {
 
 	f = newOnceFixture(t, "", "true\n")
 	f.env.Grader = "sandbox-v0"
+	steps = nil
+	f.env.Step = func(s string) { steps = append(steps, s) }
 	if rec, err := Once(context.Background(), f.env, f.spec); err == nil || rec.Outcome != "" {
 		t.Errorf("an unknown grader: %s, %v", rec.Outcome, err)
+	}
+	if len(steps) != 0 { // refused before the workspace: nothing to clean up, nothing to show
+		t.Errorf("a refused run's steps: %q", steps)
 	}
 }
 
