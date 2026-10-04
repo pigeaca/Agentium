@@ -1,11 +1,11 @@
 # A designed console: a live dashboard and visual reports
 
 - Date: 2026-10-03
-- Status: In Progress (2026-10-04): step 1 merged (#133), the design settled with the user over previews (#134), step 2 merged (#136, #137), step 3 merged, steps 4–6 done on `claude/feat/console-steps`. The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
+- Status: Done (2026-10-04): step 1 merged (#133), the design settled with the user over previews (#134), step 2 merged (#136, #137), step 3 merged (#139), steps 4–6 merged (#144, previews approved by the user). The user asked (2026-10-03), showing an animated terminal dashboard ("agent stack": coloured panels, bars, a streaming log): "Is it possible to do beautification of our app in this way? Like some sandbox work, analyze etc". The user's choices:
   - a **live dashboard** for a running experiment, redrawn in place;
   - **and a log format too** ("But also should be dashboard and just log format"): a styled, append-only log, chosen per call or once;
   - all four screen groups: `experiment run`, `experiment report`, `run show`, and `start` / `experiment plan` / `pool status`.
-- Scope: Agentium's human console output only. It follows the [no web UI decision](../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
+- Scope: Agentium's human console output only. It follows the [no web UI decision](../../decisions/2026-09-30-console-instead-of-web-ui.md): the console is the product's face.
 
 ## Outcome
 - **A running experiment** shows **each arm's current task as a row of step boxes joined by dotted lines**, redrawn in place on a terminal. The user settled this on 2026-10-03 after a series of previews: one panel was "too difficult to understand… too many strange words"; tracks were rejected for "keep boxes but with lines"; then "dot line like on the screenshot and dot that move"; then "remove arrow at the end, just dot line".
@@ -22,7 +22,7 @@
   - **Colours** (from the user's screenshot): baseline blue, trimmed orange, the sandbox purple, done and the answer green, failures red, everything else grey.
   - **Animation:** up to about 10 frames a second; the dot slides between boxes, spinners turn, and bars and counts update as runs finish. Nothing blinks.
   - **Previews** (`AGENTIUM_TERM_DEMO`-style frames turned into an animated SVG) are shown to the user before any of this merges.
-  - The agreed preview, animated: ![The running experiment: step boxes joined by dotted lines, a dot moving from box to box through the sandbox outlines](../../docs/images/console-run-dashboard.svg) (recorded from the real code; the design previews from the rounds above are not kept).
+  - The agreed preview, animated: ![The running experiment: step boxes joined by dotted lines, a dot moving from box to box through the sandbox outlines](../../../docs/images/console-run-dashboard.svg) (recorded from the real code; the design previews from the rounds above are not kept).
 - **The connected-box flow** for one run (`run show`) uses the same boxes, dotted lines and sandbox outlines: fresh copy → Claude works → hidden tests → result, with each step's time and cost. A one-time "how this experiment works" flow when an experiment is created is optional, to be previewed first.
 - **The log sits inside the frame while it runs**, as the approved preview has it: a fixed area of the last 4 runs' results under the answer, blank until filled, so the frame never jumps (the user, 2026-10-03: "it spams and goes somewhere, like last 3-4 only"). Nothing prints above the region during the run: the checks, calibrations, pauses, retries and warnings show as one status line in the frame. **When the screen closes**, on every exit path (the end, an error, a panic, Ctrl-C), the region clears and the full log goes to the scrollback once: what was printed before the first run, the question, every run's line and the answer.
 - **Reports, run details and previews** get the same visual language: boxes with coloured borders, dotted connectors, plain words, colour per arm and per outcome. Interval bars stay in `experiment report`, explained in words beside them.
@@ -84,7 +84,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
     - **Plain words:** the answer's wording is one table (`answerWords`, tested case by case). A fixed design's answer is read from its analysis once every run is done.
     - **Palette:** the arms are blue (75) and orange (215), the sandbox purple (141) and green 114. At 8 colors, warnings and infrastructure failures are magenta (arm B is yellow there) and the sandbox blue. The term color goldens were rewritten for it.
     - **Choosing the view:** `chooseView` gives the plain lines off a terminal, on `TERM=dumb`, below 60 columns, with `--json`, and with `NO_COLOR` unless a view is asked for.
-  - Samples, recorded from the real code with the test stand-in for Claude Code (2 s a run, no paid runs): the dashboard, animated ([`console-run-dashboard.svg`](../../docs/images/console-run-dashboard.svg)) and still ([`console-run-dashboard-still.svg`](../../docs/images/console-run-dashboard-still.svg)), and the log view ([`console-run-log.svg`](../../docs/images/console-run-log.svg)), with `scripts/readme_images/frames2svg.py`.
+  - Samples, recorded from the real code with the test stand-in for Claude Code (2 s a run, no paid runs): the dashboard, animated ([`console-run-dashboard.svg`](../../../docs/images/console-run-dashboard.svg)) and still ([`console-run-dashboard-still.svg`](../../../docs/images/console-run-dashboard-still.svg)), and the log view ([`console-run-log.svg`](../../../docs/images/console-run-log.svg)), with `scripts/readme_images/frames2svg.py`.
   - Limits:
     - The summary printed after the run (`WriteProgress`, shared with `experiment show`) still says "Looks" and "look 1 of 3": that is step 3's and step 5's.
     - A run that is never graded leaves its tests box at "–".
@@ -101,7 +101,7 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
       - The row notes sit on the name line rather than under the row, so the frame never changes height.
     - **Samples:**
       - The animated dashboard and its still, re-recorded: the still shows "starting" and "testing".
-      - [`console-run-sandbox-news.svg`](../../docs/images/console-run-sandbox-news.svg), drawn from the test scenes: the stand-in cannot make the real sandbox fail.
+      - [`console-run-sandbox-news.svg`](../../../docs/images/console-run-sandbox-news.svg), drawn from the test scenes: the stand-in cannot make the real sandbox fail.
     - **Limits:**
       - At 80 columns the moments' words fit only without their time.
       - Moments under a second flash by, or never show between two redraws.
@@ -123,11 +123,11 @@ Step 1 comes first; steps 2–5 build on it and can run two at a time.
       - dim notes that matter, wrapped (a wrapped line keeps its grey), ending with the `--details` command.
     - **`--details`** shows the full terminal report as before. Piped, `--markdown`, `--out`, `--json`, `NO_COLOR`, `TERM=dumb` and below 60 columns are unchanged.
     - **Shared wording** (approved): the dashboard's final answer now says "sure enough" when decisive and "not sure yet · about N tasks in all could settle it" otherwise (`answerState.Settle`, from `TasksToResolve`; not in an A/A).
-    - **Judge pairs:** step 2 of the [judge pairs plan](2026-10-01-judge-pairs.md) (`Report.PairJudge`, `pair_judge` in the JSON, a Judge pairs section in the Markdown and `--details`), only for experiments made with `--judge-pairs`.
+    - **Judge pairs:** step 2 of the [judge pairs plan](../2026-10-01-judge-pairs.md) (`Report.PairJudge`, `pair_judge` in the JSON, a Judge pairs section in the Markdown and `--details`), only for experiments made with `--judge-pairs`.
     - **Fixtures:** the report's test fixtures moved to `internal/report/reporttest` (with `Seq`, `JudgedPairs` and `FewPairs`), so the view's tests build real reports. The A/A fixture's design now names the lock's second arm (an evaluation-order slip); no golden changed, as every rendering names contexts from the lock's arms.
     - **Proof:** with a scratch test writing the Markdown, JSON and `--details` text (plain and colored) of ten fixtures without `--judge-pairs` (the A/B, one-run A/B under both methods, the A/A, the judged one and five seq-v1 states), the 40 files from this branch and from `origin/main` (`4b7eb9b`) are byte for byte identical.
     - **Tests:** goldens of seven scenes at 60, 80, 100 and 120 columns (`internal/cli/testdata/report-*.golden`), the decisive one in 256 colors and ASCII; the answer's words are `answerWords`' in every scene; the judge lines and the floor; the collapsed grid; sanitized names; wrapped colors; the fallbacks (`TERM=dumb`, 50 columns, `NO_COLOR`).
-    - **Samples** (`AGENTIUM_REPORT_DEMO=dir go test ./internal/cli -run TestReportViewPreview`, then `ansi2svg.py` at 80 columns): [decisive](../../docs/images/console-report-decisive.svg), [not sure yet](../../docs/images/console-report-unsure.svg), [A/A](../../docs/images/console-report-aa.svg), [both judges](../../docs/images/console-report-judged.svg), [too few pairs](../../docs/images/console-report-few-pairs.svg), [seq-v1 stopped early](../../docs/images/console-report-seq-stopped.svg), [seq-v1 futility](../../docs/images/console-report-seq-futility.svg).
+    - **Samples** (`AGENTIUM_REPORT_DEMO=dir go test ./internal/cli -run TestReportViewPreview`, then `ansi2svg.py` at 80 columns): [decisive](../../../docs/images/console-report-decisive.svg), [not sure yet](../../../docs/images/console-report-unsure.svg), [A/A](../../../docs/images/console-report-aa.svg), [both judges](../../../docs/images/console-report-judged.svg), [too few pairs](../../../docs/images/console-report-few-pairs.svg), [seq-v1 stopped early](../../../docs/images/console-report-seq-stopped.svg), [seq-v1 futility](../../../docs/images/console-report-seq-futility.svg).
     - **Review of #139:** an early seq-v1 stop gets the dim note "it stopped early: the true saving is likely smaller than 50%"; the answer box always says the other side of the question ("whether lean passes as many tasks: too few to tell", or the guard's verdict in words); "about N tasks in all could settle it" on both screens; a pair reason loses its line breaks and escape codes; "≥" is ">=" in ASCII; the `--details` command never breaks; on a narrow dashboard the answer's status drops its least important parts (`fitParts`) instead of being cut, so the frame keeps its height. Mutation checks killed every mutant of these paths.
     - **Limits:**
       - `experiment show` and the summary after a run (`WriteProgress`) keep their words: step 5's.
