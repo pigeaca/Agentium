@@ -299,40 +299,59 @@ var (
 // cannot substitute another image. A missing image is ErrImageMissing: Image never pulls, and neither does Run
 // (create --pull never). The image must be Linux on the daemon's architecture.
 func (d *Docker) Image(ctx context.Context, ref string) (Image, error) {
+	img, err := d.inspectImage(ctx, ref)
+	if err != nil {
+		return Image{}, err
+	}
+	return Image{Ref: ref, ID: img.ID, Env: img.Config.Env, Arch: img.Architecture}, nil
+}
+
+// imageInfo is what Agentium reads of an image's record (`docker image inspect`).
+type imageInfo struct {
+	ID           string `json:"Id"`
+	RepoDigests  []string
+	RepoTags     []string
+	Os           string
+	Architecture string
+	Size         int64
+	Config       struct {
+		Env    []string
+		Labels map[string]string
+	}
+	RootFS struct{ Layers []string }
+}
+
+// inspectImage reads a pinned image's record and checks it as Image does: found by that very reference (its digest
+// among RepoDigests, or its ID), Linux on the daemon's architecture.
+func (d *Docker) inspectImage(ctx context.Context, ref string) (imageInfo, error) {
 	if !digestRef.MatchString(ref) && !imageID.MatchString(ref) {
-		return Image{}, fmt.Errorf("image %q: not pinned by digest", ref)
+		return imageInfo{}, fmt.Errorf("image %q: not pinned by digest", ref)
 	}
 	out, stderr, res, err := d.call(ctx, []string{"image", "inspect", "--format", "{{json .}}", ref}, nil, controlTimeout)
 	if err != nil {
-		return Image{}, fmt.Errorf("image %q: %w", ref, err)
+		return imageInfo{}, fmt.Errorf("image %q: %w", ref, err)
 	}
 	if res.ExitCode != 0 {
 		if strings.Contains(stderr, "No such image") {
-			return Image{}, fmt.Errorf("%w: %s (pull it with consent first; Agentium never pulls on its own)", ErrImageMissing, ref)
+			return imageInfo{}, fmt.Errorf("%w: %s (pull it with consent first; Agentium never pulls on its own)", ErrImageMissing, ref)
 		}
-		return Image{}, fmt.Errorf("image %q: %w: %s", ref, ErrUnavailable, firstLine(stderr))
+		return imageInfo{}, fmt.Errorf("image %q: %w: %s", ref, ErrUnavailable, firstLine(stderr))
 	}
-	var img struct {
-		ID           string `json:"Id"`
-		RepoDigests  []string
-		Os           string
-		Architecture string
-		Config       struct{ Env []string }
-	}
+	var img imageInfo
 	if err := json.Unmarshal(bytes.TrimSpace(out), &img); err != nil {
-		return Image{}, fmt.Errorf("image %q: read its record: %w", ref, err)
+		return imageInfo{}, fmt.Errorf("image %q: read its record: %w", ref, err)
 	}
 	switch {
 	case imageID.MatchString(ref) && img.ID != ref:
-		return Image{}, fmt.Errorf("image %q: the daemon answered with %q", ref, img.ID)
+		return imageInfo{}, fmt.Errorf("image %q: the daemon answered with %q", ref, img.ID)
 	case digestRef.MatchString(ref) && !containsString(img.RepoDigests, ref):
-		return Image{}, fmt.Errorf("%w: %s (the daemon's image of that name has another digest)", ErrImageMissing, ref)
+		return imageInfo{}, fmt.Errorf("%w: %s (the daemon's image of that name has another digest)", ErrImageMissing, ref)
 	case !imageID.MatchString(img.ID):
-		return Image{}, fmt.Errorf("image %q: unreadable ID %q", ref, img.ID)
+		return imageInfo{}, fmt.Errorf("image %q: unreadable ID %q", ref, img.ID)
 	case img.Os != "linux" || img.Architecture != d.engine.Arch:
-		return Image{}, fmt.Errorf("image %q is %s/%s, and the daemon runs %s/%s", ref, img.Os, img.Architecture, d.engine.OS, d.engine.Arch)
+		return imageInfo{}, fmt.Errorf("image %q is %s/%s, and the daemon runs %s/%s", ref, img.Os, img.Architecture, d.engine.OS, d.engine.Arch)
 	}
-	return Image{Ref: ref, ID: img.ID, Env: img.Config.Env, Arch: img.Architecture}, nil
+	return img, nil
 }
 
 // Usable is the whole usability check before a command uses the mode: Open, Fits and every image present by digest.

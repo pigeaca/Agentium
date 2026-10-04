@@ -203,6 +203,8 @@ type runFixture struct {
 	account *string
 	// grader is Env.DefaultGrader: host, so tests grade on the host unless they test the sandbox.
 	grader *string
+	// docker is Env.Docker: nil, so tests never reach a real Docker, unless they give a fake.
+	docker *func(ctx context.Context, environ []string) (DockerClient, error)
 }
 
 // newRunFixture is a project with one commit that adds a hidden test and the task "value" imported from it, initialized
@@ -243,9 +245,10 @@ func runFixtureAt(repo, data, home string) runFixture {
 	f.account = new(string)
 	f.grader = new(string)
 	*f.grader = "host"
+	f.docker = new(func(ctx context.Context, environ []string) (DockerClient, error))
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
-		code := Run(ctx, Env{DefaultGrader: *f.grader, Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
+		code := Run(ctx, Env{DefaultGrader: *f.grader, Docker: *f.docker, Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
 			Getenv: func(key string) string { return f.vars[key] },
 			Environ: func() []string {
 				environ := []string{"PATH=" + os.Getenv("PATH"), "HOME=" + f.home}

@@ -254,7 +254,21 @@ func (w *workspace) hostToolchain(ctx context.Context, env Env) (task.Toolchain,
 	if env.Environ != nil {
 		environ = env.Environ()
 	}
-	// The tools of the root and of every module a task runs in: validations record the versions of the tools they use.
+	tools, err := w.buildTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	found, err := pool.DetectToolchain(ctx, tools, pool.HostVersions(w.layout.Root, environ))
+	if err != nil {
+		return nil, err
+	}
+	w.toolchain = found
+	return found, nil
+}
+
+// buildTools are the build tools detected at the repository's root and in every module a task runs in: validations
+// record the versions of the tools they use, and container grading needs their images.
+func (w *workspace) buildTools(ctx context.Context) ([]string, error) {
 	modules, err := w.taskModules(ctx)
 	if err != nil {
 		return nil, err
@@ -267,12 +281,7 @@ func (w *workspace) hostToolchain(ctx context.Context, env Env) (task.Toolchain,
 			}
 		}
 	}
-	found, err := pool.DetectToolchain(ctx, tools, pool.HostVersions(w.layout.Root, environ))
-	if err != nil {
-		return nil, err
-	}
-	w.toolchain = found
-	return found, nil
+	return tools, nil
 }
 
 // batchRow is a row of the table pool update and task validate --all end with: a task, or a commit that did not

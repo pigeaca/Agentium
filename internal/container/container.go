@@ -100,7 +100,15 @@ func (c *Container) ImageEnv() []string { return append([]string(nil), c.imageEn
 //  4. Anything else is infrastructure before the grade's input was used, or Agentium's own (a refused Command), and
 //     may be retried. With ErrCleanup among it, the leftover still holds the grade's name, so recovery must remove it
 //     first.
-func (d *Docker) Run(ctx context.Context, spec Spec, fn func(ctx context.Context, c *Container) error) (err error) {
+func (d *Docker) Run(ctx context.Context, spec Spec, fn func(ctx context.Context, c *Container) error) error {
+	if spec.warm {
+		return errors.New("container spec: a deps warm-up's container is never a grade's")
+	}
+	return d.run(ctx, spec, fn)
+}
+
+// run is Run for a grade's container, and Warm's for a deps warm-up's (spec.warm).
+func (d *Docker) run(ctx context.Context, spec Spec, fn func(ctx context.Context, c *Container) error) (err error) {
 	if err := spec.validate(); err != nil {
 		return err
 	}
@@ -174,7 +182,7 @@ func (c *Container) start(ctx context.Context) error {
 	if probeRes.ExitCode != 0 {
 		return fmt.Errorf("%w: the probe script exited %d: %s", ErrProbe, probeRes.ExitCode, firstLine(probeErr))
 	}
-	if err := checkProbes(string(probes), c.spec.Deps != ""); err != nil {
+	if err := checkProbesFor(string(probes), c.spec.Deps != "", c.spec.warm); err != nil {
 		return err
 	}
 	// The daemon's record of commands judges every command (Exec), so a daemon that cannot give it fails here, as

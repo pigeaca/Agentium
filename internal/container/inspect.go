@@ -164,13 +164,17 @@ func checkInspect(raw []byte, spec Spec, runtime string) (digest string, imageEn
 	for _, l := range spec.labels() {
 		want("Config.Labels["+l[0]+"]", c.Config.Labels[l[0]] == l[1], c.Config.Labels[l[0]], l[1])
 	}
-	want("HostConfig.NetworkMode", h.NetworkMode == "none", h.NetworkMode, "none")
+	network := "none"
+	if spec.warm {
+		network = "bridge" // a deps warm-up's (Warm), never a grade's
+	}
+	want("HostConfig.NetworkMode", h.NetworkMode == network, h.NetworkMode, network)
 	networks := make([]string, 0, len(c.NetworkSettings.Networks))
 	for n := range c.NetworkSettings.Networks {
 		networks = append(networks, n)
 	}
 	sort.Strings(networks)
-	want("NetworkSettings.Networks", slices.Equal(networks, []string{"none"}), networks, "[none]")
+	want("NetworkSettings.Networks", slices.Equal(networks, []string{network}), networks, "["+network+"]")
 	want("HostConfig.IpcMode", h.IpcMode == "private", h.IpcMode, "private")
 	want("HostConfig.PidMode", h.PidMode == "", h.PidMode, `""`)
 	want("HostConfig.UTSMode", h.UTSMode == "", h.UTSMode, `""`)
@@ -217,7 +221,7 @@ func checkInspect(raw []byte, spec Spec, runtime string) (digest string, imageEn
 		Memory: h.Memory, MemorySwap: h.MemorySwap, Pids: pids, NanoCPUs: h.NanoCpus, Shm: h.ShmSize, Log: h.LogConfig.Type,
 		AutoRemove: h.AutoRemove, Init: true, Mounts: []string{"volume " + GradeDir + " rw"}}
 	if spec.Deps != "" {
-		norm.Mounts = append(norm.Mounts, "volume "+DepsDir+" ro")
+		norm.Mounts = append(norm.Mounts, "volume "+DepsDir+" "+map[bool]string{false: "ro", true: "rw"}[spec.warm])
 	}
 	data, err := json.Marshal(norm)
 	if err != nil {
@@ -228,8 +232,8 @@ func checkInspect(raw []byte, spec Spec, runtime string) (digest string, imageEn
 }
 
 // checkMounts allows exactly the mounts asked for: an anonymous volume at /grade, read-write and labelled, and the
-// deps volume at /deps, read-only, when there is one. A bind of any kind, a tmpfs mount, or a volume the image itself
-// declares is refused.
+// deps volume at /deps, read-only, when there is one (read-write only for a deps warm-up, never a grade). A bind of any
+// kind, a tmpfs mount, or a volume the image itself declares is refused.
 func checkMounts(c inspected, spec Spec) []string {
 	var bad []string
 	wantAsked := 1
@@ -255,7 +259,7 @@ func checkMounts(c inspected, spec Spec) []string {
 					bad = append(bad, fmt.Sprintf("%s's label %s is %q, want %q", field, l[0], m.VolumeOptions.Labels[l[0]], l[1]))
 				}
 			}
-		case spec.Deps != "" && m.Type == "volume" && m.Target == DepsDir && m.Source == spec.Deps && m.ReadOnly:
+		case spec.Deps != "" && m.Type == "volume" && m.Target == DepsDir && m.Source == spec.Deps && m.ReadOnly != spec.warm:
 		default:
 			bad = append(bad, fmt.Sprintf("%s is %s %q at %q (read-only %v), which was not asked for", field, m.Type, m.Source, m.Target, m.ReadOnly))
 		}
@@ -265,7 +269,7 @@ func checkMounts(c inspected, spec Spec) []string {
 		switch {
 		case m.Type == "volume" && m.Destination == GradeDir && m.RW && m.Name != "" && m.Driver == "local":
 			grade++
-		case spec.Deps != "" && m.Type == "volume" && m.Destination == DepsDir && !m.RW && m.Name == spec.Deps && m.Driver == "local":
+		case spec.Deps != "" && m.Type == "volume" && m.Destination == DepsDir && m.RW == spec.warm && m.Name == spec.Deps && m.Driver == "local":
 			deps++
 		default:
 			bad = append(bad, fmt.Sprintf("Mounts has %s %q at %q (rw %v, driver %q), which was not asked for", m.Type, m.Name, m.Destination, m.RW, m.Driver))

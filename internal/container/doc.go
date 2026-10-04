@@ -26,6 +26,14 @@
 //   - Leftovers: every container and its volume carry labels that tie them to the data folder and the run, so
 //     recovery and clean find them (Leftovers, RemoveRun), including a container created but never started, which
 //     neither --rm nor the deadline removes.
+//   - Images (pins.go, recipe.go, images.go): the pin table of official base images by digest and the version match
+//     with the host's toolchains; the local build of each grading image (the base plus git and less); Plan reads what
+//     is present and what a pull would download, and only Fetch, which the caller calls with the user's consent,
+//     pulls (by digest, anonymously) and builds, then checks the result.
+//   - Deps volumes (deps.go): one per project and grading image, seeded from host caches through a container that
+//     never starts, warmed in a networked container (Warm) from a trusted commit only, and mounted read-only by
+//     grades.
+//   - Cleanup (cleanup.go): a data folder's containers and volumes by label, and the removal of the idle ones only.
 //
-// Nothing here pulls or builds an image, starts a daemon or changes Docker's settings or contexts.
+// Nothing here starts a daemon or changes Docker's settings or contexts, and nothing pulls or builds but Fetch.
 package container

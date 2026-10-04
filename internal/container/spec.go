@@ -70,6 +70,10 @@ type Spec struct {
 	Limits   Limits
 	Deadline time.Duration // how long the main process lives: every command's timeout plus a margin; at most a day
 	Deps     string        // a volume mounted read-only at /deps, or none; it must already exist
+
+	// warm makes the container a deps warm-up's (Warm), never a grade's: the default network, and the deps volume
+	// mounted read-write. Only Warm sets it, and Run refuses it.
+	warm bool
 }
 
 var (
@@ -134,9 +138,13 @@ func createArgs(s Spec) []string {
 		grade += ",volume-label=" + l[0] + "=" + l[1]
 	}
 	mem := strconv.FormatInt(s.Limits.Memory, 10)
+	network, depsMode := "none", ",readonly"
+	if s.warm {
+		network, depsMode = "bridge", "" // a warm-up's: it fetches, from a trusted commit, into the volume
+	}
 	args = append(args,
 		"--rm", "--init",
-		"--network", "none", "--ipc", "private",
+		"--network", network, "--ipc", "private",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
 		"--read-only", "--user", MainUser,
 		"--memory", mem, "--memory-swap", mem,
@@ -147,7 +155,7 @@ func createArgs(s Spec) []string {
 		"--tmpfs", TmpDir+":"+s.tmpfs(),
 		"--mount", grade)
 	if s.Deps != "" {
-		args = append(args, "--mount", "type=volume,src="+s.Deps+",dst="+DepsDir+",readonly")
+		args = append(args, "--mount", "type=volume,src="+s.Deps+",dst="+DepsDir+depsMode)
 	}
 	return append(args, "--entrypoint", "sleep", s.Image.Ref, s.deadlineSeconds())
 }

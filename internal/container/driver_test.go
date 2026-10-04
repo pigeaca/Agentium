@@ -16,8 +16,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/pigeaca/agentium/internal/task"
 )
 
 // fixtureImageID is the ID of the pinned Go image (goImage), which testdata/inspect.json records.
@@ -463,13 +461,6 @@ func TestImageMissingRefusedWithoutPull(t *testing.T) {
 	}
 	if _, err := d.Image(context.Background(), "sha256:"+strings.Repeat("b", 64)); err == nil {
 		t.Error("an image answering with another ID was accepted")
-	}
-}
-
-// TestModeIsTasks: the label's mode is task.GraderContainer.
-func TestModeIsTasks(t *testing.T) {
-	if Mode != task.GraderContainer {
-		t.Errorf("Mode %q, task.GraderContainer %q", Mode, task.GraderContainer)
 	}
 }
 

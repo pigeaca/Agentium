@@ -14,6 +14,10 @@ command experiment rm
 command experiment run
 command experiment show
 command help
+command images
+command images list
+command images pull
+command images remove
 command init
 command pool
 command pool status
@@ -91,6 +95,9 @@ flag experiment run --usage-limit	value default="85"
 flag experiment run --view	value default=""
 flag experiment run --wait	bool default="false"
 flag experiment run --yes	bool default="false"
+flag images pull --yes	bool default="false"
+flag images remove --bases	bool default="false"
+flag images remove --yes	bool default="false"
 flag init --allow-local-binding	bool default="false"
 flag init --jobs	value default="0"
 flag init --module	value default=""
