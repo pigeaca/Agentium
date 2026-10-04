@@ -164,8 +164,22 @@ type Reply struct {
 	TimedOut bool
 }
 
-// Caller makes one judge call. An error means the call could not be made at all, or ctx was cancelled.
+// Caller makes one judge call. An error means the call could not be made at all, or ctx was cancelled; a cancelled call
+// may still return its Reply with the error (Claude Code, interrupted, reports what it spent), which callers count
+// (Cost).
 type Caller func(ctx context.Context, prompt string) (Reply, error)
+
+// Cost is what a call's reply says it spent (Claude Code's total_cost_usd); 0 when the reply holds no JSON result. A
+// reply that reports a cost spent it, whatever else went wrong, an interrupt included.
+func Cost(r Reply) float64 {
+	var out struct {
+		TotalCostUSD float64 `json:"total_cost_usd"`
+	}
+	if json.Unmarshal(r.Stdout, &out) != nil || out.TotalCostUSD < 0 {
+		return 0
+	}
+	return out.TotalCostUSD
+}
 
 // filePath reads the path a "diff --git" header names, whatever the user's diff settings: "a/X b/X", no prefixes
 // (diff.noprefix), other one-letter prefixes (diff.mnemonicPrefix), and C-quoted names (core.quotePath). Both sides
@@ -386,6 +400,7 @@ func ask(ctx context.Context, in Input, s Settings, call Caller, v Verdict, prom
 		for attempt := 0; attempt < 2; attempt++ {
 			reply, err := call(ctx, text)
 			if ctx.Err() != nil {
+				v.CostUSD += Cost(reply) // an interrupted call that reported its cost spent it
 				return v, ctx.Err()
 			}
 			if err != nil {
@@ -470,7 +485,10 @@ func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Du
 		call.Dir = dir
 		result, err := claude.RunJudgement(ctx, call, prompt, environ, files[0], files[1], timeout, CallGrace)
 		if err != nil {
-			return Reply{}, err
+			// A cancelled call was interrupted (SIGINT first, CallGrace), and Claude Code then reports what it spent:
+			// the reply comes back with the error, so that the spend is counted (Cost), never lost.
+			stdout, _ := os.ReadFile(files[0].Name())
+			return Reply{Stdout: stdout, ExitCode: result.ExitCode, TimedOut: result.TimedOut}, err
 		}
 		stdout, err1 := os.ReadFile(files[0].Name())
 		stderr, err2 := os.ReadFile(files[1].Name())

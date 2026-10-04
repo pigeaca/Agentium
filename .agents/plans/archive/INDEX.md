@@ -23,3 +23,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [Cheaper verdicts: sequential stopping (wave 3)](2026-10-02-cheaper-verdicts.md) — 2026-10-02 (#88, #92, #99, #107, #117, #122; the gate's real A/A stopped for futility at look 2, $2.25)
 - [A simpler command line](2026-10-02-simpler-cli.md) — 2026-10-02 to 2026-10-03 (#128, #129; visible flags 66 → 40, project settings set once, one way to mine)
 - [agentium clean: free the space of caches nothing uses](2026-10-03-clean-command.md) — 2026-10-03 (#132)
+- [A designed console: a live dashboard and visual reports](2026-10-03-console-design.md) — 2026-10-03 to 2026-10-04 (#133, #134, #136, #137, #139, #144; the live dashboard and log view, the visual report, run show, plan, start and pool status)

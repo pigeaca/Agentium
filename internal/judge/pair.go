@@ -186,10 +186,9 @@ func (v *PairVerdict) ask(ctx context.Context, prompt string, call Caller) (Pair
 	var o PairOrder
 	for attempt := 0; attempt < 2; attempt++ {
 		reply, err := call(ctx, prompt)
-		if err == nil { // counted before an interrupt is: a call that reported its cost spent it
-			a := parseField(reply, "prefer", []string{first, second, tie})
-			o.CostUSD += a.cost
-			v.CostUSD += a.cost
+		if err == nil || ctx.Err() != nil { // counted before an interrupt is: a call that reported its cost spent it
+			o.CostUSD += Cost(reply)
+			v.CostUSD += Cost(reply)
 		}
 		if ctx.Err() != nil {
 			return o, ctx.Err()

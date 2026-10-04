@@ -368,7 +368,7 @@ func (s *starter) finish(ctx context.Context, name string) int {
 		return fail(env, err)
 	}
 	mode, _ := signInMode(env)
-	if err := review.Write(ctx, env.Stdout, st, name, mode, env.Now()); err != nil {
+	if err := writeReview(ctx, env, review, name, mode, false); err != nil {
 		return fail(env, err)
 	}
 	if budget.total != review.Design.BudgetUSD { // the preview above quotes the design's budget

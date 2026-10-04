@@ -79,7 +79,7 @@ Then the hardening plan's step 6, the paid A/B, runs with this output.
 - Real console samples: captured through a pseudo-terminal (`script`) in color, and piped plain, attached to each PR.
 
 ## Parallel ownership
-Step 1 comes first; it fixes the `internal/term` API the others use. Steps 2 and 3 then run in parallel from step 1's merge, one PR each; the coordinator integrates them. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`. At most two agents run at once.
+Step 1 comes first; it fixes the `internal/term` API the others use. Steps 2 and 3 then run in parallel from step 1's merge, one PR each; the coordinator integrates them. Worktrees live under `<worktrees>/`. At most two agents run at once.
 
 | Step | Owner | Branch / worktree | Editable scope | Must not touch |
 |---|---|---|---|---|

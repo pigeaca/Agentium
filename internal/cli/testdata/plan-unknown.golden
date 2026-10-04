@@ -1,0 +1,47 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+   lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                      │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────╮
+│ cost unknown until runs measure it · budget $30          │
+╰──────────────────────────────────────────────────────────╯
+
+ on your plan: 20 runs need about 1.4 windows of the
+ five-hour limit
+ everything: agentium experiment plan lean-seq --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+             lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────╮
+│ cost unknown until runs measure it · budget $30                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 20 runs need about 1.4 windows of the five-hour limit
+ everything: agentium experiment plan lean-seq --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                       lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
+│ cost unknown until runs measure it · budget $30                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 20 runs need about 1.4 windows of the five-hour limit
+ everything: agentium experiment plan lean-seq --details
+=== end

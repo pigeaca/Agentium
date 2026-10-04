@@ -15,6 +15,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -694,15 +695,32 @@ func (v Validator) sandboxed() bool { return GraderOf(v.Grader) != GraderHost }
 
 // verify runs the verification commands in the checkout dir: on the host (run), or in the sandbox, in a grading folder
 // of the stage's own (label) beside the checkouts, which Sandboxed moves the checkout into and removes with it (the
-// checkout comes back to dir when Keep is set).
+// checkout comes back to dir when Keep is set). The grade holds its folder's lock (GradeLock) from before the folder
+// exists until it is gone, so `agentium clean` never removes the folder of a grade in progress.
 func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string, commands []string) ([]Command, bool, *SandboxGrade, error) {
 	if !v.sandboxed() {
 		results, ok, err := v.run(ctx, log, dir, commands)
 		return results, ok, nil, err
 	}
 	root := filepath.Join(filepath.Dir(v.WorkDir), "grading", label)
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		return nil, false, nil, fmt.Errorf("validation: the grading folder: %w", err)
+	}
+	unlock, err := home.LockFile(ctx, GradeLock(root), nil)
+	if err != nil {
+		return nil, false, nil, fmt.Errorf("validation: the grade's lock: %w", err)
+	}
+	defer func() {
+		os.Remove(GradeLock(root)) // before the unlock: no later grade uses this path (each validation has its own folder)
+		unlock()
+	}()
 	return v.checkout.Sandboxed(ctx, dir, root, v.Keep, commands, v.Timeout, log)
 }
+
+// GradeLock is the lock file beside a validation's grade folder root (<artifacts>/tasks/<id>/<time>/grading/<label>),
+// held while the validation grades in it: a stopped validation's lock is free (the system drops a dead process's), so
+// cleanup (run.PlanClean) tells a grade in progress from one a stopped validation left.
+func GradeLock(root string) string { return root + ".lock" }
 
 // report prints one progress line for a run of a stage; with several repeats it ends with the run's number.
 func (v Validator) report(stage Stage, repeat, repeats int) {

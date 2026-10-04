@@ -389,11 +389,11 @@ func TestReportBetterGoalAndNoLossHeadline(t *testing.T) {
 func TestScrubReplacesWholePaths(t *testing.T) {
 	data := t.TempDir()
 	resolved, _ := filepath.EvalSymlinks(data)
-	in := Input{DataDir: data, Home: "/Users/v"}
+	in := Input{DataDir: data, Home: "/Users/a"}
 	for text, want := range map[string]string{
-		"open /Users/v/.claude/x: denied":             "open ~/.claude/x: denied",
-		"/Users/vlad/project stays":                   "/Users/vlad/project stays",
-		"at /Users/v":                                 "at ~",
+		"open /Users/a/.claude/x: denied":             "open ~/.claude/x: denied",
+		"/Users/alex/project stays":                   "/Users/alex/project stays",
+		"at /Users/a":                                 "at ~",
 		"reached " + data + "/projects":               "reached <agentium data>/projects",
 		"reached " + resolved + "/records/r1":         "reached <agentium data>/records/r1",
 		"key sk-ant-api03-" + strings.Repeat("z", 40): "key [REDACTED]", // secret-scan: allow

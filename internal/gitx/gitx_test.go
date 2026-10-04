@@ -92,6 +92,56 @@ func TestFetchCommitCopiesAnUnreferencedCommitWithoutTouchingTheSource(t *testin
 	}
 }
 
+// git status refreshes a stale index and, when it can take index.lock, writes it back: a plain one would write the
+// user's repository. Agentium's (through Environ: GIT_OPTIONAL_LOCKS=0) leaves the index and its lock alone, with the
+// arguments snapshot.UncapturedChanges gives it.
+func TestStatusNeverWritesTheUsersIndex(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	git(t, repo, "init", "-q")
+	file, index := filepath.Join(repo, "a.txt"), filepath.Join(repo, ".git", "index")
+	if err := os.WriteFile(file, []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", "a.txt")
+	git(t, repo, "commit", "-q", "-m", "base")
+	stale := func(at time.Time) []byte { // the same content, another time: the index's entry needs a refresh
+		t.Helper()
+		if err := os.Chtimes(file, at, at); err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(index)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	status := []string{"-C", repo, "status", "--porcelain", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=all"}
+
+	before := stale(time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	out, err := Output(ctx, nil, status...)
+	if err != nil || len(out) != 0 {
+		t.Fatalf("status: %q, %v", out, err)
+	}
+	if after, _ := os.ReadFile(index); !slices.Equal(after, before) {
+		t.Error("Agentium's git status rewrote the repository's index")
+	}
+	if _, err := os.Lstat(index + ".lock"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("index.lock left behind: %v", err)
+	}
+
+	// The control: the same status without GIT_OPTIONAL_LOCKS=0 does write it, so the check above can fail.
+	before = stale(time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC))
+	plain := exec.Command("git", status...)
+	plain.Env = slices.DeleteFunc(Environ(os.Environ()), func(kv string) bool { return strings.HasPrefix(kv, "GIT_OPTIONAL_LOCKS=") })
+	if out, err := plain.CombinedOutput(); err != nil {
+		t.Fatalf("plain git status: %v\n%s", err, out)
+	}
+	if after, _ := os.ReadFile(index); slices.Equal(after, before) {
+		t.Skip("this git does not write a refreshed index on status: the check above proves nothing here")
+	}
+}
+
 func TestEnvironDropsInheritedGitVariables(t *testing.T) {
 	got := Environ([]string{"HOME=/h", "GIT_DIR=/user/.git", "GIT_INDEX_FILE=/user/.git/index", "GIT_CONFIG_PARAMETERS='x=y'", "PATH=/bin",
 		"ANTHROPIC_API_KEY=k", "GITHUB_TOKEN=t"})
