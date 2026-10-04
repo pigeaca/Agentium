@@ -1,7 +1,7 @@
 # Phase 2: agent comparison and Codex
 
 - Date: 2026-10-01
-- Status: Deferred (2026-10-01) by the user: Codex is skipped for now. Comparing Claude Code models and efforts moved to its own [plan](../2026-10-01-model-ab.md). Resume from this file; it needs the Codex CLI installed by the user.
+- Status: Superseded (2026-10-04) by the [Codex plan](../2026-10-04-codex.md), which keeps this outcome. Earlier: deferred (2026-10-01) by the user; comparing Claude Code models and efforts moved to its own [plan](2026-10-01-model-ab.md).
 - Scope: the roadmap's Phase 2. The [feasibility study](../../../docs/research/2026-09-27-ai-development-lab.md) calls for:
   - Claude Code and Codex adapters, with Codex "integrated through the CLI";
   - an "Agent/Model comparison" experiment;
