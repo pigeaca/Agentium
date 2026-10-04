@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 )
 
 // How an execution ended (the store's experiment statuses).
@@ -47,7 +47,7 @@ type Result struct {
 	// WarmWait: the attempt ended, as an infrastructure failure, waiting for another run's dependency warm-up.
 	WarmWait bool
 	// Usage is the run's last subscription usage reading, if it reported one: the gate's latest reading.
-	Usage *claude.UsageReading
+	Usage *agent.UsageReading
 	// Overshoot, when set, says the run passed its cost cap by more than the allowance the budget held for it
 	// (run.OvershootNote), for progress lines.
 	Overshoot string
@@ -232,7 +232,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		switch s := &state[a.Slot]; {
 		case Settles(a.Outcome):
 			s.settled = true
-		case a.Outcome != claude.OutcomeCancelled:
+		case a.Outcome != agent.OutcomeCancelled:
 			s.attempts++
 		}
 	}
@@ -410,7 +410,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 				}
 				emit(Event{Kind: "wait", Until: until, Usage: gate.Latest.FiveHourAt(now)})
 				if err := gate.Wait(ctx, until); err == nil {
-					gate.Latest = claude.UsageReading{} // the window has reset: nothing of the new one is used yet
+					gate.Latest = agent.UsageReading{} // the window has reset: nothing of the new one is used yet
 				}
 				continue // a cancelled wait ends as interrupted
 			case blocked && wake.IsZero(): // a run waiting to be retried comes first in order, and may still fit
@@ -445,7 +445,7 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 			if gate != nil && f.result.Usage != nil && f.result.Usage.Newer(gate.Latest) {
 				gate.Latest = *f.result.Usage
 			}
-			requeued := f.result.Outcome == claude.OutcomeCancelled || f.err != nil && ctx.Err() != nil
+			requeued := f.result.Outcome == agent.OutcomeCancelled || f.err != nil && ctx.Err() != nil
 			emit(Event{Kind: "finish", Slot: p.Schedule[f.pos], Attempt: f.attempt, Result: f.result, Requeued: requeued && !Settles(f.result.Outcome)})
 			if f.err != nil && ctx.Err() == nil && runErr == nil {
 				runErr = fmt.Errorf("slot %d (task %s, arm %s): %w", f.pos, p.Schedule[f.pos].Task, p.Schedule[f.pos].Arm, f.err)

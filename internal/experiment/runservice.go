@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -48,7 +49,7 @@ type RunMeta struct {
 type Standing struct {
 	Spent    float64
 	Settled  map[int]bool
-	Usage    claude.UsageReading
+	Usage    agent.UsageReading
 	HasUsage bool
 }
 

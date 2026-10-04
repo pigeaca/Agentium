@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
@@ -403,7 +404,7 @@ func TestDeniedCommandsDoNotCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	verify := []string{"python -m pytest tests/test_make.py"}
-	parse := func(stream string) claude.Metrics {
+	parse := func(stream string) agent.Metrics {
 		t.Helper()
 		m, err := claude.Parse(strings.NewReader(stream))
 		if err != nil {

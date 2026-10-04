@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
@@ -115,7 +116,7 @@ func TestOnceRunsSetupAndVerificationInTheTasksModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed {
 		t.Fatalf("solved: %s, passed %v, notes %v", rec.Outcome, rec.Passed, rec.Notes)
 	}
 	workspace := filepath.Join(f.env.Layout.Workspaces, f.env.workspaceName(), "repo")
@@ -153,7 +154,7 @@ func TestOnceFailsAModuleTheAgentRemovedOrLinked(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+			if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 				t.Fatalf("outcome %s, passed %v, notes %v: want a graded fail", rec.Outcome, rec.Passed, rec.Notes)
 			}
 			if !strings.Contains(strings.Join(rec.Notes, "\n"), "the module's folder is not in the agent's tree") {
@@ -182,7 +183,7 @@ func TestOnceRestoresTheModulesChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 		t.Fatalf("outcome %s, passed %v, notes %v: the rewritten script decided the grade", rec.Outcome, rec.Passed, rec.Notes)
 	}
 	if !slices.Contains(rec.Behavior.ChecksChanged, "svc/run_tests.sh") {
@@ -281,18 +282,18 @@ func TestOnceReportsAnAncestorsRunnerConfig(t *testing.T) {
 // with a note, never graded with the agent's script and never infrastructure (tried again at a cost). The note names
 // paths from the copy's root, not where the copy lies.
 func TestOnceFailsAScriptThatCannotBeRestored(t *testing.T) {
-	for name, agent := range map[string]string{
+	for name, script := range map[string]string{
 		"linked": "mkdir elsewhere && printf 'exit 0\\n' > elsewhere/check.sh && rm -rf svc/scripts && ln -s ../elsewhere svc/scripts",
 		"a file": "rm -rf svc/scripts && echo 'exit 0' > svc/scripts",
 	} {
 		t.Run(name, func(t *testing.T) {
-			f := newModuleOnceWith(t, "svc", "decoy", agent, map[string]string{"svc/scripts/check.sh": "sh run_tests.sh\n"})
+			f := newModuleOnceWith(t, "svc", "decoy", script, map[string]string{"svc/scripts/check.sh": "sh run_tests.sh\n"})
 			f.spec.Task.Verify = []string{"sh scripts/check.sh"}
 			rec, err := Once(context.Background(), f.env, f.spec)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+			if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 				t.Fatalf("outcome %s, passed %v, notes %v: want a graded fail", rec.Outcome, rec.Passed, rec.Notes)
 			}
 			notes := strings.Join(rec.Notes, "\n")
@@ -356,7 +357,7 @@ func TestOnceStartsTheAgentInTheTasksModule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Module != "svc/api" {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Module != "svc/api" {
 		t.Fatalf("outcome %s, passed %v, module %q, notes %v", rec.Outcome, rec.Passed, rec.Module, rec.Notes)
 	}
 	repo, err := filepath.EvalSymlinks(filepath.Join(f.env.Layout.Workspaces, f.env.workspaceName(), "repo"))

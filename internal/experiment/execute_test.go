@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -102,7 +102,7 @@ func (f *fake) run(ctx context.Context, slot Slot, attempt int, overlap []int) (
 	if f.outcome != nil {
 		return f.outcome(slot, attempt), nil
 	}
-	return Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}, nil
+	return Result{Outcome: agent.OutcomeOK, CostUSD: 0.5}, nil
 }
 
 func TestExecuteRunsEverySlotWithinTheWindow(t *testing.T) {
@@ -126,8 +126,8 @@ func TestExecuteRunsEverySlotWithinTheWindow(t *testing.T) {
 }
 
 func TestExecuteNeverPassesTheBudget(t *testing.T) {
-	slots := scheduleOf(t, 5, 2)                                                                             // 20 runs
-	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeCapped, CostUSD: 1} }} // every run at its cap
+	slots := scheduleOf(t, 5, 2)                                                                            // 20 runs
+	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: agent.OutcomeCapped, CostUSD: 1} }} // every run at its cap
 	var mu sync.Mutex
 	maxCommitted := 0.0
 	running := map[int]bool{}
@@ -174,11 +174,11 @@ func TestExecuteRetriesInfrastructureFailures(t *testing.T) {
 		mu.Unlock()
 		switch {
 		case s.Position == 1 && attempt < 3: // recovers on the last attempt
-			return Result{Outcome: claude.OutcomeInfra, CostUSD: 0.1}
+			return Result{Outcome: agent.OutcomeInfra, CostUSD: 0.1}
 		case s.Position == 4: // never recovers
-			return Result{Outcome: claude.OutcomeInfra}
+			return Result{Outcome: agent.OutcomeInfra}
 		}
-		return Result{Outcome: claude.OutcomeOK, CostUSD: 1}
+		return Result{Outcome: agent.OutcomeOK, CostUSD: 1}
 	}}
 	var retries []time.Duration
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 2, BudgetUSD: 100, MaxAttempts: 3,
@@ -206,9 +206,9 @@ func TestExecuteStopsOnAnOutage(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
 	f := &fake{outcome: func(s Slot, _ int) Result {
 		if s.Position == 0 {
-			return Result{Outcome: claude.OutcomeOK}
+			return Result{Outcome: agent.OutcomeOK}
 		}
-		return Result{Outcome: claude.OutcomeInfra}
+		return Result{Outcome: agent.OutcomeInfra}
 	}}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3,
 		Backoff: func(int) time.Duration { return 0 }}, f.run)
@@ -222,9 +222,9 @@ func TestExecuteStopsOnAnOutage(t *testing.T) {
 func TestExecuteStopsWhenARunSaysSo(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
 	f := &fake{outcome: func(s Slot, _ int) Result {
-		r := Result{Outcome: claude.OutcomeOK}
+		r := Result{Outcome: agent.OutcomeOK}
 		if s.Position == 2 {
-			r.Outcome, r.Stop = claude.OutcomeUnfair, "Claude Code changed from 2.1.281 to 2.1.300"
+			r.Outcome, r.Stop = agent.OutcomeUnfair, "Claude Code changed from 2.1.281 to 2.1.300"
 		}
 		return r
 	}}
@@ -237,10 +237,10 @@ func TestExecuteStopsWhenARunSaysSo(t *testing.T) {
 func TestExecuteResumesFromStoredRuns(t *testing.T) {
 	slots := scheduleOf(t, 2, 1) // 4 runs
 	prior := []Attempt{
-		{Slot: 0, Outcome: claude.OutcomeOK, CostUSD: 1},
-		{Slot: 1, Outcome: claude.OutcomeInfra, CostUSD: 0.2},
-		{Slot: 1, Outcome: claude.OutcomeCancelled, CostUSD: 0.3}, // interrupted: spent, but not an attempt
-		{Slot: 2, Outcome: claude.OutcomeInfra}, {Slot: 2, Outcome: claude.OutcomeInfra}, {Slot: 2, Outcome: claude.OutcomeInfra},
+		{Slot: 0, Outcome: agent.OutcomeOK, CostUSD: 1},
+		{Slot: 1, Outcome: agent.OutcomeInfra, CostUSD: 0.2},
+		{Slot: 1, Outcome: agent.OutcomeCancelled, CostUSD: 0.3}, // interrupted: spent, but not an attempt
+		{Slot: 2, Outcome: agent.OutcomeInfra}, {Slot: 2, Outcome: agent.OutcomeInfra}, {Slot: 2, Outcome: agent.OutcomeInfra},
 	}
 	var started []Event
 	f := &fake{}
@@ -278,7 +278,7 @@ func TestExecuteInterrupted(t *testing.T) {
 		}
 		mu.Unlock()
 		<-ctx.Done()
-		return Result{Outcome: claude.OutcomeCancelled, CostUSD: 0.4}, ctx.Err()
+		return Result{Outcome: agent.OutcomeCancelled, CostUSD: 0.4}, ctx.Err()
 	}
 	sum, err := Execute(ctx, Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3}, run)
 	if err != nil || sum.Status != StatusStopped || sum.Note != "interrupted" || sum.Pending != 8 || sum.SpentUSD != 0.8 || calls != 2 {
@@ -291,7 +291,7 @@ func TestExecuteReturnsAgentiumsOwnErrors(t *testing.T) {
 	calls := 0
 	run := func(context.Context, Slot, int, []int) (Result, error) {
 		calls++
-		return Result{Outcome: claude.OutcomeInfra}, errors.New("disk full")
+		return Result{Outcome: agent.OutcomeInfra}, errors.New("disk full")
 	}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3}, run)
 	if err == nil || !strings.Contains(err.Error(), "disk full") || sum.Status != StatusStopped || calls != 1 {
@@ -308,20 +308,20 @@ func TestCounting(t *testing.T) {
 		fair    bool
 		success bool
 	}{
-		{claude.OutcomeOK, &yes, nil, true, true},
-		{claude.OutcomeCapped, &yes, nil, true, true},
-		{claude.OutcomeTimeout, &no, nil, true, false},
-		{claude.OutcomeOK, nil, nil, true, false},                     // grading did not finish
-		{claude.OutcomeOK, &yes, []string{"pytest.ini"}, true, false}, // passed with a changed test runner
-		{claude.OutcomeUnfair, &yes, nil, false, false},
-		{claude.OutcomeInfra, nil, nil, false, false},
-		{claude.OutcomeCancelled, nil, nil, false, false},
+		{agent.OutcomeOK, &yes, nil, true, true},
+		{agent.OutcomeCapped, &yes, nil, true, true},
+		{agent.OutcomeTimeout, &no, nil, true, false},
+		{agent.OutcomeOK, nil, nil, true, false},                     // grading did not finish
+		{agent.OutcomeOK, &yes, []string{"pytest.ini"}, true, false}, // passed with a changed test runner
+		{agent.OutcomeUnfair, &yes, nil, false, false},
+		{agent.OutcomeInfra, nil, nil, false, false},
+		{agent.OutcomeCancelled, nil, nil, false, false},
 	} {
 		if Fair(c.outcome) != c.fair || Success(c.outcome, c.passed, c.config) != c.success {
 			t.Errorf("%s passed=%v config=%v: fair %v success %v", c.outcome, c.passed, c.config, Fair(c.outcome), Success(c.outcome, c.passed, c.config))
 		}
 	}
-	if !Settles(claude.OutcomeUnfair) || Settles(claude.OutcomeInfra) || Settles(claude.OutcomeCancelled) {
+	if !Settles(agent.OutcomeUnfair) || Settles(agent.OutcomeInfra) || Settles(agent.OutcomeCancelled) {
 		t.Error("unfair runs settle their slot; infrastructure failures and cancelled runs do not")
 	}
 }
@@ -369,7 +369,7 @@ func TestExecuteWindowHoldsBackPastASlowRun(t *testing.T) {
 			mu.Lock()
 			slowDone = true
 			mu.Unlock()
-			return Result{Outcome: claude.OutcomeOK}, nil
+			return Result{Outcome: agent.OutcomeOK}, nil
 		}
 		mu.Lock()
 		defer mu.Unlock()
@@ -379,7 +379,7 @@ func TestExecuteWindowHoldsBackPastASlowRun(t *testing.T) {
 				t.Errorf("slot %d ran alongside slot 0 without being told", s.Position)
 			}
 		}
-		return Result{Outcome: claude.OutcomeOK}, nil
+		return Result{Outcome: agent.OutcomeOK}, nil
 	}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3}, run)
 	if err != nil || sum.Status != StatusDone {
@@ -401,9 +401,9 @@ func TestExecuteWaitsForARetryBeforeABudgetStop(t *testing.T) {
 		ran = append(ran, s.Position)
 		mu.Unlock()
 		if s.Position == 0 && attempt == 1 {
-			return Result{Outcome: claude.OutcomeInfra, CostUSD: 0.1}, nil
+			return Result{Outcome: agent.OutcomeInfra, CostUSD: 0.1}, nil
 		}
-		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}, nil
+		return Result{Outcome: agent.OutcomeOK, CostUSD: 0.5}, nil
 	}
 	// After slot 1 ($0.50) and slot 0's failure ($0.10), the next pair ($2 of caps) no longer fits the $2.50, but slot
 	// 0's retry ($1) does.
@@ -432,9 +432,9 @@ func TestExecuteWarmUpWaitsHaveTheirOwnNote(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
 	f := &fake{outcome: func(s Slot, _ int) Result {
 		if s.Position == 0 {
-			return Result{Outcome: claude.OutcomeOK}
+			return Result{Outcome: agent.OutcomeOK}
 		}
-		return Result{Outcome: claude.OutcomeInfra, WarmWait: true}
+		return Result{Outcome: agent.OutcomeInfra, WarmWait: true}
 	}}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3,
 		Backoff: func(int) time.Duration { return 0 }}, f.run)

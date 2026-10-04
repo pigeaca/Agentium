@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/claude"
@@ -162,7 +163,7 @@ func readStamp(path string, profiles []buildtool.Profile) (buildtool.Warmed, boo
 // fails does not fail the run, whose agent may still build; it returns a note instead. The commands' output goes to
 // logPath, setup.log. warmed is what the base's stamp holds for its runs (Python's venv), read once the warm-up is done;
 // every run of the base repeats its notes.
-func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv claude.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
+func (env Env) prepareTools(ctx context.Context, profiles []buildtool.Profile, inv agent.Invocation, base, logPath string, running func(pid int)) (warmed buildtool.Warmed, notes []string, err error) {
 	if names := buildtool.NeedsWarming(profiles); inv.Deps != "" && len(names) > 0 {
 		// The deps folder's last use, for cleanup (projectLast), on every path: a failed or waited-out warm-up writes
 		// no stamp, yet the run may build from what is there.
@@ -360,6 +361,8 @@ type CommandsEnv struct {
 	// own home folder when HOME is redirected).
 	Grader                         string
 	Home, AccountHome, ProjectRoot string
+	// Agent is the agent whose denied paths a sandboxed validation is denied (Env.Agent); nil: Claude Code.
+	Agent agent.Adapter
 }
 
 // CheckoutCommands warms a base commit's build tools for Agentium's own commands outside a run (validation), as a
@@ -375,7 +378,8 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 	}
 	tools, importRoot := l.tools, l.importRoot
 	profiles := buildtool.Select(tools)
-	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now, Module: c.Module}
+	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now,
+		Module: c.Module, Agent: c.Agent}
 	if c.Layout.Cache != "" {
 		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, c.Layout.Cache)...)
 	}
@@ -423,12 +427,12 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		if err != nil {
 			return task.CheckoutCommands{}, err
 		}
-		agent := claude.Invocation{Home: c.Home, AccountHome: c.AccountHome, Deny: deny, Tools: tools, AgentTools: l.agentTools, Deps: env.depsFolder(),
+		inv := agent.Invocation{Home: c.Home, AccountHome: c.AccountHome, Deny: deny, Tools: tools, AgentTools: l.agentTools, Deps: env.depsFolder(),
 			Venv: warmed.Venv, ProjectMetadata: warmed.Metadata, ImportRoot: importRoot, SignIn: claude.SignInLogin}
 		if slices.Contains(tools, "maven") || slices.Contains(tools, "gradle") {
-			agent.JavaHome = buildtool.ResolveJavaHome(ctx, env.environ(), buildtool.CommandOutput)
+			inv.JavaHome = buildtool.ResolveJavaHome(ctx, env.environ(), buildtool.CommandOutput)
 		}
-		sandboxed = env.sandboxedCommands(agent, full)
+		sandboxed = env.sandboxedCommands(inv, full)
 	}
 	return task.CheckoutCommands{
 		Sandboxed: sandboxed,

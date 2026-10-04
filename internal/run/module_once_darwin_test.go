@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -22,7 +22,7 @@ func TestOnceGradesAModuleInTheSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed {
 		t.Fatalf("solved: %s, passed %v, notes %v", rec.Outcome, rec.Passed, rec.Notes)
 	}
 	needDenials(t, rec.Sandbox)
@@ -30,12 +30,12 @@ func TestOnceGradesAModuleInTheSandbox(t *testing.T) {
 		t.Errorf("verify.log:\n%s", log)
 	}
 
-	for name, agent := range map[string]string{"deleted": "rm -rf svc", "linked": "rm -rf svc && ln -s decoy svc"} {
-		f := newModuleOnce(t, "svc", "decoy", agent)
+	for name, script := range map[string]string{"deleted": "rm -rf svc", "linked": "rm -rf svc && ln -s decoy svc"} {
+		f := newModuleOnce(t, "svc", "decoy", script)
 		f.env.Grader = task.GraderSandbox
 		rec, err := Once(context.Background(), f.env, f.spec)
 		skipLogBlind(t, err)
-		if err != nil || rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+		if err != nil || rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 			t.Errorf("%s: %v, outcome %s, passed %v, notes %v", name, err, rec.Outcome, rec.Passed, rec.Notes)
 		}
 	}
@@ -55,7 +55,7 @@ func TestOnceSandboxFailsAModuleSwappedBetweenCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 		t.Fatalf("outcome %s, passed %v, notes %v: want a graded fail", rec.Outcome, rec.Passed, rec.Notes)
 	}
 	if !strings.Contains(strings.Join(rec.Notes, "\n"), "the module's folder left the agent's tree during the grade") {

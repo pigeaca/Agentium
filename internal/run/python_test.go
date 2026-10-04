@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/runner"
@@ -88,7 +88,7 @@ func TestPythonWarmUpThroughTheRun(t *testing.T) {
 	prepare := func() buildtool.Warmed {
 		t.Helper()
 		run := filepath.Join(data, "ws", "go-build")
-		warmed, notes, err := env.prepareTools(ctx, profiles, claude.Invocation{Deps: deps, BuildCache: run}, base, filepath.Join(data, "setup.log"), func(int) {})
+		warmed, notes, err := env.prepareTools(ctx, profiles, agent.Invocation{Deps: deps, BuildCache: run}, base, filepath.Join(data, "setup.log"), func(int) {})
 		if err != nil || len(notes) != 0 {
 			t.Fatalf("prepareTools: %+v %q %v", warmed, notes, err)
 		}
@@ -187,7 +187,7 @@ func TestPythonWarmUpFailureIsANote(t *testing.T) {
 	deps := filepath.Join(data, "deps", "1")
 	env := Env{Layout: home.Layout{Cache: filepath.Join(data, "cache")}, Bare: bare, VerifyTimeout: 20 * time.Second,
 		Environ: []string{"PATH=" + filepath.Join(data, "empty-bin")}}
-	warmed, notes, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
+	warmed, notes, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
 		base, filepath.Join(data, "setup.log"), func(int) {})
 	if err != nil || warmed.Venv != "" || len(notes) != 1 || !strings.Contains(notes[0], "no Python interpreter on this machine") {
 		t.Errorf("%+v %q %v", warmed, notes, err)
@@ -198,7 +198,7 @@ func TestPythonWarmUpFailureIsANote(t *testing.T) {
 	if left, _ := os.ReadDir(filepath.Join(data, "cache", "warm")); len(left) != 0 {
 		t.Errorf("throwaway left: %v", left)
 	}
-	again, notes2, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
+	again, notes2, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
 		base, filepath.Join(data, "setup2.log"), func(int) {})
 	if err != nil || again.Venv != "" || !slices.Equal(notes2, notes) {
 		t.Errorf("a later run: %+v %q %v", again, notes2, err)
@@ -364,7 +364,7 @@ func TestValidationUsesTheRunsVenv(t *testing.T) {
 	// A run of the same base finds it warmed: the same venv, no second resolve.
 	resolves := func() int { b, _ := os.ReadFile(calls); return strings.Count(string(b), "--dry-run") }
 	env := Env{Layout: layout, Bare: bare, Environ: host, VerifyTimeout: 20 * time.Second}
-	warmed, _, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
+	warmed, _, err := env.prepareTools(ctx, buildtool.Select([]string{"python"}), agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")},
 		base, filepath.Join(data, "setup.log"), func(int) {})
 	if err != nil || warmed.Venv != venv || warmed.Metadata != meta || resolves() != 1 {
 		t.Errorf("the run's venv %q and metadata %q (validation's %q, %q), resolves %d: %v", warmed.Venv, warmed.Metadata, venv, meta, resolves(), err)
@@ -481,7 +481,7 @@ func TestPythonMetadataFailureIsRetriedThroughTheRun(t *testing.T) {
 	builds := func() int { data, _ := os.ReadFile(calls); return strings.Count(string(data), "uv build") }
 	stamp := env.stampPath(deps, base, []string{"python"})
 	for try := 1; try <= 4; try++ {
-		warmed, notes, err := env.prepareTools(ctx, profiles, claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")}, base,
+		warmed, notes, err := env.prepareTools(ctx, profiles, agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws")}, base,
 			filepath.Join(data, "setup.log"), func(int) {})
 		if err != nil || !buildtool.VenvReady(warmed.Venv) || warmed.Metadata != "" || len(notes) != 1 {
 			t.Fatalf("try %d: %+v %q %v", try, warmed, notes, err)

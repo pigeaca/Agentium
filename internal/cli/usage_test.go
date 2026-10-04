@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -104,12 +104,12 @@ func TestUsagePreviewLeavesOutCalibrationRuns(t *testing.T) {
 	older, latest := now.Add(-2*time.Hour).Truncate(time.Second), now.Add(2*time.Hour).Truncate(time.Second)
 	read := func(kind string, first, last float64, resets time.Time) store.Run {
 		var rec struct {
-			Model   string         `json:"model"`
-			Metrics claude.Metrics `json:"metrics"`
+			Model   string        `json:"model"`
+			Metrics agent.Metrics `json:"metrics"`
 		}
 		rec.Model = "claude-sonnet-5-5"
-		rec.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
-		rec.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
+		rec.Metrics.UsageFirst = &agent.UsageReading{FiveHour: first, FiveHourResets: resets}
+		rec.Metrics.UsageLast = &agent.UsageReading{FiveHour: last, FiveHourResets: resets}
 		data, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)
@@ -175,12 +175,12 @@ func TestUsagePreviewPerModelAndReadingAge(t *testing.T) {
 	var runs []store.Run
 	for i := range 6 { // 3% → 13% over six runs, about two hours ago
 		var rec struct {
-			Model   string         `json:"model"`
-			Metrics claude.Metrics `json:"metrics"`
+			Model   string        `json:"model"`
+			Metrics agent.Metrics `json:"metrics"`
 		}
 		rec.Model = "claude-sonnet-5"
-		rec.Metrics.UsageFirst = &claude.UsageReading{FiveHour: 0.03 + float64(i)*0.10/6, FiveHourResets: resets}
-		rec.Metrics.UsageLast = &claude.UsageReading{FiveHour: 0.03 + float64(i+1)*0.10/6, FiveHourResets: resets}
+		rec.Metrics.UsageFirst = &agent.UsageReading{FiveHour: 0.03 + float64(i)*0.10/6, FiveHourResets: resets}
+		rec.Metrics.UsageLast = &agent.UsageReading{FiveHour: 0.03 + float64(i+1)*0.10/6, FiveHourResets: resets}
 		data, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)

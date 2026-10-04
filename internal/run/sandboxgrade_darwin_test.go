@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
@@ -148,7 +149,7 @@ func TestOnceGradesInTheSandbox(t *testing.T) {
 	if want := []string{StepPreparing, StepDependencies, StepAgent, StepGrading, StepSandbox, StepTests, StepCleanup, StepCleanup}; !slices.Equal(steps, want) {
 		t.Errorf("steps %q, want %q", steps, want)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Grader != task.GraderSandbox {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Grader != task.GraderSandbox {
 		t.Fatalf("solved: %s, passed %v, grader %q, notes %v", rec.Outcome, rec.Passed, rec.Grader, rec.Notes)
 	}
 	needDenials(t, rec.Sandbox)
@@ -169,7 +170,7 @@ func TestOnceGradesInTheSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 		t.Fatalf("idle: %s, passed %v, notes %v", rec.Outcome, rec.Passed, rec.Notes)
 	}
 	needDenials(t, rec.Sandbox)
@@ -213,7 +214,7 @@ func TestOnceCanaryFailureIsInfrastructure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec.Outcome != claude.OutcomeInfra || rec.Passed != nil || rec.Sandbox == nil || !strings.Contains(rec.Sandbox.Canary, "nested") ||
+	if rec.Outcome != agent.OutcomeInfra || rec.Passed != nil || rec.Sandbox == nil || !strings.Contains(rec.Sandbox.Canary, "nested") ||
 		!strings.Contains(strings.Join(rec.Notes, "\n"), "the grading sandbox is unavailable, so nothing was graded") {
 		t.Errorf("canary failed: %s, passed %v, sandbox %+v, notes %v", rec.Outcome, rec.Passed, rec.Sandbox, rec.Notes)
 	}
@@ -263,7 +264,7 @@ func TestOnceFlaggedDenials(t *testing.T) {
 		t.Fatal(err)
 	}
 	needDenials(t, rec.Sandbox)
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount == 0 {
 		t.Errorf("a flagged pass: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
 	}
 
@@ -277,7 +278,7 @@ func TestOnceFlaggedDenials(t *testing.T) {
 		t.Fatal(err)
 	}
 	needDenials(t, rec.Sandbox)
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount != 0 || rec.Sandbox.Harmless == 0 {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed || rec.Sandbox == nil || rec.Sandbox.FlaggedCount != 0 || rec.Sandbox.Harmless == 0 {
 		t.Errorf("a harmless denial: %s, passed %v, sandbox %+v", rec.Outcome, rec.Passed, rec.Sandbox)
 	}
 }
@@ -320,7 +321,7 @@ func TestSetsidChildDiesWithTheGrade(t *testing.T) {
 		`open STDIN, "<", "/dev/null"; open STDOUT, ">", "/dev/null"; open STDERR, ">", "/dev/null"; sleep 300'`
 	var log strings.Builder
 	var warnings []string
-	in := sandboxGrade{Root: f.root, Copy: f.copy, Agent: claude.Invocation{Tools: []string{"go"}, Home: homeDir, Deps: f.deps, SignIn: claude.SignInLogin}, Base: commitA,
+	in := sandboxGrade{Root: f.root, Copy: f.copy, Agent: agent.Invocation{Tools: []string{"go"}, Home: homeDir, Deps: f.deps, SignIn: claude.SignInLogin}, Base: commitA,
 		Commands: []string{child}, Timeout: time.Minute, Log: &log, Running: func(int) {}, Warn: func(w string) { warnings = append(warnings, w) }}
 	_, ok, report, err := f.env.gradeInSandbox(context.Background(), in)
 	skipLogBlind(t, err)
@@ -403,7 +404,7 @@ func TestOnceWithALaggingLog(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a lagging log stopped the run: %v", err)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || !strings.Contains(rec.Sandbox.Unread, "did not reach") ||
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Sandbox == nil || !strings.Contains(rec.Sandbox.Unread, "did not reach") ||
 		!strings.Contains(strings.Join(rec.Notes, "\n"), "its denials could not be read") {
 		t.Errorf("%s, passed %v, sandbox %+v, notes %v", rec.Outcome, rec.Passed, rec.Sandbox, rec.Notes)
 	}

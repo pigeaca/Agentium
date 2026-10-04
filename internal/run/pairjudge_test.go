@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
 )
@@ -142,7 +142,7 @@ func TestJudgePairFailures(t *testing.T) {
 	if v := c.Verdict; v.Stopped != judge.StoppedCall || v.CostUSD != 0.04 || !strings.HasPrefix(v.Errors[len(v.Errors)-1], "interrupted") {
 		t.Errorf("an interrupted comparison: %+v", c)
 	}
-	if a.Outcome != claude.OutcomeOK || b.Metrics.CostUSD != 0.3 || b.Spend().AgentUSD != 0.3 {
+	if a.Outcome != agent.OutcomeOK || b.Metrics.CostUSD != 0.3 || b.Spend().AgentUSD != 0.3 {
 		t.Errorf("the runs changed: %+v, %+v", a, b)
 	}
 }

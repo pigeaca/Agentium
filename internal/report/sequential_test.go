@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/report/reporttest"
@@ -107,7 +108,7 @@ func TestSeqReportAfterALookWithoutVerdict(t *testing.T) {
 		if r.Slot >= 16 && r.Slot < 24 { // stage 2: three infrastructure failures a slot
 			for a := 1; a <= 3; a++ {
 				failed := r
-				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = a, claude.OutcomeInfra, nil
+				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = a, agent.OutcomeInfra, nil
 				runs = append(runs, failed)
 			}
 			continue
@@ -151,7 +152,7 @@ func TestReportMarksCappedRuns(t *testing.T) {
 	var capped string
 	for i, r := range in.Runs {
 		if r.Record.Arm == "B" {
-			in.Runs[i].Record.Outcome, in.Runs[i].Record.Metrics.CostUSD = claude.OutcomeCapped, 3.07
+			in.Runs[i].Record.Outcome, in.Runs[i].Record.Metrics.CostUSD = agent.OutcomeCapped, 3.07
 			in.Runs[i].Record.Metrics.Result = "error_max_budget_usd"
 			capped = r.Record.Task
 			break
@@ -214,7 +215,7 @@ func TestCappedNoteWithDifferentArmCaps(t *testing.T) {
 // A timed-out run's cost is cut off too: it is counted, marked ≥, and in the note.
 func TestReportMarksTimedOutRuns(t *testing.T) {
 	in := seqInput(t, 1.0, 6, true, experiment.StatusBudget)
-	in.Runs[0].Record.Outcome = claude.OutcomeTimeout
+	in.Runs[0].Record.Outcome = agent.OutcomeTimeout
 	rep, err := Build(in)
 	if err != nil {
 		t.Fatal(err)
@@ -238,7 +239,7 @@ func TestCostHeadlineNamesRunsCutShortThatFavourIt(t *testing.T) {
 		in := seqInput(t, 0.5, 16, true, experiment.StatusDone)
 		for i, r := range in.Runs {
 			if r.Record.Arm == arm {
-				in.Runs[i].Record.Outcome = claude.OutcomeCapped
+				in.Runs[i].Record.Outcome = agent.OutcomeCapped
 				break
 			}
 		}

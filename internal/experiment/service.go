@@ -8,7 +8,7 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/home"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
@@ -199,7 +199,7 @@ func (p Project) EstimateFor(ctx context.Context, model, effort string) (Estimat
 	}
 	var matching, unrecorded []PastRun // runs at this effort; runs from before efforts were recorded (effort unknown)
 	for _, r := range runs {
-		if r.Kind != "task" || !slices.Contains([]string{claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout}, r.Outcome) {
+		if r.Kind != "task" || !slices.Contains([]string{agent.OutcomeOK, agent.OutcomeCapped, agent.OutcomeTimeout}, r.Outcome) {
 			continue
 		}
 		var rec struct {

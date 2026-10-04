@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/source"
@@ -66,7 +67,7 @@ type Calibration struct {
 
 // Healthy reports whether a calibration can be what later runs are checked against.
 func (c Calibration) Healthy() bool {
-	return c.Outcome == claude.OutcomeOK && len(c.Drift) == 0 && c.Sandbox == checkOK && c.LargeOutput == checkOK &&
+	return c.Outcome == agent.OutcomeOK && len(c.Drift) == 0 && c.Sandbox == checkOK && c.LargeOutput == checkOK &&
 		(c.Instructions == checkOK || c.Instructions == checkNA)
 }
 

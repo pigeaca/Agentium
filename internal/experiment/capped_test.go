@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -86,7 +87,7 @@ func TestExecuteOvershootStaysWithinTheBudget(t *testing.T) {
 	const budget = 3.6
 	run := func(runCap float64) (Summary, float64) {
 		slots := scheduleOf(t, 16, 1)
-		f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeCapped, CostUSD: over} }}
+		f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: agent.OutcomeCapped, CostUSD: over} }}
 		var mu sync.Mutex
 		running := map[int]bool{}
 		committed := 0.0

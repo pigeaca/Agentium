@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 )
 
@@ -16,7 +16,7 @@ import (
 // and -5-5 write $4 an hour or $2.50 for five minutes and read $0.20; claude-haiku-4-5 writes $1.25 for five minutes
 // and reads $0.10.
 func TestIsolatedCostOfTheGoldenStream(t *testing.T) {
-	m, err := parseFile(filepath.Join("..", "claude", "testdata", "first-reads.jsonl"))
+	m, err := parseFile(adapterFor(""), filepath.Join("..", "claude", "testdata", "first-reads.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,13 +29,13 @@ func TestIsolatedCostOfTheGoldenStream(t *testing.T) {
 }
 
 func TestIsolatedCost(t *testing.T) {
-	record := func(cost float64, reads ...claude.FirstRead) Record {
+	record := func(cost float64, reads ...agent.FirstRead) Record {
 		rec := Record{Model: "claude-sonnet-5"}
 		rec.Metrics.Model, rec.Metrics.CostUSD, rec.Metrics.FirstReads = "claude-sonnet-5", cost, reads
 		return rec
 	}
-	main := func(read int64, ttl string) claude.FirstRead {
-		return claude.FirstRead{Main: true, Model: "claude-sonnet-5", CacheRead: read, WriteTTL: ttl}
+	main := func(read int64, ttl string) agent.FirstRead {
+		return agent.FirstRead{Main: true, Model: "claude-sonnet-5", CacheRead: read, WriteTTL: ttl}
 	}
 	cases := []struct {
 		name string
@@ -43,54 +43,54 @@ func TestIsolatedCost(t *testing.T) {
 		want *float64 // nil: absent
 	}{
 		{"a run that started cold is unchanged", func() Record {
-			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "claude-haiku-4-5", WriteTTL: claude.TTL5m})
+			return record(0.85, main(0, agent.TTL1h), agent.FirstRead{Model: "claude-haiku-4-5", WriteTTL: agent.TTL5m})
 		}, ptr(0.85)},
-		{"a warm first request is repriced at the one-hour write rate", func() Record { return record(0.85, main(16754, claude.TTL1h)) },
+		{"a warm first request is repriced at the one-hour write rate", func() Record { return record(0.85, main(16754, agent.TTL1h)) },
 			ptr(0.85 + 16754*(4-0.2)/1e6)},
-		{"a five-minute time to live is repriced at its own rate", func() Record { return record(0.85, main(16754, claude.TTL5m)) },
+		{"a five-minute time to live is repriced at its own rate", func() Record { return record(0.85, main(16754, agent.TTL5m)) },
 			ptr(0.85 + 16754*(2.5-0.2)/1e6)},
 		// Records made before the time-to-live fallback: a main session's empty one is an hour, a subagent's five minutes.
 		{"an older main session without a time to live: one hour", func() Record { return record(0.85, main(16754, "")) },
 			ptr(0.85 + 16754*(4-0.2)/1e6)},
 		{"an older subagent without a time to live: five minutes", func() Record {
-			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "claude-sonnet-5", CacheRead: 6082})
+			return record(0.85, main(0, agent.TTL1h), agent.FirstRead{Model: "claude-sonnet-5", CacheRead: 6082})
 		}, ptr(0.85 + 6082*(2.5-0.2)/1e6)},
 		{"subagents are priced at their own model's rates", func() Record {
-			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "claude-opus-5-5", CacheRead: 6082, WriteTTL: claude.TTL5m})
+			return record(0.85, main(0, agent.TTL1h), agent.FirstRead{Model: "claude-opus-5-5", CacheRead: 6082, WriteTTL: agent.TTL5m})
 		}, ptr(0.85 + 6082*(5-0.2)/1e6)},
 		{"an estimated cost is the starting point", func() Record {
-			rec := record(0, main(1000, claude.TTL1h))
+			rec := record(0, main(1000, agent.TTL1h))
 			rec.Metrics.EstimatedCostUSD, rec.Metrics.CostUSD, rec.CostEstimated = 0.3, 0.3, true
 			return rec
 		}, ptr(0.3 + 1000*(4-0.2)/1e6)},
 		{"the judge's spend is not the agent's", func() Record {
-			rec := record(0.85, main(0, claude.TTL1h))
+			rec := record(0.85, main(0, agent.TTL1h))
 			rec.Judge = &judge.Verdict{CostUSD: 0.1}
 			return rec
 		}, ptr(0.85)},
 		{"a request without a model takes the session's", func() Record {
-			return record(0.85, claude.FirstRead{Main: true, CacheRead: 1000})
+			return record(0.85, agent.FirstRead{Main: true, CacheRead: 1000})
 		}, ptr(0.85 + 1000*(4-0.2)/1e6)},
 		{"then the model asked for", func() Record {
-			rec := record(0.85, claude.FirstRead{Main: true, CacheRead: 1000})
+			rec := record(0.85, agent.FirstRead{Main: true, CacheRead: 1000})
 			rec.Metrics.Model, rec.Model = "", "claude-opus-5-5"
 			return rec
 		}, ptr(0.85 + 1000*(8-0.2)/1e6)},
 		{"a subagent request without a model is absent: it may not run on the session's", func() Record {
-			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{CacheRead: 6082, WriteTTL: claude.TTL5m})
+			return record(0.85, main(0, agent.TTL1h), agent.FirstRead{CacheRead: 6082, WriteTTL: agent.TTL5m})
 		}, nil},
-		{"no cost is absent", func() Record { return record(0, main(0, claude.TTL1h)) }, nil},
+		{"no cost is absent", func() Record { return record(0, main(0, agent.TTL1h)) }, nil},
 		{"an unknown model is absent, not zero", func() Record {
-			return record(0.85, main(0, claude.TTL1h), claude.FirstRead{Model: "somebody-elses-model", CacheRead: 6082})
+			return record(0.85, main(0, agent.TTL1h), agent.FirstRead{Model: "somebody-elses-model", CacheRead: 6082})
 		}, nil},
 		{"an alias is not a price", func() Record {
-			rec := record(0.85, claude.FirstRead{Main: true, CacheRead: 1000})
+			rec := record(0.85, agent.FirstRead{Main: true, CacheRead: 1000})
 			rec.Metrics.Model, rec.Model = "", "sonnet"
 			return rec
 		}, nil},
 		{"no first request (an old record) is absent", func() Record { return record(0.85) }, nil},
 		{"a launch of unknown type is absent", func() Record {
-			rec := record(0.85, main(0, claude.TTL1h))
+			rec := record(0.85, main(0, agent.TTL1h))
 			rec.Metrics.UnmatchedLaunches = 1
 			return rec
 		}, nil},

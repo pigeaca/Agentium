@@ -8,7 +8,7 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/task"
 )
@@ -141,8 +141,8 @@ func (l Lock) JudgeGraded() bool {
 }
 
 // Expect is the environment the arm's runs are checked against.
-func (a LockedArm) Expect(cliVersion string) claude.Expect {
-	return claude.Expect{CLIVersion: cliVersion, Tools: a.Tools, Skills: a.Skills, SlashCommands: a.SlashCommands}
+func (a LockedArm) Expect(cliVersion string) agent.Expect {
+	return agent.Expect{CLIVersion: cliVersion, Tools: a.Tools, Skills: a.Skills, SlashCommands: a.SlashCommands}
 }
 
 // BudgetChange records a budget raised on resume.
@@ -233,7 +233,7 @@ func (l Lock) Task(name string) (LockedTask, bool) {
 // limit, or stopped at the timeout.
 func Fair(outcome string) bool {
 	switch outcome {
-	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
+	case agent.OutcomeOK, agent.OutcomeCapped, agent.OutcomeTimeout:
 		return true
 	}
 	return false
@@ -245,7 +245,7 @@ func Fair(outcome string) bool {
 // failures; per-arm counts guard the verdicts, see SandboxCheck). Infrastructure failures are retried, and cancelled
 // runs are run again.
 func Settles(outcome string) bool {
-	return Fair(outcome) || outcome == claude.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
+	return Fair(outcome) || outcome == agent.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
 }
 
 // OutcomeUngraded is how the analysis counts a fair judge-graded run left without a grade for good among the runs it

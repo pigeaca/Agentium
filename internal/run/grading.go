@@ -11,8 +11,8 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/sandbox"
 )
@@ -188,8 +188,8 @@ type gradingInput struct {
 	// Agent is the run's agent invocation, or one with the same Tools, AgentTools, Home, Deps, JavaHome, Venv,
 	// ProjectMetadata and ImportRoot: the grade gets the agent's recipe (buildtool.GraderEnv). Its folders (Dir,
 	// BuildCache, TempRoot, ConfigDir) and sign-in are not used.
-	Agent claude.Invocation
-	// Environ is the user's environment, which the agent's allowlist filters (claude.EnvironFor).
+	Agent agent.Invocation
+	// Environ is the user's environment, which the agent's allowlist filters (sandbox.EnvironFor).
 	Environ []string
 	// Quarantine is where a grade's folder that cannot be removed is moved (quarantine of the layout); Warn, when set,
 	// is told when that happens.
@@ -284,7 +284,7 @@ func prepareGrading(ctx context.Context, in gradingInput) (g grading, err error)
 		return g, fmt.Errorf("the grade's temp root: %w", err)
 	}
 	inv := in.Agent
-	allowed := claude.EnvironFor(in.Environ, profiles)
+	allowed := sandbox.EnvironFor(in.Environ, profiles)
 	g.Environ, err = buildtool.GraderEnv(profiles, allowed, buildtool.AgentContext{Environ: in.Environ, Home: inv.Home, Repo: g.Copy,
 		BuildCache: g.Cache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot}, g.Temp)
 	if err != nil {

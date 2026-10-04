@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -18,7 +19,7 @@ const (
 // usageRun is a task run on model from start to start+length, reading first and last in the window resetting at resets.
 func usageRun(model string, start time.Time, length time.Duration, first, last float64, resets time.Time) UsageSample {
 	return UsageSample{Model: model, Started: start, Finished: start.Add(length),
-		First: claude.UsageReading{FiveHour: first, FiveHourResets: resets}, Last: claude.UsageReading{FiveHour: last, FiveHourResets: resets}}
+		First: agent.UsageReading{FiveHour: first, FiveHourResets: resets}, Last: agent.UsageReading{FiveHour: last, FiveHourResets: resets}}
 }
 
 // The seq-v1 smoke rerun's case: another model's runs measured 2% a run in a window other work shared, which said

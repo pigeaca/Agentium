@@ -1,6 +1,10 @@
 package claude
 
-import "github.com/pigeaca/agentium/internal/pricing"
+import (
+	"github.com/pigeaca/agentium/internal/pricing"
+
+	"github.com/pigeaca/agentium/internal/agent"
+)
 
 // A cap is soft: Claude Code checks --max-budget-usd after each turn, so a run stops only once a turn has crossed it,
 // and spends its cap plus that turn. In the seq-v1 smoke check (2026-10-02, claude-sonnet-5, $0.50 caps) a run ended
@@ -52,7 +56,7 @@ func (o Overshoot) Exceeded() bool { return o.OverUSD > o.AllowanceUSD+1e-9 }
 // CapOvershoot is the Overshoot of a run that Claude Code stopped at its cost cap, or that went past the cap whatever
 // its result (one that finished on the turn that crossed it), with m its metrics and costUSD its reported cost; nil for
 // any other run.
-func CapOvershoot(m Metrics, costUSD, capUSD float64, model string) *Overshoot {
+func CapOvershoot(m agent.Metrics, costUSD, capUSD float64, model string) *Overshoot {
 	if capUSD <= 0 || m.Result != "error_max_budget_usd" && costUSD <= capUSD {
 		return nil
 	}

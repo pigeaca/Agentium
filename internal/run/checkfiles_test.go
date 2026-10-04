@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/source"
 )
@@ -154,7 +154,7 @@ func TestOnceRestoresALinkedScriptsTarget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+			if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed {
 				t.Fatalf("outcome %s, passed %v, notes %v: the edited target decided the grade", rec.Outcome, rec.Passed, rec.Notes)
 			}
 			if !strings.Contains(strings.Join(rec.Notes, "\n"), "graded with the starting version: "+inModule("scripts/real.sh")) {
