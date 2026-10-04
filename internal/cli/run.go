@@ -558,7 +558,8 @@ func runShow(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		return env.emit(runShowDocument(ctx, env, w, stored, rec, *diff, *logs))
 	}
-	if err := writeRun(env, rec, runWhere(ctx, w, stored), *details); err != nil {
+	plainWhere, words := runWhere(ctx, w, stored)
+	if err := writeRun(env, rec, plainWhere, words, *details); err != nil {
 		return fail(env, err)
 	}
 	var shown []string

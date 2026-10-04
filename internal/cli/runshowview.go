@@ -20,11 +20,12 @@ import (
 // dotted connectors run straight down the middle.
 const chainBoxWidth = 64
 
-// runWhere says which experiment's slot a stored run is ("experiment   NAME, slot 3 (from 0), attempt 1"), or "" for a
-// run of no experiment.
-func runWhere(ctx context.Context, w *workspace, stored store.Run) string {
+// runWhere says which experiment a stored run belongs to: in the plain lines ("experiment   NAME, slot 3 (from 0), attempt 1")
+// and in words for the picture ("part of experiment NAME"); both "" for a run of no experiment. The slot and attempt are
+// left to --details.
+func runWhere(ctx context.Context, w *workspace, stored store.Run) (plain, designed string) {
 	if stored.ExperimentID == 0 {
-		return ""
+		return "", ""
 	}
 	name := fmt.Sprintf("#%d", stored.ExperimentID)
 	if all, err := w.db.Experiments(ctx, w.project.ID); err == nil {
@@ -35,18 +36,17 @@ func runWhere(ctx context.Context, w *workspace, stored store.Run) string {
 		}
 	}
 	if stored.Kind == "calibration" {
-		return fmt.Sprintf("experiment   %s (a calibration before its first pair)", name)
+		return fmt.Sprintf("experiment   %s (a calibration before its first pair)", name), "a calibration for experiment " + name
 	}
-	return fmt.Sprintf("experiment   %s, slot %d (from 0), attempt %d", name, stored.Slot, stored.Attempt)
+	return fmt.Sprintf("experiment   %s, slot %d (from 0), attempt %d", name, stored.Slot, stored.Attempt), "part of experiment " + name
 }
 
 // writeRun prints a run (run show): on a terminal that shows the designed console, the chain of boxes of runShowView
 // unless details asks for every line; everywhere else (a pipe, NO_COLOR, TERM=dumb, a narrow terminal) the lines of
 // printRun, the experiment's slot and the records' files, byte for byte as before.
-func writeRun(env Env, rec run.Record, where string, details bool) error {
+func writeRun(env Env, rec run.Record, where, words string, details bool) error {
 	if caps := term.DetectCapabilities(env.Terminal, env.Getenv, envSize(env)); !details && !env.Plain && caps.Designed() {
-		where = strings.Join(strings.Fields(strings.ReplaceAll(where, " (from 0)", "")), " ") // the slot's counting is in --details
-		_, err := io.WriteString(env.Stdout, strings.Join(runShowView(rec, where, caps.Shapes(), caps.Width), "\n")+"\n")
+		_, err := io.WriteString(env.Stdout, strings.Join(runShowView(rec, words, caps.Shapes(), caps.Width), "\n")+"\n")
 		return err
 	}
 	printRun(env, rec)
@@ -65,7 +65,7 @@ func writeRun(env Env, rec run.Record, where string, details bool) error {
 
 // runShowView draws one run for reading on a terminal: the run as a chain of boxes joined by dotted lines, in plain
 // words (fresh copy, Claude works, hidden tests, result), each box two lines at most with its time on the right, then
-// a few dim lines for the rest. where says which experiment's slot the run is, or "". Every name that comes from
+// a few dim lines for the rest. where says which experiment the run is part of (in words), or "". Every name that comes from
 // outside Agentium (tasks, models, notes, paths) is sanitized before it is drawn. The full figures are in --details,
 // the records and the JSON.
 func runShowView(rec run.Record, where string, sh term.Shapes, width int) []string {
@@ -73,7 +73,7 @@ func runShowView(rec run.Record, where string, sh term.Shapes, width int) []stri
 	m := marksFor(sh)
 	w := min(width, term.MaxContentWidth)
 	var out []string
-	out = append(out, " "+st.Heading(term.Sanitize(rec.Task))+st.Paint(term.Muted, " "+m.sep+" arm "+term.Sanitize(rec.Arm)))
+	out = append(out, " "+st.Heading(term.Sanitize(rec.Task))+st.Paint(term.Muted, " "+m.sep+" arm ")+st.Paint(runArmRole(rec.Arm), term.Sanitize(rec.Arm)))
 	out = append(out, " "+st.Paint(term.Muted, strings.Repeat(m.rule, max(w-1, 1))))
 	flow := term.Flow{MaxWidth: w, Dotted: true}
 	for _, n := range runChain(rec, sh, m) {
@@ -88,6 +88,14 @@ func runShowView(rec run.Record, where string, sh term.Shapes, width int) []stri
 	return out
 }
 
+// runArmRole is an arm's color as the dashboard has it: A's blue, any other arm's orange.
+func runArmRole(arm string) term.Role {
+	if arm == "A" {
+		return term.ArmA
+	}
+	return term.ArmB
+}
+
 // runResult is the run's result for the result box and the heading, with its color. A run with no grade says why.
 func runResult(rec run.Record, m marks) (string, term.Role) {
 	switch {
@@ -98,6 +106,8 @@ func runResult(rec run.Record, m marks) (string, term.Role) {
 		return m.ok + " passed", term.OutcomeOK
 	case rec.Passed != nil:
 		return m.fail + " failed", term.OutcomeFailed
+	case rec.Outcome == run.OutcomeSandboxFlagged:
+		return m.warn + " left out (sandbox)", term.OutcomeInfra
 	case rec.Outcome == claude.OutcomeInfra || rec.Outcome == claude.OutcomeUnfair:
 		return m.warn + " no fair attempt", term.OutcomeInfra
 	}
@@ -137,9 +147,9 @@ func runChain(rec run.Record, sh term.Shapes, m marks) []term.Node {
 
 	// 2. The agent works in its own sandbox.
 	mt := rec.Metrics
-	agentLine := fmt.Sprintf("%s %s %d %s %s $%.4f", "in a sandbox", m.sep, mt.Turns, plural(mt.Turns, "turn", "turns"), m.sep, rec.Spend().AgentUSD)
+	agentLine := fmt.Sprintf("%s %s %d %s %s %s", "in a sandbox", m.sep, mt.Turns, plural(mt.Turns, "turn", "turns"), m.sep, cents(rec.Spend().AgentUSD))
 	if words, role := agentOutcome(rec.Outcome); words != "" {
-		agentLine = st.Paint(role, words) + dim(fmt.Sprintf(" %s %d %s %s $%.4f", m.sep, mt.Turns, plural(mt.Turns, "turn", "turns"), m.sep, rec.Spend().AgentUSD))
+		agentLine = st.Paint(role, words) + dim(fmt.Sprintf(" %s %d %s %s %s", m.sep, mt.Turns, plural(mt.Turns, "turn", "turns"), m.sep, cents(rec.Spend().AgentUSD)))
 	}
 	agentBox := node(term.Panel{Title: "Claude works", Right: took(time.Duration(mt.DurationMS) * time.Millisecond), Border: term.Sandbox, Dashed: true,
 		Lines: []string{agentLine, dim(toolsUsed(mt, m))}})
@@ -166,7 +176,7 @@ func runChain(rec run.Record, sh term.Shapes, m marks) []term.Node {
 // agentOutcome says in words when the agent did not simply finish, with its color; "" when it did.
 func agentOutcome(outcome string) (string, term.Role) {
 	switch outcome {
-	case claude.OutcomeOK:
+	case claude.OutcomeOK, run.OutcomeSandboxFlagged: // the latter is the grading's, said in its box
 		return "", term.Default
 	case claude.OutcomeCapped:
 		return "hit its cap", term.OutcomeFailed
@@ -225,7 +235,7 @@ func gradingBox(rec run.Record, sh term.Shapes, m marks, dim func(string) string
 		role := term.Muted
 		if rec.Judge != nil {
 			v := rec.Judge
-			lines = append(lines, dim(fmt.Sprintf("%s %s $%.4f %s unvalidated", term.Sanitize(v.Model), m.sep, v.CostUSD, m.sep)))
+			lines = append(lines, dim(fmt.Sprintf("%s %s %s %s unvalidated", term.Sanitize(v.Model), m.sep, cents(v.CostUSD), m.sep)))
 			role = term.OutcomeOK
 			if rec.Passed != nil && !*rec.Passed {
 				role = term.OutcomeFailed
@@ -235,6 +245,11 @@ func gradingBox(rec run.Record, sh term.Shapes, m marks, dim func(string) string
 			role = term.Muted
 		}
 		return node(term.Panel{Title: "the judge", Border: role, Lines: lines})
+	}
+	if g := rec.Sandbox; rec.Outcome == run.OutcomeSandboxFlagged && g != nil && g.FlaggedCount > 0 {
+		return node(term.Panel{Title: "hidden tests", Right: took, Border: term.Sandbox, Dashed: true, Lines: []string{"in a sandbox",
+			st.Paint(term.OutcomeInfra, fmt.Sprintf("%s tests failed: %d blocked %s the agent's sandbox allows", m.warn, g.FlaggedCount,
+				plural(g.FlaggedCount, "action", "actions")))}})
 	}
 	if g := rec.Sandbox; rec.Passed == nil && g != nil && g.Canary != task.CanaryPassed {
 		return node(term.Panel{Title: "hidden tests", Border: term.Sandbox, Dashed: true,
@@ -319,4 +334,12 @@ func tailFit(path string, width int, ellipsis string) string {
 		}
 	}
 	return term.Truncate(path, width, ellipsis)
+}
+
+// cents is a cost in dollars and cents; "<$0.01" for a cost under a cent, which "$0.00" would call free.
+func cents(usd float64) string {
+	if usd > 0 && usd < 0.005 {
+		return "<$0.01"
+	}
+	return fmt.Sprintf("$%.2f", usd)
 }

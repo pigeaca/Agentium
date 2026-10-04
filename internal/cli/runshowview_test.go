@@ -51,10 +51,14 @@ func runScenes() map[string]run.Record {
 	canary.Sandbox = &task.SandboxGrade{Canary: "the sandbox let a read through"}
 	canary.Outcome = claude.OutcomeCapped
 	canary.Drift = []string{"permission mode \"default\", not \"acceptEdits\""}
-	return map[string]run.Record{"passed": passed, "host": host, "judged": judged, "infra": infra, "canary": canary}
+
+	flagged := base()
+	flagged.Outcome, flagged.Passed = run.OutcomeSandboxFlagged, nil
+	flagged.Sandbox = &task.SandboxGrade{Canary: task.CanaryPassed, DenialCount: 4, FlaggedCount: 2}
+	return map[string]run.Record{"passed": passed, "host": host, "judged": judged, "infra": infra, "canary": canary, "flagged": flagged}
 }
 
-var runSceneNames = []string{"passed", "host", "judged", "infra", "canary"}
+var runSceneNames = []string{"passed", "host", "judged", "infra", "canary", "flagged"}
 
 // TestRunShowPreview writes each scene's view for scripts/readme_images/ansi2svg.py: AGENTIUM_RUN_DEMO names the folder.
 func TestRunShowPreview(t *testing.T) {
@@ -64,7 +68,7 @@ func TestRunShowPreview(t *testing.T) {
 	}
 	sh := term.Shapes{Style: term.Colored().WithDepth(term.Color256)}
 	for name, rec := range runScenes() {
-		text := "\x1b[36m$\x1b[39m agentium run show " + rec.ID + "\n" + strings.Join(runShowView(rec, "experiment ctx-ab, slot 3 (from 0), attempt 1", sh, 80), "\n") + "\n"
+		text := "\x1b[36m$\x1b[39m agentium run show " + rec.ID + "\n" + strings.Join(runShowView(rec, "part of experiment ctx-ab", sh, 80), "\n") + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "run-show-"+name+".ans"), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -79,7 +83,7 @@ func TestRunShowViewGoldens(t *testing.T) {
 		var b strings.Builder
 		for _, width := range []int{term.MinWidth, 80, 120} {
 			fmt.Fprintf(&b, "=== %d columns\n", width)
-			for _, line := range runShowView(scenes[name], "experiment ctx-ab, slot 3 (from 0), attempt 1", plainUnicode, width) {
+			for _, line := range runShowView(scenes[name], "part of experiment ctx-ab", plainUnicode, width) {
 				if w := term.Width(line); w > width {
 					t.Errorf("%s at %d columns: a line of %d cells: %q", name, width, w, line)
 				}
@@ -88,7 +92,7 @@ func TestRunShowViewGoldens(t *testing.T) {
 		}
 		checkGolden(t, "runshow-"+name+".golden", b.String())
 	}
-	where := "experiment ctx-ab, slot 3 (from 0), attempt 1"
+	where := "part of experiment ctx-ab"
 	checkGolden(t, "runshow-passed-color.golden", strings.Join(runShowView(scenes["passed"], where, color256, 80), "\n")+"\n")
 	checkGolden(t, "runshow-passed-ascii.golden", strings.Join(runShowView(scenes["passed"], where, plainASCII, 80), "\n")+"\n")
 }
@@ -98,11 +102,12 @@ func TestRunShowViewWords(t *testing.T) {
 	scenes := runScenes()
 	view := func(name string) string { return strings.Join(runShowView(scenes[name], "", plainUnicode, 100), "\n") }
 	for name, want := range map[string][]string{
-		"passed": {"fresh copy", "Claude works", "hidden tests", "result", "in a sandbox", "used Read ×9, Bash ×5, Edit ×3 and 1 more", "✓ passed", "sandbox check passed"},
-		"host":   {"✗ failed", "run on your machine, outside the sandbox"},
-		"judged": {"the judge", "fixed (2 of 3)", "unvalidated", "the judge says fixed"},
-		"infra":  {"infrastructure failed", "! no fair attempt", "nothing was graded"},
-		"canary": {"hit its cap", "the sandbox check failed: nothing was graded", "unfair: permission mode"},
+		"passed":  {"fresh copy", "Claude works", "hidden tests", "result", "in a sandbox", "used Read ×9, Bash ×5, Edit ×3 and 1 more", "✓ passed", "sandbox check passed"},
+		"host":    {"✗ failed", "run on your machine, outside the sandbox"},
+		"judged":  {"the judge", "fixed (2 of 3)", "unvalidated", "the judge says fixed"},
+		"infra":   {"infrastructure failed", "! no fair attempt", "nothing was graded"},
+		"flagged": {"tests failed: 2 blocked actions the agent's sandbox allows", "! left out (sandbox)", "in a sandbox"},
+		"canary":  {"hit its cap", "the sandbox check failed: nothing was graded", "unfair: permission mode"},
 	} {
 		v := view(name)
 		for _, w := range want {
@@ -110,6 +115,15 @@ func TestRunShowViewWords(t *testing.T) {
 				t.Errorf("%s: want %q in:\n%s", name, w, v)
 			}
 		}
+	}
+	if v := view("flagged"); strings.Contains(v, "infra-sandbox") || strings.Contains(v, "did not run") || strings.Contains(v, "not graded") {
+		t.Errorf("a run left out for blocked actions is drawn as ungraded:\n%s", v)
+	}
+	if v := view("passed"); !strings.Contains(v, "$0.42") || strings.Contains(v, "$0.4231") {
+		t.Errorf("money is in dollars and cents:\n%s", v)
+	}
+	if got := cents(0.002); got != "<$0.01" || cents(0) != "$0.00" {
+		t.Errorf("cents: %q, %q", got, cents(0))
 	}
 	if v := view("judged"); strings.Contains(v, "hidden tests") {
 		t.Errorf("a judge-graded run has no hidden tests box:\n%s", v)
@@ -119,6 +133,9 @@ func TestRunShowViewWords(t *testing.T) {
 	}
 	evil := scenes["passed"]
 	evil.Task, evil.Arm, evil.Notes = "x\x1b[31m", "B\x1b]0;t\a", []string{"\x1b[2Jnote"}
+	evil.ContextHead = "\x1b[31mabcdefg"
+	evil.Metrics.Model = "m\x1b[2J"
+	evil.Metrics.ToolUses = map[string]int{"Bash\x1b]0;t\a": 3}
 	if v := strings.Join(runShowView(evil, "", plainUnicode, 80), "\n"); strings.Contains(v, "\x1b") {
 		t.Errorf("an escape from a name reached the screen: %q", v)
 	}
@@ -167,7 +184,7 @@ func TestRunShowOnATerminal(t *testing.T) {
 	*f.terminal = true
 	designed := f.run(ctx, "run", "show", id)
 	expect(t, cliResult{designed.code, term.Plain(designed.stdout), designed.stderr}, ExitOK, "fresh copy", "Claude works", "hidden tests", "result",
-		"experiment lean-ab, slot ", "agentium run show "+id+" --details")
+		"part of experiment lean-ab", "agentium run show "+id+" --details")
 	if strings.Contains(term.Plain(designed.stdout), "outcome      ok") {
 		t.Errorf("the designed view carries the plain lines:\n%s", designed.stdout)
 	}

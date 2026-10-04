@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -149,8 +150,10 @@ func spendPanel(r experiment.Review, seq *experiment.SeqPreview, sh term.Shapes,
 	switch {
 	case seq != nil:
 		known = seq.Known
-		rows = []row{{"likely", seq.NoneUSD}, {"at most", seq.MaxUSD}}
-		dim = append(dim, fmt.Sprintf("likely: if nothing changes, about %.1f of %d tasks are used", seq.TasksNone, len(d.Tasks)))
+		rows = []row{{"likely", seq.NoneUSD}, {"all tasks run", seq.MaxUSD}}
+		if seq.TasksNone < float64(len(d.Tasks))-0.05 {
+			dim = append(dim, fmt.Sprintf("likely: if nothing changes, about %s of %d tasks are used", tasksUsed(seq.TasksNone), len(d.Tasks)))
+		}
 		if known {
 			dim = append(dim, "if every run hit its cap: "+money(seq.WorstUSD))
 		}
@@ -158,11 +161,18 @@ func spendPanel(r experiment.Review, seq *experiment.SeqPreview, sh term.Shapes,
 		own := r.Rows[len(r.Rows)-1]
 		known = own.CostKnown
 		rows = []row{{"likely", own.CostUSD + own.JudgeUSD}, {"worst case", own.WorstUSD}}
+		dim = dim[:0]
 		dim = append(dim, "worst case: every run hits its cap")
 	}
 	if needs := r.Readiness.Calibrations; len(needs) > 0 {
 		estimate, _ := experiment.CalibrationCosts(needs)
-		dim = append(dim, fmt.Sprintf("includes about %s to calibrate %d %s first", money(estimate), len(needs), plural(len(needs), "context", "contexts")))
+		dim = append(dim, fmt.Sprintf("plus about %s to calibrate %d %s first (from the budget)", money(estimate), len(needs), plural(len(needs), "context", "contexts")))
+	}
+	if len(rows) == 2 && math.Abs(rows[0].usd-rows[1].usd) < 0.005 { // one amount is one bar
+		rows = rows[1:]
+		if seq != nil {
+			rows[0].label = "all tasks run"
+		}
 	}
 	p := term.Panel{Title: "what it may spend", Overflow: term.WrapText}
 	if !known {
@@ -175,7 +185,7 @@ func spendPanel(r experiment.Review, seq *experiment.SeqPreview, sh term.Shapes,
 	}
 	inner := min(width, term.MaxContentWidth) - 4
 	bar := func(label string, usd float64, role term.Role) string {
-		return sh.Bar(term.Bar{Label: label, LabelWidth: 10, Fraction: usd / scale, Value: money(usd), ValueWidth: 8, Role: role}, inner)
+		return sh.Bar(term.Bar{Label: label, LabelWidth: 13, Fraction: usd / scale, Value: money(usd), ValueWidth: 8, Role: role}, inner)
 	}
 	for _, rw := range rows {
 		p.Lines = append(p.Lines, bar(rw.label, rw.usd, term.Level(rw.usd, d.BudgetUSD)))
@@ -185,6 +195,14 @@ func spendPanel(r experiment.Review, seq *experiment.SeqPreview, sh term.Shapes,
 		p.Lines = append(p.Lines, st.Paint(term.Muted, m.words(line)))
 	}
 	return p
+}
+
+// tasksUsed is a count of tasks that may be fractional (an average): whole numbers have no ".0".
+func tasksUsed(n float64) string {
+	if math.Abs(n-math.Round(n)) < 0.05 {
+		return fmt.Sprint(int(math.Round(n)))
+	}
+	return fmt.Sprintf("%.1f", n)
 }
 
 // checksPanel lists a seq-v1 design's checks of the answer: after how many tasks, and what has been spent by then, as a

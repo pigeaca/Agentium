@@ -98,8 +98,8 @@ func TestPlanViewWords(t *testing.T) {
 		return strings.Join(planView(scenes[name], "lean-seq", "login", planNow, plainUnicode, 100), "\n")
 	}
 	for name, want := range map[string][]string{
-		"seq":       {"BASELINE", "LEAN", "does lean save money?", "everything is in place (2 checks)", "what it may spend", "likely", "at most", "budget", "when it checks the answer", "check 1: 8 tasks", "agentium experiment plan lean-seq --details"},
-		"not-ready": {"✗ task value: its tests do not fail", "! the budget $30.00 is below", "✓ 1 check ok", "includes about", "calibrate 1 context", "not ready to run"},
+		"seq":       {"BASELINE", "LEAN", "does lean save money?", "everything is in place (2 checks)", "what it may spend", "likely", "all tasks run", "budget", "when it checks the answer", "check 1: 8 tasks", "agentium experiment plan lean-seq --details"},
+		"not-ready": {"✗ task value: its tests do not fail", "! the budget $30.00 is below", "✓ 1 check ok", "plus about", "calibrate 1 context", "not ready to run"},
 		"unknown":   {"cost unknown until runs measure it"},
 	} {
 		v := view(name)

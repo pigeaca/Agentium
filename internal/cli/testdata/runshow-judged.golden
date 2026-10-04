@@ -7,13 +7,13 @@
 ╰──────────────────────────────────────────────────────────╯
                              ┊
 ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
-┆ in a sandbox · 9 turns · $0.4231                         ┆
+┆ in a sandbox · 9 turns · $0.42                           ┆
 ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                ┆
 ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                              ┊
 ╭─ the judge ──────────────────────────────────────────────╮
 │ fixed (2 of 3)                                           │
-│ claude-opus-5-5 · $0.2100 · unvalidated                  │
+│ claude-opus-5-5 · $0.21 · unvalidated                    │
 ╰──────────────────────────────────────────────────────────╯
                              ┊
 ╭─ result ───────────────────────────────────────── 3m12s ─╮
@@ -21,7 +21,7 @@
 │ 3 files · +41 -2                                         │
 ╰──────────────────────────────────────────────────────────╯
 
- experiment ctx-ab, slot 3 (from 0), attempt 1
+ part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
  records ~/runs/20261003T140000Z-a1b2c3
  everything:
@@ -35,13 +35,13 @@
         ╰──────────────────────────────────────────────────────────────╯
                                        ┊
         ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
-        ┆ in a sandbox · 9 turns · $0.4231                             ┆
+        ┆ in a sandbox · 9 turns · $0.42                               ┆
         ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                    ┆
         ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                        ┊
         ╭─ the judge ──────────────────────────────────────────────────╮
         │ fixed (2 of 3)                                               │
-        │ claude-opus-5-5 · $0.2100 · unvalidated                      │
+        │ claude-opus-5-5 · $0.21 · unvalidated                        │
         ╰──────────────────────────────────────────────────────────────╯
                                        ┊
         ╭─ result ───────────────────────────────────────────── 3m12s ─╮
@@ -49,7 +49,7 @@
         │ 3 files · +41 -2                                             │
         ╰──────────────────────────────────────────────────────────────╯
 
- experiment ctx-ab, slot 3 (from 0), attempt 1
+ part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
  records ~/runs/20261003T140000Z-a1b2c3
  everything: agentium run show 20261003T140000Z-a1b2c3 --details
@@ -62,13 +62,13 @@
                   ╰──────────────────────────────────────────────────────────────╯
                                                  ┊
                   ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
-                  ┆ in a sandbox · 9 turns · $0.4231                             ┆
+                  ┆ in a sandbox · 9 turns · $0.42                               ┆
                   ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                    ┆
                   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                                  ┊
                   ╭─ the judge ──────────────────────────────────────────────────╮
                   │ fixed (2 of 3)                                               │
-                  │ claude-opus-5-5 · $0.2100 · unvalidated                      │
+                  │ claude-opus-5-5 · $0.21 · unvalidated                        │
                   ╰──────────────────────────────────────────────────────────────╯
                                                  ┊
                   ╭─ result ───────────────────────────────────────────── 3m12s ─╮
@@ -76,7 +76,7 @@
                   │ 3 files · +41 -2                                             │
                   ╰──────────────────────────────────────────────────────────────╯
 
- experiment ctx-ab, slot 3 (from 0), attempt 1
+ part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
  records ~/runs/20261003T140000Z-a1b2c3
  everything: agentium run show 20261003T140000Z-a1b2c3 --details

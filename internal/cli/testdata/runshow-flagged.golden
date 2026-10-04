@@ -1,9 +1,9 @@
 === 60 columns
  fix-parser · arm B
  ───────────────────────────────────────────────────────────
-╭─ fresh copy ─────────────────────────────────────────────╮
+╭─ fresh copy ──────────────────────────────────────── 4s ─╮
 │ a clean copy with arm B's context (9f3c2d1)              │
-│ no setup                                                 │
+│ setup: 1 command                                         │
 ╰──────────────────────────────────────────────────────────╯
                              ┊
 ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
@@ -11,28 +11,27 @@
 ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                ┆
 ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                              ┊
-╭─ hidden tests ───────────────────────────────────── 18s ─╮
-│ ! run on your machine, outside the sandbox               │
-│ 1 command                                                │
-╰──────────────────────────────────────────────────────────╯
+╭┄ hidden tests ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 18s ┄╮
+┆ in a sandbox                                             ┆
+┆ ! tests failed: 2 blocked actions the agent's sandbox a… ┆
+╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                              ┊
 ╭─ result ───────────────────────────────────────── 3m12s ─╮
-│ ✗ failed                                                 │
-│ 3 files · +41 -2                                         │
+│ ! left out (sandbox)                                     │
+│ nothing was graded                                       │
 ╰──────────────────────────────────────────────────────────╯
 
  part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
- the agent changed go.mod
  records ~/runs/20261003T140000Z-a1b2c3
  everything:
  agentium run show 20261003T140000Z-a1b2c3 --details
 === 80 columns
  fix-parser · arm B
  ───────────────────────────────────────────────────────────────────────────────
-        ╭─ fresh copy ─────────────────────────────────────────────────╮
+        ╭─ fresh copy ──────────────────────────────────────────── 4s ─╮
         │ a clean copy with arm B's context (9f3c2d1)                  │
-        │ no setup                                                     │
+        │ setup: 1 command                                             │
         ╰──────────────────────────────────────────────────────────────╯
                                        ┊
         ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
@@ -40,27 +39,26 @@
         ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                    ┆
         ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                        ┊
-        ╭─ hidden tests ───────────────────────────────────────── 18s ─╮
-        │ ! run on your machine, outside the sandbox                   │
-        │ 1 command                                                    │
-        ╰──────────────────────────────────────────────────────────────╯
+        ╭┄ hidden tests ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 18s ┄╮
+        ┆ in a sandbox                                                 ┆
+        ┆ ! tests failed: 2 blocked actions the agent's sandbox allows ┆
+        ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                        ┊
         ╭─ result ───────────────────────────────────────────── 3m12s ─╮
-        │ ✗ failed                                                     │
-        │ 3 files · +41 -2                                             │
+        │ ! left out (sandbox)                                         │
+        │ nothing was graded                                           │
         ╰──────────────────────────────────────────────────────────────╯
 
  part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
- the agent changed go.mod
  records ~/runs/20261003T140000Z-a1b2c3
  everything: agentium run show 20261003T140000Z-a1b2c3 --details
 === 120 columns
  fix-parser · arm B
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                  ╭─ fresh copy ─────────────────────────────────────────────────╮
+                  ╭─ fresh copy ──────────────────────────────────────────── 4s ─╮
                   │ a clean copy with arm B's context (9f3c2d1)                  │
-                  │ no setup                                                     │
+                  │ setup: 1 command                                             │
                   ╰──────────────────────────────────────────────────────────────╯
                                                  ┊
                   ╭┄ Claude works ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 2m41s ┄╮
@@ -68,19 +66,18 @@
                   ┆ used Read ×9, Bash ×5, Edit ×3 and 1 more                    ┆
                   ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                                  ┊
-                  ╭─ hidden tests ───────────────────────────────────────── 18s ─╮
-                  │ ! run on your machine, outside the sandbox                   │
-                  │ 1 command                                                    │
-                  ╰──────────────────────────────────────────────────────────────╯
+                  ╭┄ hidden tests ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ 18s ┄╮
+                  ┆ in a sandbox                                                 ┆
+                  ┆ ! tests failed: 2 blocked actions the agent's sandbox allows ┆
+                  ╰┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄╯
                                                  ┊
                   ╭─ result ───────────────────────────────────────────── 3m12s ─╮
-                  │ ✗ failed                                                     │
-                  │ 3 files · +41 -2                                             │
+                  │ ! left out (sandbox)                                         │
+                  │ nothing was graded                                           │
                   ╰──────────────────────────────────────────────────────────────╯
 
  part of experiment ctx-ab
  Claude Code 2.1.281 · claude-sonnet-5
- the agent changed go.mod
  records ~/runs/20261003T140000Z-a1b2c3
  everything: agentium run show 20261003T140000Z-a1b2c3 --details
 === end

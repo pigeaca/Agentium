@@ -1,11 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="1160" viewBox="0 0 1064 1160" role="img" aria-label="agentium start --accept-mined">
-<rect width="1064" height="1160" rx="8" fill="#1e1e1e"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="1064" height="1122" viewBox="0 0 1064 1122" role="img" aria-label="agentium start --accept-mined">
+<rect width="1064" height="1122" rx="8" fill="#1e1e1e"/>
 <circle cx="20" cy="18" r="6" fill="#ff5f57"/><circle cx="40" cy="18" r="6" fill="#febc2e"/><circle cx="60" cy="18" r="6" fill="#28c840"/>
 <text x="532" y="23" fill="#8b8b8b" font-family="-apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="13" text-anchor="middle">agentium start --accept-mined</text>
 <g font-family="SF Mono, Menlo, Consolas, DejaVu Sans Mono, Liberation Mono, monospace" font-size="14" fill="#d4d4d4">
 <text x="16" y="54"><tspan fill="#29b8db">$</tspan>&#160;agentium&#160;start&#160;--accept-mined</text>
 <text x="16" y="73"><tspan font-weight="bold">Registered&#160;001&#160;(project&#160;1)</tspan></text>
-<text x="16" y="92">&#160;&#160;repository&#160;&#160;&#160;~/code/lib&#160;@&#160;ada0c2502d64</text>
+<text x="16" y="92">&#160;&#160;repository&#160;&#160;&#160;~/code/lib&#160;@&#160;f38505eb5023</text>
 <text x="16" y="111">&#160;&#160;Claude&#160;Code&#160;&#160;~/.local/bin/claude&#160;2.1.281</text>
 <text x="16" y="130">&#160;&#160;sign-in&#160;&#160;&#160;&#160;&#160;&#160;your&#160;Claude&#160;login,&#160;restricted&#160;to&#160;project&#160;settings&#160;(checked&#160;on&#160;the&#160;first&#160;run)</text>
 <text x="16" y="149">&#160;&#160;tests&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;make&#160;test</text>
@@ -17,17 +17,17 @@
 <text x="16" y="263">&#160;&#160;require&#160;lock&#160;&#160;&#160;&#160;off<tspan fill="#8b8b8b">&#160;(default)</tspan></text>
 <text x="16" y="282">&#160;&#160;jobs&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;2<tspan fill="#8b8b8b">&#160;(default)</tspan></text>
 <text x="16" y="301">&#160;&#160;verify&#160;timeout&#160;&#160;10m<tspan fill="#8b8b8b">&#160;(default)</tspan></text>
-<text x="16" y="320">Context:&#160;saved&#160;snapshot&#160;baseline&#160;from&#160;HEAD&#160;(ada0c2502d64):&#160;1&#160;file(s)</text>
+<text x="16" y="320">Context:&#160;saved&#160;snapshot&#160;baseline&#160;from&#160;HEAD&#160;(f38505eb5023):&#160;1&#160;file(s)</text>
 <text x="16" y="339">Mining:&#160;8&#160;candidate(s)&#160;in&#160;9&#160;commit(s)&#160;read;&#160;imported&#160;8&#160;of&#160;8&#160;tried&#160;(verify:&#160;make&#160;test)</text>
 <text x="16" y="358">Validating&#160;8&#160;task(s)&#160;in&#160;2&#160;context(s),&#160;2&#160;at&#160;a&#160;time</text>
-<text x="16" y="377">&#160;&#160;8&#160;valid&#160;of&#160;8,&#160;in&#160;2s</text>
-<text x="16" y="396">Accepted&#160;8&#160;mined&#160;instruction(s)&#160;without&#160;your&#160;review&#160;(--accept-mined):&#160;add-f4-to-the-library-044da09,&#160;add-f7-to-the-libra</text>
-<text x="16" y="415">ry-604b7e0,&#160;add-f6-to-the-library-7d85a70,&#160;add-f8-to-the-library-ada0c25,&#160;add-f2-to-the-library-b3b031b,&#160;add-f1-to-the-l</text>
-<text x="16" y="434">ibrary-c28047e,&#160;add-f5-to-the-library-f28b5f8,&#160;add-f3-to-the-library-fbb80a7</text>
+<text x="16" y="377">&#160;&#160;8&#160;valid&#160;of&#160;8,&#160;in&#160;12s</text>
+<text x="16" y="396">Accepted&#160;8&#160;mined&#160;instruction(s)&#160;without&#160;your&#160;review&#160;(--accept-mined):&#160;add-f7-to-the-library-4f351f4,&#160;add-f3-to-the-libra</text>
+<text x="16" y="415">ry-7925ed3,&#160;add-f5-to-the-library-9b64f76,&#160;add-f2-to-the-library-9f0d23d,&#160;add-f4-to-the-library-b0ad676,&#160;add-f6-to-the-l</text>
+<text x="16" y="434">ibrary-dbd8130,&#160;add-f8-to-the-library-f38505e,&#160;add-f1-to-the-library-31504f5</text>
 <text x="16" y="453">&#160;&#160;Only&#160;solution&#160;headings,&#160;reference-file&#160;names&#160;and&#160;unstated&#160;test&#160;requirements&#160;were&#160;checked;&#160;a&#160;message&#160;that&#160;explains&#160;the&#160;</text>
 <text x="16" y="472">fix&#160;is&#160;not&#160;detected.</text>
-<text x="16" y="491">Tasks:&#160;8&#160;ready&#160;(aims&#160;for&#160;16;&#160;the&#160;history&#160;has&#160;no&#160;more&#160;candidates),&#160;in&#160;3s:&#160;the&#160;experiment&#160;takes&#160;them&#160;all,&#160;one&#160;look,&#160;after&#160;</text>
-<text x="16" y="510">all&#160;8&#160;tasks&#160;(a&#160;fixed&#160;design&#160;at&#160;the&#160;sequential&#160;level)</text>
+<text x="16" y="491">Tasks:&#160;8&#160;ready&#160;(aims&#160;for&#160;16;&#160;the&#160;history&#160;has&#160;no&#160;more&#160;candidates),&#160;in&#160;18s:&#160;the&#160;experiment&#160;takes&#160;them&#160;all,&#160;one&#160;look,&#160;after</text>
+<text x="16" y="510">&#160;all&#160;8&#160;tasks&#160;(a&#160;fixed&#160;design&#160;at&#160;the&#160;sequential&#160;level)</text>
 <text x="16" y="529">Experiment&#160;quick-aa-baseline:&#160;created,&#160;8&#160;task(s)&#160;×&#160;1&#160;run&#160;per&#160;arm&#160;=&#160;16&#160;runs&#160;at&#160;most,&#160;budget&#160;$43.00;&#160;one&#160;look,&#160;after&#160;all&#160;8</text>
 <text x="16" y="548">&#160;tasks&#160;(a&#160;fixed&#160;design&#160;at&#160;the&#160;sequential&#160;level)</text>
 <text x="16" y="567"></text>
@@ -41,24 +41,22 @@
 <text x="16" y="719"></text>
 <text x="16" y="738"><tspan fill="#767676">╭─</tspan>&#160;<tspan font-weight="bold">before&#160;it&#160;runs</tspan>&#160;<tspan fill="#767676">─────────────────────────────────────────────────────────────────────────────────</tspan><tspan fill="#767676">╮</tspan></text>
 <text x="16" y="757"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#ffd700">!</tspan>&#160;validated&#160;with&#160;fewer&#160;than&#160;3&#160;repeats,&#160;so&#160;flaky&#160;checks&#160;may&#160;not&#160;show&#160;yet:&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="776"><tspan fill="#767676">│</tspan>&#160;&#160;&#160;add-f1-to-the-library-c28047e,&#160;add-f2-to-the-library-b3b031b,&#160;add-f3-to-the-library-fbb80a7,&#160;…&#160;<tspan fill="#767676">│</tspan></text>
+<text x="16" y="776"><tspan fill="#767676">│</tspan>&#160;&#160;&#160;add-f1-to-the-library-31504f5,&#160;add-f2-to-the-library-9f0d23d,&#160;add-f3-to-the-library-7925ed3,&#160;…&#160;<tspan fill="#767676">│</tspan></text>
 <text x="16" y="795"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">✓&#160;3&#160;checks&#160;ok</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
 <text x="16" y="814"><tspan fill="#767676">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</tspan></text>
 <text x="16" y="833"></text>
 <text x="16" y="852"><tspan fill="#767676">╭─</tspan>&#160;<tspan font-weight="bold">what&#160;it&#160;may&#160;spend</tspan>&#160;<tspan fill="#767676">──────────────────────────────────────────────────────────────────────────────</tspan><tspan fill="#767676">╮</tspan></text>
-<text x="16" y="871"><tspan fill="#767676">│</tspan>&#160;likely&#160;&#160;&#160;&#160;&#160;<tspan fill="#87d787">█████████████████████████████████████████████▋</tspan><tspan fill="#767676">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</tspan>&#160;&#160;&#160;$25.79&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="890"><tspan fill="#767676">│</tspan>&#160;at&#160;most&#160;&#160;&#160;&#160;<tspan fill="#87d787">█████████████████████████████████████████████▋</tspan><tspan fill="#767676">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</tspan>&#160;&#160;&#160;$25.79&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="909"><tspan fill="#767676">│</tspan>&#160;budget&#160;&#160;&#160;&#160;&#160;<tspan fill="#8a8a8a">████████████████████████████████████████████████████████████████████████████</tspan>&#160;&#160;&#160;&#160;&#160;&#160;$43&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="928"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">likely:&#160;if&#160;nothing&#160;changes,&#160;about&#160;8.0&#160;of&#160;8&#160;tasks&#160;are&#160;used</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="947"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">if&#160;every&#160;run&#160;hit&#160;its&#160;cap:&#160;$52.80</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="966"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">includes&#160;about&#160;$0.09&#160;to&#160;calibrate&#160;1&#160;context&#160;first</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
-<text x="16" y="985"><tspan fill="#767676">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</tspan></text>
-<text x="16" y="1004"></text>
-<text x="16" y="1023">&#160;<tspan fill="#767676">on&#160;your&#160;plan:&#160;16&#160;runs&#160;need&#160;about&#160;1.1&#160;windows&#160;of&#160;the&#160;five-hour&#160;limit</tspan></text>
-<text x="16" y="1042">&#160;<tspan fill="#767676">everything:&#160;agentium&#160;experiment&#160;plan&#160;quick-aa-baseline&#160;--details</tspan></text>
+<text x="16" y="871"><tspan fill="#767676">│</tspan>&#160;all&#160;tasks&#160;run&#160;<tspan fill="#87d787">███████████████████████████████████████████▊</tspan><tspan fill="#767676">░░░░░░░░░░░░░░░░░░░░░░░░░░░░░</tspan>&#160;&#160;&#160;$25.79&#160;<tspan fill="#767676">│</tspan></text>
+<text x="16" y="890"><tspan fill="#767676">│</tspan>&#160;budget&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#8a8a8a">█████████████████████████████████████████████████████████████████████████</tspan>&#160;&#160;&#160;&#160;&#160;&#160;$43&#160;<tspan fill="#767676">│</tspan></text>
+<text x="16" y="909"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">if&#160;every&#160;run&#160;hit&#160;its&#160;cap:&#160;$52.80</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
+<text x="16" y="928"><tspan fill="#767676">│</tspan>&#160;<tspan fill="#767676">plus&#160;about&#160;$0.09&#160;to&#160;calibrate&#160;1&#160;context&#160;first&#160;(from&#160;the&#160;budget)</tspan>&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;&#160;<tspan fill="#767676">│</tspan></text>
+<text x="16" y="947"><tspan fill="#767676">╰──────────────────────────────────────────────────────────────────────────────────────────────────╯</tspan></text>
+<text x="16" y="966"></text>
+<text x="16" y="985">&#160;<tspan fill="#767676">on&#160;your&#160;plan:&#160;16&#160;runs&#160;need&#160;about&#160;1.1&#160;windows&#160;of&#160;the&#160;five-hour&#160;limit</tspan></text>
+<text x="16" y="1004">&#160;<tspan fill="#767676">everything:&#160;agentium&#160;experiment&#160;plan&#160;quick-aa-baseline&#160;--details</tspan></text>
+<text x="16" y="1023"></text>
+<text x="16" y="1042">First&#160;decisive&#160;verdict:&#160;none&#160;yet&#160;($0.00&#160;spent&#160;since&#160;init)</text>
 <text x="16" y="1061"></text>
-<text x="16" y="1080">First&#160;decisive&#160;verdict:&#160;none&#160;yet&#160;($0.00&#160;spent&#160;since&#160;init)</text>
-<text x="16" y="1099"></text>
-<text x="16" y="1118">Nothing&#160;was&#160;run&#160;and&#160;nothing&#160;was&#160;spent.&#160;To&#160;run&#160;it&#160;(real&#160;Claude&#160;Code&#160;runs,&#160;first&#160;1&#160;calibration&#160;run(s)&#160;of&#160;about&#160;$0.09,&#160;up&#160;t</text>
-<text x="16" y="1137">o&#160;$43.00):&#160;<tspan fill="#29b8db">agentium&#160;experiment&#160;run&#160;quick-aa-baseline</tspan></text>
+<text x="16" y="1080">Nothing&#160;was&#160;run&#160;and&#160;nothing&#160;was&#160;spent.&#160;To&#160;run&#160;it&#160;(real&#160;Claude&#160;Code&#160;runs,&#160;first&#160;1&#160;calibration&#160;run(s)&#160;of&#160;about&#160;$0.09,&#160;up&#160;t</text>
+<text x="16" y="1099">o&#160;$43.00):&#160;<tspan fill="#29b8db">agentium&#160;experiment&#160;run&#160;quick-aa-baseline</tspan></text>
 </g></svg>
