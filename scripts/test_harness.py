@@ -14,6 +14,7 @@ import unittest.mock
 from unittest.mock import patch
 
 import harness
+import release
 
 
 def fake(*parts):
@@ -284,7 +285,7 @@ class CheckScopes(unittest.TestCase):
         with patch.object(harness, "check_docs") as docs, patch.object(harness, "run") as run, patch.object(harness, "check_go") as go:
             harness.main(["check", "ci"])
         docs.assert_called_once()
-        self.assertIn("test_harness.py", run.call_args.args)
+        self.assertIn("test_*.py", run.call_args.args)
         go.assert_called_once()  # this repository has a go.mod
         with tempfile.TemporaryDirectory() as directory, patch.object(harness, "ROOT", Path(directory)), \
                 patch.object(harness, "check_docs"), patch.object(harness, "run"), patch.object(harness, "check_go") as go:
@@ -674,7 +675,8 @@ class FakeGitHub:
             raise ValueError("gh api failed: HTTP 502")
         if args[:2] == ("pr", "view"):
             return json.dumps({"number": 7, "url": "https://github.com/o/r/pull/7", "headRefName": "claude/fix/x", "state": "OPEN",
-                               "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "baseRefOid": "c" * 40, **next_of(self.prs)})
+                               "isDraft": False, "mergeable": "MERGEABLE", "baseRefName": "main", "baseRefOid": "c" * 40,
+                               "title": "fix(x): y", "body": "", **next_of(self.prs)})
         if args == ("api", "repos/o/r"):
             return json.dumps({"default_branch": "main"})
         if args[0] == "api" and "/branches/" in args[1]:
@@ -695,13 +697,16 @@ class FakeGitHub:
 class PullRequestLanding(unittest.TestCase):
     A, B = "a" * 40, "b" * 40
 
-    def land(self, fake, dry_run=False, update=False, timeout=40):
+    def land(self, fake, dry_run=False, update=False, timeout=40, changes=(), no_release=False):
         sleeps = []
         clock = iter(range(0, 100000, 20)).__next__  # every reading advances one poll interval
+        self.after_merge = unittest.mock.Mock()
         with patch.object(harness, "gh", fake), patch.object(harness, "github_repo", return_value="o/r"), \
-                patch("builtins.print") as output:
+                patch.object(release, "pr_contract_changes", return_value=list(changes)), \
+                patch.object(release, "after_merge", self.after_merge), patch("builtins.print") as output:
             try:
-                harness.pr_land(7, dry_run=dry_run, update=update, timeout_minutes=timeout, sleep=sleeps.append, clock=clock)
+                harness.pr_land(7, dry_run=dry_run, update=update, timeout_minutes=timeout, sleep=sleeps.append, clock=clock,
+                                no_release=no_release)
                 error = None
             except ValueError as raised:
                 error = str(raised)
@@ -820,7 +825,50 @@ class PullRequestLanding(unittest.TestCase):
                 harness.main(["pr", *args])
         with patch.object(harness, "pr_land") as land:
             harness.main(["pr", "land", "12", "--timeout", "5", "--dry-run", "--update"])
-        land.assert_called_once_with(12, dry_run=True, update=True, timeout_minutes=5.0)
+        land.assert_called_once_with(12, dry_run=True, update=True, timeout_minutes=5.0, no_release=False)
+        with patch.object(harness, "pr_land") as land:
+            harness.main(["pr", "land", "12", "--no-release"])
+        land.assert_called_once_with(12, dry_run=False, update=False, timeout_minutes=40, no_release=True)
+
+    def test_contract_changes_must_be_declared_before_the_merge(self):
+        breaking = [{"kind": "breaking", "text": "flag clean --yes removed"}]
+        additive = [{"kind": "additive", "text": "new migration 0014_x.sql"}]
+        cases = [(breaking, "fix(x): y", "", "need a `!` in the title"), (breaking, "fix(x)!: y", "", "`Breaking:` line"),
+                 (additive, "docs: y", "", "need a feat or fix title"), (additive, "refactor(x): y", "", "need a feat or fix title")]
+        for changes, title, body, reason in cases:
+            with self.subTest(title=title, reason=reason):
+                fake = FakeGitHub([{"headRefOid": self.A, "title": title, "body": body}], [[ci_run(self.A)]])
+                error, _, _ = self.land(fake, changes=changes)
+                self.assertIn(reason, error)
+                self.assertIn(f"- {changes[0]['kind']}: {changes[0]['text']}", error)
+                self.assertEqual(fake.writes(), [])
+                self.assertFalse(self.after_merge.called)
+        for changes, title, body in [(breaking, "feat(x)!: y", "Breaking: run `agentium migrate`"), (additive, "feat(x): y", ""),
+                                     (additive, "fix(x): y", ""), ([], "docs: y", "")]:
+            with self.subTest(title=title):
+                fake = FakeGitHub([{"headRefOid": self.A, "title": title, "body": body}], [[ci_run(self.A)]])
+                error, _, _ = self.land(fake, changes=changes)
+                self.assertIsNone(error)
+                self.assertEqual(len(fake.merges()), 1)
+
+    def test_release_runs_after_the_merge_and_a_failure_does_not_undo_it(self):
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]])
+        error, _, _ = self.land(fake)
+        self.assertIsNone(error)
+        self.after_merge.assert_called_once_with(40)
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]])
+        error, _, _ = self.land(fake, no_release=True)
+        self.assertIsNone(error)
+        self.assertFalse(self.after_merge.called)
+        fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]])
+        sleeps, clock = [], iter(range(0, 100000, 20)).__next__
+        with patch.object(harness, "gh", fake), patch.object(harness, "github_repo", return_value="o/r"), \
+                patch.object(release, "pr_contract_changes", return_value=[]), \
+                patch.object(release, "after_merge", side_effect=ValueError("HEAD is not origin/main")), \
+                patch("builtins.print") as output, patch.object(harness.sys, "stderr"):
+            harness.pr_land(7, sleep=sleeps.append, clock=clock)  # does not raise
+        self.assertEqual(len(fake.merges()), 1)
+        self.assertTrue(any("release step failed: HEAD is not origin/main" in str(c) for c in output.call_args_list))
 
 if __name__ == "__main__":
     unittest.main()

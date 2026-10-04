@@ -21,6 +21,8 @@ import time
 import traceback
 from typing import Any, Callable, Iterator
 
+if __name__ == "__main__":
+    sys.modules.setdefault("harness", sys.modules["__main__"])  # release.py imports this file as `harness`; share one copy
 ROOT = Path(__file__).resolve().parents[1]
 DOC_ENTRYPOINTS = ("AGENTS.md", ".agents/README.md", ".agents/rules/core.md", ".agents/architecture.md", ".agents/ROADMAP.md")
 # Provider credentials never reach checks or tests; the Go toolchain never switches or downloads itself, and
@@ -447,7 +449,7 @@ def plan_checks(paths: list[str]) -> tuple[list[tuple[list[str], str]], list[str
             reasons.setdefault(("check", "docs"), []).append(path)
             mapped = True
         # Only the harness itself: other scripts added later should surface as unmapped until they get a rule.
-        if path in {"scripts/harness.py", "scripts/test_harness.py"} or path.startswith(".githooks/"):
+        if path in {"scripts/harness.py", "scripts/test_harness.py", "scripts/release.py", "scripts/test_release.py"} or path.startswith(".githooks/"):
             reasons.setdefault(("check", "harness"), []).append(path)
             mapped = True
         if go_path(path):
@@ -606,7 +608,7 @@ LAND_POLL_SECONDS = 20
 LAND_READ_ATTEMPTS = 3  # a failed GitHub read is retried this often (with LAND_RETRY_SECONDS backoff) before giving up
 LAND_RETRY_SECONDS = 5
 LAND_TIMEOUT_MINUTES = 40
-LAND_USAGE = "Usage: pr land <number> [--dry-run] [--update] [--timeout MINUTES]"
+LAND_USAGE = "Usage: pr land <number> [--dry-run] [--update] [--timeout MINUTES] [--no-release]"
 
 
 def github_repo() -> str:
@@ -631,7 +633,7 @@ def gh_json(*args: str) -> Any:
 
 
 def pull_request(repo: str, number: int) -> dict[str, Any]:
-    fields = "number,state,isDraft,mergeable,headRefOid,headRefName,baseRefName,baseRefOid,url"
+    fields = "number,title,body,state,isDraft,mergeable,headRefOid,headRefName,baseRefName,baseRefOid,url"
     return gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
 
 
@@ -685,14 +687,20 @@ def ci_state(runs: list[dict[str, Any]]) -> tuple[str, str]:
 
 
 def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_minutes: float = LAND_TIMEOUT_MINUTES,
-            sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> None:
+            sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
+            no_release: bool = False) -> None:
     """Merge PR `number` once the CI workflow passes on a head commit that contains the default branch's tip.
 
     It refuses at once a PR that is not open, is a draft, conflicts or targets another branch. A head behind its base
     is refused, or with `update` brought up to date by `gh pr update-branch` (GitHub merges the base into it), after
     which the wait restarts on the new head. It polls every LAND_POLL_SECONDS, re-reading the PR each time, and merges
     with --match-head-commit, so GitHub rejects the merge if a commit lands in between. Reads are retried; the merge
-    and the update never are. It never pushes, and touches no branch except through that opt-in update."""
+    and the update never are. It never pushes a branch, and touches none except through that opt-in update.
+
+    Before merging it refuses a PR whose diff changes the contract (release.detect_contract) without declaring it, and
+    after merging it plans a release and cuts one when due (release.after_merge) unless `no_release`; a release failure is
+    reported and never undoes the merge."""
+    import release
     repo = github_repo()
 
     def read(fetch: Callable[[], Any]) -> Any:
@@ -707,7 +715,7 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
 
     default = read(lambda: gh_json("api", f"repos/{repo}")["default_branch"])
     deadline = clock() + timeout_minutes * 60
-    sha, updated_for = None, None
+    sha, updated_for, contract_checked = None, None, None
     while True:
         pr = read(lambda: pull_request(repo, number))
         if refusal := landing_refusal(pr, default):
@@ -732,6 +740,11 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
                 gh("pr", "update-branch", str(number), "--repo", repo)
                 updated_for = (sha, tip)
         else:
+            if contract_checked != sha:  # once per head: it fetches the PR head
+                changes = read(lambda: release.pr_contract_changes(repo, pr, tip))
+                if refusal := release.contract_refusal(pr, changes):
+                    raise ValueError(refusal)
+                contract_checked = sha
             state, detail = ci_state(read(lambda: ci_runs(repo, sha, number)))
             if dry_run:
                 action = {"success": "merge it now", "failure": "refuse: CI did not pass",
@@ -751,11 +764,17 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
     print(f"[harness] PR #{number}: {detail}; merging {sha[:12]}", flush=True)
     output = gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", sha)
     print(output.strip() or f"[harness] PR #{number} merged.")
+    if no_release:
+        return
+    try:
+        release.after_merge(timeout_minutes)
+    except (ValueError, OSError, subprocess.CalledProcessError) as error:
+        print(f"[harness] PR #{number} is merged, but the release step failed: {error}", file=sys.stderr)
 
 
 def pr_command(args: list[str]) -> None:
     action, *values = args or [""]
-    flags = {flag: flag in values for flag in ("--dry-run", "--update")}
+    flags = {flag: flag in values for flag in ("--dry-run", "--update", "--no-release")}
     values = [value for value in values if value not in flags]
     timeout = LAND_TIMEOUT_MINUTES
     if "--timeout" in values:
@@ -769,7 +788,8 @@ def pr_command(args: list[str]) -> None:
         del values[at:at + 2]
     if action != "land" or len(values) != 1 or not values[0].isdigit():
         raise ValueError(LAND_USAGE)
-    pr_land(int(values[0]), dry_run=flags["--dry-run"], update=flags["--update"], timeout_minutes=timeout)
+    pr_land(int(values[0]), dry_run=flags["--dry-run"], update=flags["--update"], timeout_minutes=timeout,
+            no_release=flags["--no-release"])
 
 
 # --- Metrics ----------------------------------------------------------------------------------
@@ -818,10 +838,16 @@ HELP = """Agentium harness (Python standard library)
                              Task worktree from the remote default branch, offline dependency install
   worktree deps              Offline-install locked dependencies in this checkout
   worktree remove <branch>   Remove a merged, clean task worktree and its local branch
-  pr land <N> [--dry-run] [--update] [--timeout MINUTES]
+  pr land <N> [--dry-run] [--update] [--timeout MINUTES] [--no-release]
                              Merge PR N once CI passes on a head that contains the default branch (wait 40
                              min by default); refuses closed, draft, conflicting or out-of-date PRs (--update
-                             updates the branch instead) and never merges on red or pending CI
+                             updates the branch instead), undeclared contract changes, and never merges on red
+                             or pending CI; then cuts a release when one is due (--no-release skips)
+  release plan [--json]      Next version and draft notes from the PRs merged since the last v* tag and the
+                             contract diff (docs/harness.md#releases)
+  release cut [--dry-run] [--first] [--local-checks]
+                             Tag, push the tag and create the GitHub Release; --first for v0.1.0 only;
+                             --local-checks runs the CI checks here while GitHub Actions is down
   metrics                    Summarize archived plans' Metrics blocks by agent and model
 
 ci = docs + harness tests + go. go = gofmt, vet, race tests (at most two race runs per clone at once). vuln = pinned govulncheck (online DB).
@@ -854,7 +880,7 @@ def main(args: list[str]) -> None:
             if scope in {"docs", "ci"}:
                 check_docs()
             if scope in {"harness", "ci"}:
-                run(sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_harness.py")
+                run(sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py")
             if scope == "ci" and (ROOT / "go.mod").is_file():
                 check_go()
         elif scope == "go":
@@ -877,6 +903,9 @@ def main(args: list[str]) -> None:
             raise ValueError("Usage: worktree new <branch> [--base REF] | worktree deps | worktree remove <branch>")
     elif command == "pr":
         pr_command(rest)
+    elif command == "release":
+        import release
+        release.release_command(rest)
     elif command == "metrics":
         metrics_report()
     else:
