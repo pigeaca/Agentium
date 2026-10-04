@@ -3,6 +3,7 @@ package buildtool
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1190,5 +1191,16 @@ func TestModuleDirRefusesWhatIsNotARealFolder(t *testing.T) {
 		if dir, err := ModuleDir(root, module); err == nil || !strings.Contains(err.Error(), why) {
 			t.Errorf("ModuleDir(%q) = %q, %v; want an error with %q", module, dir, err, why)
 		}
+	}
+	// A folder that cannot be read: the error says so without the checkout's location. (Root reads it anyway.)
+	if os.Geteuid() == 0 {
+		return
+	}
+	if err := os.Chmod(filepath.Join(root, "a"), 0); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(filepath.Join(root, "a"), 0o755)
+	if _, err := ModuleDir(root, "a/svc"); err == nil || !errors.Is(err, fs.ErrPermission) || strings.Contains(err.Error(), root) {
+		t.Errorf("an unreadable parent: %v", err)
 	}
 }

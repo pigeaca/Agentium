@@ -759,21 +759,26 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	// The grading copy is the agent's work: a module folder it deleted or replaced by a link (to grade another folder)
 	// is a failed grade, as when the hidden tests cannot be added, never an infrastructure outcome. It is checked before
 	// the module's scripts are restored, which would otherwise write through the link or bring a deleted module back.
+	// A script that cannot be restored (the agent turned its folder into a link, say) fails the grade the same way:
+	// never graded with the agent's version, and never infrastructure, which would be tried again at a cost.
 	verifyDir, moduleErr := env.moduleDir(graded)
-	if len(restore) > 0 && moduleErr == nil {
-		if err := checkout.Write(graded, start, restore); err != nil {
-			return fmt.Errorf("restore the checks: %w", err)
-		}
-		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
-		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
-	} else if len(restore) > 0 {
-		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...) // not graded at all (below)
-	}
-
 	failed := false
-	if moduleErr != nil {
+	if len(restore) > 0 {
+		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
+	}
+	switch {
+	case moduleErr != nil:
 		rec.Notes = append(rec.Notes, "the module's folder is not in the agent's tree as it must be, so nothing was graded: "+moduleErr.Error())
 		failed = true
+	case len(restore) > 0:
+		if err := checkout.Write(graded, start, restore); err != nil {
+			// The reason names paths in the copy from its root: notes are shared, the copy's location is not theirs.
+			why := strings.ReplaceAll(err.Error(), graded+string(filepath.Separator), "")
+			rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts, and they could not be restored, so nothing was graded: "+why)
+			failed = true
+		} else {
+			rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
+		}
 	}
 	if !failed && spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
 		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
@@ -873,7 +878,8 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
 // restores) and the configuration of the test runners they call (reported when changed). The commands run in module's
 // folder (the root when it is ""), so the names they give are read from there and listed from the root, as base and
-// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh, and so is the runner's Makefile.
+// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. A runner's configuration is
+// looked for in the module's folder and every folder above it (inAncestors): svc/pom.xml and the parent pom.xml.
 func checkFiles(verify []string, module string, base source.Source) (scripts, configs []string) {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
 	// The build tools' runners come from their profiles; the rest are runners without one.
@@ -899,7 +905,7 @@ func checkFiles(verify []string, module string, base source.Source) (scripts, co
 		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range matching(base, inModule(module, files)) {
+				for _, f := range matching(base, inAncestors(module, files)) {
 					if !slices.Contains(configs, f) {
 						configs = append(configs, f)
 					}
@@ -910,16 +916,25 @@ func checkFiles(verify []string, module string, base source.Source) (scripts, co
 	return scripts, configs
 }
 
-// inModule gives names (or patterns) inside module's folder; without a module they are unchanged.
-func inModule(module string, names []string) []string {
+// inAncestors gives names (or patterns) in module's folder and in each folder above it, up to the root: for module
+// a/b, a/b/X, a/X and X. Test runners walk up the tree for their configuration (Maven's parent pom.xml and
+// .mvn/maven.config, pytest's rootdir pyproject.toml and conftest.py, Gradle's root build.gradle), so an agent that
+// edits an ancestor's must be reported as one that edits the module's. A root file a runner does not read (a root
+// Makefile, say) is reported too: it only marks a run whose agent changed it and the reference did not. Without a
+// module the names are unchanged.
+func inAncestors(module string, names []string) []string {
 	if module == "" {
 		return names
 	}
-	out := make([]string, len(names))
-	for i, name := range names {
-		out[i] = path.Join(module, name) // a "*" still matches within the module's folder only
+	var out []string
+	for dir := module; ; dir = path.Dir(dir) {
+		if dir == "." {
+			return append(out, names...)
+		}
+		for _, name := range names {
+			out = append(out, path.Join(dir, name)) // a "*" still matches within that one folder
+		}
 	}
-	return out
 }
 
 // matching lists the files of base that names give: a name that exists, or every path a pattern with "*" matches

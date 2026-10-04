@@ -64,7 +64,12 @@ The agent still gets the whole repository: a module's code depends on its neighb
 6. **Docs:** the guide gets a "Monorepos" section.
 
 ## Work
-- [x] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium. Done on `claude/feat/monorepo-module` (migration 0013; stamps, venvs and seeds keyed by `buildtool.ModuleKey`; the deps folder stays per project). Re-review fixes: the scripts and runner configuration grading restores or reports are read from the task's module (`svc/run_tests.sh`, `svc/Makefile`), and the module's folder is checked before they are restored; a module folder that a test swaps out between two sandboxed commands fails the grade with a note, never infra; `start` with a module set says mining is off and how to go on, never "no more candidates"; tests for the lock's module and for validation using the task's module.
+- [x] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium. Done on `claude/feat/monorepo-module` (migration 0013; stamps, venvs and seeds keyed by `buildtool.ModuleKey`; the deps folder stays per project). Re-review fixes: the scripts and runner configuration grading restores or reports are read from the task's module (`svc/run_tests.sh`, `svc/Makefile`), and the module's folder is checked before they are restored; a module folder that a test swaps out between two sandboxed commands fails the grade with a note, never infra; `start` with a module set says mining is off and how to go on, never "no more candidates"; tests for the lock's module and for validation using the task's module. Second re-review: runner configuration is matched in the module's folder and every folder above it (Maven's parent `pom.xml` and `.mvn`, pytest's root `pyproject.toml` and `conftest.py`, Gradle's root build files), so an edited ancestor config lands in `ConfigChanged` and the run is no success; a script that cannot be restored (its folder linked or replaced) fails the grade with a note, never infra (also at the root).
+  - Limitations of step 1:
+    - host verify does not re-check the module's folder between commands; acceptable, as host grading runs the agent's code unsandboxed anyway;
+    - follow-up: a verify script that is a symlink is not protected when only its target is edited (also at the root);
+    - follow-up: runner configuration the agent adds (a new `pytest.ini` or `conftest.py`) is never reported (also at the root);
+    - follow-up: verify tokens are read from the module's folder, so in `cd .. && sh tools/check.sh` the script is looked for as `<module>/tools/check.sh`.
 - [ ] **2. Mining and the agent:** module-scoped mining and hidden tests, the agent's starting folder, `claudectx` from the module, records and reports. Risk: high (hidden tests; the context experiments' meaning).
 - [ ] **3. Real check and docs** (free). Risk: low.
 
@@ -76,7 +81,7 @@ The agent still gets the whole repository: a module's code depends on its neighb
 ## Verification
 `python3 scripts/harness.py check changed`, the fixtures above, a review per step (with the threat checklist for step 2), and the free real check.
 
-Step 1, after its re-review (2026-10-04): `GOPROXY=off go test -race -count=1` passes for `internal/run`, `internal/experiment`, `internal/cli` and `internal/buildtool`, with the sandbox tests run on macOS; each new test fails with its fix reverted.
+Step 1, after its re-reviews (2026-10-04): `GOPROXY=off go test -race -count=1` passes for `internal/run`, `internal/experiment`, `internal/cli` and `internal/buildtool`, with the sandbox tests run on macOS; each new test fails with its fix reverted.
 
 ## Metrics
 - Agent: <client> / <exact model id> / <effort>

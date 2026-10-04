@@ -70,6 +70,11 @@ func ModuleDir(checkout, module string) (string, error) {
 		case errors.Is(err, fs.ErrNotExist):
 			return "", fmt.Errorf("module %q: %s is missing from the checkout", module, part)
 		case err != nil:
+			// The error names the checkout's location, which notes (shared with reports) must not: only what failed.
+			var pe *fs.PathError
+			if errors.As(err, &pe) {
+				return "", fmt.Errorf("module %q: %s: %w", module, part, pe.Err)
+			}
 			return "", fmt.Errorf("module %q: %w", module, err)
 		case info.Mode()&fs.ModeSymlink != 0:
 			return "", fmt.Errorf("module %q: %s is a link, not a folder", module, part)
