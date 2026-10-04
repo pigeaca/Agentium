@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"00000000-0000-7000-8000-000000000001"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll start both sleep processes in order, run the Go tests, then poll the `sleep 900` session until it exits.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc 'sleep 900'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.started","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"sh -c 'nohup sleep 901 >/dev/null 2>&1 &'\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"/bin/zsh -lc \"sh -c 'nohup sleep 901 >/dev/null 2>&1 &'\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc 'go test ./...'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"/bin/zsh -lc 'go test ./...'","aggregated_output":"--- FAIL: TestSub (0.00s)\n    calc_test.go:13: Sub(5, 3) = 8, want 2\nFAIL\nFAIL\texample.com/calc\t0.476s\nFAIL\n","exit_code":1,"status":"failed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"`go test ./...` failed: `TestSub` reports `Sub(5, 3) = 8, want 2`. Both sleep commands have started; I’m now polling session `27132` every five seconds.\n"}}
