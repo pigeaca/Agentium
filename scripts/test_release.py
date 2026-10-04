@@ -33,6 +33,10 @@ class Fixture:
         test.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.git("init", "-q", "-b", "main")
+        # release.py's own git calls (git tag -a) do not get GIT_ENV: the repository's config gives them an identity,
+        # which CI's runners, unlike a developer's machine, have nowhere else.
+        self.git("config", "user.name", "t")
+        self.git("config", "user.email", "t@example.com")
         self.write(files or {"README.md": "x\n"})
         self.git("add", "-A")
         self.git("commit", "-qm", "initial")
