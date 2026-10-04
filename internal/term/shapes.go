@@ -20,6 +20,8 @@ type glyphs struct {
 	full, track                                                      string
 	eighths                                                          []string // partial cells, 1 to 7 eighths full
 	line, interval, zero, mark, estimate                             string
+	dashedTL, dashedTR, dashedBL, dashedBR, dashedH, dashedV         string // a dashed outline, as the sandbox's
+	dotted                                                           string // a connector's cell between two boxes, drawn vertically
 	spinner                                                          []string
 }
 
@@ -29,6 +31,7 @@ var (
 		ellipsis: "…", chip: "■",
 		full: "█", track: "░", eighths: []string{"▏", "▎", "▍", "▌", "▋", "▊", "▉"},
 		line: "─", interval: "━", zero: "│", mark: "┊", estimate: "●",
+		dashedTL: "╭", dashedTR: "╮", dashedBL: "╰", dashedBR: "╯", dashedH: "┄", dashedV: "┆", dotted: "┊",
 		spinner: strings.Split(string(spinnerFrames), ""),
 	}
 	asciiGlyphs = glyphs{
@@ -36,6 +39,7 @@ var (
 		ellipsis: "...", chip: "#",
 		full: "#", track: ".",
 		line: "-", interval: "=", zero: "|", mark: ":", estimate: "o",
+		dashedTL: ".", dashedTR: ".", dashedBL: "'", dashedBR: "'", dashedH: ".", dashedV: ":", dotted: ":",
 		spinner: []string{"|", "/", "-", `\`},
 	}
 )
@@ -79,6 +83,7 @@ type Panel struct {
 	Lines    []string // the content, one entry per line (an entry with newlines is several)
 	Overflow Overflow
 	Border   Role // the frame's color; Default means Muted
+	Dashed   bool // draw the frame dashed, as a sandbox's outline is
 }
 
 // PanelMinWidth is the narrowest panel drawn; a narrower width is raised to it.
@@ -88,6 +93,9 @@ const PanelMinWidth = 8
 // of padding, and a bottom border. The content is fitted to width-4 cells.
 func (d Shapes) Panel(p Panel, width int) []string {
 	g := d.glyphs()
+	if p.Dashed {
+		g.topLeft, g.topRight, g.bottomLeft, g.bottomRight, g.horizontal, g.vertical = g.dashedTL, g.dashedTR, g.dashedBL, g.dashedBR, g.dashedH, g.dashedV
+	}
 	width = max(capWidth(width, p.MaxWidth), PanelMinWidth)
 	border := p.Border
 	if border == Default {

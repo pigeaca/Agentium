@@ -151,6 +151,9 @@ type Flow struct {
 	MaxWidth int  // the widest it is drawn, from the left edge: 0 means MaxContentWidth, negative means no limit
 	Gap      int  // cells between boxes in a row; 0 means 3
 	Line     Role // the connectors' color; Default means Muted, the borders' color
+	// Dotted draws the connectors as thin dotted lines without arrowheads: a dotted cell in place of each arrow, and
+	// no ┬ on the bottom border above it. For a chain of one box per row; splits and merges still draw their bars.
+	Dotted bool
 }
 
 // connection is how a connector cell joins its neighbours.
@@ -222,9 +225,9 @@ func (d Shapes) Flow(f Flow, width int) []string {
 	var above []int
 	for i, p := range placed {
 		if i > 0 {
-			out = append(out, d.connect(above, p.in, role)...)
+			out = append(out, d.connect(above, p.in, role, f.Dotted)...)
 		}
-		if i < len(rows)-1 {
+		if i < len(rows)-1 && !f.Dotted {
 			last := len(p.lines) - 1
 			for _, c := range p.out {
 				p.lines[last] = overlay(p.lines[last], c, d.Style.Paint(role, d.join(connection{left: true, right: true, down: true})))
@@ -238,10 +241,13 @@ func (d Shapes) Flow(f Flow, width int) []string {
 
 // connect draws the lines between boxes leaving at columns up and boxes entering at columns down: a bar joining them
 // (left out when each goes straight down), then an arrow into each box below.
-func (d Shapes) connect(up, down []int, role Role) []string {
+func (d Shapes) connect(up, down []int, role Role, dotted bool) []string {
 	arrow := "▼"
 	if d.ASCII {
 		arrow = "v"
+	}
+	if dotted {
+		arrow = d.glyphs().dotted
 	}
 	all := append(slices.Clone(up), down...)
 	lo, hi := slices.Min(all), slices.Max(all)

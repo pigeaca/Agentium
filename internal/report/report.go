@@ -301,7 +301,7 @@ func (in Input) pathPatterns() []pathPattern {
 		}
 		slices.SortFunc(spellings, func(a, b string) int { return len(b) - len(a) }) // /private/var/x before /var/x
 		for _, s := range spellings {
-			// Whole components only: /Users/v must not turn /Users/vlad into ~lad, nor /var/x match in /private/var/x.
+			// Whole components only: /Users/a must not turn /Users/alex into ~lex, nor /var/x match in /private/var/x.
 			out = append(out, pathPattern{regexp.MustCompile(`(^|[^A-Za-z0-9._/-])` + regexp.QuoteMeta(s) + `([/\s"':;,)\]]|$)`), p.as})
 		}
 	}

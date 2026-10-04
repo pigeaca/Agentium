@@ -67,7 +67,7 @@ Actual:
   - the repeats warning shows until tasks are revalidated with `--repeat 3`.
 
 ## Parallel ownership
-All steps start from `origin/main` at `c0414eb`, except step 2, which starts from step 1's reviewed head. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`. A separate session owns `claude/fix/run-estimates` (the preview's usage and cost estimates): `internal/experiment/usage.go`, `plan.go`, and the preview lines of `internal/cli/experiment.go`.
+All steps start from `origin/main` at `c0414eb`, except step 2, which starts from step 1's reviewed head. Worktrees live under `<worktrees>/`. A separate session owns `claude/fix/run-estimates` (the preview's usage and cost estimates): `internal/experiment/usage.go`, `plan.go`, and the preview lines of `internal/cli/experiment.go`.
 
 | Step | Owner | Branch / worktree | Editable scope | Must not touch |
 |---|---|---|---|---|

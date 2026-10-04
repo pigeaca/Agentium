@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -97,4 +99,60 @@ func TestRecordLiveRun(t *testing.T) {
 	if err := os.WriteFile(filepath.Clean(out), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestRecordConsoleScreens is a recorder, not a check: it runs only when AGENTIUM_RECORD_SCREENS names an existing folder.
+// It runs the commands of the gallery's screens as on a 120-column terminal at 256 colors with the test stand-in for
+// Claude Code (no paid runs) and writes each output as an .ans file for scripts/readme_images/ansi2svg.py: start (a
+// fresh repository, up to its preview), plan, run-show (one of an experiment's runs) and pool-status. Paths of the
+// test's temporary folders are written as ~/… so the pictures hold no machine's paths.
+func TestRecordConsoleScreens(t *testing.T) {
+	dir := os.Getenv("AGENTIUM_RECORD_SCREENS")
+	if dir == "" {
+		t.Skip("set AGENTIUM_RECORD_SCREENS=DIR to record")
+	}
+	ctx := context.Background()
+	write := func(f runFixture, name, command string, res cliResult) {
+		t.Helper()
+		if res.code != ExitOK {
+			t.Fatalf("%s: exit %d: %s", command, res.code, res.stderr)
+		}
+		text := res.stdout
+		// Longest first, and the resolved /private/var form that macOS reports for /var.
+		for _, p := range [][2]string{{"/private" + f.data, "~/.agentium"}, {f.data, "~/.agentium"}, {"/private" + f.repo, "~/code/lib"}, {f.repo, "~/code/lib"},
+			{"/private" + f.home, "~"}, {f.home, "~"}} {
+			text = strings.ReplaceAll(text, p[0], p[1])
+		}
+		text = regexp.MustCompile(`…\S*/data/records/`).ReplaceAllString(text, "~/.agentium/records/") // a cut path of the test's folder
+		text = regexp.MustCompile(`\S*/claude( \d)`).ReplaceAllString(text, "~/.local/bin/claude$1")
+		out := "\x1b[36m$\x1b[39m " + command + "\n" + text
+		if err := os.WriteFile(filepath.Join(dir, name+".ans"), []byte(out), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	terminal := func(f runFixture) {
+		*f.terminal = true
+		f.vars["TERM"], f.vars["LANG"], f.vars["COLUMNS"], f.vars["LINES"] = "xterm-256color", "en_US.UTF-8", "120", "40"
+	}
+
+	s, _ := startFixture(t, 8)
+	terminal(s)
+	write(s, "start", "agentium start --accept-mined", s.run(ctx, "start", "--accept-mined"))
+
+	f, ctrl := seqFixture(t)
+	control(t, ctrl, map[string]string{"cost-lean": "0.25", "cost-jitter": "", "fix-lib": ""})
+	expect(t, f.run(ctx, "experiment", "new", "lean-vs-base", "--b", "lean", "--seed", "5", "--grader", "sandbox"), ExitOK)
+	terminal(f)
+	write(f, "plan", "agentium experiment plan lean-vs-base", f.run(ctx, "experiment", "plan", "lean-vs-base"))
+	write(f, "pool-status", "agentium pool status", f.run(ctx, "pool", "status"))
+	*f.terminal = false
+	expect(t, f.run(ctx, "experiment", "run", "lean-vs-base"), ExitOK)
+	id := ""
+	for _, r := range jsonRun(t, f, ExitOK, "run", "list").get("runs").([]any) {
+		if e := r.(map[string]any); e["arm"] == "B" && e["kind"] != "calibration" {
+			id = e["id"].(string)
+		}
+	}
+	terminal(f)
+	write(f, "run-show", "agentium run show "+id, f.run(ctx, "run", "show", id))
 }

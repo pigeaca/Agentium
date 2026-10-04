@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"os/user"
+	"runtime/debug"
 	"syscall"
 	"time"
 
@@ -26,7 +27,7 @@ func main() {
 	// Interrupts cancel the context so long-running commands can stop agent processes cleanly.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	code := cli.Run(ctx, cli.Env{
-		Args: os.Args[1:], Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Version: version, Terminal: term.IsTerminal(os.Stdout),
+		Args: os.Args[1:], Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr, Version: readVersion(), Terminal: term.IsTerminal(os.Stdout),
 		StdinTerminal: term.IsTerminal(os.Stdin),
 		Columns:       func() int { return term.Columns(os.Stdout) },
 		Rows: func() int {
@@ -47,4 +48,10 @@ func accountHome() string {
 		return ""
 	}
 	return u.HomeDir
+}
+
+// readVersion is the version to show, from the link-time value and the build information.
+func readVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	return buildVersion(version, info, ok)
 }

@@ -1,0 +1,1597 @@
+command clean
+command context
+command context diff
+command context lint
+command context list
+command context show
+command context snapshot
+command experiment
+command experiment list
+command experiment new
+command experiment plan
+command experiment report
+command experiment rm
+command experiment run
+command experiment show
+command help
+command init
+command pool
+command pool status
+command pool update
+command run
+command run calibrate
+command run list
+command run once
+command run show
+command start
+command task
+command task add
+command task edit
+command task import
+command task list
+command task rm
+command task show
+command task validate
+command version
+exit ExitError	1
+exit ExitOK	0
+exit ExitUsage	2
+experiment DesignVersion	1
+experiment DesignVersionJudge	5
+experiment DesignVersionModelAB	2
+experiment DesignVersionSandbox	4
+experiment DesignVersionSeq	3
+experiment MethodSeq	"seq-v1"
+experiment MethodV1	"phase1-v1"
+experiment MethodV2	"phase1-v2"
+experiment MethodVersion	MethodSeq
+flag clean --older-than	value default="30d"
+flag clean --yes	bool default="false"
+flag context diff --patch	bool default="false"
+flag context lint --hook	bool default="false"
+flag context lint --print-hook	bool default="false"
+flag context lint --ref	value default=""
+flag context show --ref	value default=""
+flag context snapshot --include	list default=""
+flag context snapshot --include-linked	bool default="false"
+flag context snapshot --ref	value default=""
+flag context snapshot --working-tree	bool default="false"
+flag experiment new --a	value default=""
+flag experiment new --b	value default=""
+flag experiment new --budget	value default="0"
+flag experiment new --concurrency	value default="2"
+flag experiment new --context	value default=""
+flag experiment new --effort	bool default=""
+flag experiment new --goal	value default="cheaper"
+flag experiment new --grader	value default=""
+flag experiment new --judge	bool default="false"
+flag experiment new --judge-effort	bool default=""
+flag experiment new --judge-model	bool default=""
+flag experiment new --judge-pairs	bool default="false"
+flag experiment new --judge-repeats	bool default=""
+flag experiment new --model	value default="claude-sonnet-5-5"
+flag experiment new --no-futility	bool default="false"
+flag experiment new --repeats	value default="0"
+flag experiment new --run-budget	value default="3"
+flag experiment new --run-budget-a	bool default=""
+flag experiment new --run-budget-b	bool default=""
+flag experiment new --seed	value default="0"
+flag experiment new --task	list default=""
+flag experiment new --template	bool default=""
+flag experiment new --tier	value default=""
+flag experiment new --timeout	value default="20m0s"
+flag experiment new --verify-timeout	value default="10m0s"
+flag experiment plan --details	bool default="false"
+flag experiment report --details	bool default="false"
+flag experiment report --json	bool default="false"
+flag experiment report --markdown	bool default="false"
+flag experiment report --out	value default=""
+flag experiment run --budget	value default="0"
+flag experiment run --usage-limit	value default="85"
+flag experiment run --view	value default=""
+flag experiment run --wait	bool default="false"
+flag experiment run --yes	bool default="false"
+flag init --allow-local-binding	bool default="false"
+flag init --jobs	value default="0"
+flag init --module	value default=""
+flag init --no-allow-local-binding	bool default=""
+flag init --require-lock	bool default="false"
+flag init --setup	list default=""
+flag init --verify	list default=""
+flag init --verify-timeout	value default="0s"
+flag pool update --accept-mined	bool default="false"
+flag pool update --dry-run	bool default="false"
+flag pool update --jobs	value default="0"
+flag pool update --limit	value default="10"
+flag pool update --max-files	value default="15"
+flag pool update --max-lines	value default="600"
+flag pool update --require-lock	bool default="false"
+flag pool update --setup	list default=""
+flag pool update --since	value default=""
+flag pool update --verify	list default=""
+flag pool update --verify-timeout	value default="0s"
+flag run calibrate --budget	value default="0.5"
+flag run calibrate --model	value default="claude-sonnet-5-5"
+flag run calibrate --snapshot	list default=""
+flag run calibrate --timeout	value default="5m0s"
+flag run once --budget	value default="3"
+flag run once --effort	bool default=""
+flag run once --grader	value default=""
+flag run once --keep	bool default="false"
+flag run once --model	value default="claude-sonnet-5-5"
+flag run once --snapshot	value default=""
+flag run once --timeout	value default="20m0s"
+flag run once --verify-timeout	value default="10m0s"
+flag run show --details	bool default="false"
+flag run show --diff	bool default="false"
+flag run show --log	bool default="false"
+flag start --accept-mined	bool default="false"
+flag start --b	value default=""
+flag start --budget	value default="0"
+flag start --require-lock	bool default="false"
+flag start --view	value default=""
+flag start --yes	bool default="false"
+flag task add --accept-gaps	bool default="false"
+flag task add --base	value default=""
+flag task add --instruction	value default=""
+flag task add --instruction-file	bool default=""
+flag task add --judge-graded	bool default="false"
+flag task add --module	value default=""
+flag task add --setup	list default=""
+flag task add --solution	value default=""
+flag task add --ticket-file	value default=""
+flag task add --verify	list default=""
+flag task edit --accept-gaps	bool default="false"
+flag task edit --instruction	value default=""
+flag task edit --instruction-file	bool default=""
+flag task edit --no-setup	bool default="false"
+flag task edit --reviewed	bool default="false"
+flag task edit --setup	list default=""
+flag task edit --verify	list default=""
+flag task import --commit	value default=""
+flag task import --module	value default=""
+flag task import --name	value default=""
+flag task import --pr	value default="0"
+flag task import --setup	list default=""
+flag task import --verify	list default=""
+flag task validate --all	bool default="false"
+flag task validate --grader	value default=""
+flag task validate --jobs	value default="0"
+flag task validate --keep	bool default="false"
+flag task validate --max-hunks	value default="20"
+flag task validate --repeat	value default="1"
+flag task validate --snapshot	list default=""
+flag task validate --status	value default=""
+flag task validate --timeout	value default="0s"
+flag task validate --weak-tests	bool default="false"
+json (any failed command) .command	string
+json (any failed command) .error	object
+json (any failed command) .error.code	int
+json (any failed command) .error.message	string
+json (any failed command) .schema	int
+json JSONSchema	1
+json clean .command	string
+json clean .dry_run	bool
+json clean .freed_bytes	int
+json clean .kept	[]object
+json clean .kept[].base	string
+json clean .kept[].bytes	int
+json clean .kept[].kind	string
+json clean .kept[].last_used	time
+json clean .kept[].note	string
+json clean .kept[].path	string
+json clean .kept[].problem	string
+json clean .kept[].project	string
+json clean .kept[].removed	bool
+json clean .kept[].why	string
+json clean .kinds	[]object
+json clean .kinds[].keep	int
+json clean .kinds[].keep_bytes	int
+json clean .kinds[].kind	string
+json clean .kinds[].remove	int
+json clean .kinds[].remove_bytes	int
+json clean .leftovers_checked	bool
+json clean .notes	[]string
+json clean .older_than_seconds	int
+json clean .remove	[]object
+json clean .remove[].base	string
+json clean .remove[].bytes	int
+json clean .remove[].kind	string
+json clean .remove[].last_used	time
+json clean .remove[].note	string
+json clean .remove[].path	string
+json clean .remove[].problem	string
+json clean .remove[].project	string
+json clean .remove[].removed	bool
+json clean .remove[].why	string
+json clean .remove_bytes	int
+json clean .schema	int
+json clean .warnings	[]string
+json context diff .changed	bool
+json context diff .command	string
+json context diff .delta_tokens_estimated	int
+json context diff .from	string
+json context diff .from_tokens_estimated	int
+json context diff .patch	string
+json context diff .schema	int
+json context diff .stat	string
+json context diff .to	string
+json context diff .to_tokens_estimated	int
+json context lint .command	string
+json context lint .no_comparison	string
+json context lint .problems	[]string
+json context lint .project	string
+json context lint .schema	int
+json context lint .snapshot	object
+json context lint .snapshot.delta_tokens_estimated	int
+json context lint .snapshot.name	string
+json context lint .snapshot.startup_tokens_estimated	int
+json context lint .startup_tokens_estimated	int
+json context lint .warnings	[]string
+json context lint .where	string
+json context list .command	string
+json context list .schema	int
+json context list .snapshots	[]object
+json context list .snapshots[].commit	string
+json context list .snapshots[].files	int
+json context list .snapshots[].name	string
+json context list .snapshots[].source	string
+json context list .snapshots[].startup_tokens_estimated	int
+json context list .snapshots[].warnings	[]string
+json context show .above_repository_files	int
+json context show .command	string
+json context show .context	object
+json context show .context.on_demand_files	int
+json context show .context.startup_files	int
+json context show .context.startup_tokens_estimated	int
+json context show .entries	[]object
+json context show .entries[].bytes	int
+json context show .entries[].kind	string
+json context show .entries[].path	string
+json context show .entries[].startup_bytes	int
+json context show .entries[].via	string
+json context show .linked	[]string
+json context show .project	string
+json context show .schema	int
+json context show .warnings	[]string
+json context show .where	string
+json context snapshot .command	string
+json context snapshot .commit	string
+json context snapshot .files	int
+json context snapshot .name	string
+json context snapshot .not_included_linked	[]string
+json context snapshot .schema	int
+json context snapshot .source	string
+json context snapshot .startup_tokens_estimated	int
+json context snapshot .uncaptured_changes	[]string
+json context snapshot .warnings	[]string
+json experiment list .command	string
+json experiment list .experiments	[]object
+json experiment list .experiments[].arms	[]object
+json experiment list .experiments[].arms[].context	string
+json experiment list .experiments[].arms[].name	string
+json experiment list .experiments[].budget_usd	float
+json experiment list .experiments[].created	time
+json experiment list .experiments[].goal	string
+json experiment list .experiments[].method	string
+json experiment list .experiments[].model	string
+json experiment list .experiments[].name	string
+json experiment list .experiments[].repeats_per_arm	int
+json experiment list .experiments[].status	string
+json experiment list .experiments[].tasks	int
+json experiment list .experiments[].template	string
+json experiment list .schema	int
+json experiment new .command	string
+json experiment new .eligible_tasks	int
+json experiment new .experiment	object
+json experiment new .experiment.arms	[]object
+json experiment new .experiment.arms[].context	string
+json experiment new .experiment.arms[].effort	string
+json experiment new .experiment.arms[].model	string
+json experiment new .experiment.arms[].name	string
+json experiment new .experiment.budget_usd	float
+json experiment new .experiment.concurrency	int
+json experiment new .experiment.goal	string
+json experiment new .experiment.grader	string
+json experiment new .experiment.judge	bool
+json experiment new .experiment.judge_pairs	bool
+json experiment new .experiment.method	string
+json experiment new .experiment.name	string
+json experiment new .experiment.repeats_per_arm	int
+json experiment new .experiment.run_budget_usd	float
+json experiment new .experiment.runs	int
+json experiment new .experiment.tasks	[]string
+json experiment new .experiment.template	string
+json experiment new .notes	[]string
+json experiment new .plan_command	string
+json experiment new .schema	int
+json experiment plan .calibration_estimate_usd	float
+json experiment plan .calibration_runs_needed	int
+json experiment plan .command	string
+json experiment plan .eligible_tasks	[]string
+json experiment plan .experiment	object
+json experiment plan .experiment.arms	[]object
+json experiment plan .experiment.arms[].context	string
+json experiment plan .experiment.arms[].effort	string
+json experiment plan .experiment.arms[].model	string
+json experiment plan .experiment.arms[].name	string
+json experiment plan .experiment.budget_usd	float
+json experiment plan .experiment.concurrency	int
+json experiment plan .experiment.goal	string
+json experiment plan .experiment.grader	string
+json experiment plan .experiment.judge	bool
+json experiment plan .experiment.judge_pairs	bool
+json experiment plan .experiment.method	string
+json experiment plan .experiment.name	string
+json experiment plan .experiment.repeats_per_arm	int
+json experiment plan .experiment.run_budget_usd	float
+json experiment plan .experiment.runs	int
+json experiment plan .experiment.tasks	[]string
+json experiment plan .experiment.template	string
+json experiment plan .ineligible_tasks	[]object
+json experiment plan .ineligible_tasks[].reason	string
+json experiment plan .ineligible_tasks[].task	string
+json experiment plan .looks	[]object
+json experiment plan .looks[].efficacy_level	float
+json experiment plan .looks[].equivalence_level	float
+json experiment plan .looks[].estimated_usd	float
+json experiment plan .looks[].look	int
+json experiment plan .looks[].runs	int
+json experiment plan .looks[].tasks	int
+json experiment plan .looks[].worst_case_usd	float
+json experiment plan .readiness	[]object
+json experiment plan .readiness[].status	string
+json experiment plan .readiness[].text	string
+json experiment plan .ready	bool
+json experiment plan .schema	int
+json experiment plan .sizes	[]object
+json experiment plan .sizes[].cost_usd	float
+json experiment plan .sizes[].judge_usd	float
+json experiment plan .sizes[].name	string
+json experiment plan .sizes[].repeats_per_arm	int
+json experiment plan .sizes[].runs	int
+json experiment plan .sizes[].short	bool
+json experiment plan .sizes[].tasks	int
+json experiment plan .sizes[].worst_case_usd	float
+json experiment plan .spend	object
+json experiment plan .spend.estimate_basis	[]object
+json experiment plan .spend.estimate_basis[].arm	string
+json experiment plan .spend.estimate_basis[].basis	string
+json experiment plan .spend.estimate_basis[].history_runs	int
+json experiment plan .spend.estimate_basis[].model	string
+json experiment plan .spend.estimate_basis[].per_run_usd	float
+json experiment plan .spend.expected_tasks	float
+json experiment plan .spend.expected_usd	float
+json experiment plan .spend.if_cut_usd	float
+json experiment plan .spend.known	bool
+json experiment plan .spend.max_usd	float
+json experiment plan .spend.worst_case_usd	float
+json experiment plan .usage	object
+json experiment plan .usage.latest	object
+json experiment plan .usage.latest.age_seconds	float
+json experiment plan .usage.latest.current	bool
+json experiment plan .usage.latest.fits	int
+json experiment plan .usage.latest.read_at	time
+json experiment plan .usage.latest.resets_at	time
+json experiment plan .usage.latest.used	float
+json experiment plan .usage.limit	float
+json experiment plan .usage.models	[]object
+json experiment plan .usage.models[].measured_runs	int
+json experiment plan .usage.models[].model	string
+json experiment plan .usage.models[].per_run	float
+json experiment plan .usage.models[].runs	int
+json experiment plan .usage.runs	int
+json experiment plan .usage.windows	float
+json experiment report .analysis	object
+json experiment report .analysis.counted	map
+json experiment report .analysis.excluded	map
+json experiment report .analysis.judge_pass_at_1	map?
+json experiment report .analysis.noise	object?
+json experiment report .analysis.noise.repeats	float
+json experiment report .analysis.noise.sigma_log_cost	object?
+json experiment report .analysis.noise.sigma_log_cost.basis	string
+json experiment report .analysis.noise.sigma_log_cost.bootstrap	bool?
+json experiment report .analysis.noise.sigma_log_cost.estimate	float
+json experiment report .analysis.noise.sigma_log_cost.high	float
+json experiment report .analysis.noise.sigma_log_cost.low	float
+json experiment report .analysis.noise.success_varies	bool
+json experiment report .analysis.noise.tasks	int
+json experiment report .analysis.noise.tau_log_cost	object?
+json experiment report .analysis.noise.tau_log_cost.basis	string
+json experiment report .analysis.noise.tau_log_cost.bootstrap	bool?
+json experiment report .analysis.noise.tau_log_cost.estimate	float
+json experiment report .analysis.noise.tau_log_cost.high	float
+json experiment report .analysis.noise.tau_log_cost.low	float
+json experiment report .analysis.noise.tau_success	object?
+json experiment report .analysis.noise.tau_success.basis	string
+json experiment report .analysis.noise.tau_success.bootstrap	bool?
+json experiment report .analysis.noise.tau_success.estimate	float
+json experiment report .analysis.noise.tau_success.high	float
+json experiment report .analysis.noise.tau_success.low	float
+json experiment report .analysis.noise.w_success	object?
+json experiment report .analysis.noise.w_success.basis	string
+json experiment report .analysis.noise.w_success.bootstrap	bool?
+json experiment report .analysis.noise.w_success.estimate	float
+json experiment report .analysis.noise.w_success.high	float
+json experiment report .analysis.noise.w_success.low	float
+json experiment report .analysis.not_discriminating	[]string?
+json experiment report .analysis.pass_all	map
+json experiment report .analysis.pass_at_1	map
+json experiment report .analysis.results	[]object
+json experiment report .analysis.results[].a	float
+json experiment report .analysis.results[].b	float
+json experiment report .analysis.results[].bootstrap_90	object
+json experiment report .analysis.results[].bootstrap_90.estimate	float
+json experiment report .analysis.results[].bootstrap_90.high	float
+json experiment report .analysis.results[].bootstrap_90.low	float
+json experiment report .analysis.results[].bootstrap_95	object
+json experiment report .analysis.results[].bootstrap_95.estimate	float
+json experiment report .analysis.results[].bootstrap_95.high	float
+json experiment report .analysis.results[].bootstrap_95.low	float
+json experiment report .analysis.results[].equivalence_level	float?
+json experiment report .analysis.results[].floor_repeats	int
+json experiment report .analysis.results[].floor_tasks	int
+json experiment report .analysis.results[].full_tasks	int
+json experiment report .analysis.results[].level	float?
+json experiment report .analysis.results[].metric	string
+json experiment report .analysis.results[].note	string?
+json experiment report .analysis.results[].ratio	bool
+json experiment report .analysis.results[].repeats	int
+json experiment report .analysis.results[].role	string
+json experiment report .analysis.results[].t_90	object
+json experiment report .analysis.results[].t_90.estimate	float
+json experiment report .analysis.results[].t_90.high	float
+json experiment report .analysis.results[].t_90.low	float
+json experiment report .analysis.results[].t_95	object
+json experiment report .analysis.results[].t_95.estimate	float
+json experiment report .analysis.results[].t_95.high	float
+json experiment report .analysis.results[].t_95.low	float
+json experiment report .analysis.results[].tasks	int
+json experiment report .analysis.results[].tasks_to_resolve	int?
+json experiment report .analysis.results[].verdict	string
+json experiment report .analysis.results[].warning	string?
+json experiment report .analysis.sandbox	object?
+json experiment report .analysis.sandbox.as_fails	map?
+json experiment report .analysis.sandbox.disagrees	[]string?
+json experiment report .analysis.sandbox.flagged	map
+json experiment report .analysis.sandbox.imbalanced	bool
+json experiment report .analysis.sandbox.pairs	int
+json experiment report .analysis.sequential	object?
+json experiment report .analysis.sequential.ended	string?
+json experiment report .analysis.sequential.looks	[]object
+json experiment report .analysis.sequential.looks[].analysed	bool
+json experiment report .analysis.sequential.looks[].conditional_power	float?
+json experiment report .analysis.sequential.looks[].counted	int
+json experiment report .analysis.sequential.looks[].decision	string
+json experiment report .analysis.sequential.looks[].efficacy_level	float?
+json experiment report .analysis.sequential.looks[].equivalence_interval	object?
+json experiment report .analysis.sequential.looks[].equivalence_interval.estimate	float
+json experiment report .analysis.sequential.looks[].equivalence_interval.high	float
+json experiment report .analysis.sequential.looks[].equivalence_interval.low	float
+json experiment report .analysis.sequential.looks[].equivalence_level	float?
+json experiment report .analysis.sequential.looks[].fraction	float?
+json experiment report .analysis.sequential.looks[].interval	object?
+json experiment report .analysis.sequential.looks[].interval.estimate	float
+json experiment report .analysis.sequential.looks[].interval.high	float
+json experiment report .analysis.sequential.looks[].interval.low	float
+json experiment report .analysis.sequential.looks[].look	int
+json experiment report .analysis.sequential.looks[].note	string?
+json experiment report .analysis.sequential.looks[].planned	int
+json experiment report .analysis.sequential.looks[].verdict	string?
+json experiment report .analysis.sequential.looks[].z	float?
+json experiment report .analysis.sequential.next_stage	int?
+json experiment report .analysis.sequential.planned	[]int
+json experiment report .analysis.sequential.reported	int
+json experiment report .analysis.ungraded	object?
+json experiment report .analysis.ungraded.as_counted	map?
+json experiment report .analysis.ungraded.disagrees	[]string?
+json experiment report .analysis.ungraded.imbalanced	bool
+json experiment report .analysis.ungraded.pairs	int
+json experiment report .analysis.ungraded.ungraded	map
+json experiment report .arms	[]object
+json experiment report .arms[].behavior	object
+json experiment report .arms[].behavior.bash_commands	float
+json experiment report .arms[].behavior.checks_changed	int
+json experiment report .arms[].behavior.committed	int
+json experiment report .arms[].behavior.config_passes	int
+json experiment report .arms[].behavior.denials	int
+json experiment report .arms[].behavior.files_changed	float
+json experiment report .arms[].behavior.lines_changed	float
+json experiment report .arms[].behavior.ran_checks	int
+json experiment report .arms[].behavior.ran_tests	int
+json experiment report .arms[].behavior.tests_changed	int
+json experiment report .arms[].behavior.tests_removed	int
+json experiment report .arms[].cache_read_share	float
+json experiment report .arms[].capped	int
+json experiment report .arms[].cold_cost_usd	float
+json experiment report .arms[].context	string
+json experiment report .arms[].context_use	object
+json experiment report .arms[].context_use.files	map?
+json experiment report .arms[].context_use.other_subagents	int?
+json experiment report .arms[].context_use.recorded	int
+json experiment report .arms[].context_use.skills	map?
+json experiment report .arms[].context_use.start	[]string
+json experiment report .arms[].context_use.subagents	map?
+json experiment report .arms[].cost_usd	float
+json experiment report .arms[].counted	int
+json experiment report .arms[].first_request_tokens	float
+json experiment report .arms[].isolated_cost_usd	float
+json experiment report .arms[].name	string
+json experiment report .arms[].profile	string?
+json experiment report .arms[].snapshot	string?
+json experiment report .arms[].timed_out	int
+json experiment report .calibration_usd	float?
+json experiment report .experiment	string
+json experiment report .judge	object?
+json experiment report .judge.agreement	object
+json experiment report .judge.agreement.count	int
+json experiment report .judge.agreement.high	float
+json experiment report .judge.agreement.low	float
+json experiment report .judge.agreement.of	int
+json experiment report .judge.agreement.share	float
+json experiment report .judge.arms	[]object
+json experiment report .judge.arms[].cost_usd	float
+json experiment report .judge.arms[].failing	object
+json experiment report .judge.arms[].failing.fixed	object
+json experiment report .judge.arms[].failing.fixed.count	int
+json experiment report .judge.arms[].failing.fixed.high	float
+json experiment report .judge.arms[].failing.fixed.low	float
+json experiment report .judge.arms[].failing.fixed.of	int
+json experiment report .judge.arms[].failing.fixed.share	float
+json experiment report .judge.arms[].failing.judged	int
+json experiment report .judge.arms[].failing.no	object
+json experiment report .judge.arms[].failing.no.count	int
+json experiment report .judge.arms[].failing.no.high	float
+json experiment report .judge.arms[].failing.no.low	float
+json experiment report .judge.arms[].failing.no.of	int
+json experiment report .judge.arms[].failing.no.share	float
+json experiment report .judge.arms[].failing.partly	object
+json experiment report .judge.arms[].failing.partly.count	int
+json experiment report .judge.arms[].failing.partly.high	float
+json experiment report .judge.arms[].failing.partly.low	float
+json experiment report .judge.arms[].failing.partly.of	int
+json experiment report .judge.arms[].failing.partly.share	float
+json experiment report .judge.arms[].name	string
+json experiment report .judge.arms[].not_judged	object
+json experiment report .judge.arms[].not_judged.empty	int
+json experiment report .judge.arms[].not_judged.no_answer	int
+json experiment report .judge.arms[].not_judged.no_reference	int
+json experiment report .judge.arms[].not_judged.not_graded	int
+json experiment report .judge.arms[].not_judged.stopped	int
+json experiment report .judge.arms[].not_judged.waiting	int
+json experiment report .judge.arms[].passing	object
+json experiment report .judge.arms[].passing.fixed	object
+json experiment report .judge.arms[].passing.fixed.count	int
+json experiment report .judge.arms[].passing.fixed.high	float
+json experiment report .judge.arms[].passing.fixed.low	float
+json experiment report .judge.arms[].passing.fixed.of	int
+json experiment report .judge.arms[].passing.fixed.share	float
+json experiment report .judge.arms[].passing.judged	int
+json experiment report .judge.arms[].passing.no	object
+json experiment report .judge.arms[].passing.no.count	int
+json experiment report .judge.arms[].passing.no.high	float
+json experiment report .judge.arms[].passing.no.low	float
+json experiment report .judge.arms[].passing.no.of	int
+json experiment report .judge.arms[].passing.no.share	float
+json experiment report .judge.arms[].passing.partly	object
+json experiment report .judge.arms[].passing.partly.count	int
+json experiment report .judge.arms[].passing.partly.high	float
+json experiment report .judge.arms[].passing.partly.low	float
+json experiment report .judge.arms[].passing.partly.of	int
+json experiment report .judge.arms[].passing.partly.share	float
+json experiment report .judge.arms[].profile	string?
+json experiment report .judge.cost_usd	float
+json experiment report .judge.effort	string
+json experiment report .judge.flagged	[]object
+json experiment report .judge.flagged[].arm	string
+json experiment report .judge.flagged[].detail	string
+json experiment report .judge.flagged[].reason	string
+json experiment report .judge.flagged[].run	string
+json experiment report .judge.flagged[].task	string
+json experiment report .judge.flagged[].verdict	string
+json experiment report .judge.model	string
+json experiment report .judge.pending	int
+json experiment report .judge.repeats	int
+json experiment report .judge_grading	object?
+json experiment report .judge_grading.arms	[]object
+json experiment report .judge_grading.arms[].cost_usd	float
+json experiment report .judge_grading.arms[].fixed	object
+json experiment report .judge_grading.arms[].fixed.count	int
+json experiment report .judge_grading.arms[].fixed.high	float
+json experiment report .judge_grading.arms[].fixed.low	float
+json experiment report .judge_grading.arms[].fixed.of	int
+json experiment report .judge_grading.arms[].fixed.share	float
+json experiment report .judge_grading.arms[].graded	int
+json experiment report .judge_grading.arms[].name	string
+json experiment report .judge_grading.arms[].pending	int?
+json experiment report .judge_grading.arms[].profile	string?
+json experiment report .judge_grading.arms[].ungraded	int
+json experiment report .judge_grading.cost_usd	float
+json experiment report .judge_grading.effort	string
+json experiment report .judge_grading.model	string
+json experiment report .judge_grading.repeats	int
+json experiment report .judge_grading.tasks	[]string
+json experiment report .lock	object
+json experiment report .lock.agentium	string
+json experiment report .lock.arms	[]object
+json experiment report .lock.arms[].calibration	string
+json experiment report .lock.arms[].context	string
+json experiment report .lock.arms[].effort	string?
+json experiment report .lock.arms[].files	[]object?
+json experiment report .lock.arms[].files[].path	string
+json experiment report .lock.arms[].files[].sha256	string
+json experiment report .lock.arms[].model	string
+json experiment report .lock.arms[].name	string
+json experiment report .lock.arms[].requested_model	string?
+json experiment report .lock.arms[].run_budget_usd	float?
+json experiment report .lock.arms[].skills	[]string
+json experiment report .lock.arms[].slash_commands	[]string
+json experiment report .lock.arms[].snapshot	string?
+json experiment report .lock.arms[].tools	[]string
+json experiment report .lock.budget_changes	[]object?
+json experiment report .lock.budget_changes[].at	time
+json experiment report .lock.budget_changes[].from_usd	float
+json experiment report .lock.budget_changes[].to_usd	float
+json experiment report .lock.claude_code	string
+json experiment report .lock.claude_path	string
+json experiment report .lock.design	object
+json experiment report .lock.design.arms	[]object
+json experiment report .lock.design.arms[].context	string
+json experiment report .lock.design.arms[].effort	string?
+json experiment report .lock.design.arms[].name	string
+json experiment report .lock.design.arms[].requested_model	string?
+json experiment report .lock.design.arms[].run_budget_usd	float?
+json experiment report .lock.design.arms[].snapshot	string?
+json experiment report .lock.design.budget_usd	float
+json experiment report .lock.design.concurrency	int
+json experiment report .lock.design.cost_margin	float
+json experiment report .lock.design.effort	string?
+json experiment report .lock.design.goal	string
+json experiment report .lock.design.grader	string?
+json experiment report .lock.design.judge	object?
+json experiment report .lock.design.judge.effort	string?
+json experiment report .lock.design.judge.model	string
+json experiment report .lock.design.judge.repeats	int
+json experiment report .lock.design.judge_graded	[]string?
+json experiment report .lock.design.judge_grading	object?
+json experiment report .lock.design.judge_grading.effort	string?
+json experiment report .lock.design.judge_grading.model	string
+json experiment report .lock.design.judge_grading.repeats	int
+json experiment report .lock.design.judge_pairs	object?
+json experiment report .lock.design.judge_pairs.effort	string?
+json experiment report .lock.design.judge_pairs.model	string
+json experiment report .lock.design.judge_pairs.repeats	int
+json experiment report .lock.design.method	string?
+json experiment report .lock.design.model	string
+json experiment report .lock.design.no_futility	bool?
+json experiment report .lock.design.repeats	int
+json experiment report .lock.design.run_budget_usd	float
+json experiment report .lock.design.seed	int
+json experiment report .lock.design.success_margin	float
+json experiment report .lock.design.tasks	[]string
+json experiment report .lock.design.template	string
+json experiment report .lock.design.timeout	int
+json experiment report .lock.design.verify_timeout	int
+json experiment report .lock.design.version	int
+json experiment report .lock.grader	string?
+json experiment report .lock.harmless_denials	map?
+json experiment report .lock.harmless_denials{}[].operation	string
+json experiment report .lock.harmless_denials{}[].target	string?
+json experiment report .lock.host	string
+json experiment report .lock.local_binding	bool?
+json experiment report .lock.locked_at	time
+json experiment report .lock.max_attempts	int
+json experiment report .lock.method	string
+json experiment report .lock.price_table	string
+json experiment report .lock.schedule	[]object
+json experiment report .lock.schedule[].arm	string
+json experiment report .lock.schedule[].pair	int
+json experiment report .lock.schedule[].position	int
+json experiment report .lock.schedule[].repeat	int
+json experiment report .lock.schedule[].stage	int?
+json experiment report .lock.schedule[].task	string
+json experiment report .lock.sequential	object?
+json experiment report .lock.sequential.alpha	float
+json experiment report .lock.sequential.efficacy_levels	[]float
+json experiment report .lock.sequential.equivalence_alpha	float
+json experiment report .lock.sequential.equivalence_levels	[]float
+json experiment report .lock.sequential.futility	float
+json experiment report .lock.sequential.looks	[]int
+json experiment report .lock.sequential.spending	string
+json experiment report .lock.sign_in	string
+json experiment report .lock.tasks	[]object
+json experiment report .lock.tasks[].base	string
+json experiment report .lock.tasks[].digest	string
+json experiment report .lock.tasks[].grading	string?
+json experiment report .lock.tasks[].hidden_tests	[]string?
+json experiment report .lock.tasks[].instruction	string
+json experiment report .lock.tasks[].module	string?
+json experiment report .lock.tasks[].name	string
+json experiment report .lock.tasks[].reference	[]string?
+json experiment report .lock.tasks[].setup	[]string?
+json experiment report .lock.tasks[].solution	string?
+json experiment report .lock.tasks[].verify	[]string
+json experiment report .north_star	object?
+json experiment report .north_star.decisive	bool
+json experiment report .north_star.experiment	string?
+json experiment report .north_star.left_out	[]object?
+json experiment report .north_star.left_out[].experiment	string
+json experiment report .north_star.left_out[].why	string
+json experiment report .north_star.metric	string?
+json experiment report .north_star.seconds	float?
+json experiment report .north_star.spent_usd	float
+json experiment report .north_star.verdict	string?
+json experiment report .notes	[]string
+json experiment report .pair_judge	object?
+json experiment report .pair_judge.cost_usd	float
+json experiment report .pair_judge.effort	string
+json experiment report .pair_judge.model	string
+json experiment report .pair_judge.pairs	object
+json experiment report .pair_judge.pairs.a	int
+json experiment report .pair_judge.pairs.b	int
+json experiment report .pair_judge.pairs.b_share	float
+json experiment report .pair_judge.pairs.complete	int
+json experiment report .pair_judge.pairs.empty	int
+json experiment report .pair_judge.pairs.enough	bool
+json experiment report .pair_judge.pairs.flips	int
+json experiment report .pair_judge.pairs.high	float
+json experiment report .pair_judge.pairs.incomplete	int
+json experiment report .pair_judge.pairs.low	float
+json experiment report .pair_judge.pairs.p	float
+json experiment report .pair_judge.pairs.ties	int
+json experiment report .pair_judge.per_task	[]object
+json experiment report .pair_judge.per_task[].compared	int
+json experiment report .pair_judge.per_task[].flips	int
+json experiment report .pair_judge.per_task[].prefer	string
+json experiment report .pair_judge.per_task[].reason	string?
+json experiment report .pair_judge.per_task[].task	string
+json experiment report .pair_judge.tasks	object
+json experiment report .pair_judge.tasks.a	int
+json experiment report .pair_judge.tasks.b	int
+json experiment report .pair_judge.tasks.b_share	float
+json experiment report .pair_judge.tasks.complete	int
+json experiment report .pair_judge.tasks.empty	int
+json experiment report .pair_judge.tasks.enough	bool
+json experiment report .pair_judge.tasks.flips	int
+json experiment report .pair_judge.tasks.high	float
+json experiment report .pair_judge.tasks.incomplete	int
+json experiment report .pair_judge.tasks.low	float
+json experiment report .pair_judge.tasks.p	float
+json experiment report .pair_judge.tasks.ties	int
+json experiment report .pair_judge.uncompared	int
+json experiment report .runs	[]object
+json experiment report .runs[].arm	string
+json experiment report .runs[].attempt	int
+json experiment report .runs[].behavior	object
+json experiment report .runs[].behavior.bash_commands	int
+json experiment report .runs[].behavior.checks_changed	[]string?
+json experiment report .runs[].behavior.commits	int
+json experiment report .runs[].behavior.config_changed	[]string?
+json experiment report .runs[].behavior.denials	int
+json experiment report .runs[].behavior.files_changed	int
+json experiment report .runs[].behavior.lines_added	int
+json experiment report .runs[].behavior.lines_removed	int
+json experiment report .runs[].behavior.outside_reads	int
+json experiment report .runs[].behavior.ran_checks	bool
+json experiment report .runs[].behavior.ran_tests	bool
+json experiment report .runs[].behavior.tests_changed	bool
+json experiment report .runs[].behavior.tests_removed	int
+json experiment report .runs[].context_commit	string?
+json experiment report .runs[].context_use	object?
+json experiment report .runs[].context_use.files	[]string?
+json experiment report .runs[].context_use.other_subagents	int?
+json experiment report .runs[].context_use.skills	[]string?
+json experiment report .runs[].context_use.start	[]string
+json experiment report .runs[].context_use.subagents	[]string?
+json experiment report .runs[].cost_estimated	bool?
+json experiment report .runs[].drift	[]string?
+json experiment report .runs[].finished	string
+json experiment report .runs[].graded_by	string?
+json experiment report .runs[].grader	string?
+json experiment report .runs[].harness_changed	[]string?
+json experiment report .runs[].id	string
+json experiment report .runs[].judge	object?
+json experiment report .runs[].judge.answers	[]string
+json experiment report .runs[].judge.cost_usd	float
+json experiment report .runs[].judge.effort	string?
+json experiment report .runs[].judge.empty	bool?
+json experiment report .runs[].judge.errors	[]string?
+json experiment report .runs[].judge.fixed	string?
+json experiment report .runs[].judge.model	string
+json experiment report .runs[].judge.reason	string?
+json experiment report .runs[].judge.reasons	[]string
+json experiment report .runs[].judge.refused	int?
+json experiment report .runs[].judge.requested	int
+json experiment report .runs[].judge.stopped	string?
+json experiment report .runs[].judge.truncated	bool?
+json experiment report .runs[].judge.version	int
+json experiment report .runs[].metrics	object
+json experiment report .runs[].metrics.api_ms	int
+json experiment report .runs[].metrics.api_retries	int
+json experiment report .runs[].metrics.cache_read_tokens	int
+json experiment report .runs[].metrics.cache_write_tokens	int
+json experiment report .runs[].metrics.cli_version	string
+json experiment report .runs[].metrics.cost_usd	float
+json experiment report .runs[].metrics.duration_ms	int
+json experiment report .runs[].metrics.estimated_cost_usd	float?
+json experiment report .runs[].metrics.first_reads	[]object?
+json experiment report .runs[].metrics.first_reads[].cache_read	int
+json experiment report .runs[].metrics.first_reads[].main	bool?
+json experiment report .runs[].metrics.first_reads[].model	string?
+json experiment report .runs[].metrics.first_reads[].ttl_assumed	bool?
+json experiment report .runs[].metrics.first_reads[].write_ttl	string?
+json experiment report .runs[].metrics.first_request_tokens	int
+json experiment report .runs[].metrics.input_tokens	int
+json experiment report .runs[].metrics.mcp_tools	int
+json experiment report .runs[].metrics.model	string
+json experiment report .runs[].metrics.output_tokens	int
+json experiment report .runs[].metrics.permission_denials	int
+json experiment report .runs[].metrics.permission_mode	string
+json experiment report .runs[].metrics.result_excerpt	string
+json experiment report .runs[].metrics.result_is_error	bool
+json experiment report .runs[].metrics.result_subtype	string
+json experiment report .runs[].metrics.saw_init	bool
+json experiment report .runs[].metrics.saw_result	bool
+json experiment report .runs[].metrics.skills	int
+json experiment report .runs[].metrics.subagent_models	map?
+json experiment report .runs[].metrics.tools	[]string
+json experiment report .runs[].metrics.tools_used	map
+json experiment report .runs[].metrics.turns	int
+json experiment report .runs[].metrics.unmatched_launches	int?
+json experiment report .runs[].metrics.unpriced_requests	int?
+json experiment report .runs[].metrics.usage_first	object?
+json experiment report .runs[].metrics.usage_first.five_hour	float
+json experiment report .runs[].metrics.usage_first.five_hour_resets	time
+json experiment report .runs[].metrics.usage_first.seven_day	float
+json experiment report .runs[].metrics.usage_first.seven_day_resets	time
+json experiment report .runs[].metrics.usage_first.status	string
+json experiment report .runs[].metrics.usage_last	object?
+json experiment report .runs[].metrics.usage_last.five_hour	float
+json experiment report .runs[].metrics.usage_last.five_hour_resets	time
+json experiment report .runs[].metrics.usage_last.seven_day	float
+json experiment report .runs[].metrics.usage_last.seven_day_resets	time
+json experiment report .runs[].metrics.usage_last.status	string
+json experiment report .runs[].notes	[]string?
+json experiment report .runs[].outcome	string
+json experiment report .runs[].passed	bool?
+json experiment report .runs[].recovered	string?
+json experiment report .runs[].sandbox	object?
+json experiment report .runs[].sandbox.canary	string
+json experiment report .runs[].sandbox.denials	int
+json experiment report .runs[].sandbox.denials_unread	bool?
+json experiment report .runs[].sandbox.flagged	int
+json experiment report .runs[].sandbox.flagged_operations	[]string?
+json experiment report .runs[].slot	int
+json experiment report .runs[].started	string
+json experiment report .runs[].success	bool
+json experiment report .runs[].task	string
+json experiment report .runs[].verify	[]object?
+json experiment report .runs[].verify[].command	string
+json experiment report .runs[].verify[].exit_code	int
+json experiment report .runs[].verify[].seconds	float
+json experiment report .settled	int
+json experiment report .slots	int
+json experiment report .spent_usd	float
+json experiment report .status	string
+json experiment report .status_note	string?
+json experiment report .summary	string?
+json experiment report .tasks	[]object
+json experiment report .tasks[].arms	map
+json experiment report .tasks[].arms{}.capped	int
+json experiment report .tasks[].arms{}.cost_usd	float
+json experiment report .tasks[].arms{}.counted	int
+json experiment report .tasks[].arms{}.marks	string
+json experiment report .tasks[].arms{}.profile	string?
+json experiment report .tasks[].arms{}.successes	int
+json experiment report .tasks[].arms{}.timed_out	int
+json experiment report .tasks[].judged	bool?
+json experiment report .tasks[].task	string
+json experiment report .template	string
+json experiment rm .command	string
+json experiment rm .removed	string
+json experiment rm .schema	int
+json experiment run .command	string
+json experiment run .experiment	string
+json experiment run .run	object
+json experiment run .run.budget_usd	float
+json experiment run .run.ended_by	string
+json experiment run .run.judge_paused	bool
+json experiment run .run.looks	[]object
+json experiment run .run.looks[].analysed	bool
+json experiment run .run.looks[].conditional_power	float
+json experiment run .run.looks[].decision	string
+json experiment run .run.looks[].interval	object
+json experiment run .run.looks[].interval.estimate	float
+json experiment run .run.looks[].interval.high	float
+json experiment run .run.looks[].interval.low	float
+json experiment run .run.looks[].level	float
+json experiment run .run.looks[].look	int
+json experiment run .run.looks[].note	string
+json experiment run .run.looks[].tasks_counted	int
+json experiment run .run.looks[].tasks_planned	int
+json experiment run .run.looks[].verdict	string
+json experiment run .run.method	string
+json experiment run .run.next_command	string
+json experiment run .run.north_star	object
+json experiment run .run.north_star.decisive	bool
+json experiment run .run.north_star.experiment	string
+json experiment run .run.north_star.left_out	[]object?
+json experiment run .run.north_star.left_out[].experiment	string
+json experiment run .run.north_star.left_out[].why	string
+json experiment run .run.north_star.metric	string
+json experiment run .run.north_star.seconds	float
+json experiment run .run.north_star.spent_usd	float
+json experiment run .run.north_star.verdict	string
+json experiment run .run.note	string
+json experiment run .run.resume_at	time
+json experiment run .run.runs	object
+json experiment run .run.runs.failed	int
+json experiment run .run.runs.pending	int
+json experiment run .run.runs.settled	int
+json experiment run .run.runs.skipped	int
+json experiment run .run.runs.total	int
+json experiment run .run.spent_usd	float
+json experiment run .run.status	string
+json experiment run .run.stopped_at_look	int
+json experiment run .run.verdict	object
+json experiment run .run.verdict.decisive	bool
+json experiment run .run.verdict.metrics	[]object
+json experiment run .run.verdict.metrics[].a	float
+json experiment run .run.verdict.metrics[].b	float
+json experiment run .run.verdict.metrics[].decisive	bool
+json experiment run .run.verdict.metrics[].interval	object
+json experiment run .run.verdict.metrics[].interval.estimate	float
+json experiment run .run.verdict.metrics[].interval.high	float
+json experiment run .run.verdict.metrics[].interval.low	float
+json experiment run .run.verdict.metrics[].level	float
+json experiment run .run.verdict.metrics[].metric	string
+json experiment run .run.verdict.metrics[].note	string
+json experiment run .run.verdict.metrics[].role	string
+json experiment run .run.verdict.metrics[].tasks	int
+json experiment run .run.verdict.metrics[].verdict	string
+json experiment run .run.verdict.summary	string
+json experiment run .schema	int
+json experiment show .calibration_usd	float
+json experiment show .command	string
+json experiment show .experiment	object
+json experiment show .experiment.arms	[]object
+json experiment show .experiment.arms[].context	string
+json experiment show .experiment.arms[].effort	string
+json experiment show .experiment.arms[].model	string
+json experiment show .experiment.arms[].name	string
+json experiment show .experiment.budget_usd	float
+json experiment show .experiment.concurrency	int
+json experiment show .experiment.goal	string
+json experiment show .experiment.grader	string
+json experiment show .experiment.judge	bool
+json experiment show .experiment.judge_pairs	bool
+json experiment show .experiment.method	string
+json experiment show .experiment.name	string
+json experiment show .experiment.repeats_per_arm	int
+json experiment show .experiment.run_budget_usd	float
+json experiment show .experiment.runs	int
+json experiment show .experiment.tasks	[]string
+json experiment show .experiment.template	string
+json experiment show .lock	object
+json experiment show .lock.budget_changes	[]object
+json experiment show .lock.budget_changes[].at	time
+json experiment show .lock.budget_changes[].from_usd	float
+json experiment show .lock.budget_changes[].to_usd	float
+json experiment show .lock.claude_code	string
+json experiment show .lock.local_binding	bool
+json experiment show .lock.locked_at	time
+json experiment show .lock.method	string
+json experiment show .lock.price_table	string
+json experiment show .lock.sign_in	string
+json experiment show .locked	bool
+json experiment show .progress	object
+json experiment show .progress.arms	[]object
+json experiment show .progress.arms[].cancelled	int
+json experiment show .progress.arms[].context	string
+json experiment show .progress.arms[].cost_usd	float
+json experiment show .progress.arms[].fair	int
+json experiment show .progress.arms[].infra	int
+json experiment show .progress.arms[].judge_fixed	int
+json experiment show .progress.arms[].judge_graded	int
+json experiment show .progress.arms[].judge_pending	int?
+json experiment show .progress.arms[].judge_ungraded	int?
+json experiment show .progress.arms[].left_out_sandbox	int
+json experiment show .progress.arms[].name	string
+json experiment show .progress.arms[].settled	int
+json experiment show .progress.arms[].successes	int
+json experiment show .progress.arms[].unfair	int
+json experiment show .progress.budget_usd	float
+json experiment show .progress.calibration_usd	float
+json experiment show .progress.ended_by	string
+json experiment show .progress.judge_usd	float
+json experiment show .progress.looks	[]object
+json experiment show .progress.looks[].analysed	bool
+json experiment show .progress.looks[].conditional_power	float
+json experiment show .progress.looks[].decision	string
+json experiment show .progress.looks[].interval	object
+json experiment show .progress.looks[].interval.estimate	float
+json experiment show .progress.looks[].interval.high	float
+json experiment show .progress.looks[].interval.low	float
+json experiment show .progress.looks[].level	float
+json experiment show .progress.looks[].look	int
+json experiment show .progress.looks[].note	string
+json experiment show .progress.looks[].tasks_counted	int
+json experiment show .progress.looks[].tasks_planned	int
+json experiment show .progress.looks[].verdict	string
+json experiment show .progress.pair_judge_usd	float
+json experiment show .progress.settled	int
+json experiment show .progress.slots	int
+json experiment show .progress.spent_usd	float
+json experiment show .progress.uncompared_pairs	int
+json experiment show .progress.unjudged_runs	int
+json experiment show .schema	int
+json experiment show .status	string
+json experiment show .status_note	string
+json init .claude_code	object
+json init .claude_code.found	bool
+json init .claude_code.version	string
+json init .command	string
+json init .context	object
+json init .context.on_demand_files	int
+json init .context.startup_files	int
+json init .context.startup_tokens_estimated	int
+json init .head	string
+json init .local_binding	object
+json init .local_binding.allowed	bool
+json init .local_binding.gradle_project	bool
+json init .modules	[]object?
+json init .modules[].path	string
+json init .modules[].tools	[]string
+json init .modules_total	int?
+json init .project	object
+json init .project.id	int
+json init .project.name	string
+json init .schema	int
+json init .settings	object
+json init .settings.allow_local_binding	bool
+json init .settings.defaults	[]string
+json init .settings.jobs	int
+json init .settings.mined_verify	[]string
+json init .settings.module	string?
+json init .settings.require_lock	bool
+json init .settings.setup	[]string
+json init .settings.verify	[]string
+json init .settings.verify_timeout_seconds	float
+json init .sign_in	string
+json init .test_commands	[]string
+json init .warnings	[]string
+json pool status .command	string
+json pool status .health	object
+json pool status .health.awaiting_review	int
+json pool status .health.flaky	int
+json pool status .health.invalid	int
+json pool status .health.last_pass	time
+json pool status .health.oldest_valid_base	time
+json pool status .health.retired	int
+json pool status .health.total	int
+json pool status .health.unchecked	int
+json pool status .health.unvalidated	int
+json pool status .health.valid	int
+json pool status .health.weak	int
+json pool status .schema	int
+json pool update .accepted	[]string
+json pool update .candidates	[]object
+json pool update .candidates[].changed_lines	int
+json pool update .candidates[].code_files	int
+json pool update .candidates[].commit	string
+json pool update .candidates[].score	int
+json pool update .candidates[].score_parts	[]string
+json pool update .candidates[].subject	string
+json pool update .candidates[].test_files	int
+json pool update .candidates_found	int
+json pool update .command	string
+json pool update .commits_read	int
+json pool update .complete	bool
+json pool update .dry_run	bool
+json pool update .head	string
+json pool update .health	object
+json pool update .health.awaiting_review	int
+json pool update .health.flaky	int
+json pool update .health.invalid	int
+json pool update .health.last_pass	time
+json pool update .health.oldest_valid_base	time
+json pool update .health.retired	int
+json pool update .health.total	int
+json pool update .health.unchecked	int
+json pool update .health.unvalidated	int
+json pool update .health.valid	int
+json pool update .health.weak	int
+json pool update .held_back	[]object
+json pool update .held_back[].name	string
+json pool update .held_back[].reason	string
+json pool update .imported	[]string
+json pool update .interrupted	bool
+json pool update .kept	[]object
+json pool update .kept[].experiments	[]string
+json pool update .kept[].name	string
+json pool update .kept[].problem	string
+json pool update .kept[].reasons	[]string
+json pool update .kept[].status	string
+json pool update .outside_window	int
+json pool update .ref	string
+json pool update .retired	[]object
+json pool update .retired[].name	string
+json pool update .retired[].reason	string
+json pool update .revalidated	[]object
+json pool update .revalidated[].experiments	[]string
+json pool update .revalidated[].name	string
+json pool update .revalidated[].problem	string
+json pool update .revalidated[].reasons	[]string
+json pool update .revalidated[].status	string
+json pool update .revalidations_skipped	bool
+json pool update .schema	int
+json pool update .set_aside	map
+json pool update .tasks	[]object
+json pool update .tasks[].commit	string
+json pool update .tasks[].name	string
+json pool update .tasks[].problem	string
+json pool update .tasks[].task	object
+json pool update .tasks[].task.base_commit	string
+json pool update .tasks[].task.graded_by	string
+json pool update .tasks[].task.hidden_test_files	int
+json pool update .tasks[].task.module	string?
+json pool update .tasks[].task.name	string
+json pool update .tasks[].task.needs_review	bool
+json pool update .tasks[].task.reference_files	int
+json pool update .tasks[].task.solution_commit	string
+json pool update .tasks[].task.source	string
+json pool update .tasks[].task.status	string
+json pool update .tasks[].task.status_summary	string
+json pool update .tasks[].task.unstated_requirements	int
+json pool update .tasks[].task.untested_hunks	int
+json pool update .unknown_watermark	[]string
+json pool update .verify	[]string
+json pool update .warnings	[]string
+json pool update .watermark_moved	bool
+json run list .command	string
+json run list .runs	[]object
+json run list .runs[].arm	string
+json run list .runs[].cost_usd	float
+json run list .runs[].graded_by	string?
+json run list .runs[].id	string
+json run list .runs[].kind	string
+json run list .runs[].outcome	string
+json run list .runs[].passed	bool
+json run list .runs[].started	time
+json run list .runs[].task	string
+json run list .schema	int
+json run once .command	string
+json run once .run	object
+json run once .run.arm	string
+json run once .run.behavior	object
+json run once .run.behavior.bash_commands	int
+json run once .run.behavior.checks_changed	[]string
+json run once .run.behavior.commits	int
+json run once .run.behavior.config_changed	[]string
+json run once .run.behavior.denials	int
+json run once .run.behavior.files_changed	int
+json run once .run.behavior.lines_added	int
+json run once .run.behavior.lines_removed	int
+json run once .run.behavior.outside_reads	int
+json run once .run.behavior.ran_checks	bool
+json run once .run.behavior.ran_tests	bool
+json run once .run.behavior.tests_changed	bool
+json run once .run.behavior.tests_removed	int
+json run once .run.cli_version	string
+json run once .run.cost_estimated	bool
+json run once .run.cost_usd	float
+json run once .run.drift	[]string
+json run once .run.duration_ms	int
+json run once .run.effort	string
+json run once .run.finished	time
+json run once .run.first_request_tokens	int
+json run once .run.graded_by	string
+json run once .run.grader	string
+json run once .run.id	string
+json run once .run.judge_cost_usd	float
+json run once .run.judge_grade	object
+json run once .run.judge_grade.answers	[]string
+json run once .run.judge_grade.effort	string
+json run once .run.judge_grade.fixed	string
+json run once .run.judge_grade.model	string
+json run once .run.judge_grade.reason	string
+json run once .run.judge_grade.requested	int
+json run once .run.judge_grade.unvalidated	bool
+json run once .run.model	string
+json run once .run.notes	[]string
+json run once .run.outcome	string
+json run once .run.pair_judge_cost_usd	float
+json run once .run.passed	bool
+json run once .run.permission_mode	string
+json run once .run.sandbox	object
+json run once .run.sandbox.canary	string
+json run once .run.sandbox.denials	int
+json run once .run.sandbox.denials_unread	bool?
+json run once .run.sandbox.flagged	int
+json run once .run.sandbox.flagged_operations	[]string?
+json run once .run.sign_in	string
+json run once .run.skills	int
+json run once .run.started	time
+json run once .run.task	string
+json run once .run.tools	int
+json run once .run.turns	int
+json run once .schema	int
+json run show .command	string
+json run show .diff	string
+json run show .experiment	object
+json run show .experiment.attempt	int
+json run show .experiment.name	string
+json run show .experiment.slot	int
+json run show .files	[]string
+json run show .kind	string
+json run show .run	object
+json run show .run.arm	string
+json run show .run.behavior	object
+json run show .run.behavior.bash_commands	int
+json run show .run.behavior.checks_changed	[]string
+json run show .run.behavior.commits	int
+json run show .run.behavior.config_changed	[]string
+json run show .run.behavior.denials	int
+json run show .run.behavior.files_changed	int
+json run show .run.behavior.lines_added	int
+json run show .run.behavior.lines_removed	int
+json run show .run.behavior.outside_reads	int
+json run show .run.behavior.ran_checks	bool
+json run show .run.behavior.ran_tests	bool
+json run show .run.behavior.tests_changed	bool
+json run show .run.behavior.tests_removed	int
+json run show .run.cli_version	string
+json run show .run.cost_estimated	bool
+json run show .run.cost_usd	float
+json run show .run.drift	[]string
+json run show .run.duration_ms	int
+json run show .run.effort	string
+json run show .run.finished	time
+json run show .run.first_request_tokens	int
+json run show .run.graded_by	string
+json run show .run.grader	string
+json run show .run.id	string
+json run show .run.judge_cost_usd	float
+json run show .run.judge_grade	object
+json run show .run.judge_grade.answers	[]string
+json run show .run.judge_grade.effort	string
+json run show .run.judge_grade.fixed	string
+json run show .run.judge_grade.model	string
+json run show .run.judge_grade.reason	string
+json run show .run.judge_grade.requested	int
+json run show .run.judge_grade.unvalidated	bool
+json run show .run.model	string
+json run show .run.notes	[]string
+json run show .run.outcome	string
+json run show .run.pair_judge_cost_usd	float
+json run show .run.passed	bool
+json run show .run.permission_mode	string
+json run show .run.sandbox	object
+json run show .run.sandbox.canary	string
+json run show .run.sandbox.denials	int
+json run show .run.sandbox.denials_unread	bool?
+json run show .run.sandbox.flagged	int
+json run show .run.sandbox.flagged_operations	[]string?
+json run show .run.sign_in	string
+json run show .run.skills	int
+json run show .run.started	time
+json run show .run.task	string
+json run show .run.tools	int
+json run show .run.turns	int
+json run show .schema	int
+json run show .setup_log	string
+json run show .verify_log	string
+json start .calibration_estimate_usd	float
+json start .calibration_runs_needed	int
+json start .command	string
+json start .context_a	string
+json start .context_b	string
+json start .experiment	object
+json start .experiment.budget_usd	float
+json start .experiment.looks	[]object
+json start .experiment.looks[].efficacy_level	float
+json start .experiment.looks[].equivalence_level	float
+json start .experiment.looks[].estimated_usd	float
+json start .experiment.looks[].look	int
+json start .experiment.looks[].runs	int
+json start .experiment.looks[].tasks	int
+json start .experiment.looks[].worst_case_usd	float
+json start .experiment.method	string
+json start .experiment.model	string
+json start .experiment.name	string
+json start .experiment.repeats_per_arm	int
+json start .experiment.runs	int
+json start .experiment.spend	object
+json start .experiment.spend.estimate_basis	[]object
+json start .experiment.spend.estimate_basis[].arm	string
+json start .experiment.spend.estimate_basis[].basis	string
+json start .experiment.spend.estimate_basis[].history_runs	int
+json start .experiment.spend.estimate_basis[].model	string
+json start .experiment.spend.estimate_basis[].per_run_usd	float
+json start .experiment.spend.expected_tasks	float
+json start .experiment.spend.expected_usd	float
+json start .experiment.spend.if_cut_usd	float
+json start .experiment.spend.known	bool
+json start .experiment.spend.max_usd	float
+json start .experiment.spend.worst_case_usd	float
+json start .experiment.tasks	int
+json start .experiment.template	string
+json start .log	[]string
+json start .north_star	object
+json start .north_star.decisive	bool
+json start .north_star.experiment	string
+json start .north_star.left_out	[]object?
+json start .north_star.left_out[].experiment	string
+json start .north_star.left_out[].why	string
+json start .north_star.metric	string
+json start .north_star.seconds	float
+json start .north_star.spent_usd	float
+json start .north_star.verdict	string
+json start .nothing_was_run	bool
+json start .project	object
+json start .project.id	int
+json start .project.name	string
+json start .readiness	[]object
+json start .readiness[].status	string
+json start .readiness[].text	string
+json start .ready	bool
+json start .run	object
+json start .run.budget_usd	float
+json start .run.ended_by	string
+json start .run.judge_paused	bool
+json start .run.looks	[]object
+json start .run.looks[].analysed	bool
+json start .run.looks[].conditional_power	float
+json start .run.looks[].decision	string
+json start .run.looks[].interval	object
+json start .run.looks[].interval.estimate	float
+json start .run.looks[].interval.high	float
+json start .run.looks[].interval.low	float
+json start .run.looks[].level	float
+json start .run.looks[].look	int
+json start .run.looks[].note	string
+json start .run.looks[].tasks_counted	int
+json start .run.looks[].tasks_planned	int
+json start .run.looks[].verdict	string
+json start .run.method	string
+json start .run.next_command	string
+json start .run.north_star	object
+json start .run.north_star.decisive	bool
+json start .run.north_star.experiment	string
+json start .run.north_star.left_out	[]object?
+json start .run.north_star.left_out[].experiment	string
+json start .run.north_star.left_out[].why	string
+json start .run.north_star.metric	string
+json start .run.north_star.seconds	float
+json start .run.north_star.spent_usd	float
+json start .run.north_star.verdict	string
+json start .run.note	string
+json start .run.resume_at	time
+json start .run.runs	object
+json start .run.runs.failed	int
+json start .run.runs.pending	int
+json start .run.runs.settled	int
+json start .run.runs.skipped	int
+json start .run.runs.total	int
+json start .run.spent_usd	float
+json start .run.status	string
+json start .run.stopped_at_look	int
+json start .run.verdict	object
+json start .run.verdict.decisive	bool
+json start .run.verdict.metrics	[]object
+json start .run.verdict.metrics[].a	float
+json start .run.verdict.metrics[].b	float
+json start .run.verdict.metrics[].decisive	bool
+json start .run.verdict.metrics[].interval	object
+json start .run.verdict.metrics[].interval.estimate	float
+json start .run.verdict.metrics[].interval.high	float
+json start .run.verdict.metrics[].interval.low	float
+json start .run.verdict.metrics[].level	float
+json start .run.verdict.metrics[].metric	string
+json start .run.verdict.metrics[].note	string
+json start .run.verdict.metrics[].role	string
+json start .run.verdict.metrics[].tasks	int
+json start .run.verdict.metrics[].verdict	string
+json start .run.verdict.summary	string
+json start .run_command	string
+json start .schema	int
+json start .status	string
+json start .tasks_awaiting_review	int
+json start .tasks_ready	int
+json task add .command	string
+json task add .next_command	string
+json task add .schema	int
+json task add .setup	[]string
+json task add .solution_leak_sections	[]string
+json task add .task	object
+json task add .task.base_commit	string
+json task add .task.graded_by	string
+json task add .task.hidden_test_files	int
+json task add .task.module	string?
+json task add .task.name	string
+json task add .task.needs_review	bool
+json task add .task.reference_files	int
+json task add .task.solution_commit	string
+json task add .task.source	string
+json task add .task.status	string
+json task add .task.status_summary	string
+json task add .task.unstated_requirements	int
+json task add .task.untested_hunks	int
+json task add .verify	[]string
+json task edit .command	string
+json task edit .schema	int
+json task edit .task	object
+json task edit .task.base_commit	string
+json task edit .task.graded_by	string
+json task edit .task.hidden_test_files	int
+json task edit .task.module	string?
+json task edit .task.name	string
+json task edit .task.needs_review	bool
+json task edit .task.reference_files	int
+json task edit .task.solution_commit	string
+json task edit .task.source	string
+json task edit .task.status	string
+json task edit .task.status_summary	string
+json task edit .task.unstated_requirements	int
+json task edit .task.untested_hunks	int
+json task edit .updated	bool
+json task import .command	string
+json task import .next_command	string
+json task import .schema	int
+json task import .setup	[]string
+json task import .solution_leak_sections	[]string
+json task import .task	object
+json task import .task.base_commit	string
+json task import .task.graded_by	string
+json task import .task.hidden_test_files	int
+json task import .task.module	string?
+json task import .task.name	string
+json task import .task.needs_review	bool
+json task import .task.reference_files	int
+json task import .task.solution_commit	string
+json task import .task.source	string
+json task import .task.status	string
+json task import .task.status_summary	string
+json task import .task.unstated_requirements	int
+json task import .task.untested_hunks	int
+json task import .verify	[]string
+json task list .command	string
+json task list .schema	int
+json task list .tasks	[]object
+json task list .tasks[].base_commit	string
+json task list .tasks[].graded_by	string
+json task list .tasks[].hidden_test_files	int
+json task list .tasks[].module	string?
+json task list .tasks[].name	string
+json task list .tasks[].needs_review	bool
+json task list .tasks[].reference_files	int
+json task list .tasks[].solution_commit	string
+json task list .tasks[].source	string
+json task list .tasks[].status	string
+json task list .tasks[].status_summary	string
+json task list .tasks[].unstated_requirements	int
+json task list .tasks[].untested_hunks	int
+json task rm .command	string
+json task rm .removed	string
+json task rm .schema	int
+json task show .base_commit	string
+json task show .command	string
+json task show .graded_by	string
+json task show .hidden_test_files	int
+json task show .hidden_tests	[]string
+json task show .instruction	string
+json task show .instruction_names_reference_files	[]string
+json task show .module	string?
+json task show .name	string
+json task show .needs_review	bool
+json task show .reference	[]string
+json task show .reference_files	int
+json task show .review	string
+json task show .schema	int
+json task show .setup	[]string
+json task show .solution_commit	string
+json task show .source	string
+json task show .status	string
+json task show .status_summary	string
+json task show .unstated_requirement_details	[]object
+json task show .unstated_requirement_details[].file	string
+json task show .unstated_requirement_details[].kind	string
+json task show .unstated_requirement_details[].text	string
+json task show .unstated_requirements	int
+json task show .untested_hunks	int
+json task show .verify	[]string
+json task show .warnings	[]string
+json task show .weak_tests	object
+json task show .weak_tests.checked	int
+json task show .weak_tests.reason	string
+json task show .weak_tests.skipped	int
+json task show .weak_tests.timed_out	int
+json task show .weak_tests.untested	[]string
+json task validate .arms	[]string
+json task validate .command	string
+json task validate .grader	string
+json task validate .harness_changed	map
+json task validate .interrupted	bool
+json task validate .judge	object
+json task validate .judge.changed_lines	int
+json task validate .judge.code_files	[]string
+json task validate .judge.instruction_truncated	bool?
+json task validate .judge.instruction_words	int
+json task validate .judge.reference_diff_truncated	bool
+json task validate .needs_review	bool
+json task validate .repeats	int
+json task validate .schema	int
+json task validate .status	string
+json task validate .summary	string
+json task validate .task	string
+json task validate .tasks	[]object
+json task validate .tasks[].commit	string
+json task validate .tasks[].name	string
+json task validate .tasks[].problem	string
+json task validate .tasks[].task	object
+json task validate .tasks[].task.base_commit	string
+json task validate .tasks[].task.graded_by	string
+json task validate .tasks[].task.hidden_test_files	int
+json task validate .tasks[].task.module	string?
+json task validate .tasks[].task.name	string
+json task validate .tasks[].task.needs_review	bool
+json task validate .tasks[].task.reference_files	int
+json task validate .tasks[].task.solution_commit	string
+json task validate .tasks[].task.source	string
+json task validate .tasks[].task.status	string
+json task validate .tasks[].task.status_summary	string
+json task validate .tasks[].task.unstated_requirements	int
+json task validate .tasks[].task.untested_hunks	int
+json task validate .total	int
+json task validate .unstated_requirement_details	[]object
+json task validate .unstated_requirement_details[].file	string
+json task validate .unstated_requirement_details[].kind	string
+json task validate .unstated_requirement_details[].text	string
+json task validate .valid	int
+json task validate .warnings	[]string
+json task validate .weak_tests	object
+json task validate .weak_tests.checked	int
+json task validate .weak_tests.reason	string
+json task validate .weak_tests.skipped	int
+json task validate .weak_tests.timed_out	int
+json task validate .weak_tests.untested	[]string
+json-flag clean
+json-flag context diff
+json-flag context lint
+json-flag context list
+json-flag context show
+json-flag context snapshot
+json-flag experiment list
+json-flag experiment new
+json-flag experiment plan
+json-flag experiment rm
+json-flag experiment run
+json-flag experiment show
+json-flag init
+json-flag pool status
+json-flag pool update
+json-flag run list
+json-flag run once
+json-flag run show
+json-flag start
+json-flag task add
+json-flag task edit
+json-flag task import
+json-flag task list
+json-flag task mine
+json-flag task rm
+json-flag task show
+json-flag task validate
+migration 0001_projects.sql	a93a733ec7396e7a
+migration 0002_snapshots.sql	0719af08e4e24dc8
+migration 0003_tasks.sql	18fbdd492a134bf6
+migration 0004_runs.sql	56a875dcd218dcc1
+migration 0005_calibrations.sql	b3bbd6e8861b35a9
+migration 0006_experiments.sql	839614a44af8ddbe
+migration 0007_experiment_runs.sql	a10bdc0079cc2003
+migration 0008_task_grading.sql	93588561341be20e
+migration 0009_project_local_binding.sql	b301d84de0a4d429
+migration 0010_task_retirement.sql	d75df0f53390468c
+migration 0011_removed_watch.sql	683d146397d0a68b
+migration 0012_project_settings.sql	36ca254216271595
+migration 0013_project_module.sql	d2c002bd6494bb10
