@@ -58,8 +58,12 @@ type Spec struct {
 	// (task.Validation.Harmless, as the experiment's lock fixed them): a sandboxed grade does not flag them.
 	HarmlessDenials []task.DenialKey
 	// Judge, when set, has the judge give a graded run a verdict (Env.Judge), after grading and inside the run, so the
-	// experiment's concurrency bounds the calls too. It never changes the run's outcome or result.
+	// experiment's concurrency bounds the calls too. It never changes the run's outcome or result. A judge-graded task's
+	// run (Task.JudgeGraded) is not given one: its grading verdict is the judge's already.
 	Judge *judge.Settings
+	// JudgeGrading is the judge that grades a judge-graded task's run (Task.JudgeGraded), as an experiment's design fixes
+	// it; nil: judge.GradingSettings. Ignored for test-graded tasks.
+	JudgeGrading *judge.Settings
 }
 
 // Env is what a run needs from Agentium and the machine.
@@ -215,7 +219,11 @@ type Record struct {
 	ProjectCommands []string `json:"-"`
 	// Judge is the judge's verdict on a graded run, when its experiment asked for one: a second opinion beside Passed
 	// that decides nothing. Its cost is kept here, apart from Metrics.CostUSD, which stays the agent's alone (Spend).
+	// For a judge-graded run (GradedBy) it is the grading verdict, which Passed follows (judge.Grade).
 	Judge *judge.Verdict `json:"judge,omitempty"`
+	// GradedBy is task.GradingJudge for a run of a judge-graded task: the judge's majority grades it (Passed), not
+	// hidden tests, and its grade is unvalidated. Empty for every run graded by the tests (and every older record).
+	GradedBy string `json:"graded_by,omitempty"`
 	// PairJudge is the pair judge's comparison of this run's change with its pair's arm-A run (an experiment with
 	// --judge-pairs, both runs passing): kept on the pair's arm-B run only. Unvalidated and exploratory, it decides
 	// nothing; its cost is kept here, apart from Metrics.CostUSD (Spend).
@@ -263,6 +271,9 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
+	if spec.Task.JudgeGraded() {
+		rec.GradedBy = task.GradingJudge
+	}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)
 	repo := filepath.Join(workspace, "repo")
@@ -635,6 +646,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		} else if err != nil {
 			return unfinished(err)
 		}
+		if spec.Task.JudgeGraded() {
+			return env.gradeByJudge(ctx, spec, &rec, func(partial Record) error {
+				return env.writeStart(start{Record: partial, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: true, Meta: env.Meta})
+			}, unfinished)
+		}
 		if rec.Passed == nil { // the grade was infrastructure (flagged sandbox denials): nothing to judge
 			break
 		}
@@ -722,6 +738,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	rec.Behavior.RanTests, rec.Behavior.RanChecks = commandFlags(rec.Metrics, spec.Task.Verify)
 	for _, p := range changed {
 		rec.Behavior.TestsChanged = rec.Behavior.TestsChanged || task.IsTestFile(p)
+	}
+	if spec.Task.JudgeGraded() { // no hidden tests, and the verification commands decide nothing: the judge grades it (gradeByJudge)
+		return nil
 	}
 
 	// The checks themselves: scripts the verification commands name are restored to their version in the context
@@ -1018,7 +1037,8 @@ func (env Env) repositoryPaths(ctx context.Context) []string {
 // ends after StepAgent, and only a judged run has StepJudging. The words are what status lines show.
 //
 // Within them come finer moments, so a display never looks stuck on a slow one: StepDependencies and StepSetup while
-// preparing; StepSandbox (the grading sandbox's seed, profile and canary) and StepTests while grading; StepCleanup when
+// preparing; StepSandbox (the grading sandbox's seed, profile and canary) and StepTests while grading, or, for a
+// judge-graded run, StepJudgeGrading, the judge's calls that grade it; StepCleanup when
 // a grade's or the run's folders go (it may come more than once). StepSandboxDown says the grading sandbox could not
 // start (the run is infrastructure, retried), and StepQuarantined that a grade's cleanup moved a folder it could not
 // remove into the quarantine: they are news, not steps.
@@ -1031,6 +1051,7 @@ const (
 	StepSandbox      = "starting the grading sandbox"
 	StepTests        = "running the tests"
 	StepJudging      = "judging"
+	StepJudgeGrading = "the judge is grading" // a judge-graded run's grade, in place of the hidden tests
 	StepCleanup      = "cleaning up"
 	StepSandboxDown  = "the grading sandbox is unavailable"
 	StepQuarantined  = "a folder was moved to the quarantine"

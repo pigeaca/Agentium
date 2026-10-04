@@ -353,7 +353,7 @@ func slotsDone(l Lock, runs []RunData) []bool {
 func costPairs(runs []RunData, a, b string) int {
 	has := map[string]map[string]bool{}
 	for _, r := range runs {
-		if Fair(r.Outcome) && r.CostUSD > 0 {
+		if Fair(r.Outcome) && r.graded() && r.CostUSD > 0 { // as the cost analysis counts them
 			if has[r.Task] == nil {
 				has[r.Task] = map[string]bool{}
 			}
@@ -462,11 +462,13 @@ func PreviewSequential(d Design, est ArmEstimates) (SeqPreview, error) {
 	if len(d.Tasks) > 0 {
 		judgePair = d.JudgingEstimateUSD() / float64(len(d.Tasks))
 	}
-	p := SeqPreview{Known: true, WorstUSD: float64(len(d.Tasks)) * d.PairCapUSD()}
+	p := SeqPreview{Known: true, WorstUSD: d.WorstUSD()}
 	for k, n := range seq.Looks {
 		cost, known := est.DesignUSD(Design{Tasks: order[:n], Repeats: 1})
 		p.Known = p.Known && known
-		p.Looks = append(p.Looks, SeqLookPreview{Tasks: n, Runs: 2 * n, CostUSD: cost + float64(n)*judgePair, WorstUSD: float64(n) * d.PairCapUSD(),
+		upTo := d
+		upTo.Tasks = order[:n]
+		p.Looks = append(p.Looks, SeqLookPreview{Tasks: n, Runs: 2 * n, CostUSD: cost + float64(n)*judgePair, WorstUSD: upTo.WorstUSD(),
 			EffLevel: planned[k].EffLevel, EqLevel: planned[k].EqLevel})
 	}
 	sd := math.Sqrt(2*SigmaLogCost*SigmaLogCost + TauLow*TauLow) // a task's log difference with one run per arm

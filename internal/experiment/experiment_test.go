@@ -247,17 +247,32 @@ func TestIneligible(t *testing.T) {
 	if why := Ineligible(Candidate{Name: "t", Validation: valid}, arms, ""); why != "" {
 		t.Errorf("a task valid in both contexts: %s", why)
 	}
+	// A judge-graded task needs only its own validation (nothing runs, so no context or grader mode applies), and it is
+	// never validated again in the sandbox.
+	judgedValid := &task.Validation{Status: task.StatusValid, Arms: []task.Arm{}, Judge: &task.JudgeCheck{CodeFiles: []string{"a.go"}, ChangedLines: 2}}
+	for _, mode := range []string{"", task.GraderSandbox} {
+		c := Candidate{Name: "t", Grading: task.GradingJudge, Validation: judgedValid}
+		if why := Ineligible(c, arms, mode); why != "" {
+			t.Errorf("a valid judge-graded task, grader %q: %s", mode, why)
+		}
+		if NeedsRevalidation(c, mode) {
+			t.Errorf("a judge-graded task is validated again in grader %q", mode)
+		}
+	}
 	for name, c := range map[string]struct {
 		candidate Candidate
 		want      string
 	}{
-		"review":      {Candidate{Name: "t", NeedsReview: true, Validation: valid}, "agentium task edit t --reviewed"},
-		"judged":      {Candidate{Name: "t", Grading: task.GradingJudge, Validation: valid}, "judge-graded"},
-		"never":       {Candidate{Name: "t"}, "not validated (agentium task validate t --snapshot lean)"},
-		"unchecked":   {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusUnchecked}}, "no solution"},
-		"invalid":     {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusInvalid}}, "validation failed"},
-		"other arm":   {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusValid, Arms: []task.Arm{{Name: "base"}}}}, "not validated in context lean"},
-		"only a snap": {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusValid, Arms: []task.Arm{{Name: "lean", Snapshot: "abc"}}}}, "not validated in context base"},
+		"review":                    {Candidate{Name: "t", NeedsReview: true, Validation: valid}, "agentium task edit t --reviewed"},
+		"judged, tests' validation": {Candidate{Name: "t", Grading: task.GradingJudge, Validation: valid}, "not validated (agentium task validate t)"},
+		"judged, invalid": {Candidate{Name: "t", Grading: task.GradingJudge, Validation: &task.Validation{Status: task.StatusInvalid,
+			Judge: &task.JudgeCheck{Problems: []string{"the instruction is empty"}}}}, "its validation failed: the instruction is empty"},
+		"judged, review": {Candidate{Name: "t", Grading: task.GradingJudge, NeedsReview: true}, "--reviewed"},
+		"never":          {Candidate{Name: "t"}, "not validated (agentium task validate t --snapshot lean)"},
+		"unchecked":      {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusUnchecked}}, "no solution"},
+		"invalid":        {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusInvalid}}, "validation failed"},
+		"other arm":      {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusValid, Arms: []task.Arm{{Name: "base"}}}}, "not validated in context lean"},
+		"only a snap":    {Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusValid, Arms: []task.Arm{{Name: "lean", Snapshot: "abc"}}}}, "not validated in context base"},
 	} {
 		if why := Ineligible(c.candidate, arms, ""); !strings.Contains(why, c.want) {
 			t.Errorf("%s: %q, want %q", name, why, c.want)

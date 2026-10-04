@@ -46,7 +46,13 @@ type Spec struct {
 	HiddenTests, Reference []string
 	Setup                  []string // shell commands a fresh checkout needs first (for example, building embedded assets)
 	Verify                 []string // shell commands, run in order in the checkout
+	// Grading is GradingJudge for a judge-graded task, whose runs the judge grades (no hidden tests, and the
+	// verification commands decide nothing); empty (or GradingTests) for every other.
+	Grading string
 }
+
+// JudgeGraded reports whether the judge grades the task's runs (GradingJudge).
+func (s Spec) JudgeGraded() bool { return s.Grading == GradingJudge }
 
 // Arm is a context version to validate in: Snapshot is a snapshot commit, or empty for the base's own context.
 type Arm struct {

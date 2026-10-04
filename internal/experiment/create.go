@@ -195,6 +195,9 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 	if err != nil {
 		return Created{}, err
 	}
+	if err := p.markJudgeGraded(ctx, &d); err != nil {
+		return Created{}, err
+	}
 	ests, err := p.EstimatesFor(ctx, d)
 	if err != nil {
 		return Created{}, err
@@ -270,8 +273,30 @@ func unknownBasis(d Design, ests ArmEstimates) string {
 	return strings.Join(why, "; ")
 }
 
+// markJudgeGraded records which of d's tasks are judge-graded, and the judge that grades their runs
+// (judge.GradingSettings), fixing d's stored version (WantVersion); a design without any is left as it was.
+func (p Project) markJudgeGraded(ctx context.Context, d *Design) error {
+	judged, err := p.judgeGradedTasks(ctx)
+	if err != nil {
+		return err
+	}
+	d.JudgeGraded, d.JudgeGrading = nil, nil
+	for _, t := range d.Tasks {
+		if judged[t] {
+			d.JudgeGraded = append(d.JudgeGraded, t)
+		}
+	}
+	if len(d.JudgeGraded) > 0 {
+		s := llmjudge.GradingSettings()
+		d.JudgeGrading = &s
+	}
+	d.Version = d.WantVersion()
+	return nil
+}
+
 // chooseTasks sets d.Tasks: the named tasks (each must be eligible), or the tier's seeded sample of the eligible ones.
-// It returns the eligible tasks; with none to sample from, the error is a *NoTasksError.
+// A sample never draws a judge-graded task: their grades are unvalidated, so they are in an experiment only when named
+// (--task). It returns the eligible tasks; with none to sample from, the error is a *NoTasksError.
 func (p Project) chooseTasks(ctx context.Context, d *Design, o NewOptions) ([]string, error) {
 	eligible, reasons, err := p.EligibleTasks(ctx, d.Arms, d.Grader)
 	if err != nil {
@@ -288,6 +313,18 @@ func (p Project) chooseTasks(ctx context.Context, d *Design, o NewOptions) ([]st
 		}
 		d.Tasks = slices.Sorted(slices.Values(o.Tasks))
 		return eligible, nil
+	}
+	judged, err := p.judgeGradedTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(judged) > 0 { // only named: a sample takes test-graded tasks alone
+		eligible = slices.DeleteFunc(eligible, func(t string) bool {
+			if judged[t] {
+				reasons[t] = "it is judge-graded: an experiment takes it only when named (--task " + t + ")"
+			}
+			return judged[t]
+		})
 	}
 	if len(eligible) == 0 {
 		return nil, &NoTasksError{Reasons: reasons}
@@ -315,6 +352,9 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 	if d.JudgePairs != nil {
 		fmt.Fprintf(out, "The pair judge: %s; unvalidated, its preferences are exploratory and decide nothing.\n", DescribePairJudge(*d.JudgePairs))
 	}
+	if len(d.JudgeGraded) > 0 {
+		fmt.Fprintln(out, st.Note("note: "+JudgeGradedWords(d)))
+	}
 	switch {
 	case !c.Explicit && c.Eligible < c.Tier.Tasks && d.Sequential():
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("note: a cost experiment takes up to %d tasks; only %d can be in it", c.Tier.Tasks, c.Eligible)))
@@ -322,4 +362,14 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("note: the %s tier asks for %d tasks; only %d can be in it", c.Tier.Name, c.Tier.Tasks, c.Eligible)))
 	}
 	fmt.Fprintf(out, "Preview what it costs and can detect: %s\n", st.Command("agentium experiment plan "+name))
+}
+
+// JudgeGradedWords says what a design's judge-graded tasks mean: "2 task(s) are judge-graded (fix-a, fix-b): the judge
+// grades their runs by a majority of 5 calls, each run's grading up to $5.00; unvalidated, their grades are reported
+// apart as "the judge says fixed", and no verdict rests on them".
+func JudgeGradedWords(d Design) string {
+	s := d.JudgeGrading.WithDefaults()
+	return fmt.Sprintf("%d task(s) are judge-graded (%s): the judge grades their runs by a majority of %d calls (%s at effort %s), each run's grading up to $%.2f; "+
+		"unvalidated, their grades are reported apart as \"the judge says fixed\", and no verdict rests on them",
+		len(d.JudgeGraded), strings.Join(d.JudgeGraded, ", "), s.Repeats, s.Model, s.Effort, d.GradingCapUSD())
 }

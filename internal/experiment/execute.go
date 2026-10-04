@@ -53,6 +53,10 @@ type Result struct {
 	Overshoot string
 	// Passed is the run's grade, for progress displays: nil when it was not graded.
 	Passed *bool
+	// JudgeGraded: the run's task is judge-graded, so Passed is the judge's (unvalidated) grade, Judge says it in words
+	// (run.GradeWords: "fixed (4 of 5)") and JudgeVotes how many calls carried it ("4 of 5").
+	JudgeGraded bool
+	JudgeVotes  string
 	// SandboxFlagged, for a run left out for flagged sandbox denials (run.OutcomeSandboxFlagged), lists their
 	// operations ("mach-lookup, file-read-data"), never their paths: for progress displays.
 	SandboxFlagged string
@@ -94,7 +98,10 @@ type Plan struct {
 	RunCapUSD   float64 // what one run may spend, overshoot and judgement included (Design.RunCapUSD): the larger arm's
 	// ArmCapUSD, set for a model-ab experiment (even when the caps are equal), gives each arm's own; an arm without an
 	// entry has RunCapUSD.
-	ArmCapUSD   map[string]float64
+	ArmCapUSD map[string]float64
+	// CapOf, when set, gives each slot's own cap in place of RunCapUSD and ArmCapUSD (Design.SlotCapUSD: a judge-graded
+	// task's run holds its grading's cap). RunCapUSD stays the largest, for the budget's note.
+	CapOf       func(Slot) float64
 	BudgetUSD   float64
 	SpentUSD    float64 // spent before the schedule's runs, outside its slots: the experiment's calibrations
 	MaxAttempts int
@@ -230,6 +237,9 @@ func Execute(ctx context.Context, p Plan, run Executor) (Summary, error) {
 		state[i].failed = !state[i].settled && state[i].attempts >= p.MaxAttempts
 	}
 	capOf := func(pos int) float64 { // what the run at pos may spend at most
+		if p.CapOf != nil {
+			return p.CapOf(p.Schedule[pos])
+		}
 		if c, ok := p.ArmCapUSD[p.Schedule[pos].Arm]; ok {
 			return c
 		}

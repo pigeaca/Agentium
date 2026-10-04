@@ -452,7 +452,7 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	fmt.Fprintf(env.Stdout, "  verify: %s\n", strings.Join(saved.Verify, "; "))
 	st := env.style()
 	if saved.Grading == task.GradingJudge {
-		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote))
+		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote()))
 	}
 	if sections := task.SolutionSections(saved.Instruction); saved.NeedsReview && len(sections) > 0 {
 		fmt.Fprintln(env.Stdout, st.Warn("The instruction has sections that may give the solution away: "+strings.Join(sections, ", ")))
@@ -466,8 +466,11 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 }
 
 // judgeGradedNote says what judge grading means for a task today.
-const judgeGradedNote = "runs of this task are graded by the judge, which compares each run's change with the reference solution " +
-	"(there are no hidden tests); experiments and run once take judge-graded tasks in a later version"
+func judgeGradedNote() string {
+	return fmt.Sprintf("runs of this task are graded by the judge, which compares each run's change with the reference solution "+
+		"(there are no hidden tests): a majority of its %d calls passes or fails a run. Unvalidated, these grades are shown apart from "+
+		"the tests'; an experiment takes the task only when named (--task) and rests no verdict on it", llmjudge.GradeRepeats)
+}
 
 // reviewReason says why a task's instruction needs a review: a ticket's was converted, history's may leak the solution.
 func reviewReason(t store.Task) string {
@@ -807,7 +810,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 		printWeakTests(out, st, stored.WeakTests)
 	}
 	if t.Grading == task.GradingJudge {
-		fmt.Fprintln(out, note(st, judgeGradedNote))
+		fmt.Fprintln(out, note(st, judgeGradedNote()))
 	}
 	gaps, gapErr := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview && isTicket(t) {
@@ -1119,7 +1122,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 			"(the task stays valid)", chars, llmjudge.MaxDiffChars)))
 	}
 	fmt.Fprintln(out, note(st, "hidden-test checks are skipped: there are no hidden tests"))
-	fmt.Fprintln(out, note(st, judgeGradedNote))
+	fmt.Fprintln(out, note(st, judgeGradedNote()))
 	if t.NeedsReview {
 		fmt.Fprintf(out, "%s: %s\n", st.Warn("The instruction is not reviewed yet"), st.Command("agentium task show "+t.Name)+", then "+
 			st.Command("task edit "+t.Name+" --reviewed"))

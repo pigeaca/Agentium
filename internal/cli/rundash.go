@@ -16,6 +16,12 @@ var stepTitles = [2][stepCount]string{
 	{"copy", "Claude", "tests", "result"},
 }
 
+// judgeTitles are a judge-graded run's grading step and result, in full and short: the judge grades it, not tests.
+var judgeTitles = [2][stepCount]string{
+	{"", "", "the judge", "judge says"},
+	{"", "", "judge", "judge"},
+}
+
 // rowLayout places an arm's four step boxes: their width, the column of each, and the row's width.
 type rowLayout struct {
 	box    int
@@ -71,6 +77,10 @@ type boxState struct {
 	markRole      term.Role
 	text          string // after the mark: the time, "judging", or nothing
 	noTitle       bool   // on one line, the mark and text say it all: the result's words, or the judge at work
+	// judged: the box is a judge-graded run's grading step or result, titled for the judge (judgeTitles); lineMark is
+	// then the result's words on one line where they fit ("✓ judge: fixed"), mark the short form under its title.
+	judged   bool
+	lineMark string
 }
 
 // dashboardFrame draws the dashboard from a copy of the state: the header, each arm's current run as a row of step
@@ -205,6 +215,7 @@ var subWords = map[string][3]string{
 	run.StepTests:        {"running tests", "testing", "test"},
 	run.StepCleanup:      {"cleaning up", "cleanup", "clean"},
 	run.StepJudging:      {"judging", "judging", "judge"},
+	run.StepJudgeGrading: {"judge grading", "judging", "judge"},
 }
 
 // fitStatus is what follows a box's mark in inner cells: for each form of the words, longest first, the words and the
@@ -240,6 +251,12 @@ func (v stateView) boxes(sh term.Shapes, m marks, arm int, now time.Time, tick, 
 		case i == stepResult && r.finished:
 			words, _, outcome := outcomeWords(r.result, r.requeued, r.sandboxDown, m)
 			out[i] = boxState{border: outcome, title: term.Default, mark: words, markRole: outcome, noTitle: true}
+			if r.judged && experiment.Fair(r.result.Outcome) && r.result.Passed != nil { // "judge says" over "✓ fixed"
+				out[i].judged, out[i].lineMark, out[i].mark = true, words, m.fail+" not fixed"
+				if *r.result.Passed {
+					out[i].mark = m.ok + " fixed"
+				}
+			}
 		case i < r.step && r.began[i].IsZero(): // a step the run never began: it was not graded
 			out[i] = later
 		case i < r.step:
@@ -256,6 +273,9 @@ func (v stateView) boxes(sh term.Shapes, m marks, arm int, now time.Time, tick, 
 		default:
 			out[i] = later
 		}
+	}
+	if have && r.judged { // a judge-graded run's grading step is the judge's
+		out[stepTests].judged = true
 	}
 	return out
 }
@@ -309,9 +329,21 @@ func (v stateView) nameLine(c *term.Canvas, m marks, x, y, arm int) int {
 	return x
 }
 
-// sandboxedStep reports whether step i runs in the sandbox: Claude Code always does, the hidden tests in sandbox mode.
-func (v stateView) sandboxedStep(i int) bool {
-	return i == stepAgent || i == stepTests && v.facts.sandboxed
+// sandboxedStep reports whether step i of an arm's row runs in the sandbox: Claude Code always does, the hidden tests in
+// sandbox mode; a judge-graded run's grading is the judge's calls, which run no code.
+func (v stateView) sandboxedStep(arm, i int) bool {
+	return i == stepAgent || i == stepTests && v.facts.sandboxed && !(v.have[arm] && v.shown[arm].judged)
+}
+
+// boxTitle is step i's title in a box: titles' own, or the judge's for a judge-graded run's grading and result.
+func boxTitle(titles [stepCount]string, short bool, i int, b boxState) string {
+	if b.judged && judgeTitles[0][i] != "" {
+		if short || titles == stepTitles[1] {
+			return judgeTitles[1][i]
+		}
+		return judgeTitles[0][i]
+	}
+	return titles[i]
 }
 
 // connectors draws the dotted lines on row y between the boxes, the sandbox's edges where they cross them, and the dot
@@ -321,7 +353,7 @@ func (v stateView) connectors(c *term.Canvas, m marks, lay rowLayout, arm, y int
 		c.HLine(lay.x[i]+lay.box, y, lay.x[i+1]-lay.x[i]-lay.box, m.line, term.Muted)
 	}
 	for i := range stepCount {
-		if v.sandboxedStep(i) {
+		if v.sandboxedStep(arm, i) {
 			c.Put(lay.x[i]-2, y, m.outV, v.outlineRole(arm, i), false)
 			c.Put(lay.x[i]+lay.box+1, y, m.outV, v.outlineRole(arm, i), false)
 		}
@@ -349,7 +381,7 @@ func (v stateView) armBoxes(sh term.Shapes, m marks, lay rowLayout, arm int, now
 	for i, b := range states {
 		x := lay.x[i]
 		box(c, m, x, 2, lay.box, 4, b.border)
-		title := term.Truncate(lay.titles[i], inner, "")
+		title := term.Truncate(boxTitle(lay.titles, false, i, b), inner, "")
 		c.Put(x+1+(inner-term.Width(title))/2, 3, title, b.title, b.bold)
 		status := []part{{b.mark, b.markRole, false}}
 		if b.text != "" && term.Width(b.mark)+1+term.Width(b.text) <= inner { // else the mark alone: the judge's spinner
@@ -358,7 +390,7 @@ func (v stateView) armBoxes(sh term.Shapes, m marks, lay rowLayout, arm int, now
 		putParts(c, x+1+max((inner-partsWidth(status))/2, 0), 4, inner, status)
 	}
 	for i := range stepCount {
-		if v.sandboxedStep(i) {
+		if v.sandboxedStep(arm, i) {
 			outline(c, m, lay.x[i]-2, 1, lay.box+4, 6, v.outlineRole(arm, i))
 		}
 	}
@@ -391,7 +423,7 @@ func (v stateView) armOneLine(sh term.Shapes, m marks, lay rowLayout, arm int, n
 		x := lay.x[i]
 		c.Put(x, 1, m.boxV, b.border, false)
 		c.Put(x+lay.box-1, 1, m.boxV, b.border, false)
-		parts := stepParts(i, b)
+		parts := stepParts(i, b, inner)
 		if partsWidth(parts) > inner && len(parts) > 2 { // too narrow for the name: the place says which step it is
 			parts = append(parts[:1], parts[2:]...)
 		}
@@ -414,7 +446,7 @@ func (v stateView) armText(sh term.Shapes, m marks, arm int, now time.Time, tick
 		if i > 0 {
 			x = c.Put(x, 0, " "+m.line+m.line+" ", term.Muted, false)
 		}
-		x = putParts(c, x, 0, 30, stepParts(i, b))
+		x = putParts(c, x, 0, 30, stepParts(i, b, 30))
 	}
 	return c.Lines(sh.Style)[0]
 }
@@ -426,11 +458,16 @@ type part struct {
 	bold bool
 }
 
-// stepParts is step i on one line: its mark, its short name and its time, or the result's own words.
-func stepParts(i int, b boxState) []part {
-	parts := []part{{b.mark, b.markRole, false}}
+// stepParts is step i on one line, in room cells: its mark, its short name and its time, or the result's own words (a
+// judge-graded result's in full where they fit: "✓ judge: fixed", else "✓ fixed").
+func stepParts(i int, b boxState, room int) []part {
+	mark := b.mark
+	if b.lineMark != "" && term.Width(b.lineMark) <= room {
+		mark = b.lineMark
+	}
+	parts := []part{{mark, b.markRole, false}}
 	if !b.noTitle {
-		parts = append(parts, part{" " + stepTitles[1][i], b.title, b.bold})
+		parts = append(parts, part{" " + boxTitle(stepTitles[1], true, i, b), b.title, b.bold})
 	}
 	if b.text != "" {
 		parts = append(parts, part{" " + b.text, term.Default, false})

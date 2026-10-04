@@ -25,7 +25,15 @@ type RunData struct {
 	CostUSD       float64
 	DurationS     float64 // the agent's run
 	OutputTokens  float64
+	// Judged: the run's task is judge-graded, so Passed is the judge's grade, which counts toward MetricJudgeSuccess,
+	// never toward MetricSuccess.
+	Judged bool
 }
+
+// graded reports whether a fair run counts in the analysis: every test-graded one (the tests graded it), and a
+// judge-graded one the judge graded. A judge-graded run without a grade is infrastructure (run.gradeByJudge), so a fair
+// one has a grade; one without is left out all the same, cost included: the cost verdict uses only graded runs.
+func (r RunData) graded() bool { return !r.Judged || r.Passed != nil }
 
 // Metrics compared between the arms.
 const (
@@ -33,7 +41,13 @@ const (
 	MetricCost    = "cost"
 	MetricTime    = "time"
 	MetricOutput  = "output_tokens"
+	// MetricJudgeSuccess is the judge-graded tasks' success: the judge says fixed. Present only when the lock has
+	// judge-graded tasks, after the others; unvalidated, it is always exploratory (no verdict), with its own floors.
+	MetricJudgeSuccess = "judge_success"
 )
+
+// NoteJudgeSuccess is MetricJudgeSuccess's note: why it has no verdict.
+const NoteJudgeSuccess = "the judge's grades, unvalidated: shown apart from the tests, never a verdict"
 
 // Roles: the goal's primary metric and the success guard get verdicts; the rest are exploratory.
 const (
@@ -113,11 +127,14 @@ type Noise struct {
 
 // Analysis is an experiment's results.
 type Analysis struct {
-	Results           []MetricResult     `json:"results"`
-	Counted           map[string]int     `json:"counted"`  // fair runs per arm
-	Excluded          map[string]int     `json:"excluded"` // other runs per outcome
-	PassAt1           map[string]float64 `json:"pass_at_1"`
-	PassAll           map[string]float64 `json:"pass_all"` // pass^k: tasks whose every counted run succeeded
+	Results  []MetricResult     `json:"results"`
+	Counted  map[string]int     `json:"counted"`  // fair runs per arm
+	Excluded map[string]int     `json:"excluded"` // other runs per outcome
+	PassAt1  map[string]float64 `json:"pass_at_1"`
+	PassAll  map[string]float64 `json:"pass_all"` // pass^k: tasks whose every counted run succeeded
+	// JudgePassAt1 is each arm's share of judge-graded runs the judge called fixed (MetricJudgeSuccess's levels); only
+	// when the lock has judge-graded tasks. PassAt1 and PassAll are the test-graded runs'.
+	JudgePassAt1      map[string]float64 `json:"judge_pass_at_1,omitempty"`
 	NotDiscriminating []string           `json:"not_discriminating,omitempty"`
 	Noise             *Noise             `json:"noise,omitempty"`
 	// Sequential is a seq-v1 experiment's looks. Every other field then describes the runs of the reported look's
@@ -230,8 +247,12 @@ type lookLevels struct {
 // analyze is Analyze at lv's levels; it also returns the primary metric's t-statistic (0 without one).
 func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	// The tests' success and the judge's are separate metrics over separate runs: no verdict is computed over both.
 	metrics := []metric{
 		{MetricSuccess, false, func(r RunData) (float64, bool) {
+			if r.Judged {
+				return 0, false
+			}
 			if Success(r.Outcome, r.Passed, r.ConfigChanged) {
 				return 1, true
 			}
@@ -241,6 +262,18 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		{MetricTime, true, func(r RunData) (float64, bool) { return r.DurationS, r.DurationS > 0 }},
 		{MetricOutput, true, func(r RunData) (float64, bool) { return r.OutputTokens, r.OutputTokens > 0 }},
 	}
+	judged := l.JudgeGraded()
+	if judged {
+		metrics = append(metrics, metric{MetricJudgeSuccess, false, func(r RunData) (float64, bool) {
+			if !r.Judged {
+				return 0, false
+			}
+			if Success(r.Outcome, r.Passed, r.ConfigChanged) {
+				return 1, true
+			}
+			return 0, true
+		}})
+	}
 	floors := FloorsFor(l.Method)
 	out := Analysis{Counted: map[string]int{}, Excluded: map[string]int{}, PassAt1: map[string]float64{}, PassAll: map[string]float64{}}
 	tables := map[string]*stats.Table{}
@@ -248,8 +281,12 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		tables[m.name] = stats.NewTable()
 	}
 	for _, r := range runs {
-		if !Fair(r.Outcome) {
+		switch {
+		case !Fair(r.Outcome):
 			out.Excluded[r.Outcome]++
+			continue
+		case !r.graded():
+			out.Excluded[OutcomeUngraded]++
 			continue
 		}
 		out.Counted[r.Arm]++
@@ -273,7 +310,7 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 			res.Role = RoleGuard
 		}
 		dir := stats.LowerIsBetter
-		if m.name == MetricSuccess {
+		if m.name == MetricSuccess || m.name == MetricJudgeSuccess {
 			dir = stats.HigherIsBetter
 		}
 		transform, back, margin := stats.Transform(stats.Identity), stats.Identity, stats.Symmetric(l.Design.SuccessMargin)
@@ -308,6 +345,9 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		belowFloor := res.FullTasks < res.FloorTasks // enough tasks with the floor's runs per arm
 		if res.Role == RoleSecondary {
 			res.Verdict = stats.Exploratory // no verdict: one primary metric, and the guard
+			if m.name == MetricJudgeSuccess {
+				res.Note = NoteJudgeSuccess
+			}
 			out.Results = append(out.Results, res)
 			continue
 		}
@@ -329,6 +369,14 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		}
 	}
 	out.NotDiscriminating = stats.NotDiscriminating(success, a, b)
+	if judged {
+		out.JudgePassAt1 = map[string]float64{}
+		for _, arm := range []string{a, b} {
+			if rate := level(tables[MetricJudgeSuccess], arm, stats.Identity, stats.Identity); rate != nil {
+				out.JudgePassAt1[arm] = *rate
+			}
+		}
+	}
 	out.Noise = noise(tables[MetricCost], success, a, b, l.Design)
 	if !lv.noSandboxCheck {
 		if err := demote(l, runs, lv, &out); err != nil {

@@ -49,6 +49,9 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		}
 		fmt.Fprintf(&b, "- %s%s%s.\n", st.Heading(bold), mid, verdict)
 	}
+	if bold, mid, verdict, ok := r.judgeHeadline(); ok {
+		fmt.Fprintf(&b, "- %s%s%s.\n", st.Heading(bold), mid, st.Warn(verdict))
+	}
 	model, effort := modelEffort(d)
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, st.Status(r.Status), r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
@@ -97,9 +100,12 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		}
 		return "-"
 	}
-	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n",
+	fmt.Fprintf(&b, "\n%s: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n", r.successLabel(),
 		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
+	if line := r.judgeGradingLine(); line != "" {
+		fmt.Fprintf(&b, "\n%s\n", line)
+	}
 
 	if r.Analysis.Sequential != nil && len(r.Analysis.Sequential.Looks) > 0 {
 		section("Looks", r.looksIntro())
@@ -184,7 +190,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	t = table(term.Left("Task"), term.Left(r.Arms[0].label()), term.Right(""), term.Left(r.Arms[1].label()), term.Right(""), term.Right("Cost A → B"))
 	for _, tr := range r.Tasks {
 		ca, cb := tr.Arms[r.Arms[0].Name], tr.Arms[r.Arms[1].Name]
-		t.Row(tr.Task, orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost()+" → "+cb.cost())
+		t.Row(r.judgedTaskName(tr), orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost()+" → "+cb.cost())
 	}
 	if err := t.Write(&b); err != nil {
 		return err

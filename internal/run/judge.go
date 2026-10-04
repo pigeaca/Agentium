@@ -36,9 +36,10 @@ func HasReferenceCode(spec task.Spec) bool {
 //   - a verdict that ran its course is final, even with no answer (every call failed: Fixed and Stopped empty), and so
 //     is an unjudged candidate with no code (Empty).
 //
-// A task the judge cannot judge (HasReferenceCode) never needs it.
+// A task the judge cannot judge (HasReferenceCode) never needs it, nor does a judge-graded task (spec.JudgeGraded): its
+// run is graded by the judge within the run, and a run it could not grade is infrastructure, tried again whole.
 func NeedsJudging(rec Record, spec task.Spec) bool {
-	return rec.Passed != nil && HasReferenceCode(spec) && (rec.Judge == nil || rec.Judge.Stopped != "")
+	return rec.Passed != nil && !spec.JudgeGraded() && HasReferenceCode(spec) && (rec.Judge == nil || rec.Judge.Stopped != "")
 }
 
 // Judge asks the judge s about a graded run (rec.Passed set) and stores its verdict in rec.Judge. It reads the task's
@@ -59,6 +60,11 @@ func (env Env) Judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 	if rec.Passed == nil {
 		return
 	}
+	env.judge(ctx, spec, s, rec)
+}
+
+// judge is Judge without its check that the run was graded: gradeByJudge asks it for the verdict that grades the run.
+func (env Env) judge(ctx context.Context, spec Spec, s judge.Settings, rec *Record) {
 	if !HasReferenceCode(spec.Task) {
 		rec.Notes = append(rec.Notes, "not judged: the task has no reference solution in code to judge against")
 		return
@@ -81,7 +87,11 @@ func (env Env) Judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 		}
 		rec.Notes = slices.DeleteFunc(rec.Notes, func(n string) bool { return strings.HasPrefix(n, "not judged: ") })
 		rec.Judge = &v
-		env.progress("  judge: %s, $%.2f", Describe(v), v.CostUSD)
+		label := "judge"
+		if rec.GradedBy == task.GradingJudge {
+			label = "judge (grading)"
+		}
+		env.progress("  %s: %s, $%.2f", label, Describe(v), v.CostUSD)
 	}
 	final := func(err error) { // never judged again
 		v := blank()
@@ -194,4 +204,113 @@ func lastOf(list []string) string {
 		return ""
 	}
 	return list[len(list)-1]
+}
+
+// gradeByJudge grades a judge-graded task's run (spec.Task.JudgeGraded) once grade has measured its change: the judge
+// compares the run's agent.diff with the reference solution's code diff (never tests: the task has none) and its
+// majority of spec.JudgeGrading's repeats (judge.GradingSettings by default) decides (judge.Grade): a pass, a fail,
+// or, when errors, a refusal, a usage limit or an interrupt leave too few answers, no grade. A run without a grade is
+// infrastructure (claude.OutcomeInfra: not counted, tried again by an experiment), never a failure; an interrupted one
+// is cancelled (unfinished). The verdict is kept in rec.Judge, its spend counted as the judge's (Spend), its texts
+// redacted, and Passed follows it.
+//
+// persist stores a record as the run's finished start file. Judging can take repeats × judge.CallTimeout, so the
+// records are redacted and the run persisted first as not graded, and again after each call that reports a cost: if
+// Agentium dies while judging, recovery stores an infrastructure run with what the judge spent so far, which an
+// experiment tries again (its spend counted).
+func (env Env) gradeByJudge(ctx context.Context, spec Spec, rec *Record, persist func(Record) error, unfinished func(error) (Record, error)) (Record, error) {
+	s := judge.GradingSettings()
+	if spec.JudgeGrading != nil {
+		s = spec.JudgeGrading.WithDefaults()
+	}
+	const stoppedNote = "not graded: Agentium stopped while the judge graded it (infrastructure)"
+	partial := func(costUSD float64) Record {
+		p := *rec
+		p.Outcome, p.Passed = claude.OutcomeInfra, nil
+		p.Notes = append(slices.Clone(rec.Notes), stoppedNote)
+		p.Judge = &judge.Verdict{Version: judge.Version, Answers: []string{}, Reasons: []string{}, Requested: s.Repeats, Model: s.Model,
+			Effort: s.Effort, CostUSD: costUSD, Stopped: judge.StoppedCall, Errors: []string{"Agentium stopped while judging"}}
+		return p
+	}
+	if err := env.redactRecords(rec.RecordsDir); err != nil {
+		return unfinished(err)
+	}
+	rec.Finished = env.Now().UTC() // the deferred write sets it again once graded
+	if err := persist(partial(0)); err != nil {
+		return unfinished(err)
+	}
+	grading := env
+	grading.judgeSpent = func(usd float64) {
+		p := partial(usd)
+		p.Finished = env.Now().UTC()
+		_ = persist(p) // best effort: the final write follows, and a failure only risks this spend if Agentium also dies
+	}
+	env.step(StepJudgeGrading)
+	grading.judge(ctx, spec, s, rec)
+	if rec.Judge == nil { // the task has no reference in code: judge left a note, and nothing was spent
+		rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+		rec.Notes = append(rec.Notes, "not graded: the judge has no reference solution in code to compare the run with (infrastructure)")
+		env.progress("  %s", env.Style.Warn("warning: not graded: the task's reference solution changes no code"))
+		return *rec, nil
+	}
+	passed, ok, why := judge.Grade(*rec.Judge)
+	switch {
+	case ok:
+		rec.Passed = &passed
+		env.progress("  graded by the judge (unvalidated): %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
+	case ctx.Err() != nil:
+		return unfinished(ctx.Err())
+	default:
+		rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+		note := "not graded: " + why + " (infrastructure: not counted, and an experiment tries the run again)"
+		rec.Notes = append(rec.Notes, note)
+		env.progress("  %s", env.Style.Warn("warning: "+note))
+	}
+	return *rec, nil
+}
+
+// GradeWords is a judge-graded run's grade in a few words, for the run's own lines: "fixed (4 of 5)", "not fixed (3 of
+// 5 said partly or no)", or why it has none; "" for a run graded by tests. Callers say it is the judge's.
+func GradeWords(rec Record) string {
+	if rec.GradedBy != task.GradingJudge {
+		return ""
+	}
+	if rec.Judge == nil {
+		return "not graded"
+	}
+	v := *rec.Judge
+	passed, ok, why := judge.Grade(v)
+	switch {
+	case !ok:
+		return "not graded (" + why + ")"
+	case v.Empty:
+		return "not fixed (the run changed no code)"
+	case passed:
+		return "fixed (" + GradeVotes(rec) + ")"
+	}
+	return "not fixed (" + GradeVotes(rec) + " said partly or no)"
+}
+
+// GradeVotes is how many of the judge's requested calls carried a judge-graded run's grade: "4 of 5" (said fixed, for a
+// pass; said otherwise, for a fail); "" without a grade or for a candidate that changed no code.
+func GradeVotes(rec Record) string {
+	if rec.GradedBy != task.GradingJudge || rec.Judge == nil || rec.Judge.Empty {
+		return ""
+	}
+	v := *rec.Judge
+	passed, ok, _ := judge.Grade(v)
+	if !ok {
+		return ""
+	}
+	yes := 0
+	for _, a := range v.Answers {
+		if a == judge.Yes {
+			yes++
+		}
+	}
+	n := yes
+	if !passed {
+		n = len(v.Answers) - yes
+	}
+	return fmt.Sprintf("%d of %d", n, max(v.Requested, len(v.Answers)))
 }

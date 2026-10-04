@@ -423,10 +423,13 @@ func TestTaskTicketsAndJudgeGrading(t *testing.T) {
 	expect(t, run("task", "list"), ExitOK, "invalid: the reference changes no code")
 	expect(t, run("task", "show", "shop"), ExitOK, "status     valid")
 
-	// Experiments and single runs refuse judge-graded tasks until they can grade them.
+	// An experiment takes a judge-graded task when named, and says what grades it; a sample never draws one. Run once
+	// takes it too, and names the grading's cost before it starts (here Claude Code is missing, so it starts nothing).
 	expect(t, run("task", "edit", "shop", "--reviewed"), ExitOK)
-	expect(t, run("experiment", "new", "judged-ab", "--b", "lean", "--task", "shop"), ExitError, "judge-graded")
-	expect(t, run("run", "once", "shop"), ExitError, "is judge-graded")
+	expect(t, run("experiment", "new", "judged-ab", "--b", "lean", "--task", "shop"), ExitOK, "1 task(s) are judge-graded (shop)",
+		"a majority of 5 calls", "each run's grading up to $5.00", "no verdict rests on them")
+	expect(t, run("experiment", "new", "sampled", "--b", "lean"), ExitError, "no task can be in this experiment yet")
+	expect(t, run("run", "once", "shop"), ExitError, "graded by the judge: 5 calls on claude-opus-5-5, unvalidated", "its grading up to $5.00")
 	expect(t, run("task", "validate", "web"), ExitOK, "Result: valid") // a ticket's test-graded task validates as before
 
 	if after := repoState(t, repo); after != before {

@@ -101,13 +101,16 @@ type LockedTask struct {
 	Reference   []string `json:"reference,omitempty"`
 	Setup       []string `json:"setup,omitempty"`
 	Verify      []string `json:"verify"`
-	Digest      string   `json:"digest"` // SHA-256 of everything above
+	// Grading is task.GradingJudge for a judge-graded task (the judge grades its runs), empty for a test-graded one, so
+	// the digests of test-graded tasks stay as they were before judge grading.
+	Grading string `json:"grading,omitempty"`
+	Digest  string `json:"digest"` // SHA-256 of everything above
 }
 
 // NewLockedTask fixes a task and its digest.
 func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 	t := LockedTask{Name: name, Instruction: instruction, Base: spec.Base, Solution: spec.Solution, HiddenTests: spec.HiddenTests,
-		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify}
+		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify, Grading: task.GradingOf(spec.Grading)}
 	encoded, _ := json.Marshal(t) // strings and string lists only: cannot fail
 	sum := sha256.Sum256(encoded)
 	t.Digest = hex.EncodeToString(sum[:])
@@ -116,7 +119,21 @@ func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 
 // Spec is the task's run specification.
 func (t LockedTask) Spec() task.Spec {
-	return task.Spec{Base: t.Base, Solution: t.Solution, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}
+	return task.Spec{Base: t.Base, Solution: t.Solution, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify,
+		Grading: t.Grading}
+}
+
+// JudgeGraded reports whether the judge grades the task's runs.
+func (t LockedTask) JudgeGraded() bool { return t.Grading == task.GradingJudge }
+
+// JudgeGraded reports whether any of the lock's tasks is judge-graded.
+func (l Lock) JudgeGraded() bool {
+	for _, t := range l.Tasks {
+		if t.JudgeGraded() {
+			return true
+		}
+	}
+	return false
 }
 
 // Expect is the environment the arm's runs are checked against.
@@ -227,12 +244,18 @@ func Settles(outcome string) bool {
 	return Fair(outcome) || outcome == claude.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
 }
 
+// OutcomeUngraded is how the analysis counts a fair judge-graded run without a grade among the runs it leaves out
+// (Analysis.Excluded): the judge gave no majority. Runs are stored as infrastructure then (run.gradeByJudge), so it
+// shows only for a record that is not.
+const OutcomeUngraded = "ungraded"
+
 // LeftOutForSandbox reports whether a run was left out because its sandboxed grade failed with denials the agent's own
 // sandbox does not impose (run.OutcomeSandboxFlagged).
 func LeftOutForSandbox(outcome string) bool { return outcome == run.OutcomeSandboxFlagged }
 
 // Success reports whether a run counts as a success: a fair run that passed the verification with the hidden tests,
-// graded without test-runner configuration the agent changed beyond what the task's reference changes.
+// graded without test-runner configuration the agent changed beyond what the task's reference changes. For a
+// judge-graded run it is the judge's "fixed" (the analysis keeps those apart: MetricJudgeSuccess).
 func Success(outcome string, passed *bool, configChanged []string) bool {
 	return Fair(outcome) && passed != nil && *passed && len(configChanged) == 0
 }

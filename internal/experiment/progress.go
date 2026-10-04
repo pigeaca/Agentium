@@ -9,6 +9,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -19,7 +20,10 @@ type ArmProgress struct {
 	// LeftOutSandbox counts runs left out because their sandboxed grade failed with flagged denials
 	// (run.OutcomeSandboxFlagged): settled, not counted, not tried again. Infra does not count them.
 	LeftOutSandbox int
-	CostUSD        float64
+	// JudgeGraded counts the fair runs of judge-graded tasks, and JudgeFixed those the judge called fixed: kept apart
+	// from Successes, which are the tests'. Fair counts both kinds.
+	JudgeGraded, JudgeFixed int
+	CostUSD                 float64
 }
 
 // Progress is where an experiment stands, from its stored runs: what WriteProgress prints and the experiment commands'
@@ -80,6 +84,12 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 			out.UnjudgedRuns++
 		}
 		switch {
+		case Fair(r.Outcome) && rec.GradedBy == task.GradingJudge:
+			c.Fair++
+			c.JudgeGraded++
+			if Success(r.Outcome, r.Passed, rec.Behavior.ConfigChanged) {
+				c.JudgeFixed++
+			}
 		case Fair(r.Outcome):
 			c.Fair++
 			if r.Passed != nil && *r.Passed {
@@ -171,6 +181,9 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 		if c.LeftOutSandbox > 0 {
 			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d run(s) left out for sandbox denials the agent's sandbox does not impose (%s): settled, not counted, not tried again",
 				c.Name, c.LeftOutSandbox, run.OutcomeSandboxFlagged)))
+		}
+		if lock.JudgeGraded() {
+			table.Line(st.Note(fmt.Sprintf("  arm %s: the judge says %d of %d judge-graded run(s) fixed (unvalidated; not in SUCCESSES)", c.Name, c.JudgeFixed, c.JudgeGraded)))
 		}
 		if c.Passed > c.Successes {
 			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", c.Name, c.Passed-c.Successes)))

@@ -46,6 +46,22 @@ type runInfo struct {
 	Sandbox  *report.SandboxRow `json:"sandbox"`
 	Started  time.Time          `json:"started"`
 	Finished time.Time          `json:"finished"`
+	// GradedBy is what graded the run: "tests", or "judge" for a run of a judge-graded task, whose JudgeGrade is the
+	// judge's grading verdict, which Passed follows (unvalidated); JudgeGrade is null for every other run.
+	GradedBy   string         `json:"graded_by"`
+	JudgeGrade *judgeGradeDoc `json:"judge_grade"`
+}
+
+// judgeGradeDoc is a judge-graded run's grade: the majority of the judge's answers ("yes" passes), each answer, how
+// many were asked for, and the reason given with the first answer that matches the majority (redacted).
+type judgeGradeDoc struct {
+	Fixed       string   `json:"fixed"` // yes, partly or no; empty when no repeat answered
+	Answers     []string `json:"answers"`
+	Requested   int      `json:"requested"`
+	Reason      string   `json:"reason"`
+	Model       string   `json:"model"`
+	Effort      string   `json:"effort"`
+	Unvalidated bool     `json:"unvalidated"` // always true: the judge's grading without tests is unvalidated
 }
 
 // behaviorDoc is run.Behavior as the public schema has it, owned here so that a storage change cannot change the schema.
@@ -73,12 +89,26 @@ func behaviorOf(b run.Behavior) behaviorDoc {
 
 func runInfoOf(env Env, rec run.Record) runInfo {
 	spend := rec.Spend()
-	return runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
+	info := runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
 		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
 		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),
 		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Grader: task.GraderOf(rec.Grader), Sandbox: report.SandboxOf(rec.Sandbox),
-		Started: rec.Started, Finished: rec.Finished}
+		Started: rec.Started, Finished: rec.Finished, GradedBy: task.GradingOf(rec.GradedBy), JudgeGrade: judgeGradeOf(env, rec)}
+	if info.GradedBy == "" {
+		info.GradedBy = task.GradingTests
+	}
+	return info
+}
+
+// judgeGradeOf is a judge-graded run's grade for the JSON documents; nil for any other run.
+func judgeGradeOf(env Env, rec run.Record) *judgeGradeDoc {
+	if rec.GradedBy != task.GradingJudge || rec.Judge == nil {
+		return nil
+	}
+	v := rec.Judge
+	return &judgeGradeDoc{Fixed: v.Fixed, Answers: list(v.Answers), Requested: v.Requested, Reason: env.redact(v.Reason), Model: v.Model, Effort: v.Effort,
+		Unvalidated: true}
 }
 
 type runOnceDoc struct {

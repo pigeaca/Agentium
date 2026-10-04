@@ -1,0 +1,2180 @@
+{
+  "experiment": "lean-ab-judge-graded",
+  "template": "context-ab",
+  "status": "done",
+  "slots": 20,
+  "settled": 20,
+  "spent_usd": 10.007047894799397,
+  "lock": {
+    "method": "phase1-v2",
+    "agentium": "test",
+    "locked_at": "2026-09-29T12:00:00Z",
+    "claude_code": "2.1.281",
+    "claude_path": "claude",
+    "sign_in": "login",
+    "host": "darwin/arm64",
+    "price_table": "2026-09-29",
+    "design": {
+      "version": 5,
+      "template": "context-ab",
+      "arms": [
+        {
+          "name": "A",
+          "context": "base"
+        },
+        {
+          "name": "B",
+          "context": "lean",
+          "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46"
+        }
+      ],
+      "tasks": [
+        "task-0",
+        "task-1",
+        "task-2",
+        "task-3",
+        "task-4",
+        "task-5",
+        "task-6",
+        "task-7",
+        "task-8",
+        "task-9"
+      ],
+      "repeats": 1,
+      "model": "claude-sonnet-5",
+      "goal": "cheaper",
+      "cost_margin": 0.1,
+      "success_margin": 0.15,
+      "run_budget_usd": 3,
+      "budget_usd": 30,
+      "timeout": 1200000000000,
+      "verify_timeout": 600000000000,
+      "concurrency": 2,
+      "seed": 42,
+      "judge_graded": [
+        "task-6",
+        "task-7",
+        "task-8",
+        "task-9"
+      ],
+      "judge_grading": {
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "repeats": 5
+      }
+    },
+    "arms": [
+      {
+        "name": "A",
+        "context": "base",
+        "calibration": "cal-A",
+        "model": "claude-sonnet-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Read"
+        ],
+        "skills": [
+          "(1 skill)"
+        ],
+        "slash_commands": [
+          "(2 slash commands)"
+        ]
+      },
+      {
+        "name": "B",
+        "context": "lean",
+        "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
+        "calibration": "cal-B",
+        "model": "claude-sonnet-5",
+        "tools": [
+          "Bash",
+          "Edit",
+          "Read"
+        ],
+        "skills": [
+          "(1 skill)"
+        ],
+        "slash_commands": [
+          "(2 slash commands)"
+        ]
+      }
+    ],
+    "tasks": [
+      {
+        "name": "task-0",
+        "instruction": "Fix task-0.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "c9703af386b4b629ea6a9133b0d18ec2960a02a0f106e2a7648ca5303760b243"
+      },
+      {
+        "name": "task-1",
+        "instruction": "Fix task-1.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "29da7c0700f288a64dcca2a1fcb22ba13e138067a8f77b79170c4afe2c814eb6"
+      },
+      {
+        "name": "task-2",
+        "instruction": "Fix task-2.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "9abffa7e25e800cb2c2e91b80323aaccfa0831925a3dc2c15f9f0556c8c7976c"
+      },
+      {
+        "name": "task-3",
+        "instruction": "Fix task-3.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "1141c6895e171428a3d4ad84b1b405e4180045e527baa6783c5c704add33619d"
+      },
+      {
+        "name": "task-4",
+        "instruction": "Fix task-4.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "7f6f8e548756075dda62de9e0172755ea3f6b7959d219596e2fcb1bb140b2208"
+      },
+      {
+        "name": "task-5",
+        "instruction": "Fix task-5.",
+        "base": "base-commit",
+        "verify": [
+          "make test"
+        ],
+        "digest": "cf62dad054797d5bc0d894f3968cdfbf1ee19997e727538c4badfc6b396f3628"
+      },
+      {
+        "name": "task-6",
+        "instruction": "Fix task-6.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "grading": "judge",
+        "digest": "c8f2233402f42e3cb99816fc5279e1bbe5c85cb40c63b995e6660919cac1aa98"
+      },
+      {
+        "name": "task-7",
+        "instruction": "Fix task-7.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "grading": "judge",
+        "digest": "542dae4594b5034e4d7ef85fe8ba2b2bd8c5b461da2e8aedef4527f48dd6acf7"
+      },
+      {
+        "name": "task-8",
+        "instruction": "Fix task-8.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "grading": "judge",
+        "digest": "edd013e8151ffec6c8bde7391f056a0c6139927051fd5524ca1a44b4ebe2334c"
+      },
+      {
+        "name": "task-9",
+        "instruction": "Fix task-9.",
+        "base": "base-commit",
+        "solution": "solution-commit",
+        "reference": [
+          "value.go"
+        ],
+        "verify": [
+          "make test"
+        ],
+        "grading": "judge",
+        "digest": "6c7f4cd36205477a3d2927f1fde116949e7be4f59a30b003da698b11e75c2ef0"
+      }
+    ],
+    "schedule": [
+      {
+        "position": 0,
+        "pair": 0,
+        "task": "task-3",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 1,
+        "pair": 0,
+        "task": "task-3",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 2,
+        "pair": 1,
+        "task": "task-6",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 3,
+        "pair": 1,
+        "task": "task-6",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 4,
+        "pair": 2,
+        "task": "task-9",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 5,
+        "pair": 2,
+        "task": "task-9",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 6,
+        "pair": 3,
+        "task": "task-2",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 7,
+        "pair": 3,
+        "task": "task-2",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 8,
+        "pair": 4,
+        "task": "task-7",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 9,
+        "pair": 4,
+        "task": "task-7",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 10,
+        "pair": 5,
+        "task": "task-8",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 11,
+        "pair": 5,
+        "task": "task-8",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 12,
+        "pair": 6,
+        "task": "task-4",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 13,
+        "pair": 6,
+        "task": "task-4",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 14,
+        "pair": 7,
+        "task": "task-0",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 15,
+        "pair": 7,
+        "task": "task-0",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 16,
+        "pair": 8,
+        "task": "task-5",
+        "arm": "B",
+        "repeat": 1
+      },
+      {
+        "position": 17,
+        "pair": 8,
+        "task": "task-5",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 18,
+        "pair": 9,
+        "task": "task-1",
+        "arm": "A",
+        "repeat": 1
+      },
+      {
+        "position": 19,
+        "pair": 9,
+        "task": "task-1",
+        "arm": "B",
+        "repeat": 1
+      }
+    ],
+    "max_attempts": 3
+  },
+  "analysis": {
+    "results": [
+      {
+        "metric": "success",
+        "role": "guard",
+        "ratio": false,
+        "tasks": 6,
+        "repeats": 1,
+        "full_tasks": 0,
+        "floor_tasks": 20,
+        "floor_repeats": 3,
+        "a": 0.5,
+        "b": 1,
+        "bootstrap_95": {
+          "estimate": 0.5,
+          "low": 0.16666666666666666,
+          "high": 0.8333333333333334
+        },
+        "t_95": {
+          "estimate": 0.5,
+          "low": -0.07479957262089867,
+          "high": 1.0747995726208988
+        },
+        "bootstrap_90": {
+          "estimate": 0.5,
+          "low": 0.16666666666666666,
+          "high": 0.8333333333333334
+        },
+        "t_90": {
+          "estimate": 0.5,
+          "low": 0.049421485927698544,
+          "high": 0.9505785140723014
+        },
+        "verdict": "exploratory"
+      },
+      {
+        "metric": "cost",
+        "role": "primary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 1,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 0.3522090529504411,
+        "b": 0.27578522378936693,
+        "bootstrap_95": {
+          "estimate": 0.7830157160332059,
+          "low": 0.6730742416272921,
+          "high": 0.9096284049807029
+        },
+        "t_95": {
+          "estimate": 0.7830157160332059,
+          "low": 0.6508123700932742,
+          "high": 0.9420743054824279
+        },
+        "bootstrap_90": {
+          "estimate": 0.7830157160332059,
+          "low": 0.689054157038434,
+          "high": 0.8876660711869683
+        },
+        "t_90": {
+          "estimate": 0.7830157160332059,
+          "low": 0.6740442458643463,
+          "high": 0.9096043995877167
+        },
+        "verdict": "improved"
+      },
+      {
+        "metric": "time",
+        "role": "secondary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 1,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 44.40705568201521,
+        "b": 44.40705568201521,
+        "bootstrap_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "bootstrap_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "verdict": "exploratory"
+      },
+      {
+        "metric": "output_tokens",
+        "role": "secondary",
+        "ratio": true,
+        "tasks": 10,
+        "repeats": 1,
+        "full_tasks": 10,
+        "floor_tasks": 8,
+        "floor_repeats": 1,
+        "a": 3437.9901308667518,
+        "b": 3437.9901308667518,
+        "bootstrap_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_95": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "bootstrap_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "t_90": {
+          "estimate": 1,
+          "low": 1,
+          "high": 1
+        },
+        "verdict": "exploratory"
+      },
+      {
+        "metric": "judge_success",
+        "role": "secondary",
+        "ratio": false,
+        "tasks": 4,
+        "repeats": 1,
+        "full_tasks": 0,
+        "floor_tasks": 20,
+        "floor_repeats": 3,
+        "a": 1,
+        "b": 0.75,
+        "bootstrap_95": {
+          "estimate": -0.25,
+          "low": -0.75,
+          "high": 0
+        },
+        "t_95": {
+          "estimate": -0.25,
+          "low": -1.0456115763209262,
+          "high": 0.5456115763209262
+        },
+        "bootstrap_90": {
+          "estimate": -0.25,
+          "low": -0.75,
+          "high": 0
+        },
+        "t_90": {
+          "estimate": -0.25,
+          "low": -0.8383408587004553,
+          "high": 0.33834085870045527
+        },
+        "verdict": "exploratory",
+        "note": "the judge's grades, unvalidated: shown apart from the tests, never a verdict"
+      }
+    ],
+    "counted": {
+      "A": 10,
+      "B": 10
+    },
+    "excluded": {
+      "infra": 1
+    },
+    "pass_at_1": {
+      "A": 0.5,
+      "B": 1
+    },
+    "pass_all": {
+      "A": 0.5,
+      "B": 1
+    },
+    "judge_pass_at_1": {
+      "A": 1,
+      "B": 0.75
+    },
+    "not_discriminating": [
+      "task-3",
+      "task-2",
+      "task-0"
+    ],
+    "noise": {
+      "tasks": 10,
+      "repeats": 1,
+      "tau_log_cost": {
+        "estimate": 0,
+        "low": 0,
+        "high": 0.3879906008780044,
+        "basis": "var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow"
+      },
+      "success_varies": true
+    }
+  },
+  "arms": [
+    {
+      "name": "A",
+      "context": "base",
+      "counted": 10,
+      "capped": 0,
+      "timed_out": 0,
+      "first_request_tokens": 30000,
+      "cost_usd": 0.36798439085547685,
+      "cold_cost_usd": 1.8879843908554768,
+      "isolated_cost_usd": null,
+      "cache_read_share": 0.9301244041390536,
+      "behavior": {
+        "tests_changed": 0,
+        "tests_removed": 0,
+        "ran_tests": 10,
+        "ran_checks": 0,
+        "committed": 0,
+        "checks_changed": 0,
+        "config_passes": 0,
+        "denials": 0,
+        "files_changed": 2,
+        "lines_changed": 13,
+        "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 0,
+        "start": []
+      }
+    },
+    {
+      "name": "B",
+      "context": "lean",
+      "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
+      "counted": 10,
+      "capped": 0,
+      "timed_out": 0,
+      "first_request_tokens": 30000,
+      "cost_usd": 0.2927658164743392,
+      "cold_cost_usd": 1.812765816474339,
+      "isolated_cost_usd": null,
+      "cache_read_share": 0.9301244041390536,
+      "behavior": {
+        "tests_changed": 0,
+        "tests_removed": 0,
+        "ran_tests": 10,
+        "ran_checks": 0,
+        "committed": 0,
+        "checks_changed": 0,
+        "config_passes": 0,
+        "denials": 0,
+        "files_changed": 2,
+        "lines_changed": 13,
+        "bash_commands": 6
+      },
+      "context_use": {
+        "recorded": 0,
+        "start": []
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "task": "task-0",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.26798642644251863
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.22264980596336356
+        }
+      }
+    },
+    {
+      "task": "task-1",
+      "arms": {
+        "A": {
+          "marks": "○",
+          "successes": 0,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.41809645894982306
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.26987593763220613
+        }
+      }
+    },
+    {
+      "task": "task-2",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.5842007539274057
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.3787942364746337
+        }
+      }
+    },
+    {
+      "task": "task-3",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.2989547935726022
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.2392914661987623
+        }
+      }
+    },
+    {
+      "task": "task-4",
+      "arms": {
+        "A": {
+          "marks": "○",
+          "successes": 0,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.3594028988057864
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.3154270327453014
+        }
+      }
+    },
+    {
+      "task": "task-5",
+      "arms": {
+        "A": {
+          "marks": "○",
+          "successes": 0,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.4944271117438328
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.2421277954411697
+        }
+      }
+    },
+    {
+      "task": "task-6",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.24949776459494713
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.18414702680056166
+        }
+      },
+      "judged": true
+    },
+    {
+      "task": "task-7",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.3169051032925967
+        },
+        "B": {
+          "marks": "○",
+          "successes": 0,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.2722030209352778
+        }
+      },
+      "judged": true
+    },
+    {
+      "task": "task-8",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.45611451130129826
+        },
+        "B": {
+          "marks": "×●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.5995458215012371
+        }
+      },
+      "judged": true
+    },
+    {
+      "task": "task-9",
+      "arms": {
+        "A": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.23425808592395703
+        },
+        "B": {
+          "marks": "●",
+          "successes": 1,
+          "counted": 1,
+          "capped": 0,
+          "timed_out": 0,
+          "cost_usd": 0.20359602105087846
+        }
+      },
+      "judged": true
+    }
+  ],
+  "judge_grading": {
+    "model": "claude-opus-5-5",
+    "effort": "high",
+    "repeats": 5,
+    "tasks": [
+      "task-6",
+      "task-7",
+      "task-8",
+      "task-9"
+    ],
+    "arms": [
+      {
+        "name": "A",
+        "graded": 4,
+        "fixed": {
+          "count": 4,
+          "of": 4,
+          "share": 1,
+          "low": 0.5101091596030786,
+          "high": 1
+        },
+        "ungraded": 0,
+        "cost_usd": 1.2600000000000002
+      },
+      {
+        "name": "B",
+        "graded": 4,
+        "fixed": {
+          "count": 3,
+          "of": 4,
+          "share": 0.75,
+          "low": 0.30064184009690814,
+          "high": 0.954412739704631
+        },
+        "ungraded": 1,
+        "cost_usd": 1.54
+      }
+    ],
+    "cost_usd": 2.8000000000000003
+  },
+  "notes": [
+    "Runs not counted: 1 infrastructure failure. Their spend is in the total.",
+    "4 task(s) are judge-graded (task-6, task-7, task-8, task-9): no tests ran; the judge compared each run's change with the reference solution, and a majority of its 5 calls passed or failed the run (a run without a majority is infrastructure: not counted, tried again). These grades are unvalidated (the judge pilot's grading without tests was inconclusive), so they count toward \"the judge says fixed\" alone, never toward success, which is the tests'; no verdict rests on them, and the north star does not count them. Cost, time and output tokens count every graded run of both kinds. 1 run(s) the judge could not grade are among the infrastructure failures. The judge says fixed: 0 of 4 task(s) have 3 or more graded runs in both arms, against success's floor of 20 tasks, counted over judge-graded tasks alone.",
+    "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-2, task-3. They stay in for cost.",
+    "Success is exploratory: 0 of 6 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
+    "Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows: each task's difference carries the run-to-run noise, and the t-interval across tasks, the wider of the two here, decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) checked it: false differences in at most 6% of experiments without a true difference, and 95% intervals that cover the true effect at least 93% of the time.",
+    "Verdicts are given for success (guard) and cost (primary); time and output tokens and the judge says fixed are exploratory. A verdict needs the bootstrap and the t-interval to agree: the intervals in the summary are the wider of the two, at 95%, or at 90% for \"no loss\" and \"equivalent\", which are one-sided tests at 5%.",
+    "Cold-cache cost reprices every cached read as a one-hour cache write, at Agentium's list prices of 2026-09-29.",
+    "Isolated-run cost is each run's cost had no other run warmed the prompt cache: the cache reads of the main session's first request and of each subagent launch that could not have read this run's own cache (a type's first, a parallel one, or one after its prefix expired) are repriced as cache writes, at the time to live the run wrote with, at Agentium's list prices of 2026-09-29. Unlike cold-cache cost, which reprices every cached read (the run's own included) as a bound, it keeps a run's reads of its own cache. It is at most the cold-cache cost, except when a subagent runs on a pricier model than the session or a run ended without Claude Code's result. Verdicts use the actual cost. 20 counted run(s) have no isolated-run cost (recorded before Agentium kept it, no reported cost, a model without a list price, a subagent request without a model, or a subagent of unknown type), so their arm shows none."
+  ],
+  "runs": [
+    {
+      "id": "r00",
+      "slot": 0,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.2392914661987623,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:00:00Z",
+      "finished": "2026-09-29T12:00:50Z"
+    },
+    {
+      "id": "r01",
+      "slot": 1,
+      "attempt": 1,
+      "task": "task-3",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.2989547935726022,
+        "turns": 0,
+        "duration_ms": 43000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3300,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:01:00Z",
+      "finished": "2026-09-29T12:01:50Z"
+    },
+    {
+      "id": "r02",
+      "slot": 2,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.24949776459494713,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:02:00Z",
+      "finished": "2026-09-29T12:02:50Z"
+    },
+    {
+      "id": "r03",
+      "slot": 3,
+      "attempt": 1,
+      "task": "task-6",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.18414702680056166,
+        "turns": 0,
+        "duration_ms": 46000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3600,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:03:00Z",
+      "finished": "2026-09-29T12:03:50Z"
+    },
+    {
+      "id": "r04",
+      "slot": 4,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.23425808592395703,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.21000000000000002,
+        "errors": [
+          "timed out",
+          "error result: overloaded"
+        ]
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:04:00Z",
+      "finished": "2026-09-29T12:04:50Z"
+    },
+    {
+      "id": "r05",
+      "slot": 5,
+      "attempt": 1,
+      "task": "task-9",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.20359602105087846,
+        "turns": 0,
+        "duration_ms": 49000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3900,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:05:00Z",
+      "finished": "2026-09-29T12:05:50Z"
+    },
+    {
+      "id": "r06",
+      "slot": 6,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3787942364746337,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:06:00Z",
+      "finished": "2026-09-29T12:06:50Z"
+    },
+    {
+      "id": "r07",
+      "slot": 7,
+      "attempt": 1,
+      "task": "task-2",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.5842007539274057,
+        "turns": 0,
+        "duration_ms": 42000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3200,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:07:00Z",
+      "finished": "2026-09-29T12:07:50Z"
+    },
+    {
+      "id": "r08",
+      "slot": 8,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3169051032925967,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:08:00Z",
+      "finished": "2026-09-29T12:08:50Z"
+    },
+    {
+      "id": "r09",
+      "slot": 9,
+      "attempt": 1,
+      "task": "task-7",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.2722030209352778,
+        "turns": 0,
+        "duration_ms": 47000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3700,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "no",
+        "answers": [
+          "no",
+          "partly",
+          "no",
+          "yes",
+          "no"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Misses the empty case; see <agentium data>/records/x/agent.diff with [REDACTED]",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:09:00Z",
+      "finished": "2026-09-29T12:09:50Z"
+    },
+    {
+      "id": "r10",
+      "slot": 10,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.45611451130129826,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:10:00Z",
+      "finished": "2026-09-29T12:10:50Z"
+    },
+    {
+      "id": "r11-ungraded",
+      "slot": 11,
+      "attempt": 1,
+      "task": "task-8",
+      "arm": "B",
+      "outcome": "infra",
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.5995458215012371,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "notes": [
+        "not graded: the judge answered 2 of 5 times (2 fixed, 0 not), too few for a majority either way: it stopped at a usage limit or a sign-in failure (infrastructure: not counted, and an experiment tries the run again)"
+      ],
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.14,
+        "errors": [
+          "error result: Claude AI usage limit reached"
+        ],
+        "stopped": "limit"
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:11:00Z",
+      "finished": "2026-09-29T12:11:50Z"
+    },
+    {
+      "id": "r11",
+      "slot": 11,
+      "attempt": 2,
+      "task": "task-8",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.5995458215012371,
+        "turns": 0,
+        "duration_ms": 48000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3800,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "judge": {
+        "version": 1,
+        "fixed": "yes",
+        "answers": [
+          "yes",
+          "yes",
+          "yes",
+          "partly",
+          "yes"
+        ],
+        "reasons": [
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does.",
+          "Does what the reference does."
+        ],
+        "requested": 5,
+        "reason": "Does what the reference does.",
+        "model": "claude-opus-5-5",
+        "effort": "high",
+        "cost_usd": 0.35000000000000003
+      },
+      "graded_by": "judge",
+      "started": "2026-09-29T12:11:00Z",
+      "finished": "2026-09-29T12:11:50Z"
+    },
+    {
+      "id": "r12",
+      "slot": 12,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3154270327453014,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:12:00Z",
+      "finished": "2026-09-29T12:12:50Z"
+    },
+    {
+      "id": "r13",
+      "slot": 13,
+      "attempt": 1,
+      "task": "task-4",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.3594028988057864,
+        "turns": 0,
+        "duration_ms": 44000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3400,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:13:00Z",
+      "finished": "2026-09-29T12:13:50Z"
+    },
+    {
+      "id": "r14",
+      "slot": 14,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26798642644251863,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:14:00Z",
+      "finished": "2026-09-29T12:14:50Z"
+    },
+    {
+      "id": "r15",
+      "slot": 15,
+      "attempt": 1,
+      "task": "task-0",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.22264980596336356,
+        "turns": 0,
+        "duration_ms": 40000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3000,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:15:00Z",
+      "finished": "2026-09-29T12:15:50Z"
+    },
+    {
+      "id": "r16",
+      "slot": 16,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.2421277954411697,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:16:00Z",
+      "finished": "2026-09-29T12:16:50Z"
+    },
+    {
+      "id": "r17",
+      "slot": 17,
+      "attempt": 1,
+      "task": "task-5",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.4944271117438328,
+        "turns": 0,
+        "duration_ms": 45000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3500,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:17:00Z",
+      "finished": "2026-09-29T12:17:50Z"
+    },
+    {
+      "id": "r18",
+      "slot": 18,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "A",
+      "outcome": "ok",
+      "passed": false,
+      "success": false,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.41809645894982306,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:18:00Z",
+      "finished": "2026-09-29T12:18:50Z"
+    },
+    {
+      "id": "r19",
+      "slot": 19,
+      "attempt": 1,
+      "task": "task-1",
+      "arm": "B",
+      "outcome": "ok",
+      "passed": true,
+      "success": true,
+      "metrics": {
+        "cli_version": "2.1.281",
+        "model": "claude-sonnet-5",
+        "permission_mode": "",
+        "tools": null,
+        "skills": 0,
+        "mcp_tools": 0,
+        "cost_usd": 0.26987593763220613,
+        "turns": 0,
+        "duration_ms": 41000,
+        "api_ms": 0,
+        "input_tokens": 50,
+        "output_tokens": 3100,
+        "cache_read_tokens": 400000,
+        "cache_write_tokens": 30000,
+        "first_request_tokens": 30000,
+        "tools_used": null,
+        "api_retries": 0,
+        "permission_denials": 0,
+        "result_subtype": "",
+        "result_is_error": false,
+        "result_excerpt": "",
+        "saw_init": true,
+        "saw_result": true
+      },
+      "behavior": {
+        "files_changed": 2,
+        "lines_added": 10,
+        "lines_removed": 3,
+        "tests_changed": false,
+        "tests_removed": 0,
+        "ran_tests": true,
+        "ran_checks": false,
+        "commits": 0,
+        "bash_commands": 6,
+        "denials": 0,
+        "outside_reads": 0
+      },
+      "context_commit": "ctx",
+      "started": "2026-09-29T12:19:00Z",
+      "finished": "2026-09-29T12:19:50Z"
+    }
+  ]
+}

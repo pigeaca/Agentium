@@ -329,3 +329,76 @@ func comparePairs(e *Experiment, verdict func(n int, task string) judge.PairVerd
 		n++
 	}
 }
+
+// JudgeGraded is OneRun (an A/B of 10 tasks × 1 run, arm B cheaper) with tasks 6 to 9 judge-graded: their runs are
+// graded by the judge's majority of 5 calls instead of tests (task-7's in arm B "not fixed", task-9's in arm A by 3 "yes"
+// of 5 with two calls failing), and task-8's first run in arm B could not be graded (the judge stopped at a usage
+// limit: infrastructure, tried again). A reason names a local path and a key.
+func JudgeGraded() Experiment {
+	e := OneRun(experiment.MethodV2, experiment.TemplateContextAB)
+	e.Name = "lean-ab-judge-graded"
+	l := &e.Lock
+	grading := judge.GradingSettings()
+	l.Design.JudgeGrading = &grading
+	judged := map[string]bool{}
+	for i := 6; i < 10; i++ {
+		name := fmt.Sprintf("task-%d", i)
+		judged[name] = true
+		l.Design.JudgeGraded = append(l.Design.JudgeGraded, name)
+	}
+	l.Design.Version = l.Design.WantVersion()
+	for i, t := range l.Tasks {
+		if judged[t.Name] {
+			l.Tasks[i] = experiment.NewLockedTask(t.Name, t.Instruction, task.Spec{Base: "base-commit", Solution: "solution-commit",
+				Reference: []string{"value.go"}, Verify: []string{"make test"}, Grading: task.GradingJudge})
+		}
+	}
+	verdict := func(answers ...string) *judge.Verdict {
+		v := &judge.Verdict{Version: judge.Version, Requested: grading.Repeats, Model: grading.Model, Effort: grading.Effort, Answers: answers,
+			CostUSD: 0.07 * float64(len(answers))}
+		for range answers {
+			v.Reasons = append(v.Reasons, "Does what the reference does.")
+		}
+		v.Fixed = judge.Majority(answers)
+		for i, a := range answers {
+			if a == v.Fixed {
+				v.Reason = v.Reasons[i]
+				break
+			}
+		}
+		return v
+	}
+	var runs []Run
+	for _, r := range e.Runs {
+		rec := &r.Record
+		if !judged[rec.Task] {
+			runs = append(runs, r)
+			continue
+		}
+		rec.GradedBy, rec.Verify = task.GradingJudge, nil
+		switch {
+		case rec.Task == "task-7" && rec.Arm == "B":
+			rec.Judge = verdict(judge.No, judge.Partly, judge.No, judge.Yes, judge.No)
+			rec.Judge.Reason = "Misses the empty case; see /home/someone/.agentium/records/x/agent.diff with sk-ant-api03-" + strings.Repeat("j", 40) // secret-scan: allow
+		case rec.Task == "task-9" && rec.Arm == "A":
+			rec.Judge = verdict(judge.Yes, judge.Yes, judge.Yes)
+			rec.Judge.Errors = []string{"timed out", "error result: overloaded"}
+		default:
+			rec.Judge = verdict(judge.Yes, judge.Yes, judge.Yes, judge.Partly, judge.Yes)
+		}
+		passed, _, _ := judge.Grade(*rec.Judge)
+		rec.Passed = &passed
+		if rec.Task == "task-8" && rec.Arm == "B" { // its first try: the judge stopped at a usage limit before a majority
+			ungraded := *rec
+			ungraded.ID, ungraded.Outcome, ungraded.Passed = rec.ID+"-ungraded", claude.OutcomeInfra, nil
+			ungraded.Judge = verdict(judge.Yes, judge.Yes)
+			ungraded.Judge.Stopped, ungraded.Judge.Errors = judge.StoppedLimit, []string{"error result: Claude AI usage limit reached"}
+			ungraded.Notes = []string{"not graded: the judge answered 2 of 5 times (2 fixed, 0 not), too few for a majority either way: it stopped at a usage limit or a sign-in failure (infrastructure: not counted, and an experiment tries the run again)"}
+			runs = append(runs, Run{ID: ungraded.ID, Slot: r.Slot, Attempt: 1, Record: ungraded})
+			r.Attempt = 2
+		}
+		runs = append(runs, r)
+	}
+	e.Runs = runs
+	return e
+}

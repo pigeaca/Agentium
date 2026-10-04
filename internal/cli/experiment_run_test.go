@@ -24,7 +24,7 @@ import (
 // workspace ("s2-t1": slot 2, first try): "infra" lists runs that end without a result, "hang" runs that wait to be
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
 // Called as the judge (--json-schema), it keeps its prompt and folder in ctrl ("judge-prompt-PID", "judge-dir-PID") and
-// answers "yes" at $0.05 a call; with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
+// answers "yes" at $0.05 a call, or what "judge-answer" holds ("no", "partly"); with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
 // numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON. "cost" sets what a run
 // reports it cost (default 0.30), with "capped" as a run Claude Code stopped at its cost cap, "cost-lean" what a run in the lean context (CLAUDE.md says "Keep it short") reports,
 // "cost-MODEL" what a run on that model reports,
@@ -60,7 +60,8 @@ case " $* " in *" --json-schema "*)
   [ -f "$CTRL/judge-limit-after" ] && [ "$calls" -ge "$(cat "$CTRL/judge-limit-after")" ] && touch "$CTRL/judge-limit"
   [ -f "$CTRL/judge-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
   [ -f "$CTRL/judge-broken" ] && { echo 'not json'; exit 1; }
-  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"fixed":"yes","reason":"Sets the value as the reference does."},"total_cost_usd":0.05}'; exit 0;;
+  janswer=yes; [ -f "$CTRL/judge-answer" ] && janswer=$(cat "$CTRL/judge-answer")
+  echo '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"fixed":"'"$janswer"'","reason":"Sets the value as the reference does."},"total_cost_usd":0.05}'; exit 0;;
 esac
 case "$2" in *"This is an environment check"*) # a calibration run: the calibrating agent's transcript, on the model asked for
   model=claude-sonnet-5; prev=""; for a in "$@"; do [ "$prev" = "--model" ] && model=$a; prev=$a; done

@@ -1,7 +1,7 @@
 # Tasks from tickets, graded without tests
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-02): resumed without the judge gate, by the user's decision ("integrate it without any proofs"). Step 1 merged (#55). Step 2 (the judge as grader) starts after `seq-v1` merges. Because the pilot's grading-without-tests result was INCONCLUSIVE, judge-graded outcomes are labeled "judge, unvalidated", kept in separate metrics, exploratory, and never count as a decisive verdict or toward the north star.
+- Status: In Progress (2026-10-02): resumed without the judge gate, by the user's decision ("integrate it without any proofs"). Step 1 merged (#55). Steps 2 and 3 done on `claude/feat/judge-grader` (2026-10-04); step 4 (paid) awaits approval. Because the pilot's grading-without-tests result was INCONCLUSIVE, judge-graded outcomes are labeled "judge, unvalidated", kept in separate metrics, exploratory, and never count as a decisive verdict or toward the north star.
 - Scope: the user's question on 2026-09-30 about using "some specific Jira task" in an A/B, and the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) that lists grading tasks without tests as a later use.
 
 ## Why
@@ -45,8 +45,17 @@
   - **Review:** approved with notes (an ADF panic, a heading inside the criteria, and others), all fixed.
   - **Limitation:** a Jira text field is read as wiki markup, so Markdown in it loses its sections.
   - **For step 2:** add the grading mode to the locked task's digest, and remove the `run once` and experiment refusals together with their tests.
-- [ ] **2. Grading and experiments:** the judge as grader, separate metrics and floors.
-- [ ] **3. Reports and docs.**
+- [x] **2. Grading and experiments:** the judge as grader, separate metrics and floors (2026-10-04, branch `claude/feat/judge-grader`).
+  - **Grading:** a judge-graded run's verification commands do not run; the judge compares its `agent.diff` with the reference's code diff, 5 calls on the default judge, and `judge.Grade` decides: a majority of the 5 requested saying "yes" passes, a majority saying otherwise fails, a run that changed no code fails. Errors, a refusal, a usage limit or an interrupt that leave no majority leave the run ungraded: `infra` (retried, the agent's run too), or `cancelled` when interrupted, never failed. The run is persisted as ungraded before the first call and after each call's cost, so a crash recovers it as `infra` with the judge's spend. The verdict is `Record.Judge` (same spend accounting), `Record.GradedBy` is `judge`; judge-graded runs get no second-opinion judge.
+  - **Experiments:** `--task` names a judge-graded task; samples and `start` never draw one. The design records `judge_graded` and `judge_grading` and is stored as version 5 (an older Agentium refuses it); the lock's task digest covers `grading` (test-graded digests unchanged), and a task whose grading changed since `experiment new` refuses the lock.
+  - **Metrics and floors:** success is the test-graded tasks' alone; `judge_success` (the judge says fixed) is the judge-graded tasks', always exploratory, with success's floor counted over its own tasks; no verdict is computed over both. Cost, time and tokens count every graded run of both kinds; a fair judge-graded run without a grade (never stored so) would be left out of all of them.
+  - **seq-v1:** looks count tasks with graded cost in both arms, of both kinds; ungraded runs are infrastructure, so stages wait for their retries as for any infra run, and a look never sees a run whose grade can change later. A cost verdict of a mixed experiment counts toward the north star (cost is not a judge outcome); `judge_success` never does.
+  - **Budget:** each judge-graded run holds its grading at its cap (5 × 2 × $0.50 = $5.00, the per-call overshoot allowance for any other judge) in the reserve (`Plan.CapOf`), the worst case, the minimum budget and the calibration check; the estimate adds 5 × $0.065 a run. `run once` names the grading's cap in its consent line.
+- [x] **3. Reports and docs** (2026-10-04, same branch).
+  - **Labels:** `run once` and `run show` (`judge: fixed (4 of 5)`, a grading and a judge line), their JSON (`graded_by`, `judge_grade`), the plain progress line, the dashboard (the grading box "the judge" outside the sandbox outline, the result "judge says ✓ fixed", the log line `✓ judge: fixed … (4 of 5)`), `experiment show` (a line per arm; JSON `judge_graded`, `judge_fixed`), and the report: a headline and a metrics row for "The judge says fixed", "Success (passed the tests, test-graded tasks only)", a judge line, `(judge)` in the per-task table and the "where they differ" grid, both kinds in the answer box and the version boxes, a note; JSON `judge_grading`, `judged`, `graded_by`, `judge_pass_at_1`.
+  - **Unchanged:** reports of test-graded tasks are byte for byte origin/main's (100 files: Markdown, JSON, `--details` plain and colored, the terminal view at 60, 80 and 120 columns plain and colored, for every test-graded fixture).
+  - **Docs:** the guide ("Tasks from tickets, graded by the judge", the JSON fields), help, the README's commands table, the code map; previews `docs/images/console-run-judge-graded.svg` and `console-report-judge-graded.svg` (test scenes).
+  - **Limitations:** the judge reads the agent's diff, which the agent wrote and can use to argue its case; ungraded runs rerun the agent; no paid check yet (step 4).
 - [ ] **4. Real check (paid; approval).**
 - [ ] **5. Live Jira (credentials and integration; approval):** planned separately when wanted.
 

@@ -28,3 +28,7 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
 - `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestDashboardMomentsGoldens -count=1` writes `sandbox-news.ans`
   (a row whose grading sandbox could not start, and one left out for flagged denials, from the test scenes: the stand-in
   cannot make the real sandbox fail); `console-run-sandbox-news.svg` is it through `ansi2svg.py`, at 80 columns.
+- `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestDashboardJudgeGraded -count=1` writes `judge-graded.ans` (two
+  judge-graded runs, from the test scenes); `console-run-judge-graded.svg` is it, after a `$ agentium experiment run`
+  line, through `ansi2svg.py` at 80 columns. `console-report-judge-graded.svg` is `report-judge-graded.ans` from
+  `TestReportViewPreview` (`AGENTIUM_REPORT_DEMO`), the same way.

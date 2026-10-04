@@ -1,7 +1,8 @@
 // Package judge asks a reference-guided LLM judge whether a run's change does what its task asks: fixed ("yes"),
 // "partly" or "no", with a one-line reason. The judge sees the task's instruction, the reference solution's code diff and
 // the agent's code diff, never the tests or their result. Its verdict is a second opinion shown next to the tests; it
-// decides nothing (.agents/decisions/2026-10-01-llm-judge-alongside-tests.md).
+// decides nothing (.agents/decisions/2026-10-01-llm-judge-alongside-tests.md). A judge-graded task has no tests: there
+// its majority grades the run instead (grade.go), unvalidated and kept apart from the tests' grades.
 //
 // JudgePair, the pair judge, asks which of two changes is the better fix, in both orders (pair.go).
 //

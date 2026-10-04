@@ -520,6 +520,9 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
 			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: event, Usage: gate,
 			Paused: x.paused}
+		if len(design.JudgeGraded) > 0 { // a judge-graded task's run holds its grading's cap, a test-graded one its judgement's
+			plan.CapOf = func(s Slot) float64 { return design.SlotCapUSD(s.Arm, s.Task) }
+		}
 		if x.pairs != nil {
 			plan.PairHoldUSD, plan.Outside = design.PairJudgeCapUSD(), x.pairs.outside
 			x.pairs.start(ctx)
@@ -563,6 +566,9 @@ func RunningLine(design Design) string {
 	judging := ""
 	if design.Judge != nil {
 		judging = fmt.Sprintf(" and its judgement up to $%.2f", design.JudgeCapUSD())
+	}
+	if len(design.JudgeGraded) > 0 {
+		judging += fmt.Sprintf(" (a judge-graded task's run: its grading up to $%.2f)", design.GradingCapUSD())
 	}
 	comparing := ""
 	if design.JudgePairs != nil {
@@ -702,7 +708,7 @@ func RunDataOfStored(runs []store.Run) ([]RunData, error) {
 func RunDataOf(slot int, rec run.Record) RunData {
 	return RunData{Slot: slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 		ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
-		OutputTokens: float64(rec.Metrics.OutputTokens)}
+		OutputTokens: float64(rec.Metrics.OutputTokens), Judged: rec.GradedBy == task.GradingJudge}
 }
 
 // usageGate is the gate that pauses pairs before the subscription's usage limit; nil with an API key, whose runs use no
@@ -756,15 +762,16 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	meta := RunMeta{ExperimentID: x.stored.ID, Slot: slot.Position, Attempt: attempt}
 	if current, err := r.Project.DB.TaskByName(ctx, r.Project.ID, t.Name); err == nil && NewLockedTask(current.Name, current.Instruction,
 		task.Spec{Base: current.BaseCommit, Solution: current.SolutionCommit, HiddenTests: current.HiddenTests, Reference: current.Reference,
-			Setup: current.Setup, Verify: current.Verify}).Digest == t.Digest {
+			Setup: current.Setup, Verify: current.Verify, Grading: current.Grading}).Digest == t.Digest {
 		meta.TaskID = current.ID // linked only while the task is the one the lock ran
 	}
 	rec, err := r.ExecuteRun(ctx, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
 		Arm: task.Arm{Name: arm.Name, Snapshot: arm.Snapshot}, Model: design.ArmModel(arm.Arm), Effort: design.ArmEffort(arm.Arm),
 		BudgetUSD: design.ArmRunBudgetUSD(arm.Arm), HarmlessDenials: lock.Harmless[t.Name],
-		Timeout: design.Timeout, Judge: design.Judge})
+		Timeout: design.Timeout, Judge: design.Judge, JudgeGrading: design.JudgeGrading})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait, result.Passed = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait, rec.Passed
+	result.JudgeGraded = rec.GradedBy == task.GradingJudge
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
 		result.Overshoot = run.OvershootNote(*o)
 	}
@@ -773,6 +780,9 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	}
 	if v := rec.Judge; v != nil {
 		result.Judge = run.Describe(*v)
+		if result.JudgeGraded {
+			result.Judge, result.JudgeVotes = run.GradeWords(rec), run.GradeVotes(rec)
+		}
 		if v.Stopped == llmjudge.StoppedLimit {
 			result.Pause = judgeLimitNote
 			x.judgePaused.Store(true)
@@ -1029,8 +1039,14 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 		if err != nil {
 			return l, err
 		}
+		// The design fixed which tasks the judge grades, and so its version and budget: a task whose grading changed since
+		// would run under a design that does not hold it.
+		if (t.Grading == task.GradingJudge) != d.IsJudgeGraded(t.Name) {
+			return l, fmt.Errorf("task %s is %s now, but the experiment was made when it was not: make the experiment again (agentium experiment new)",
+				t.Name, map[bool]string{true: "judge-graded", false: "graded by its tests"}[t.Grading == task.GradingJudge])
+		}
 		l.Tasks = append(l.Tasks, NewLockedTask(t.Name, t.Instruction, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit,
-			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}))
+			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Grading: t.Grading}))
 		if v := task.ValidationOf(t); l.Grader != task.GraderHost && v.Grader == l.Grader && len(v.Harmless) > 0 {
 			if l.Harmless == nil {
 				l.Harmless = map[string][]task.DenialKey{}
