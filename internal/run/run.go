@@ -105,6 +105,11 @@ type Env struct {
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE). A sandboxed grade does not use it: it gets the agent's
 	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
+	// Module is the monorepo module the project measures (store.Settings.Module; "": the repository's root, as before
+	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. The
+	// agent's own folder and sandbox stay the whole checkout. It is part of the keys of the warm-up stamps, the Python
+	// venvs and the grading seeds.
+	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
 	Grader string
@@ -328,7 +333,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// before it costs anything.
 	// Where Python code imports from is decided here too, once: the agent, setup and grading agree on it whatever the
 	// agent adds or removes under src/.
-	l, err := baseLayout(ctx, env.Bare, spec.Task.Base)
+	l, err := baseLayoutIn(ctx, env.Bare, spec.Task.Base, env.Module)
 	if err != nil {
 		return rec, err
 	}
@@ -489,7 +494,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
 		setup.commandBase = env.checkoutBase
 		var ok bool
-		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
+		if rec.Setup, ok, err = setup.commands(ctx, env.inModule(repo), spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -786,7 +791,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			verify.commandBase = env.checkoutBase
 		}
 		env.step(StepTests)
-		commands, ok, err = verify.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
+		commands, ok, err = verify.commands(ctx, env.inModule(graded), spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -798,6 +803,10 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	env.progress("  verification: %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
 	return nil
 }
+
+// inModule is the folder commands run in for a checkout dir: the module's folder inside it, or dir itself without a
+// module. The module was checked to be a plain relative folder (project.ValidateModule).
+func (env Env) inModule(dir string) string { return filepath.Join(dir, filepath.FromSlash(env.Module)) }
 
 // verifySandboxed runs the verification commands on the grading copy in the grading sandbox (gradeInSandbox), in the
 // run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept

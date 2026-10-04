@@ -1177,3 +1177,45 @@ CREATE INDEX runs_by_watch_pass ON runs (watch_pass_id);
 CREATE INDEX runs_by_drift_check ON runs (drift_check_id);
 CREATE INDEX runs_by_finish ON runs (finished_at);
 `
+
+// A project registered before the module migration has no module after it (the repository's root, as before); the
+// module then round-trips with the other settings, survives registering again, and is per project.
+func TestProjectModuleMigrationAndRoundTrip(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	old, err := openOnce(ctx, file, migrationVersion(t, "project_module")-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := insertOldProject(t, old, "/work/app", now)
+	old.Close()
+
+	s := open(t, file)
+	got, err := s.ProjectByRoot(ctx, "/work/app")
+	if err != nil || got.Settings.Module != "" || len(got.Settings.Verify) != 0 || got.Settings.Jobs != 0 {
+		t.Fatalf("an old project after the migration = %+v, %v", got, err)
+	}
+	other, err := s.SaveProject(ctx, "/work/other", "other", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Settings{Verify: []string{"go test ./..."}, Jobs: 3, Module: "services/billing"}
+	if err := s.SetSettings(ctx, app.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	again, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{"v":2}`), now.Add(time.Hour))
+	if err != nil || again.Settings.Module != want.Module || again.Settings.Jobs != 3 || len(again.Settings.Verify) != 1 {
+		t.Errorf("registering again must keep the module: %+v, %v", again, err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/other"); got.ID != other.ID || got.Settings.Module != "" {
+		t.Errorf("another project: %+v", got)
+	}
+	want.Module = ""
+	if err := s.SetSettings(ctx, app.ID, want); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.ProjectByRoot(ctx, "/work/app"); got.Settings.Module != "" || got.Settings.Jobs != 3 {
+		t.Errorf("clearing the module did not stick: %+v", got.Settings)
+	}
+}

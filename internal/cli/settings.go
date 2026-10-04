@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ const (
 	settingRequireLock   = "require-lock"
 	settingJobs          = "jobs"
 	settingVerifyTimeout = "verify-timeout"
+	settingModule        = "module"
 )
 
 // defaultJobs is how many tasks are validated at once when neither a flag nor the project's setting says.
@@ -36,6 +38,7 @@ type settingFlags struct {
 	requireLock   bool
 	jobs          int
 	verifyTimeout time.Duration
+	module        string // init only: the monorepo module; init checks it (project.ValidateModule) before apply stores it
 	// timeoutName is the verify timeout's flag name: "verify-timeout", or task validate's older "timeout".
 	timeoutName string
 }
@@ -55,6 +58,8 @@ func addSettingFlags(fs *flag.FlagSet, timeoutName string, names ...string) *set
 			fs.IntVar(&f.jobs, settingJobs, 0, "how many tasks to validate at once")
 		case settingVerifyTimeout:
 			fs.DurationVar(&f.verifyTimeout, timeoutName, 0, "time limit for each setup or verification command")
+		case settingModule:
+			fs.StringVar(&f.module, settingModule, "", "the monorepo folder to measure (an empty one: the repository's root)")
 		default:
 			panic("unknown setting " + name)
 		}
@@ -74,7 +79,7 @@ func (f *settingFlags) given(name string) bool {
 
 // any reports whether any setting's flag was given.
 func (f *settingFlags) any() bool {
-	return slices.ContainsFunc([]string{settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout}, f.given)
+	return slices.ContainsFunc([]string{settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout, settingModule}, f.given)
 }
 
 // check refuses values no command can use; the error names the flag.
@@ -105,6 +110,9 @@ func (f *settingFlags) apply(s store.Settings) store.Settings {
 	}
 	if f.given(settingVerifyTimeout) {
 		s.VerifyTimeout = f.verifyTimeout
+	}
+	if f.given(settingModule) {
+		s.Module = f.module
 	}
 	return s
 }
@@ -149,3 +157,9 @@ func verifyTimeoutOf(s store.Settings) time.Duration {
 
 // settings is the project's stored settings.
 func (w *workspace) settings() store.Settings { return w.project.Settings }
+
+// moduleDir is the folder of the repository the project's build tools are detected in: its module's, else its root.
+func (w *workspace) moduleDir() string { return moduleDir(w.root, w.settings().Module) }
+
+// moduleDir is root's module folder (a slash-separated, relative path), or root itself without a module.
+func moduleDir(root, module string) string { return filepath.Join(root, filepath.FromSlash(module)) }

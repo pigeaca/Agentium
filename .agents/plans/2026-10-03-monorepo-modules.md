@@ -58,7 +58,7 @@ The agent still gets the whole repository: a module's code depends on its neighb
 6. **Docs:** the guide gets a "Monorepos" section.
 
 ## Work
-- [ ] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium.
+- [x] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium. Done on `claude/feat/monorepo-module` (migration 0013; stamps, venvs and seeds keyed by `buildtool.ModuleKey`; the deps folder stays per project).
 - [ ] **2. Mining and the agent:** module-scoped mining and hidden tests, the agent's starting folder, `claudectx` from the module, records and reports. Risk: high (hidden tests; the context experiments' meaning).
 - [ ] **3. Real check and docs** (free). Risk: low.
 

@@ -88,6 +88,9 @@ type WarmInput struct {
 	// Base is the base commit being warmed, and State a folder agents cannot read where warm-ups keep what they count
 	// between runs (Python: tries at the project's metadata). Either empty: nothing is counted.
 	Base, State string
+	// Module is the monorepo module Dir's warm-up runs for (Dir is then the module's folder); "": the repository's root.
+	// It is part of every venv's key, so two modules never share one.
+	Module string
 }
 
 // Warmed is what the warm-ups of a base commit found for its runs, kept in the run's stamp (JSON) so that later runs of

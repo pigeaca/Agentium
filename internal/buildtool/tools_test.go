@@ -1133,3 +1133,30 @@ func TestCargoBuildDirTemplates(t *testing.T) {
 		}
 	}
 }
+
+// A module's keys differ from the root's and from every other module's; the root's are what they were before modules.
+func TestModuleKeysAreSeparate(t *testing.T) {
+	if ModuleKey("") != "" {
+		t.Error("the root has a module key")
+	}
+	a, b := ModuleKey("services/api"), ModuleKey("services/web")
+	if a == "" || a == b || strings.ContainsAny(a, "/-") || ModuleKey("services/api") != a {
+		t.Errorf("module keys %q, %q", a, b)
+	}
+	if moduleVenvKey("0123456789abcdef", "") != "0123456789abcdef" {
+		t.Error("the root's venv key changed")
+	}
+	if k1, k2 := moduleVenvKey("0123456789abcdef", "a"), moduleVenvKey("0123456789abcdef", "b"); k1 == k2 || k1 == "0123456789abcdef" || len(k1) != 16 {
+		t.Errorf("venv keys %q, %q", k1, k2)
+	}
+}
+
+func TestInModule(t *testing.T) {
+	paths := []string{"README.md", "svc/go.mod", "svc/src/a.py", "svcx/go.mod", "svc2/b.py"}
+	if got := InModule(paths, ""); !slices.Equal(got, paths) {
+		t.Errorf("no module: %v", got)
+	}
+	if got := InModule(paths, "svc"); !slices.Equal(got, []string{"go.mod", "src/a.py"}) {
+		t.Errorf("svc: %v", got)
+	}
+}

@@ -225,6 +225,9 @@ type Validator struct {
 	MaxHunks  int      // how many hunks that tries; 0 means DefaultMaxHunks
 	Repeats   int      // runs per stage, each in a fresh checkout; below 2 means once
 	Env       []string // added to every setup and verification command (a build cache of Agentium's own)
+	// Module is the monorepo module the project measures (store.Settings.Module; "": the root): setup and verification
+	// commands run in its folder of each checkout, and its build files decide the tools' caches.
+	Module string
 	// Cache is the data folder's cache root (home.Layout.Cache): with it, each checkout's own build tools (Maven,
 	// Gradle, Cargo) keep their caches there too, or have their wrappers cleared, like Go's in Env. Empty: Env alone.
 	Cache    string
@@ -710,12 +713,17 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 	fmt.Fprintln(v.Progress, line)
 }
 
+// inModule is the folder commands run in for a checkout dir: the module's folder inside it, or dir without a module.
+func (v Validator) inModule(dir string) string {
+	return filepath.Join(dir, filepath.FromSlash(v.Module))
+}
+
 // envFor is Env plus the caches of the build tools the checkout in dir uses (see Cache), then what the warmed tools add
 // in dir (Checkout: Python's venv).
 func (v Validator) envFor(dir string) []string {
 	env := v.Env
 	if v.Cache != "" {
-		env = append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(dir)), v.Cache)...)
+		env = append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(v.inModule(dir))), v.Cache)...)
 	}
 	if v.checkout.Env != nil {
 		env = append(slices.Clone(env), v.checkout.Env(dir)...)
@@ -727,7 +735,7 @@ func (v Validator) envFor(dir string) []string {
 func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir),
+		result, err := runner.Run(ctx, runner.Spec{Dir: v.inModule(dir), Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir),
 			Environ: v.checkout.Environ})
 		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})

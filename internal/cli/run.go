@@ -235,7 +235,7 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	}
 	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), AccountHome: accountHome,
 		Environ: environ, SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second,
-		CommandEnv: buildEnv, AllowLocalBinding: w.project.AllowLocalBinding,
+		CommandEnv: buildEnv, AllowLocalBinding: w.project.AllowLocalBinding, Module: w.settings().Module,
 		Progress: env.Stdout, Style: env.style(), Now: env.Now}, nil
 }
 

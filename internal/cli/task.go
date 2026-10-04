@@ -1069,7 +1069,7 @@ func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration
 	if timeout <= 0 {
 		timeout = verifyTimeoutOf(w.settings())
 	}
-	v := task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Cache: w.layout.Cache, Now: env.Now,
+	v := task.Validating{DB: w.db, Bare: w.bare, Artifacts: w.layout.Artifacts, Env: buildEnv, Module: w.settings().Module, Cache: w.layout.Cache, Now: env.Now,
 		ReferenceDiff: func(ctx context.Context, base, solution string, reference []string) (string, error) {
 			return llmjudge.ReferenceDiff(ctx, w.bare, base, solution, reference)
 		}}
@@ -1082,7 +1082,7 @@ func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration
 		if env.AccountHome != nil {
 			accountHome = env.AccountHome()
 		}
-		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now,
+		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now, Module: w.settings().Module,
 			Grader: grader, Home: env.Getenv("HOME"), AccountHome: accountHome, ProjectRoot: w.root}
 		v.Checkout = func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return run.CheckoutCommands(ctx, c, base, verify, logPath)

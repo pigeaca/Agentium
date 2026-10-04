@@ -254,7 +254,7 @@ func (w *workspace) hostToolchain(ctx context.Context, env Env) (task.Toolchain,
 	if env.Environ != nil {
 		environ = env.Environ()
 	}
-	found, err := pool.DetectToolchain(ctx, buildtool.DetectIn(w.root), pool.HostVersions(w.layout.Root, environ))
+	found, err := pool.DetectToolchain(ctx, buildtool.DetectIn(w.moduleDir()), pool.HostVersions(w.layout.Root, environ))
 	if err != nil {
 		return nil, err
 	}

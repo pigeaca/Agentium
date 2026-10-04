@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -37,23 +38,42 @@ type layout struct {
 
 // baseLayout reads commit's layout in the bare repository.
 func baseLayout(ctx context.Context, bare, commit string) (layout, error) {
+	return baseLayoutIn(ctx, bare, commit, "")
+}
+
+// baseLayoutIn is baseLayout for a monorepo module (store.Settings.Module; "": the repository's root, exactly
+// baseLayout): the tools are those whose files are in the module's folder, and the Python import root is the module's
+// (relative to the checkout, like the root's: "services/api/src", or "services/api" without a src layout).
+func baseLayoutIn(ctx context.Context, bare, commit, module string) (layout, error) {
 	base, err := source.Commit(ctx, commit, "--git-dir", bare)
 	if err != nil {
 		return layout{}, err
 	}
-	paths := base.Paths()
-	return layout{tools: buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }),
-		agentTools: buildtool.AgentKept(paths), importRoot: buildtool.ImportRoot(paths)}, nil
+	if module == "" {
+		paths := base.Paths()
+		return layout{tools: buildtool.DetectedNames(func(name string) bool { return source.Has(base, name) }),
+			agentTools: buildtool.AgentKept(paths), importRoot: buildtool.ImportRoot(paths)}, nil
+	}
+	paths := buildtool.InModule(base.Paths(), module)
+	has := func(name string) bool { return source.Has(base, path.Join(module, name)) }
+	return layout{tools: buildtool.DetectedNames(has), agentTools: buildtool.AgentKept(paths),
+		importRoot: path.Join(module, buildtool.ImportRoot(paths))}, nil
 }
 
 // NeedsLocalBinding reports whether runs on any of the commits need the sandbox's local binding (a Gradle build), so
 // that a caller can ask for the user's opt-in before anything runs.
 func NeedsLocalBinding(ctx context.Context, bare string, commits []string) (bool, error) {
+	return NeedsLocalBindingIn(ctx, bare, "", commits)
+}
+
+// NeedsLocalBindingIn is NeedsLocalBinding for a monorepo module's build files ("": the root's).
+func NeedsLocalBindingIn(ctx context.Context, bare, module string, commits []string) (bool, error) {
 	for _, c := range commits {
-		tools, err := toolsAtBase(ctx, bare, c)
+		l, err := baseLayoutIn(ctx, bare, c, module)
 		if err != nil {
 			return false, err
 		}
+		tools := l.tools
 		if buildtool.LocalBinding(buildtool.Select(tools)) {
 			return true, nil
 		}
@@ -103,7 +123,11 @@ func (env Env) warmState(deps string) string {
 // (markUsed), which cleanup (PlanClean) ages the base's dependencies by.
 
 func (env Env) stampPath(deps, base string, names []string) string {
-	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+"-"+filepath.Base(base))
+	module := ""
+	if key := buildtool.ModuleKey(env.Module); key != "" { // a module's stamps are its own: another module's never match
+		module = "-" + key
+	}
+	return filepath.Join(env.warmState(deps), strings.Join(names, "+")+"-"+buildtool.WarmVersion(buildtool.Select(names))+module+"-"+filepath.Base(base))
 }
 
 // readStamp reads a base's stamp (stampPath): whether the base is warmed, and what its runs get. A stamp that does not
@@ -191,8 +215,10 @@ func (env Env) warmInThrowawayFor(ctx context.Context, profiles []buildtool.Prof
 	if err := checkout.New(ctx, env.Bare, base, checkoutDir); err != nil {
 		return "", fmt.Errorf("warm-up checkout: %w", err)
 	}
-	steps := buildtool.WarmSteps(profiles, checkoutDir, deps)
-	return env.warmToolsFor(ctx, checkoutDir, deps, base, profiles, buildtool.NeedsWarming(profiles), steps, logPath, running, fresh)
+	// A module's warm-up runs in its folder, where its build files are.
+	moduleDir := filepath.Join(checkoutDir, filepath.FromSlash(env.Module))
+	steps := buildtool.WarmSteps(profiles, moduleDir, deps)
+	return env.warmToolsFor(ctx, moduleDir, deps, base, profiles, buildtool.NeedsWarming(profiles), steps, logPath, running, fresh)
 }
 
 // warmTools runs the warm-up steps in the checkout. Runs that may overlap wait for each other here (a lock file in
@@ -325,6 +351,9 @@ type CommandsEnv struct {
 	Timeout    time.Duration
 	WarmWait   time.Duration
 	Now        func() time.Time
+	// Module is the monorepo module the project measures (store.Settings.Module; "": the root): its folder holds the
+	// build files, and the warm-up and the commands run in it.
+	Module string
 	// Grader is the mode validation grades in (task.GraderOf). In sandbox mode the stages' verification runs as a
 	// run's grade does (task.CheckoutCommands.Sandboxed), denied what a run's agent is: Agentium's data, the user's
 	// repository (ProjectRoot) and its worktrees, and the credential stores under Home (and AccountHome, the account's
@@ -340,13 +369,13 @@ type CommandsEnv struct {
 // checkout), and the notes runs of the base get, with a note for a test runner the verify commands use and the venv
 // lacks. A warm-up that waited out the lock is a note, not an error: validation then runs without the venv.
 func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
-	l, err := baseLayout(ctx, c.Bare, base)
+	l, err := baseLayoutIn(ctx, c.Bare, base, c.Module)
 	if err != nil {
 		return task.CheckoutCommands{}, err
 	}
 	tools, importRoot := l.tools, l.importRoot
 	profiles := buildtool.Select(tools)
-	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now}
+	env := Env{Layout: c.Layout, Bare: c.Bare, Environ: c.Environ, CommandEnv: c.CommandEnv, VerifyTimeout: c.Timeout, WarmWait: c.WarmWait, Now: c.Now, Module: c.Module}
 	if c.Layout.Cache != "" {
 		env.CommandEnv = append(slices.Clone(env.CommandEnv), buildtool.CommandEnvFor(profiles, c.Layout.Cache)...)
 	}
@@ -440,7 +469,7 @@ func (env Env) warmFuncs(ctx context.Context, repo, deps, base string, profiles 
 		now = env.Now
 	}
 	return buildtool.WarmFuncs(ctx, profiles, buildtool.WarmInput{Dir: repo, Deps: deps, Environ: env.Environ, Env: env.CommandEnv,
-		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now(), Base: base, State: env.warmState(deps)})
+		Log: log, Started: running, Timeout: env.VerifyTimeout, Now: now(), Base: base, State: env.warmState(deps), Module: env.Module})
 }
 
 // lockFile is home.LockFile: an exclusive flock on path, waited for until ctx ends.
