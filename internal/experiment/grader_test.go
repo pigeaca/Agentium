@@ -341,3 +341,66 @@ func TestFlaggedStreakStopsTheExperiment(t *testing.T) {
 		t.Errorf("counted runs between them: %+v", sum)
 	}
 }
+
+// container-v1 is named (task.GraderContainer) but not graded in until the containers plan's step 4: every place that
+// takes an experiment's mode refuses it as an unknown one, and none reads it as the sandbox (not host) or the host.
+func TestContainerModeIsRefused(t *testing.T) {
+	const mode = task.GraderContainer
+	d := validDesign()
+	d.Grader = mode
+	if d.WantVersion() == DesignVersionSandbox {
+		t.Error("a container design is stored under the sandbox's version")
+	}
+	d.Version = d.WantVersion()
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "grader "+mode) {
+		t.Errorf("design: %v", err)
+	}
+
+	l := Lock{Method: MethodV2, ClaudeCode: "2.1.281", SignIn: "login", Grader: mode}
+	if err := l.Check("2.1.281", "login"); err == nil || !strings.Contains(err.Error(), mode) || !strings.Contains(err.Error(), "start a new experiment") {
+		t.Errorf("lock: %v", err)
+	}
+
+	// Readiness: no task is ready for the mode, whatever it was validated in, and none is validated again for it.
+	arms := validDesign().Arms
+	for _, validated := range []string{"", task.GraderHost, task.GraderSandbox, mode} {
+		cand := Candidate{Name: "t", Validation: &task.Validation{Status: task.StatusValid, Grader: validated,
+			Arms: []task.Arm{{Name: "base"}, {Name: "lean", Snapshot: "abc"}}}}
+		if why := Ineligible(cand, arms, mode); !strings.Contains(why, "does not grade in "+mode) {
+			t.Errorf("validated %q: eligible for %s: %q", validated, mode, why)
+		}
+		if NeedsRevalidation(cand, mode) {
+			t.Errorf("validated %q: re-validated for %s", validated, mode)
+		}
+	}
+
+	// Resume and lock go through run.SandboxUsable (the default): refused before any run, never graded on another mode.
+	lock := Lock{Method: MethodV2, ClaudeCode: "2.1.281", SignIn: "login", Host: runtime.GOOS + "/" + runtime.GOARCH, Grader: mode}
+	encoded, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs := 0
+	r := Runner{Out: io.Discard, SignIn: "login", ExecuteRun: func(context.Context, run.Env, RunMeta, run.Spec) (run.Record, error) {
+		runs++
+		return run.Record{}, nil
+	}}
+	if _, err := r.resume(context.Background(), store.Experiment{Lock: encoded}, "boxed", "2.1.281"); err == nil || !strings.Contains(err.Error(), "graded in "+mode+", which this Agentium does not grade in") || runs != 0 {
+		t.Errorf("resume: %v, %d run(s)", err, runs)
+	}
+	if err := r.sandboxUsable(context.Background(), mode); err == nil || !strings.Contains(err.Error(), "grader "+mode) {
+		t.Errorf("usable: %v", err)
+	}
+}
+
+// The sandbox's per-arm check and the version of a design belong to the sandbox alone: a mode that is not host is not
+// thereby the sandbox.
+func TestSandboxCheckIsOnlyTheSandboxs(t *testing.T) {
+	l := lockFor(GoalCheaper, 2, 1)
+	for mode, want := range map[string]bool{"": false, task.GraderHost: false, task.GraderSandbox: true, task.GraderContainer: false} {
+		l.Grader = mode
+		if got := sandboxCheck(l, nil) != nil; got != want {
+			t.Errorf("mode %q: sandbox check %v", mode, got)
+		}
+	}
+}

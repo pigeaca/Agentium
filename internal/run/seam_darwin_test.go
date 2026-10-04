@@ -26,12 +26,12 @@ func TestValidationDeniesWhatTheAgentIsDenied(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cc.Sandboxed == nil {
+	if cc.Isolated == nil {
 		t.Fatal("no sandboxed commands")
 	}
 	dir := filepath.Join(stage, "base")
 	must(t, checkout.New(ctx, f.env.Bare, f.spec.Task.Base, dir))
-	results, ok, _, err := cc.Sandboxed(ctx, dir, filepath.Join(stage, "grading", "base"), false, []string{"true"}, time.Minute, io.Discard)
+	results, ok, _, err := cc.Isolated(ctx, dir, filepath.Join(stage, "grading", "base"), false, []string{"true"}, time.Minute, io.Discard)
 	skipLogBlind(t, err)
 	if err != nil || !ok || len(results) != 1 {
 		t.Fatalf("results %+v, ok %v, %v", results, ok, err)

@@ -83,6 +83,39 @@ func TestHostExperimentRefusesASandboxValidatedTask(t *testing.T) {
 	expect(t, f.run(ctx, "run", "once", "value", "--grader", "docker"), ExitUsage, `--grader "docker"`)
 }
 
+// container-v1 is named but not graded in until the containers plan's step 4: --grader refuses it at every entry
+// point as it refuses an unknown mode (same words, same exit code), and a lock that names it is refused on resume,
+// never graded on the host or in the sandbox instead.
+func TestContainerGraderIsRefusedAsUnknown(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t)
+	ctx := context.Background()
+	for _, flag := range []string{"container", task.GraderContainer} {
+		want := `--grader "` + flag + `": use host or sandbox`
+		expect(t, f.run(ctx, "experiment", "new", "c-"+flag, "--b", "lean", "--task", "value", "--grader", flag), ExitUsage, want)
+		expect(t, f.run(ctx, "run", "once", "value", "--grader", flag), ExitUsage, want)
+		expect(t, f.run(ctx, "task", "validate", "value", "--grader", flag), ExitUsage, want)
+	}
+
+	expect(t, f.run(ctx, "experiment", "new", "locked", "--b", "lean", "--task", "value", "--budget", "10", "--grader", "host"), ExitOK)
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitOK)
+	var lock map[string]any
+	if err := json.Unmarshal(storedLock(t, f, "locked"), &lock); err != nil {
+		t.Fatal(err)
+	}
+	lock["grader"] = task.GraderContainer
+	encoded, err := json.Marshal(lock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	amendLock(t, f, "locked", encoded)
+	before := len(records(t, experimentRuns(t, f, "locked")))
+	expect(t, f.run(ctx, "experiment", "run", "locked"), ExitError, "graded in container-v1, which this Agentium does not grade in")
+	if after := len(records(t, experimentRuns(t, f, "locked"))); after != before {
+		t.Errorf("a container lock resumed: %d runs, then %d", before, after)
+	}
+}
+
 // An experiment locked before grader modes (its lock names none) resumes as it ran, on the host, whatever the default
 // is now; a new lock names its mode.
 func TestOldLockResumesOnTheHost(t *testing.T) {

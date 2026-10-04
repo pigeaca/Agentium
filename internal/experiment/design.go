@@ -68,12 +68,14 @@ const (
 	DesignVersionJudge   = 5
 )
 
-// WantVersion is the stored version a design of its template, method, grader and tasks carries.
+// WantVersion is the stored version a design of its template, method, grader and tasks carries. Only the sandbox
+// has a version of its own. A mode this Agentium does not grade in (container-v1 until the containers plan's step 4
+// gives it one) is never stored: Validate refuses its grader.
 func (d Design) WantVersion() int {
 	switch {
 	case len(d.JudgeGraded) > 0:
 		return DesignVersionJudge
-	case task.GraderOf(d.Grader) != task.GraderHost:
+	case task.GraderOf(d.Grader) == task.GraderSandbox:
 		return DesignVersionSandbox
 	case d.Method == MethodSeq:
 		return DesignVersionSeq
@@ -650,6 +652,9 @@ func Ineligible(c Candidate, arms []Arm, grader string) string {
 			return fmt.Sprintf("not validated in context %s", a.Context) + validateHint(c.Name, arms)
 		}
 	}
+	if !task.KnownGrader(grader) { // container-v1 too, until the containers plan's step 4: no task is eligible for a mode not graded in
+		return fmt.Sprintf("this Agentium does not grade in %s, so no task is ready for it", grader)
+	}
 	if mode := task.GraderOf(grader); task.GraderOf(v.Grader) != mode && mode == task.GraderHost {
 		return fmt.Sprintf("it was validated %s, but this experiment grades on the host (%s --grader host)", task.DescribeGrader(v.Grader),
 			validateCommand(c.Name, arms))
@@ -662,7 +667,7 @@ func Ineligible(c Candidate, arms []Arm, grader string) string {
 // sandbox experiment does that; a host one refuses such a task (Ineligible).
 func NeedsRevalidation(c Candidate, grader string) bool {
 	mode := task.GraderOf(grader)
-	return c.Grading != task.GradingJudge && c.Validation != nil && mode != task.GraderHost && task.GraderOf(c.Validation.Grader) != mode
+	return c.Grading != task.GradingJudge && c.Validation != nil && mode == task.GraderSandbox && task.GraderOf(c.Validation.Grader) != mode
 }
 
 func validateHint(name string, arms []Arm) string {

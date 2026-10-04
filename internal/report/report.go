@@ -923,6 +923,8 @@ func graderNote(l experiment.Lock) string {
 		return ""
 	case task.GraderOf(l.Grader) == task.GraderHost:
 		return "Graded on the host, without a sandbox: the agents' code ran its builds and tests with the user's access (--grader host)."
+	case task.GraderOf(l.Grader) != task.GraderSandbox: // container-v1 included, until the containers plan's step 4
+		return fmt.Sprintf("Graded in %s, a mode this Agentium does not describe.", l.Grader)
 	}
 	return fmt.Sprintf("Graded in Agentium's grading sandbox (%s): no network but this machine's, writes only to each grade's own folders. "+
 		"On macOS the sandbox's localhost is every address of the machine, so a grade could accept connections from the network.", l.Grader)

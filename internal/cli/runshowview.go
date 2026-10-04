@@ -259,8 +259,13 @@ func gradingBox(rec run.Record, sh term.Shapes, m marks, dim func(string) string
 		return node(term.Panel{Title: "hidden tests", Lines: []string{dim("the tests did not run"), dim(gradingWhere(rec))}})
 	}
 	p := term.Panel{Title: "hidden tests", Right: took}
-	if task.GraderOf(rec.Grader) != task.GraderSandbox {
+	switch task.GraderOf(rec.Grader) {
+	case task.GraderSandbox:
+	case task.GraderHost:
 		p.Lines = []string{st.Paint(term.OutcomeInfra, m.warn+" run on your machine, outside the sandbox"), dim(testsWords(rec))}
+		return node(p)
+	default: // container-v1 included, until the containers plan's step 4: not a sandbox panel, and not "your machine"
+		p.Lines = []string{dim(task.DescribeGrader(rec.Grader)), dim(testsWords(rec))}
 		return node(p)
 	}
 	p.Border, p.Dashed = term.Sandbox, true

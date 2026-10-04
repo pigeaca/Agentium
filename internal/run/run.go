@@ -375,7 +375,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
 		return rec, err
 	}
-	if env.sandboxed() {
+	if env.gradesInSandbox() {
 		if env.gradeBase, err = fullCommitOf(ctx, env.Bare, spec.Task.Base); err != nil {
 			return rec, err
 		}
@@ -849,8 +849,8 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			failed = true
 		}
 	}
-	if !failed && env.sandboxed() {
-		ok, err := env.verifySandboxed(ctx, spec, graded, rec, running)
+	if !failed && task.GraderOf(env.Grader) != task.GraderHost {
+		ok, err := env.verifyIsolated(ctx, spec, graded, rec, running)
 		if err != nil {
 			return err
 		}
@@ -888,12 +888,17 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 // module. It is checked at each use (buildtool.ModuleDir): a checkout the agent worked in may no longer have it.
 func (env Env) moduleDir(dir string) (string, error) { return buildtool.ModuleDir(dir, env.Module) }
 
-// verifySandboxed runs the verification commands on the grading copy in the grading sandbox (gradeInSandbox), in the
-// run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept
+// verifyIsolated runs the verification commands on the grading copy where the mode says: the grading sandbox for
+// task.GraderSandbox. Any other mode is an error, never a fall back to the sandbox or the host (the caller reaches it
+// for every mode but host; container-v1 is wired by the containers plan's step 4). The sandbox grade (gradeInSandbox)
+// runs in the run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept
 // (the copy then comes back to graded). It records the commands and what the sandbox reported, and adds a note for
 // denials it could not read and for what the grade left behind. An error wrapping sandbox.ErrUnavailable means
 // nothing was graded.
-func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, rec *Record, running func(pid int)) (bool, error) {
+func (env Env) verifyIsolated(ctx context.Context, spec Spec, graded string, rec *Record, running func(pid int)) (bool, error) {
+	if mode := task.GraderOf(env.Grader); mode != task.GraderSandbox {
+		return false, unknownGrader(mode)
+	}
 	if env.gradeAgent == nil || env.gradeBase == "" {
 		return false, errors.New("a sandboxed grade needs the run's agent and base (Once sets them)")
 	}

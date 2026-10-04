@@ -208,12 +208,12 @@ type CheckoutCommands struct {
 	// Removed, when set, removes what Env gave the checkout in dir alone (Python's hypothesis database in the data
 	// folder), once the checkout is removed.
 	Removed func(dir string)
-	// Sandboxed, when set, runs commands in the grading sandbox, as a run's grade does (run.CheckoutCommands sets it in
+	// Isolated, when set, runs commands in the mode's isolation (today the grading sandbox), as a run's grade does (run.CheckoutCommands sets it in
 	// sandbox mode): the checkout dir is moved into root, a grading folder of its own that must not exist yet, and is
 	// removed with it afterwards, unless keep, when the checkout is moved back to dir first. Output goes to log; each
 	// command has timeout. An error wrapping sandbox.ErrUnavailable means the sandbox could not be shown to hold, and
 	// nothing ran.
-	Sandboxed func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error)
+	Isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error)
 }
 
 // Toolchain maps a build tool ("go", "java", "cargo", ...) to its version as the tool reports it on the host.
@@ -254,7 +254,7 @@ type Validator struct {
 	// interpreter, dependencies and variables as grading. logPath gets the warm-up's commands.
 	Checkout func(ctx context.Context, base, module string, verify []string, logPath string) (CheckoutCommands, error)
 	// Grader is the mode the verification commands run in (GraderOf: empty is host). In sandbox mode each stage's
-	// verification runs through Checkout's Sandboxed, in a grading folder of its own: a validation in sandbox mode needs
+	// verification runs through Checkout's Isolated, in a grading folder of its own: a validation in sandbox mode needs
 	// Checkout. Setup commands run on the host in either mode, as a run's setup does.
 	Grader string
 	// checkout is what Checkout returned, for this validation's commands.
@@ -283,7 +283,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			return Validation{}, fmt.Errorf("prepare the build tools: %w", err)
 		}
 		v.checkout, result.Notes = cc, cc.Notes
-		if v.sandboxed() && cc.Sandboxed == nil {
+		if v.inSandbox() && cc.Isolated == nil {
 			return Validation{}, errors.New("validation in the sandbox: the build tools' preparation offers no sandboxed commands")
 		}
 		for _, n := range cc.Notes {
@@ -291,7 +291,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 				fmt.Fprintln(v.Progress, "  note: "+n)
 			}
 		}
-	} else if v.sandboxed() {
+	} else if v.inSandbox() {
 		return Validation{}, errors.New("validation in the sandbox needs the build tools' preparation (Validator.Checkout)")
 	}
 	var solution source.Source
@@ -331,7 +331,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			}
 		}
 	}
-	if v.sandboxed() {
+	if v.inSandbox() {
 		result.Harmless = harmlessOf(result.Stages)
 	}
 	if v.WeakTests {
@@ -690,17 +690,23 @@ func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string
 	return stage, nil
 }
 
-// sandboxed reports whether the verification runs in the grading sandbox.
-func (v Validator) sandboxed() bool { return GraderOf(v.Grader) != GraderHost }
+// inSandbox reports whether the verification runs in the grading sandbox. It names the mode: Validate refuses any
+// mode that is not known (KnownGrader: container-v1 too, for now) before this is asked, so no mode reads as the sandbox
+// by not being host.
+func (v Validator) inSandbox() bool { return GraderOf(v.Grader) == GraderSandbox }
 
 // verify runs the verification commands in the checkout dir: on the host (run), or in the sandbox, in a grading folder
-// of the stage's own (label) beside the checkouts, which Sandboxed moves the checkout into and removes with it (the
+// of the stage's own (label) beside the checkouts, which Isolated moves the checkout into and removes with it (the
 // checkout comes back to dir when Keep is set). The grade holds its folder's lock (GradeLock) from before the folder
 // exists until it is gone, so `agentium clean` never removes the folder of a grade in progress.
 func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string, commands []string) ([]Command, bool, *SandboxGrade, error) {
-	if !v.sandboxed() {
+	switch GraderOf(v.Grader) {
+	case GraderHost:
 		results, ok, err := v.run(ctx, log, dir, commands)
 		return results, ok, nil, err
+	case GraderSandbox:
+	default:
+		return nil, false, nil, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", v.Grader, GraderSandbox)
 	}
 	root := filepath.Join(filepath.Dir(v.WorkDir), "grading", label)
 	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
@@ -714,7 +720,7 @@ func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string,
 		os.Remove(GradeLock(root)) // before the unlock: no later grade uses this path (each validation has its own folder)
 		unlock()
 	}()
-	return v.checkout.Sandboxed(ctx, dir, root, v.Keep, commands, v.Timeout, log)
+	return v.checkout.Isolated(ctx, dir, root, v.Keep, commands, v.Timeout, log)
 }
 
 // GradeLock is the lock file beside a validation's grade folder root (<artifacts>/tasks/<id>/<time>/grading/<label>),
