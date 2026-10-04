@@ -126,7 +126,7 @@ func TestWriteTarLimits(t *testing.T) {
 	if _, err := WriteTar(io.Discard, filepath.Join(root, "missing"), DefaultCopyLimits()); !errors.Is(err, errNoRoot) {
 		t.Errorf("a missing tree: %v", err)
 	}
-	if l := DefaultCopyLimits(); l.Bytes != 2<<30 || l.Entries != 1_000_000 {
+	if l := DefaultCopyLimits(); l.Bytes != 2<<30 || l.Entries != 1_000_000 || l.Timeout != 10*time.Minute {
 		t.Errorf("default limits: %+v", l)
 	}
 }

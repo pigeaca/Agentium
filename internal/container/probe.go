@@ -30,6 +30,7 @@ section ns; for n in ipc pid cgroup uts; do echo "$n $(readlink /proc/self/ns/$n
 section status; grep -E '^(NoNewPrivs|Seccomp|CapInh|CapPrm|CapEff|CapBnd|CapAmb):' /proc/self/status
 section mounts; cat /proc/self/mounts
 section devlog; if [ -e /dev/log ]; then echo present; else echo absent; fi
+section signal; if kill -0 1 2>/dev/null; then echo allowed; else echo denied; fi
 section sockets
 for s in /var/run/docker.sock /run/docker.sock /var/run/containerd/containerd.sock /run/containerd/containerd.sock /run/podman/podman.sock /var/run/podman/podman.sock; do
   if [ -e "$s" ]; then echo "$s"; fi
@@ -74,6 +75,7 @@ func sections(out string) map[string][]string {
 
 // checkProbes reads probeScript's output and refuses anything but an isolated container: the grade's user, not root;
 // /tmp, /grade/work and /grade/cache writable and nothing else (a read-only root, read-only /deps and cgroup files);
+// the main process (pid 1, MainUser) beyond its signals;
 // only the loopback interface and no route; namespaces of its own; no new privileges, seccomp filtering and no
 // capabilities; no /dev/log and no runtime socket; its own cgroup namespace with readable, protected counters.
 func checkProbes(out string, deps bool) error {
@@ -145,6 +147,9 @@ func checkProbes(out string, deps bool) error {
 	bad = append(bad, checkMountTable(s["mounts"], deps)...)
 	if devlog := s["devlog"]; !slices.Equal(devlog, []string{"absent"}) {
 		fail("/dev/log is %v, want absent", devlog)
+	}
+	if signal := s["signal"]; !slices.Equal(signal, []string{"denied"}) {
+		fail("signalling the main process (pid 1) is %v, want denied", signal)
 	}
 	if socks := s["sockets"]; len(socks) > 0 {
 		fail("runtime sockets are reachable: %v", socks)

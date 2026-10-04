@@ -160,7 +160,17 @@ func TestInspectMismatchRefused(t *testing.T) {
 			if !errors.Is(err, ErrMismatch) || !strings.Contains(err.Error(), c.field) {
 				t.Fatalf("%v, want ErrMismatch naming %s", err, c.field)
 			}
+			if strings.Contains(err.Error(), "FAKEPASS") || strings.Contains(err.Error(), "/tmp/evil") {
+				t.Errorf("the error carries a variable's value: %v", err)
+			}
 		})
+	}
+	_, _, err := checkInspect(inspectWith(t, func(c map[string]any) {
+		env := obj(c, "Config")["Env"].([]any)
+		obj(c, "Config")["Env"] = append([]any{"HTTP_PROXY=http://user:FAKEPASS@proxy.example:3128"}, append(env[1:], "PATH=/x")...)
+	}), fixtureSpec(), "runc")
+	if err == nil || !strings.Contains(err.Error(), "added [HTTP_PROXY], dropped [], changed [PATH]") {
+		t.Errorf("the environment's difference by name: %v", err)
 	}
 	if _, _, err := checkInspect([]byte(readFixture(t, "inspect.json")), fixtureSpec(), "runsc"); !errors.Is(err, ErrMismatch) {
 		t.Errorf("a daemon whose default runtime is another: %v", err)
@@ -241,6 +251,8 @@ func TestProbesRefuseAnythingButIsolation(t *testing.T) {
 		"cgroup fs writable":      replace("cgroup /sys/fs/cgroup cgroup2 ro,", "cgroup /sys/fs/cgroup cgroup2 rw,"),
 		"deps mounted":            replace("== devlog", "/dev/root /deps ext4 ro 0 0\n== devlog"),
 		"dev log":                 replace("== devlog\nabsent", "== devlog\npresent"),
+		"main process signalled":  replace("== signal\ndenied", "== signal\nallowed"),
+		"signal unprobed":         replace("== signal\ndenied\n", ""),
 		"docker socket":           replace("== sockets\n", "== sockets\n/var/run/docker.sock\n"),
 		"the VM's cgroup":         replace("== cgroup\n0::/\n", "== cgroup\n0::/docker/abc\n"),
 		"counters unreadable":     replace("readable\nprotected", "unreadable\nprotected"),

@@ -48,6 +48,7 @@ type scenario struct {
 	CommandExit  int
 	CommandBlock bool   // a command blocks until it is killed
 	TarExit      int    // the copy-in's tar
+	TarBlock     bool   // the copy-in's tar hangs (without reading) until it is killed
 	CreateExit   int    // docker create's exit; not 0: refused, its name in use
 	CreateBlock  bool   // docker create hangs until it is killed
 	CountersExit int    // the counters' exec exit; not 0: it failed (a fork bomb holds every slot, or it was killed)
@@ -152,6 +153,9 @@ func fakeDocker() int {
 		}
 		switch script := args[len(args)-1]; {
 		case slices.Contains(args, "tar"):
+			if sc.TarBlock {
+				time.Sleep(time.Minute) // bounded, so a fake orphaned by a failing test does not linger
+			}
 			saveStdin()
 			return sc.TarExit
 		case script == probeScript:

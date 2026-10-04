@@ -672,9 +672,9 @@ func TestExecRefusesBadInput(t *testing.T) {
 	must(t, err)
 }
 
-// TestCopyInFailures: a tree the stream refuses (too much content, too many entries) or that the image's tar fails on
-// is ErrUnjudgeable (the agent controls the tree; a retry would be a re-roll), and removes the container. A root that
-// cannot be opened is Agentium's own failure, not the agent's.
+// TestCopyInFailures: a tree the stream refuses (too much content, too many entries), that the image's tar fails on,
+// or whose streaming reaches the timeout is ErrUnjudgeable (the agent controls the tree; a retry would be a re-roll),
+// and removes the container. A root that cannot be opened is Agentium's own failure, not the agent's.
 func TestCopyInFailures(t *testing.T) {
 	t.Parallel()
 	tree := t.TempDir()
@@ -685,17 +685,21 @@ func TestCopyInFailures(t *testing.T) {
 		tarExit    int
 		unjudgable bool
 		also       error
+		tarBlock   bool
 	}{
-		"too much content": {tree, CopyLimits{Bytes: 1024, Entries: 100}, 0, true, ErrTooLarge},
-		"too many entries": {tree, CopyLimits{Bytes: 1 << 20, Entries: 3}, 0, true, ErrTooLarge},
-		"tar fails":        {tree, DefaultCopyLimits(), 2, true, nil},
-		"no root":          {filepath.Join(tree, "missing"), DefaultCopyLimits(), 0, false, nil},
+		"too much content": {tree, CopyLimits{Bytes: 1024, Entries: 100}, 0, true, ErrTooLarge, false},
+		"too many entries": {tree, CopyLimits{Bytes: 1 << 20, Entries: 3}, 0, true, ErrTooLarge, false},
+		"tar fails":        {tree, DefaultCopyLimits(), 2, true, nil, false},
+		// A tree slow enough to reach the timeout once streaming is the agent's doing: no retry.
+		"tar hangs past the timeout": {tree, CopyLimits{Bytes: 1 << 20, Entries: 100, Timeout: 500 * time.Millisecond}, 0, true, nil, true},
+		"no root":                    {filepath.Join(tree, "missing"), DefaultCopyLimits(), 0, false, nil, false},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := goodScenario(t)
 			s.TarExit = c.tarExit
+			s.TarBlock = c.tarBlock
 			f, d := openFake(t, s)
 			err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, ct *Container) error {
 				_, err := ct.CopyIn(ctx, c.root, c.limits)

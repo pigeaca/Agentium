@@ -55,6 +55,8 @@ tmpfs /proc/scsi tmpfs ro,relatime,inode64 0 0
 tmpfs /sys/firmware tmpfs ro,relatime,inode64 0 0
 == devlog
 absent
+== signal
+denied
 == sockets
 == cgroup
 0::/

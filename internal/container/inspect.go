@@ -149,7 +149,10 @@ func checkInspect(raw []byte, spec Spec, runtime string) (digest string, imageEn
 	want("Name", c.Name == "/"+name, c.Name, "/"+name)
 	want("Image", c.Image == spec.Image.ID, c.Image, spec.Image.ID)
 	want("Config.User", c.Config.User == MainUser, c.Config.User, MainUser)
-	want("Config.Env", slices.Equal(c.Config.Env, spec.Image.Env), c.Config.Env, spec.Image.Env)
+	if !slices.Equal(c.Config.Env, spec.Image.Env) {
+		// Names only: the values may be credentials (a proxy's password), and this error can reach logs.
+		bad = append(bad, "Config.Env differs from the image's: "+envDiff(c.Config.Env, spec.Image.Env))
+	}
 	want("HostConfig.Runtime", runtime != "" && h.Runtime == runtime, h.Runtime, runtime)
 	want("Config.Entrypoint", slices.Equal(c.Config.Entrypoint, []string{"sleep"}), c.Config.Entrypoint, "[sleep]")
 	want("Config.Cmd", slices.Equal(c.Config.Cmd, []string{spec.deadlineSeconds()}), c.Config.Cmd, "["+spec.deadlineSeconds()+"]")
@@ -270,6 +273,39 @@ func checkMounts(c inspected, spec Spec) []string {
 		bad = append(bad, fmt.Sprintf("Mounts has %d grade and %d deps volumes, want 1 and %d", grade, deps, wantAsked-1))
 	}
 	return bad
+}
+
+// envDiff names the variables have adds, drops or changes against want, or says only the order differs; never values.
+func envDiff(have, want []string) string {
+	index := func(env []string) map[string]string {
+		m := map[string]string{}
+		for _, kv := range env {
+			k, v, _ := strings.Cut(kv, "=")
+			m[k] = v
+		}
+		return m
+	}
+	h, w := index(have), index(want)
+	var added, dropped, changed []string
+	for k, v := range h {
+		if wv, ok := w[k]; !ok {
+			added = append(added, k)
+		} else if wv != v {
+			changed = append(changed, k)
+		}
+	}
+	for k := range w {
+		if _, ok := h[k]; !ok {
+			dropped = append(dropped, k)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(dropped)
+	sort.Strings(changed)
+	if len(added)+len(dropped)+len(changed) == 0 {
+		return "the same variables, in another order or repeated"
+	}
+	return fmt.Sprintf("added %v, dropped %v, changed %v", added, dropped, changed)
 }
 
 func mapsEqual(a, b map[string]string) bool {

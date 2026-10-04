@@ -20,12 +20,16 @@ var errNoRoot = errors.New("the tree cannot be opened")
 
 // CopyLimits cap what a copy-in sends.
 type CopyLimits struct {
-	Bytes   int64 // file content
-	Entries int   // folders, files and links, so a tree of countless empty files cannot stream without end
+	Bytes   int64         // file content
+	Entries int           // folders, files and links, so a tree of countless empty files cannot stream without end
+	Timeout time.Duration // the whole copy-in; 0 is the default's
 }
 
-// DefaultCopyLimits are 2 GiB of content and 1,000,000 entries (step 0's largest tree: 177 MB in 9,092 files).
-func DefaultCopyLimits() CopyLimits { return CopyLimits{Bytes: 2 << 30, Entries: 1_000_000} }
+// DefaultCopyLimits are 2 GiB of content, 1,000,000 entries and 10 minutes (step 0's largest tree: 177 MB in 9,092
+// files, in 0.53 s).
+func DefaultCopyLimits() CopyLimits {
+	return CopyLimits{Bytes: 2 << 30, Entries: 1_000_000, Timeout: 10 * time.Minute}
+}
 
 // TarStats counts what a tar stream holds.
 type TarStats struct {

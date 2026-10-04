@@ -10,6 +10,7 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
@@ -30,8 +31,6 @@ var ErrUnjudgeable = errors.New("the grade's result cannot be judged")
 const (
 	// removeTimeout bounds a removal, which runs even after ctx is cancelled.
 	removeTimeout = 30 * time.Second
-	// copyTimeout bounds a copy-in (step 0: 0.53 s for 177 MB).
-	copyTimeout = 10 * time.Minute
 	// countersTimeout bounds the read of the counters after a command.
 	countersTimeout = 30 * time.Second
 )
@@ -128,7 +127,7 @@ func (c *Container) start(ctx context.Context) error {
 	}
 	// The probes run as the grade's user, since they prove the grade's own view (its user, what it can write). No code
 	// of the grade has run yet, so nothing can interfere with them.
-	probes, probeErr, probeRes, err := c.d.call(ctx, c.execArgs(User, false, nil, "", "sh", "-c", probeScript), nil, controlTimeout)
+	probes, probeErr, probeRes, err := c.d.call(ctx, c.execArgs(User, false, nil, "/", "sh", "-c", probeScript), nil, controlTimeout)
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", c.name, err)
 	}
@@ -149,7 +148,8 @@ func (c *Container) check(_ []byte, stderr string, res runner.Result, err error)
 }
 
 // execArgs is a docker exec as user (User for the grade's own, MainUser for Agentium's reads), in dir (under
-// /grade/work; "" for the container's own folder), with env, of argv; interactive passes stdin.
+// /grade/work for the grade's; / for Agentium's reads, which then need nothing of the image's working folder), with
+// env, of argv; interactive passes stdin.
 func (c *Container) execArgs(user string, interactive bool, env []string, dir string, argv ...string) []string {
 	args := []string{"exec"}
 	if interactive {
@@ -168,7 +168,9 @@ func (c *Container) execArgs(user string, interactive bool, env []string, dir st
 // CopyIn sends the tree at root into /grade/work as a tar stream (WriteTar: links never followed, the tree only read),
 // unpacked by the image's tar as the grade's user, so the daemon never resolves a path in a tree the agent wrote. A
 // tree the stream refuses (ErrTooLarge, or changed or unreadable) or the image's tar fails on is ErrUnjudgeable: the
-// agent controls the tree. A failed or cancelled copy-in leaves a partial tree, so the container is removed.
+// agent controls the tree. So is a client failure or a timeout (limits.Timeout) once the stream has started, since a
+// tree can be made slow enough to reach it; before that, such an error is plain. A failed or cancelled copy-in leaves
+// a partial tree, so the container is removed.
 func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) (TarStats, error) {
 	if c.gone {
 		return TarStats{}, ErrGone
@@ -176,13 +178,18 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 	pr, pw := io.Pipe()
 	var stats TarStats
 	var writeErr error
+	var started atomic.Bool // set once docker has taken the first bytes of the tree
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		stats, writeErr = WriteTar(pw, root, limits)
+		stats, writeErr = WriteTar(startWriter{pw, &started}, root, limits)
 		pw.CloseWithError(writeErr) // nil closes the stream normally
 	}()
-	_, stderr, res, err := c.d.call(ctx, c.execArgs(User, true, nil, WorkDir, "tar", "-x", "-f", "-"), pr, copyTimeout)
+	timeout := limits.Timeout
+	if timeout <= 0 {
+		timeout = DefaultCopyLimits().Timeout
+	}
+	_, stderr, res, err := c.d.call(ctx, c.execArgs(User, true, nil, WorkDir, "tar", "-x", "-f", "-"), pr, timeout)
 	pr.CloseWithError(errors.New("copy-in ended")) // unblocks the writer if docker stopped reading
 	<-done
 	switch {
@@ -193,6 +200,8 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 		err = fmt.Errorf("%w: %w", ErrUnjudgeable, writeErr)
 	case writeErr != nil:
 		err = writeErr
+	case err != nil && started.Load():
+		err = fmt.Errorf("%w: %w", ErrUnjudgeable, err)
 	case err != nil:
 	case res.ExitCode != 0:
 		err = fmt.Errorf("%w: tar exited %d: %s", ErrUnjudgeable, res.ExitCode, firstLine(stderr))
@@ -200,6 +209,20 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 		return stats, nil
 	}
 	return stats, errors.Join(fmt.Errorf("copy into %s: %w", c.name, err), c.kill(ctx))
+}
+
+// startWriter records that a write was taken.
+type startWriter struct {
+	w       io.Writer
+	started *atomic.Bool
+}
+
+func (s startWriter) Write(p []byte) (int, error) {
+	n, err := s.w.Write(p)
+	if n > 0 {
+		s.started.Store(true)
+	}
+	return n, err
 }
 
 // Command is one command to run in the container.
@@ -288,7 +311,7 @@ func (c *Container) Counters(ctx context.Context) (Counters, error) {
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), countersTimeout)
 	defer cancel()
-	out, stderr, res, err := c.d.call(cctx, c.execArgs(MainUser, false, nil, "", "sh", "-c", countersScript), nil, countersTimeout)
+	out, stderr, res, err := c.d.call(cctx, c.execArgs(MainUser, false, nil, "/", "sh", "-c", countersScript), nil, countersTimeout)
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(stderr))
 	}

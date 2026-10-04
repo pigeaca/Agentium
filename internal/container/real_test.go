@@ -459,6 +459,26 @@ func TestRealProxyConfigNeverReachesTheGrade(t *testing.T) {
 	}
 }
 
+// TestRealInspectBackstopsTheConfig: were the client's configuration ever to carry proxies into a create (here the
+// empty folder Open accepted gains a config.json afterwards), the inspect check refuses the container on the daemon's
+// own record, naming Config.Env. It also shows that every call uses that folder: without --config, the create would
+// get no proxies and this test would fail. The user's own ~/.docker is never touched.
+func TestRealInspectBackstopsTheConfig(t *testing.T) {
+	real, img := realDocker(t)
+	data := testData(t, real)
+	config := t.TempDir()
+	d, err := Open(context.Background(), Options{Environ: os.Environ(), ConfigDir: config})
+	must(t, err)
+	defer func() { must(t, d.Close()) }()
+	must(t, os.WriteFile(filepath.Join(config, "config.json"), []byte(`{"proxies":{"default":{"httpProxy":"http://user:FAKEPASS@proxy.example:3128"}}}`), 0o600))
+	ran := false
+	err = d.Run(context.Background(), realSpec(data, "backstop", img, d), func(context.Context, *Container) error { ran = true; return nil })
+	if !errors.Is(err, ErrMismatch) || !strings.Contains(err.Error(), "Config.Env") || strings.Contains(err.Error(), "FAKEPASS") || ran {
+		t.Fatalf("a create with proxies: %v (fn ran: %v), want ErrMismatch naming Config.Env, without the password", err, ran)
+	}
+	t.Logf("refused: %.200s", err)
+}
+
 // TestRealGradeCannotStopTheDeadline: the main process (the init and the sleep that holds the deadline) runs as
 // MainUser, so the grade's code, as User, can neither stop the sleep (which would outlive the deadline) nor end it or
 // the init (which would end its own container mid-command, turning a failure into infrastructure). The deadline then
@@ -593,7 +613,7 @@ func TestRealFixtures(t *testing.T) {
 	must(t, c.check(d.call(ctx, []string{"cp", "-", c.name + ":" + GradeDir}, &skeleton, controlTimeout)))
 	_, err = d.output(ctx, "start", c.name)
 	must(t, err)
-	probes, err := d.output(ctx, c.execArgs(User, false, nil, "", "sh", "-c", probeScript)...)
+	probes, err := d.output(ctx, c.execArgs(User, false, nil, "/", "sh", "-c", probeScript)...)
 	must(t, err)
 	if err := checkProbes(string(probes), false); err != nil {
 		t.Fatal(err)
