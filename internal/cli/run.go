@@ -15,8 +15,10 @@ import (
 
 	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/experiment"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -27,11 +29,14 @@ import (
 // runUsage is run's help. It lists neither run once's expert flags (runHidden) nor run calibrate, which still works
 // but which experiment run makes unneeded: the guide's "Advanced flags" table lists them.
 const runUsage = `Usage:
-  agentium run once TASK [--snapshot NAME] [--model MODEL[:EFFORT]] [--budget USD]
+  agentium run once TASK [--snapshot NAME] [--model MODEL[:EFFORT]] [--budget USD] [--agent claude|codex]
                      one real Claude Code run on TASK, in the base's own context or with a snapshot applied, on the
                      model (default ` + experiment.DefaultExperimentModel + `) at the effort (default: the CLI's).
                      It costs money (up to --budget, default $3) or uses your plan. A judge-graded task's run is
                      graded by the judge's majority of 5 calls (up to $5.00 more; unvalidated), not by tests.
+                     --agent codex runs Codex instead (model default ` + codex.DefaultModel + `): Agentium prices its
+                     tokens at OpenAI's list prices and stops it while one more full-context request still fits under
+                     --budget. Codex runs refuse Gradle projects and judge-graded tasks.
   agentium run list
   agentium run show ID [--diff] [--log] [--details]
                      one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
@@ -42,6 +47,9 @@ Expert flags (timeouts, keeping the workspace) are in docs/guide.md, "Advanced f
 
 Sign-in: ANTHROPIC_API_KEY when set, else a token file from ` + "`claude setup-token`" + ` (AGENTIUM_CLAUDE_TOKEN_FILE or
 ~/.config/agentium/claude-oauth-token), else your own login with project settings only.
+Codex (AGENTIUM_CODEX, else codex on PATH; version ` + codex.SupportedVersion + `): CODEX_API_KEY (or OPENAI_API_KEY) when set,
+given to Codex alone, else the ChatGPT login in Agentium's own Codex home, which you sign in once:
+CODEX_HOME=~/.agentium/codex codex login (Agentium never runs it). Your own ~/.codex is never used.
 `
 
 func runRun(ctx context.Context, env Env, args []string) int {
@@ -102,6 +110,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	snapshotName := fs.String("snapshot", "", "apply this context snapshot (default: the base's own context)")
 	profile := fs.String("model", experiment.DefaultExperimentModel, "the model, MODEL[:EFFORT] (effort default: the CLI's)")
 	budget := fs.Float64("budget", 3, "stop the run at this cost in USD")
+	agentFlag := fs.String("agent", "claude", "the coding agent: claude or codex")
 	// Hidden (runHidden): the guide's "Advanced flags".
 	timeout := fs.Duration("timeout", 20*time.Minute, "stop the run after this long")
 	verifyTimeout := fs.Duration("verify-timeout", 10*time.Minute, "time limit for each setup or verification command")
@@ -115,6 +124,10 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if len(rest) != 1 || *budget <= 0 || *timeout <= 0 {
 		fmt.Fprint(env.Stderr, runUsage)
 		return ExitUsage
+	}
+	agentName, code, ok := agentChoice(env, fs, "run once", *agentFlag, profile, nil)
+	if !ok {
+		return code
 	}
 	model, effort, mode, err := onceProfile(env, *profile, grader)
 	if err != nil {
@@ -134,26 +147,24 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	notice, err := startingRun(agentName, *profile, model, mode, t.Grading, *budget)
+	if err != nil {
+		return fail(env, err)
+	}
 	env, live := liveEnv(env)
 	defer live.Stop()
-	runEnv, err := newRunEnv(env, w, *verifyTimeout)
+	runEnv, err := newRunEnvFor(ctx, env, w, *verifyTimeout, agentName)
 	if err != nil {
 		return fail(env, err)
 	}
 	runEnv.Step, runEnv.Grader = progressStep(live.Step), mode
-	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, model); {
+	switch cal, err := checkAgainstCalibration(ctx, env, w, arm, model, agentName); {
 	case err != nil:
 		return fail(env, err)
 	case cal != nil:
 		runEnv.Expect = *cal
 	}
-	if t.Grading == task.GradingJudge { // graded by the judge: its calls are paid too, and the consent names them
-		grading := llmjudge.GradingSettings()
-		fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded by the judge: %d calls on %s, unvalidated): it may cost up to $%.2f, and its grading up to $%.2f.\n",
-			*profile, runEnv.SignIn, grading.Repeats, grading.Model, *budget, llmjudge.CapUSD(grading))
-	} else {
-		fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, task.DescribeGrader(mode), *budget)
-	}
+	fmt.Fprintln(env.Stdout, notice(runEnv.SignIn))
 	release, err := startRuns(ctx, env, w)
 	if err != nil {
 		return fail(env, err)
@@ -244,6 +255,85 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	if err != nil {
 		return run.Env{}, err
 	}
+	return runEnvWith(env, w, verifyTimeout, cli, mode, secret, tokenFile)
+}
+
+// newRunEnvFor is newRunEnv for the agent named (parseAgent): Claude Code's, or Codex's (newCodexRunEnv).
+func newRunEnvFor(ctx context.Context, env Env, w *workspace, verifyTimeout time.Duration, agentName string) (run.Env, error) {
+	if agentName == codex.Name {
+		return newCodexRunEnv(ctx, env, w, verifyTimeout)
+	}
+	return newRunEnv(env, w, verifyTimeout)
+}
+
+// newCodexRunEnv resolves a Codex run's: the CLI (AGENTIUM_CODEX, else PATH) at the version Agentium supports, and the
+// sign-in: an API key (CODEX_API_KEY, else OPENAI_API_KEY) given to Codex alone, else the ChatGPT login in Agentium's
+// own Codex home, which must be signed in (codex login status: Agentium never reads the credential, and never signs in).
+func newCodexRunEnv(ctx context.Context, env Env, w *workspace, verifyTimeout time.Duration) (run.Env, error) {
+	cli, err := codexPath(env)
+	if err != nil {
+		return run.Env{}, err
+	}
+	version, err := codex.Version(ctx, cli)
+	if err != nil {
+		return run.Env{}, fmt.Errorf("Codex at %s could not report its version: %w", cli, err)
+	}
+	if err := codex.CheckVersion(version); err != nil {
+		return run.Env{}, err
+	}
+	mode, secret := codexSignIn(env)
+	if mode == codex.SignInLogin {
+		if err := codex.LoginStatus(ctx, cli, w.layout.CodexHome()); err != nil {
+			return run.Env{}, err
+		}
+	}
+	runEnv, err := runEnvWith(env, w, verifyTimeout, cli, mode, secret, "")
+	runEnv.Agent = codex.Adapter{}
+	return runEnv, err
+}
+
+// codexSignIn is a Codex run's sign-in, from the keys' presence: CODEX_API_KEY, else OPENAI_API_KEY, else the login.
+func codexSignIn(env Env) (mode, secret string) {
+	for _, name := range []string{"CODEX_API_KEY", "OPENAI_API_KEY"} {
+		if key := env.Getenv(name); key != "" {
+			return codex.SignInAPIKey, key
+		}
+	}
+	return codex.SignInLogin, ""
+}
+
+// codexPath finds Codex: AGENTIUM_CODEX, else PATH.
+func codexPath(env Env) (string, error) {
+	if cli := env.Getenv("AGENTIUM_CODEX"); cli != "" {
+		return cli, nil
+	}
+	cli, err := env.LookPath("codex")
+	if err != nil {
+		return "", errors.New("Codex was not found on PATH: install it, or set AGENTIUM_CODEX to its path")
+	}
+	return cli, nil
+}
+
+// parseAgent reads --agent: Claude Code (claude or claude-code, the default) or Codex.
+func parseAgent(value string) (string, error) {
+	switch value {
+	case "", "claude", agent.ClaudeCode:
+		return agent.ClaudeCode, nil
+	case codex.Name:
+		return codex.Name, nil
+	}
+	return "", fmt.Errorf("--agent %q: use claude or codex", value)
+}
+
+// flagGiven reports whether the flag named was given on the command line.
+func flagGiven(fs *flag.FlagSet, name string) bool {
+	given := false
+	fs.Visit(func(f *flag.Flag) { given = given || f.Name == name })
+	return given
+}
+
+// runEnvWith is a run's environment with the agent's CLI and sign-in resolved.
+func runEnvWith(env Env, w *workspace, verifyTimeout time.Duration, cli, mode, secret, tokenFile string) (run.Env, error) {
 	var environ []string
 	if env.Environ != nil {
 		environ = env.Environ()
@@ -272,6 +362,95 @@ func claudePath(env Env) (string, error) {
 		return "", errors.New("Claude Code was not found on PATH: install it, or set AGENTIUM_CLAUDE to its path")
 	}
 	return cli, nil
+}
+
+// codexCalibrationBudget is run calibrate's default cap for a Codex run: above the allowance of one full-context request
+// that Agentium's cap holds back (codex.Allowance).
+const codexCalibrationBudget = 2.5
+
+// agentChoice reads --agent (parseAgent) for the command named, and for Codex fills in what was not given: the model
+// (codex.DefaultModel) and, when budget is set (run calibrate), the cap (codexCalibrationBudget). A bad value is
+// reported, with its exit code.
+func agentChoice(env Env, fs *flag.FlagSet, command, value string, profile *string, budget *float64) (agentName string, code int, ok bool) {
+	agentName, err := parseAgent(value)
+	if err != nil {
+		fmt.Fprintf(env.Stderr, "agentium %s: %v\n", command, err)
+		return "", ExitUsage, false
+	}
+	if agentName != codex.Name {
+		return agentName, ExitOK, true
+	}
+	if !flagGiven(fs, "model") {
+		*profile = codex.DefaultModel
+	}
+	if budget != nil && !flagGiven(fs, "budget") {
+		// Agentium stops a Codex run while one more full-context request fits under its cap, so the cap must be above
+		// that allowance (about $1.80 on gpt-6.1-sol); a calibration run itself costs cents.
+		*budget = codexCalibrationBudget
+	}
+	return agentName, ExitOK, true
+}
+
+// calibrationProfile reads run calibrate's --model. A Claude Code calibration is of a context on a model
+// (experiment.Project.CalibrationOn): runs at any effort are checked against their model's, so an effort is accepted,
+// as --model takes it everywhere, and not used. A Codex run always passes an effort, and its session records it, so a
+// Codex calibration runs at the effort given.
+func calibrationProfile(profile, agentName string) (model, effort string, err error) {
+	model, effort, err = experiment.ParseProfile(profile)
+	if agentName != codex.Name {
+		effort = ""
+	}
+	return model, effort, err
+}
+
+// startingRun is run once's notice before its run, given the sign-in, which is resolved later: what the run may cost;
+// for a judge-graded task (grading), what its grading may; for Codex, who prices it and where Agentium's cap stops it.
+// A Codex run of a judge-graded task is refused: the judge is Claude Code, and Codex runs do not resolve its sign-in
+// yet (the Codex plan's step 5).
+func startingRun(agentName, profile, model, mode, grading string, budget float64) (func(signIn string) string, error) {
+	switch {
+	case grading == task.GradingJudge && agentName == codex.Name:
+		return nil, errors.New("a judge-graded task cannot run with --agent codex yet: the judge is Claude Code, and Codex runs do not resolve its sign-in (the Codex plan's step 5)")
+	case grading == task.GradingJudge: // graded by the judge: its calls are paid too, and the consent names them
+		settings := llmjudge.GradingSettings()
+		return func(signIn string) string {
+			return fmt.Sprintf("Starting a real Claude Code run (%s, sign-in %s, graded by the judge: %d calls on %s, unvalidated): it may cost up to $%.2f, and its grading up to $%.2f.",
+				profile, signIn, settings.Repeats, settings.Model, budget, llmjudge.CapUSD(settings))
+		}, nil
+	case agentName != codex.Name:
+		return func(signIn string) string {
+			return fmt.Sprintf("Starting a real Claude Code run (%s, sign-in %s, graded %s): it may cost up to $%.2f.", profile, signIn, task.DescribeGrader(mode), budget)
+		}, nil
+	}
+	allowance, _ := codex.Allowance(model)
+	return func(signIn string) string {
+		return fmt.Sprintf("Starting a real Codex run (%s, sign-in %s, graded %s): it may cost up to $%.2f at OpenAI's list prices of %s, priced by Agentium, which stops it while one more full-context request (up to $%.2f) still fits under that.",
+			profile, signIn, task.DescribeGrader(mode), budget, pricing.OpenAIDate, allowance)
+	}, nil
+}
+
+// agentLabel is the agent named (parseAgent) as messages name it.
+func agentLabel(agentName string) string {
+	if agentName == codex.Name {
+		return "Codex"
+	}
+	return "Claude Code"
+}
+
+// calibratedAgent is run.Calibrator.Agent for the agent named: codex.Name, or "" for Claude Code.
+func calibratedAgent(agentName string) string {
+	if agentName == codex.Name {
+		return codex.Name
+	}
+	return ""
+}
+
+// agentFlagName is the --agent value naming the agent.
+func agentFlagName(agentName string) string {
+	if agentName == codex.Name {
+		return codex.Name
+	}
+	return "claude"
 }
 
 // runMeta places a run: the project, the task, the kind, and for experiments the slot and attempt. It is stored with
@@ -398,14 +577,23 @@ func printRun(env Env, rec run.Record) {
 	m, b := rec.Metrics, rec.Behavior
 	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", rec.Spend().AgentUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
+	if rec.CostSource != "" { // an agent without a cost of its own (Codex): its tokens, and who priced them
+		fmt.Fprintf(out, "  tokens       %d input, %d cached, %d output (%d reasoning); cost %s at the list prices of %s\n",
+			m.InputTokens, m.CacheReadTokens, m.OutputTokens, m.ReasoningTokens, rec.CostSource, rec.PriceTable)
+	}
 	fmt.Fprintf(out, "  changes      %d file(s), +%d -%d, %d commit(s); tests changed: %v, test files removed: %d\n", b.FilesChanged, b.LinesAdded,
 		b.LinesRemoved, b.Commits, b.TestsChanged, b.TestsRemoved)
 	if len(b.ChecksChanged) > 0 {
 		fmt.Fprintf(out, "  checks       the agent changed %s\n", strings.Join(b.ChecksChanged, ", "))
 	}
 	fmt.Fprintf(out, "  behavior     ran tests: %v, ran the checks: %v, %d Bash command(s), %d denial(s)\n", b.RanTests, b.RanChecks, b.BashCommands, b.Denials)
-	fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", term.OrNone(m.CLIVersion), term.OrNone(m.Model),
-		term.OrNone(m.PermissionMode), len(m.Tools), m.SkillCount)
+	if rec.AgentName() == codex.Name {
+		fmt.Fprintf(out, "  environment  Codex %s, %s, effort %s, sandbox %s, permission profile %s\n", term.OrNone(m.CLIVersion), term.OrNone(m.Model),
+			term.OrNone(m.Effort), term.OrNone(m.SandboxPolicy), term.OrNone(m.PermissionProfile))
+	} else {
+		fmt.Fprintf(out, "  environment  Claude Code %s, %s, permission mode %s, %d tool(s), %d skill(s)\n", term.OrNone(m.CLIVersion), term.OrNone(m.Model),
+			term.OrNone(m.PermissionMode), len(m.Tools), m.SkillCount)
+	}
 	if len(m.SubagentModels) > 0 {
 		var kinds []string
 		for kind, models := range m.SubagentModels {
@@ -611,6 +799,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	profile := fs.String("model", experiment.DefaultExperimentModel, "the model, MODEL[:EFFORT]")
 	budget := fs.Float64("budget", 0.5, "stop each calibration run at this cost in USD")
 	timeout := fs.Duration("timeout", 5*time.Minute, "stop each calibration run after this long")
+	agentFlag := fs.String("agent", "claude", "the coding agent: claude or codex")
 	rest, code, ok := parseArgs(env, fs, args, runUsage)
 	if !ok {
 		return code
@@ -619,9 +808,11 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		fmt.Fprint(env.Stderr, runUsage)
 		return ExitUsage
 	}
-	// A calibration is of a context on a model (experiment.Project.CalibrationOn): runs at any effort are checked
-	// against their model's, so an effort is accepted, as --model takes it everywhere, and not used.
-	model, _, err := experiment.ParseProfile(*profile)
+	agentName, code, ok := agentChoice(env, fs, "run calibrate", *agentFlag, profile, budget)
+	if !ok {
+		return code
+	}
+	model, effort, err := calibrationProfile(*profile, agentName)
 	if err != nil {
 		fmt.Fprintf(env.Stderr, "agentium run calibrate: --model %v\n", err)
 		return ExitUsage
@@ -645,7 +836,7 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 	}
 	env, live := liveEnv(env)
 	defer live.Stop()
-	runEnv, err := newRunEnv(env, w, time.Minute)
+	runEnv, err := newRunEnvFor(ctx, env, w, time.Minute, agentName)
 	if err != nil {
 		return fail(env, err)
 	}
@@ -654,9 +845,10 @@ func runCalibrate(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer release()
-	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real Claude Code runs (%s, sign-in %s): up to $%.2f each.\n",
-		len(arms), experiment.ShortCommit(head), model, runEnv.SignIn, *budget)
-	results, err := run.Calibrator{Head: head, Arms: arms, Model: model, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn, Now: env.Now,
+	fmt.Fprintf(env.Stdout, "Calibrating %d arm(s) at %s with real %s runs (%s, sign-in %s): up to $%.2f each.\n",
+		len(arms), experiment.ShortCommit(head), agentLabel(agentName), model, runEnv.SignIn, *budget)
+	results, err := run.Calibrator{Head: head, Arms: arms, Model: model, Effort: effort, Budget: *budget, Timeout: *timeout, SignIn: runEnv.SignIn,
+		Agent: calibratedAgent(agentName), Now: env.Now,
 		Execute: func(ctx context.Context, arm task.Arm, spec run.Spec) (run.Record, error) {
 			runEnv.Step = progressStep(func(step string) { live.Step("calibrating arm " + arm.Name + ": " + step) })
 			return executeRun(ctx, env, w, runEnv, runMeta{Kind: "calibration"}, spec)
@@ -710,13 +902,17 @@ func saveCalibration(ctx context.Context, env Env, w *workspace, c run.Calibrati
 // context on that very model (tools and skills can differ by model, as experiments check), and says so. Without one it
 // falls back to the newest on any model, with a note that the model differs, and without any it says the run's tools
 // and skills are not checked. It returns nil when there is nothing to check against.
-func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm task.Arm, model string) (*agent.Expect, error) {
+func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm task.Arm, model, agentName string) (*agent.Expect, error) {
 	stored, err := w.service().CalibrationOn(ctx, arm.Name, arm.Snapshot, model)
 	if errors.Is(err, store.ErrNotFound) {
 		stored, err = w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot)
 	}
 	if errors.Is(err, store.ErrNotFound) {
-		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated, so its tools and skills are not checked: agentium run calibrate --model %s", arm.Name, model)))
+		command := "agentium run calibrate --model " + model
+		if agentName == codex.Name {
+			command = "agentium run calibrate --agent codex --model " + model
+		}
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated, so its tools and skills are not checked: %s", arm.Name, command)))
 		return nil, nil
 	}
 	if err != nil {
@@ -725,6 +921,11 @@ func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm tas
 	var found run.Calibration
 	if err := json.Unmarshal(stored.Result, &found); err != nil {
 		return nil, fmt.Errorf("calibration of %s: %w", arm.Name, err)
+	}
+	if agent.Name(found.Agent) != agentName { // another agent's environment says nothing of this one's
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("arm %s is not calibrated for this agent, so its environment is checked only against what the run was given: agentium run calibrate --agent %s --model %s",
+			arm.Name, agentFlagName(agentName), model)))
+		return nil, nil
 	}
 	fmt.Fprintf(env.Stdout, "Checking the environment against the calibration of %s (%s).\n", arm.Name, stored.CreatedAt.Format("2006-01-02 15:04"))
 	if found.RequestedModel != model {

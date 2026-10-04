@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/gitx"
 )
 
@@ -28,6 +29,7 @@ type Info struct {
 	Root         string     `json:"root"`
 	Head         string     `json:"head"`
 	Claude       ClaudeInfo `json:"claude"`
+	Codex        CodexInfo  `json:"codex"`
 	TestCommands []string   `json:"test_commands"`
 	Instructions []File     `json:"instructions"`
 	Skills       int        `json:"skills"`
@@ -46,6 +48,15 @@ type ClaudeInfo struct {
 	Path    string `json:"path,omitempty"`
 	Version string `json:"version,omitempty"`
 	SignIn  string `json:"sign_in"` // api-key | token-file | login
+}
+
+// CodexInfo describes the Codex CLI, an optional second agent (`--agent codex`): where it is, its version, and the
+// sign-in a Codex run would use, by presence only (an API key in the environment, else Agentium's own ChatGPT login,
+// which is checked when a run starts). Discovery never signs in and never reads a credential.
+type CodexInfo struct {
+	Path    string `json:"path,omitempty"`
+	Version string `json:"version,omitempty"`
+	SignIn  string `json:"sign_in"` // api-key | login
 }
 
 // File is an instruction file at the repository root.
@@ -96,6 +107,9 @@ func Discover(ctx context.Context, dir string, env Env) (Info, error) {
 	}
 	info := Info{Root: root, Head: head}
 	info.Claude, info.Warnings = detectClaude(ctx, env)
+	var codexWarnings []string
+	info.Codex, codexWarnings = detectCodex(ctx, env)
+	info.Warnings = append(info.Warnings, codexWarnings...)
 	info.TestCommands = testCommands(root)
 	if len(info.TestCommands) == 0 {
 		info.TestCommands = []string{} // stored as [], not null
@@ -143,6 +157,33 @@ func detectClaude(ctx context.Context, env Env) (ClaudeInfo, []string) {
 		warnings = append(warnings, fmt.Sprintf("Claude Code %s is older than %s; experiments need %s or later.", version, MinClaudeVersion, MinClaudeVersion))
 	}
 	return info, warnings
+}
+
+// detectCodex finds the Codex CLI (AGENTIUM_CODEX, else PATH) and its version (codex.Version, which keeps it away from
+// the user's ~/.codex). Codex is optional: its absence is no warning, a version Codex runs refuse is one.
+func detectCodex(ctx context.Context, env Env) (CodexInfo, []string) {
+	info := CodexInfo{SignIn: codex.SignInLogin}
+	if env.Getenv("CODEX_API_KEY") != "" || env.Getenv("OPENAI_API_KEY") != "" { // presence only; the value is never read
+		info.SignIn = codex.SignInAPIKey
+	}
+	path := env.Getenv("AGENTIUM_CODEX")
+	if path == "" {
+		found, err := env.LookPath("codex")
+		if err != nil {
+			return info, nil
+		}
+		path = found
+	}
+	info.Path = path
+	version, err := codex.Version(ctx, path)
+	if err != nil {
+		return info, []string{fmt.Sprintf("Could not read the Codex version from %s: %v", path, err)}
+	}
+	info.Version = version
+	if err := codex.CheckVersion(version); err != nil {
+		return info, []string{err.Error()}
+	}
+	return info, nil
 }
 
 var versionPattern = regexp.MustCompile(`\b(\d+\.\d+\.\d+)\b`)

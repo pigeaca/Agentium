@@ -35,7 +35,7 @@ func assertKeys(t *testing.T, v any, want string) {
 const (
 	taskInfoKeys = "base_commit,graded_by,hidden_test_files,name,needs_review,reference_files,solution_commit,source,status,status_summary,unstated_requirements,untested_hunks"
 	behaviorKeys = "bash_commands,checks_changed,commits,config_changed,denials,files_changed,lines_added,lines_removed,outside_reads,ran_checks,ran_tests,tests_changed,tests_removed"
-	runKeys      = "agent,arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,graded_by,grader,id,judge_cost_usd,judge_grade,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
+	runKeys      = "agent,arm,behavior,cli_version,cost_estimated,cost_source,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,graded_by,grader,id,judge_cost_usd,judge_grade,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,price_table,sandbox,sign_in,skills,started,task,tokens,tools,turns"
 )
 
 func TestJSONFieldNamesAreFixed(t *testing.T) {
@@ -45,7 +45,8 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	row := func(r jsonResult, list, want string) { t.Helper(); assertKeys(t, r.get(list).([]any)[0], want) }
 
 	initDoc := jsonRun(t, f, ExitOK, "init")
-	keys(initDoc, "claude_code,command,context,head,local_binding,project,schema,settings,sign_in,test_commands,warnings")
+	keys(initDoc, "claude_code,codex,command,context,head,local_binding,project,schema,settings,sign_in,test_commands,warnings")
+	assertKeys(t, initDoc.get("codex"), "found,sign_in,version")
 	assertKeys(t, initDoc.get("settings"), "allow_local_binding,defaults,jobs,mined_verify,require_lock,setup,verify,verify_timeout_seconds")
 	show := jsonRun(t, f, ExitOK, "context", "show")
 	keys(show, "above_repository_files,command,context,entries,linked,project,schema,warnings,where")
@@ -92,6 +93,7 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 		t.Errorf("run once: agent = %v, want claude-code", agent)
 	}
 	assertKeys(t, once.get("run", "behavior"), behaviorKeys)
+	assertKeys(t, once.get("run", "tokens"), "cache_read,cache_write,input,output,reasoning")
 	runs := jsonRun(t, f, ExitOK, "run", "list")
 	keys(runs, "command,runs,schema")
 	row(runs, "runs", "arm,cost_usd,id,kind,outcome,passed,started,task")

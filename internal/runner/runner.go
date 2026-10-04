@@ -36,6 +36,9 @@ type Spec struct {
 	Stdin io.Reader
 	// Started, when set, is called with the process ID (also its process group's) once the command runs.
 	Started func(pid int)
+	// Stop, when set, stops the command once it is closed, the way a timeout does (gently with Grace, then SIGKILL), and
+	// the result says so (Result.Stopped): a watcher's decision, such as Agentium's cost cap, not a timeout.
+	Stop <-chan struct{}
 }
 
 // Result is how a command ended.
@@ -43,10 +46,12 @@ type Result struct {
 	ExitCode int // -1 when it timed out or was killed by a signal
 	Duration time.Duration
 	TimedOut bool
+	// Stopped: Spec.Stop was closed while the command ran, and it was stopped for that (never with TimedOut).
+	Stopped bool
 }
 
 // Passed reports whether the command exited with status 0.
-func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut }
+func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut && !r.Stopped }
 
 // IsCredential reports whether an environment variable looks like it carries a credential: by name pattern (tokens,
 // keys, secrets, passwords, credentials) or by being a known one (the ssh agent socket, which allows pushes; Docker and
@@ -120,6 +125,20 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
 	}
 	defer cancel()
+	// A stop (Spec.Stop) cancels the command's own context with errStopped as its cause, so it ends as a timeout does
+	// but is told apart from one.
+	var stopCancel context.CancelCauseFunc
+	runCtx, stopCancel = context.WithCancelCause(runCtx)
+	defer stopCancel(nil)
+	if spec.Stop != nil {
+		go func() {
+			select {
+			case <-spec.Stop:
+				stopCancel(errStopped)
+			case <-runCtx.Done():
+			}
+		}()
+	}
 	argv := []string{"/bin/sh", "-c", spec.Command}
 	if len(spec.Args) > 0 {
 		argv = spec.Args
@@ -168,6 +187,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	switch {
 	case ctx.Err() != nil:
 		return result, fmt.Errorf("run %q: %w", name, ctx.Err())
+	case errors.Is(context.Cause(runCtx), errStopped):
+		result.Stopped = true
+		return result, nil
 	case runCtx.Err() != nil:
 		result.TimedOut = true
 		return result, nil
@@ -183,6 +205,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	result.ExitCode = 0
 	return result, nil
 }
+
+// errStopped is the cause of a command's context when Spec.Stop stopped it.
+var errStopped = errors.New("stopped")
 
 // interruptGroup sends SIGINT to the process group led by pid; a group that is already gone is not an error.
 func interruptGroup(pid int) error {

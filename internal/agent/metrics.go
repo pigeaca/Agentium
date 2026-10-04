@@ -76,6 +76,25 @@ type Metrics struct {
 	// Agent (Task) call in the transcript made: their type is unknown, so whether they are first launches is too.
 	// Claude Code only.
 	UnmatchedLaunches int `json:"unmatched_launches,omitempty"`
+
+	// The fields below are another agent's (Codex's), absent from Claude Code's records. Codex reports no cost: CostUSD
+	// is its requests priced by Agentium (Record.CostSource), with the tokens beside it.
+	//
+	// Effort, ApprovalPolicy, SandboxPolicy, PermissionProfile and NetworkAccess are the session's, as it recorded them
+	// (Codex: its rollout's turn_context), for the drift check; they never hold an account, user or organization ID.
+	Effort            string `json:"effort,omitempty"`
+	ApprovalPolicy    string `json:"approval_policy,omitempty"`
+	SandboxPolicy     string `json:"sandbox_policy,omitempty"`
+	PermissionProfile string `json:"permission_profile,omitempty"`
+	NetworkAccess     bool   `json:"network_access,omitempty"`
+	// ReasoningTokens are the output tokens spent reasoning: part of OutputTokens, and priced as output.
+	ReasoningTokens int64 `json:"reasoning_tokens,omitempty"`
+	// Rerouted is the agent's report that the session's model was switched mid-run (Codex: "model rerouted: A -> B");
+	// such a run is unfair.
+	Rerouted string `json:"rerouted,omitempty"`
+	// Rollouts counts the session files the metrics were read from (Codex: the main session's rollout and any
+	// subagent's); zero when the agent keeps none.
+	Rollouts int `json:"rollouts,omitempty"`
 }
 
 // FirstRead is the first real request of the main session or of a repriced subagent launch, for the isolated-run
@@ -129,7 +148,11 @@ func (u UsageReading) Newer(v UsageReading) bool {
 type Expect struct {
 	CLIVersion string
 	Model      string
-	Tools      []string // the tool set every run of an experiment must get
+	// RequestedModel and Effort are what the run asked for (the model and effort given; an empty Effort: the agent's
+	// default). An agent whose session records them is checked against them (Codex); Claude Code's Check ignores them.
+	RequestedModel string
+	Effort         string
+	Tools          []string // the tool set every run of an experiment must get
 	// Skills and SlashCommands are the sets every run of an arm must get, taken from a calibration run under the same
 	// isolation (the agent bundles skills and commands of its own, so the resolver cannot list them). Reported by
 	// count: names can be personal.

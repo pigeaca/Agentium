@@ -18,6 +18,7 @@ import (
 	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/pricing"
 )
@@ -252,6 +253,11 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		if !within(workspace, realPath(layout.Workspaces)) || workspace == realPath(layout.Workspaces) {
 			return orphans, fmt.Errorf("run %s: its start file names a workspace outside %s", e.Name(), layout.Workspaces)
 		}
+		// A Codex run's sessions are outside its records until gathered (an API key run's Codex home is in the workspace).
+		var codexNotes []string
+		if s.AgentStarted {
+			codexNotes = gatherOrphan(layout, s.Record, s.Workspace, dir)
+		}
 		if err := os.RemoveAll(workspace); err != nil {
 			return orphans, fmt.Errorf("remove %s: %w", workspace, err)
 		}
@@ -290,9 +296,13 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		if info, err := os.Stat(transcript); err == nil {
 			rec.Finished = info.ModTime().UTC()
 		}
-		rec.Metrics, _ = parseFile(adapterFor(rec.Agent), transcript) // what can be read is kept; a missing transcript spent nothing visible
+		rec.Metrics, _ = parseRecords(adapterFor(rec.Agent), dir) // what can be read is kept; a missing transcript spent nothing visible
 		rec.Recovered = RecoveredStopped
 		rec.Notes = append(rec.Notes, fmt.Sprintf("Agentium stopped during this run; recovered on %s", now.UTC().Format("2006-01-02 15:04")))
+		rec.Notes = append(rec.Notes, codexNotes...)
+		if agent.Name(rec.Agent) == codex.Name {
+			rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+		}
 		if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {
 			rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
 			rec.CostEstimated = true
@@ -355,7 +365,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	hasTranscript := statErr == nil
 	var m agent.Metrics
 	if hasTranscript {
-		m, _ = parseFile(adapterFor(""), transcript) // the record is unreadable: its agent is unknown, so Claude Code's, the only agent so far
+		m, _ = parseRecords(sniffAdapter(transcript), dir) // the record is unreadable: its agent is told from its transcript
 	}
 	if match := pgidInTruncated.FindSubmatch(data); match != nil {
 		if pgid, err := strconv.Atoi(string(match[1])); err == nil && pgid > 0 && groupExists(pgid) {

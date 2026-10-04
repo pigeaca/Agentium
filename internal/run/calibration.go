@@ -16,6 +16,7 @@ import (
 	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/source"
 	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
@@ -31,6 +32,13 @@ const calibrationPrompt = "This is an environment check: do not change any files
 	"3. Your project instructions, as loaded at the start, end with a calibration codeword. If you see none, it is NONE.\n" +
 	"Then reply with exactly one line: SANDBOX=<what command 1 printed> LINE=<the 20000th line of command 2's output> CODEWORD=<the codeword>"
 
+// codexCalibrationPrompt is calibrationPrompt for Codex: a sandboxed shell command and the codeword. Codex saves no
+// large outputs for the agent to read back, so there is no second step (LargeOutput is n/a).
+const codexCalibrationPrompt = "This is an environment check: do not change any files and do not search the repository.\n" +
+	"1. Run this shell command: printf 'agentium-sandbox-ok\\n'\n" +
+	"2. Your project instructions, as loaded at the start, end with a calibration codeword. If you see none, it is NONE.\n" +
+	"Then reply with exactly one line: SANDBOX=<what the command printed> CODEWORD=<the codeword>"
+
 // Check states.
 const (
 	checkOK         = "ok"
@@ -41,6 +49,8 @@ const (
 
 // Calibration is what a calibration run found for one arm.
 type Calibration struct {
+	// Agent is the agent calibrated (agent.Name: absent for Claude Code, and in calibrations made before agents).
+	Agent            string `json:"agent,omitempty"`
 	Arm              string `json:"arm"`
 	Snapshot         string `json:"snapshot,omitempty"`
 	RunID            string `json:"run_id"`
@@ -67,7 +77,8 @@ type Calibration struct {
 
 // Healthy reports whether a calibration can be what later runs are checked against.
 func (c Calibration) Healthy() bool {
-	return c.Outcome == agent.OutcomeOK && len(c.Drift) == 0 && c.Sandbox == checkOK && c.LargeOutput == checkOK &&
+	// LargeOutput is n/a only for an agent that saves no large outputs (Codex).
+	return c.Outcome == agent.OutcomeOK && len(c.Drift) == 0 && c.Sandbox == checkOK && (c.LargeOutput == checkOK || c.LargeOutput == checkNA) &&
 		(c.Instructions == checkOK || c.Instructions == checkNA)
 }
 
@@ -119,6 +130,30 @@ func judgeChecks(calls []claude.ToolCall, answer, codeword, probeFile string) (s
 	return sandbox, large, instructions
 }
 
+// codexChecks reads a Codex calibration's checks from the shell commands its stream shows: the sandboxed command's
+// output, and the codeword in the answer, which a command that read the probe file or printed the codeword makes
+// unverified. There is no large-output check (n/a).
+func codexChecks(commands []codex.CommandResult, answer, codeword, probeFile string) (sandboxCheck, large, instructions string) {
+	sandboxCheck, large, instructions = checkFailed, checkNA, checkFailed
+	for _, c := range commands {
+		if strings.Contains(c.Command, "agentium-sandbox-ok") && c.ExitCode != nil && *c.ExitCode == 0 && strings.Contains(c.Output, "agentium-sandbox-ok") {
+			sandboxCheck = checkOK
+		}
+	}
+	switch {
+	case probeFile == "":
+		instructions = checkNA
+	case strings.Contains(answer, "CODEWORD="+codeword):
+		instructions = checkOK
+		for _, c := range commands { // finding the codeword with a command (reading, grepping) is not loading it
+			if strings.Contains(c.Output, codeword) || strings.Contains(c.Command, path.Base(probeFile)) {
+				instructions = checkUnverified
+			}
+		}
+	}
+	return sandboxCheck, large, instructions
+}
+
 // without lists the names in list that none of the others hold.
 func without(list []string, others ...[]string) []string {
 	out := []string{}
@@ -164,10 +199,14 @@ type Calibrator struct {
 	Head    string // the commit the base arm is calibrated at
 	Arms    []CalibrationArm
 	Model   string
+	Effort  string // empty: the CLI's default (Claude Code's calibrations always use it: they are of a context on a model)
 	Budget  float64
 	Timeout time.Duration
 	SignIn  string // recorded with each calibration
-	Now     func() time.Time
+	// Agent is the agent calibrated (codex.Name, or "" for Claude Code): it decides the prompt and how the checks are
+	// read. Execute must run that agent.
+	Agent string
+	Now   func() time.Time
 	// Execute runs and stores one calibration run of the arm; it reports progress for the arm as it likes.
 	Execute func(ctx context.Context, arm task.Arm, spec Spec) (Record, error)
 	// Save stores a healthy calibration; unhealthy ones are never saved. It gets a context that outlives
@@ -189,27 +228,45 @@ func (k Calibrator) Run(ctx context.Context) ([]Calibration, error) {
 			return results, err
 		}
 		codeword := "AGENTIUM-" + strings.ToUpper(suffix[len(suffix)-6:])
-		rec, err := k.Execute(ctx, a.Arm, Spec{TaskName: "calibration", Instruction: calibrationPrompt,
+		prompt := calibrationPrompt
+		if k.Agent == codex.Name {
+			prompt = codexCalibrationPrompt
+		}
+		rec, err := k.Execute(ctx, a.Arm, Spec{TaskName: "calibration", Instruction: prompt,
 			PlainPrompt: true, Probe: "Calibration codeword: " + codeword, Task: task.Spec{Base: k.Head, Verify: []string{"true"}},
-			Arm: a.Arm, Model: k.Model, BudgetUSD: k.Budget, Timeout: k.Timeout})
-		if err != nil {
-			return results, err
-		}
-		transcript, err := os.Open(filepath.Join(rec.RecordsDir, "stream.jsonl"))
-		if err != nil {
-			return results, fmt.Errorf("calibration transcript: %w", err)
-		}
-		calls, err := claude.ToolCalls(transcript)
-		transcript.Close()
+			Arm: a.Arm, Model: k.Model, Effort: k.Effort, BudgetUSD: k.Budget, Timeout: k.Timeout})
 		if err != nil {
 			return results, err
 		}
 		m := rec.Metrics
-		c := Calibration{Arm: a.Arm.Name, Snapshot: a.Arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
+		var sandboxCheck, large, instructions string
+		if k.Agent == codex.Name {
+			commands, err := codex.Commands(filepath.Join(rec.RecordsDir, agent.Transcript))
+			if err != nil {
+				return results, err
+			}
+			sandboxCheck, large, instructions = codexChecks(commands, m.ResultExcerpt, codeword, rec.ProbeFile)
+		} else {
+			transcript, err := os.Open(filepath.Join(rec.RecordsDir, "stream.jsonl"))
+			if err != nil {
+				return results, fmt.Errorf("calibration transcript: %w", err)
+			}
+			calls, err := claude.ToolCalls(transcript)
+			transcript.Close()
+			if err != nil {
+				return results, err
+			}
+			sandboxCheck, large, instructions = judgeChecks(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
+		}
+		agentName := ""
+		if k.Agent == codex.Name {
+			agentName = codex.Name
+		}
+		c := Calibration{Agent: agentName, Arm: a.Arm.Name, Snapshot: a.Arm.Snapshot, RunID: rec.ID, Outcome: rec.Outcome, FirstRequest: m.FirstRequest,
 			EstimatedContext: claudectx.EstimateTokens(resolved.StartupBytes()), CLIVersion: m.CLIVersion, Model: m.Model,
 			RequestedModel: k.Model, SignIn: k.SignIn, Tools: m.Tools, Skills: without(m.Skills, rec.ProjectSkills),
 			SlashCommands: without(m.SlashCommands, rec.ProjectSkills, rec.ProjectCommands), Drift: rec.Drift, CostUSD: rec.Spend().AgentUSD}
-		c.Sandbox, c.LargeOutput, c.Instructions = judgeChecks(calls, m.ResultExcerpt, codeword, rec.ProbeFile)
+		c.Sandbox, c.LargeOutput, c.Instructions = sandboxCheck, large, instructions
 		results = append(results, c)
 		if !c.Healthy() {
 			continue
@@ -239,8 +296,12 @@ func WriteCalibrations(out io.Writer, st term.Style, results []Calibration) erro
 	fmt.Fprintln(out, st.Note("Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;"))
 	fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file."))
 	if len(results) > 0 {
-		fmt.Fprintf(out, "Claude Code %s, %s. The first request also holds Claude Code's own system prompt and tools; between arms:\n",
-			term.OrNone(results[0].CLIVersion), term.OrNone(results[0].Model))
+		label := "Claude Code"
+		if results[0].Agent == codex.Name {
+			label = "Codex"
+		}
+		fmt.Fprintf(out, "%s %s, %s. The first request also holds %s's own system prompt and tools; between arms:\n",
+			label, term.OrNone(results[0].CLIVersion), term.OrNone(results[0].Model), label)
 	}
 	base := results[0]
 	for _, c := range results[1:] {

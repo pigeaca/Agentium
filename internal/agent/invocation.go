@@ -69,4 +69,10 @@ type Invocation struct {
 	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
 	// commit): "src", or "" for Dir itself.
 	ImportRoot string
+	// Records is the run's records folder, which the agent may not read (it is under the data folder's records): an
+	// agent that writes its final message to a file (Codex's -o) writes it there. Claude Code does not use it.
+	Records string
+	// State is a folder of the run's own, in its workspace, for the agent's state outside its config folder (Codex: its
+	// run-local HOME, SQLite state and logs); the agent may not read it. Claude Code does not use it.
+	State string
 }

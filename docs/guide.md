@@ -344,6 +344,8 @@ Last use is recorded whenever a run or a validation uses a seed or a project's d
 | `AGENTIUM_VIEW` | How a running experiment shows on a terminal: `dashboard` (the default) or `log` (`--view` for one command) |
 | `ANTHROPIC_API_KEY` | Claude Code credentials, as an alternative to signing in |
 | `AGENTIUM_CLAUDE_TOKEN_FILE` | A token file for Claude Code |
+| `AGENTIUM_CODEX` | The Codex CLI for `--agent codex` (default: `codex` on `PATH`) |
+| `CODEX_API_KEY`, `OPENAI_API_KEY` | An API key for Codex runs, given to Codex alone, instead of the ChatGPT login |
 
 ## Advanced flags
 
@@ -380,6 +382,8 @@ These flags still work but are left out of the commands' usage texts. A per-call
 | `--grader sandbox\|host` | `run once`, `task validate` | `sandbox` on macOS, `host` elsewhere | Where the verification runs ([sandboxed grading](#sandboxed-grading)); `experiment new` shows the flag, and an experiment's lock decides for its runs |
 
 `agentium run calibrate [--snapshot NAME]... [--model MODEL[:EFFORT]] [--budget USD] [--timeout DURATION]` (default $0.50 and `5m` per run) also still works, though its help is gone: it makes ahead of time the short calibration runs that `experiment run` makes for any arm that lacks one. A calibration is of a context on a model, so an effort in `--model` is accepted and not used.
+
+**Codex (preview).** `run once --agent codex` and `run calibrate --agent codex` run OpenAI's Codex CLI (version 0.160 only) instead of Claude Code, on `gpt-6.1-sol` at its default effort unless `--model MODEL[:EFFORT]` says otherwise. Codex signs in with an API key from `CODEX_API_KEY` (or `OPENAI_API_KEY`), given to Codex alone with a fresh Codex home per run, or else with the ChatGPT login in Agentium's own Codex home, which you sign in once: `CODEX_HOME=~/.agentium/codex codex login` (Agentium checks it with `codex login status`, never reads it, never signs in or out, and never uses your own `~/.codex`; runs with that login take turns). Codex reports no cost: Agentium prices each request's tokens at OpenAI's list prices of 2026-10-04 (`cost_source` "priced by Agentium" and `tokens` in `--json`), and stops a run (SIGINT, then SIGKILL) while one more full-context request still fits under `--budget`, about $1.80 on `gpt-6.1-sol`, so a smaller cap is refused (`run calibrate` defaults to $2.50 for Codex). Codex runs refuse Gradle projects (Codex can allow Gradle's local socket only by letting DNS out) and judge-graded tasks; experiments with Codex come later.
 
 ## Renamed and removed
 

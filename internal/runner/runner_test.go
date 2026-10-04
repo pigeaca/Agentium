@@ -196,3 +196,24 @@ func TestEnvironPinned(t *testing.T) {
 		t.Errorf("Environ(nil) = %#v, want an empty non-nil slice", got)
 	}
 }
+
+// A stop (Spec.Stop) ends the command as a timeout does, gently first (the command's trap runs), and says so apart
+// from a timeout; a command that ends by itself first is not stopped.
+func TestStopEndsTheCommandGently(t *testing.T) {
+	out, read := output(t)
+	stop := make(chan struct{})
+	time.AfterFunc(200*time.Millisecond, func() { close(stop) })
+	start := time.Now()
+	result, err := Run(context.Background(), Spec{Command: "trap 'echo interrupted; exit 1' INT; while :; do sleep 0.05; done", Output: out,
+		Grace: 5 * time.Second, Timeout: time.Minute, Stop: stop})
+	if err != nil || !result.Stopped || result.TimedOut || result.Passed() || time.Since(start) > 10*time.Second {
+		t.Fatalf("result %+v, %v after %v", result, err, time.Since(start))
+	}
+	if !strings.Contains(read(), "interrupted") {
+		t.Error("the command was not interrupted first")
+	}
+	result, err = Run(context.Background(), Spec{Command: "true", Stop: make(chan struct{})})
+	if err != nil || result.Stopped || !result.Passed() {
+		t.Errorf("a command that was never stopped: %+v, %v", result, err)
+	}
+}

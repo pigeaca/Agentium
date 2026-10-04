@@ -16,7 +16,7 @@ import (
 // and -5-5 write $4 an hour or $2.50 for five minutes and read $0.20; claude-haiku-4-5 writes $1.25 for five minutes
 // and reads $0.10.
 func TestIsolatedCostOfTheGoldenStream(t *testing.T) {
-	m, err := parseFile(adapterFor(""), filepath.Join("..", "claude", "testdata", "first-reads.jsonl"))
+	m, err := parseRecords(adapterFor(""), recordsWith(t, filepath.Join("..", "claude", "testdata", "first-reads.jsonl")))
 	if err != nil {
 		t.Fatal(err)
 	}
