@@ -28,7 +28,7 @@ func TestGraderModes(t *testing.T) {
 			t.Errorf("ParseGrader(%q) = %q, %v", flag, got, err)
 		}
 	}
-	for _, flag := range []string{"", "Sandbox", "sandbox-v0", "docker"} {
+	for _, flag := range []string{"", "Sandbox", "sandbox-v0", "docker", "container", GraderContainer} {
 		if _, err := ParseGrader(flag); err == nil {
 			t.Errorf("ParseGrader(%q) accepted", flag)
 		}
@@ -38,7 +38,43 @@ func TestGraderModes(t *testing.T) {
 	}
 }
 
-// fakeSandbox is CheckoutCommands.Sandboxed run on the host: it moves the checkout into root (as the real one does),
+// container-v1 is named but not graded in until the containers plan's step 4: it is refused as an unknown mode, and no
+// predicate over a mode reads it as the sandbox or the host.
+func TestContainerModeIsNotKnownYet(t *testing.T) {
+	if GraderContainer != "container-v1" {
+		t.Errorf("GraderContainer = %q", GraderContainer)
+	}
+	if KnownGrader(GraderContainer) {
+		t.Error("KnownGrader(container-v1)")
+	}
+	if _, err := ParseGrader("container"); err == nil || !strings.Contains(err.Error(), "use host or sandbox") {
+		t.Errorf("ParseGrader(container): %v", err)
+	}
+	for mode, want := range map[string]string{"": "on the host", GraderHost: "on the host", GraderSandbox: "in the sandbox (sandbox-v1)",
+		GraderContainer: "in a container (container-v1)", "sandbox-v0": "in an unknown grader mode (sandbox-v0)"} {
+		if got := DescribeGrader(mode); got != want {
+			t.Errorf("DescribeGrader(%q) = %q, want %q", mode, got, want)
+		}
+	}
+	// The validator's mode switch: only the sandbox's mode is the sandbox, and verify refuses the rest before running.
+	for mode, sandboxed := range map[string]bool{"": false, GraderHost: false, GraderSandbox: true, GraderContainer: false, "sandbox-v0": false} {
+		if got := (Validator{Grader: mode}).inSandbox(); got != sandboxed {
+			t.Errorf("inSandbox(%q) = %v", mode, got)
+		}
+	}
+	for _, mode := range []string{GraderContainer, "sandbox-v0"} {
+		ran := false
+		v := Validator{Grader: mode, checkout: CheckoutCommands{Isolated: func(context.Context, string, string, bool, []string, time.Duration, io.Writer) ([]Command, bool, *SandboxGrade, error) {
+			ran = true
+			return nil, true, nil, nil
+		}}}
+		if _, _, _, err := v.verify(context.Background(), io.Discard, t.TempDir(), "x", []string{"true"}); err == nil || ran {
+			t.Errorf("verify in %s: %v, isolated ran %v", mode, err, ran)
+		}
+	}
+}
+
+// fakeSandbox is CheckoutCommands.Isolated run on the host: it moves the checkout into root (as the real one does),
 // runs the commands there, removes root (bringing the checkout back with keep), and reports flagged denials when the
 // command fails and flag is set, or the sandbox unavailable when down is set.
 type fakeSandbox struct {
@@ -112,7 +148,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 		v, _ := validator(t, f.bare)
 		v.Grader = grader
 		v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
-			return CheckoutCommands{Sandboxed: fake.run}, nil
+			return CheckoutCommands{Isolated: fake.run}, nil
 		}
 		return v
 	}
@@ -147,7 +183,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	flagged := &fakeSandbox{flag: true}
 	v, progress := validator(t, f.bare)
 	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
-		return CheckoutCommands{Sandboxed: flagged.run}, nil
+		return CheckoutCommands{Isolated: flagged.run}, nil
 	}
 	result, err = v.Validate(ctx, spec, arms)
 	if err != nil || result.Status != StatusInvalid || result.Stages[0].OK || len(result.Stages) != 2 || len(result.Harmless) != 0 ||
@@ -161,7 +197,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	always := &fakeSandbox{always: true}
 	v, progress = validator(t, f.bare)
 	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
-		return CheckoutCommands{Sandboxed: always.run}, nil
+		return CheckoutCommands{Isolated: always.run}, nil
 	}
 	result, err = v.Validate(ctx, spec, arms)
 	if err != nil || result.Status != StatusValid || !slices.Equal(result.Harmless, []DenialKey{{Operation: "mach-lookup", Target: "com.apple.FontServer"}}) ||
@@ -197,9 +233,11 @@ func TestValidateInTheSandbox(t *testing.T) {
 	if _, err := v.Validate(ctx, spec, arms); err == nil {
 		t.Error("sandbox mode without sandboxed commands validated")
 	}
-	v.Grader = "sandbox-v0"
-	if _, err := v.Validate(ctx, spec, arms); err == nil {
-		t.Error("an unknown grader validated")
+	for _, mode := range []string{"sandbox-v0", GraderContainer} {
+		v.Grader = mode
+		if _, err := v.Validate(ctx, spec, arms); err == nil || !strings.Contains(err.Error(), "grader "+mode) {
+			t.Errorf("grader %s validated: %v", mode, err)
+		}
 	}
 }
 
@@ -222,7 +260,7 @@ func TestHarmlessFailureChecksEveryRepeat(t *testing.T) {
 		v.Grader, v.Repeats = GraderSandbox, 3
 		fake := &fakeSandbox{deny: deny}
 		v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
-			return CheckoutCommands{Sandboxed: fake.run}, nil
+			return CheckoutCommands{Isolated: fake.run}, nil
 		}
 		result, err := v.Validate(ctx, spec, []Arm{{Name: "base"}})
 		if err != nil {

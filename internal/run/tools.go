@@ -356,7 +356,7 @@ type CommandsEnv struct {
 	// build files, and the warm-up and the commands run in it.
 	Module string
 	// Grader is the mode validation grades in (task.GraderOf). In sandbox mode the stages' verification runs as a
-	// run's grade does (task.CheckoutCommands.Sandboxed), denied what a run's agent is: Agentium's data, the user's
+	// run's grade does (task.CheckoutCommands.Isolated), denied what a run's agent is: Agentium's data, the user's
 	// repository (ProjectRoot) and its worktrees, and the credential stores under Home (and AccountHome, the account's
 	// own home folder when HOME is redirected).
 	Grader                         string
@@ -372,6 +372,9 @@ type CommandsEnv struct {
 // checkout), and the notes runs of the base get, with a note for a test runner the verify commands use and the venv
 // lacks. A warm-up that waited out the lock is a note, not an error: validation then runs without the venv.
 func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
+	if !task.KnownGrader(c.Grader) { // before any warm-up: nothing is prepared for a mode this Agentium does not grade in
+		return task.CheckoutCommands{}, unknownGrader(c.Grader)
+	}
 	l, err := baseLayoutIn(ctx, c.Bare, base, c.Module)
 	if err != nil {
 		return task.CheckoutCommands{}, err
@@ -413,8 +416,10 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		}
 		notes = append(notes, buildtool.MissingRunners(ctx, warmed.Venv, verify, env.environ())...)
 	}
-	var sandboxed func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error)
-	if task.GraderOf(c.Grader) != task.GraderHost {
+	var isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error)
+	switch mode := task.GraderOf(c.Grader); mode {
+	case task.GraderHost:
+	case task.GraderSandbox:
 		if err := sandboxApplies(ctx, c.Grader); err != nil {
 			return task.CheckoutCommands{}, err
 		}
@@ -432,11 +437,13 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		if slices.Contains(tools, "maven") || slices.Contains(tools, "gradle") {
 			inv.JavaHome = buildtool.ResolveJavaHome(ctx, env.environ(), buildtool.CommandOutput)
 		}
-		sandboxed = env.sandboxedCommands(inv, full)
+		isolated = env.sandboxedCommands(inv, full)
+	default: // container-v1 included, until the containers plan's step 4: never the sandbox or the host
+		return task.CheckoutCommands{}, unknownGrader(mode)
 	}
 	return task.CheckoutCommands{
-		Sandboxed: sandboxed,
-		Environ:   runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
+		Isolated: isolated,
+		Environ:  runner.Environ(buildtool.CheckoutEnviron(profiles, env.environ())),
 		Env: func(dir string) []string {
 			for _, p := range used { // each command of each stage: last use stays fresh however long validation takes
 				markUsed(p)

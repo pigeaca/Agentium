@@ -38,8 +38,9 @@ const OutcomeSandboxFlagged = "infra-sandbox"
 // DenialsWait bounds the wait for a grade's denials to reach the unified log.
 const DenialsWait = 10 * time.Second
 
-// sandboxed reports whether env grades in the sandbox.
-func (env Env) sandboxed() bool { return task.GraderOf(env.Grader) != task.GraderHost }
+// gradesInSandbox reports whether env grades in the sandbox. It names the mode: a mode that is neither host nor
+// sandbox (container-v1 until it is wired) is refused before any grade (sandboxApplies), never read as the sandbox.
+func (env Env) gradesInSandbox() bool { return task.GraderOf(env.Grader) == task.GraderSandbox }
 
 // SandboxUsable checks, before anything is spent, that this Agentium can grade in mode: a mode it knows, and for the
 // sandbox, a sandbox-exec that applies a profile here and a unified log that shows its denials (sandbox.Usable). It
@@ -47,12 +48,21 @@ func (env Env) sandboxed() bool { return task.GraderOf(env.Grader) != task.Grade
 // and validated task checks only sandboxApplies. Every grade still runs the full canary.
 func SandboxUsable(ctx context.Context, mode string) error {
 	if !task.KnownGrader(mode) {
-		return fmt.Errorf("grader %s: this Agentium grades on the host or in %s", mode, task.GraderSandbox)
+		return unknownGrader(mode)
 	}
-	if task.GraderOf(mode) == task.GraderHost {
+	switch task.GraderOf(mode) {
+	case task.GraderHost:
 		return nil
+	case task.GraderSandbox:
+		return sandbox.Usable(ctx)
 	}
-	return sandbox.Usable(ctx)
+	return unknownGrader(mode)
+}
+
+// unknownGrader is the refusal of a mode this Agentium does not grade in (container-v1 included, until the
+// containers plan's step 4): the same error for every entry point, and never a fall back to another mode.
+func unknownGrader(mode string) error {
+	return task.UnknownGrader(mode)
 }
 
 // sandboxApplies is the check every run and every validated task makes before it starts: a mode this Agentium knows,
@@ -60,12 +70,15 @@ func SandboxUsable(ctx context.Context, mode string) error {
 // when the command began (SandboxUsable); a grade whose denials the log does not show in time records them as unread.
 func sandboxApplies(ctx context.Context, mode string) error {
 	if !task.KnownGrader(mode) {
-		return fmt.Errorf("grader %s: this Agentium grades on the host or in %s", mode, task.GraderSandbox)
+		return unknownGrader(mode)
 	}
-	if task.GraderOf(mode) == task.GraderHost {
+	switch task.GraderOf(mode) {
+	case task.GraderHost:
 		return nil
+	case task.GraderSandbox:
+		return sandbox.Applies(ctx)
 	}
-	return sandbox.Applies(ctx)
+	return unknownGrader(mode)
 }
 
 // fullCommitOf resolves commit in the bare repository to its full ID: a grading seed is per base commit, and a branch
@@ -279,7 +292,7 @@ func (g grading) lock() error {
 	return nil
 }
 
-// sandboxedCommands is task.CheckoutCommands.Sandboxed for a validation (CheckoutCommands): a stage's checkout is
+// sandboxedCommands is task.CheckoutCommands.Isolated for a validation (CheckoutCommands): a stage's checkout is
 // graded as a run's copy is, in its own grading folder, with agent's recipe and denied paths.
 func (env Env) sandboxedCommands(inv agent.Invocation, base string) func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
 	return func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {

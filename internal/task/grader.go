@@ -14,7 +14,21 @@ const (
 	// GraderSandbox runs them under Agentium's grading sandbox (internal/sandbox), named by its profile's version: a
 	// new version is a new mode, so what was validated under the old one is validated again.
 	GraderSandbox = sandbox.Version
+	// GraderContainer runs them in a throwaway container (the containers plan). Until that plan's step 4 lands it is
+	// named but not graded in: KnownGrader and ParseGrader refuse it as an unknown mode, and no site may read it as
+	// the sandbox or the host. Every site that tells modes apart names the mode it means.
+	GraderContainer = "container-v1"
 )
+
+// GradesOn names the modes this Agentium grades in, for the refusal of any other (UnknownGrader and callers that
+// add context): one text, so the places that refuse cannot drift. Step 4 of the containers plan extends it.
+const GradesOn = "on the host or in " + GraderSandbox
+
+// UnknownGrader is the refusal of a mode this Agentium does not grade in (container-v1 included, until the containers
+// plan's step 4): the same words at every entry point.
+func UnknownGrader(mode string) error {
+	return fmt.Errorf("grader %s: this Agentium grades %s", mode, GradesOn)
+}
 
 // GraderOf is a recorded mode as it counts: empty is host.
 func GraderOf(mode string) string {
@@ -53,8 +67,14 @@ func KnownGrader(mode string) bool {
 
 // DescribeGrader names a mode for people: "on the host" or "in the sandbox (sandbox-v1)".
 func DescribeGrader(mode string) string {
-	if m := GraderOf(mode); m != GraderHost {
+	switch m := GraderOf(mode); m {
+	case GraderHost:
+		return "on the host"
+	case GraderSandbox:
 		return "in the sandbox (" + m + ")"
+	case GraderContainer:
+		return "in a container (" + m + ")"
+	default:
+		return "in an unknown grader mode (" + m + ")"
 	}
-	return "on the host"
 }

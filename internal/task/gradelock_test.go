@@ -24,7 +24,7 @@ func TestValidationHoldsTheGradeLock(t *testing.T) {
 	v, _ := validator(t, f.bare)
 	v.Grader = GraderSandbox
 	v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
-		return CheckoutCommands{Sandboxed: func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error) {
+		return CheckoutCommands{Isolated: func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error) {
 			if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("the grade folder %s exists before its grade: %v", root, err)
 			}

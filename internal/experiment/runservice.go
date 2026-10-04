@@ -1112,7 +1112,7 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 		}
 		l.Tasks = append(l.Tasks, NewLockedTask(t.Name, t.Instruction, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit,
 			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module, Grading: t.Grading}))
-		if v := task.ValidationOf(t); l.Grader != task.GraderHost && v.Grader == l.Grader && len(v.Harmless) > 0 {
+		if v := task.ValidationOf(t); task.GraderOf(l.Grader) == task.GraderSandbox && v.Grader == l.Grader && len(v.Harmless) > 0 {
 			if l.Harmless == nil {
 				l.Harmless = map[string][]task.DenialKey{}
 			}
