@@ -243,7 +243,7 @@ func pythonCredentials(env map[string]string, home string) []string {
 		filepath.Join(config, "pypoetry", "auth.toml"), filepath.Join(appSupport, "pypoetry", "auth.toml"),
 		filepath.Join(data, "python_keyring")}
 	if x := env["XDG_CONFIG_HOME"]; filepath.IsAbs(x) {
-		paths = append(paths, filepath.Join(x, "pip"), filepath.Join(x, "uv", "uv.toml"), filepath.Join(x, "pypoetry", "auth.toml"))
+		paths = append(paths, filepath.Join(x, "pip"), filepath.Join(x, "uv"), filepath.Join(x, "pypoetry", "auth.toml"))
 	}
 	if x := env["XDG_DATA_HOME"]; filepath.IsAbs(x) {
 		paths = append(paths, filepath.Join(x, "uv", "credentials"), filepath.Join(x, "python_keyring"))

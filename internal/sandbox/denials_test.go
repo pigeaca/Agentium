@@ -91,16 +91,13 @@ func TestDenialNoise(t *testing.T) {
 	}
 }
 
-// Flagged are the limits the grading profile imposes and the agent's own sandbox does not (decision 3): reads of the
-// grader's own credential stores, Mach lookups, POSIX IPC, IOKit, Unix sockets and anything unknown. Reads of what
-// agents are denied too, writes, the network to addresses, signals, process information and sysctl reads are not.
+// Flagged are the limits the grading profile imposes and the agent's own sandbox does not (decision 3):
+// Mach lookups, POSIX IPC, IOKit, Unix sockets and anything unknown. Reads (the grader's credential stores among them:
+// agents are denied those too), writes, the network to addresses, signals, process information and sysctl reads are not.
 func TestDenialFlagged(t *testing.T) {
 	home := t.TempDir()
 	p := Profile{Home: home, Data: "/data"}
 	flagged := []Denial{
-		{Operation: "file-read-data", Target: filepath.Join(home, ".m2/settings.xml")},
-		{Operation: "file-read-metadata", Target: filepath.Join(RealForm(home), ".config/pip/pip.conf")},
-		{Operation: "file-read-data", Target: filepath.Join(home, ".cargo/credentials.toml")},
 		{Operation: "mach-lookup", Target: "com.apple.SecurityServer"},
 		{Operation: "mach-lookup", Target: "com.apple.FontServer"},
 		{Operation: "ipc-posix-shm-write-create", Target: "/psm_abc"},
@@ -119,7 +116,10 @@ func TestDenialFlagged(t *testing.T) {
 	shared := []Denial{
 		{Operation: "file-read-data", Target: filepath.Join(home, ".ssh/id_ed25519")},
 		{Operation: "file-read-data", Target: "/data/records/r2/hidden_test.go"},
-		{Operation: "file-read-metadata", Target: filepath.Join(home, ".m2")}, // the folder above the grader's own store
+		{Operation: "file-read-data", Target: filepath.Join(home, ".m2/settings.xml")}, // denied to agents too
+		{Operation: "file-read-metadata", Target: filepath.Join(RealForm(home), ".config/pip/pip.conf")},
+		{Operation: "file-read-data", Target: filepath.Join(home, ".cargo/credentials.toml")},
+		{Operation: "file-read-metadata", Target: filepath.Join(home, ".m2")},
 		{Operation: "file-write-create", Target: filepath.Join(home, "Library/Caches/x")},
 		{Operation: "file-write-data", Target: "/data/deps/7/go/pkg"},
 		{Operation: "file-link", Target: "/data/cache/x"},
