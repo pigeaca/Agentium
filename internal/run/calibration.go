@@ -293,8 +293,13 @@ func WriteCalibrations(out io.Writer, st term.Style, results []Calibration) erro
 	if err := table.Write(out); err != nil {
 		return err
 	}
-	fmt.Fprintln(out, st.Note("Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;"))
-	fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file."))
+	if len(results) > 0 && results[0].Agent == codex.Name {
+		fmt.Fprintln(out, st.Note("Checks rest on the stream: SANDBOX, the shell command's output; LARGE OUTPUT, n/a (Codex saves no large outputs for the agent);"))
+		fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the first AGENTS.md Codex loads (the trusted checkout's), repeated without reading that file."))
+	} else {
+		fmt.Fprintln(out, st.Note("Checks rest on the transcript: SANDBOX, the Bash output; LARGE OUTPUT, a read of the output Claude Code saved;"))
+		fmt.Fprintln(out, st.Note("INSTRUCTIONS, the codeword Agentium added to the arm's instruction file, repeated without reading that file."))
+	}
 	if len(results) > 0 {
 		label := "Claude Code"
 		if results[0].Agent == codex.Name {

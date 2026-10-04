@@ -9,6 +9,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/pricing"
 )
 
 // sweepCodex stops the processes a Codex run's commands left that still use its workspace or temp root, and says what
@@ -54,4 +55,34 @@ func sniffAdapter(transcript string) agent.Adapter {
 		return codex.Adapter{}
 	}
 	return claude.Adapter{}
+}
+
+// codexSpendFallback gives a Codex run whose spend could not be read from its rollouts (Gather failed, or Agentium died
+// before it ran and the rollout is gone) an estimate that never undercounts, marked as one (CostEstimated, a note):
+//   - with the stream's whole-turn totals (turn.completed), those totals at the requested model's list prices; per
+//     request sizes are unknown, so the long-context limit cannot be checked;
+//   - with no usage at all (an interrupted run: Codex prints usage only when its turn completes), or no list price,
+//     the run's cap (CapUSD), which Agentium's watcher kept its spend under.
+//
+// A run whose stream shows no session (no thread.started) never reached the API and spent nothing. A rollout that was
+// read, even without requests, is the spend: nothing changes.
+func codexSpendFallback(rec *Record) {
+	m := &rec.Metrics
+	if agent.Name(rec.Agent) != codex.Name || m.Rollouts > 0 || !m.SawInit {
+		return
+	}
+	if rates, ok := pricing.OpenAILookup(rec.Model); ok && m.InputTokens+m.CacheReadTokens+m.CacheWriteTokens+m.OutputTokens > 0 {
+		usd := (float64(m.InputTokens)*rates.Input + float64(m.CacheReadTokens)*rates.CachedInput + float64(m.CacheWriteTokens)*rates.CacheWrite +
+			float64(m.OutputTokens)*rates.Output) / 1e6
+		m.CostUSD, m.EstimatedCostUSD, m.UnpricedRequests, rec.CostEstimated = usd, usd, 0, true
+		rec.Notes = append(rec.Notes, fmt.Sprintf("Codex's session rollout is missing: the cost is estimated from the stream's whole-turn tokens at %s's list prices of %s (per-request sizes are unknown, so the long-context limit cannot be checked)",
+			rec.Model, pricing.OpenAIDate))
+		return
+	}
+	if rec.CapUSD <= 0 {
+		rec.Notes = append(rec.Notes, "Codex's session rollout is missing and the run had no cap: what it spent is unknown")
+		return
+	}
+	m.CostUSD, m.EstimatedCostUSD, m.UnpricedRequests, rec.CostEstimated = rec.CapUSD, rec.CapUSD, 0, true
+	rec.Notes = append(rec.Notes, fmt.Sprintf("Codex's session rollout is missing and its stream holds no usage: the run's $%.2f cap is counted as its spend", rec.CapUSD))
 }

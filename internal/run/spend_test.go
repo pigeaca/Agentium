@@ -31,6 +31,7 @@ var spendFields = map[string]string{
 	"Overshoot.CapUSD":             "folded",
 	"Overshoot.OverUSD":            "folded",
 	"Overshoot.AllowanceUSD":       "folded",
+	"CapUSD":                       "folded", // a Codex run's cap: a limit, counted as spend only through Metrics.CostUSD (codexSpendFallback)
 }
 
 // moneyFields lists the paths of the float64 fields (or pointers to one) named *USD under t, through structs,

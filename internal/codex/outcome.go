@@ -2,17 +2,26 @@ package codex
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/pigeaca/agentium/internal/agent"
 )
 
+// infraText matches a failed turn's error that never reached the task: a usage or rate limit, the sign-in, the network,
+// or the API itself. Any other failure (the context window overflowing, a policy refusal) is the agent's.
+var infraText = regexp.MustCompile(`(?i)usage limit|rate limit|too many requests|\b429\b|quota|billing|unauthori[sz]ed|\b40[13]\b|forbidden|` +
+	`not logged in|log in again|sign in|authenticat|token (has )?expired|refresh token|connection|network|stream disconnected|` +
+	`error sending request|timed out|overloaded|server error|service unavailable|bad gateway|\b5\d\d\b`)
+
 // Classify decides a Codex run's outcome:
 //   - unfair, on any drift (Check);
-//   - infra, when the stream ends while Codex retries the API or waits for the network (only a stop ends that), or when
-//     Agentium could not watch its spend (agent.StopBlind);
-//   - capped at Agentium's cost cap, timeout at Agentium's timeout;
-//   - infra when the turn never completed: it failed (a usage limit, the sign-in, the network, the API) or Codex
-//     ended without a final event (stopped by something other than Agentium);
+//   - infra, when Agentium could not watch its spend (agent.StopBlind);
+//   - capped at Agentium's cost cap, before anything else Codex reported: a run stopped for its spend is never retried;
+//   - infra, when the stream ends while Codex retries the API or waits for the network (only a stop ends that);
+//   - timeout at Agentium's timeout;
+//   - for a failed turn (turn.failed), infra when its error never reached the task (infraText: a usage limit, the
+//     sign-in, the network, the API), else the agent's own failure, a fair attempt that is graded (ok);
+//   - infra when Codex ended without a final event (stopped by something other than Agentium);
 //   - ok otherwise.
 //
 // An interrupted run (Ctrl-C, a dead Agentium process) is cancelled, which the run decides, not the agent.
@@ -22,12 +31,16 @@ func Classify(m agent.Metrics, stop agent.Stop, drift []string) string {
 		return agent.OutcomeUnfair
 	case stop == agent.StopBlind:
 		return agent.OutcomeInfra
-	case m.Result == ResultNetwork:
-		return agent.OutcomeInfra
 	case stop == agent.StopCap:
 		return agent.OutcomeCapped
+	case m.Result == ResultNetwork:
+		return agent.OutcomeInfra
 	case stop == agent.StopTimeout:
 		return agent.OutcomeTimeout
+	case m.Result == ResultFailed && infraText.MatchString(m.ResultExcerpt):
+		return agent.OutcomeInfra
+	case m.Result == ResultFailed:
+		return agent.OutcomeOK
 	case !m.SawResult:
 		return agent.OutcomeInfra
 	}

@@ -302,12 +302,12 @@ func recoverForClean(ctx context.Context, env Env, layout home.Layout, db *store
 	if db == nil {
 		return errors.New("the data folder has no database to store recovered runs in")
 	}
-	_, secret, _, err := signIn(env)
+	secrets, err := recoverySecrets(env)
 	if err != nil {
 		return err
 	}
 	warn := func(msg string) { res.warnings = append(res.warnings, msg) }
-	orphans, recErr := run.RecoverWarn(ctx, layout, func(id string) (bool, error) { return db.HasRun(ctx, id) }, secret, env.Now(), warn)
+	orphans, recErr := run.RecoverWarn(ctx, layout, func(id string) (bool, error) { return db.HasRun(ctx, id) }, secrets, env.Now(), warn)
 	w := &workspace{db: db, layout: layout}
 	for _, o := range orphans {
 		if o.Unreadable != "" {

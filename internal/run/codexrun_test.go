@@ -134,3 +134,83 @@ func TestCodexProbeGoesIntoAgentsMD(t *testing.T) {
 		t.Errorf("CLAUDE.md changed: %q", data)
 	}
 }
+
+// A Codex run whose rollout is lost never counts as free: the stream's whole-turn tokens priced at the requested
+// model's list prices when the turn completed, else (an interrupted run, whose stream holds no usage) its cap; both
+// marked estimated. A run that never started a session spent nothing, and a rollout that was read stands.
+func TestCodexSpendWithoutItsRollout(t *testing.T) {
+	read := func(fixture string) Record {
+		t.Helper()
+		rec := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
+		m, err := parseRecords(codex.Adapter{}, recordsWith(t, filepath.Join("..", "codex", "testdata", fixture)))
+		must(t, err)
+		rec.Metrics = m
+		codexSpendFallback(&rec)
+		return rec
+	}
+	completed := read("exec-ok.jsonl") // 44,416 input (21,248 cached), 316 output
+	if want := (float64(44416-21248)*2 + 21248*0.2 + 316*10) / 1e6; completed.Spend().AgentUSD < want-1e-12 || completed.Spend().AgentUSD > want+1e-12 ||
+		!completed.CostEstimated || completed.Metrics.UnpricedRequests != 0 || len(completed.Notes) != 1 || !strings.Contains(completed.Notes[0], "long-context") {
+		t.Errorf("a completed turn without its rollout: $%.6f (want $%.6f), estimated %v, notes %q", completed.Spend().AgentUSD, want, completed.CostEstimated, completed.Notes)
+	}
+	interrupted := read("exec-interrupted.jsonl")
+	if interrupted.Spend().AgentUSD != 3 || !interrupted.CostEstimated || !strings.Contains(strings.Join(interrupted.Notes, " "), "$3.00 cap") {
+		t.Errorf("an interrupted run without its rollout: $%.2f, estimated %v, notes %q", interrupted.Spend().AgentUSD, interrupted.CostEstimated, interrupted.Notes)
+	}
+	never := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
+	codexSpendFallback(&never)
+	if never.Spend().AgentUSD != 0 || never.CostEstimated {
+		t.Errorf("a run without a session: $%.2f", never.Spend().AgentUSD)
+	}
+	gathered := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3, Metrics: agent.Metrics{SawInit: true, Rollouts: 1}}
+	codexSpendFallback(&gathered)
+	if gathered.Spend().AgentUSD != 0 || gathered.CostEstimated {
+		t.Errorf("a run whose rollout was read, without requests: $%.2f", gathered.Spend().AgentUSD)
+	}
+}
+
+// Recovering a Codex run whose rollout is gone counts its cap: budgets only ever go up.
+func TestRecoverACodexRunWithoutItsRollout(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1")
+	stream, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "exec-interrupted.jsonl"))
+	must(t, err)
+	must(t, os.MkdirAll(dir, 0o700))
+	must(t, os.MkdirAll(workspace, 0o700))
+	must(t, os.WriteFile(filepath.Join(dir, "stream.jsonl"), stream, 0o600))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 2.5, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if got := orphans[0].Record; got.Spend().AgentUSD != 2.5 || !got.CostEstimated {
+		t.Errorf("recovered $%.2f, estimated %v, notes %q", got.Spend().AgentUSD, got.CostEstimated, got.Notes)
+	}
+}
+
+// Recovery redacts a dead run's records of every sign-in secret it is given, Claude Code's and Codex's key alike.
+func TestRecoveryRedactsEveryAgentsSecret(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1")
+	must(t, os.MkdirAll(dir, 0o700))
+	must(t, os.MkdirAll(workspace, 0o700))
+	stream := `{"type":"thread.started","thread_id":"00000000-0000-7000-8000-000000000001"}` + "\n" +
+		`{"type":"item.completed","item":{"type":"agent_message","text":"codex-key-value-1 and claude-token-value-2"}}` + "\n"
+	must(t, os.WriteFile(filepath.Join(dir, "stream.jsonl"), []byte(stream), 0o600))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 3, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	if _, err := RecoverWarn(context.Background(), layout, func(string) (bool, error) { return false, nil },
+		[]string{"claude-token-value-2", "codex-key-value-1"}, time.Now(), nil); err != nil {
+		t.Fatal(err)
+	}
+	data2, err := os.ReadFile(filepath.Join(dir, "stream.jsonl"))
+	must(t, err)
+	if strings.Contains(string(data2), "value-1") || strings.Contains(string(data2), "value-2") {
+		t.Errorf("a secret is left in the records: %s", data2)
+	}
+}

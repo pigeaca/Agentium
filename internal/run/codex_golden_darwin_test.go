@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -32,6 +33,10 @@ const fakeCodexName = "codex-golden-fake"
 
 // spendForever, in a run's prompt, makes the fake Codex spend $0.40 a request until it is interrupted.
 const spendForever = "AGENTIUM-SPEND-FOREVER"
+
+// leaveAChild, in a run's prompt, makes the fake Codex leave a process in a session of its own (as unified exec's
+// commands run), in the checkout, which outlives Codex and its process group: the stream names its ID.
+const leaveAChild = "AGENTIUM-LEAVE-A-CHILD"
 
 // fakeThread is the fake Codex's thread.
 const fakeThread = "00000000-0000-7000-8000-00000000f00d"
@@ -96,6 +101,13 @@ func fakeCodex() int {
 		value("-m"), effort))
 	usage := func(input, output int64) string {
 		return fmt.Sprintf(`{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0}`, input, output)
+	}
+	if strings.Contains(string(stdin), leaveAChild) {
+		child := exec.Command("/bin/sleep", "600")
+		child.Dir, child.SysProcAttr = cwd, &syscall.SysProcAttr{Setsid: true}
+		if err := child.Start(); err == nil {
+			fmt.Printf(`{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"nohup sleep 600 & # pid %d","aggregated_output":"","exit_code":0,"status":"completed"}}`+"\n", child.Process.Pid)
+		}
 	}
 	_ = os.MkdirAll(filepath.Join(home, "shell_snapshots"), 0o700)
 	_ = os.WriteFile(filepath.Join(home, "shell_snapshots", fakeThread+".1.sh"), []byte("export FROM_THE_SHELL=1\n"), 0o600)
@@ -167,12 +179,16 @@ type codexOnce struct {
 	sentinels       map[string]string // path: content
 }
 
-func newCodexOnce(t *testing.T, module, decoy, signIn string) codexOnce {
+func newCodexOnce(t *testing.T, module, decoy, signIn string, files ...map[string]string) codexOnce {
 	t.Helper()
 	if decoy == "" {
 		decoy = "decoy"
 	}
-	f := codexOnce{moduleOnce: newModuleOnce(t, module, decoy, "")}
+	var base map[string]string
+	if len(files) > 0 {
+		base = files[0]
+	}
+	f := codexOnce{moduleOnce: newModuleOnceWith(t, module, decoy, "", base)}
 	f.dir = filepath.Dir(f.env.Home)
 	f.temps = shortTemp(t)
 	t.Cleanup(func() { os.RemoveAll(f.temps) })
@@ -196,7 +212,7 @@ func newCodexOnce(t *testing.T, module, decoy, signIn string) codexOnce {
 		must(t, os.WriteFile(p, []byte(content), 0o600))
 	}
 	f.env.Environ = claudeUser(f.env.Home)
-	f.spec.Model = "gpt-6.1-sol"
+	f.spec.Model, f.spec.BudgetUSD = "gpt-6.1-sol", 3
 	return f
 }
 
@@ -397,5 +413,64 @@ func TestCodexRunRefusals(t *testing.T) {
 	f.spec.Task.Grading = "judge"
 	if _, err := Once(context.Background(), f.env, f.spec); err == nil || !strings.Contains(err.Error(), "judge") {
 		t.Errorf("a judge-graded task: %v", err)
+	}
+}
+
+// What Codex's commands leave running (each command runs in a session of its own, outside the process group the
+// runner kills) is stopped once Codex ends: a child in its own session, in the checkout, is gone after Once, and the
+// record says so.
+func TestCodexRunSweepsLeftoverProcesses(t *testing.T) {
+	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
+	f.spec.Instruction = "Leave one: " + leaveAChild
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := os.ReadFile(filepath.Join(rec.RecordsDir, "stream.jsonl"))
+	must(t, err)
+	match := regexp.MustCompile(`# pid (\d+)`).FindSubmatch(stream)
+	if match == nil {
+		t.Fatalf("the fake left no child: %s", stream)
+	}
+	pid, _ := strconv.Atoi(string(match[1]))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	gone := false
+	for range 40 {
+		if err := syscall.Kill(pid, 0); err != nil {
+			gone = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !gone {
+		t.Errorf("process %d, which Codex's command left in the checkout, outlived the run (notes %q)", pid, rec.Notes)
+	}
+	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es) Codex's commands left running") {
+		t.Errorf("the record does not say what was stopped: %q", rec.Notes)
+	}
+}
+
+// A trusted checkout's Codex configuration is checked before the agent starts: one that could change the run's
+// sandbox, network, environment or hooks is refused with nothing spent and no transcript; one with only the allowed
+// settings runs, and the run's own model and effort are what Codex is given.
+func TestCodexRunRefusesAProjectConfig(t *testing.T) {
+	for name, config := range map[string]string{
+		"network":     "[permissions.agentium.network]\nenabled = true\n",
+		"the sandbox": "sandbox_mode = \"danger-full-access\"\n",
+		"hooks":       "[features]\nhooks = true\n",
+	} {
+		f := newCodexOnce(t, "", "decoy", codex.SignInLogin, map[string]string{".codex/config.toml": config})
+		rec, err := Once(context.Background(), f.env, f.spec)
+		if err == nil || !strings.Contains(err.Error(), "Codex merges a trusted project's configuration") {
+			t.Errorf("%s: %v", name, err)
+		}
+		if _, statErr := os.Stat(filepath.Join(rec.RecordsDir, "stream.jsonl")); statErr == nil || rec.Spend().AgentUSD != 0 {
+			t.Errorf("%s: the agent started", name)
+		}
+	}
+	f := newCodexOnce(t, "", "decoy", codex.SignInLogin, map[string]string{".codex/config.toml": "model = \"gpt-5.5\"\nmodel_reasoning_effort = \"high\"\n"})
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil || rec.Outcome != agent.OutcomeOK || rec.Metrics.Model != "gpt-6.1-sol" || rec.Metrics.Effort != "low" {
+		t.Errorf("allowed settings: %v, outcome %s, model %s, effort %s, notes %q", err, rec.Outcome, rec.Metrics.Model, rec.Metrics.Effort, rec.Notes)
 	}
 }

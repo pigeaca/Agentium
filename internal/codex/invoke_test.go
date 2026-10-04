@@ -1,6 +1,8 @@
 package codex
 
 import (
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -56,11 +58,11 @@ func command(t *testing.T, inv agent.Invocation) (agent.Command, map[string]stri
 // setting a -c override, the effort always passed, unbounded retries off, the final message into the records.
 func TestCommandIsTheVerifiedRecipe(t *testing.T) {
 	cmd, overrides, _ := command(t, invocation(SignInLogin, ""))
-	if !slices.Equal(cmd.Args[:5], []string{"exec", "--json", "-m", "gpt-6.1-sol", "--ignore-user-config"}) {
+	if !slices.Equal(cmd.Args[:5], []string{"exec", "--json", "-m", "gpt-6.1-sol", "--ignore-user-config"}) || !slices.Contains(cmd.Args, "--ignore-rules") {
 		t.Errorf("starts %q", cmd.Args[:5])
 	}
-	tail := cmd.Args[len(cmd.Args)-7:]
-	if !slices.Equal(tail, []string{"--disable", "unbounded_connection_retries", "-C", "/data/workspaces/r1/repo", "-o", "/data/records/r1/last-message.txt", "-"}) {
+	tail := cmd.Args[len(cmd.Args)-8:]
+	if !slices.Equal(tail, []string{"--disable", "unbounded_connection_retries", "--ignore-rules", "-C", "/data/workspaces/r1/repo", "-o", "/data/records/r1/last-message.txt", "-"}) {
 		t.Errorf("ends %q", tail)
 	}
 	if cmd.Stdin != "Fix the parser." || slices.Contains(cmd.Args, "Fix the parser.") {
@@ -72,14 +74,15 @@ func TestCommandIsTheVerifiedRecipe(t *testing.T) {
 		}
 	}
 	for key, want := range map[string]string{
-		"model_reasoning_effort": `"low"`, // the catalog's default, passed: the rollout records it only then
+		"model":                  `"gpt-6.1-sol"`, // as a setting too: it outranks a trusted project's model
+		"model_reasoning_effort": `"low"`,         // the catalog's default, passed: the rollout records it only then
 		"approval_policy":        `"never"`, "default_permissions": `"agentium"`, "forced_login_method": `"chatgpt"`,
 		"history.persistence": `"none"`, "web_search": `"disabled"`, "check_for_update_on_startup": "false",
 		"sqlite_home": `"/data/workspaces/r1/agent/sqlite"`, "log_dir": `"/data/workspaces/r1/agent/log"`,
 		"allow_login_shell": "false",
 		"shell_environment_policy.ignore_default_excludes": "false",
 		"shell_environment_policy.exclude":                 `["CODEX_*","OPENAI_*"]`,
-		"shell_environment_policy.set":                     `{"HOME"="/hm/u","TMPDIR"="/tmp/ag-0123456789","TMPPREFIX"="/tmp/ag-0123456789/zsh"}`,
+		"shell_environment_policy.set":                     `{"HOME"="/hm/u","TMPDIR"="/tmp/ag-0123456789","TMPPREFIX"="/tmp/ag-0123456789/zsh","ZDOTDIR"="/tmp/ag-0123456789/zdotdir"}`,
 		"permissions.agentium.network":                     "{enabled=false}",
 	} {
 		if overrides[key] != want {
@@ -91,8 +94,8 @@ func TestCommandIsTheVerifiedRecipe(t *testing.T) {
 			t.Errorf("feature %s is not off: %s", off, overrides["features"])
 		}
 	}
-	// Trust pinned in the table form, for the start folder (and the checkout); never the dotted form, which is ignored.
-	if !strings.HasPrefix(overrides["projects"], `{"/data/workspaces/r1/repo"={trust_level="untrusted"}`) {
+	// Trust pinned (trusted: decision 7) in the table form, for the start folder (and the checkout); never the dotted form, which is ignored.
+	if !strings.HasPrefix(overrides["projects"], `{"/data/workspaces/r1/repo"={trust_level="trusted"}`) {
 		t.Errorf("projects %s", overrides["projects"])
 	}
 	for key := range overrides {
@@ -244,7 +247,7 @@ func TestCommandRefusals(t *testing.T) {
 	}
 }
 
-// A module run starts in the module's folder; the whole checkout is writable and untrusted.
+// A module run starts in the module's folder; the whole checkout is writable and pinned trusted.
 func TestModuleRun(t *testing.T) {
 	inv := invocation(SignInLogin, "")
 	inv.Repo, inv.Dir = "/data/workspaces/r1/repo", "/data/workspaces/r1/repo/svc"
@@ -256,8 +259,8 @@ func TestModuleRun(t *testing.T) {
 		t.Error("the checkout is not writable")
 	}
 	for _, p := range []string{"/data/workspaces/r1/repo/svc", "/data/workspaces/r1/repo"} {
-		if !strings.Contains(overrides["projects"], `"`+p+`"={trust_level="untrusted"}`) {
-			t.Errorf("%s is not pinned untrusted: %s", p, overrides["projects"])
+		if !strings.Contains(overrides["projects"], `"`+p+`"={trust_level="trusted"}`) {
+			t.Errorf("%s is not pinned trusted: %s", p, overrides["projects"])
 		}
 	}
 }
@@ -288,5 +291,57 @@ func TestAllowance(t *testing.T) {
 	}
 	if filepath.Base(zshPrefix("/tmp/x")) != "zsh" {
 		t.Error("TMPPREFIX")
+	}
+}
+
+// The user's ~/.zshenv never runs in the agent's shells: `zsh -c` reads $ZDOTDIR/.zshenv even without a login shell,
+// after Codex's environment filter, so the shells get an empty ZDOTDIR of the run's own. Checked offline with the
+// shells' own settings (shell_environment_policy.set): a .zshenv that exports a marker leaves none; without ZDOTDIR it
+// would.
+func TestTheUsersZshenvNeverRuns(t *testing.T) {
+	if _, err := os.Stat("/bin/zsh"); err != nil {
+		t.Skip("no /bin/zsh")
+	}
+	home, temp := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".zshenv"), []byte("export AGENTIUM_ZSHENV_MARKER=sourced\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inv := invocation(SignInLogin, "")
+	inv.Home, inv.TempRoot = home, temp
+	cmd, overrides, _ := command(t, inv)
+	set := map[string]string{}
+	for _, entry := range strings.Split(strings.Trim(overrides["shell_environment_policy.set"], "{}"), ",") {
+		key, value, _ := strings.Cut(entry, "=")
+		set[strings.Trim(key, `"`)] = strings.Trim(value, `"`)
+	}
+	if set["ZDOTDIR"] == "" || !strings.HasPrefix(set["ZDOTDIR"], temp) || !slices.Contains(cmd.Dirs, set["ZDOTDIR"]) {
+		t.Fatalf("ZDOTDIR %q is not an empty folder of the run's own (dirs %q)", set["ZDOTDIR"], cmd.Dirs)
+	}
+	for _, dir := range cmd.Dirs {
+		if strings.HasPrefix(dir, temp) {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	shell := func(env map[string]string) string {
+		t.Helper()
+		c := exec.Command("/bin/zsh", "-c", "env")
+		c.Env = []string{"PATH=/usr/bin:/bin"}
+		for k, v := range env {
+			c.Env = append(c.Env, k+"="+v)
+		}
+		out, err := c.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if out := shell(set); strings.Contains(out, "AGENTIUM_ZSHENV_MARKER") {
+		t.Errorf("the user's .zshenv ran in the agent's shell:\n%s", out)
+	}
+	delete(set, "ZDOTDIR")
+	if out := shell(set); !strings.Contains(out, "AGENTIUM_ZSHENV_MARKER=sourced") {
+		t.Error("the check proves nothing: without ZDOTDIR the .zshenv did not run either")
 	}
 }

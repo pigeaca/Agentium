@@ -8,6 +8,8 @@ exec
 gpt-6.1-sol
 --ignore-user-config
 -c
+model="gpt-6.1-sol"
+-c
 model_reasoning_effort="low"
 -c
 approval_policy="never"
@@ -34,7 +36,7 @@ allow_login_shell=false
 -c
 features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false}
 -c
-shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh"}
+shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh","ZDOTDIR"="<RUNTEMP>/zdotdir"}
 -c
 shell_environment_policy.ignore_default_excludes=false
 -c
@@ -157,10 +159,11 @@ permissions.agentium.filesystem={
 permissions.agentium.network={enabled=false}
 -c
 projects={
-  "<T>/data/workspaces/<ID>/repo"={trust_level="untrusted"}
+  "<T>/data/workspaces/<ID>/repo"={trust_level="trusted"}
 }
 --disable
 unbounded_connection_retries
+--ignore-rules
 -C
 <T>/data/workspaces/<ID>/repo
 -o
@@ -213,6 +216,8 @@ exec
 gpt-6.1-sol
 --ignore-user-config
 -c
+model="gpt-6.1-sol"
+-c
 model_reasoning_effort="high"
 -c
 approval_policy="never"
@@ -239,7 +244,7 @@ allow_login_shell=false
 -c
 features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false}
 -c
-shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh"}
+shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh","ZDOTDIR"="<RUNTEMP>/zdotdir"}
 -c
 shell_environment_policy.ignore_default_excludes=false
 -c
@@ -363,11 +368,12 @@ permissions.agentium.filesystem={
 permissions.agentium.network={enabled=false}
 -c
 projects={
-  "<T>/data/workspaces/<ID>/repo/svc"={trust_level="untrusted"}
-  "<T>/data/workspaces/<ID>/repo"={trust_level="untrusted"}
+  "<T>/data/workspaces/<ID>/repo/svc"={trust_level="trusted"}
+  "<T>/data/workspaces/<ID>/repo"={trust_level="trusted"}
 }
 --disable
 unbounded_connection_retries
+--ignore-rules
 -C
 <T>/data/workspaces/<ID>/repo/svc
 -o

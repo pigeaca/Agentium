@@ -71,16 +71,19 @@ type Spec struct {
 
 // Env is what a run needs from Agentium and the machine.
 type Env struct {
-	ID            string // from NewID
-	Layout        home.Layout
-	Bare          string // the project's bare repository
-	ProjectRoot   string // the user's repository: the agent may not read it
-	CLI           string // the claude executable
-	Home          string
-	AccountHome   string   // the account's home folder in the user database, when known (agent.Invocation.AccountHome)
-	Environ       []string // the parent's environment; the run gets an allowlisted part
-	SignIn        string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
-	Secret        string   // for API key and token sign-in; redacted from every record
+	ID          string // from NewID
+	Layout      home.Layout
+	Bare        string // the project's bare repository
+	ProjectRoot string // the user's repository: the agent may not read it
+	CLI         string // the claude executable
+	Home        string
+	AccountHome string   // the account's home folder in the user database, when known (agent.Invocation.AccountHome)
+	Environ     []string // the parent's environment; the run gets an allowlisted part
+	SignIn      string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
+	Secret      string   // for API key and token sign-in; redacted from every record
+	// RedactAlso are more secrets redacted from the run's records: the other agent's sign-in (recovery and clean redact
+	// a dead run's records of every key, whichever agent ran).
+	RedactAlso    []string
 	TokenFile     string
 	VerifyTimeout time.Duration // each setup or verification command
 	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
@@ -218,6 +221,9 @@ type Record struct {
 	// (pricing.OpenAIDate). Both are absent from Claude Code's records, whose cost is Claude Code's own.
 	CostSource string `json:"cost_source,omitempty"`
 	PriceTable string `json:"price_table,omitempty"`
+	// CapUSD is a Codex run's cost cap, Agentium's own (Codex has none): kept so that a run whose spend cannot be read
+	// (its session rollout lost) counts the cap, never nothing (codexSpendFallback). Absent from Claude Code's records.
+	CapUSD float64 `json:"cap_usd,omitempty"`
 	// IsolatedCostUSD is the run's cost had no other run warmed the prompt cache: Metrics.CostUSD with the first-request
 	// cache reads of Metrics.FirstReads repriced as cache writes (isolatedCost). Actual cost (Spend) stays the primary
 	// metric; this is a counterfactual beside it, not spend. Nil when it cannot be computed and in records made before
@@ -308,6 +314,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	if spec.Task.JudgeGraded() {
 		rec.GradedBy = task.GradingJudge
+	}
+	if env.isCodex() {
+		rec.CapUSD = spec.BudgetUSD
 	}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)
@@ -577,6 +586,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if rec.ContextHead, err = gitx.Run(ctx, "-C", repo, "rev-parse", "HEAD"); err != nil {
 		return rec, err
 	}
+	// A Codex run loads the checkout's Codex configuration (a trusted project): one that could change the run's sandbox,
+	// permissions or environment is refused now, as the arm and the setup left it, before anything is spent.
+	if env.isCodex() {
+		if err := codex.ProjectConfigRefusal(repo, env.Module); err != nil {
+			return rec, err
+		}
+	}
 	// Grading never trusts the agent's .git (its config could name filters that run outside the sandbox): the context
 	// commit is copied now, before the agent starts, into a repository of Agentium's own.
 	if err := checkout.New(ctx, repo, rec.ContextHead, graded); err != nil {
@@ -663,6 +679,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if env.isCodex() { // Codex reports no cost: its requests' tokens, priced here (codex.Adapter.Parse)
 		rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+		codexSpendFallback(&rec)
 		if rec.Metrics.UnpricedRequests > 0 {
 			rec.Notes = append(rec.Notes, fmt.Sprintf("%d request(s) could not be priced (a model without a list price, or a request above the long-context limit): they are not in the cost", rec.Metrics.UnpricedRequests))
 		}
@@ -1337,7 +1354,7 @@ func (env Env) redactRecords(dir string) error {
 		if err != nil {
 			return fmt.Errorf("redact %s: %w", p, err)
 		}
-		if clean := Redact(data, env.Secret); len(clean) != len(data) || string(clean) != string(data) {
+		if clean := Redact(data, append([]string{env.Secret}, env.RedactAlso...)...); len(clean) != len(data) || string(clean) != string(data) {
 			if err := os.WriteFile(p, clean, 0o600); err != nil {
 				return fmt.Errorf("redact %s: %w", p, err)
 			}
@@ -1351,11 +1368,13 @@ var secretPatterns = regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}|\bsk-(?:proj-
 	`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})|\bxox[abprs]-[A-Za-z0-9-]{10,}|` +
 	`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
 
-// Redact replaces secret, when not empty, and credential-shaped strings with [REDACTED].
-func Redact(data []byte, secret string) []byte {
+// Redact replaces each secret, when not empty, and credential-shaped strings with [REDACTED].
+func Redact(data []byte, secrets ...string) []byte {
 	text := string(data)
-	if secret != "" {
-		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	for _, secret := range secrets {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "[REDACTED]")
+		}
 	}
 	return []byte(secretPatterns.ReplaceAllString(text, "[REDACTED]"))
 }
@@ -1422,6 +1441,12 @@ func (env Env) agentRefusal(tools []string, spec Spec) error {
 		return claude.LocalBindingRefusal(tools, env.AllowLocalBinding)
 	}
 	if err := codex.ToolsRefusal(tools); err != nil {
+		return err
+	}
+	if err := codex.CapRefusal(spec.Model, spec.BudgetUSD); err != nil {
+		return err
+	}
+	if _, err := codex.Effort(spec.Model, spec.Effort); err != nil {
 		return err
 	}
 	if spec.Task.JudgeGraded() || spec.Judge != nil {

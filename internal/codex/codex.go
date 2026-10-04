@@ -2,13 +2,14 @@
 // agent seam (Adapter, internal/agent). Each run follows the recipe the Codex spike verified with Codex CLI 0.160.0
 // (docs/research/2026-10-04-codex-spike.md; the Codex plan, .agents/plans/2026-10-04-codex.md):
 //
-//   - `codex exec --json` with the prompt on stdin, `--ignore-user-config`, and every setting as a `-c` override: no
-//     configuration file of the user's or the project's is read, and the checkout stays untrusted;
+//   - `codex exec --json` with the prompt on stdin, `--ignore-user-config`, and every setting as a `-c` override: the
+//     user's configuration is not read; the checkout is trusted, so its AGENTS.md and .codex/config.toml load, and a
+//     config that could change what the overrides protect is refused (ProjectConfigRefusal);
 //   - Codex's own Seatbelt sandbox, with an Agentium permission profile: the disk readable, the checkout, the run's build
 //     cache and temp root writable, the shared deny list (internal/sandbox) plus Codex's and Claude Code's own data
 //     denied, and no network;
 //   - an environment built from the shared allowlist, with a run-local HOME, TMPDIR and TMPPREFIX; the agent's shells get
-//     the user's HOME back, and never Codex's variables or a key (shell_environment_policy);
+//     the user's HOME back with an empty ZDOTDIR, and never Codex's variables or a key (shell_environment_policy);
 //   - sign-in: the ChatGPT login in Agentium's own Codex home (<data>/codex, CODEX_HOME), shared by every run and run
 //     one at a time, or an API key (CODEX_API_KEY) given to Codex alone with a fresh CODEX_HOME per run;
 //   - Agentium's cost cap, since Codex has none: a watcher prices each request from the session's rollout as it is

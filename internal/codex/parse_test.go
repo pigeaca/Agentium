@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -152,10 +153,14 @@ func TestParseNetworkFailures(t *testing.T) {
 	if waiting.Result != ResultNetwork {
 		t.Errorf("waiting: result %q", waiting.Result)
 	}
-	for _, stop := range []agent.Stop{agent.StopTimeout, agent.StopCap, agent.StopNone} {
+	for _, stop := range []agent.Stop{agent.StopTimeout, agent.StopNone} {
 		if got := Classify(waiting, stop, Check(waiting, agent.Expect{})); got != agent.OutcomeInfra {
 			t.Errorf("waiting for the network, stopped %q: %s", stop, got)
 		}
+	}
+	// Stopped at its cap, a run is capped whatever Codex was doing: a run stopped for its spend is never retried.
+	if got := Classify(waiting, agent.StopCap, nil); got != agent.OutcomeCapped {
+		t.Errorf("waiting for the network, stopped at the cap: %s", got)
 	}
 	// A reconnect the run recovered from is not an outage.
 	recovered := parse(t, records(t, "ok", "ok"))
@@ -219,5 +224,40 @@ func TestParseSubagents(t *testing.T) {
 	m := parse(t, dir)
 	if want := cost(44416, 21248, 316) + cost(54875, 43008, 396); math.Abs(m.CostUSD-want) > 1e-12 || m.Turns != 4 || m.Rollouts != 2 {
 		t.Errorf("cost $%.7f (want $%.7f), turns %d, rollouts %d", m.CostUSD, want, m.Turns, m.Rollouts)
+	}
+}
+
+// A failed turn is infrastructure when its error never reached the task (a usage limit, the sign-in, the network, the
+// API), and the agent's own failure otherwise (the context window overflowing, a policy refusal): a fair attempt,
+// graded. The spike's network failure is infra.
+func TestFailedTurnsByTheirError(t *testing.T) {
+	for message, want := range map[string]string{
+		"You've hit your usage limit. Try again later.":                                 agent.OutcomeInfra,
+		"unexpected status 401 Unauthorized: Missing bearer authentication":             agent.OutcomeInfra,
+		"Your access token could not be refreshed. Please log in again.":                agent.OutcomeInfra,
+		"Rate limit reached for requests":                                               agent.OutcomeInfra,
+		"stream disconnected before completion: Connection refused (os error 61)":       agent.OutcomeInfra,
+		"unexpected status 503 Service Unavailable":                                     agent.OutcomeInfra,
+		"Your input exceeds the context window of this model. Please adjust your input": agent.OutcomeOK,
+		"This request was refused under the usage policies.":                            agent.OutcomeOK,
+		"something else went wrong":                                                     agent.OutcomeOK,
+	} {
+		line := `{"type":"turn.failed","error":{"message":` + strconv.Quote(message) + `}}`
+		dir := t.TempDir()
+		data := `{"type":"thread.started","thread_id":"00000000-0000-7000-8000-000000000001"}` + "\n" + line + "\n"
+		if err := os.WriteFile(filepath.Join(dir, agent.Transcript), []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		m := parse(t, dir)
+		if got := Classify(m, agent.StopNone, nil); m.Result != ResultFailed || got != want {
+			t.Errorf("%q: %s (result %q), want %s", message, got, m.Result, want)
+		}
+		if got := Classify(m, agent.StopCap, nil); got != agent.OutcomeCapped {
+			t.Errorf("%q stopped at the cap: %s", message, got)
+		}
+	}
+	failed := parse(t, records(t, "network-failed", ""))
+	if got := Classify(failed, agent.StopNone, nil); got != agent.OutcomeInfra {
+		t.Errorf("the spike's network failure: %s", got)
 	}
 }

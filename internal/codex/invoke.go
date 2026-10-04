@@ -67,9 +67,9 @@ func Allowance(model string) (usd float64, ok bool) {
 	return cost, ok
 }
 
-// checkCap refuses a cap that cannot be kept: an unpriced model (no request could be priced), or a cap no larger than
+// CapRefusal refuses a cap that cannot be kept: an unpriced model (no request could be priced), or a cap no larger than
 // the allowance (the run would be stopped before its first request).
-func checkCap(model string, capUSD float64) error {
+func CapRefusal(model string, capUSD float64) error {
 	if capUSD <= 0 {
 		return nil
 	}
@@ -130,7 +130,7 @@ func check(inv agent.Invocation) error {
 	if err := ToolsRefusal(inv.Tools); err != nil {
 		return err
 	}
-	return checkCap(inv.Model, inv.BudgetUSD)
+	return CapRefusal(inv.Model, inv.BudgetUSD)
 }
 
 // Command is the run's `codex exec` (see the package documentation): its arguments, environment, prompt on stdin, the
@@ -152,18 +152,20 @@ func (Adapter) Command(inv agent.Invocation, environ []string) (agent.Command, e
 		args = append(args, "-c", o)
 	}
 	args = append(args, "--disable", "unbounded_connection_retries", // a lost network ends the turn (turn.failed), never waits for ever
+		"--ignore-rules",                                                  // no execpolicy rules, the project's or a Codex home's: ProjectConfigRefusal refuses a checkout's too
 		"-C", inv.Dir, "-o", filepath.Join(inv.Records, LastMessage), "-") // "-": the prompt is on stdin
 	cmd := agent.Command{Args: args, Env: environment(inv, environ), Stdin: inv.Prompt,
-		Dirs: []string{inv.State, filepath.Join(inv.State, stateHome), filepath.Join(inv.State, stateSQLite), filepath.Join(inv.State, stateLogs)}}
+		Dirs: []string{inv.State, filepath.Join(inv.State, stateHome), filepath.Join(inv.State, stateSQLite), filepath.Join(inv.State, stateLogs),
+			zshDotDir(inv.TempRoot)}}
 	if inv.SignIn == SignInAPIKey {
 		cmd.Dirs = append(cmd.Dirs, inv.ConfigDir) // a fresh Codex home of the run's own
 	} else {
 		// One ChatGPT login for every run: token refreshes write it back, and two at once could sign Agentium out (the
 		// plan's decision 6), so login-mode runs take turns. The lock lies beside the home, not in it.
-		cmd.Exclusive = filepath.Clean(inv.ConfigDir) + ".lock"
+		cmd.Exclusive = loginLock(inv.ConfigDir)
 	}
 	if inv.BudgetUSD > 0 {
-		rates, _ := pricing.OpenAILookup(inv.Model) // checkCap: priced
+		rates, _ := pricing.OpenAILookup(inv.Model) // CapRefusal: priced
 		allowance, _ := Allowance(inv.Model)
 		cmd.Watch = watcher{transcript: filepath.Join(inv.Records, agent.Transcript), codexHome: inv.ConfigDir, rates: rates,
 			capUSD: inv.BudgetUSD, allowanceUSD: allowance}.watch
@@ -212,6 +214,12 @@ func environment(inv agent.Invocation, environ []string) []string {
 // default, which the profile does not let the agent write.
 func zshPrefix(tempRoot string) string { return filepath.Join(tempRoot, "zsh") }
 
+// zshDotDir is zsh's ZDOTDIR for the agent's shells: an empty folder in the run's temp root (Command.Dirs makes it).
+// `zsh -c` reads $ZDOTDIR/.zshenv, ~/.zshenv by default, even without a login shell, and after Codex's environment
+// filter: the user's own could add a key back, or change PATH or GOTOOLCHAIN. The run's temp root is the agent's to
+// write, so what the agent puts there is its own doing; /etc/zshenv, the system's, still runs (macOS ships none).
+func zshDotDir(tempRoot string) string { return filepath.Join(tempRoot, "zdotdir") }
+
 // features are Codex's features a run turns off: outward-facing tools (apps, plugins, browser and computer use, image
 // generation), what keeps state across sessions (memories, goals), what runs code Agentium did not choose (hooks, tool
 // suggestions, MCP dependency installs), the background daemon, the fast tier, and realtime conversation. Unbounded
@@ -236,14 +244,19 @@ func configOverrides(inv agent.Invocation, environ []string, effort string) ([]s
 	for _, f := range features {
 		featureTable = append(featureTable, f+"=false")
 	}
-	// The project is pinned untrusted by its start folder and its checkout: otherwise Codex trusts a checkout its profile
-	// can write, saves that in CODEX_HOME's config.toml, and loads the checkout's .codex/config.toml, rules and hooks.
-	// Only the table form works (the dotted form -c projects."<path>".trust_level is ignored).
+	// The project is pinned trusted by its start folder and its checkout (the plan's decision 7, re-decided 2026-10-04):
+	// Codex 0.160 trusts all or nothing, and an untrusted checkout loads neither its AGENTS.md nor its .codex/config.toml.
+	// Trusted, both load, as in the user's own sessions; the overrides here outrank the project's config, and a project
+	// config that sets what they protect is refused before the run (ProjectConfigRefusal). Pinned, not left unset:
+	// unset, exec saves the trust in CODEX_HOME's config.toml. Only the table form works (the dotted form
+	// -c projects."<path>".trust_level is ignored).
 	var projects []string
 	for _, p := range dedupe(append(sandbox.Forms(inv.Dir), sandbox.Forms(checkout(inv))...)) {
-		projects = append(projects, tomlString(p)+"={trust_level=\"untrusted\"}")
+		projects = append(projects, tomlString(p)+"={trust_level=\"trusted\"}")
 	}
 	return []string{
+		// The model again, as a setting: a session flag outranks a trusted project's model (-m alone is not shown to).
+		"model=" + tomlString(inv.Model),
 		"model_reasoning_effort=" + tomlString(effort),
 		`approval_policy="never"`,
 		"default_permissions=" + tomlString(Profile),
@@ -255,12 +268,16 @@ func configOverrides(inv agent.Invocation, environ []string, effort string) ([]s
 		"log_dir=" + tomlString(filepath.Join(inv.State, stateLogs)),
 		"analytics.enabled=false",
 		"feedback.enabled=false",
-		"allow_login_shell=false", // the plan's decision 3: the user's zsh startup files never run in the agent's shells
+		// The plan's decision 3: no login shell, so the user's .zprofile and .zlogin never run in the agent's shells (and
+		// ZDOTDIR below keeps out their .zshenv, which every zsh reads).
+		"allow_login_shell=false",
 		"features={" + strings.Join(featureTable, ",") + "}",
-		// The agent's shells: the user's HOME (Codex's own is run-local), the run's temp root, zsh's heredocs in it; the
+		// The agent's shells: the user's HOME (Codex's own is run-local), the run's temp root, zsh's heredocs in it, an
+		// empty ZDOTDIR (zshDotDir); the
 		// default excludes (*KEY*, *SECRET*, *TOKEN*) on, which 0.160.0 turns off when read from TOML, and Codex's and
 		// OpenAI's variables (CODEX_HOME, CODEX_API_KEY) dropped.
-		"shell_environment_policy.set={" + tomlTable([][2]string{{"HOME", inv.Home}, {"TMPDIR", inv.TempRoot}, {"TMPPREFIX", zshPrefix(inv.TempRoot)}}) + "}",
+		"shell_environment_policy.set={" + tomlTable([][2]string{{"HOME", inv.Home}, {"TMPDIR", inv.TempRoot}, {"TMPPREFIX", zshPrefix(inv.TempRoot)},
+			{"ZDOTDIR", zshDotDir(inv.TempRoot)}}) + "}",
 		"shell_environment_policy.ignore_default_excludes=false",
 		`shell_environment_policy.exclude=["CODEX_*","OPENAI_*"]`,
 		"permissions." + Profile + ".filesystem={" + tomlTable(filesystem) + "}",

@@ -3,6 +3,9 @@ package codex
 import (
 	"context"
 	"errors"
+	"time"
+
+	agentiumhome "github.com/pigeaca/agentium/internal/home"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,4 +131,28 @@ func TestProbeFile(t *testing.T) {
 	if got := ProbeFile(link, ""); got != "" {
 		t.Errorf("a link: %q", got)
 	}
+}
+
+// Asking about the login holds the login's lock, which runs hold too: while a run holds it, the question waits, and
+// gives up with a clear error rather than race a token refresh.
+func TestLoginStatusTakesTheLoginsLock(t *testing.T) {
+	home := t.TempDir()
+	cli, _ := fakeCLI(t, "Logged in using ChatGPT", 0)
+	unlock, err := homeLock(loginLock(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := LoginStatus(ctx, cli, home); err == nil || !strings.Contains(err.Error(), "another Codex run") {
+		t.Errorf("while a run holds the login: %v", err)
+	}
+	unlock()
+	if err := LoginStatus(context.Background(), cli, home); err != nil {
+		t.Errorf("once it is free: %v", err)
+	}
+}
+
+func homeLock(path string) (func(), error) {
+	return agentiumhome.LockFile(context.Background(), path, nil)
 }

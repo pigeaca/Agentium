@@ -281,25 +281,40 @@ func newCodexRunEnv(ctx context.Context, env Env, w *workspace, verifyTimeout ti
 	if err := codex.CheckVersion(version); err != nil {
 		return run.Env{}, err
 	}
-	mode, secret := codexSignIn(env)
+	mode, secret, source := codexSignIn(env)
 	if mode == codex.SignInLogin {
 		if err := codex.LoginStatus(ctx, cli, w.layout.CodexHome()); err != nil {
 			return run.Env{}, err
 		}
+	} else {
+		// A key in Agentium's environment wins over the ChatGPT login: said plainly, since it is billed differently.
+		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("Codex signs in with the API key in %s (set in Agentium's environment, so it wins over the ChatGPT login): its runs are billed to that OpenAI API account, not your ChatGPT plan; the key goes to Codex alone", source)))
 	}
 	runEnv, err := runEnvWith(env, w, verifyTimeout, cli, mode, secret, "")
 	runEnv.Agent = codex.Adapter{}
 	return runEnv, err
 }
 
-// codexSignIn is a Codex run's sign-in, from the keys' presence: CODEX_API_KEY, else OPENAI_API_KEY, else the login.
-func codexSignIn(env Env) (mode, secret string) {
+// recoverySecrets are the sign-in secrets a dead run's records are redacted of, whichever agent ran: Claude Code's
+// (signIn) and Codex's key (codexSignIn).
+func recoverySecrets(env Env) ([]string, error) {
+	_, claudeSecret, _, err := signIn(env)
+	if err != nil {
+		return nil, err
+	}
+	_, codexKey, _ := codexSignIn(env)
+	return []string{claudeSecret, codexKey}, nil
+}
+
+// codexSignIn is a Codex run's sign-in, from the keys' presence: CODEX_API_KEY, else OPENAI_API_KEY (source names
+// it), else the login.
+func codexSignIn(env Env) (mode, secret, source string) {
 	for _, name := range []string{"CODEX_API_KEY", "OPENAI_API_KEY"} {
 		if key := env.Getenv(name); key != "" {
-			return codex.SignInAPIKey, key
+			return codex.SignInAPIKey, key, name
 		}
 	}
-	return codex.SignInLogin, ""
+	return codex.SignInLogin, "", ""
 }
 
 // codexPath finds Codex: AGENTIUM_CODEX, else PATH.
@@ -424,7 +439,7 @@ func startingRun(agentName, profile, model, mode, grading string, budget float64
 	}
 	allowance, _ := codex.Allowance(model)
 	return func(signIn string) string {
-		return fmt.Sprintf("Starting a real Codex run (%s, sign-in %s, graded %s): it may cost up to $%.2f at OpenAI's list prices of %s, priced by Agentium, which stops it while one more full-context request (up to $%.2f) still fits under that.",
+		return fmt.Sprintf("Starting a real Codex run (%s, sign-in %s, graded %s): it may cost up to $%.2f at OpenAI's list prices of %s (the cached-input rate assumed), priced by Agentium, which stops it while one more full-context request (up to $%.2f) still fits under that.",
 			profile, signIn, task.DescribeGrader(mode), budget, pricing.OpenAIDate, allowance)
 	}, nil
 }
@@ -471,7 +486,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	if err != nil {
 		return nil, err
 	}
-	_, secret, _, err := signIn(env)
+	secrets, err := recoverySecrets(env)
 	if err != nil {
 		release()
 		return nil, err
@@ -480,7 +495,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	// These notices print at once, even under the dashboard: if Agentium is killed before the run ends, they are not lost.
 	out := env.noticeOut()
 	warn := func(msg string) { fmt.Fprintf(out, "%s\n", env.style().Warn("warning: "+msg)) }
-	orphans, recoverErr := run.RecoverWarn(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now(), warn)
+	orphans, recoverErr := run.RecoverWarn(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secrets, env.Now(), warn)
 	for _, o := range orphans {
 		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored
 			fmt.Fprintf(out, "Run %s left behind by a stopped Agentium has an unreadable start file, so it is not stored. "+
@@ -578,7 +593,7 @@ func printRun(env Env, rec run.Record) {
 	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", rec.Spend().AgentUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
 	if rec.CostSource != "" { // an agent without a cost of its own (Codex): its tokens, and who priced them
-		fmt.Fprintf(out, "  tokens       %d input, %d cached, %d output (%d reasoning); cost %s at the list prices of %s\n",
+		fmt.Fprintf(out, "  tokens       %d input, %d cached, %d output (%d reasoning); cost %s at the list prices of %s (cached input at an assumed rate)\n",
 			m.InputTokens, m.CacheReadTokens, m.OutputTokens, m.ReasoningTokens, rec.CostSource, rec.PriceTable)
 	}
 	fmt.Fprintf(out, "  changes      %d file(s), +%d -%d, %d commit(s); tests changed: %v, test files removed: %d\n", b.FilesChanged, b.LinesAdded,

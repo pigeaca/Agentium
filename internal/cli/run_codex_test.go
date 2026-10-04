@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -40,7 +42,9 @@ printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread"
 case "$prompt" in
 *agentium-sandbox-ok*)
 	printf '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -c \\"printf agentium-sandbox-ok\\"","aggregated_output":"agentium-sandbox-ok\\n","exit_code":0,"status":"completed"}}\n'
-	printf '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"SANDBOX=agentium-sandbox-ok CODEWORD=NONE"}}\n' ;;
+	code=$(sed -n 's/^Calibration codeword: //p' AGENTS.md 2>/dev/null | tail -n 1)
+	[ -n "$code" ] || code=NONE
+	printf '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"SANDBOX=agentium-sandbox-ok CODEWORD=%s"}}\n' "$code" ;;
 *)
 	printf 'new\n' > value.txt
 	printf '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"%s/value.txt","kind":"update"}],"status":"completed"}}\n' "$(pwd -P)" ;;
@@ -102,7 +106,7 @@ func TestRunOnceWithCodexAndAnAPIKey(t *testing.T) {
 	f.vars["AGENTIUM_CODEX"] = fakeCodex(t, "0.160.0", false)
 	f.vars["CODEX_API_KEY"] = "codex-key-for-the-test-not-real"
 	result := f.run(context.Background(), "run", "once", "value", "--agent", "codex")
-	expect(t, result, ExitOK, "sign-in api-key", "outcome      ok")
+	expect(t, result, ExitOK, "sign-in api-key", "outcome      ok", "Codex signs in with the API key in CODEX_API_KEY", "billed to that OpenAI API account")
 	if strings.Contains(result.stdout+result.stderr, "codex-key-for-the-test") {
 		t.Error("the key was printed")
 	}
@@ -115,16 +119,33 @@ func TestRunOnceWithCodexAndAnAPIKey(t *testing.T) {
 }
 
 // run calibrate --agent codex calibrates Codex (its own prompt, no large-output check), with a cap above the
-// allowance; a Claude Code run is not checked against a Codex calibration, a Codex run is.
+// allowance, and its codeword in the AGENTS.md a trusted checkout loads (the fake answers with what it loaded); a
+// Claude Code run is not checked against a Codex calibration, a Codex run is.
 func TestRunCalibrateWithCodex(t *testing.T) {
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	writeFile(t, f.repo, "AGENTS.md", "# Rules for Codex\n")
+	gitIn(t, f.repo, "add", "AGENTS.md")
+	gitIn(t, f.repo, "commit", "-q", "-m", "AGENTS.md")
 	f.vars["AGENTIUM_CODEX"] = fakeCodex(t, "0.160.0", true)
 	if err := os.MkdirAll(filepath.Join(f.data, "codex"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	expect(t, f.run(context.Background(), "run", "calibrate", "--agent", "codex"), ExitOK,
-		"with real Codex runs (gpt-6.1-sol, sign-in login): up to $2.50 each", "Codex 0.160.0, gpt-6.1-sol")
+	calibration := f.run(context.Background(), "run", "calibrate", "--agent", "codex")
+	expect(t, calibration, ExitOK, "with real Codex runs (gpt-6.1-sol, sign-in login): up to $2.50 each", "Codex 0.160.0, gpt-6.1-sol",
+		"the first AGENTS.md Codex loads")
+	if !regexp.MustCompile(`base\s+ok\s+ok\s+n/a\s+ok`).MatchString(calibration.stdout) {
+		t.Errorf("the instructions check did not pass:\n%s", calibration.stdout)
+	}
 	expect(t, f.run(context.Background(), "run", "once", "value", "--agent", "codex"), ExitOK, "Checking the environment against the calibration of base")
 	f.vars["AGENTIUM_CLAUDE"] = scriptedAgent(t, "printf 'new\\n' > value.txt", false)
 	expect(t, f.run(context.Background(), "run", "once", "value"), ExitOK, "arm base is not calibrated for this agent", "outcome      ok")
+}
+
+// Recovery and clean redact dead runs' records of both agents' secrets: Claude Code's and Codex's key.
+func TestRecoverySecretsCoverBothAgents(t *testing.T) {
+	vars := map[string]string{"ANTHROPIC_API_KEY": "claude-key-for-test", "OPENAI_API_KEY": "openai-key-for-test", "HOME": t.TempDir()}
+	secrets, err := recoverySecrets(Env{Getenv: func(k string) string { return vars[k] }})
+	if err != nil || !slices.Contains(secrets, "claude-key-for-test") || !slices.Contains(secrets, "openai-key-for-test") {
+		t.Errorf("secrets %q, %v", secrets, err)
+	}
 }

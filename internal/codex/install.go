@@ -11,7 +11,16 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/pigeaca/agentium/internal/home"
 )
+
+// lockWait bounds LoginStatus's wait for the login's lock.
+const lockWait = 30 * time.Second
+
+// loginLock is the lock file of a ChatGPT login home: beside it, not in it. Runs (Command.Exclusive) and LoginStatus
+// take it.
+func loginLock(codexHome string) string { return filepath.Clean(codexHome) + ".lock" }
 
 var versionPattern = regexp.MustCompile(`\b(\d+)\.(\d+)\.(\d+)\b`)
 
@@ -52,12 +61,21 @@ var ErrNotSignedIn = errors.New("Codex is not signed in to ChatGPT in Agentium's
 // LoginStatus asks the Codex CLI at cli whether the Codex home codexHome holds a ChatGPT login (`codex login status`),
 // and refuses otherwise: no login, a missing home, or an API key's login (runs in login mode force the ChatGPT one).
 // Agentium never reads the home's auth.json itself, and never prints what the command says (an API key's login names
-// part of the key). The error says how the user signs in.
+// part of the key). The error says how the user signs in. It holds the login's lock (Command.Exclusive) while it asks:
+// reading the login may refresh its token, which must not race a run's refresh; a run holding it for longer than
+// lockWait is an error, not a wait for the whole run.
 func LoginStatus(ctx context.Context, cli, codexHome string) error {
 	signIn := fmt.Sprintf("sign in once with `CODEX_HOME=%s codex login` (Agentium never runs it), or set CODEX_API_KEY", codexHome)
 	if info, err := os.Stat(codexHome); err != nil || !info.IsDir() {
 		return fmt.Errorf("%w: %s does not exist; %s", ErrNotSignedIn, codexHome, signIn)
 	}
+	lockCtx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	unlock, err := home.LockFile(lockCtx, loginLock(codexHome), nil)
+	if err != nil {
+		return fmt.Errorf("another Codex run is using the ChatGPT login in %s: try again once it ends (%w)", codexHome, err)
+	}
+	defer unlock()
 	out, exit, err := runCLI(ctx, cli, codexHome, []string{"login", "status"})
 	switch {
 	case err != nil && exit == 0:

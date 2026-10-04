@@ -157,14 +157,15 @@ func (e *AliveError) runsText() string {
 // comparison (Env.JudgePair) that Agentium died in leaves its folder there, with a config folder that may hold the
 // sign-in: with the run lock held none is running, so it goes.
 func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
-	return RecoverWarn(ctx, layout, stored, secret, now, nil)
+	return RecoverWarn(ctx, layout, stored, []string{secret}, now, nil)
 }
 
 // RecoverWarn is Recover, and tells warn (when set) what it could not clean up but did not let stop it: a grading copy
 // or grade folder that resisted removal was moved into the quarantine (removeOrQuarantine), or could not even be moved;
 // processes a grade left that could not be stopped; quarantined folders that still cannot be removed. What a grade
-// wrote never stops recovery, so it never blocks later runs.
-func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time, warn func(string)) ([]Orphan, error) {
+// wrote never stops recovery, so it never blocks later runs. secrets are every sign-in secret a run may have had (Claude
+// Code's, Codex's key): a dead run's records are redacted of each, whichever agent ran.
+func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secrets []string, now time.Time, warn func(string)) ([]Orphan, error) {
 	if warn == nil {
 		warn = func(string) {}
 	}
@@ -232,7 +233,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 				// Valid JSON of another shape (a newer version's file, say) is not damage: fail loudly, touch nothing.
 				return orphans, fmt.Errorf("run %s: start file: %w", e.Name(), parseErr)
 			}
-			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), data, parseErr, secret, now, warn)
+			orphan, aliveNote, err := recoverUnreadable(layout, dir, e.Name(), data, parseErr, secrets, now, warn)
 			if err != nil {
 				return orphans, err
 			}
@@ -274,7 +275,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 					return orphans, fmt.Errorf("remove the %s folder of %s: %w", sub, e.Name(), err)
 				}
 			}
-			if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
+			if err := (Env{RedactAlso: secrets}).redactRecords(dir); err != nil {
 				return orphans, err
 			}
 			rec := s.Record
@@ -302,6 +303,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		rec.Notes = append(rec.Notes, codexNotes...)
 		if agent.Name(rec.Agent) == codex.Name {
 			rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+			codexSpendFallback(&rec)
 		}
 		if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {
 			rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
@@ -312,7 +314,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		if rec.Metrics.UnpricedRequests > 0 {
 			rec.Notes = append(rec.Notes, fmt.Sprintf("%d request(s) on models without a list price are not in the cost", rec.Metrics.UnpricedRequests))
 		}
-		if err := (Env{Secret: secret}).redactRecords(dir); err != nil {
+		if err := (Env{RedactAlso: secrets}).redactRecords(dir); err != nil {
 			return orphans, err
 		}
 		orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
@@ -355,7 +357,7 @@ var pgidInTruncated = regexp.MustCompile(`"pgid":\s*(\d+)[,}]`)
 //     and found by no one, so Once removes a stale one before its checkout.
 //
 // The judge's per-call cost lives only in the start file and may be missing from the spend.
-func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr error, secret string, now time.Time, warn func(string)) (orphan *Orphan, aliveNote string, err error) {
+func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr error, secrets []string, now time.Time, warn func(string)) (orphan *Orphan, aliveNote string, err error) {
 	startPath := filepath.Join(dir, startFile)
 	transcript := filepath.Join(dir, "stream.jsonl")
 	info, statErr := os.Stat(transcript)
@@ -415,7 +417,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	}
 	// Redaction rewrites stream.jsonl, which would make a half-finished cleanup look like a live run for the next
 	// window: the transcript keeps its mtime, on failure too.
-	redactErr := (Env{Secret: secret}).redactRecords(dir)
+	redactErr := (Env{RedactAlso: secrets}).redactRecords(dir)
 	if err := os.Chtimes(transcript, info.ModTime(), info.ModTime()); err != nil && redactErr == nil {
 		redactErr = err
 	}
