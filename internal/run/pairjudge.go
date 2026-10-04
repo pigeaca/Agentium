@@ -2,7 +2,6 @@ package run
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,11 +99,8 @@ func (env Env) JudgePair(ctx context.Context, spec Spec, s judge.Settings, a, b 
 		inner := call
 		call = func(ctx context.Context, prompt string) (judge.Reply, error) {
 			reply, err := inner(ctx, prompt)
-			var out struct {
-				CostUSD float64 `json:"total_cost_usd"`
-			}
-			if err == nil && json.Unmarshal(reply.Stdout, &out) == nil && out.CostUSD > 0 {
-				so += out.CostUSD
+			if cost := judge.Cost(reply); cost > 0 && (err == nil || ctx.Err() != nil) { // an interrupted call's too
+				so += cost
 				p := blank()
 				p.Verdict.CostUSD += so
 				p.Verdict.Stopped, p.Verdict.Errors = judge.StoppedCall, []string{"Agentium stopped while judging"}

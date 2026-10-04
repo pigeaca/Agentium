@@ -218,6 +218,23 @@ func TestJudgePairCancelledInBAKeepsAB(t *testing.T) {
 	}
 }
 
+// An order's call that Ctrl-C interrupts reports what it spent with the error: the pair keeps it.
+func TestJudgePairInterruptedCallKeepsItsCost(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	n := 0
+	v, err := JudgePair(ctx, pairIn, Settings{}, func(context.Context, string) (Reply, error) {
+		n++
+		if n == 1 {
+			return pairResult("first", "r", 0.1), nil
+		}
+		cancel()
+		return Reply{Stdout: []byte(`{"type":"result","is_error":false,"result":"interrupted","total_cost_usd":0.03}`), ExitCode: -1}, context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) || math.Abs(v.CostUSD-0.13) > 1e-12 || math.Abs(v.BA.CostUSD-0.03) > 1e-12 || v.Complete() {
+		t.Errorf("%+v, %v (want $0.13, BA's $0.03)", v, err)
+	}
+}
+
 func TestJudgePairTruncated(t *testing.T) {
 	long := "diff --git a/a.go b/a.go\n+" + strings.Repeat("x", MaxDiffChars+5) + "\n"
 	call, _ := pairFake(pairResult("first", "", 0), pairResult("second", "", 0))

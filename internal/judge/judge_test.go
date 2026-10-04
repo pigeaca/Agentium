@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -294,6 +295,20 @@ func TestJudgeStopsWhenACallCannotRunOrIsCancelled(t *testing.T) {
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("cancelled: %v", err)
+	}
+	// An interrupted call that reported its cost spent it: the verdict keeps it, with the answers so far.
+	ctx, cancel = context.WithCancel(context.Background())
+	calls := 0
+	v, err = Judge(ctx, in, Settings{Repeats: 3}, func(context.Context, string) (Reply, error) {
+		calls++
+		if calls == 1 {
+			return result("yes", "r", 0.05), nil
+		}
+		cancel()
+		return Reply{Stdout: []byte(`{"type":"result","is_error":false,"result":"interrupted","total_cost_usd":0.02}`), ExitCode: -1}, context.Canceled
+	})
+	if !errors.Is(err, context.Canceled) || math.Abs(v.CostUSD-0.07) > 1e-12 || len(v.Answers) != 1 {
+		t.Errorf("interrupted in its second call: %+v, %v (want $0.07 and one answer)", v, err)
 	}
 }
 
