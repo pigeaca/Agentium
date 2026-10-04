@@ -118,7 +118,7 @@ func judgeSummary(in Input) *Judge {
 	for _, r := range bySlot(in.Runs) {
 		rec := r.Record
 		arm := byArm[rec.Arm]
-		if arm == nil {
+		if arm == nil || judgeGraded(rec) { // the judge graded it: its verdict is no second opinion (JudgeGrading)
 			continue
 		}
 		judged := rec.Spend().JudgeUSD

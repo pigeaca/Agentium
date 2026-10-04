@@ -486,7 +486,7 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 	fmt.Fprintf(env.Stdout, "  verify: %s\n", strings.Join(saved.Verify, "; "))
 	st := env.style()
 	if saved.Grading == task.GradingJudge {
-		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote))
+		fmt.Fprintln(env.Stdout, note(st, judgeGradedNote()))
 	}
 	if sections := task.SolutionSections(saved.Instruction); saved.NeedsReview && len(sections) > 0 {
 		fmt.Fprintln(env.Stdout, st.Warn("The instruction has sections that may give the solution away: "+strings.Join(sections, ", ")))
@@ -500,8 +500,11 @@ func saveTask(ctx context.Context, env Env, w *workspace, t store.Task, acceptGa
 }
 
 // judgeGradedNote says what judge grading means for a task today.
-const judgeGradedNote = "runs of this task are graded by the judge, which compares each run's change with the reference solution " +
-	"(there are no hidden tests); experiments and run once take judge-graded tasks in a later version"
+func judgeGradedNote() string {
+	return fmt.Sprintf("runs of this task are graded by the judge, which compares each run's change with the reference solution "+
+		"(there are no hidden tests): a majority of its %d calls passes or fails a run. Unvalidated, these grades are shown apart from "+
+		"the tests'; an experiment takes the task only when named (--task) and rests no verdict on it", llmjudge.GradeRepeats)
+}
 
 // reviewReason says why a task's instruction needs a review: a ticket's was converted, history's may leak the solution.
 func reviewReason(t store.Task) string {
@@ -854,7 +857,7 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 		printWeakTests(out, st, stored.WeakTests)
 	}
 	if t.Grading == task.GradingJudge {
-		fmt.Fprintln(out, note(st, judgeGradedNote))
+		fmt.Fprintln(out, note(st, judgeGradedNote()))
 	}
 	gaps, gapErr := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t)
 	if t.NeedsReview && isTicket(t) {
@@ -1167,8 +1170,13 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The reference diff has %d characters; the judge reads the first %d, so it will see a cut copy "+
 			"(the task stays valid)", chars, llmjudge.MaxDiffChars)))
 	}
+	instructionCut := utf8.RuneCountInString(t.Instruction) > llmjudge.MaxInstructionChars
+	if instructionCut { // each of the grading's single-turn calls reads it: cut, so one call cannot overshoot its cap far
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The instruction has %d characters; the grading judge reads the first %d, so it will judge against a cut copy "+
+			"(the task stays valid; shorten it with agentium task edit %s --instruction @FILE)", utf8.RuneCountInString(t.Instruction), llmjudge.MaxInstructionChars, t.Name)))
+	}
 	fmt.Fprintln(out, note(st, "hidden-test checks are skipped: there are no hidden tests"))
-	fmt.Fprintln(out, note(st, judgeGradedNote))
+	fmt.Fprintln(out, note(st, judgeGradedNote()))
 	if t.NeedsReview {
 		fmt.Fprintf(out, "%s: %s\n", st.Warn("The instruction is not reviewed yet"), st.Command("agentium task show "+t.Name)+", then "+
 			st.Command("task edit "+t.Name+" --reviewed"))
@@ -1177,7 +1185,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview, Grader: task.GraderOf(result.Grader),
 			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, Warnings: []string{},
 			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
-				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}
+				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars, InstructionTruncated: instructionCut}}
 		return env.emitCode(doc, validationExit(result.Status))
 	}
 	fmt.Fprintf(out, "Result: %s\n", st.Status(result.Summary()))

@@ -187,7 +187,13 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 	}
 	add(headline, a.Role())
 	if guard != "" {
+		if rep.JudgeGrading != nil { // both kinds of success, each named: the tests' and the judge's
+			guard = "by the tests: " + guard
+		}
 		add(m.words(guard), guardRole)
+	}
+	if judged := judgeAnswerWords(rep, f); judged != "" {
+		add(m.words(judged), term.Muted)
 	}
 	add(status, term.Muted)
 	var scale []string
@@ -259,6 +265,17 @@ func guardWords(rep report.Report, f runFacts) (string, term.Role) {
 		return costWords(g, f.labels[1], f.aa), g.Role()
 	}
 	return successWords(g, f.labels, f.aa), g.Role()
+}
+
+// judgeAnswerWords is the answer box's line on judge-graded tasks: "by the judge (unvalidated): baseline 2 of 3 fixed,
+// lean 3 of 3"; "" without them.
+func judgeAnswerWords(rep report.Report, f runFacts) string {
+	g := rep.JudgeGrading
+	if g == nil || len(g.Arms) < 2 {
+		return ""
+	}
+	return fmt.Sprintf("by the judge (unvalidated): %s %d of %d fixed, %s %d of %d", f.labels[0], g.Arms[0].Fixed.Count, g.Arms[0].Graded,
+		f.labels[1], g.Arms[1].Fixed.Count, g.Arms[1].Graded)
 }
 
 // noiseWords is what an A/A shows of the noise in plain words: how much the same setup's cost varies from run to run
@@ -358,8 +375,10 @@ func rangeWords(res experiment.MetricResult, lo, hi float64) string {
 // armSide is one version's results in its panel.
 type armSide struct {
 	passed, counted int
-	cost, time      *float64
-	notes           []string
+	// judgeFixed and judgeCounted are the judge-graded tasks' runs: the judge's grades, apart from the tests'.
+	judgeFixed, judgeCounted int
+	cost, time               *float64
+	notes                    []string
 }
 
 // sidesOf collects each version's passes, typical cost and time (the analysis' levels: geometric means per run) and
@@ -372,6 +391,11 @@ func sidesOf(rep report.Report) [2]armSide {
 		}
 		for _, t := range rep.Tasks {
 			cell := t.Arms[a.Name]
+			if t.Judged {
+				s[i].judgeFixed += cell.Successes
+				s[i].judgeCounted += cell.Counted
+				continue
+			}
 			s[i].passed += cell.Successes
 			s[i].counted += cell.Counted
 		}
@@ -401,6 +425,9 @@ func sidesOf(rep report.Report) [2]armSide {
 		}
 		if left > 0 {
 			s[i].notes = append(s[i].notes, fmt.Sprintf("%d left out by the sandbox", left))
+		}
+		if g := rep.JudgeGrading; g != nil && i < len(g.Arms) && g.Arms[i].Ungraded > 0 {
+			s[i].notes = append(s[i].notes, fmt.Sprintf("%d without the judge's grade", g.Arms[i].Ungraded))
 		}
 	}
 	return s
@@ -466,13 +493,28 @@ func sideLines(sh term.Shapes, m marks, s armSide, perRun bool, role term.Role, 
 	if perRun {
 		unit, passed = " a run", fmt.Sprintf("%d of %d runs passed", s.passed, s.counted)
 	}
+	var judged reportLine // beside judge-graded tasks: the judge's grades on a line of their own, and the tests' named
+	if s.judgeCounted > 0 {
+		passed += " the tests"
+		fixed := fmt.Sprintf("%d of %d fixed", s.judgeFixed, s.judgeCounted)
+		if perRun {
+			fixed = fmt.Sprintf("%d of %d runs fixed", s.judgeFixed, s.judgeCounted)
+		}
+		judged = reportLine{{text: fixed}, {text: ", says the judge", role: term.Muted}}
+		if s.counted == 0 { // judge-graded tasks only: the bar is the judge's
+			frac = float64(s.judgeFixed) / float64(s.judgeCounted)
+		}
+	}
 	// The bar is drawn with the shapes (partial blocks), then stripped of its styles for the canvas: its fill takes
 	// the arm's color and its track the muted one.
 	bar := term.Plain(sh.Bar(term.Bar{Fraction: frac}, inner))
 	filled := strings.TrimRight(bar, "░.")
-	lines := []reportLine{
-		{{text: filled, role: role}, {text: bar[len(filled):], role: term.Muted}},
-		{{text: passed}},
+	lines := []reportLine{{{text: filled, role: role}, {text: bar[len(filled):], role: term.Muted}}}
+	if s.counted > 0 || s.judgeCounted == 0 {
+		lines = append(lines, reportLine{{text: passed}})
+	}
+	if judged != nil {
+		lines = append(lines, judged)
 	}
 	if s.cost != nil {
 		lines = append(lines, reportLine{{text: term.Pad("typical cost", label), role: term.Muted}, {text: fmt.Sprintf("$%.2f", *s.cost)}, {text: unit, role: term.Muted}})
@@ -511,9 +553,10 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 	type row struct {
 		name   string
 		ca, cb report.TaskCell
+		judged bool
 	}
 	var differ []row
-	bothPassed, bothFailed, same, uncounted := 0, 0, 0, 0
+	bothPassed, bothFailed, same, uncounted, judgedSame := 0, 0, 0, 0, 0
 	for _, t := range rep.Tasks {
 		ca, cb := t.Arms[a], t.Arms[b]
 		if ca.Counted == 0 && cb.Counted == 0 {
@@ -523,6 +566,9 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 			continue // else not run: a seq-v1 experiment stopped before it
 		}
 		if ca.Successes == cb.Successes && ca.Counted == cb.Counted {
+			if t.Judged {
+				judgedSame++
+			}
 			switch {
 			case ca.Counted > 0 && ca.Successes == ca.Counted:
 				bothPassed++
@@ -533,11 +579,16 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 			}
 			continue
 		}
-		differ = append(differ, row{term.Sanitize(t.Task), ca, cb})
+		differ = append(differ, row{term.Sanitize(t.Task), ca, cb, t.Judged})
 	}
+	const judgeMark = " (judge)" // a judge-graded task's ✓ and ✗ are the judge's grades: its name keeps the mark when cut
 	nameW := 8
 	for _, r := range differ {
-		nameW = max(nameW, min(term.Width(r.name), maxNameWidth))
+		w := min(term.Width(r.name), maxNameWidth)
+		if r.judged {
+			w = min(term.Width(r.name)+term.Width(judgeMark), maxNameWidth+term.Width(judgeMark))
+		}
+		nameW = max(nameW, w)
 	}
 	cellW := max(term.Width(f.labels[0]), term.Width(f.labels[1]), 4*max(rep.Lock.Design.Repeats, 1)+8, 12) + 2
 	var out []string
@@ -545,7 +596,11 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 		out = append(out, "  "+st.Heading("where they differ"))
 		out = append(out, "  "+term.Pad("", nameW)+"  "+term.Pad(st.Paint(term.ArmA, f.labels[0]), cellW)+st.Paint(term.ArmB, f.labels[1]))
 		for _, r := range differ {
-			out = append(out, "  "+term.Pad(sh.Fit(r.name, nameW), nameW)+"  "+term.Pad(taskCell(st, m, r.ca), cellW)+taskCell(st, m, r.cb))
+			name := sh.Fit(r.name, nameW)
+			if r.judged {
+				name = sh.Fit(r.name, nameW-term.Width(judgeMark)) + st.Paint(term.Muted, judgeMark)
+			}
+			out = append(out, "  "+term.Pad(name, nameW)+"  "+term.Pad(taskCell(st, m, r.ca), cellW)+taskCell(st, m, r.cb))
 		}
 	}
 	var rest []string
@@ -560,6 +615,9 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 	}
 	if uncounted > 0 {
 		rest = append(rest, fmt.Sprintf("%d not counted", uncounted))
+	}
+	if judgedSame > 0 {
+		rest = append(rest, fmt.Sprintf("%d of them graded by the judge", judgedSame))
 	}
 	if n := bothPassed + bothFailed + same + uncounted; n > 0 {
 		lead := fmt.Sprintf("+ %s where both ended the same", taskCount(n))
@@ -594,6 +652,9 @@ func taskCell(st term.Style, m marks, c report.TaskCell) string {
 		if c.Capped+c.TimedOut > 0 {
 			cost = m.atLeast + cost
 		}
+	}
+	if cost == "" { // no counted run: no cost, and no trailing spaces after the marks
+		return b.String()
 	}
 	return b.String() + "  " + st.Paint(term.Muted, cost)
 }
@@ -694,7 +755,8 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 		n := 0
 		var why []string
 		for _, k := range []struct{ outcome, words string }{{claude.OutcomeUnfair, "setup changed"}, {claude.OutcomeInfra, "infrastructure"},
-			{run.OutcomeSandboxFlagged, "sandbox"}, {claude.OutcomeCancelled, "stopped"}} {
+			{run.OutcomeSandboxFlagged, "sandbox"}, {claude.OutcomeCancelled, "stopped"}, {experiment.OutcomeUngraded, "ungraded by the judge"},
+			{experiment.OutcomeGradePending, "awaiting the judge's grade"}} {
 			if c := ex[k.outcome]; c > 0 {
 				n += c
 				why = append(why, fmt.Sprintf("%d %s", c, k.words))
@@ -712,6 +774,9 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 	}
 	if s := rep.Analysis.Sandbox; s != nil && (s.Imbalanced || len(s.Disagrees) > 0) {
 		notes = append(notes, "the sandbox left out more runs on one side, so the answer is not sure")
+	}
+	if u := rep.Analysis.Ungraded; u != nil && (u.Imbalanced || len(u.Disagrees) > 0) {
+		notes = append(notes, "the judge left more runs without a grade on one side, so the answer is not sure")
 	}
 	if !f.sandboxed && rep.Lock.Grader != "" {
 		notes = append(notes, "hidden tests ran on your machine, outside the sandbox")

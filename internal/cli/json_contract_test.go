@@ -33,7 +33,7 @@ func assertKeys(t *testing.T, v any, want string) {
 const (
 	taskInfoKeys = "base_commit,graded_by,hidden_test_files,name,needs_review,reference_files,solution_commit,source,status,status_summary,unstated_requirements,untested_hunks"
 	behaviorKeys = "bash_commands,checks_changed,commits,config_changed,denials,files_changed,lines_added,lines_removed,outside_reads,ran_checks,ran_tests,tests_changed,tests_removed"
-	runKeys      = "arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,grader,id,judge_cost_usd,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
+	runKeys      = "arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,graded_by,grader,id,judge_cost_usd,judge_grade,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
 )
 
 func TestJSONFieldNamesAreFixed(t *testing.T) {

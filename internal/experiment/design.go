@@ -57,17 +57,22 @@ type Arm struct {
 // DesignVersionModelAB: an older Agentium, which would run both arms on arm A's model, refuses it. A seq-v1 design, of
 // any template, is stored as DesignVersionSeq: an older Agentium, which would run its 16 tasks as one fixed design at
 // 95%, refuses it. A design that grades in the sandbox, of any template and method, is stored as DesignVersionSandbox:
-// an older Agentium, which would grade its runs on the host, refuses it.
+// an older Agentium, which would grade its runs on the host, refuses it. A design with judge-graded tasks, of any
+// template, method and grader, is stored as DesignVersionJudge: an older Agentium, which would grade those tasks' runs
+// by their verification commands as if they were tests, refuses it.
 const (
 	DesignVersion        = 1
 	DesignVersionModelAB = 2
 	DesignVersionSeq     = 3
 	DesignVersionSandbox = 4
+	DesignVersionJudge   = 5
 )
 
-// WantVersion is the stored version a design of its template, method and grader carries.
+// WantVersion is the stored version a design of its template, method, grader and tasks carries.
 func (d Design) WantVersion() int {
 	switch {
+	case len(d.JudgeGraded) > 0:
+		return DesignVersionJudge
 	case task.GraderOf(d.Grader) != task.GraderHost:
 		return DesignVersionSandbox
 	case d.Method == MethodSeq:
@@ -137,6 +142,12 @@ type Design struct {
 	// design is stored as designs were before modes, and those grade on the host: task.GraderOf). An existing
 	// experiment keeps its mode.
 	Grader string `json:"grader,omitempty"`
+	// JudgeGraded lists the design's judge-graded tasks (task.GradingJudge), in Tasks' order, and JudgeGrading is the
+	// judge that grades their runs, by the majority of its repeats (judge.Grade). Their grades are unvalidated: the
+	// analysis keeps them apart from the tests' (MetricJudgeSuccess) and rests no verdict on them. Both are omitted when
+	// no task is judge-graded, so other designs read and encode as before (WantVersion).
+	JudgeGraded  []string        `json:"judge_graded,omitempty"`
+	JudgeGrading *judge.Settings `json:"judge_grading,omitempty"`
 }
 
 // Default margins (the study's §5.6).
@@ -176,10 +187,59 @@ func (d Design) ArmRunBudgetUSD(a Arm) float64 {
 	return d.RunBudgetUSD
 }
 
-// ArmRunCapUSD is what one of arm a's runs may spend at most: the agent's cap, the turn that may cross it on the arm's
-// model (claude.CapOvershootUSD), and its judgement's cap.
+// ArmRunCapUSD is what one of arm a's runs of a test-graded task may spend at most: the agent's cap, the turn that may
+// cross it on the arm's model (claude.CapOvershootUSD), and its judgement's cap. TaskRunCapUSD is any task's.
 func (d Design) ArmRunCapUSD(a Arm) float64 {
 	return d.ArmRunBudgetUSD(a) + claude.CapOvershootUSD(d.ArmRunBudgetUSD(a), d.ArmModel(a)) + d.JudgeCapUSD()
+}
+
+// IsJudgeGraded reports whether the judge grades the design's task of that name.
+func (d Design) IsJudgeGraded(name string) bool { return slices.Contains(d.JudgeGraded, name) }
+
+// judgedTasks counts the design's tasks that are judge-graded.
+func (d Design) judgedTasks() int {
+	n := 0
+	for _, t := range d.Tasks {
+		if d.IsJudgeGraded(t) {
+			n++
+		}
+	}
+	return n
+}
+
+// GradingCapUSD is what grading one judge-graded run may spend at most: each of JudgeGrading's calls at its cap
+// (judge.CallCapFor, the overshoot allowance included for any but the default judge), twice, since a malformed reply is
+// asked again. Zero without judge-graded tasks.
+func (d Design) GradingCapUSD() float64 {
+	if d.JudgeGrading == nil || len(d.JudgeGraded) == 0 {
+		return 0
+	}
+	return judge.CapUSD(*d.JudgeGrading)
+}
+
+// judgedRunCapUSD is what one of arm a's runs of a judge-graded task may spend at most: the agent's cap and overshoot,
+// and its grading's cap (it is given no second-opinion judgement).
+func (d Design) judgedRunCapUSD(a Arm) float64 {
+	return d.ArmRunBudgetUSD(a) + claude.CapOvershootUSD(d.ArmRunBudgetUSD(a), d.ArmModel(a)) + d.GradingCapUSD()
+}
+
+// TaskRunCapUSD is what one of arm a's runs of the named task may spend at most: ArmRunCapUSD for a test-graded task,
+// the grading's cap in place of the judgement's for a judge-graded one.
+func (d Design) TaskRunCapUSD(a Arm, name string) float64 {
+	if d.IsJudgeGraded(name) {
+		return d.judgedRunCapUSD(a)
+	}
+	return d.ArmRunCapUSD(a)
+}
+
+// SlotCapUSD is TaskRunCapUSD for the arm named arm (the design's first arm's cap for a name it lacks).
+func (d Design) SlotCapUSD(arm, name string) float64 {
+	for _, a := range d.Arms {
+		if a.Name == arm {
+			return d.TaskRunCapUSD(a, name)
+		}
+	}
+	return d.RunCapUSD()
 }
 
 // ModelLabel is the model of an experiment in words: the design's, or each arm's in a model-ab experiment.
@@ -255,7 +315,7 @@ func (d Design) Runs() int { return len(d.Tasks) * d.Repeats * len(d.Arms) }
 // Pairs is the number of pairs the design asks for: a task's run in each arm with the same repeat index.
 func (d Design) Pairs() int { return len(d.Tasks) * d.Repeats }
 
-// JudgeCapUSD is what one run's judgement may spend at most: each repeat's call up to judge.CallCapUSD, twice, since a
+// JudgeCapUSD is what one test-graded run's judgement may spend at most: each repeat's call up to judge.CallCapUSD, twice, since a
 // malformed reply is asked again. Zero without the judge. Claude Code checks --max-budget-usd after a turn, so a call
 // can pass its cap a little. A judge call has no tools and few turns, and on the default judge (judge.DefaultModel at
 // judge.DefaultEffort) CallCapUSD already clears the dearest call measured with room, so it gets no overshoot
@@ -271,14 +331,7 @@ func (d Design) JudgeCapUSD() float64 {
 
 // judgeCallCapUSD is what one judge call on s may spend at most: judge.CallCapUSD, with the overshoot allowance of a run
 // on its model for any judge but the default one (JudgeCapUSD says why).
-func judgeCallCapUSD(s judge.Settings) float64 {
-	s = s.WithDefaults()
-	perCall := judge.CallCapUSD
-	if s.Model != judge.DefaultModel || s.Effort != judge.DefaultEffort {
-		perCall += claude.CapOvershootUSD(judge.CallCapUSD, s.Model)
-	}
-	return perCall
-}
+func judgeCallCapUSD(s judge.Settings) float64 { return judge.CallCapFor(s) }
 
 // PairJudgeCapUSD is what one pair's comparison may spend at most: judge.PairCalls calls (both orders, each asked again
 // after a malformed reply), each at the judge's call cap with the same overshoot allowance as JudgeCapUSD. Zero without
@@ -291,21 +344,28 @@ func (d Design) PairJudgeCapUSD() float64 {
 }
 
 // RunCapUSD is what one run may spend at most: the agent's cap, its overshoot (claude.CapOvershootUSD) and its judgement's
-// cap; the larger of the arms' when they differ. Reserve holds it back for every run in flight, so spending never
-// passes the budget while each run stays within it.
+// cap, or, with judge-graded tasks, its grading's when that is larger; the larger of the arms' when they differ. Reserve
+// holds it back for every run in flight, so spending never passes the budget while each run stays within it.
 func (d Design) RunCapUSD() float64 {
 	if !d.PerArmProfiles() || len(d.Arms) == 0 { // the arms of a model-ab design may all differ from RunBudgetUSD
-		return d.RunBudgetUSD + claude.CapOvershootUSD(d.RunBudgetUSD, d.Model) + d.JudgeCapUSD()
+		capUSD := d.RunBudgetUSD + claude.CapOvershootUSD(d.RunBudgetUSD, d.Model) + d.JudgeCapUSD()
+		if d.judgedTasks() > 0 {
+			capUSD = max(capUSD, d.RunBudgetUSD+claude.CapOvershootUSD(d.RunBudgetUSD, d.Model)+d.GradingCapUSD())
+		}
+		return capUSD
 	}
 	capUSD := 0.0
 	for _, a := range d.Arms {
 		capUSD = max(capUSD, d.ArmRunCapUSD(a))
+		if d.judgedTasks() > 0 {
+			capUSD = max(capUSD, d.judgedRunCapUSD(a))
+		}
 	}
 	return capUSD
 }
 
-// PairCapUSD is what a pair of runs, one per arm, may spend at most: each run's cap with its overshoot and judgement,
-// and the pair's comparison (PairJudgeCapUSD).
+// PairCapUSD is what a pair of runs of a test-graded task, one per arm, may spend at most: each run's cap with its
+// overshoot and judgement, and the pair's comparison (PairJudgeCapUSD). TaskPairCapUSD is any task's.
 func (d Design) PairCapUSD() float64 {
 	if len(d.Arms) != 2 {
 		return 2*d.RunCapUSD() + d.PairJudgeCapUSD()
@@ -313,13 +373,57 @@ func (d Design) PairCapUSD() float64 {
 	return d.ArmRunCapUSD(d.Arms[0]) + d.ArmRunCapUSD(d.Arms[1]) + d.PairJudgeCapUSD()
 }
 
-// JudgeEstimateUSD is the judge's expected cost for every run of d, at the judge pilot's mean cost of a call
-// (judge.EstimateUSD): a stated figure, not a measure of this project. Zero without the judge.
+// TaskPairCapUSD is what a pair of runs of the named task may spend at most: PairCapUSD for a test-graded task, each
+// run with its grading's cap (TaskRunCapUSD) and the pair's comparison for a judge-graded one.
+func (d Design) TaskPairCapUSD(name string) float64 {
+	if !d.IsJudgeGraded(name) || len(d.Arms) != 2 {
+		return d.PairCapUSD()
+	}
+	return d.TaskRunCapUSD(d.Arms[0], name) + d.TaskRunCapUSD(d.Arms[1], name) + d.PairJudgeCapUSD()
+}
+
+// MaxPairCapUSD is the most any pair of the design's runs may spend: PairCapUSD, or a judge-graded task's pair when
+// that is more. A budget must hold at least one.
+func (d Design) MaxPairCapUSD() float64 {
+	capUSD := d.PairCapUSD()
+	for _, t := range d.JudgeGraded {
+		if d.IsJudgeGraded(t) && slices.Contains(d.Tasks, t) {
+			capUSD = max(capUSD, d.TaskPairCapUSD(t))
+		}
+	}
+	return capUSD
+}
+
+// WorstUSD is what every run of the design, its judgement or grading and its pair's comparison would spend at their
+// caps: what the budget must allow for.
+func (d Design) WorstUSD() float64 {
+	judged := d.judgedTasks()
+	worst := float64((len(d.Tasks)-judged)*d.Repeats) * d.PairCapUSD() // as a design without judge-graded tasks always had it
+	if judged > 0 {
+		worst += float64(judged*d.Repeats) * d.TaskPairCapUSD(d.JudgeGraded[0])
+	}
+	return worst
+}
+
+// JudgeEstimateUSD is the judge's expected cost for every test-graded run of d, at the judge pilot's mean cost of a call
+// (judge.EstimateUSD): a stated figure, not a measure of this project. Zero without the judge. Judge-graded runs get
+// no second opinion: GradingEstimateUSD is theirs.
 func (d Design) JudgeEstimateUSD() float64 {
 	if d.Judge == nil {
 		return 0
 	}
-	return float64(d.Runs()*d.Judge.WithDefaults().Repeats) * judge.EstimateUSD
+	runs := (len(d.Tasks) - d.judgedTasks()) * d.Repeats * len(d.Arms)
+	return float64(runs*d.Judge.WithDefaults().Repeats) * judge.EstimateUSD
+}
+
+// GradingEstimateUSD is the expected cost of grading every judge-graded run of d (JudgeGrading's calls) at the pilot's
+// mean call (judge.EstimateUSD). Zero without judge-graded tasks.
+func (d Design) GradingEstimateUSD() float64 {
+	if d.JudgeGrading == nil {
+		return 0
+	}
+	runs := d.judgedTasks() * d.Repeats * len(d.Arms)
+	return float64(runs*d.JudgeGrading.WithDefaults().Repeats) * judge.EstimateUSD
 }
 
 // PairJudgeEstimateUSD is the pair judge's expected cost for every pair of d at the pilot's mean pair
@@ -331,8 +435,10 @@ func (d Design) PairJudgeEstimateUSD() float64 {
 	return float64(d.Pairs()) * judge.PairEstimateUSD
 }
 
-// JudgingEstimateUSD is both judges' expected cost for d: every run's judgement and every pair's comparison.
-func (d Design) JudgingEstimateUSD() float64 { return d.JudgeEstimateUSD() + d.PairJudgeEstimateUSD() }
+// JudgingEstimateUSD is the judges' expected cost for d: every run's judgement or grading, and every pair's comparison.
+func (d Design) JudgingEstimateUSD() float64 {
+	return d.JudgeEstimateUSD() + d.GradingEstimateUSD() + d.PairJudgeEstimateUSD()
+}
 
 // Validate checks that the design is complete and consistent.
 func (d Design) Validate() error {
@@ -388,7 +494,7 @@ func (d Design) Validate() error {
 	}
 	if d.RunBudgetUSD <= 0 || d.BudgetUSD <= 0 {
 		errs = append(errs, errors.New("budgets must be positive"))
-	} else if pair := d.PairCapUSD(); d.BudgetUSD < pair {
+	} else if pair := d.MaxPairCapUSD(); d.BudgetUSD < pair {
 		errs = append(errs, fmt.Errorf("the budget $%.2f is below one pair of runs at their caps ($%.2f)", d.BudgetUSD, pair))
 	}
 	if d.Timeout <= 0 || d.VerifyTimeout <= 0 {
@@ -412,6 +518,7 @@ func (d Design) Validate() error {
 			errs = append(errs, errors.New("the judge needs a model and an effort"))
 		}
 	}
+	errs = append(errs, d.validateJudgeGraded()...)
 	if j := d.JudgePairs; j != nil {
 		if j.Repeats != 1 {
 			errs = append(errs, errors.New("the pair judge asks each order once (repeats 1)"))
@@ -421,6 +528,29 @@ func (d Design) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// validateJudgeGraded checks the judge-graded tasks: each is one of the design's tasks, once, and the judge that grades
+// them is given whenever there are some, and only then.
+func (d Design) validateJudgeGraded() []error {
+	var errs []error
+	for i, t := range d.JudgeGraded {
+		switch {
+		case !slices.Contains(d.Tasks, t):
+			errs = append(errs, fmt.Errorf("judge-graded task %s is not one of the experiment's tasks", t))
+		case slices.Contains(d.JudgeGraded[:i], t):
+			errs = append(errs, fmt.Errorf("judge-graded task %s is listed twice", t))
+		}
+	}
+	switch j := d.JudgeGrading; {
+	case j == nil && len(d.JudgeGraded) > 0:
+		errs = append(errs, errors.New("judge-graded tasks need the judge that grades them"))
+	case j != nil && len(d.JudgeGraded) == 0:
+		errs = append(errs, errors.New("a grading judge without judge-graded tasks"))
+	case j != nil && (j.Repeats < 1 || j.Repeats > MaxJudgeRepeats || j.Model == "" || j.Effort == ""):
+		errs = append(errs, fmt.Errorf("the grading judge needs a model, an effort and 1 to %d repeats", MaxJudgeRepeats))
+	}
+	return errs
 }
 
 // validateMethod checks the design against its method: a seq-v1 design is a cost experiment of one run per task and
@@ -489,16 +619,22 @@ type Candidate struct {
 // must be reviewed for solution leaks, and its hidden tests must fail on the base and pass with the reference in every
 // arm's context (the last `task validate`), in the experiment's mode. A task validated in another mode is refused by a
 // host experiment; a sandbox experiment takes it, and validates it again in the sandbox when it locks
-// (NeedsRevalidation). Judge-graded tasks are refused: experiments grade by tests only, and must not count such a
-// task's runs as if its verification commands decided them.
+// (NeedsRevalidation). A judge-graded task has no hidden tests: its last validation must find its instruction and its
+// reference's code diff fit for the judge (task.ValidateJudged), in any context and mode, since nothing runs.
 func Ineligible(c Candidate, arms []Arm, grader string) string {
-	if c.Grading == task.GradingJudge {
-		return "it is judge-graded (its solution has no tests); experiments take judge-graded tasks in a later version"
-	}
 	if c.NeedsReview {
 		return fmt.Sprintf("its instruction needs a review for solution leaks (then: agentium task edit %s --reviewed)", c.Name)
 	}
 	v := c.Validation
+	if c.Grading == task.GradingJudge {
+		switch {
+		case v == nil || v.Judge == nil:
+			return "not validated (agentium task validate " + c.Name + ")"
+		case v.Status != task.StatusValid:
+			return "its validation failed: " + strings.Join(v.Judge.Problems, "; ")
+		}
+		return ""
+	}
 	switch {
 	case v == nil:
 		return "not validated" + validateHint(c.Name, arms)
@@ -526,7 +662,7 @@ func Ineligible(c Candidate, arms []Arm, grader string) string {
 // sandbox experiment does that; a host one refuses such a task (Ineligible).
 func NeedsRevalidation(c Candidate, grader string) bool {
 	mode := task.GraderOf(grader)
-	return c.Validation != nil && mode != task.GraderHost && task.GraderOf(c.Validation.Grader) != mode
+	return c.Grading != task.GradingJudge && c.Validation != nil && mode != task.GraderHost && task.GraderOf(c.Validation.Grader) != mode
 }
 
 func validateHint(name string, arms []Arm) string {

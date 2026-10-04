@@ -327,7 +327,9 @@ func wider(boot, t stats.Interval) stats.Interval {
 }
 
 // slotsDone reports, per schedule position, whether its slot is settled or out of attempts, as Execute counts them:
-// a settling run settles it; other runs, cancelled ones aside, are attempts.
+// a settling run settles it; other runs, cancelled ones aside, are attempts. A judge-graded run whose grade is pending
+// (RunData.Pending) leaves its slot not done, though Execute never runs it again: its grade may still change, so no
+// look reads it before it is graded or left ungraded for good.
 func slotsDone(l Lock, runs []RunData) []bool {
 	settled := make([]bool, len(l.Schedule))
 	attempts := make([]int, len(l.Schedule))
@@ -336,6 +338,7 @@ func slotsDone(l Lock, runs []RunData) []bool {
 			continue
 		}
 		switch {
+		case Settles(r.Outcome) && r.Pending:
 		case Settles(r.Outcome):
 			settled[r.Slot] = true
 		case r.Outcome != claude.OutcomeCancelled:
@@ -353,7 +356,7 @@ func slotsDone(l Lock, runs []RunData) []bool {
 func costPairs(runs []RunData, a, b string) int {
 	has := map[string]map[string]bool{}
 	for _, r := range runs {
-		if Fair(r.Outcome) && r.CostUSD > 0 {
+		if Fair(r.Outcome) && r.graded() && r.CostUSD > 0 { // as the cost analysis counts them
 			if has[r.Task] == nil {
 				has[r.Task] = map[string]bool{}
 			}
@@ -462,11 +465,13 @@ func PreviewSequential(d Design, est ArmEstimates) (SeqPreview, error) {
 	if len(d.Tasks) > 0 {
 		judgePair = d.JudgingEstimateUSD() / float64(len(d.Tasks))
 	}
-	p := SeqPreview{Known: true, WorstUSD: float64(len(d.Tasks)) * d.PairCapUSD()}
+	p := SeqPreview{Known: true, WorstUSD: d.WorstUSD()}
 	for k, n := range seq.Looks {
 		cost, known := est.DesignUSD(Design{Tasks: order[:n], Repeats: 1})
 		p.Known = p.Known && known
-		p.Looks = append(p.Looks, SeqLookPreview{Tasks: n, Runs: 2 * n, CostUSD: cost + float64(n)*judgePair, WorstUSD: float64(n) * d.PairCapUSD(),
+		upTo := d
+		upTo.Tasks = order[:n]
+		p.Looks = append(p.Looks, SeqLookPreview{Tasks: n, Runs: 2 * n, CostUSD: cost + float64(n)*judgePair, WorstUSD: upTo.WorstUSD(),
 			EffLevel: planned[k].EffLevel, EqLevel: planned[k].EqLevel})
 	}
 	sd := math.Sqrt(2*SigmaLogCost*SigmaLogCost + TauLow*TauLow) // a task's log difference with one run per arm

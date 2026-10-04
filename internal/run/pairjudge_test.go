@@ -166,13 +166,15 @@ func TestDescribePair(t *testing.T) {
 	}
 }
 
-// A comparison Agentium died in leaves its folder (with a config folder that may hold the sign-in) in a stored run's
-// records: any command that takes the run lock removes it, and keeps the rest of the records.
+// A comparison, a judgement or a grading attempt (Regrade) Agentium died in leaves its folder (with a config folder that
+// may hold the sign-in) in a stored run's records: any command that takes the run lock removes it, and keeps the rest
+// of the records.
 func TestRecoverRemovesALeftoverPairJudgeFolder(t *testing.T) {
 	data := t.TempDir()
 	layout := home.Layout{Root: data, Records: filepath.Join(data, "records"), Workspaces: filepath.Join(data, "workspaces")}
 	dir := filepath.Join(layout.Records, "r2")
-	for p, body := range map[string]string{"agent.diff": "+x\n", "pair-judge/config/.claude.json": `{"token":"tok-secret-1234567890"}`} {
+	for p, body := range map[string]string{"agent.diff": "+x\n", "pair-judge/config/.claude.json": `{"token":"tok-secret-1234567890"}`,
+		"judge/config/.claude.json": `{"token":"tok-secret-1234567890"}`} {
 		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, p)), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -186,6 +188,9 @@ func TestRecoverRemovesALeftoverPairJudgeFolder(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "pair-judge")); err == nil {
 		t.Error("the pair judge's folder outlived the crash")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "judge")); err == nil {
+		t.Error("the judge's folder outlived the crash")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "agent.diff")); err != nil {
 		t.Errorf("the stored run's records went: %v", err)

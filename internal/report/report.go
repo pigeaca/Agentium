@@ -67,6 +67,9 @@ type Report struct {
 	Judge   *Judge `json:"judge,omitempty"` // only with the judge
 	// PairJudge is the pair judge's preference, only with the pair judge (--judge-pairs): unvalidated and exploratory.
 	PairJudge *PairJudge `json:"pair_judge,omitempty"`
+	// JudgeGrading is how the judge graded the judge-graded tasks, only when there are some: unvalidated, apart from the
+	// tests (experiment.MetricJudgeSuccess).
+	JudgeGrading *JudgeGrading `json:"judge_grading,omitempty"`
 	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
 	// project's other experiments).
 	NorthStar *NorthStar `json:"north_star,omitempty"`
@@ -132,6 +135,8 @@ type Behavior struct {
 type TaskRow struct {
 	Task string              `json:"task"`
 	Arms map[string]TaskCell `json:"arms"`
+	// Judged: the task is judge-graded, so its marks and successes are the judge's grades (unvalidated).
+	Judged bool `json:"judged,omitempty"`
 }
 
 // TaskCell is a task's runs in one arm: marks in schedule order (● success, ○ failure, × not counted), and the mean cost
@@ -167,7 +172,10 @@ type RunRow struct {
 	ContextCommit  string          `json:"context_commit,omitempty"`
 	ContextUse     *run.ContextUse `json:"context_use,omitempty"`
 	Judge          *judge.Verdict  `json:"judge,omitempty"` // the judge's verdict, its texts scrubbed
-	Verify         []taskCommand   `json:"verify,omitempty"`
+	// GradedBy is "judge" for a run of a judge-graded task: Passed and Success are then the judge's grade (Judge holds
+	// its verdict), unvalidated. Absent for runs graded by tests.
+	GradedBy string        `json:"graded_by,omitempty"`
+	Verify   []taskCommand `json:"verify,omitempty"`
 	// Grader is the mode the run was graded in (absent in runs recorded before modes: the host), and Sandbox what the
 	// grading sandbox reported, as counts: the denials' targets are what the grade chose, so they stay in the records.
 	Grader   string      `json:"grader,omitempty"`
@@ -240,7 +248,7 @@ func Build(in Input) (Report, error) {
 			Success: experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged), Metrics: metrics, Behavior: rec.Behavior,
 			CostEstimated: rec.Spend().AgentEstimated, Recovered: rec.Recovered, HarnessChanged: rec.HarnessChanged, Drift: in.scrubAll(rec.Drift),
 			Notes: in.scrubAll(rec.Notes), ContextCommit: rec.ContextHead, ContextUse: rec.ContextUse, Judge: in.shareVerdict(rec.Judge),
-			Grader: rec.Grader, Sandbox: sandboxRow(rec.Sandbox), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
+			GradedBy: rec.GradedBy, Grader: rec.Grader, Sandbox: sandboxRow(rec.Sandbox), Started: rec.Started.UTC().Format("2006-01-02T15:04:05Z"),
 			Finished: rec.Finished.UTC().Format("2006-01-02T15:04:05Z")}
 		for _, c := range rec.Verify {
 			row.Verify = append(row.Verify, taskCommand{Command: c.Command, ExitCode: c.ExitCode, Seconds: c.Seconds})
@@ -264,6 +272,7 @@ func Build(in Input) (Report, error) {
 		}
 	}
 	rep.Judge = judgeSummary(in)
+	rep.JudgeGrading = judgeGradingSummary(in)
 	if rep.PairJudge, err = pairJudgeSummary(in); err != nil {
 		return Report{}, err
 	}
@@ -349,7 +358,7 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	var cacheRead, input float64
 	for _, r := range runs {
 		rec := r.Record
-		if rec.Arm != a.Name || !experiment.Fair(rec.Outcome) {
+		if rec.Arm != a.Name || !counted(rec) {
 			continue
 		}
 		arm.Counted++
@@ -488,7 +497,7 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 	ordered := bySlot(runs)
 	var rows []TaskRow
 	for _, t := range l.Tasks {
-		row := TaskRow{Task: t.Name, Arms: map[string]TaskCell{}}
+		row := TaskRow{Task: t.Name, Arms: map[string]TaskCell{}, Judged: t.JudgeGraded()}
 		for _, a := range l.Arms {
 			var cell TaskCell
 			var costs []float64
@@ -498,7 +507,7 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 					continue
 				}
 				switch {
-				case !experiment.Fair(rec.Outcome):
+				case !counted(rec):
 					cell.Marks += "×"
 					continue
 				case experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged):
@@ -554,12 +563,14 @@ func notes(rep Report, in Input) []string {
 	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
-		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled}
+		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled, experiment.OutcomeUngraded,
+			experiment.OutcomeGradePending}
 		for _, outcome := range known {
 			if n := a.Excluded[outcome]; n > 0 {
 				parts = append(parts, fmt.Sprintf("%d %s", n, map[string]string{claude.OutcomeUnfair: "unfair (the environment drifted)",
 					claude.OutcomeInfra: plural(n, "infrastructure failure"), claude.OutcomeCancelled: "cancelled",
-					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)"}[outcome]))
+					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)", experiment.OutcomeUngraded: "judge-graded, left without a grade (not tried again)",
+					experiment.OutcomeGradePending: "judge-graded, waiting for the judge's grade"}[outcome]))
 			}
 		}
 		for _, outcome := range slices.Sorted(func(yield func(string) bool) {
@@ -612,6 +623,9 @@ func notes(rep Report, in Input) []string {
 		out = append(out, "Environment drift in unfair runs: "+strings.Join(drift, "; ")+".")
 	}
 	if note := sandboxNote(rep, in.Runs); note != "" {
+		out = append(out, note)
+	}
+	if note := rep.judgeGradingNote(); note != "" {
 		out = append(out, note)
 	}
 	if note := cappedNote(rep); note != "" {
@@ -780,7 +794,7 @@ func plural(n int, noun string) string {
 
 func title(metric string) string {
 	return map[string]string{experiment.MetricSuccess: "Success", experiment.MetricCost: "Cost", experiment.MetricTime: "Time",
-		experiment.MetricOutput: "Output tokens"}[metric]
+		experiment.MetricOutput: "Output tokens", experiment.MetricJudgeSuccess: "The judge says fixed"}[metric]
 }
 
 // VerdictInterval is the interval a verdict rests on (see verdictInterval), without its level.

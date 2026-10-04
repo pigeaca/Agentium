@@ -48,9 +48,11 @@ func FloorsFor(method string) Floors {
 	return f
 }
 
-// Metric returns a metric's floor: success has its own, and cost, time and output tokens share cost's.
+// Metric returns a metric's floor: success has its own, and cost, time and output tokens share cost's. The judge's
+// success has success's floor, counted over its own (judge-graded) tasks alone: neither kind of task helps the other
+// reach it.
 func (f Floors) Metric(metric string) (tasks, repeats int) {
-	if metric == MetricSuccess {
+	if metric == MetricSuccess || metric == MetricJudgeSuccess {
 		return f.SuccessTasks, f.SuccessRepeats
 	}
 	return f.CostTasks, f.CostRepeats
@@ -356,6 +358,9 @@ func DefaultBudgetWith(d Design, est ArmEstimates, calibrationUSD float64) float
 	return math.Ceil(1.25*(expected+d.JudgingEstimateUSD()+calibrationUSD) + Reserve(d))
 }
 
+// ownRow names the preview's row of the design itself.
+const ownRow = "This experiment"
+
 // Row is one line of a preview.
 type Row struct {
 	Name        string
@@ -387,6 +392,9 @@ func PreviewFor(d Design, eligible []string, est ArmEstimates) []Row {
 		sized.Tasks, sized.Repeats = make([]string, tasks), repeats
 		r := Row{Name: name, Tasks: tasks, Repeats: repeats, Runs: runs, WorstUSD: float64(tasks*repeats) * d.PairCapUSD(),
 			JudgeUSD: sized.JudgingEstimateUSD(), Detect: Detect(tasks, repeats), Exploratory: Exploratory(tasks, repeats), CostKnown: known}
+		if name == ownRow { // its own tasks, judge-graded ones with their grading (a tier samples test-graded tasks alone)
+			r.WorstUSD, r.JudgeUSD = d.WorstUSD(), d.JudgingEstimateUSD()
+		}
 		if known {
 			r.CostUSD = float64(tasks*repeats) * pair
 		}
@@ -399,7 +407,7 @@ func PreviewFor(d Design, eligible []string, est ArmEstimates) []Row {
 		r.Short = len(eligible) < t.Tasks
 		rows = append(rows, r)
 	}
-	own := row("This experiment", len(d.Tasks), d.Repeats, 0, false)
+	own := row(ownRow, len(d.Tasks), d.Repeats, 0, false)
 	own.CostUSD, own.CostKnown = est.DesignUSD(d)
 	return append(rows, own)
 }

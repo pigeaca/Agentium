@@ -134,6 +134,16 @@ func (p Project) CalibrationSpend(ctx context.Context, experimentID int64) (floa
 	return spent, nil
 }
 
+// calibrationBudget refuses calibrations up to capUSD, with prior spent on earlier ones, when the budget could not hold
+// them and then the dearest pair of runs at its caps (Design.MaxPairCapUSD: a judge-graded task's, with its grading).
+func calibrationBudget(d Design, prior, capUSD float64) error {
+	if need := prior + capUSD + d.MaxPairCapUSD(); need > d.BudgetUSD+1e-9 {
+		return UsageError(fmt.Sprintf("the budget $%.2f cannot hold the calibrations this experiment needs (up to $%.2f, with $%.2f already spent on earlier ones) and one pair of runs at their caps ($%.2f): "+
+			"raise it with --budget, or calibrate ahead with agentium run calibrate", d.BudgetUSD, capUSD, prior, d.MaxPairCapUSD()))
+	}
+	return nil
+}
+
 // calibrate makes the calibrations the experiment lacks, before it is locked, so that its runs are checked against an
 // environment measured on this Claude Code, sign-in and model. Calibrations that are in place are not repeated, and a
 // locked experiment never gets here. The runs are stored with the experiment (as calibration runs, not slots), so
@@ -152,9 +162,8 @@ func (r Runner) calibrate(ctx context.Context, stored store.Experiment, d Design
 		return err
 	}
 	_, capUSD := CalibrationCosts(needs)
-	if need := prior + capUSD + d.PairCapUSD(); need > d.BudgetUSD+1e-9 {
-		return UsageError(fmt.Sprintf("the budget $%.2f cannot hold the calibrations this experiment needs (up to $%.2f, with $%.2f already spent on earlier ones) and one pair of runs at their caps ($%.2f): "+
-			"raise it with --budget, or calibrate ahead with agentium run calibrate", d.BudgetUSD, capUSD, prior, d.PairCapUSD()))
+	if err := calibrationBudget(d, prior, capUSD); err != nil {
+		return err
 	}
 	head, err := r.KeepHead(ctx)
 	if err != nil {

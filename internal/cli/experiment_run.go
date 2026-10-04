@@ -259,7 +259,10 @@ func progressLines(env Env, lock experiment.Lock) func(experiment.Event) {
 				outcome = st.Warn("stopped before its agent started (not counted; it runs again on resume)")
 			}
 			judged := ""
-			if e.Result.Judge != "" {
+			switch {
+			case e.Result.JudgeGraded && e.Result.Judge != "":
+				judged = fmt.Sprintf("; graded by the judge (unvalidated): %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
+			case e.Result.Judge != "":
 				judged = fmt.Sprintf("; judge: %s, $%.2f", e.Result.Judge, e.Result.JudgeUSD)
 			}
 			fmt.Fprintf(out, "%s: %s, $%.2f%s (spent $%.2f of $%.2f)\n", label, outcome, e.Result.AgentUSD(), judged, e.SpentUSD, design.BudgetUSD)

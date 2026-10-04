@@ -15,6 +15,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
+	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/project"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -28,7 +29,8 @@ const runUsage = `Usage:
   agentium run once TASK [--snapshot NAME] [--model MODEL[:EFFORT]] [--budget USD]
                      one real Claude Code run on TASK, in the base's own context or with a snapshot applied, on the
                      model (default ` + experiment.DefaultExperimentModel + `) at the effort (default: the CLI's).
-                     It costs money (up to --budget, default $3) or uses your plan.
+                     It costs money (up to --budget, default $3) or uses your plan. A judge-graded task's run is
+                     graded by the judge's majority of 5 calls (up to $5.00 more; unvalidated), not by tests.
   agentium run list
   agentium run show ID [--diff] [--log]
                      one run: outcome, cost, behavior, environment; --diff adds the agent's change, --log the setup
@@ -127,9 +129,6 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	if t.Grading == task.GradingJudge { // its verification commands would grade it as if they were its tests
-		return fail(env, fmt.Errorf("task %s is judge-graded (no hidden tests); run once takes judge-graded tasks in a later version", t.Name))
-	}
 	arm := task.Arm{Name: "base"}
 	if *snapshotName != "" {
 		snap, err := w.db.SnapshotByName(ctx, w.project.ID, *snapshotName)
@@ -151,15 +150,22 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	case cal != nil:
 		runEnv.Expect = *cal
 	}
-	fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, task.DescribeGrader(mode), *budget)
+	if t.Grading == task.GradingJudge { // graded by the judge: its calls are paid too, and the consent names them
+		grading := llmjudge.GradingSettings()
+		fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded by the judge: %d calls on %s, unvalidated): it may cost up to $%.2f, and its grading up to $%.2f.\n",
+			*profile, runEnv.SignIn, grading.Repeats, grading.Model, *budget, llmjudge.CapUSD(grading))
+	} else {
+		fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded %s): it may cost up to $%.2f.\n", *profile, runEnv.SignIn, task.DescribeGrader(mode), *budget)
+	}
 	release, err := startRuns(ctx, env, w)
 	if err != nil {
 		return fail(env, err)
 	}
 	defer release()
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
-		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module},
-		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep, HarmlessDenials: harmlessFor(t, mode)})
+		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify,
+			Module: t.Module, Grading: t.Grading},
+		Arm: arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep, HarmlessDenials: harmlessFor(t, mode)})
 	live.Stop()
 	if err != nil {
 		return fail(env, err)
@@ -297,8 +303,17 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 			release()
 			return nil, err
 		}
-		fmt.Fprintf(out, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
-			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Spend().AgentUSD)
+		// A run that had finished (only storing it was cut short) keeps its outcome; one stopped mid-run is cancelled.
+		outcome := o.Record.Outcome
+		if outcome == "" {
+			outcome = claude.OutcomeCancelled
+		}
+		pending := ""
+		if run.NeedsGrading(o.Record) {
+			pending = " (its grade is pending: graded again from its change)"
+		}
+		fmt.Fprintf(out, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f%s\n",
+			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status(outcome), o.Record.Spend().AgentUSD, pending)
 	}
 	if recoverErr != nil {
 		release()
@@ -358,7 +373,11 @@ func printRun(env Env, rec run.Record) {
 		passed = st.Status(map[bool]string{true: "passed", false: "failed"}[*rec.Passed])
 	}
 	fmt.Fprintln(out, st.Heading(fmt.Sprintf("Run %s: task %s, arm %s", rec.ID, rec.Task, rec.Arm)))
-	fmt.Fprintf(out, "  outcome      %s; verification %s\n", st.Status(rec.Outcome), passed)
+	if words := run.GradeWords(rec); words != "" { // graded by the judge, not by tests: said so wherever a pass shows
+		fmt.Fprintf(out, "  outcome      %s; judge: %s\n", st.Status(rec.Outcome), term.Sanitize(words))
+	} else {
+		fmt.Fprintf(out, "  outcome      %s; verification %s\n", st.Status(rec.Outcome), passed)
+	}
 	m, b := rec.Metrics, rec.Behavior
 	fmt.Fprintf(out, "  cost         $%.4f, %d turn(s), %s, first request %d tokens\n", rec.Spend().AgentUSD, m.Turns,
 		(time.Duration(m.DurationMS) * time.Millisecond).Round(time.Second), m.FirstRequest)
@@ -384,6 +403,14 @@ func printRun(env Env, rec run.Record) {
 	if line := gradingLine(rec); line != "" {
 		fmt.Fprintf(out, "  grading      %s\n", line)
 	}
+	if rec.GradedBy == task.GradingJudge && rec.Judge != nil {
+		v := rec.Judge
+		fmt.Fprintf(out, "  judge        %s at effort %s, answers %s, $%.4f (unvalidated)\n", term.Sanitize(v.Model), term.Sanitize(v.Effort),
+			term.OrNone(strings.Join(v.Answers, ", ")), v.CostUSD)
+		if v.Reason != "" {
+			fmt.Fprintf(out, "  reason       %s\n", term.Sanitize(env.redact(v.Reason)))
+		}
+	}
 	for _, d := range rec.Drift {
 		fmt.Fprintf(out, "%s %s\n", st.Warn("unfair:"), d)
 	}
@@ -394,7 +421,11 @@ func printRun(env Env, rec run.Record) {
 }
 
 // gradingLine says where a run was graded and what the sandbox reported; empty for a record made before grader modes.
+// A judge-graded run is graded by the judge, not where the tests run.
 func gradingLine(rec run.Record) string {
+	if rec.GradedBy == task.GradingJudge {
+		return "by the judge's majority of its calls, comparing the run's change with the reference solution (no tests ran)"
+	}
 	if rec.Grader == "" {
 		return ""
 	}
@@ -436,7 +467,8 @@ func runList(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		doc := runListDoc{header: hdr("run list"), Runs: []runListEntry{}}
 		for _, r := range runs {
-			entry := runListEntry{ID: r.ID, Task: r.TaskName, Kind: r.Kind, Arm: r.Arm, Outcome: r.Outcome, Passed: r.Passed, CostUSD: r.CostUSD, Started: r.Started}
+			entry := runListEntry{ID: r.ID, Task: r.TaskName, Kind: r.Kind, Arm: r.Arm, Outcome: r.Outcome, Passed: r.Passed, CostUSD: r.CostUSD, Started: r.Started,
+				GradedBy: listGrade(r).gradedBy}
 			if entry.Kind == "" {
 				entry.Kind = "task"
 			}
@@ -458,6 +490,16 @@ func runList(ctx context.Context, env Env, args []string) int {
 		if r.Passed != nil {
 			passed = map[bool]string{true: "yes", false: "no"}[*r.Passed]
 		}
+		if g := listGrade(r); g.gradedBy == task.GradingJudge { // the judge's grade, labelled wherever a pass shows
+			switch {
+			case r.Passed != nil:
+				passed += " (judge)"
+			case g.pending:
+				passed = "pending (judge)"
+			case g.ungraded:
+				passed = "ungraded (judge)"
+			}
+		}
 		name := r.TaskName
 		if r.Kind == "calibration" {
 			name = st.Note("(calibration)")
@@ -468,6 +510,23 @@ func runList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// runGrade is what run list shows of who graded a stored run.
+type runGrade struct {
+	gradedBy string // task.GradingJudge, or "" for the tests
+	pending  bool   // a judge-graded run whose grade is pending (run.NeedsGrading)
+	ungraded bool   // a judge-graded run left without a grade for good (run.Record.Ungraded)
+}
+
+// listGrade reads who graded a stored run from its record; a record it cannot read was graded by the tests, as every
+// run before judge grading was.
+func listGrade(r store.Run) runGrade {
+	var rec run.Record
+	if json.Unmarshal(r.Record, &rec) != nil {
+		return runGrade{}
+	}
+	return runGrade{gradedBy: rec.GradedBy, pending: run.NeedsGrading(rec), ungraded: rec.Ungraded != ""}
 }
 
 func runShow(ctx context.Context, env Env, args []string) int {

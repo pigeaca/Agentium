@@ -34,7 +34,7 @@ const (
 	verdictKeys         = "decisive,metrics,summary"
 	metricKeys          = "a,b,decisive,interval,level,metric,note,role,tasks,verdict"
 	progressKeys        = "arms,budget_usd,calibration_usd,ended_by,judge_usd,looks,pair_judge_usd,settled,slots,spent_usd,uncompared_pairs,unjudged_runs"
-	armProgKeys         = "cancelled,context,cost_usd,fair,infra,left_out_sandbox,name,settled,successes,unfair"
+	armProgKeys         = "cancelled,context,cost_usd,fair,infra,judge_fixed,judge_graded,left_out_sandbox,name,settled,successes,unfair"
 	lockKeys            = "budget_changes,claude_code,local_binding,locked_at,method,price_table,sign_in"
 )
 

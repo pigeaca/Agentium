@@ -1,12 +1,15 @@
 // Package judge asks a reference-guided LLM judge whether a run's change does what its task asks: fixed ("yes"),
 // "partly" or "no", with a one-line reason. The judge sees the task's instruction, the reference solution's code diff and
 // the agent's code diff, never the tests or their result. Its verdict is a second opinion shown next to the tests; it
-// decides nothing (.agents/decisions/2026-10-01-llm-judge-alongside-tests.md).
+// decides nothing (.agents/decisions/2026-10-01-llm-judge-alongside-tests.md). A judge-graded task has no tests: there
+// its majority grades the run instead (grade.go), unvalidated and kept apart from the tests' grades.
 //
 // JudgePair, the pair judge, asks which of two changes is the better fix, in both orders (pair.go).
 //
 // The prompts, the schema, the code-only filter, the cut and the majority rule are the judge pilot's, unchanged
-// (docs/research/judge-pilot/protocol.md), so the pilot's figures on noise and cost apply.
+// (docs/research/judge-pilot/protocol.md), so the pilot's figures on noise and cost apply. Grading alone has a prompt of
+// its own (GradingPrompt, GradingVersion): the pilot's, with the instruction cut, the tags' content marked as data and
+// its closing tags neutralised.
 package judge
 
 import (
@@ -147,6 +150,10 @@ type Verdict struct {
 	Truncated bool `json:"truncated,omitempty"`
 	// Empty: the candidate changed no code (only tests or documents, or nothing); the judge was not asked.
 	Empty bool `json:"empty,omitempty"`
+	// Refused counts the repeats that brought no valid verdict even when asked again (a refusal, or a reply still
+	// malformed): settled without an answer. A grading judgement never asks them again (GradeRun); errors leave a
+	// repeat unsettled instead.
+	Refused int `json:"refused,omitempty"`
 }
 
 // Reply is how one call ended.
@@ -359,6 +366,12 @@ func Majority(answers []string) string {
 func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, error) {
 	s = s.WithDefaults()
 	v := Verdict{Version: Version, Answers: []string{}, Reasons: []string{}, Requested: s.Repeats, Model: s.Model, Effort: s.Effort}
+	return ask(ctx, in, s, call, v, Prompt)
+}
+
+// ask asks the repeats v has not settled yet (s.Repeats less its answers and refusals) with prompt's text, adding to
+// v: Judge's rules, from a fresh verdict or (GradeRun) from one an earlier grading attempt left.
+func ask(ctx context.Context, in Input, s Settings, call Caller, v Verdict, prompt func(Input) (string, bool)) (Verdict, error) {
 	if strings.TrimSpace(CodeOnly(in.Reference)) == "" {
 		return v, errors.New("judge: the reference changes no code, so there is nothing to judge against")
 	}
@@ -366,9 +379,10 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 		v.Empty = true
 		return v, nil
 	}
-	text, truncated := Prompt(in)
+	text, truncated := prompt(in)
 	v.Truncated = truncated
-	for r := 0; r < s.Repeats && v.Stopped == ""; r++ {
+	remaining := s.Repeats - len(v.Answers) - v.Refused
+	for r := 0; r < remaining && v.Stopped == ""; r++ {
 		for attempt := 0; attempt < 2; attempt++ {
 			reply, err := call(ctx, text)
 			if ctx.Err() != nil {
@@ -392,6 +406,9 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 				}
 				break
 			}
+			if attempt == 1 { // malformed when asked again too: the repeat is settled without an answer
+				v.Refused++
+			}
 		}
 	}
 	v.Fixed = Majority(v.Answers)
@@ -409,20 +426,25 @@ func Judge(ctx context.Context, in Input, s Settings, call Caller) (Verdict, err
 // Agentium's own (in its data folder) with no instruction file above it, which Claude Code would load into the judge's
 // context. timeout bounds each call (CallTimeout when zero).
 func ClaudeCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
-	return newCaller(s, j, environ, timeout, Schema)
+	return newCaller(s, j, environ, timeout, SystemPrompt, Schema)
+}
+
+// GradingCaller is ClaudeCaller with the grading judge's system prompt (GradingSystemPrompt), for GradeRun.
+func GradingCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
+	return newCaller(s, j, environ, timeout, GradingSystemPrompt, Schema)
 }
 
 // PairCaller is ClaudeCaller with the pair schema (PairSchema), for JudgePair.
 func PairCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration) (Caller, error) {
-	return newCaller(s, j, environ, timeout, PairSchema)
+	return newCaller(s, j, environ, timeout, SystemPrompt, PairSchema)
 }
 
-func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration, schema string) (Caller, error) {
+func newCaller(s Settings, j claude.Judgement, environ []string, timeout time.Duration, system, schema string) (Caller, error) {
 	if above := claudectx.InstructionFilesAbove(filepath.Join(j.Dir, "call")); len(above) > 0 { // the calls start one level below
 		return nil, fmt.Errorf("judge: Claude Code would load %s above the judge's folder", strings.Join(above, ", "))
 	}
 	s = s.WithDefaults()
-	j.Model, j.Effort, j.SystemPrompt, j.Schema = s.Model, s.Effort, SystemPrompt, schema
+	j.Model, j.Effort, j.SystemPrompt, j.Schema = s.Model, s.Effort, system, schema
 	if j.BudgetUSD == 0 {
 		j.BudgetUSD = CallCapUSD
 	}

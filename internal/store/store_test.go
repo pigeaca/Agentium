@@ -371,6 +371,20 @@ func TestRunsRoundTripAndTaskRemoval(t *testing.T) {
 	if err := s.SetRunRecord(ctx, "nope", []byte(`{}`)); !errors.Is(err, ErrNotFound) {
 		t.Errorf("SetRunRecord of a missing run: %v", err)
 	}
+	// A grade stored on resume sets the record and the passed column, and nothing else.
+	failed := false
+	for _, p := range []*bool{&failed, nil} {
+		if err := s.SetRunGrade(ctx, "20260928T100500Z-bbbbbb", []byte(`{"graded":1}`), p); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.RunByID(ctx, app.ID, "20260928T100500Z-bbbbbb")
+		if err != nil || string(got.Record) != `{"graded":1}` || got.Outcome != "infra" || (p == nil) != (got.Passed == nil) || (p != nil && *got.Passed) {
+			t.Errorf("after SetRunGrade(%v) = %+v, %v", p, got, err)
+		}
+	}
+	if err := s.SetRunGrade(ctx, "nope", []byte(`{}`), nil); !errors.Is(err, ErrNotFound) {
+		t.Errorf("SetRunGrade of a missing run: %v", err)
+	}
 }
 
 func TestLatestCalibrationPerArmAndSnapshot(t *testing.T) {

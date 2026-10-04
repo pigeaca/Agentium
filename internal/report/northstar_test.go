@@ -17,6 +17,7 @@ import (
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
+	"github.com/pigeaca/agentium/internal/task"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -317,5 +318,55 @@ func TestNorthStarCountsADecisiveGuard(t *testing.T) {
 	got, err := LoadNorthStar(context.Background(), p)
 	if err != nil || !got.Decisive || got.Metric != experiment.MetricSuccess {
 		t.Errorf("north star %+v, %v: want decisive on success (the guard)", got, err)
+	}
+}
+
+// An experiment with judge-graded tasks never counts toward the north star, whatever its verdict, until the judge's
+// paid real check validates it: its cost verdict has no tests' guard over those tasks. The line says what it left out
+// and why; a project without such experiments reads as before.
+func TestNorthStarLeavesOutJudgeGradedExperiments(t *testing.T) {
+	t.Parallel()
+	in := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
+	in.Name = "tickets"
+	l := &in.Lock
+	grading := judge.GradingSettings()
+	l.Design.JudgeGraded, l.Design.JudgeGrading = []string{"task-9"}, &grading
+	l.Design.Version = l.Design.WantVersion()
+	for i, lt := range l.Tasks {
+		if lt.Name == "task-9" {
+			l.Tasks[i] = experiment.NewLockedTask(lt.Name, lt.Instruction, task.Spec{Base: "base-commit", Solution: "solution-commit",
+				Reference: []string{"value.go"}, Verify: []string{"make test"}, Grading: task.GradingJudge})
+		}
+	}
+	for i := range in.Runs {
+		if in.Runs[i].Record.Task == "task-9" {
+			in.Runs[i].Record.GradedBy = task.GradingJudge
+		}
+	}
+	if v := verdictOf(t, in, experiment.RolePrimary); !Decisive(v) {
+		t.Fatalf("premise: the cost verdict is %q, want decisive", v)
+	}
+	p, _ := starProject(t)
+	storeExperiment(t, p, in)
+	got, err := LoadNorthStar(context.Background(), p)
+	if err != nil || got.Decisive || len(got.LeftOut) != 1 || got.LeftOut[0].Experiment != "tickets" || got.LeftOut[0].Why != whyJudgeGraded {
+		t.Fatalf("north star %+v, %v: want none, tickets left out", got, err)
+	}
+	if line := got.Line(); !strings.HasSuffix(line, "; left out: tickets (it has judge-graded tasks, whose grades are unvalidated until the judge's paid real check)") ||
+		!strings.HasPrefix(line, "First decisive verdict: none yet") {
+		t.Errorf("line %q", line)
+	}
+	if js, _ := json.Marshal(got); !strings.Contains(string(js), `"left_out":[{"experiment":"tickets","why":"it has judge-graded tasks`) {
+		t.Errorf("JSON %s", js)
+	}
+	// A test-graded experiment beside it still counts; nothing is said to be left out without such experiments.
+	plain := oneRun(experiment.MethodV2, experiment.TemplateContextAB)
+	plain.Name = "lean-ab"
+	storeExperiment(t, p, plain)
+	if got, err := LoadNorthStar(context.Background(), p); err != nil || !got.Decisive || got.Experiment != "lean-ab" || len(got.LeftOut) != 1 {
+		t.Errorf("beside a test-graded experiment: %+v, %v", got, err)
+	}
+	if js, _ := json.Marshal(NorthStar{SpentUSD: 1}); strings.Contains(string(js), "left_out") || strings.Contains(NorthStar{SpentUSD: 1}.Line(), "left out") {
+		t.Errorf("a north star without left-out experiments mentions them: %s", js)
 	}
 }

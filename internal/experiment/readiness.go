@@ -74,6 +74,9 @@ func CheckReadiness(ctx context.Context, p Project, e ReadinessEnv, d Design, el
 	if c.r.Ready {
 		c.check("ok", fmt.Sprintf("%d task(s), each valid in every arm's context", len(d.Tasks)))
 	}
+	if len(d.JudgeGraded) > 0 {
+		c.check("WARNING", JudgeGradedWords(d))
+	}
 	expected, known := est.DesignUSD(d)
 	expected += d.JudgingEstimateUSD()
 	calibrating, _ := CalibrationCosts(c.r.Calibrations)
@@ -198,7 +201,7 @@ func (c *checker) fairness(ctx context.Context, p Project, e ReadinessEnv, d Des
 		} else if len(gaps) > 0 {
 			unfair = append(unfair, fmt.Sprintf("%s (%d)", name, len(gaps)))
 		}
-		if t.Validation != nil && slices.Contains(eligible, name) {
+		if t.Validation != nil && slices.Contains(eligible, name) && t.Grading != task.GradingJudge { // nothing runs to validate a judge-graded task
 			var v task.Validation
 			if err := json.Unmarshal(t.Validation, &v); err != nil {
 				unreadable = append(unreadable, name)

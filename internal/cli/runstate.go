@@ -48,6 +48,9 @@ type stateRun struct {
 	// sandboxDown: the grading sandbox could not start (run.StepSandboxDown), so the run was not graded; retrying: the
 	// scheduler will try it again.
 	sandboxDown, retrying bool
+	// judged: the run's task is judge-graded (run.StepJudgeGrading, or its result): its grading step is the judge's, not
+	// hidden tests in the sandbox.
+	judged bool
 }
 
 // runState is what the designed views know of a running experiment: the facts from its lock, and what the scheduler's
@@ -135,6 +138,10 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 			if r.step == stepTests {
 				r.sub, r.subAt = e.Step, now
 			}
+		case run.StepJudgeGrading:
+			if r.step == stepTests {
+				r.sub, r.subAt, r.judged = e.Step, now, true
+			}
 		case run.StepCleanup, run.StepJudging:
 			r.advance(stepResult, now)
 			r.sub, r.subAt = e.Step, now
@@ -150,6 +157,7 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		}
 		delete(s.runs, r.pos)
 		r.finish(e.Result, e.Requeued, now)
+		r.judged = r.judged || e.Result.JudgeGraded
 		s.last[arm] = r
 		s.spent = e.SpentUSD
 		if experiment.Settles(e.Result.Outcome) {
@@ -162,6 +170,14 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 			sandboxDown: r.sandboxDown}
 		if e.Result.Judge != "" {
 			entry.judge = term.Sanitize(e.Result.Judge)
+		}
+		if e.Result.JudgeGraded { // the outcome's words say the judge's grade; the line adds its votes
+			entry.judge = ""
+			if e.Result.JudgeVotes != "" {
+				entry.votes = term.Sanitize(e.Result.JudgeVotes)
+			} else if e.Result.Judge != "" {
+				entry.votes = term.Sanitize(e.Result.Judge)
+			}
 		}
 		added = append(added, entry)
 		if e.Result.Overshoot != "" {

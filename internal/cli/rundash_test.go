@@ -677,3 +677,68 @@ func TestBlockedWords(t *testing.T) {
 		}
 	}
 }
+
+// A judge-graded run on the dashboard: its grading step is the judge's (titled so, outside the sandbox's outline, "judge
+// grading" while it works), its result box says the judge's grade ("judge says" over "✓ fixed", "✓ judge: fixed" on one
+// line), and the log line labels it with the calls that carried it. A test-graded run beside it is drawn as always.
+func TestDashboardJudgeGraded(t *testing.T) {
+	t.Parallel()
+	lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+	s := newScene(t, lock, experiment.Standing{})
+	yes, no := true, false
+	judged := func(pos int, passed *bool, votes string) {
+		s.start(pos)
+		s.clock.add(3 * time.Second)
+		s.step(pos, run.StepAgent)
+		s.clock.add(2 * time.Minute)
+		s.step(pos, run.StepGrading)
+		s.clock.add(time.Second)
+		s.step(pos, run.StepJudgeGrading)
+		s.clock.add(40 * time.Second)
+		s.spent += 0.4
+		s.event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, SpentUSD: s.spent,
+			Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: passed, CostUSD: 0.4, JudgeUSD: 0.3, JudgeGraded: true, JudgeVotes: votes,
+				Judge: "fixed (" + votes + ")"}})
+	}
+	judged(0, &yes, "4 of 5")
+	judged(1, &no, "3 of 5")
+	s.clock.add(5 * time.Second)
+	var b strings.Builder
+	sizes := [][2]int{{79, 40}, {79, 23}, {79, 12}, {64, 40}}
+	for _, size := range sizes {
+		fmt.Fprintf(&b, "=== finished, %d columns, %d rows\n%s\n", size[0], size[1], s.frame(plainUnicode, size[0], size[1], 3))
+	}
+	done := s.frame(plainUnicode, 79, 40, 3)
+	for _, want := range []string{"the judge", "judge says", "✓ fixed", "✗ not fixed", "✓ judge: fixed  $0.10", "✗ judge: not fixed  $0.10", "(4 of 5)", "(3 of 5)"} {
+		if !strings.Contains(done, want) {
+			t.Errorf("the finished frame lacks %q:\n%s", want, done)
+		}
+	}
+	if strings.Count(done, "sandbox ┄") != 2 { // the agents' outlines only: a judge's grade runs no code
+		t.Errorf("a judge-graded run's grading is drawn inside the sandbox:\n%s", done)
+	}
+	if one := s.frame(plainUnicode, 79, 23, 3); !strings.Contains(one, "✓ judge: fixed") || !strings.Contains(one, "judge") {
+		t.Errorf("the one-line boxes do not label the judge's grade:\n%s", one)
+	}
+	if dir := os.Getenv("AGENTIUM_RUN_DEMO"); dir != "" { // a still in color, for scripts/readme_images
+		if err := os.WriteFile(filepath.Join(dir, "judge-graded.ans"), []byte(s.frame(color256, 79, 40, 3)+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.whole(2, true)
+	s.start(3)
+	s.clock.add(2 * time.Second)
+	s.step(3, run.StepAgent)
+	s.clock.add(time.Minute)
+	s.step(3, run.StepGrading)
+	s.step(3, run.StepJudgeGrading)
+	s.clock.add(12 * time.Second)
+	for _, size := range sizes {
+		fmt.Fprintf(&b, "=== judging, %d columns, %d rows\n%s\n", size[0], size[1], s.frame(plainUnicode, size[0], size[1], 3))
+	}
+	checkWords(t, "judged", b.String())
+	checkGolden(t, "dashboard-judged.golden", b.String())
+	if frame := s.frame(plainUnicode, 79, 40, 3); !strings.Contains(frame, "judging") || !strings.Contains(frame, "hidden tests") {
+		t.Errorf("the judging frame:\n%s", frame)
+	}
+}

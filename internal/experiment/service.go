@@ -149,7 +149,7 @@ func (p Project) Revalidations(ctx context.Context, d Design) ([]string, error) 
 		if err != nil {
 			continue // removed: readiness reports it
 		}
-		c := Candidate{Name: t.Name}
+		c := Candidate{Name: t.Name, Grading: t.Grading}
 		if t.Validation != nil {
 			v := task.ValidationOf(t)
 			c.Validation = &v
@@ -159,6 +159,21 @@ func (p Project) Revalidations(ctx context.Context, d Design) ([]string, error) 
 		}
 	}
 	return names, nil
+}
+
+// judgeGradedTasks is the set of the project's judge-graded tasks, by name.
+func (p Project) judgeGradedTasks(ctx context.Context) (map[string]bool, error) {
+	all, err := p.DB.Tasks(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	judged := map[string]bool{}
+	for _, t := range all {
+		if t.Grading == task.GradingJudge {
+			judged[t.Name] = true
+		}
+	}
+	return judged, nil
 }
 
 // WriteIneligible lists why tasks cannot be in an experiment, by name.

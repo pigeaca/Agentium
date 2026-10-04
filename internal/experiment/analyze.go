@@ -25,7 +25,21 @@ type RunData struct {
 	CostUSD       float64
 	DurationS     float64 // the agent's run
 	OutputTokens  float64
+	// Judged: the run's task is judge-graded, so Passed is the judge's grade, which counts toward MetricJudgeSuccess,
+	// never toward MetricSuccess.
+	Judged bool
+	// Pending: a fair judge-graded run whose grade is pending (run.NeedsGrading): an experiment grades it again from its
+	// change, so it settles its slot for the scheduler (the agent never runs again) but not for a seq-v1 look.
+	Pending bool
 }
+
+// graded reports whether a fair run counts in the analysis: every test-graded one (the tests graded it), and a
+// judge-graded one the judge graded. A judge-graded run without a grade, pending or left ungraded for good
+// (run.Record.Ungraded), is left out, cost included: the cost verdict uses only graded runs.
+func (r RunData) graded() bool { return !r.Judged || r.Passed != nil }
+
+// ungraded reports whether a fair judge-graded run was left without a grade for good: counted per arm (UngradedCheck).
+func (r RunData) ungraded() bool { return Fair(r.Outcome) && !r.graded() && !r.Pending }
 
 // Metrics compared between the arms.
 const (
@@ -33,7 +47,13 @@ const (
 	MetricCost    = "cost"
 	MetricTime    = "time"
 	MetricOutput  = "output_tokens"
+	// MetricJudgeSuccess is the judge-graded tasks' success: the judge says fixed. Present only when the lock has
+	// judge-graded tasks, after the others; unvalidated, it is always exploratory (no verdict), with its own floors.
+	MetricJudgeSuccess = "judge_success"
 )
+
+// NoteJudgeSuccess is MetricJudgeSuccess's note: why it has no verdict.
+const NoteJudgeSuccess = "the judge's grades, unvalidated: shown apart from the tests, never a verdict"
 
 // Roles: the goal's primary metric and the success guard get verdicts; the rest are exploratory.
 const (
@@ -113,11 +133,14 @@ type Noise struct {
 
 // Analysis is an experiment's results.
 type Analysis struct {
-	Results           []MetricResult     `json:"results"`
-	Counted           map[string]int     `json:"counted"`  // fair runs per arm
-	Excluded          map[string]int     `json:"excluded"` // other runs per outcome
-	PassAt1           map[string]float64 `json:"pass_at_1"`
-	PassAll           map[string]float64 `json:"pass_all"` // pass^k: tasks whose every counted run succeeded
+	Results  []MetricResult     `json:"results"`
+	Counted  map[string]int     `json:"counted"`  // fair runs per arm
+	Excluded map[string]int     `json:"excluded"` // other runs per outcome
+	PassAt1  map[string]float64 `json:"pass_at_1"`
+	PassAll  map[string]float64 `json:"pass_all"` // pass^k: tasks whose every counted run succeeded
+	// JudgePassAt1 is each arm's share of judge-graded runs the judge called fixed (MetricJudgeSuccess's levels); only
+	// when the lock has judge-graded tasks. PassAt1 and PassAll are the test-graded runs'.
+	JudgePassAt1      map[string]float64 `json:"judge_pass_at_1,omitempty"`
 	NotDiscriminating []string           `json:"not_discriminating,omitempty"`
 	Noise             *Noise             `json:"noise,omitempty"`
 	// Sequential is a seq-v1 experiment's looks. Every other field then describes the runs of the reported look's
@@ -125,6 +148,9 @@ type Analysis struct {
 	Sequential *SeqStatus `json:"sequential,omitempty"`
 	// Sandbox is the per-arm check of runs left out for flagged sandbox denials (sandbox-mode experiments only).
 	Sandbox *SandboxCheck `json:"sandbox,omitempty"`
+	// Ungraded is the per-arm check of judge-graded runs left without a grade (experiments with judge-graded tasks
+	// only).
+	Ungraded *UngradedCheck `json:"ungraded,omitempty"`
 }
 
 // SandboxCheck counts, per arm, the runs left out because their sandboxed grade failed with denials the agent's own
@@ -144,14 +170,87 @@ type SandboxCheck struct {
 	Disagrees []string `json:"disagrees,omitempty"`
 }
 
-// imbalanced reports whether flagged exclusions differ between arms a and b enough to demote the verdicts: one arm has
-// some and the other none, or they differ by more than max(1, 10% of the counted pairs).
+// imbalanced reports whether flagged exclusions differ between arms a and b enough to demote the verdicts
+// (armsDiffer).
 func (c SandboxCheck) imbalanced(a, b string) bool {
-	fa, fb := c.Flagged[a], c.Flagged[b]
+	return armsDiffer(c.Flagged[a], c.Flagged[b], c.Pairs)
+}
+
+// armsDiffer reports whether the arms' counts of runs left out without a retry, fa and fb, differ enough to demote the
+// verdicts: one arm has some and the other none, or they differ by more than max(1, 10% of the counted pairs).
+func armsDiffer(fa, fb, pairs int) bool {
 	if (fa > 0) != (fb > 0) {
 		return true
 	}
-	return math.Abs(float64(fa-fb)) > math.Max(1, 0.1*float64(c.Pairs))
+	return math.Abs(float64(fa-fb)) > math.Max(1, 0.1*float64(pairs))
+}
+
+// UngradedCheck counts, per arm, the judge-graded runs the judge left without a grade for good (run.Record.Ungraded: a
+// tie, refusals or malformed replies, or errors on every attempt), against the counted pairs: SandboxCheck's guard for
+// another exclusion without a retry. Such a run is left out, never a fail or a pass, and never run again, so an arm
+// cannot re-roll it; but an arm whose changes the judge leaves ungraded more often would lose those runs, with their
+// cost, from the count. So whenever any run was left ungraded, AsCounted says what the verdicts would be with those
+// runs counted (their cost and time, and as the judge's fails); when the arms differ (Imbalanced, by SandboxCheck's
+// threshold) every verdict those runs would feed (all but the tests' success, which never counts them) is demoted to
+// inconclusive, and when they are balanced, those AsCounted disagrees with (Disagrees).
+type UngradedCheck struct {
+	Ungraded   map[string]int `json:"ungraded"` // runs left ungraded per arm
+	Pairs      int            `json:"pairs"`    // pairs with a counted run in both arms
+	Imbalanced bool           `json:"imbalanced"`
+	// AsCounted maps each metric with a verdict to its verdict with the ungraded runs counted; whenever any was.
+	AsCounted map[string]string `json:"as_counted,omitempty"`
+	// Disagrees lists the metrics demoted because AsCounted gives another verdict, though the arms are balanced.
+	Disagrees []string `json:"disagrees,omitempty"`
+}
+
+// countedPairs counts the pairs (by the lock's schedule) with a counted run in both arms a and b.
+func countedPairs(l Lock, runs []RunData, a, b string) int {
+	counted := map[int]map[string]bool{} // pair: arms with a counted run
+	for _, r := range runs {
+		if Fair(r.Outcome) && r.graded() && r.Slot >= 0 && r.Slot < len(l.Schedule) {
+			pair := l.Schedule[r.Slot].Pair
+			if counted[pair] == nil {
+				counted[pair] = map[string]bool{}
+			}
+			counted[pair][r.Arm] = true
+		}
+	}
+	n := 0
+	for _, arms := range counted {
+		if arms[a] && arms[b] {
+			n++
+		}
+	}
+	return n
+}
+
+// ungradedCheck counts the runs left ungraded per arm and the counted pairs in runs; nil for a lock without
+// judge-graded tasks.
+func ungradedCheck(l Lock, runs []RunData) *UngradedCheck {
+	if !l.JudgeGraded() {
+		return nil
+	}
+	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	c := &UngradedCheck{Ungraded: map[string]int{a: 0, b: 0}, Pairs: countedPairs(l, runs, a, b)}
+	for _, r := range runs {
+		if r.ungraded() {
+			c.Ungraded[r.Arm]++
+		}
+	}
+	c.Imbalanced = armsDiffer(c.Ungraded[a], c.Ungraded[b], c.Pairs)
+	return c
+}
+
+// asCounted is runs with the ungraded ones counted: graded as the judge's fails, at their cost.
+func asCounted(runs []RunData) []RunData {
+	out := slices.Clone(runs)
+	failed := false
+	for i, r := range out {
+		if r.ungraded() {
+			out[i].Passed = &failed
+		}
+	}
+	return out
 }
 
 // sandboxCheck counts the flagged exclusions per arm and the counted pairs (by the lock's schedule) in runs; nil for an
@@ -161,23 +260,10 @@ func sandboxCheck(l Lock, runs []RunData) *SandboxCheck {
 		return nil
 	}
 	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
-	c := &SandboxCheck{Flagged: map[string]int{a: 0, b: 0}}
-	counted := map[int]map[string]bool{} // pair: arms with a counted run
+	c := &SandboxCheck{Flagged: map[string]int{a: 0, b: 0}, Pairs: countedPairs(l, runs, a, b)}
 	for _, r := range runs {
-		switch {
-		case r.Outcome == run.OutcomeSandboxFlagged:
+		if r.Outcome == run.OutcomeSandboxFlagged {
 			c.Flagged[r.Arm]++
-		case Fair(r.Outcome) && r.Slot >= 0 && r.Slot < len(l.Schedule):
-			pair := l.Schedule[r.Slot].Pair
-			if counted[pair] == nil {
-				counted[pair] = map[string]bool{}
-			}
-			counted[pair][r.Arm] = true
-		}
-	}
-	for _, arms := range counted {
-		if arms[a] && arms[b] {
-			c.Pairs++
 		}
 	}
 	c.Imbalanced = c.imbalanced(a, b)
@@ -223,15 +309,20 @@ type lookLevels struct {
 	eff, eq   float64
 	look      int  // from 1: each look draws its own bootstrap streams
 	noVerdict bool // no look was analysed: the primary metric gets no verdict
-	// noSandboxCheck skips the per-arm check of flagged exclusions (SandboxCheck): its own sensitivity analysis.
+	// noSandboxCheck skips the per-arm checks of exclusions without a retry (SandboxCheck, UngradedCheck): their own
+	// sensitivity analyses.
 	noSandboxCheck bool
 }
 
 // analyze is Analyze at lv's levels; it also returns the primary metric's t-statistic (0 without one).
 func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	// The tests' success and the judge's are separate metrics over separate runs: no verdict is computed over both.
 	metrics := []metric{
 		{MetricSuccess, false, func(r RunData) (float64, bool) {
+			if r.Judged {
+				return 0, false
+			}
 			if Success(r.Outcome, r.Passed, r.ConfigChanged) {
 				return 1, true
 			}
@@ -241,6 +332,18 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		{MetricTime, true, func(r RunData) (float64, bool) { return r.DurationS, r.DurationS > 0 }},
 		{MetricOutput, true, func(r RunData) (float64, bool) { return r.OutputTokens, r.OutputTokens > 0 }},
 	}
+	judged := l.JudgeGraded()
+	if judged {
+		metrics = append(metrics, metric{MetricJudgeSuccess, false, func(r RunData) (float64, bool) {
+			if !r.Judged {
+				return 0, false
+			}
+			if Success(r.Outcome, r.Passed, r.ConfigChanged) {
+				return 1, true
+			}
+			return 0, true
+		}})
+	}
 	floors := FloorsFor(l.Method)
 	out := Analysis{Counted: map[string]int{}, Excluded: map[string]int{}, PassAt1: map[string]float64{}, PassAll: map[string]float64{}}
 	tables := map[string]*stats.Table{}
@@ -248,8 +351,15 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		tables[m.name] = stats.NewTable()
 	}
 	for _, r := range runs {
-		if !Fair(r.Outcome) {
+		switch {
+		case !Fair(r.Outcome):
 			out.Excluded[r.Outcome]++
+			continue
+		case !r.graded() && r.Pending:
+			out.Excluded[OutcomeGradePending]++
+			continue
+		case !r.graded():
+			out.Excluded[OutcomeUngraded]++
 			continue
 		}
 		out.Counted[r.Arm]++
@@ -273,7 +383,7 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 			res.Role = RoleGuard
 		}
 		dir := stats.LowerIsBetter
-		if m.name == MetricSuccess {
+		if m.name == MetricSuccess || m.name == MetricJudgeSuccess {
 			dir = stats.HigherIsBetter
 		}
 		transform, back, margin := stats.Transform(stats.Identity), stats.Identity, stats.Symmetric(l.Design.SuccessMargin)
@@ -308,6 +418,9 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		belowFloor := res.FullTasks < res.FloorTasks // enough tasks with the floor's runs per arm
 		if res.Role == RoleSecondary {
 			res.Verdict = stats.Exploratory // no verdict: one primary metric, and the guard
+			if m.name == MetricJudgeSuccess {
+				res.Note = NoteJudgeSuccess
+			}
 			out.Results = append(out.Results, res)
 			continue
 		}
@@ -329,6 +442,14 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 		}
 	}
 	out.NotDiscriminating = stats.NotDiscriminating(success, a, b)
+	if judged {
+		out.JudgePassAt1 = map[string]float64{}
+		for _, arm := range []string{a, b} {
+			if rate := level(tables[MetricJudgeSuccess], arm, stats.Identity, stats.Identity); rate != nil {
+				out.JudgePassAt1[arm] = *rate
+			}
+		}
+	}
 	out.Noise = noise(tables[MetricCost], success, a, b, l.Design)
 	if !lv.noSandboxCheck {
 		if err := demote(l, runs, lv, &out); err != nil {
@@ -338,46 +459,83 @@ func analyze(l Lock, runs []RunData, lv lookLevels) (Analysis, float64, error) {
 	return out, primaryZ, nil
 }
 
-// demote runs the per-arm check of flagged exclusions (sandboxCheck). Whenever any run was left out, it re-analyses
-// the runs with those counted as failures (AsFails: a sensitivity check the report always shows). A cost or success
-// verdict becomes inconclusive, with a note, when the arms differ (Imbalanced: all of them), or when counting the
-// left-out runs as fails gives another verdict (that one): a stricter reading of decision 3 than the per-arm threshold
-// alone, which a verdict could cross unnoticed. A seq-v1 look is analysed here too, so it never stops on a verdict this
-// demotes.
+// demote runs the per-arm checks of the runs left out without a retry: flagged sandbox exclusions (sandboxCheck) and
+// judge-graded runs left ungraded (ungradedCheck). Whenever any run was left out, it re-analyses the runs with those
+// counted (as failures, at their cost: AsFails and AsCounted, sensitivity checks the report always shows). A verdict
+// those runs would feed becomes inconclusive, with a note, when the arms differ (Imbalanced: all of them), or when
+// counting the left-out runs gives another verdict (that one): a stricter reading of decision 3 than the per-arm
+// threshold alone, which a verdict could cross unnoticed. Both checks compare the verdicts as analysed; a verdict both
+// demote carries both notes. A seq-v1 look is analysed here too, so it never stops on a verdict this demotes.
 func demote(l Lock, runs []RunData, lv lookLevels, out *Analysis) error {
-	c := sandboxCheck(l, runs)
-	out.Sandbox = c
-	if c == nil || c.Flagged[l.Design.Arms[0].Name]+c.Flagged[l.Design.Arms[1].Name] == 0 {
+	before := slices.Clone(out.Results)
+	lv.noSandboxCheck = true
+	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
+	apply := func(i int, note string) {
+		if out.Results[i].Verdict == stats.Inconclusive && out.Results[i].Note != "" && before[i].Verdict != stats.Inconclusive {
+			out.Results[i].Note += "; " + note
+		} else {
+			out.Results[i].Note = note
+		}
+		out.Results[i].Verdict = stats.Inconclusive
+	}
+	if c := sandboxCheck(l, runs); c != nil {
+		out.Sandbox = c
+		if c.Flagged[a]+c.Flagged[b] > 0 {
+			sens, _, err := analyze(l, asFails(runs), lv)
+			if err != nil {
+				return err
+			}
+			c.AsFails = map[string]string{}
+			for _, r := range sens.Results {
+				if r.Role != RoleSecondary {
+					c.AsFails[r.Metric] = r.Verdict
+				}
+			}
+			for i, r := range before {
+				if r.Role == RoleSecondary || r.Verdict == stats.Exploratory {
+					continue
+				}
+				switch {
+				case c.Imbalanced:
+					apply(i, fmt.Sprintf("demoted to inconclusive: the arms' runs left out for sandbox denials differ (%s %d, %s %d); "+
+						"counting them as fails gives %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric]))
+				case c.AsFails[r.Metric] != r.Verdict:
+					c.Disagrees = append(c.Disagrees, r.Metric)
+					apply(i, fmt.Sprintf("demoted to inconclusive: with the runs left out for sandbox denials (%s %d, %s %d) counted as fails "+
+						"it is %s, not %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric], r.Verdict))
+				}
+			}
+		}
+	}
+	u := ungradedCheck(l, runs)
+	out.Ungraded = u
+	if u == nil || u.Ungraded[a]+u.Ungraded[b] == 0 {
 		return nil
 	}
-	lv.noSandboxCheck = true
-	sens, _, err := analyze(l, asFails(runs), lv)
+	sens, _, err := analyze(l, asCounted(runs), lv)
 	if err != nil {
 		return err
 	}
-	c.AsFails = map[string]string{}
+	u.AsCounted = map[string]string{}
 	for _, r := range sens.Results {
-		if r.Role != RoleSecondary {
-			c.AsFails[r.Metric] = r.Verdict
+		if r.Role != RoleSecondary && r.Metric != MetricSuccess {
+			u.AsCounted[r.Metric] = r.Verdict
 		}
 	}
-	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name
-	for i, r := range out.Results {
-		if r.Role == RoleSecondary || r.Verdict == stats.Exploratory {
+	for i, r := range before {
+		// The tests' success never counts a judge-graded run, so these runs cannot move it.
+		if r.Role == RoleSecondary || r.Verdict == stats.Exploratory || r.Metric == MetricSuccess {
 			continue
 		}
 		switch {
-		case c.Imbalanced:
-			out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: the arms' runs left out for sandbox denials differ (%s %d, %s %d); "+
-				"counting them as fails gives %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric])
-		case c.AsFails[r.Metric] != r.Verdict:
-			c.Disagrees = append(c.Disagrees, r.Metric)
-			out.Results[i].Note = fmt.Sprintf("demoted to inconclusive: with the runs left out for sandbox denials (%s %d, %s %d) counted as fails "+
-				"it is %s, not %s", a, c.Flagged[a], b, c.Flagged[b], c.AsFails[r.Metric], r.Verdict)
-		default:
-			continue
+		case u.Imbalanced:
+			apply(i, fmt.Sprintf("demoted to inconclusive: the arms' judge-graded runs the judge left without a grade differ (%s %d, %s %d); "+
+				"counting them gives %s", a, u.Ungraded[a], b, u.Ungraded[b], u.AsCounted[r.Metric]))
+		case u.AsCounted[r.Metric] != r.Verdict:
+			u.Disagrees = append(u.Disagrees, r.Metric)
+			apply(i, fmt.Sprintf("demoted to inconclusive: with the judge-graded runs left without a grade (%s %d, %s %d) counted "+
+				"it is %s, not %s", a, u.Ungraded[a], b, u.Ungraded[b], u.AsCounted[r.Metric], r.Verdict))
 		}
-		out.Results[i].Verdict = stats.Inconclusive
 	}
 	return nil
 }

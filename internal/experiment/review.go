@@ -213,6 +213,9 @@ func (r Review) writeDesign(out io.Writer, st term.Style, name string) {
 		fmt.Fprintf(out, "  judge pairs: %s; each comparison up to $%.2f; unvalidated and exploratory, it decides nothing\n",
 			DescribePairJudge(*d.JudgePairs), d.PairJudgeCapUSD())
 	}
+	if len(d.JudgeGraded) > 0 {
+		fmt.Fprintf(out, "  judge-graded: %s\n", JudgeGradedWords(d))
+	}
 }
 
 func orDefaultEffort(effort string) string {
@@ -293,6 +296,11 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 			"runs are %s). $%.3f is the judge pilot's mean call on %s at effort %s, not a measure of this project.\n",
 			d.JudgeEstimateUSD(), own.Runs, j.Repeats, llmjudge.EstimateUSD, agent, llmjudge.EstimateUSD, llmjudge.DefaultModel, llmjudge.DefaultEffort)
 	}
+	if d.JudgeGrading != nil {
+		g := d.JudgeGrading.WithDefaults()
+		fmt.Fprintf(out, "Grading by the judge: about $%.2f for the %d run(s) of judge-graded tasks × %d call(s) at $%.3f a call (EST. COST includes it).\n",
+			d.GradingEstimateUSD(), d.judgedTasks()*d.Repeats*len(d.Arms), g.Repeats, llmjudge.EstimateUSD)
+	}
 	if d.JudgePairs != nil {
 		fmt.Fprintf(out, "The pair judge (unvalidated): about $%.2f if it compares all %d pairs at $%.3f a pair, both orders (EST. COST includes it;\n"+
 			"only pairs whose two runs pass are compared). $%.3f is the judge pilot's mean pair on %s at effort %s, not a measure\n"+
@@ -311,6 +319,11 @@ func (r Review) writeWorstCase(out io.Writer, st term.Style) {
 	if d.JudgePairs != nil {
 		guard = fmt.Sprintf(" Each pair's comparison may reach $%.2f (%d calls at $%.2f: both orders, each asked twice at most).", d.PairJudgeCapUSD(),
 			llmjudge.PairCalls, d.PairJudgeCapUSD()/llmjudge.PairCalls) + guard
+	}
+	if d.JudgeGrading != nil {
+		g := d.JudgeGrading.WithDefaults()
+		guard = fmt.Sprintf(" A judge-graded task's run is graded instead of judged: its grading may reach $%.2f (%d calls at $%.2f, each asked twice at most).",
+			d.GradingCapUSD(), g.Repeats, d.GradingCapUSD()/float64(2*g.Repeats)) + guard
 	}
 	if d.PerArmProfiles() {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("Worst case: every run reaches its cap (arm A $%.2f, arm B $%.2f%s).%s", d.ArmRunBudgetUSD(d.Arms[0]),

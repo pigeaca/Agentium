@@ -12,7 +12,8 @@ const (
 	// GradingTests: the hidden tests and verification commands decide a run (every task before judge grading).
 	GradingTests = "tests"
 	// GradingJudge: the solution changes no test files, so there are no hidden tests; the LLM judge compares a run's
-	// change with the reference solution. Experiments do not take these tasks yet.
+	// change with the reference solution, and its majority of judge.GradeRepeats grades the run (unvalidated: reports
+	// keep these grades apart from the tests').
 	GradingJudge = "judge"
 )
 
@@ -22,6 +23,15 @@ type JudgeCheck struct {
 	CodeFiles    []string `json:"code_files"`    // the reference files the judge reads (not tests, not documents)
 	ChangedLines int      `json:"changed_lines"` // added and removed lines in their diff
 	Problems     []string `json:"problems,omitempty"`
+}
+
+// GradingOf is a task's grading mode as a run specification carries it (Spec.Grading): GradingJudge, or empty for the
+// tests, so specifications and lock digests of test-graded tasks stay as they were before judge grading.
+func GradingOf(mode string) string {
+	if mode == GradingJudge {
+		return GradingJudge
+	}
+	return ""
 }
 
 // JudgedFiles lists the reference files the judge compares: those that are neither tests nor documents.

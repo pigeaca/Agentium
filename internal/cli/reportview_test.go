@@ -55,7 +55,8 @@ func reportScenes(t *testing.T) map[string]reporttest.Experiment {
 	}
 	futility.Name = "lean-seq-futility"
 	return map[string]reporttest.Experiment{"decisive": decisive, "unsure": unsure, "aa": reporttest.OneRun(experiment.MethodV2, experiment.TemplateAA),
-		"judged": reporttest.JudgedPairs(), "few-pairs": reporttest.FewPairs(), "seq-stopped": stopped, "seq-futility": futility}
+		"judged": reporttest.JudgedPairs(), "few-pairs": reporttest.FewPairs(), "seq-stopped": stopped, "seq-futility": futility,
+		"judge-graded": reporttest.JudgeGraded()}
 }
 
 // TestReportViewPreview writes the report view of each scene, as a terminal of 80 columns at 256 colors shows it,
@@ -84,7 +85,7 @@ var reportWidths = []int{term.MinWidth, 80, 100, 120}
 // line is wider than the terminal.
 func TestReportViewGoldens(t *testing.T) {
 	scenes := reportScenes(t)
-	for _, name := range []string{"decisive", "unsure", "aa", "judged", "few-pairs", "seq-stopped", "seq-futility"} {
+	for _, name := range []string{"decisive", "unsure", "aa", "judged", "few-pairs", "seq-stopped", "seq-futility", "judge-graded"} {
 		rep := buildReport(t, scenes[name])
 		var b strings.Builder
 		for _, width := range reportWidths {

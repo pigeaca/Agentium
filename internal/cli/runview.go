@@ -216,6 +216,9 @@ func termsOf(d experiment.Design, labels [2]string) string {
 	if d.JudgePairs != nil {
 		parts = append(parts, "each pair's comparison up to "+money(d.PairJudgeCapUSD()))
 	}
+	if len(d.JudgeGraded) > 0 {
+		parts = append(parts, "a judge-graded run's grading up to "+money(d.GradingCapUSD()))
+	}
 	return strings.Join(append(parts, "Ctrl-C stops; run again to go on"), " · ")
 }
 
@@ -548,8 +551,16 @@ func outcomeWords(r experiment.Result, requeued, sandboxDown bool, m marks) (box
 		return "not graded", "sandbox unavailable (not counted)", term.OutcomeLeftOut
 	case r.Outcome == "" && requeued:
 		return "stopped", "stopped before Claude began · runs again next time", term.OutcomeLeftOut
+	case experiment.Fair(r.Outcome) && r.Passed == nil && r.GradePending:
+		return "judge: pending", "judge: grade pending · graded again from its change", term.OutcomeLeftOut
+	case experiment.Fair(r.Outcome) && r.Passed == nil && r.JudgeGraded:
+		return "not graded", "judge: not graded (not counted, not tried again)", term.OutcomeLeftOut
 	case experiment.Fair(r.Outcome) && r.Passed == nil:
 		return "not graded", "not graded", term.OutcomeLeftOut
+	case experiment.Fair(r.Outcome) && r.JudgeGraded && *r.Passed: // the judge's grade, labelled wherever a pass shows
+		return m.ok + " judge: fixed", m.ok + " judge: fixed", term.OutcomeOK
+	case experiment.Fair(r.Outcome) && r.JudgeGraded:
+		return m.fail + " judge: not fixed", m.fail + " judge: not fixed", term.OutcomeFailed
 	case experiment.Fair(r.Outcome) && *r.Passed:
 		return m.ok + " passed", m.ok + " passed", term.OutcomeOK
 	case experiment.Fair(r.Outcome):
@@ -586,6 +597,7 @@ type logEntry struct {
 	sandboxDown bool
 	took        time.Duration
 	judge       string    // the judge's verdict in words, when judged
+	votes       string    // a judge-graded run's: how many of the judge's calls carried its grade ("4 of 5"), or why none
 	words       string    // a sentence
 	role        term.Role // a sentence's color
 	sentence    bool
@@ -614,6 +626,9 @@ func (e logEntry) format(sh term.Shapes, m marks, f runFacts, width int) string 
 	}
 	if e.judge != "" {
 		line += "  " + st.Paint(term.Muted, "judge: "+e.judge)
+	}
+	if e.votes != "" {
+		line += "  " + st.Paint(term.Muted, "("+e.votes+")")
 	}
 	return term.Truncate(line, width, sh.Ellipsis())
 }

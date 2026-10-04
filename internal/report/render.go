@@ -42,6 +42,9 @@ func (r Report) Markdown(w io.Writer) error {
 			fmt.Fprintf(&b, "- %s\n", r.headline(res))
 		}
 	}
+	if bold, mid, verdict, ok := r.judgeHeadline(); ok {
+		fmt.Fprintf(&b, "- **%s**%s%s.\n", bold, mid, verdict)
+	}
 	model, effort := modelEffort(d)
 	fmt.Fprintf(&b, "\n%d of %d runs settled (%s); spent $%.2f of $%.2f%s. %d task(s) × %d run(s) per arm; %s, effort %s, Claude Code %s, sign-in %s. Locked %s (method %s).\n",
 		r.Settled, r.Slots, r.Status, r.SpentUSD, d.BudgetUSD, r.calibrationNote(), len(l.Tasks), d.Repeats, model, effort, l.ClaudeCode, l.SignIn,
@@ -88,9 +91,12 @@ func (r Report) Markdown(w io.Writer) error {
 		}
 		return "-"
 	}
-	fmt.Fprintf(&b, "\nSuccess: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n",
+	fmt.Fprintf(&b, "\n%s: pass@1 %s (%s) and %s (%s); every run of a task passed (pass^k) in %s and %s of tasks.\n", r.successLabel(),
 		rate(r.Analysis.PassAt1, r.Arms[0].Name), r.Arms[0].tag(), rate(r.Analysis.PassAt1, r.Arms[1].Name), r.Arms[1].tag(), rate(r.Analysis.PassAll, r.Arms[0].Name),
 		rate(r.Analysis.PassAll, r.Arms[1].Name))
+	if line := r.judgeGradingLine(); line != "" {
+		fmt.Fprintf(&b, "\n%s\n", line)
+	}
 
 	if r.Analysis.Sequential != nil && len(r.Analysis.Sequential.Looks) > 0 {
 		fmt.Fprintf(&b, "\n## Looks\n\n%s\n\n| %s |\n|---%s|\n", r.looksIntro(), strings.Join(lookColumns, " | "), strings.Repeat("|---", len(lookColumns)-1))
@@ -144,7 +150,7 @@ func (r Report) Markdown(w io.Writer) error {
 	fmt.Fprintf(&b, "\n## Per task\n\n%s\n\n| Task | %s | %s | Cost A → B |\n|---|---|---|---|\n", r.perTaskLegend(), r.Arms[0].label(), r.Arms[1].label())
 	for _, t := range r.Tasks {
 		ca, cb := t.Arms[r.Arms[0].Name], t.Arms[r.Arms[1].Name]
-		fmt.Fprintf(&b, "| %s | %s %s | %s %s | %s → %s |\n", t.Task, orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost(), cb.cost())
+		fmt.Fprintf(&b, "| %s | %s %s | %s %s | %s → %s |\n", r.judgedTaskName(t), orDash(ca.Marks), ca.counts(), orDash(cb.Marks), cb.counts(), ca.cost(), cb.cost())
 	}
 
 	if r.Judge != nil {
@@ -340,7 +346,7 @@ func level(res experiment.MetricResult, p *float64) string {
 		return "-"
 	}
 	switch x := *p; res.Metric {
-	case experiment.MetricSuccess:
+	case experiment.MetricSuccess, experiment.MetricJudgeSuccess:
 		return pct(x)
 	case experiment.MetricCost:
 		return fmt.Sprintf("$%.3f", x)
@@ -395,7 +401,7 @@ func orDefault(effort string) string {
 
 // perTaskLegend explains the per-task table's marks; it names runs cut short only when there are some.
 func (r Report) perTaskLegend() string {
-	legend := "● success, ○ failure, × not counted; cost is the mean of counted runs."
+	legend := "● success, ○ failure, × not counted; cost is the mean of counted runs." + r.judgedLegend()
 	for _, a := range r.Arms {
 		if a.Censored() > 0 {
 			return legend + " A run cut short (capped at its cost cap or turn limit, or timed out) has a cost that is a lower bound: ≥ marks a mean that includes one."

@@ -52,6 +52,7 @@ Before tasks are used, read them once for hints that give the answer away: `agen
 | `agentium experiment run NAME` | Run it, with the live screen above (`--view log` for a plain log) |
 | `agentium experiment report NAME` | The answer and the details per task |
 | `agentium context snapshot NAME` | Save the current context as a version to compare |
+| `agentium task add NAME --ticket-file FILE --base REF --solution REF` | A task from a ticket; when its fix has no tests, the judge grades it (unvalidated, reported apart) |
 | `agentium pool update` | Find new tasks in your history and keep the old ones fresh |
 | `agentium clean` | Show the space unused caches take; `--yes` frees it |
 

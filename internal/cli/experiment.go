@@ -62,7 +62,11 @@ var experimentUsage = `Usage:
 Every experiment command but report takes --json (one JSON document on stdout; see docs/guide.md, "Scripting and automation").
 
 Tasks must be reviewed and valid in both arms' contexts (agentium task validate NAME --snapshot SNAPSHOT); --task picks
-them (repeatable), else a seeded sample does. A cost experiment (--goal cheaper, the default) runs method seq-v1: up to
+them (repeatable), else a seeded sample does. A judge-graded task (a ticket's, whose fix has no tests) is in an
+experiment only when --task names it: the judge's majority of 5 calls grades its runs (each run's grading held at $5.00
+in the budget), unvalidated and reported apart as "the judge says fixed", never in success, a verdict or the north star;
+a judge error leaves a grade pending (graded again from the run's change, never by running the agent again), and a
+refusal or a tie leaves the run out. A cost experiment (--goal cheaper, the default) runs method seq-v1: up to
 16 tasks × 1 run per arm in stages, with a look after 8, 12 and 16 tasks; it stops at the first look with a cost
 verdict, or when one has become unlikely (futility). A success experiment (--goal better) runs 12 tasks × 3 runs per
 arm. Expert flags (a larger sample, repeats, the seed, timeouts, concurrency) are in docs/guide.md, "Advanced flags".
