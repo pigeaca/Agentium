@@ -1,7 +1,7 @@
 # Judge pairs: real check (judge-pairs step 3)
 
 - Date: 2026-10-04
-- Scope: [judge-pairs plan](../../.agents/plans/2026-10-01-judge-pairs.md) step 3, Acceptance 4: an A/A with `--judge-pairs`, 4 tasks × 1, to check arm bias, order flips and whether the reasons are plausible.
+- Scope: [judge-pairs plan](../../.agents/plans/archive/2026-10-01-judge-pairs.md) step 3, Acceptance 4: an A/A with `--judge-pairs`, 4 tasks × 1, to check arm bias, order flips and whether the reasons are plausible.
 - Spend: **$2.06** (8 runs $1.59, pair judge $0.46; the context's calibration was reused, $0). Cap: the user's hard cap of $12 (2026-10-04, "Allow up to $12").
 - The first attempt, the same day, was not run: its preview's worst case ($11.60) was above the check's first cap of $3, and no sizing of 4 pairs fits $3.
 

@@ -10,7 +10,7 @@ import (
 )
 
 // PairJudge is the pair judge's comparisons of an experiment's passing pairs: present only when the experiment was
-// made with --judge-pairs. It is unvalidated and exploratory (.agents/plans/2026-10-01-judge-pairs.md): it decides
+// made with --judge-pairs. It is unvalidated and exploratory (.agents/plans/archive/2026-10-01-judge-pairs.md): it decides
 // nothing, and every verdict stays the tests'.
 type PairJudge struct {
 	Model  string `json:"model"`
