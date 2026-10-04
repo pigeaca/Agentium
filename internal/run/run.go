@@ -921,14 +921,15 @@ func checkFiles(verify []string, module string, base source.Source) (scripts, co
 // .mvn/maven.config, pytest's rootdir pyproject.toml and conftest.py, Gradle's root build.gradle), so an agent that
 // edits an ancestor's must be reported as one that edits the module's. A root file a runner does not read (a root
 // Makefile, say) is reported too: it only marks a run whose agent changed it and the reference did not. Without a
-// module the names are unchanged.
+// module the names are unchanged. A stored module is always relative (ValidateModule); the walk still stops at "/" so
+// a corrupted absolute one fails the grade at the module check instead of looping here.
 func inAncestors(module string, names []string) []string {
 	if module == "" {
 		return names
 	}
 	var out []string
 	for dir := module; ; dir = path.Dir(dir) {
-		if dir == "." {
+		if dir == "." || dir == "/" {
 			return append(out, names...)
 		}
 		for _, name := range names {

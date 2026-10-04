@@ -314,3 +314,18 @@ func TestGradeDirFailsAModuleGoneBetweenCommands(t *testing.T) {
 		t.Errorf("notes %q, log %q", notes, log.String())
 	}
 }
+
+// TestInAncestorsEndsOnAnAbsoluteModule: path.Dir("/") is "/", never ".", so a walk that stopped only at "." would
+// never end on a corrupted absolute module and hang the grade.
+func TestInAncestorsEndsOnAnAbsoluteModule(t *testing.T) {
+	done := make(chan []string, 1)
+	go func() { done <- inAncestors("/svc", []string{"pom.xml"}) }()
+	select {
+	case got := <-done:
+		if want := []string{"/svc/pom.xml", "pom.xml"}; !slices.Equal(got, want) {
+			t.Fatalf("inAncestors(/svc) = %q, want %q", got, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("inAncestors did not end on an absolute module")
+	}
+}
