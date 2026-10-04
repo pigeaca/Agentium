@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/sandbox"
@@ -86,7 +86,7 @@ type sandboxGrade struct {
 	// Agent is the agent's invocation, or one with its tools, deps, JDK, venv, metadata, import root, home and denied
 	// paths (Deny, TokenFile, TempRoot as the run had them): the grade gets the agent's recipe and is denied what the
 	// agent was.
-	Agent claude.Invocation
+	Agent agent.Invocation
 	// Base is the task's base commit, a full ID: the seed's.
 	Base     string
 	Commands []string
@@ -132,7 +132,7 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 			return err
 		}
 		written, file, digest, err := g.writeProfile(sandbox.Profile{Tag: tag, Home: in.Agent.Home, AccountHome: in.Agent.AccountHome,
-			Environ: env.environ(), Data: env.Layout.Root, Denied: in.Agent.DeniedPaths(env.environ()), Loopback: true})
+			Environ: env.environ(), Data: env.Layout.Root, Denied: env.adapter().DeniedPaths(in.Agent, env.environ()), Loopback: true})
 		if err != nil {
 			return fmt.Errorf("the grading profile: %w", err)
 		}
@@ -281,9 +281,9 @@ func (g grading) lock() error {
 
 // sandboxedCommands is task.CheckoutCommands.Sandboxed for a validation (CheckoutCommands): a stage's checkout is
 // graded as a run's copy is, in its own grading folder, with agent's recipe and denied paths.
-func (env Env) sandboxedCommands(agent claude.Invocation, base string) func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
+func (env Env) sandboxedCommands(inv agent.Invocation, base string) func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
 	return func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
-		in := sandboxGrade{Root: root, Copy: dir, Agent: agent, Base: base, Commands: commands, Timeout: timeout, Log: log,
+		in := sandboxGrade{Root: root, Copy: dir, Agent: inv, Base: base, Commands: commands, Timeout: timeout, Log: log,
 			Running: func(int) {}, Warn: func(w string) { fmt.Fprintf(log, "[agentium] warning: %s\n", w) }}
 		if keep {
 			in.Keep = dir

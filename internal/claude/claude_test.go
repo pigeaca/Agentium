@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
@@ -90,36 +91,36 @@ func TestReq1PersonalContextDoesNotLoad(t *testing.T) {
 	if !slices.Equal(personal, []string{"deploy", "my-review", "ship"}) {
 		t.Fatalf("personal skills = %v", personal)
 	}
-	leaked := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "my-review", "product-increment"},
+	leaked := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy", "my-review", "product-increment"},
 		SlashCommands: []string{"compact", "ship"}}
-	drift := Check(leaked, Expect{PersonalSkills: personal})
+	drift := Check(leaked, agent.Expect{PersonalSkills: personal})
 	if len(drift) != 1 || drift[0] != "2 personal skill(s) loaded" {
 		t.Errorf("drift = %q (names must stay private)", drift)
 	}
 	// A personal command shows up among slash commands, next to Claude Code's own: an exact set from a calibration run
 	// catches it; a personal skill named like a built-in command is not a leak.
-	if drift := Check(leaked, Expect{SlashCommands: []string{"compact", "review"}}); len(drift) != 1 || drift[0] != "slash commands differ (1 added, 1 missing)" {
+	if drift := Check(leaked, agent.Expect{SlashCommands: []string{"compact", "review"}}); len(drift) != 1 || drift[0] != "slash commands differ (1 added, 1 missing)" {
 		t.Errorf("slash command drift = %q", drift)
 	}
-	builtin := Metrics{SawInit: true, PermissionMode: PermissionMode, SlashCommands: []string{"compact", "review"}}
-	if drift := Check(builtin, Expect{PersonalSkills: []string{"review"}}); len(drift) != 0 {
+	builtin := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, SlashCommands: []string{"compact", "review"}}
+	if drift := Check(builtin, agent.Expect{PersonalSkills: []string{"review"}}); len(drift) != 0 {
 		t.Errorf("a personal skill named like a built-in command: %q", drift)
 	}
 	// A bundled skill that a calibration run also had is not a leak either.
-	bundled := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"review"}}
-	if drift := Check(bundled, Expect{PersonalSkills: []string{"review"}, Skills: []string{"review"}}); len(drift) != 0 {
+	bundled := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"review"}}
+	if drift := Check(bundled, agent.Expect{PersonalSkills: []string{"review"}, Skills: []string{"review"}}); len(drift) != 0 {
 		t.Errorf("a bundled skill named like a personal one: %q", drift)
 	}
 	// A project skill that shares a personal skill's name is the arm's own, not a leak.
-	own := Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy"}}
-	if drift := Check(own, Expect{PersonalSkills: personal, ProjectSkills: []string{"deploy"}}); len(drift) != 0 {
+	own := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, Skills: []string{"deploy"}}
+	if drift := Check(own, agent.Expect{PersonalSkills: personal, ProjectSkills: []string{"deploy"}}); len(drift) != 0 {
 		t.Errorf("a project skill named like a personal one: %q", drift)
 	}
 	// With a lock's exact skill set, any other set is drift, reported by count.
-	if drift := Check(own, Expect{Skills: []string{"deploy", "review"}}); len(drift) != 1 || drift[0] != "skills differ (0 added, 1 missing)" {
+	if drift := Check(own, agent.Expect{Skills: []string{"deploy", "review"}}); len(drift) != 1 || drift[0] != "skills differ (0 added, 1 missing)" {
 		t.Errorf("skill set drift = %q", drift)
 	}
-	if Classify(Metrics{SawResult: true, Result: "success"}, false, drift) != OutcomeUnfair {
+	if Classify(agent.Metrics{SawResult: true, Result: "success"}, false, drift) != agent.OutcomeUnfair {
 		t.Error("a run with personal skills is unfair")
 	}
 }
@@ -134,8 +135,8 @@ func TestReq2AccountConnectorsStayOff(t *testing.T) {
 			t.Errorf("%s is not disallowed", tool)
 		}
 	}
-	m := Metrics{SawInit: true, PermissionMode: PermissionMode, MCPTools: 2}
-	if drift := Check(m, Expect{}); len(drift) != 1 || !strings.Contains(drift[0], "2 MCP or connector tool(s)") {
+	m := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, MCPTools: 2}
+	if drift := Check(m, agent.Expect{}); len(drift) != 1 || !strings.Contains(drift[0], "2 MCP or connector tool(s)") {
 		t.Errorf("drift = %q", drift)
 	}
 }
@@ -149,7 +150,7 @@ func TestReq3PermissionModeIsFixedAndChecked(t *testing.T) {
 		t.Error("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB forces the default permission mode and must never reach a run")
 	}
 	for mode, unfair := range map[string]bool{PermissionMode: false, "default": true, "bypassPermissions": true, "": true} {
-		drift := Check(Metrics{SawInit: true, PermissionMode: mode}, Expect{})
+		drift := Check(agent.Metrics{SawInit: true, PermissionMode: mode}, agent.Expect{})
 		if (len(drift) > 0) != unfair {
 			t.Errorf("mode %q: drift %q", mode, drift)
 		}
@@ -297,7 +298,7 @@ func TestReq5DeniedPathsAreCheckedAndResolved(t *testing.T) {
 }
 
 func TestReq5EnvironmentAllowlistEdges(t *testing.T) {
-	env := strings.Join(Environ([]string{"GOOGLE_CLOUD_PROJECT=p", "GOAUTH=netrc", "GOPATH=/g", "GOFLAGS=-mod=mod",
+	env := strings.Join(sandbox.Environ([]string{"GOOGLE_CLOUD_PROJECT=p", "GOAUTH=netrc", "GOPATH=/g", "GOFLAGS=-mod=mod",
 		"HTTPS_PROXY=http://proxy:3128", "NO_PROXY=localhost", "SSL_CERT_FILE=/etc/ca.pem", "CGO_ENABLED=1", "NODE_OPTIONS=--x"}), " ")
 	if env != "GOPATH=/g GOFLAGS=-mod=mod HTTPS_PROXY=http://proxy:3128 NO_PROXY=localhost SSL_CERT_FILE=/etc/ca.pem CGO_ENABLED=1 NODE_OPTIONS=--x" {
 		t.Errorf("kept %s", env)
@@ -334,7 +335,7 @@ func toStrings(v any) []string {
 	return out
 }
 
-func parseFixture(t *testing.T) Metrics {
+func parseFixture(t *testing.T) agent.Metrics {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", "ok.jsonl"))
 	if err != nil {
@@ -374,27 +375,27 @@ func TestParse(t *testing.T) {
 }
 
 func TestClassify(t *testing.T) {
-	result := func(subtype string, isError bool, text string) Metrics {
-		return Metrics{SawInit: true, SawResult: true, Result: subtype, ResultIsError: isError, ResultExcerpt: text}
+	result := func(subtype string, isError bool, text string) agent.Metrics {
+		return agent.Metrics{SawInit: true, SawResult: true, Result: subtype, ResultIsError: isError, ResultExcerpt: text}
 	}
 	for name, c := range map[string]struct {
-		m        Metrics
+		m        agent.Metrics
 		timedOut bool
 		drift    []string
 		want     string
 	}{
-		"ok":             {result("success", false, "done"), false, nil, OutcomeOK},
-		"agent error":    {result("success", true, "I could not find the file"), false, nil, OutcomeOK},
-		"turn cap":       {result("error_max_turns", true, ""), false, nil, OutcomeCapped},
-		"budget cap":     {result("error_max_budget_usd", true, ""), false, nil, OutcomeCapped},
-		"crash":          {result("error_during_execution", true, ""), false, nil, OutcomeInfra},
-		"rate limit":     {result("success", true, "API Error: rate limit reached"), false, nil, OutcomeInfra},
-		"not logged in":  {result("success", true, "Not logged in · Please run /login"), false, nil, OutcomeInfra},
-		"no result":      {Metrics{SawInit: true}, false, nil, OutcomeInfra},
-		"timeout":        {result("success", false, ""), true, nil, OutcomeTimeout},
-		"drift wins":     {result("success", false, "done"), true, []string{"x"}, OutcomeUnfair},
-		"server error":   {result("success", true, "API Error: 529 Overloaded"), false, nil, OutcomeInfra},
-		"an agent's 500": {result("success", false, "Fixed the 500 error handler"), false, nil, OutcomeOK},
+		"ok":             {result("success", false, "done"), false, nil, agent.OutcomeOK},
+		"agent error":    {result("success", true, "I could not find the file"), false, nil, agent.OutcomeOK},
+		"turn cap":       {result("error_max_turns", true, ""), false, nil, agent.OutcomeCapped},
+		"budget cap":     {result("error_max_budget_usd", true, ""), false, nil, agent.OutcomeCapped},
+		"crash":          {result("error_during_execution", true, ""), false, nil, agent.OutcomeInfra},
+		"rate limit":     {result("success", true, "API Error: rate limit reached"), false, nil, agent.OutcomeInfra},
+		"not logged in":  {result("success", true, "Not logged in · Please run /login"), false, nil, agent.OutcomeInfra},
+		"no result":      {agent.Metrics{SawInit: true}, false, nil, agent.OutcomeInfra},
+		"timeout":        {result("success", false, ""), true, nil, agent.OutcomeTimeout},
+		"drift wins":     {result("success", false, "done"), true, []string{"x"}, agent.OutcomeUnfair},
+		"server error":   {result("success", true, "API Error: 529 Overloaded"), false, nil, agent.OutcomeInfra},
+		"an agent's 500": {result("success", false, "Fixed the 500 error handler"), false, nil, agent.OutcomeOK},
 	} {
 		if got := Classify(c.m, c.timedOut, c.drift); got != c.want {
 			t.Errorf("%s: %s, want %s", name, got, c.want)
@@ -403,15 +404,15 @@ func TestClassify(t *testing.T) {
 }
 
 func TestCheckVersionModelToolsAndMissingInit(t *testing.T) {
-	m := Metrics{SawInit: true, PermissionMode: PermissionMode, CLIVersion: "2.1.290", Model: "claude-sonnet-5", Tools: []string{"Bash", "Edit", "Monitor"}}
-	drift := Check(m, Expect{CLIVersion: "2.1.281", Model: "claude-sonnet-5", Tools: []string{"Edit", "Bash", "Read"}})
+	m := agent.Metrics{SawInit: true, PermissionMode: PermissionMode, CLIVersion: "2.1.290", Model: "claude-sonnet-5", Tools: []string{"Bash", "Edit", "Monitor"}}
+	drift := Check(m, agent.Expect{CLIVersion: "2.1.281", Model: "claude-sonnet-5", Tools: []string{"Edit", "Bash", "Read"}})
 	if len(drift) != 2 || drift[0] != "Claude Code 2.1.290, not 2.1.281" || drift[1] != "tools differ (added Monitor; missing Read)" {
 		t.Errorf("drift = %q", drift)
 	}
-	if drift := Check(Metrics{SawResult: true}, Expect{}); len(drift) != 1 {
+	if drift := Check(agent.Metrics{SawResult: true}, agent.Expect{}); len(drift) != 1 {
 		t.Errorf("a result without an init event: %q", drift)
 	}
-	if drift := Check(Metrics{}, Expect{}); drift != nil {
+	if drift := Check(agent.Metrics{}, agent.Expect{}); drift != nil {
 		t.Errorf("nothing ran: %q (Classify reports infra)", drift)
 	}
 }
@@ -460,13 +461,14 @@ func TestRunWithAFakeClaude(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Run(context.Background(), inv, parentEnv, transcript, stderr, time.Minute, 5*time.Second)
+	inv.Timeout, inv.Grace = time.Minute, 5*time.Second
+	result, err := agent.Run(context.Background(), Adapter{}, agent.Invocation(inv), parentEnv, transcript, stderr)
 	if err != nil || !result.Passed() {
 		t.Fatalf("%+v, %v", result, err)
 	}
 	transcript.Seek(0, 0)
 	m, err := Parse(transcript)
-	if err != nil || m.Result != "success" || Classify(m, result.TimedOut, Check(m, Expect{})) != OutcomeOK {
+	if err != nil || m.Result != "success" || Classify(m, result.TimedOut, Check(m, agent.Expect{})) != agent.OutcomeOK {
 		t.Errorf("parsed %+v, %v", m, err)
 	}
 	args, _ := os.ReadFile(filepath.Join(record, "args"))
@@ -483,7 +485,7 @@ func TestRunWithAFakeClaude(t *testing.T) {
 }
 
 // The timeout counts from the start, as a run's should; a fake that a loaded machine starts late can be interrupted
-// before its trap or its init event, which says nothing about Run. Such an attempt (no ready file) is retried with a
+// before its trap or its init event, which says nothing about agent.Run. Such an attempt (no ready file) is retried with a
 // longer timeout; an attempt after the fake was ready must report the interrupted result.
 func TestRunTimeoutInterruptsFirst(t *testing.T) {
 	fixture, _ := filepath.Abs(filepath.Join("testdata", "ok.jsonl"))
@@ -495,7 +497,8 @@ func TestRunTimeoutInterruptsFirst(t *testing.T) {
 		transcript, _ := os.Create(filepath.Join(t.TempDir(), "stream.jsonl"))
 		stderr, _ := os.Create(filepath.Join(t.TempDir(), "stderr.txt"))
 		os.Remove(ready)
-		result, err := Run(context.Background(), inv, parentEnv, transcript, stderr, timeout, 5*time.Second)
+		inv.Timeout, inv.Grace = timeout, 5*time.Second
+		result, err := agent.Run(context.Background(), Adapter{}, agent.Invocation(inv), parentEnv, transcript, stderr)
 		if err != nil || !result.TimedOut {
 			t.Fatalf("%+v, %v", result, err)
 		}
@@ -508,7 +511,7 @@ func TestRunTimeoutInterruptsFirst(t *testing.T) {
 		}
 		transcript.Seek(0, 0)
 		m, _ := Parse(transcript)
-		if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
+		if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, agent.Expect{})) != agent.OutcomeTimeout {
 			t.Errorf("an interrupted run should still report its result: %+v", m)
 			se, _ := os.ReadFile(stderr.Name())
 			t.Errorf("the run took %v, exit %d, stderr %q", result.Duration, result.ExitCode, se)
@@ -677,7 +680,7 @@ func TestParseUsageReadingsAndSubagentModels(t *testing.T) {
 		return fmt.Sprintf(`{"type":"rate_limit_event","rate_limit_info":{"status":%q,"resetsAt":1790716800,"unifiedWindows":`+
 			`{"five_hour":{"utilization":%v,"resetsAt":1790716800},"seven_day":{"utilization":%v,"resetsAt":1791025200}}}}`, status, five, seven)
 	}
-	agent := func(id, kind string) string {
+	launch := func(id, kind string) string {
 		input := `{"prompt":"look"}`
 		if kind != "" {
 			input = `{"prompt":"look","subagent_type":"` + kind + `"}`
@@ -690,8 +693,8 @@ func TestParseUsageReadingsAndSubagentModels(t *testing.T) {
 	stream := strings.Join([]string{
 		`{"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Agent","Bash"]}`,
 		limit(0.30, 0.07, "allowed"),
-		agent("a1", "investigator"), child("a1", "claude-sonnet-5-5"), child("a1", "claude-sonnet-5-5"),
-		agent("a2", ""), child("a2", "claude-sonnet-5"),
+		launch("a1", "investigator"), child("a1", "claude-sonnet-5-5"), child("a1", "claude-sonnet-5-5"),
+		launch("a2", ""), child("a2", "claude-sonnet-5"),
 		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`, // no windows: skipped
 		limit(0.36, 0.08, "allowed_warning"),
 		`{"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.5}`,
@@ -715,7 +718,7 @@ func TestParseUsageReadingsAndSubagentModels(t *testing.T) {
 	if got := m.UsageLast.FiveHourAt(resets); got != 0 {
 		t.Errorf("once the window resets, nothing of it is used: %v", got)
 	}
-	if !m.UsageLast.Newer(*m.UsageFirst) || m.UsageFirst.Newer(*m.UsageLast) || !(UsageReading{FiveHour: 0.1, FiveHourResets: resets.Add(time.Hour)}).Newer(*m.UsageLast) {
+	if !m.UsageLast.Newer(*m.UsageFirst) || m.UsageFirst.Newer(*m.UsageLast) || !(agent.UsageReading{FiveHour: 0.1, FiveHourResets: resets.Add(time.Hour)}).Newer(*m.UsageLast) {
 		t.Error("a later reading is one further into the same window, or in a later window")
 	}
 
@@ -757,7 +760,7 @@ func TestAgentGoflagsDisableVCSStamping(t *testing.T) {
 	if got := goflags([]string{"PATH=/usr/bin", "GOFLAGS=-mod=mod -race"}); len(got) != 1 || got[0] != "GOFLAGS=-mod=mod -race -buildvcs=false" {
 		t.Errorf("with user flags: %v", got)
 	}
-	if got := Environ([]string{"GOFLAGS=-mod=mod"}); len(got) != 1 || got[0] != "GOFLAGS=-mod=mod" {
+	if got := sandbox.Environ([]string{"GOFLAGS=-mod=mod"}); len(got) != 1 || got[0] != "GOFLAGS=-mod=mod" {
 		t.Errorf("Environ changed the user's flags: %v", got)
 	}
 }

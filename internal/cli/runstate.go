@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/term"
@@ -64,7 +64,7 @@ type runState struct {
 	last     [2]*stateRun      // each arm's run that finished last
 	settled  map[int]bool
 	spent    float64
-	usage    claude.UsageReading
+	usage    agent.UsageReading
 	hasUsage bool
 	until    time.Time // waiting for the plan's usage to reset
 	answer   answerState
@@ -192,7 +192,7 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		s.notePos = e.Slot.Position
 	case "wait":
 		s.until = e.Until
-		s.read(claude.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
+		s.read(agent.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
 		sentence(term.LevelCaution, fmt.Sprintf("waiting for your Claude plan's usage to reset at %s (%.0f%% used); Ctrl-C stops, and running it again goes on",
 			experiment.Clock(e.Until, now), 100*e.Usage))
 	case "look":
@@ -240,7 +240,7 @@ func (s *runState) armOf(slot experiment.Slot) int {
 }
 
 // read keeps u if it is later than the reading kept so far; s.mu is held.
-func (s *runState) read(u claude.UsageReading) {
+func (s *runState) read(u agent.UsageReading) {
 	if !s.hasUsage || u.Newer(s.usage) {
 		s.usage, s.hasUsage = u, true
 	}
@@ -325,7 +325,7 @@ type stateView struct {
 	have      [2]bool
 	settled   [2]int
 	spent     float64
-	usage     claude.UsageReading
+	usage     agent.UsageReading
 	hasUsage  bool
 	until     time.Time
 	answer    answerState

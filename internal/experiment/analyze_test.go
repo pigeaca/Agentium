@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/stats"
 )
 
@@ -32,7 +32,7 @@ func synthetic(tasks, repeats int, costA, costB float64, pass func(task, repeat 
 				if pass(i, r, arm) {
 					passed = &yes
 				}
-				runs = append(runs, RunData{Slot: len(runs), Task: fmt.Sprintf("t%02d", i), Arm: arm, Outcome: claude.OutcomeOK, Passed: passed,
+				runs = append(runs, RunData{Slot: len(runs), Task: fmt.Sprintf("t%02d", i), Arm: arm, Outcome: agent.OutcomeOK, Passed: passed,
 					CostUSD: cost, DurationS: 60 * cost, OutputTokens: 1000})
 			}
 		}
@@ -93,13 +93,13 @@ func TestAnalyzeCheaperContext(t *testing.T) {
 
 func TestAnalyzeCountsOnlyFairRunsAndStrictSuccess(t *testing.T) {
 	runs := synthetic(10, 3, 1.0, 1.0, func(int, int, string) bool { return true })
-	runs[0].Outcome, runs[1].Outcome, runs[2].Outcome = claude.OutcomeUnfair, claude.OutcomeInfra, claude.OutcomeCancelled
+	runs[0].Outcome, runs[1].Outcome, runs[2].Outcome = agent.OutcomeUnfair, agent.OutcomeInfra, agent.OutcomeCancelled
 	runs[3].ConfigChanged = []string{"pytest.ini"} // passed, but with the test runner changed: a failure
 	a, err := Analyze(lockFor(GoalCheaper, 10, 3), runs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.Excluded[claude.OutcomeUnfair] != 1 || a.Excluded[claude.OutcomeInfra] != 1 || a.Excluded[claude.OutcomeCancelled] != 1 ||
+	if a.Excluded[agent.OutcomeUnfair] != 1 || a.Excluded[agent.OutcomeInfra] != 1 || a.Excluded[agent.OutcomeCancelled] != 1 ||
 		a.Counted["A"]+a.Counted["B"] != 57 {
 		t.Errorf("counted %+v, excluded %+v", a.Counted, a.Excluded)
 	}
@@ -118,7 +118,7 @@ func TestAnalyzeCountsOnlyFairRunsAndStrictSuccess(t *testing.T) {
 		t.Errorf("cost: %+v; want a verdict (10 tasks, 8 with 3 runs per arm; the floor is 8 tasks)", c)
 	}
 	fewer := slices.Clone(runs)
-	fewer[4].Outcome = claude.OutcomeInfra // a third task loses a run: 7 full tasks
+	fewer[4].Outcome = agent.OutcomeInfra // a third task loses a run: 7 full tasks
 	if c := result(t, mustAnalyze(t, v1, fewer), MetricCost); c.Verdict != stats.Exploratory || c.FullTasks != 7 {
 		t.Errorf("cost with 7 full tasks: %+v", c)
 	}
@@ -212,7 +212,7 @@ func mustAnalyze(t *testing.T, l Lock, runs []RunData) Analysis {
 func TestAnalysisAlwaysEncodes(t *testing.T) {
 	runs := synthetic(4, 3, 1, 1, func(int, int, string) bool { return true })
 	for i := range runs {
-		runs[i].Outcome = claude.OutcomeInfra
+		runs[i].Outcome = agent.OutcomeInfra
 	}
 	for name, rs := range map[string][]RunData{"all excluded": runs, "no tokens": synthetic(4, 3, 1, 1, func(int, int, string) bool { return true })} {
 		if name == "no tokens" {
@@ -225,7 +225,7 @@ func TestAnalysisAlwaysEncodes(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
-		if name == "all excluded" && (!strings.Contains(string(data), `"a":null`) || a.Excluded[claude.OutcomeInfra] != 24) {
+		if name == "all excluded" && (!strings.Contains(string(data), `"a":null`) || a.Excluded[agent.OutcomeInfra] != 24) {
 			t.Errorf("%s: %s", name, data)
 		}
 	}
@@ -251,7 +251,7 @@ func TestAnalyzeVarianceMatchesTheSpike(t *testing.T) {
 		}
 		arm := map[string]string{"full": "A", "minimal": "B"}[r.Arm]
 		passed := r.Success
-		runs = append(runs, RunData{Task: r.Task, Arm: arm, Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: r.CostUSD})
+		runs = append(runs, RunData{Task: r.Task, Arm: arm, Outcome: agent.OutcomeOK, Passed: &passed, CostUSD: r.CostUSD})
 	}
 	data, err := os.ReadFile("../stats/testdata/phase0/summary.json")
 	if err != nil {

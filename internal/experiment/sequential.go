@@ -6,7 +6,7 @@ import (
 	"math"
 	"slices"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/stats"
 )
 
@@ -341,7 +341,7 @@ func slotsDone(l Lock, runs []RunData) []bool {
 		case Settles(r.Outcome) && r.Pending:
 		case Settles(r.Outcome):
 			settled[r.Slot] = true
-		case r.Outcome != claude.OutcomeCancelled:
+		case r.Outcome != agent.OutcomeCancelled:
 			attempts[r.Slot]++
 		}
 	}

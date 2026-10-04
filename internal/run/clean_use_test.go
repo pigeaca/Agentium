@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 )
 
@@ -48,7 +48,7 @@ func TestRunsAndValidationsMarkTheirDependenciesUsed(t *testing.T) {
 	must(t, os.WriteFile(stamp, nil, 0o600)) // warmed already
 
 	check := stale(t, stamp, deps)
-	inv := claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "run-cache")}
+	inv := agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "run-cache")}
 	if _, _, err := env.prepareTools(ctx, buildtool.Select([]string{"cargo"}), inv, base, filepath.Join(data, "setup.log"), func(int) {}); err != nil {
 		t.Fatal(err)
 	}

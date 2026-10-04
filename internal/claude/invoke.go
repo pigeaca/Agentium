@@ -1,23 +1,22 @@
 // Package claude runs Claude Code headless for Agentium and reads what it reports. Each run is isolated the way the
 // Phase 0 spike found necessary (docs/research/2026-09-27-phase0-spike-results.md): project settings only, no account
 // connectors, a fixed permission mode, a sandbox without network that cannot read hidden paths or credentials, and an
-// environment built from an allowlist. Checked against Claude Code 2.1.285.
+// environment built from an allowlist. Checked against Claude Code 2.1.285. It is Claude Code's adapter behind the
+// agent seam (Adapter, internal/agent); the deny list and the environment allowlist it applies are the ones every agent
+// shares (internal/sandbox: AgentDenied, EnvironFor).
 package claude
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
-	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
@@ -31,73 +30,22 @@ const (
 // PermissionMode is the mode every run uses: edits are accepted, and nothing prompts.
 const PermissionMode = "acceptEdits"
 
-// Invocation is one headless Claude Code run.
-type Invocation struct {
-	CLI       string // path to the claude executable
-	Dir       string // where Claude Code starts: the run's checkout, or a monorepo module's folder inside it (Repo)
-	Prompt    string
-	Model     string
-	Effort    string  // empty: the CLI's default
-	BudgetUSD float64 // --max-budget-usd; 0: none
-	SignIn    string  // SignInAPIKey, SignInTokenFile or SignInLogin
-	Secret    string  // the API key or token for SignInAPIKey and SignInTokenFile; never logged or stored
-	ConfigDir string  // a fresh, empty CLAUDE_CONFIG_DIR for SignInAPIKey and SignInTokenFile
-	TokenFile string  // for SignInTokenFile: the token's file, whose folder the agent may not read
-	Home      string  // the user's home folder
-	// Repo, when set, is the run's whole checkout and Dir a folder inside it (a monorepo module's, where the agent starts
-	// as a developer would, so Claude Code loads the root's and the module's instructions). The whole checkout stays the
-	// agent's, as at the root: it is a working folder (--add-dir) the sandbox lets it write (allowWrite), and the build
-	// tools' environment names it (Python's import root is relative to it). Empty: Dir is the checkout, and the
-	// command is exactly what it was before modules.
-	Repo string
-	// AccountHome is the account's home folder in the user database (user.Current), when known. HOME (Home) can point
-	// elsewhere, but the account's login keychain stays in the real home folder, where an explicit path opens it, so
-	// that folder is denied too (sandbox.CredentialPaths). Empty: only Home's.
-	AccountHome string
-	// Deny lists absolute paths the agent must not read, through the sandboxed shell or the Read tool: Agentium's data
-	// (other runs, hidden tests, the database), the user's repository, and verification copies.
-	Deny []string
-	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
-	Started func(pid int)
-	// BuildCache, when set, is a folder of the run's own for build caches: the build tools' agent caches point there
-	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied
-	// (buildtool.UserCaches): they hold what earlier builds compiled, the hidden tests of validations and gradings included.
-	BuildCache string
-	// TempRoot, when set, is the run's own Claude Code temp root (CLAUDE_CODE_TMPDIR), an existing owner-only folder:
-	// Claude Code keeps its temp files in <TempRoot>/claude-<uid>, points the agent's shells' TMPDIR there, and keeps
-	// its sockets in <TempRoot>/cc-socks (unless XDG_RUNTIME_DIR is set). Then the folders every other Claude Code
-	// session of the user shares (SharedTempDirs) are denied to the agent, for reading and writing: they would be a
-	// channel between runs, and a view of other sessions' temp files. It must be short (TempRootFits): a longer one
-	// makes Claude Code fall back to the shared folders. The sandbox lets the agent write it without an allowWrite
-	// entry (verified in a probe session).
-	TempRoot string
-	// UID is the user's id (os.Getuid()), which names Claude Code's temp folders (claude-<uid>); read only with TempRoot.
-	UID int
-	// Tools names the build-tool profiles the run's repository has (buildtool.DetectedNames); the always-on ones (Go's)
-	// apply besides. They choose the environment allowlist, the agent's environment and caches, and the sandbox's
-	// local-binding setting.
-	Tools []string
-	// AgentTools names the always-on profiles whose agent side stays on though Tools lacks them (buildtool.AgentKept of
-	// the base commit: Go, with a go.mod, go.work or .go file anywhere). See buildtool.SelectRun.
-	AgentTools []string
-	// Deps is the folder of warmed dependencies (home.Layout.Deps for the project): the agent's offline builds read it,
-	// and the sandbox keeps it read-only. It lies outside every denied folder. Empty: none.
-	Deps string
-	// AllowLocalBinding is the user's opt-in (`agentium init --allow-local-binding`) for the sandbox's local binding,
-	// which a Gradle project needs (see LocalBindingRefusal). Without it such a run does not start.
-	AllowLocalBinding bool
-	// JavaHome is a JDK resolved on the host (buildtool.ResolveJavaHome), which the JVM tools' environments name.
-	JavaHome string
-	// Venv is the Python venv the run's warm-up chose in Deps (buildtool.Warmed), which the Python profile's
-	// environment activates. Empty: none.
-	Venv string
-	// ProjectMetadata is the base's Python metadata folder (buildtool.Warmed.Metadata), a read-only folder in Deps holding
-	// only the project's .dist-info, which the Python profile puts on PYTHONPATH after the checkout. Empty: none.
-	ProjectMetadata string
-	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
-	// commit): "src", or "" for Dir itself.
-	ImportRoot string
-}
+// Invocation is one headless Claude Code run: the agent-neutral run (agent.Invocation), with Claude Code's methods
+// (Command, DeniedPaths). Adapter takes an agent.Invocation and converts it. Claude Code reads its fields so:
+//   - BudgetUSD is --max-budget-usd; SignIn is SignInAPIKey, SignInTokenFile or SignInLogin; ConfigDir is a fresh, empty
+//     CLAUDE_CONFIG_DIR for SignInAPIKey and SignInTokenFile; TokenFile is the SignInTokenFile token's file.
+//   - Repo: the checkout is a working folder (--add-dir) the sandbox lets the agent write (allowWrite), so Claude Code
+//     loads the root's and the module's instructions and accepts edits anywhere in it.
+//   - Deny: denied through the sandboxed shell and the Read tool.
+//   - TempRoot is the run's own Claude Code temp root (CLAUDE_CODE_TMPDIR), an existing owner-only folder: Claude Code
+//     keeps its temp files in <TempRoot>/claude-<uid>, points the agent's shells' TMPDIR there, and keeps its sockets in
+//     <TempRoot>/cc-socks (unless XDG_RUNTIME_DIR is set). Then the folders every other Claude Code session of the user
+//     shares (sandbox.SharedTempDirs) are denied to the agent, for reading and writing: they would be a channel between
+//     runs, and a view of other sessions' temp files. It must be short (TempRootFits): a longer one makes Claude Code
+//     fall back to the shared folders. The sandbox lets the agent write it without an allowWrite entry (verified in a
+//     probe session). UID names Claude Code's temp folders (claude-<uid>).
+//   - AllowLocalBinding sets the sandbox's allowLocalBinding (see LocalBindingRefusal).
+type Invocation agent.Invocation
 
 // LocalBindingRefusal is why a run may not start: its tools (Gradle) need the sandbox's allowLocalBinding and the user
 // has not allowed it. The setting is more than its name says (Claude Code 2.1.285 writes allow rules for network-bind
@@ -141,59 +89,6 @@ func TempRootFits(root string, uid int) error {
 		}
 	}
 	return nil
-}
-
-// SharedTempDirs are the folders Claude Code shares between all the user's sessions (2.1.285), in /tmp in both forms
-// (the sandbox matches the resolved /private/tmp on macOS, the Read tool the path as written):
-//   - claude-<uid>, the default temp folder, and claude, which the sandbox lets every shell write;
-//   - cc-socks, cc-socks-<uid> and cc-daemon-<uid>, the sockets' and the background daemon's folders (Anthropic's own
-//     eval-shell isolation denies writes to exactly these);
-//   - under the user's own CLAUDE_CODE_TMPDIR, when environ sets one: claude-<uid> and cc-socks;
-//   - $XDG_RUNTIME_DIR/cc-socks, when environ sets XDG_RUNTIME_DIR (it passes the allowlist, and Claude Code then keeps
-//     every session's sockets there, the run's own included: its Claude Code process is not sandboxed, its agent is).
-func SharedTempDirs(environ []string, uid int) []string {
-	id := strconv.Itoa(uid)
-	var dirs []string
-	add := func(dir string) {
-		if !slices.Contains(dirs, dir) {
-			dirs = append(dirs, dir)
-		}
-	}
-	// Each name in both forms, side by side: the order stays the same whether /tmp/<name> exists (and its resolved form
-	// is added after it, see sandbox.Forms) or not.
-	for _, name := range []string{"claude-" + id, "claude", "cc-socks", "cc-socks-" + id, "cc-daemon-" + id} {
-		add(filepath.Join("/tmp", name))
-		add(filepath.Join("/private/tmp", name))
-	}
-	if root := lookup(environ, "CLAUDE_CODE_TMPDIR"); filepath.IsAbs(root) {
-		add(filepath.Join(root, "claude-"+id))
-		add(filepath.Join(root, "cc-socks"))
-	}
-	if runtime := lookup(environ, "XDG_RUNTIME_DIR"); filepath.IsAbs(runtime) {
-		add(filepath.Join(runtime, "cc-socks"))
-	}
-	return dirs
-}
-
-// sharedLogDirs are the folders outside the temp folders that the sandbox lets every shell write (Claude Code
-// 2.1.285): npm's logs and Claude Code's debug folder, ~/.claude/debug, and in login mode the user's config folder's
-// (a run with its own config folder writes its own). All the user's sessions share them.
-func (inv Invocation) sharedLogDirs(userConfig string) []string {
-	dirs := []string{filepath.Join(inv.Home, ".npm", "_logs"), filepath.Join(inv.Home, ".claude", "debug")}
-	if inv.SignIn == SignInLogin && filepath.Clean(userConfig) != filepath.Join(inv.Home, ".claude") {
-		dirs = append(dirs, filepath.Join(userConfig, "debug"))
-	}
-	return dirs
-}
-
-// lookup is the value of name in environ, or "".
-func lookup(environ []string, name string) string {
-	for _, kv := range environ {
-		if value, ok := strings.CutPrefix(kv, name+"="); ok {
-			return value
-		}
-	}
-	return ""
 }
 
 // UserConfigDir is the user's own Claude Code folder: $CLAUDE_CONFIG_DIR when set in environ, otherwise ~/.claude.
@@ -274,7 +169,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	// The build tools' own variables (Go's GOFLAGS) replace any of the same name the allowlist kept, and come right
 	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
 	profiles := buildtool.SelectRun(inv.Tools, inv.AgentTools)
-	allowed := EnvironFor(environ, profiles)
+	allowed := sandbox.EnvironFor(environ, profiles)
 	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.checkout(),
 		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot})
 	replaced := map[string]bool{}
@@ -298,7 +193,7 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BuildCache != "" {
 		env = append(env, buildtool.AgentCacheEnv(profiles, inv.BuildCache)...)
 	}
-	if inv.TempRoot != "" { // the parent's own CLAUDE_CODE_TMPDIR was dropped with every CLAUDE_* (Environ)
+	if inv.TempRoot != "" { // the parent's own CLAUDE_CODE_TMPDIR was dropped with every CLAUDE_* (sandbox.Environ)
 		env = append(env, "CLAUDE_CODE_TMPDIR="+inv.TempRoot)
 	}
 	env = append(env, signInEnv(inv.SignIn, inv.Secret, inv.ConfigDir, inv.Home, userConfig)...) // requirement 4
@@ -376,89 +271,67 @@ func SessionFolders(configDir string) []string {
 	return folders
 }
 
-// deniedPaths are the paths the agent may not read, in every sign-in mode:
+// denied is the run's deny list (sandbox.AgentDenied), in every sign-in mode:
 //   - inv.Deny;
 //   - Claude Code's data. The run's active config folder (the user's in login mode, the fresh one otherwise) loses only
 //     its history paths: Claude Code keeps working files there that its Bash tool reads, such as the shell snapshot.
 //     Every other Claude folder (~/.claude, the user's CLAUDE_CONFIG_DIR, when not active) is denied whole, and so is
 //     ~/.claude.json. The Claude Code process itself is not sandboxed, so none of this affects sign-in;
-//   - credential stores (sandbox.CredentialPaths: the login and System keychains among them) and the token file's folder;
-//   - the build tools' caches of the user (buildtool.UserCaches: Go's build caches), which hold hidden tests compiled
-//     before Agentium kept its own;
-//   - with a temp root of the run's own, the user's shared Claude Code temp folders (SharedTempDirs);
-//   - the log folders the sandbox lets every shell write (sharedLogDirs).
-//
-// Each path is cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
-func (inv Invocation) deniedPaths(userConfig string, environ []string) []string {
+//   - the shared policy: credential stores and the token file's folder, the user's build caches, the deps folder's
+//     denied parts;
+//   - with a temp root of the run's own, the user's shared Claude Code temp folders (sandbox.SharedTempDirs);
+//   - the log folders the sandbox lets every shell write (sandbox.SharedLogDirs).
+func (inv Invocation) denied(userConfig string, environ []string) sandbox.AgentDenied {
 	active := userConfig
 	if inv.SignIn != SignInLogin {
 		active = inv.ConfigDir
 	}
-	paths := append([]string{}, inv.Deny...)
+	var own []string
 	for _, name := range historyPaths() {
-		paths = append(paths, filepath.Join(active, name))
+		own = append(own, filepath.Join(active, name))
 	}
-	paths = append(paths, SessionFolders(active)...)
+	own = append(own, SessionFolders(active)...)
 	for _, dir := range []string{filepath.Join(inv.Home, ".claude"), userConfig} {
 		if filepath.Clean(dir) != filepath.Clean(active) {
-			paths = append(paths, dir)
+			own = append(own, dir)
 		}
 	}
-	paths = append(paths, filepath.Join(inv.Home, ".claude.json"))
-	if inv.TokenFile != "" {
-		paths = append(paths, filepath.Dir(inv.TokenFile))
-	}
-	paths = append(paths, sandbox.CredentialPaths(inv.Home, inv.AccountHome)...)
-	paths = append(paths, sandbox.MovedCredentials(environ, inv.Home)...)
-	paths = append(paths, buildtool.UserCaches(environ, inv.Home)...)
-	if inv.Deps != "" {
-		paths = append(paths, buildtool.DepsDenied(inv.Deps)...)
-	}
+	own = append(own, filepath.Join(inv.Home, ".claude.json"))
+	var shared []string
 	if inv.TempRoot != "" {
-		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
+		shared = append(shared, sandbox.SharedTempDirs(environ, inv.UID)...)
 	}
-	paths = append(paths, inv.sharedLogDirs(userConfig)...)
-	return sandbox.WithForms(paths)
+	loginConfig := ""
+	if inv.SignIn == SignInLogin {
+		loginConfig = userConfig
+	}
+	shared = append(shared, sandbox.SharedLogDirs(inv.Home, loginConfig)...)
+	return sandbox.AgentDenied{Deny: inv.Deny, AgentData: own, SecretFile: inv.TokenFile, Home: inv.Home, AccountHome: inv.AccountHome,
+		Environ: environ, Deps: inv.Deps, Shared: shared}
 }
 
-// deniedWrites are the paths the sandbox must stop the agent writing, beyond its default (only the checkout and the
-// allowWrite folders): the folders the sandbox lets every shell write, shared by all the user's Claude Code sessions,
-// so with a temp root of the run's own the shared temp folders (SharedTempDirs: denyRead alone does not stop writes),
-// and the log folders (sharedLogDirs); and inv.Deny, what belongs to Agentium, the user and other runs (their temp
-// roots under /tmp among them), which is never the agent's to write either.
-func (inv Invocation) deniedWrites(userConfig string, environ []string) []string {
-	paths := append([]string{}, inv.Deny...)
-	if inv.Deps != "" {
-		paths = append(paths, inv.Deps) // already read-only by default; stated, so no allowWrite above it can open it
-	}
-	if inv.TempRoot != "" {
-		paths = append(paths, SharedTempDirs(environ, inv.UID)...)
-	}
-	paths = append(paths, inv.sharedLogDirs(userConfig)...)
-	return sandbox.WithForms(paths)
-}
-
-// DeniedPaths is every path the run's agent may not read, as its settings will list them (see deniedPaths).
+// DeniedPaths is every path the run's agent may not read, as its settings will list them (see denied): each path is
+// cleaned, and its symlink-resolved form (/var and /private/var on macOS) is denied too.
 func (inv Invocation) DeniedPaths(environ []string) []string {
-	return inv.deniedPaths(UserConfigDir(environ, inv.Home), environ)
+	return inv.denied(UserConfigDir(environ, inv.Home), environ).Reads()
 }
 
 // settings are the per-run Claude Code settings (--settings).
 func (inv Invocation) settings(userConfig string, environ []string) map[string]any {
-	denied := inv.deniedPaths(userConfig, environ)
+	deny := inv.denied(userConfig, environ)
+	denied := deny.Reads()
 	readRules := make([]string, len(denied))
 	for i, p := range denied {
 		readRules[i] = "Read(/" + p + "/**)" // an absolute path in a permission rule starts with //
 	}
 	var files []map[string]string
-	for _, p := range sandbox.CredentialPaths(inv.Home, inv.AccountHome) {
+	for _, p := range deny.Credentials() {
 		files = append(files, map[string]string{"path": p, "mode": "deny"})
 	}
-	if inv.TokenFile != "" {
-		files = append(files, map[string]string{"path": filepath.Dir(inv.TokenFile), "mode": "deny"})
-	}
 	filesystem := map[string]any{"denyRead": denied} // requirement 5
-	if writes := inv.deniedWrites(userConfig, environ); len(writes) > 0 {
+	// Beyond the sandbox's default (only the checkout and the allowWrite folders): the shared temp and log folders the
+	// sandbox lets every shell write, inv.Deny and the deps folder (sandbox.AgentDenied.Writes).
+	if writes := deny.Writes(); len(writes) > 0 {
 		filesystem["denyWrite"] = writes
 	}
 	var writable []string
@@ -494,40 +367,6 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 	}
 }
 
-// Environ keeps what a coding agent's tools need from environ (system settings, proxies and certificates, toolchain
-// variables, the build tools' among them: buildtool.EnvAllowlist) and nothing else: no credentials, no GIT_*, no
-// AGENTIUM_*, no CLAUDE_* (in particular not CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, which silently forces the default
-// permission mode: requirement 3). Values are passed as given: a proxy URL with a password in it would pass too.
-//
-// TMPDIR is kept as the user's own (macOS: /var/folders/.../T). Claude Code points its shells' TMPDIR at the run's
-// temp root, but the user's folder itself stays readable to the agent: a follow-up (the run temp isolation plan).
-//
-// SHELL is kept on purpose: runs should behave like the user's own Claude Code sessions, so a user's zsh stays zsh
-// (an unquoted glob such as --include=*.go then fails with "no matches found" there, as it would for them), and
-// both arms get the same shell.
-func Environ(environ []string) []string {
-	return EnvironFor(environ, buildtool.Select(nil))
-}
-
-// EnvironFor is Environ for a repository whose build-tool profiles are selected (buildtool.Select): the allowlist
-// widens by theirs. The base list keeps JAVA_HOME, CARGO_HOME and the RUSTC* prefix for every project, as before
-// profiles: a profile that owns one of them (Maven's and Gradle's JAVA_HOME, Cargo's CARGO_HOME and wrappers) sets or
-// clears it in the agent's environment instead.
-func EnvironFor(environ []string, selected []buildtool.Profile) []string {
-	names := []string{"PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR",
-		"LANG", "TERM", "TZ", "JAVA_HOME", "CARGO_HOME",
-		"RUSTUP_HOME", "PNPM_HOME", "BUN_INSTALL", "DENO_DIR",
-		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-		"SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"}
-	// No PYTHON*, PIP_*, UV_* or VIRTUAL_ENV, for any project: a PIP_INDEX_URL may carry a token, and PYTHONPATH,
-	// VIRTUAL_ENV or UV_CACHE_DIR would point the agent at other code or at the user's caches. A Python project's
-	// profile sets its own (buildtool's pythonEnv).
-	prefixes := []string{"LC_", "NODE_", "NVM_", "CONDA_", "RUSTC", "XDG_", "HOMEBREW_"}
-	toolNames, toolPrefixes := buildtool.EnvAllowlist(selected)
-	// Credentials are dropped by the shared policy; GIT_*, AGENTIUM_* and CLAUDE_* are simply not on the list.
-	return runner.EnvPolicy{Allowlist: true, Names: append(names, toolNames...), Prefixes: append(prefixes, toolPrefixes...)}.Filter(environ)
-}
-
 // ReadToken reads a `claude setup-token` token file. The file must be readable by its owner only and hold one token.
 func ReadToken(file string) (string, error) {
 	info, err := os.Stat(file)
@@ -546,16 +385,4 @@ func ReadToken(file string) (string, error) {
 		return "", fmt.Errorf("token file %s must hold only the token", file)
 	}
 	return token, nil
-}
-
-// Run starts the invocation and waits for it: stdout (the stream-json transcript) goes to transcript, stderr to
-// errOut. On timeout or cancel the run's process group is interrupted first, so Claude Code can finish its turn and
-// report a result, then killed after grace.
-func Run(ctx context.Context, inv Invocation, environ []string, transcript, errOut *os.File, timeout, grace time.Duration) (runner.Result, error) {
-	args, env, err := inv.Command(environ)
-	if err != nil {
-		return runner.Result{}, err
-	}
-	return runner.Run(ctx, runner.Spec{Dir: inv.Dir, Args: append([]string{inv.CLI}, args...), Environ: env,
-		Timeout: timeout, Grace: grace, Output: transcript, Stderr: errOut, Started: inv.Started})
 }

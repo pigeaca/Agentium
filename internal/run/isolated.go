@@ -3,7 +3,7 @@ package run
 import (
 	"cmp"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
@@ -35,7 +35,7 @@ func isolatedCost(rec Record) *float64 {
 		// Records made before the time-to-live fallback leave it empty when the launch reported no write: the
 		// fallback's defaults apply.
 		write := rates.CacheWrite5m
-		if read.WriteTTL == claude.TTL1h || (read.WriteTTL == "" && read.Main) {
+		if read.WriteTTL == agent.TTL1h || (read.WriteTTL == "" && read.Main) {
 			write = rates.CacheWrite1h
 		}
 		cost += float64(read.CacheRead) * (write - rates.CacheRead) / 1e6

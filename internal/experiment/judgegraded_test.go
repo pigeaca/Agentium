@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/stats"
@@ -220,7 +221,7 @@ func TestExecuteHoldsEachSlotsCap(t *testing.T) {
 	var mu sync.Mutex
 	committed, spent, inFlight := 0.0, 0.0, map[int]bool{}
 	run := func(ctx context.Context, s Slot, attempt int, overlap []int) (Result, error) {
-		return Result{Outcome: claude.OutcomeCapped, CostUSD: capOf(s)}, nil // every run at its cap
+		return Result{Outcome: agent.OutcomeCapped, CostUSD: capOf(s)}, nil // every run at its cap
 	}
 	plan := Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 4, BudgetUSD: 7, MaxAttempts: 3, CapOf: capOf, Progress: func(e Event) {
 		mu.Lock()

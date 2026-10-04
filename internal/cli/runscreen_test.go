@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
@@ -364,7 +364,7 @@ func TestDashboardFeedIsRaceFree(t *testing.T) {
 				emit(experiment.Event{Kind: "step", Slot: slot, Attempt: 1, Step: step})
 			}
 			passed := pos%2 == 0
-			emit(experiment.Event{Kind: "finish", Slot: slot, Attempt: 1, Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: 0.1}})
+			emit(experiment.Event{Kind: "finish", Slot: slot, Attempt: 1, Result: experiment.Result{Outcome: agent.OutcomeOK, Passed: &passed, CostUSD: 0.1}})
 			fmt.Fprintf(env.Stdout, "a line printed meanwhile %d\n", pos)
 		}()
 	}
@@ -398,16 +398,16 @@ func logViewScene(t *testing.T, caps term.Capabilities) string {
 		spent += r.CostUSD
 		obs.Event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, SpentUSD: spent, Result: r, Requeued: requeued})
 	}
-	finish(0, experiment.Result{Outcome: claude.OutcomeOK, Passed: &yes, CostUSD: 0.12, JudgeUSD: 0.03, Judge: "fixed (3 of 3)"}, false)
-	finish(1, experiment.Result{Outcome: claude.OutcomeOK, Passed: &no, CostUSD: 0.09}, false)
-	finish(2, experiment.Result{Outcome: claude.OutcomeInfra, CostUSD: 0.01}, false)
+	finish(0, experiment.Result{Outcome: agent.OutcomeOK, Passed: &yes, CostUSD: 0.12, JudgeUSD: 0.03, Judge: "fixed (3 of 3)"}, false)
+	finish(1, experiment.Result{Outcome: agent.OutcomeOK, Passed: &no, CostUSD: 0.09}, false)
+	finish(2, experiment.Result{Outcome: agent.OutcomeInfra, CostUSD: 0.01}, false)
 	obs.Event(experiment.Event{Kind: "retry", Slot: lock.Schedule[2], Attempt: 1, RetryIn: 30 * time.Second, SpentUSD: spent})
 	finish(3, experiment.Result{Outcome: "unfair", CostUSD: 0.08}, false)
 	finish(4, experiment.Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.07}, false)
-	finish(5, experiment.Result{Outcome: claude.OutcomeCapped, Passed: &yes, CostUSD: 0.31,
+	finish(5, experiment.Result{Outcome: agent.OutcomeCapped, Passed: &yes, CostUSD: 0.31,
 		Overshoot: "it passed its $0.30 cost cap by $0.010, more than the $0.00 allowance budgets hold for that"}, false)
 	finish(6, experiment.Result{}, true)
-	finish(7, experiment.Result{Outcome: claude.OutcomeCancelled, CostUSD: 0.02}, false)
+	finish(7, experiment.Result{Outcome: agent.OutcomeCancelled, CostUSD: 0.02}, false)
 	obs.Event(experiment.Event{Kind: "pair", Slot: lock.Schedule[1], Result: experiment.Result{Judge: "prefers B", JudgeUSD: 0.09, CostUSD: 0.09}})
 	obs.Event(experiment.Event{Kind: "wait", Until: c.Now().Add(23 * time.Minute), Usage: 0.86, SpentUSD: spent})
 	obs.Event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 1, Planned: 8, Counted: 8, Analysed: true, Verdict: "inconclusive",
@@ -486,7 +486,7 @@ func TestScreenCloseLeavesTheRuns(t *testing.T) {
 		passed := true
 		for pos := range 2 {
 			obs.Event(experiment.Event{Kind: "start", Slot: lock.Schedule[pos], Attempt: 1})
-			obs.Event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: 0.1}})
+			obs.Event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, Result: experiment.Result{Outcome: agent.OutcomeOK, Passed: &passed, CostUSD: 0.1}})
 		}
 		if err := screen.Close(); err != nil { // no Finish: the execution failed
 			t.Fatal(err)

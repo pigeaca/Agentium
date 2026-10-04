@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // userPython is a user's environment with every Python, pip and uv setting that could point the agent elsewhere or
@@ -21,7 +22,7 @@ var userPython = append(slices.Clone(parentEnv), "PYTHONPATH=/home/u/other", "PY
 // gets the profile's own instead, each once.
 func TestPythonVariablesNeverPass(t *testing.T) {
 	for _, tools := range [][]string{nil, {"maven"}, {"cargo"}, {"python"}} {
-		for _, kv := range EnvironFor(userPython, buildtool.Select(tools)) {
+		for _, kv := range sandbox.EnvironFor(userPython, buildtool.Select(tools)) {
 			name, _, _ := strings.Cut(kv, "=")
 			if strings.HasPrefix(name, "PYTHON") || strings.HasPrefix(name, "PIP_") || strings.HasPrefix(name, "UV_") || name == "VIRTUAL_ENV" {
 				t.Errorf("%v: the allowlist passes %s", tools, kv)

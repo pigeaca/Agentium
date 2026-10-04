@@ -66,7 +66,7 @@ func IsCredential(name string) bool {
 	return false
 }
 
-// EnvPolicy is how an environment is filtered; runner.Environ, gitx.Environ and claude.Environ are each one policy.
+// EnvPolicy is how an environment is filtered; runner.Environ, gitx.Environ and sandbox.Environ are each one policy.
 // Whatever the policy, a variable that IsCredential is dropped: that is the part all three share.
 type EnvPolicy struct {
 	// Allowlist keeps only the variables named in Names or starting with one of Prefixes; otherwise everything not

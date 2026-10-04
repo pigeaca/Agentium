@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
@@ -173,9 +173,9 @@ func TestNorthStarDecisive(t *testing.T) {
 	}
 	decisive.Runs[0].Record.Judge = &judge.Verdict{CostUSD: 0.07}
 	// A calibration before the experiment is project spend too (kind "calibration", outside every experiment).
-	calibration := run.Record{ID: "cal", Metrics: claude.Metrics{CostUSD: 0.42}}
+	calibration := run.Record{ID: "cal", Metrics: agent.Metrics{CostUSD: 0.42}}
 	calJSON, _ := json.Marshal(calibration)
-	if err := p.DB.SaveRun(ctx, store.Run{ID: "cal", ProjectID: p.ID, Kind: "calibration", Outcome: claude.OutcomeOK, CostUSD: 0.42, Record: calJSON,
+	if err := p.DB.SaveRun(ctx, store.Run{ID: "cal", ProjectID: p.ID, Kind: "calibration", Outcome: agent.OutcomeOK, CostUSD: 0.42, Record: calJSON,
 		Started: decisive.Lock.LockedAt.Add(-90 * time.Minute), Finished: decisive.Lock.LockedAt.Add(-89 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
@@ -294,10 +294,10 @@ func guardOnly(t *testing.T) Input {
 	yes := true
 	in.Runs = nil
 	for _, s := range in.Lock.Schedule {
-		rec := run.Record{ID: fmt.Sprintf("r%03d", s.Position), Task: s.Task, Arm: s.Arm, Outcome: claude.OutcomeOK, Passed: &yes,
+		rec := run.Record{ID: fmt.Sprintf("r%03d", s.Position), Task: s.Task, Arm: s.Arm, Outcome: agent.OutcomeOK, Passed: &yes,
 			Started:  in.Lock.LockedAt.Add(time.Duration(s.Position) * time.Minute),
 			Finished: in.Lock.LockedAt.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
-			Metrics:  claude.Metrics{CostUSD: 0.30 * math.Exp(0.6*r.NormFloat64()), DurationMS: 40000, OutputTokens: 3000, SawResult: true}}
+			Metrics:  agent.Metrics{CostUSD: 0.30 * math.Exp(0.6*r.NormFloat64()), DurationMS: 40000, OutputTokens: 3000, SawResult: true}}
 		in.Runs = append(in.Runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
 	}
 	in.Name = "guard-only"

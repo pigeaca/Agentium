@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/report/reporttest"
@@ -268,7 +268,7 @@ func TestReportJudgeRunRows(t *testing.T) {
 	if !found {
 		t.Error("no run row carries the scrubbed reason")
 	}
-	if rep.Runs[0].Outcome != claude.OutcomeOK {
+	if rep.Runs[0].Outcome != agent.OutcomeOK {
 		t.Errorf("run outcome %s", rep.Runs[0].Outcome)
 	}
 }

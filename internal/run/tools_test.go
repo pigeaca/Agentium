@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
@@ -340,7 +341,7 @@ func TestWaitedOutWarmUpClonesNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hold()
-	inv := claude.Invocation{Deps: deps, BuildCache: run}
+	inv := agent.Invocation{Deps: deps, BuildCache: run}
 	_, _, err = env.prepareTools(ctx, buildtool.Select([]string{"gradle"}), inv, base, filepath.Join(data, "log"), func(int) {})
 	if !errors.Is(err, errWarmWait) {
 		t.Fatalf("prepareTools: %v", err)

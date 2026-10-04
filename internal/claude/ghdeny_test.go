@@ -80,7 +80,7 @@ func TestGHLoginNeverReachesTheAgent(t *testing.T) {
 		checkNoGHToken(t, mode+" judge", judge)
 	}
 	for _, tools := range [][]string{nil, {"go"}, {"maven"}, {"gradle"}, {"cargo"}} {
-		checkNoGHToken(t, "profiles "+strings.Join(tools, ","), EnvironFor(environ, buildtool.Select(tools)))
+		checkNoGHToken(t, "profiles "+strings.Join(tools, ","), sandbox.EnvironFor(environ, buildtool.Select(tools)))
 	}
 }
 

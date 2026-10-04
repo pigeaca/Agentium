@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -16,10 +16,10 @@ func TestUsageFromStoredRecords(t *testing.T) {
 	resets := time.Date(2026, 9, 30, 1, 20, 0, 0, time.UTC)
 	rec := func(first, last float64, models map[string][]string) []byte {
 		var m struct {
-			Metrics claude.Metrics `json:"metrics"`
+			Metrics agent.Metrics `json:"metrics"`
 		}
-		m.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
-		m.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
+		m.Metrics.UsageFirst = &agent.UsageReading{FiveHour: first, FiveHourResets: resets}
+		m.Metrics.UsageLast = &agent.UsageReading{FiveHour: last, FiveHourResets: resets}
 		m.Metrics.SubagentModels = models
 		data, err := json.Marshal(m)
 		if err != nil {

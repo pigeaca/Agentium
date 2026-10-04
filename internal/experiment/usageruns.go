@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
@@ -25,9 +26,9 @@ const DefaultUsageLimit = 85.0
 type recordUsage struct {
 	Model   string `json:"model"`
 	Metrics struct {
-		UsageFirst     *claude.UsageReading `json:"usage_first"`
-		UsageLast      *claude.UsageReading `json:"usage_last"`
-		SubagentModels map[string][]string  `json:"subagent_models"`
+		UsageFirst     *agent.UsageReading `json:"usage_first"`
+		UsageLast      *agent.UsageReading `json:"usage_last"`
+		SubagentModels map[string][]string `json:"subagent_models"`
 	} `json:"metrics"`
 }
 
@@ -90,7 +91,7 @@ type UsageModel struct {
 
 // UsageLatest is the newest usage reading and how far it can be trusted now.
 type UsageLatest struct {
-	Reading claude.UsageReading
+	Reading agent.UsageReading
 	// ReadAt is when the reading was taken, at the latest (its run's end); zero when unknown.
 	ReadAt time.Time
 	// Current is false when the window has reset since the reading, or the reading is older than a window: what the

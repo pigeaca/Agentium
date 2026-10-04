@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/claude"
@@ -74,16 +75,21 @@ type Env struct {
 	ProjectRoot   string // the user's repository: the agent may not read it
 	CLI           string // the claude executable
 	Home          string
-	AccountHome   string   // the account's home folder in the user database, when known (claude.Invocation.AccountHome)
+	AccountHome   string   // the account's home folder in the user database, when known (agent.Invocation.AccountHome)
 	Environ       []string // the parent's environment; the run gets an allowlisted part
 	SignIn        string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
 	Secret        string   // for API key and token sign-in; redacted from every record
 	TokenFile     string
 	VerifyTimeout time.Duration // each setup or verification command
 	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
+	// Agent is the coding agent the run starts, behind the agent seam (internal/agent): its command, denied paths,
+	// transcript, outcome and drift come from it, and the record names it (Record.Agent). nil: Claude Code
+	// (claude.Adapter), the only agent so far; Once's other steps (the temp root's fit, session folders, personal
+	// skills, the cap's overshoot) are still Claude Code's own.
+	Agent agent.Adapter
 	// Expect is the arm's calibrated environment (CLI version, model, tools, skills, slash commands); its personal and
 	// project skills are filled in by the run.
-	Expect   claude.Expect
+	Expect   agent.Expect
 	Progress io.Writer
 	Style    term.Style // styles the progress lines' outcomes; the zero Style prints plain text
 	// Step, when set, is called as each step and finer moment begins (StepPreparing, StepDependencies, StepSetup,
@@ -112,7 +118,7 @@ type Env struct {
 	// Module is the monorepo module the commands run in (store.Task.Module; "": the repository's root, as before
 	// modules): build tools are detected in its folder, the warm-up, setup and verification commands run there, and the
 	// agent starts there (its context is what a session there loads: claudectx.ResolveIn). Once sets it from the run's
-	// task; callers need not. The agent's sandbox stays the whole checkout (claude.Invocation.Repo). It is part of the
+	// task; callers need not. The agent's sandbox stays the whole checkout (agent.Invocation.Repo). It is part of the
 	// keys of the warm-up stamps, the Python venvs and the grading seeds.
 	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
@@ -120,7 +126,7 @@ type Env struct {
 	Grader string
 	// gradeAgent and gradeBase are what a sandboxed grade needs of the run, set by Once once the run's tools are known:
 	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
-	gradeAgent *claude.Invocation
+	gradeAgent *agent.Invocation
 	gradeBase  string
 	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold), and readDenials
 	// sandbox.ReadDenials (tests make the log lag).
@@ -170,6 +176,9 @@ type Record struct {
 	Task     string `json:"task"`
 	Arm      string `json:"arm"`
 	Snapshot string `json:"snapshot,omitempty"`
+	// Agent is the coding agent that ran (agent.ClaudeCode): absent in records made before the agent seam, which were
+	// all Claude Code's. Read it through AgentName.
+	Agent string `json:"agent,omitempty"`
 	// Module is the monorepo folder the task ran in (store.Task.Module), where the agent started and the commands ran;
 	// empty (and absent from the JSON) at the repository's root.
 	Module string `json:"module,omitempty"`
@@ -179,11 +188,11 @@ type Record struct {
 	// older record), with it the CLI's default.
 	EffortRecorded bool           `json:"effort_recorded,omitempty"`
 	SignIn         string         `json:"sign_in"`
-	Outcome        string         `json:"outcome"`          // claude.Outcome*
+	Outcome        string         `json:"outcome"`          // agent.Outcome*
 	Passed         *bool          `json:"passed,omitempty"` // the verification with hidden tests; nil when it did not run
 	Drift          []string       `json:"drift,omitempty"`
 	Notes          []string       `json:"notes,omitempty"`
-	Metrics        claude.Metrics `json:"metrics"`
+	Metrics        agent.Metrics  `json:"metrics"`
 	Behavior       Behavior       `json:"behavior"`
 	Setup          []task.Command `json:"setup,omitempty"`
 	Verify         []task.Command `json:"verify,omitempty"`
@@ -245,6 +254,9 @@ type Record struct {
 	PairJudge *PairJudgement `json:"pair_judge,omitempty"`
 }
 
+// AgentName is the coding agent that ran: Claude Code for a record that names none (agent.Name).
+func (r Record) AgentName() string { return agent.Name(r.Agent) }
+
 // Behavior is what the agent did, beyond passing or failing.
 type Behavior struct {
 	FilesChanged int  `json:"files_changed"`
@@ -285,7 +297,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	env.Module = spec.Task.Module // a run uses its task's module, never the project's current setting
-	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Module: env.Module, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Agent: env.adapter().Name(), Module: env.Module, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	if spec.Task.JudgeGraded() {
 		rec.GradedBy = task.GradingJudge
@@ -372,9 +384,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if spec.PlainPrompt {
 		prompt = spec.Instruction
 	}
-	inv := claude.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
-		BudgetUSD: spec.BudgetUSD, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile, Home: env.Home,
-		AccountHome: env.AccountHome, TempRoot: tempRoot, UID: os.Getuid()}
+	inv := agent.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
+		BudgetUSD: spec.BudgetUSD, Timeout: spec.Timeout, Grace: env.Grace, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile,
+		Home: env.Home, AccountHome: env.AccountHome, TempRoot: tempRoot, UID: os.Getuid()}
 	deny, err := env.denied(ctx, workspace)
 	if err != nil {
 		return rec, err
@@ -388,7 +400,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	inv.BuildCache = filepath.Join(workspace, "go-build")
 	// A denied path that holds the workspace would hide the agent's own checkout from it: every run would fail for a
 	// reason that is not the agent's. So would one that holds its temp root.
-	deniedPaths := inv.DeniedPaths(env.Environ)
+	deniedPaths := env.adapter().DeniedPaths(inv, env.Environ)
 	if denied, ok := insideDenied(workspace, deniedPaths); ok {
 		return rec, fmt.Errorf("the run's workspace %s lies inside %s, which runs may not read: set AGENTIUM_HOME (or the token file) elsewhere", workspace, denied)
 	}
@@ -499,7 +511,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if errors.Is(err, errWarmWait) {
 		// The dependencies were not warmed and the agent would build without them: not the arm's doing, so the run is
 		// not counted against it (an infrastructure failure is retried or left out).
-		rec.Outcome, rec.WarmWait = claude.OutcomeInfra, true
+		rec.Outcome, rec.WarmWait = agent.OutcomeInfra, true
 		rec.Notes = append(rec.Notes, err.Error())
 		return rec, nil
 	}
@@ -527,7 +539,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, err
 		}
 		if !ok {
-			rec.Outcome = claude.OutcomeInfra
+			rec.Outcome = agent.OutcomeInfra
 			rec.Notes = append(rec.Notes, "setup failed: see setup.log")
 			return rec, nil
 		}
@@ -597,7 +609,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	inv.Started = running
 	env.step(StepAgent)
 	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
-	result, runErr := claude.Run(ctx, inv, env.Environ, transcript, stderr, spec.Timeout, env.Grace)
+	result, runErr := agent.Run(ctx, env.adapter(), inv, env.Environ, transcript, stderr)
 	if runErr == nil && startErr != nil {
 		runErr = startErr
 	}
@@ -609,16 +621,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	unfinished := func(err error) (Record, error) {
 		switch {
 		case ctx.Err() != nil: // interrupted, even during grading: the run is not usable, and not the agent's failure
-			rec.Outcome, rec.Passed = claude.OutcomeCancelled, nil
+			rec.Outcome, rec.Passed = agent.OutcomeCancelled, nil
 		default: // Agentium's own failure, even after a fair attempt (grading failed): not the agent's result
-			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+			rec.Outcome, rec.Passed = agent.OutcomeInfra, nil
 		}
 		rec.Notes = append(rec.Notes, "Agentium could not finish the run: "+err.Error())
 		return rec, err
 	}
 	var parseErr error
-	rec.Metrics, parseErr = parseFile(transcriptPath)               // partial metrics are kept even when reading fails
-	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 { // stopped before Claude Code's result: still spent
+	rec.Metrics, parseErr = parseFile(env.adapter(), transcriptPath) // partial metrics are kept even when reading fails
+	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {  // stopped before Claude Code's result: still spent
 		rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
 		rec.CostEstimated = true
 		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
@@ -650,7 +662,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if expect.SlashCommands != nil {
 		expect.SlashCommands = union(expect.SlashCommands, rec.ProjectSkills, rec.ProjectCommands)
 	}
-	rec.Drift = claude.Check(rec.Metrics, expect)
+	rec.Drift = env.adapter().Check(rec.Metrics, expect)
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
 	rec.Behavior.OutsideReads = outsideReads(ownSessionExcluded(rec.Metrics.FilePaths, ownSession), repo, workspace, watched)
 	if _, err := os.Stat(ownSession); err != nil && len(claude.SessionFolders(activeConfig)) > len(pastSessions) {
@@ -659,7 +671,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if rec.Behavior.OutsideReads > 0 {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
-	rec.Outcome = claude.Classify(rec.Metrics, result.TimedOut, rec.Drift)
+	rec.Outcome = env.adapter().Classify(rec.Metrics, result.TimedOut, rec.Drift)
 	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
 	if rec.Overshoot = claude.CapOvershoot(rec.Metrics, rec.Spend().AgentUSD, spec.BudgetUSD, spec.Model); rec.Overshoot != nil && rec.Overshoot.Exceeded() {
 		note := OvershootNote(*rec.Overshoot)
@@ -669,11 +681,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 
 	// Grading, only for fair attempts (infra and unfair runs are never counted).
 	switch rec.Outcome {
-	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
+	case agent.OutcomeOK, agent.OutcomeCapped, agent.OutcomeTimeout:
 		if err := env.grade(ctx, spec, repo, graded, &rec, running); errors.Is(err, sandbox.ErrUnavailable) && ctx.Err() == nil {
 			env.step(StepSandboxDown)
 			// Fail closed: the sandbox did not hold, so nothing was graded, and the run is not the agent's result.
-			rec.Outcome, rec.Passed = claude.OutcomeInfra, nil
+			rec.Outcome, rec.Passed = agent.OutcomeInfra, nil
 			note := gradeInfraNote(rec.Sandbox, err)
 			rec.Notes = append(rec.Notes, note)
 			env.progress("  %s", env.Style.Warn("warning: "+note))
@@ -1296,13 +1308,35 @@ func Redact(data []byte, secret string) []byte {
 	return []byte(secretPatterns.ReplaceAllString(text, "[REDACTED]"))
 }
 
-func parseFile(p string) (claude.Metrics, error) {
+// parseFile reads the run's transcript at p with its agent's adapter (a, adapterFor); a nil adapter (an agent this
+// Agentium does not know) reads nothing.
+func parseFile(a agent.Adapter, p string) (agent.Metrics, error) {
+	if a == nil {
+		return agent.Metrics{}, errors.New("run transcript: the run's agent is not one this Agentium knows")
+	}
 	f, err := os.Open(p)
 	if err != nil {
-		return claude.Metrics{}, fmt.Errorf("run transcript: %w", err)
+		return agent.Metrics{}, fmt.Errorf("run transcript: %w", err)
 	}
 	defer f.Close()
-	return claude.Parse(f)
+	return a.Parse(f)
+}
+
+// adapter is the agent the run starts (Agent): Claude Code's unless set.
+func (env Env) adapter() agent.Adapter {
+	if env.Agent != nil {
+		return env.Agent
+	}
+	return claude.Adapter{}
+}
+
+// adapterFor is the adapter of the agent a record names (Record.Agent, read through agent.Name): Claude Code's for a
+// record that names none (every record made before the agent seam). nil for an agent this Agentium does not know.
+func adapterFor(name string) agent.Adapter {
+	if agent.Name(name) == agent.ClaudeCode {
+		return claude.Adapter{}
+	}
+	return nil
 }
 
 // appendProbe appends line to the first startup instruction file of the context in repo (as a session started in
@@ -1441,8 +1475,8 @@ var testRunner = regexp.MustCompile(`\b(` + strings.Join(append(buildtool.TestPa
 	`(npm|pnpm|yarn|bun) (run )?test|jest|vitest|make test|rspec|dotnet test|harness\.py check`), "|") + `)\b`)
 
 // commandFlags are the behavior flags "ran tests" and "ran the checks" (verify): from the agent's Bash commands that
-// ran, not those Claude Code denied (claude.Metrics.RanCommands), which never started.
-func commandFlags(m claude.Metrics, verify []string) (tests, checks bool) {
+// ran, not those Claude Code denied (agent.Metrics.RanCommands), which never started.
+func commandFlags(m agent.Metrics, verify []string) (tests, checks bool) {
 	return ranTests(m.RanCommands), ranChecks(m.RanCommands, verify)
 }
 

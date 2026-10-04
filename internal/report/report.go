@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
@@ -162,7 +163,7 @@ type RunRow struct {
 	Outcome        string          `json:"outcome"`
 	Passed         *bool           `json:"passed,omitempty"`
 	Success        bool            `json:"success"`
-	Metrics        claude.Metrics  `json:"metrics"` // without the result excerpt
+	Metrics        agent.Metrics   `json:"metrics"` // without the result excerpt
 	Behavior       run.Behavior    `json:"behavior"`
 	CostEstimated  bool            `json:"cost_estimated,omitempty"`
 	Recovered      string          `json:"recovered,omitempty"`
@@ -363,9 +364,9 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 		}
 		arm.Counted++
 		switch rec.Outcome {
-		case claude.OutcomeCapped:
+		case agent.OutcomeCapped:
 			arm.Capped++
-		case claude.OutcomeTimeout:
+		case agent.OutcomeTimeout:
 			arm.TimedOut++
 		}
 		m, b := rec.Metrics, rec.Behavior
@@ -518,9 +519,9 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 				}
 				cell.Counted++
 				switch rec.Outcome {
-				case claude.OutcomeCapped:
+				case agent.OutcomeCapped:
 					cell.Capped++
-				case claude.OutcomeTimeout:
+				case agent.OutcomeTimeout:
 					cell.TimedOut++
 				}
 				costs = append(costs, rec.Spend().AgentUSD)
@@ -563,12 +564,12 @@ func notes(rep Report, in Input) []string {
 	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
-		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled, experiment.OutcomeUngraded,
+		known := []string{agent.OutcomeUnfair, agent.OutcomeInfra, run.OutcomeSandboxFlagged, agent.OutcomeCancelled, experiment.OutcomeUngraded,
 			experiment.OutcomeGradePending}
 		for _, outcome := range known {
 			if n := a.Excluded[outcome]; n > 0 {
-				parts = append(parts, fmt.Sprintf("%d %s", n, map[string]string{claude.OutcomeUnfair: "unfair (the environment drifted)",
-					claude.OutcomeInfra: plural(n, "infrastructure failure"), claude.OutcomeCancelled: "cancelled",
+				parts = append(parts, fmt.Sprintf("%d %s", n, map[string]string{agent.OutcomeUnfair: "unfair (the environment drifted)",
+					agent.OutcomeInfra: plural(n, "infrastructure failure"), agent.OutcomeCancelled: "cancelled",
 					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)", experiment.OutcomeUngraded: "judge-graded, left without a grade (not tried again)",
 					experiment.OutcomeGradePending: "judge-graded, waiting for the judge's grade"}[outcome]))
 			}
@@ -588,7 +589,7 @@ func notes(rep Report, in Input) []string {
 	estimated, stopped, finished, unpriced, unrepriced, noIsolated := 0, 0, 0, 0, 0, 0
 	for _, r := range in.Runs {
 		rec := r.Record
-		if rec.Outcome == claude.OutcomeUnfair {
+		if rec.Outcome == agent.OutcomeUnfair {
 			for _, d := range in.scrubAll(rec.Drift) {
 				if !slices.Contains(drift, d) {
 					drift = append(drift, d)

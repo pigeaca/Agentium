@@ -1164,6 +1164,7 @@ json run list .runs[].task	string
 json run list .schema	int
 json run once .command	string
 json run once .run	object
+json run once .run.agent	string
 json run once .run.arm	string
 json run once .run.behavior	object
 json run once .run.behavior.bash_commands	int
@@ -1227,6 +1228,7 @@ json run show .experiment.slot	int
 json run show .files	[]string
 json run show .kind	string
 json run show .run	object
+json run show .run.agent	string
 json run show .run.arm	string
 json run show .run.behavior	object
 json run show .run.behavior.bash_commands	int

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 )
 
@@ -164,7 +164,7 @@ func TestPythonVenvsAreKeyedByModule(t *testing.T) {
 	venvs := map[string]string{}
 	for _, module := range []string{"a", "b"} {
 		env := newEnv(module)
-		warmed, _, err := env.prepareTools(ctx, profiles, claude.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws", module)}, base,
+		warmed, _, err := env.prepareTools(ctx, profiles, agent.Invocation{Deps: deps, BuildCache: filepath.Join(data, "ws", module)}, base,
 			filepath.Join(data, "setup.log"), func(int) {})
 		if err != nil || !buildtool.VenvReady(warmed.Venv) {
 			t.Fatalf("module %s: %+v, %v", module, warmed, err)

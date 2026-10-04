@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/judge"
@@ -219,7 +220,7 @@ func NeedsGrading(rec Record) bool {
 		return false
 	}
 	switch rec.Outcome {
-	case claude.OutcomeOK, claude.OutcomeCapped, claude.OutcomeTimeout:
+	case agent.OutcomeOK, agent.OutcomeCapped, agent.OutcomeTimeout:
 		return true
 	}
 	return false

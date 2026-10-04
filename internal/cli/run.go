@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
@@ -322,7 +323,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 		// A run that had finished (only storing it was cut short) keeps its outcome; one stopped mid-run is cancelled.
 		outcome := o.Record.Outcome
 		if outcome == "" {
-			outcome = claude.OutcomeCancelled
+			outcome = agent.OutcomeCancelled
 		}
 		pending := ""
 		if run.NeedsGrading(o.Record) {
@@ -709,7 +710,7 @@ func saveCalibration(ctx context.Context, env Env, w *workspace, c run.Calibrati
 // context on that very model (tools and skills can differ by model, as experiments check), and says so. Without one it
 // falls back to the newest on any model, with a note that the model differs, and without any it says the run's tools
 // and skills are not checked. It returns nil when there is nothing to check against.
-func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm task.Arm, model string) (*claude.Expect, error) {
+func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm task.Arm, model string) (*agent.Expect, error) {
 	stored, err := w.service().CalibrationOn(ctx, arm.Name, arm.Snapshot, model)
 	if errors.Is(err, store.ErrNotFound) {
 		stored, err = w.db.LatestCalibration(ctx, w.project.ID, arm.Name, arm.Snapshot)
@@ -729,5 +730,5 @@ func checkAgainstCalibration(ctx context.Context, env Env, w *workspace, arm tas
 	if found.RequestedModel != model {
 		fmt.Fprintln(env.Stdout, note(env.style(), fmt.Sprintf("the calibration used %s, this run %s: its tool set may differ by model", found.RequestedModel, model)))
 	}
-	return &claude.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}, nil
+	return &agent.Expect{CLIVersion: found.CLIVersion, Tools: found.Tools, Skills: found.Skills, SlashCommands: found.SlashCommands}, nil
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 )
 
@@ -98,7 +98,7 @@ func TestJudgeCapsAndEstimates(t *testing.T) {
 func TestExecutePausesWhenTheJudgeHitsALimit(t *testing.T) {
 	slots := scheduleOf(t, 4, 1) // 8 runs
 	f := &fake{outcome: func(s Slot, _ int) Result {
-		r := Result{Outcome: claude.OutcomeOK, CostUSD: 1.2, JudgeUSD: 0.2}
+		r := Result{Outcome: agent.OutcomeOK, CostUSD: 1.2, JudgeUSD: 0.2}
 		if s.Position == 2 {
 			r.Pause = "the judge hit a usage limit"
 		}
@@ -116,7 +116,7 @@ func TestExecutePausesWhenTheJudgeHitsALimit(t *testing.T) {
 // The reserve holds each run's judgement too: with judging, fewer runs fit, and spending never passes the budget.
 func TestExecuteReservesTheJudgement(t *testing.T) {
 	slots := scheduleOf(t, 4, 1)
-	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeOK, CostUSD: 3, JudgeUSD: 2} }} // agent $1, judge $2
+	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: agent.OutcomeOK, CostUSD: 3, JudgeUSD: 2} }} // agent $1, judge $2
 	d := judged(judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 1})
 	d.RunBudgetUSD = 1 // a run's cap: $1, its $0.15 overshoot, and 1 × 2 × $0.50
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: d.RunCapUSD(), BudgetUSD: 12, MaxAttempts: 3}, f.run)

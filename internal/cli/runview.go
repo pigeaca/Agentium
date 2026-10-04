@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
@@ -569,9 +569,9 @@ func outcomeWords(r experiment.Result, requeued, sandboxDown bool, m marks) (box
 		return "left out", "left out: setup changed", term.OutcomeLeftOut
 	case r.Outcome == run.OutcomeSandboxFlagged:
 		return "left out", "left out (sandbox)", term.OutcomeLeftOut
-	case r.Outcome == claude.OutcomeCancelled:
+	case r.Outcome == agent.OutcomeCancelled:
 		return "stopped", "stopped (not counted)", term.OutcomeLeftOut
-	case r.Outcome == claude.OutcomeInfra:
+	case r.Outcome == agent.OutcomeInfra:
 		return "infra error", "infra error (not counted)", term.OutcomeInfra
 	}
 	words := term.Sanitize(r.Outcome)

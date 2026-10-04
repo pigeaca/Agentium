@@ -3,17 +3,15 @@ package sandbox
 import (
 	"path/filepath"
 	"testing"
-
-	"github.com/pigeaca/agentium/internal/buildtool"
 )
 
-// Every credential store grading denies is denied to agent runs too: an agent's denied paths (the credential stores
-// every sandbox denies, and the build tools' user caches, which Claude Code's settings list in every run) cover each
-// of graderCredentialFiles, and the environment's moved pip and uv configs as well.
+// Every credential store grading denies is denied to agent runs too: the deny list every agent run shares
+// (AgentDenied.Reads: the credential stores every sandbox denies, and the build tools' user caches) covers each of
+// graderCredentialFiles, and the environment's moved pip and uv configs as well, whatever the agent adds of its own.
 func TestAgentsDenyWhatGradingDenies(t *testing.T) {
 	home := "/home/u"
 	environ := []string{"HOME=" + home, "PIP_CONFIG_FILE=/cfg/pip.conf", "UV_CONFIG_FILE=/cfg/uv.toml", "XDG_CONFIG_HOME=/xdg"}
-	denied := append(CredentialPaths(home, ""), buildtool.UserCaches(environ, home)...)
+	denied := AgentDenied{Home: home, Environ: environ}.Reads()
 	covered := func(path string) bool {
 		for _, d := range denied {
 			if rel, err := filepath.Rel(d, path); err == nil && filepath.IsLocal(rel) {

@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/task"
@@ -92,7 +92,7 @@ func TestGradeByJudge(t *testing.T) {
 		err := env.gradeByJudge(context.Background(), spec, &rec, p.persist)
 		got := rec
 		v := got.Judge
-		if err != nil || got.Outcome != claude.OutcomeOK || got.Passed == nil || *got.Passed != c.passed || v == nil || v.Requested != judge.GradeRepeats ||
+		if err != nil || got.Outcome != agent.OutcomeOK || got.Passed == nil || *got.Passed != c.passed || v == nil || v.Requested != judge.GradeRepeats ||
 			v.Version != judge.GradingVersion || v.CostUSD < c.cost-1e-9 || v.CostUSD > c.cost+1e-9 || got.Spend().JudgeUSD != v.CostUSD || got.Metrics.CostUSD != 0.3 ||
 			got.Ungraded != "" || NeedsGrading(got) {
 			t.Errorf("%s: %v, outcome %s, passed %v, verdict %+v", name, err, got.Outcome, got.Passed, v)
@@ -102,7 +102,7 @@ func TestGradeByJudge(t *testing.T) {
 			t.Errorf("%s: GradeWords = %q, want %q", name, words, c.words)
 		}
 		first := p.records[0]
-		if len(p.records) < 2 || first.Outcome != claude.OutcomeOK || first.Passed != nil || !NeedsGrading(first) || first.Judge == nil ||
+		if len(p.records) < 2 || first.Outcome != agent.OutcomeOK || first.Passed != nil || !NeedsGrading(first) || first.Judge == nil ||
 			first.Judge.Stopped != judge.StoppedCall || !strings.Contains(strings.Join(first.Notes, "; "), "Agentium stopped while the judge graded it") {
 			t.Errorf("%s: persisted %+v", name, p.records)
 		}
@@ -137,7 +137,7 @@ func TestGradeByJudgeErrorsLeaveTheGradePending(t *testing.T) {
 		var p persisted
 		err := env.gradeByJudge(context.Background(), spec, &rec, p.persist)
 		notes := strings.Join(rec.Notes, "; ")
-		if err != nil || rec.Outcome != claude.OutcomeOK || rec.Passed != nil || !NeedsGrading(rec) || rec.Ungraded != "" || rec.Judge == nil ||
+		if err != nil || rec.Outcome != agent.OutcomeOK || rec.Passed != nil || !NeedsGrading(rec) || rec.Ungraded != "" || rec.Judge == nil ||
 			rec.Judge.Stopped != c.stopped || rec.GradeErrors != c.errors || !strings.Contains(notes, "not graded yet: the judge") ||
 			!strings.Contains(notes, c.why) || !strings.Contains(notes, "the agent does not run again") {
 			t.Errorf("%s: %v, outcome %s, passed %v, errors %d, verdict %+v, notes %s", name, err, rec.Outcome, rec.Passed, rec.GradeErrors, rec.Judge, notes)
@@ -151,7 +151,7 @@ func TestGradeByJudgeErrorsLeaveTheGradePending(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var p persisted
-	if err := env.gradeByJudge(ctx, spec, &rec, p.persist); err != nil || rec.Outcome != claude.OutcomeOK || !NeedsGrading(rec) || rec.GradeErrors != 0 {
+	if err := env.gradeByJudge(ctx, spec, &rec, p.persist); err != nil || rec.Outcome != agent.OutcomeOK || !NeedsGrading(rec) || rec.GradeErrors != 0 {
 		t.Errorf("interrupted: %v, %+v", err, rec)
 	}
 }
@@ -173,7 +173,7 @@ func TestGradeByJudgeRefusalsAndTiesAreFinal(t *testing.T) {
 		spec.JudgeGrading = c.repeats
 		var p persisted
 		err := env.gradeByJudge(context.Background(), spec, &rec, p.persist)
-		if err != nil || rec.Outcome != claude.OutcomeOK || rec.Passed != nil || NeedsGrading(rec) || !strings.Contains(rec.Ungraded, c.why) ||
+		if err != nil || rec.Outcome != agent.OutcomeOK || rec.Passed != nil || NeedsGrading(rec) || !strings.Contains(rec.Ungraded, c.why) ||
 			!strings.Contains(strings.Join(rec.Notes, "; "), "not graded: the judge") || !strings.Contains(strings.Join(rec.Notes, "; "), "not tried again") {
 			t.Errorf("%s: %v, outcome %s, passed %v, ungraded %q, verdict %+v, notes %v", name, err, rec.Outcome, rec.Passed, rec.Ungraded, rec.Judge, rec.Notes)
 		}
@@ -189,7 +189,7 @@ func TestGradeByJudgeRefusalsAndTiesAreFinal(t *testing.T) {
 	env, spec, rec := judgeGradeFixture(t, "yes")
 	spec.Task.Reference = []string{"README.md"}
 	var p persisted
-	if err := env.gradeByJudge(context.Background(), spec, &rec, p.persist); err != nil || rec.Outcome != claude.OutcomeOK || rec.Passed != nil ||
+	if err := env.gradeByJudge(context.Background(), spec, &rec, p.persist); err != nil || rec.Outcome != agent.OutcomeOK || rec.Passed != nil ||
 		rec.Spend().JudgeUSD != 0 || NeedsGrading(rec) || !strings.Contains(rec.Ungraded, "reference solution changes no code") {
 		t.Errorf("no reference in code: %v, %+v", err, rec)
 	}
@@ -307,7 +307,7 @@ func TestRecoverAJudgeGradeCutShort(t *testing.T) {
 		t.Fatalf("Recover = %+v, %v", orphans, err)
 	}
 	got := orphans[0].Record
-	if got.Recovered != RecoveredFinished || got.Outcome != claude.OutcomeOK || got.Passed != nil || got.GradedBy != task.GradingJudge || got.Judge == nil ||
+	if got.Recovered != RecoveredFinished || got.Outcome != agent.OutcomeOK || got.Passed != nil || got.GradedBy != task.GradingJudge || got.Judge == nil ||
 		!NeedsGrading(got) {
 		t.Errorf("recovered %+v", got)
 	}

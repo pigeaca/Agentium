@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 )
 
 // StatusUsage ends an execution that paused before the subscription's five-hour usage limit. Like a budget stop, it
@@ -29,7 +29,7 @@ const UsageJoinGap = 2 * time.Minute
 
 // UsageSample is one run's first and last usage readings.
 type UsageSample struct {
-	First, Last claude.UsageReading
+	First, Last agent.UsageReading
 	// Calibration marks a calibration run (agentium run calibrate): a few short turns, which use far less of the window
 	// than a task run (1% against 6–10% in the 16-run A/B), so UsagePerRun leaves it out. Its readings still count as
 	// the latest.
@@ -138,9 +138,9 @@ func LatestUsage(samples []UsageSample) (UsageSample, bool) {
 // latest reading, plus the expected use of the runs in flight and of the pair, stays within Limit. A pair already
 // started always gets its second run, so pairs stay whole. Runs that report no readings (an API key) never pause.
 type UsageGate struct {
-	Limit  float64             // share of the window, such as 0.85
-	PerRun float64             // the expected share per run (UsagePerRun; the larger of the arms' models)
-	Latest claude.UsageReading // the newest reading so far; finished runs update it
+	Limit  float64            // share of the window, such as 0.85
+	PerRun float64            // the expected share per run (UsagePerRun; the larger of the arms' models)
+	Latest agent.UsageReading // the newest reading so far; finished runs update it
 	// Wait, when set, waits until the window resets instead of pausing, and returns ctx's error if it is cancelled.
 	Wait func(ctx context.Context, until time.Time) error
 }

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
@@ -111,7 +111,7 @@ func (s *scene) whole(pos int, passed bool) {
 	s.clock.add(2*time.Minute + 14*time.Second)
 	s.step(pos, run.StepGrading)
 	s.clock.add(38 * time.Second)
-	s.finish(pos, claude.OutcomeOK, &passed, 0.09)
+	s.finish(pos, agent.OutcomeOK, &passed, 0.09)
 }
 
 func (s *scene) frame(sh term.Shapes, width, height, tick int) string {
@@ -162,7 +162,7 @@ func checkWords(t *testing.T, what, text string) {
 // finished runs in the log and a check made.
 func midRun(t *testing.T, sandbox bool) *scene {
 	s := newScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, sandbox, true),
-		experiment.Standing{Spent: 2.17, Usage: claude.UsageReading{FiveHour: 0.64, FiveHourResets: time.Date(2026, 10, 3, 18, 0, 0, 0, time.UTC)}, HasUsage: true})
+		experiment.Standing{Spent: 2.17, Usage: agent.UsageReading{FiveHour: 0.64, FiveHourResets: time.Date(2026, 10, 3, 18, 0, 0, 0, time.UTC)}, HasUsage: true})
 	s.spent = 2.17
 	s.whole(0, true)
 	s.whole(1, false)
@@ -364,7 +364,7 @@ func TestScreenSanitizesOutsideText(t *testing.T) {
 	s.start(0)
 	passed := true
 	s.event(experiment.Event{Kind: "finish", Slot: l.Schedule[0], Attempt: 1, SpentUSD: 0.1,
-		Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: &passed, CostUSD: 0.1, Judge: "fixed\x1b[31m (3 of 3)\r\x1b[2K"}})
+		Result: experiment.Result{Outcome: agent.OutcomeOK, Passed: &passed, CostUSD: 0.1, Judge: "fixed\x1b[31m (3 of 3)\r\x1b[2K"}})
 	out := s.frame(color256, 99, 40, 0)
 	for _, bad := range []string{"\x1b]", "\x07", "\u202e", "\r", "\x1b[2K", "\x1b[31m"} {
 		if strings.Contains(out, bad) {
@@ -589,7 +589,7 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 	s.step(0, run.StepQuarantined)
 	draw("a folder quarantined", s)
 	yes := true
-	s.finish(0, claude.OutcomeOK, &yes, 0.09)
+	s.finish(0, agent.OutcomeOK, &yes, 0.09)
 	draw("passed", s)
 
 	host := moments(false)
@@ -607,7 +607,7 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 	down.step(0, run.StepSandbox)
 	down.step(0, run.StepSandboxDown)
 	down.step(0, run.StepCleanup)
-	down.finish(0, claude.OutcomeInfra, nil, 0.08)
+	down.finish(0, agent.OutcomeInfra, nil, 0.08)
 	down.event(experiment.Event{Kind: "retry", Slot: down.lock.Schedule[0], Attempt: 1, RetryIn: 30 * time.Second})
 	down.clock.add(2 * time.Second) // the dot has arrived
 	draw("the sandbox unavailable", down)
@@ -619,7 +619,7 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 	spent.step(0, run.StepGrading)
 	spent.step(0, run.StepSandbox)
 	spent.step(0, run.StepSandboxDown)
-	spent.finish(0, claude.OutcomeInfra, nil, 0.08)
+	spent.finish(0, agent.OutcomeInfra, nil, 0.08)
 	spent.clock.add(2 * time.Second)
 	draw("the sandbox unavailable, no retry", spent)
 
@@ -697,7 +697,7 @@ func TestDashboardJudgeGraded(t *testing.T) {
 		s.clock.add(40 * time.Second)
 		s.spent += 0.4
 		s.event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, SpentUSD: s.spent,
-			Result: experiment.Result{Outcome: claude.OutcomeOK, Passed: passed, CostUSD: 0.4, JudgeUSD: 0.3, JudgeGraded: true, JudgeVotes: votes,
+			Result: experiment.Result{Outcome: agent.OutcomeOK, Passed: passed, CostUSD: 0.4, JudgeUSD: 0.3, JudgeGraded: true, JudgeVotes: votes,
 				Judge: "fixed (" + votes + ")"}})
 	}
 	judged(0, &yes, "4 of 5")

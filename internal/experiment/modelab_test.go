@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 )
 
@@ -235,7 +235,7 @@ func TestModelABEstimatesAndBudget(t *testing.T) {
 func TestExecuteReservesEachArmsCap(t *testing.T) {
 	slots := scheduleOf(t, 4, 2) // 16 runs
 	caps := map[string]float64{"A": 1, "B": 4}
-	f := &fake{outcome: func(s Slot, _ int) Result { return Result{Outcome: claude.OutcomeCapped, CostUSD: caps[s.Arm]} }}
+	f := &fake{outcome: func(s Slot, _ int) Result { return Result{Outcome: agent.OutcomeCapped, CostUSD: caps[s.Arm]} }}
 	var mu sync.Mutex
 	running := map[int]bool{}
 	worst, committed := 0.0, 0.0

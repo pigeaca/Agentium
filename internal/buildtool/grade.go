@@ -18,7 +18,7 @@ import (
 // GraderEnv is the whole environment of a sandboxed grade's commands (runner.Spec.Environ). It is the agent's recipe
 // for the same run, with the grade's own folders in place of the agent's. In order, a later entry replacing an
 // earlier one of the same name:
-//   - allowed: the agent's allowlisted environment (claude.EnvironFor of the user's), without the variables set below;
+//   - allowed: the agent's allowlisted environment (sandbox.EnvironFor of the user's), without the variables set below;
 //   - the selected profiles' AgentEnv, with c.Repo the grading copy and c.BuildCache the grade's own cache (Go's
 //     GOFLAGS, the JVM tools' JAVA_HOME and offline settings, Cargo's offline home, Python's venv);
 //   - their AgentCacheEnv in c.BuildCache (Go's GOCACHE);

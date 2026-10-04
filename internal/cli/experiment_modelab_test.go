@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -366,12 +366,12 @@ func TestModelABUsageGateUsesTheLargerModelRate(t *testing.T) {
 	resets := now.Add(2 * time.Hour).Truncate(time.Second)
 	read := func(model string, start time.Time, first, last float64) store.Run {
 		var rec struct {
-			Model   string         `json:"model"`
-			Metrics claude.Metrics `json:"metrics"`
+			Model   string        `json:"model"`
+			Metrics agent.Metrics `json:"metrics"`
 		}
 		rec.Model = model
-		rec.Metrics.UsageFirst = &claude.UsageReading{FiveHour: first, FiveHourResets: resets}
-		rec.Metrics.UsageLast = &claude.UsageReading{FiveHour: last, FiveHourResets: resets}
+		rec.Metrics.UsageFirst = &agent.UsageReading{FiveHour: first, FiveHourResets: resets}
+		rec.Metrics.UsageLast = &agent.UsageReading{FiveHour: last, FiveHourResets: resets}
 		data, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)

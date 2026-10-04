@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -64,14 +64,14 @@ func TestPairsOfPairsTheSchedulesSlots(t *testing.T) {
 	done := &run.PairJudgement{RunA: "a1", Verdict: judge.PairVerdict{Prefer: judge.PreferB}}
 	stopped := &run.PairJudgement{RunA: "a2", Verdict: judge.PairVerdict{Stopped: judge.StoppedLimit}}
 	runs := []store.Run{
-		storedRun(t, "b1-infra", at("t1", "B", 1), claude.OutcomeInfra, false, nil), // retried: not the slot's run
-		storedRun(t, "b1", at("t1", "B", 1), claude.OutcomeOK, true, done),
-		storedRun(t, "a1", at("t1", "A", 1), claude.OutcomeOK, true, nil),
-		storedRun(t, "a2", at("t1", "A", 2), claude.OutcomeOK, true, nil),
-		storedRun(t, "b2", at("t1", "B", 2), claude.OutcomeTimeout, true, stopped),
-		storedRun(t, "da1", at("docs", "A", 1), claude.OutcomeOK, true, nil),
-		storedRun(t, "db1", at("docs", "B", 1), claude.OutcomeOK, true, nil),
-		storedRun(t, "da2", at("docs", "A", 2), claude.OutcomeOK, false, nil),
+		storedRun(t, "b1-infra", at("t1", "B", 1), agent.OutcomeInfra, false, nil), // retried: not the slot's run
+		storedRun(t, "b1", at("t1", "B", 1), agent.OutcomeOK, true, done),
+		storedRun(t, "a1", at("t1", "A", 1), agent.OutcomeOK, true, nil),
+		storedRun(t, "a2", at("t1", "A", 2), agent.OutcomeOK, true, nil),
+		storedRun(t, "b2", at("t1", "B", 2), agent.OutcomeTimeout, true, stopped),
+		storedRun(t, "da1", at("docs", "A", 1), agent.OutcomeOK, true, nil),
+		storedRun(t, "db1", at("docs", "B", 1), agent.OutcomeOK, true, nil),
+		storedRun(t, "da2", at("docs", "A", 2), agent.OutcomeOK, false, nil),
 	}
 	pairs, err := PairsOf(l, runs)
 	if err != nil || len(pairs) != 4 {
@@ -123,18 +123,18 @@ func TestPairsOfPairsTheSchedulesSlots(t *testing.T) {
 func TestComparableNeedsTwoPassingRuns(t *testing.T) {
 	l := pairLock(t, 1)
 	yes, no := true, false
-	pass := run.Record{Outcome: claude.OutcomeOK, Passed: &yes}
+	pass := run.Record{Outcome: agent.OutcomeOK, Passed: &yes}
 	for name, c := range map[string]struct {
 		a, b run.Record
 		want bool
 	}{
 		"both pass":      {pass, pass, true},
-		"capped passes":  {run.Record{Outcome: claude.OutcomeCapped, Passed: &yes}, pass, true},
-		"one fails":      {pass, run.Record{Outcome: claude.OutcomeOK, Passed: &no}, false},
-		"not graded":     {run.Record{Outcome: claude.OutcomeOK}, pass, false},
-		"unfair":         {pass, run.Record{Outcome: claude.OutcomeUnfair, Passed: &yes}, false},
-		"config changed": {run.Record{Outcome: claude.OutcomeOK, Passed: &yes, Behavior: run.Behavior{ConfigChanged: []string{"jest.config.js"}}}, pass, false},
-		"both fail":      {run.Record{Outcome: claude.OutcomeOK, Passed: &no}, run.Record{Outcome: claude.OutcomeOK, Passed: &no}, false},
+		"capped passes":  {run.Record{Outcome: agent.OutcomeCapped, Passed: &yes}, pass, true},
+		"one fails":      {pass, run.Record{Outcome: agent.OutcomeOK, Passed: &no}, false},
+		"not graded":     {run.Record{Outcome: agent.OutcomeOK}, pass, false},
+		"unfair":         {pass, run.Record{Outcome: agent.OutcomeUnfair, Passed: &yes}, false},
+		"config changed": {run.Record{Outcome: agent.OutcomeOK, Passed: &yes, Behavior: run.Behavior{ConfigChanged: []string{"jest.config.js"}}}, pass, false},
+		"both fail":      {run.Record{Outcome: agent.OutcomeOK, Passed: &no}, run.Record{Outcome: agent.OutcomeOK, Passed: &no}, false},
 	} {
 		p := PairRuns{Task: "t1", Repeat: 1, A: &PairRun{ID: "a", Rec: c.a}, B: &PairRun{ID: "b", Rec: c.b}}
 		if got := p.Comparable(l); got != c.want {
@@ -250,14 +250,14 @@ func TestDesignPairJudgeCapsAndValidation(t *testing.T) {
 // schedule spends and holds: no run starts unless all of it fits.
 func TestExecuteHoldsThePairsComparison(t *testing.T) {
 	slots := scheduleOf(t, 3, 1) // 6 runs, 3 pairs
-	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeOK, CostUSD: 1} }}
+	f := &fake{outcome: func(Slot, int) Result { return Result{Outcome: agent.OutcomeOK, CostUSD: 1} }}
 	// A pair needs its runs' $1 caps and its $2 comparison: $4 of a $3.90 budget is too much, though both runs fit.
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, PairHoldUSD: 2, BudgetUSD: 3.9, MaxAttempts: 3}, f.run)
 	if err != nil || sum.Status != StatusBudget || sum.Settled != 0 || len(f.ran) != 0 {
 		t.Fatalf("summary %+v (%d ran), %v", sum, len(f.ran), err)
 	}
 	// $4 fits one pair at a time, its two runs together: the hold is the pair's, not each run's.
-	f = &fake{outcome: func(Slot, int) Result { return Result{Outcome: claude.OutcomeOK} }}
+	f = &fake{outcome: func(Slot, int) Result { return Result{Outcome: agent.OutcomeOK} }}
 	sum, err = Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, PairHoldUSD: 2, BudgetUSD: 4, MaxAttempts: 3}, f.run)
 	if err != nil || sum.Status != StatusDone || sum.Settled != 6 || f.peak != 2 {
 		t.Fatalf("summary %+v (peak %d), %v", sum, f.peak, err)
@@ -276,7 +276,7 @@ func TestExecuteHoldsThePairsComparison(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		outSpent, outHeld = outSpent+0.25, outHeld-0.25 // a comparison's call stored while the runs go on, within its hold
-		return Result{Outcome: claude.OutcomeOK, CostUSD: 1}
+		return Result{Outcome: agent.OutcomeOK, CostUSD: 1}
 	}}
 	outside := func() (float64, float64) { mu.Lock(); defer mu.Unlock(); return outSpent, outHeld }
 	outHeld = 1.5
