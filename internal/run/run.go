@@ -987,6 +987,11 @@ func linkTargets(base source.Source, p string) []string {
 	return out
 }
 
+// toolWritten names the runner configuration files build tools write themselves while they build or test: lock files
+// and a pinned interpreter version. addedConfigs does not report them when the agent's tree adds them.
+var toolWritten = []string{"Cargo.lock", "uv.lock", "poetry.lock", "pdm.lock", "Pipfile.lock", "package-lock.json", "yarn.lock",
+	"pnpm-lock.yaml", "go.sum", "gradle.lockfile", ".python-version"}
+
 // configNames lists the configuration names (or patterns) of the test runners the verification commands call, in
 // module's folder and each folder above it (inAncestors).
 func configNames(verify []string, module string) []string {
@@ -1015,12 +1020,14 @@ func configNames(verify []string, module string) []string {
 
 // addedConfigs lists the files of changed (the agent's changes, from the root) that base does not have and that are a
 // runner's configuration the verification reads (configNames): a new pytest.ini, conftest.py or .mvn/maven.config
-// changes how the tests run as much as an edited one.
+// changes how the tests run as much as an edited one. Files the tools write on their own (toolWritten: Cargo.lock
+// after `cargo test` in a repository that neither commits nor ignores it, uv.lock, .python-version) are left out:
+// a run that only ran the tests would be reported. An edit to one the base has is still checkFiles' config.
 func addedConfigs(verify []string, module string, base source.Source, changed []string) []string {
 	names := configNames(verify, module)
 	var out []string
 	for _, p := range changed {
-		if source.Has(base, p) || slices.Contains(out, p) {
+		if source.Has(base, p) || slices.Contains(out, p) || slices.Contains(toolWritten, path.Base(p)) {
 			continue
 		}
 		if slices.ContainsFunc(names, func(name string) bool {

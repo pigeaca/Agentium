@@ -126,6 +126,17 @@ func TestAddedConfigs(t *testing.T) {
 	if got := addedConfigs([]string{"python -m pytest"}, "", fakeSource{"value.txt"}, []string{"pytest.ini", "sub/conftest.py"}); !slices.Equal(got, []string{"pytest.ini"}) {
 		t.Errorf("at the root: %q", got)
 	}
+	// What the tools write themselves while testing is no added configuration: Cargo.lock after `cargo test` where the
+	// repository neither commits nor ignores it, uv.lock after `uv run pytest`, .python-version after `uv python pin`.
+	// An edit to one the base has stays checkFiles' config.
+	written := []string{"Cargo.lock", "svc/Cargo.lock", "uv.lock", "svc/uv.lock", ".python-version", "svc/.python-version", "Cargo.toml"}
+	if got := addedConfigs([]string{"cargo test", "uv run pytest"}, "svc", fakeSource{"svc/run_tests.sh"}, written); !slices.Equal(got, []string{"Cargo.toml"}) {
+		t.Errorf("tool-written files: %q, want only Cargo.toml", got)
+	}
+	locked := fakeSource{"Cargo.lock", "Cargo.toml", "uv.lock"}
+	if _, configs := checkFiles([]string{"cargo test", "uv run pytest"}, "", locked); !slices.Contains(configs, "Cargo.lock") || !slices.Contains(configs, "uv.lock") {
+		t.Errorf("committed lock files: configs %q, want Cargo.lock and uv.lock", configs)
+	}
 }
 
 // An agent that edits only the target of a linked verify script is graded with the starting version of the target, at

@@ -238,6 +238,28 @@ func stopSandboxed(own, outside string) ([]string, error) {
 	return stopFound(func() ([]process, error) { return sandboxedIn(own, outside) }, "run in the grade's sandbox")
 }
 
+// usingGrade lists, without stopping any, the processes stopSandboxed(own, outside) and stopProcessesUnder(folders)
+// would stop: "<pid> <command>" each, the command quoted (a grade picks it).
+func usingGrade(own, outside string, folders []string) ([]string, error) {
+	sandboxed, err := sandboxedIn(own, outside)
+	if err != nil {
+		return nil, err
+	}
+	under, err := processesUnder(folders)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	seen := map[int]bool{}
+	for _, p := range append(sandboxed, under...) {
+		if !seen[p.pid] {
+			seen[p.pid] = true
+			out = append(out, fmt.Sprintf("%d %q", p.pid, p.command))
+		}
+	}
+	return out, nil
+}
+
 // stopProcessesUnder kills (SIGKILL) this user's processes that use the folders (processesUnder), and looks again
 // until none is left, a few rounds at most: what a grade left running (a daemon in its own session, a background
 // server) must not outlive it, write its folders while they are removed, or hold their files. Before each kill it

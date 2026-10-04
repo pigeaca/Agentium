@@ -51,6 +51,20 @@ func TestCleanPlansValidationGrades(t *testing.T) {
 	must(t, os.MkdirAll(filepath.Join(outside, at, "grading", "x"), 0o700))
 	usedAgo(t, filepath.Join(outside, at, "grading", "x"), now, 5*time.Hour)
 	must(t, os.Symlink(outside, filepath.Join(l.Artifacts, "tasks", "9")))
+	// Lock files without their folder: an old one goes, a recent one stays, a link in a lock's place is not listed.
+	strayOld, strayNew := filepath.Join(l.Artifacts, "tasks", "7", at, "grading", "arm-reference.lock"), filepath.Join(l.Artifacts, "tasks", "7", at, "grading", "arm-hidden-tests.lock")
+	for _, p := range []string{strayOld, strayNew} {
+		must(t, os.WriteFile(p, nil, 0o600))
+	}
+	usedAgo(t, strayOld, now, 2*time.Hour)
+	must(t, os.Symlink(filepath.Join(outside, "victim"), filepath.Join(l.Artifacts, "tasks", "7", at, "grading", "gone.lock")))
+	items := 5
+	var inUse string
+	if runtime.GOOS == "darwin" { // a process in an old folder (a validation from before the lock, or your shell) keeps it
+		inUse = validationGrade(t, l, "8", at, "base-hidden-tests", now, 5*time.Hour)
+		leftover(t, filepath.Join(inUse, "copy"), "")
+		items++
+	}
 	before := snapshotTree(t, l.Artifacts)
 
 	plan, err := PlanClean(context.Background(), CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge})
@@ -67,8 +81,17 @@ func TestCleanPlansValidationGrades(t *testing.T) {
 	if it, ok := byPath(plan.Keep, grading); !ok || it.Reason != CleanKeptRunning {
 		t.Errorf("the grade in progress: %+v, %v", it, ok)
 	}
-	if n := len(plan.Remove) + len(plan.Keep); n != 3 {
-		t.Errorf("%d items, want the three grade folders: %+v %+v", n, plan.Remove, plan.Keep)
+	if it, ok := byPath(plan.Remove, strayOld); !ok || it.Reason != CleanStoppedValidation || it.lock != strayOld {
+		t.Errorf("an old stray lock: %+v, %v", it, ok)
+	}
+	if it, ok := byPath(plan.Keep, strayNew); !ok || it.Reason != CleanKeptRecent {
+		t.Errorf("a recent stray lock: %+v, %v", it, ok)
+	}
+	if it, ok := byPath(plan.Keep, inUse); inUse != "" && (!ok || it.Reason != CleanKeptRunning || !strings.Contains(it.Detail, "in use by 1 process(es)")) {
+		t.Errorf("a folder in use: %+v, %v", it, ok)
+	}
+	if n := len(plan.Remove) + len(plan.Keep); n != items {
+		t.Errorf("%d items, want %d: %+v %+v", n, items, plan.Remove, plan.Keep)
 	}
 	if after := snapshotTree(t, l.Artifacts); after != before {
 		t.Errorf("a dry run wrote the artifacts:\n%s\nwas\n%s", after, before)
@@ -86,19 +109,23 @@ func TestCleanRemovesValidationGrades(t *testing.T) {
 	must(t, os.WriteFile(task.GradeLock(stopped), nil, 0o600)) // its dead validation's, free
 	changed := validationGrade(t, l, "7", at, "base-reference", now, 3*time.Hour)
 	grading := validationGrade(t, l, "8", at, "base-reference", now, 3*time.Hour)
-	var ended <-chan struct{}
-	if runtime.GOOS == "darwin" {
-		_, ended = leftover(t, filepath.Join(stopped, "copy"), "")
-	}
+	inUse := validationGrade(t, l, "8", at, "base-hidden-tests", now, 3*time.Hour)
+	stray := filepath.Join(l.Artifacts, "tasks", "8", at, "grading", "arm-reference.lock")
+	must(t, os.WriteFile(stray, nil, 0o600))
+	usedAgo(t, stray, now, 2*time.Hour)
 	plan, err := PlanClean(context.Background(), CleanInput{Layout: l, Now: now, OlderThan: CleanDefaultAge})
 	must(t, err)
 	usedAgo(t, changed, time.Now(), 0) // used since the plan
 	unlock, err := home.LockFile(context.Background(), task.GradeLock(grading), nil)
 	must(t, err)
 	defer unlock()
+	var ended <-chan struct{}
+	if runtime.GOOS == "darwin" { // a process starts using the folder after the plan: kept, never stopped
+		_, ended = leftover(t, filepath.Join(inUse, "copy"), "")
+	}
 
 	var items []CleanItem
-	for _, p := range []string{stopped, changed, grading} {
+	for _, p := range []string{stopped, changed, grading, inUse, stray} {
 		it, ok := byPath(plan.Remove, p)
 		if !ok {
 			t.Fatalf("%s is not planned", p)
@@ -109,14 +136,39 @@ func TestCleanRemovesValidationGrades(t *testing.T) {
 	if errs[0] != nil || exists(stopped) || exists(task.GradeLock(stopped)) {
 		t.Errorf("the stopped grade: %v, still there %v, its lock %v", errs[0], exists(stopped), exists(task.GradeLock(stopped)))
 	}
-	if ended != nil {
-		endsSoon(t, "a process in the grade's copy", ended)
-	}
 	if !errors.Is(errs[1], ErrCleanUsed) || !exists(changed) {
 		t.Errorf("changed since the plan: %v", errs[1])
 	}
 	if !errors.Is(errs[2], ErrCleanBusy) || !strings.Contains(errs[2].Error(), "validation") || !exists(filepath.Join(grading, "copy", "tests", "data")) {
 		t.Errorf("a grade in progress: %v", errs[2])
+	}
+	if ended != nil {
+		select {
+		case <-ended:
+			t.Error("cleanup stopped a process that used the grade folder")
+		default:
+		}
+		if !errors.Is(errs[3], ErrCleanBusy) || !strings.Contains(errs[3].Error(), "in use by 1 process(es)") || !exists(filepath.Join(inUse, "copy", "tests", "data")) {
+			t.Errorf("a folder in use: %v", errs[3])
+		}
+	}
+	if errs[4] != nil || exists(stray) {
+		t.Errorf("a stray lock: %v, still there %v", errs[4], exists(stray))
+	}
+	// A lock that is a link is refused, never followed (the probe uses O_NOFOLLOW, the removal checks first).
+	victim := filepath.Join(t.TempDir(), "victim")
+	must(t, os.WriteFile(victim, []byte("yours"), 0o600))
+	linkedRoot := validationGrade(t, l, "10", at, "base-reference", now, 3*time.Hour)
+	must(t, os.Symlink(victim, task.GradeLock(linkedRoot)))
+	linkedLock := filepath.Join(l.Artifacts, "tasks", "10", at, "grading", "x.lock")
+	must(t, os.Symlink(victim, linkedLock))
+	for _, it := range []CleanItem{{Kind: CleanValidations, Path: linkedRoot, lock: task.GradeLock(linkedRoot)}, {Kind: CleanValidations, Path: linkedLock, lock: linkedLock}} {
+		if errs := RemoveClean(context.Background(), l, []CleanItem{it}); errs[0] == nil || !strings.Contains(errs[0].Error(), "refused") {
+			t.Errorf("a linked lock %s: %v", it.lock, errs[0])
+		}
+	}
+	if data, _ := os.ReadFile(victim); string(data) != "yours" || !exists(linkedRoot) {
+		t.Errorf("a linked lock: the file it points to %q, the folder kept %v", data, exists(linkedRoot))
 	}
 
 	// Refused whatever a plan says: elsewhere in the artifacts, the grading folder itself, a grade reached through a link.
