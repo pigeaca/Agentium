@@ -130,6 +130,8 @@ type poolPass struct {
 	timeout       time.Duration
 	// noMining: no test command was detected, so the pass mines nothing (newPoolPass).
 	noMining bool
+	// noMiningWhy is the note that says why (noMiningNote, or moduleMiningNote).
+	noMiningWhy string
 	// acceptRefused: --accept-mined accepted nothing because the state file was unreadable.
 	acceptRefused bool
 
@@ -169,9 +171,16 @@ func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 	}
 	// Without a test command, mined tasks would have nothing to verify with: the pass mines nothing (its watermark stays),
 	// and still validates, re-validates and retires.
-	p.noMining = len(p.verify) == 0
+	p.noMining, p.noMiningWhy = len(p.verify) == 0, noMiningNote
+	if settings.Module != "" { // mining inside a module is step 2 of the monorepo plan
+		p.noMining, p.noMiningWhy = true, moduleMiningNote
+	}
 	return p
 }
+
+// moduleMiningNote says why a pass mines nothing while the project's module is set. A task is added or imported into
+// a module (the project's setting is its default); mining reads the whole history, which a module's tasks must not.
+const moduleMiningNote = "module set: mining inside a module comes in a later version; use task import --commit or task add"
 
 // noMiningNote says why a pass mines nothing.
 const noMiningNote = "no test commands were detected for this project, so the pass mines nothing (mined tasks would have nothing to verify with); " +
@@ -482,7 +491,7 @@ func poolUpdate(ctx context.Context, env Env, args []string) int {
 	}
 	p := newPoolPass(env, w, a)
 	if p.noMining {
-		fmt.Fprintln(env.Stdout, note(env.style(), noMiningNote))
+		fmt.Fprintln(env.Stdout, note(env.style(), p.noMiningWhy))
 	}
 	if !a.since.IsZero() {
 		fmt.Fprintln(env.Stdout, note(env.style(), p.rescanNote()))

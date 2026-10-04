@@ -98,6 +98,9 @@ type sandboxGrade struct {
 	Running  func(pid int)
 	// Warn is told what the grade left behind that was cleaned up (processes stopped, a folder quarantined).
 	Warn func(string)
+	// Note, when set, is told why the grade failed when Agentium, not a test, failed it (the module's folder is gone): a
+	// run records it in its notes. Without it the reason is only in Log.
+	Note func(string)
 	// Testing, Cleaning and Quarantined, when set, are told when the commands start (the canary passed), when the
 	// grade's cleanup starts, and when it moved a folder into the quarantine: for a live display (Env.Step).
 	Testing, Cleaning, Quarantined func()
@@ -159,7 +162,12 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 				return err
 			}
 			fmt.Fprintf(in.Log, "$ %s\n", command)
-			spec, err := sandbox.Wrap(runner.Spec{Dir: g.Copy, Command: command, Timeout: in.Timeout, Output: in.Log, Started: in.Running,
+			dir, there := env.gradeDir(g.Copy, in)
+			if !there {
+				ok = false
+				break
+			}
+			spec, err := sandbox.Wrap(runner.Spec{Dir: dir, Command: command, Timeout: in.Timeout, Output: in.Log, Started: in.Running,
 				Environ: g.Environ}, file)
 			if err != nil {
 				return err
@@ -225,6 +233,26 @@ func classify(report *task.SandboxGrade, p sandbox.Profile, denials []sandbox.De
 			report.Flagged = append(report.Flagged, d)
 		}
 	}
+}
+
+// gradeDir is the folder a grade's next command runs in: the module's folder in copy, checked again before each
+// command. The commands run the agent's code in the copy, which is writable, so a test can delete the module's folder
+// or replace it with a link (to another module's passing tests) between two commands. That is the agent's tree failing,
+// as when the folder is missing before the grade: false, with the reason in in.Log and in.Note, and the grade fails.
+// It is never an error, which would make the run infrastructure (tried again, at a cost, or dropped).
+func (env Env) gradeDir(copy string, in sandboxGrade) (string, bool) {
+	dir, err := env.moduleDir(copy)
+	if err == nil {
+		return dir, true
+	}
+	note := "the module's folder left the agent's tree during the grade, so the remaining commands did not run: " + err.Error()
+	if in.Log != nil {
+		fmt.Fprintf(in.Log, "[agentium] %s\n", note)
+	}
+	if in.Note != nil {
+		in.Note(note)
+	}
+	return "", false
 }
 
 // inGrade writes the grade's folder root (in any of its forms) in target as task.GradeFolder.

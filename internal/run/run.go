@@ -109,6 +109,11 @@ type Env struct {
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE). A sandboxed grade does not use it: it gets the agent's
 	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
+	// Module is the monorepo module the commands run in (store.Task.Module; "": the repository's root, as before
+	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. Once
+	// sets it from the run's task; callers need not. The agent's own folder and sandbox stay the whole checkout. It is
+	// part of the keys of the warm-up stamps, the Python venvs and the grading seeds.
+	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
 	Grader string
@@ -275,6 +280,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
+	env.Module = spec.Task.Module // a run uses its task's module, never the project's current setting
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	if spec.Task.JudgeGraded() {
@@ -345,7 +351,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	// before it costs anything.
 	// Where Python code imports from is decided here too, once: the agent, setup and grading agree on it whatever the
 	// agent adds or removes under src/.
-	l, err := baseLayout(ctx, env.Bare, spec.Task.Base)
+	l, err := baseLayoutIn(ctx, env.Bare, spec.Task.Base, env.Module)
 	if err != nil {
 		return rec, err
 	}
@@ -506,7 +512,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
 		setup.commandBase = env.checkoutBase
 		var ok bool
-		if rec.Setup, ok, err = setup.commands(ctx, repo, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
+		// The checkout is the base commit's plus the arm's context: a module folder that is not a real folder there is
+		// Agentium's own failure, found before anything runs.
+		setupDir, err := env.moduleDir(repo)
+		if err != nil {
+			return rec, fmt.Errorf("setup: %w", err)
+		}
+		if rec.Setup, ok, err = setup.commands(ctx, setupDir, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -759,7 +771,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if err != nil {
 		return err
 	}
-	scripts, configs := checkFiles(spec.Task.Verify, start)
+	scripts, configs := checkFiles(spec.Task.Verify, spec.Task.Module, start)
 	var restore []string
 	for _, p := range changed {
 		switch {
@@ -772,16 +784,31 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			}
 		}
 	}
-	if len(restore) > 0 {
-		if err := checkout.Write(graded, start, restore); err != nil {
-			return fmt.Errorf("restore the checks: %w", err)
-		}
-		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
-		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
-	}
-
+	// The grading copy is the agent's work: a module folder it deleted or replaced by a link (to grade another folder)
+	// is a failed grade, as when the hidden tests cannot be added, never an infrastructure outcome. It is checked before
+	// the module's scripts are restored, which would otherwise write through the link or bring a deleted module back.
+	// A script that cannot be restored (the agent turned its folder into a link, say) fails the grade the same way:
+	// never graded with the agent's version, and never infrastructure, which would be tried again at a cost.
+	verifyDir, moduleErr := env.moduleDir(graded)
 	failed := false
-	if spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
+	if len(restore) > 0 {
+		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
+	}
+	switch {
+	case moduleErr != nil:
+		rec.Notes = append(rec.Notes, "the module's folder is not in the agent's tree as it must be, so nothing was graded: "+moduleErr.Error())
+		failed = true
+	case len(restore) > 0:
+		if err := checkout.Write(graded, start, restore); err != nil {
+			// The reason names paths in the copy from its root: notes are shared, the copy's location is not theirs.
+			why := strings.ReplaceAll(err.Error(), graded+string(filepath.Separator), "")
+			rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts, and they could not be restored, so nothing was graded: "+why)
+			failed = true
+		} else {
+			rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
+		}
+	}
+	if !failed && spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
 		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
 		if err != nil {
 			return err
@@ -814,7 +841,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			verify.commandBase = env.checkoutBase
 		}
 		env.step(StepTests)
-		commands, ok, err = verify.commands(ctx, graded, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
+		commands, ok, err = verify.commands(ctx, verifyDir, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -826,6 +853,10 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	env.progress("  verification: %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
 	return nil
 }
+
+// moduleDir is the folder commands run in for a checkout dir: the module's folder inside it, or dir itself without a
+// module. It is checked at each use (buildtool.ModuleDir): a checkout the agent worked in may no longer have it.
+func (env Env) moduleDir(dir string) (string, error) { return buildtool.ModuleDir(dir, env.Module) }
 
 // verifySandboxed runs the verification commands on the grading copy in the grading sandbox (gradeInSandbox), in the
 // run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept
@@ -851,6 +882,7 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 			fmt.Fprintf(log, "[agentium] warning: %s\n", w)
 			env.progress("  %s", env.Style.Warn("warning: "+w))
 		},
+		Note:    func(n string) { rec.Notes = append(rec.Notes, n) }, // Agentium's own words and the module's path, not the grade's output
 		Testing: func() { env.step(StepTests) }, Cleaning: func() { env.step(StepCleanup) },
 		Quarantined: func() { env.step(StepQuarantined) }}
 	if spec.Keep {
@@ -872,8 +904,11 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 }
 
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
-// restores) and the configuration of the test runners they call (reported when changed).
-func checkFiles(verify []string, base source.Source) (scripts, configs []string) {
+// restores) and the configuration of the test runners they call (reported when changed). The commands run in module's
+// folder (the root when it is ""), so the names they give are read from there and listed from the root, as base and
+// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. A runner's configuration is
+// looked for in the module's folder and every folder above it (inAncestors): svc/pom.xml and the parent pom.xml.
+func checkFiles(verify []string, module string, base source.Source) (scripts, configs []string) {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
 	// The build tools' runners come from their profiles; the rest are runners without one.
 	runners := buildtool.RunnerConfigs()
@@ -885,13 +920,20 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	}
 	for _, command := range verify {
 		for _, token := range strings.FieldsFunc(command, split) {
-			if p := path.Clean(strings.TrimPrefix(token, "./")); source.Has(base, p) && !slices.Contains(scripts, p) {
+			p := path.Clean(strings.TrimPrefix(token, "./"))
+			if module != "" {
+				if path.IsAbs(p) {
+					continue // outside the repository, as at the root (base lists relative paths only)
+				}
+				p = path.Join(module, p) // "../tools/check.sh" from the module is the repository's tools/check.sh
+			}
+			if source.Has(base, p) && !slices.Contains(scripts, p) {
 				scripts = append(scripts, p)
 			}
 		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range matching(base, files) {
+				for _, f := range matching(base, inAncestors(module, files)) {
 					if !slices.Contains(configs, f) {
 						configs = append(configs, f)
 					}
@@ -900,6 +942,28 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 		}
 	}
 	return scripts, configs
+}
+
+// inAncestors gives names (or patterns) in module's folder and in each folder above it, up to the root: for module
+// a/b, a/b/X, a/X and X. Test runners walk up the tree for their configuration (Maven's parent pom.xml and
+// .mvn/maven.config, pytest's rootdir pyproject.toml and conftest.py, Gradle's root build.gradle), so an agent that
+// edits an ancestor's must be reported as one that edits the module's. A root file a runner does not read (a root
+// Makefile, say) is reported too: it only marks a run whose agent changed it and the reference did not. Without a
+// module the names are unchanged. A stored module is always relative (ValidateModule); the walk still stops at "/" so
+// a corrupted absolute one fails the grade at the module check instead of looping here.
+func inAncestors(module string, names []string) []string {
+	if module == "" {
+		return names
+	}
+	var out []string
+	for dir := module; ; dir = path.Dir(dir) {
+		if dir == "." || dir == "/" {
+			return append(out, names...)
+		}
+		for _, name := range names {
+			out = append(out, path.Join(dir, name)) // a "*" still matches within that one folder
+		}
+	}
 }
 
 // matching lists the files of base that names give: a name that exists, or every path a pattern with "*" matches

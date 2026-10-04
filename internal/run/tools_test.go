@@ -261,7 +261,7 @@ func TestGradingKnowsMavenGradleAndCargo(t *testing.T) {
 		"go test ./...":       nil,
 		"./gradlew --version": {"build.gradle.kts", "gradle.properties", "settings.gradle.kts"},
 	} {
-		scripts, configs := checkFiles([]string{verify}, files)
+		scripts, configs := checkFiles([]string{verify}, "", files)
 		slices.Sort(configs)
 		if !slices.Equal(configs, want) {
 			t.Errorf("%q: configuration %q, want %q", verify, configs, want)

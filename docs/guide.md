@@ -60,6 +60,7 @@ agentium init --verify "" --require-lock=false              # back to the detect
 | `--require-lock[=false]` | off | `pool update`, `start` |
 | `--jobs N` | 2 | `pool update`, `start`, `task validate --all` |
 | `--verify-timeout DURATION` | 10m | the same, and the experiment `start` creates |
+| `--module PATH` | none: the repository's root | the module of a monorepo that tasks added or imported from now on run in (each task keeps the module it was made with): build tools are detected in its folder, and setup, verification and the offline warm-up run there. Mining (`pool update`, `start`) is off while it is set, and the agent's folder is still the root (step 2). With no build file at the root, `init` lists the candidate modules |
 | `--allow-local-binding[=false]` | off | agent runs on a Gradle project ([build tools](#build-tools-and-offline-dependencies)) |
 
 A project with no settings behaves as it did before settings existed. A command's own flag (in [advanced flags](#advanced-flags)) wins for that call only. `init --json` has them under `"settings"`.

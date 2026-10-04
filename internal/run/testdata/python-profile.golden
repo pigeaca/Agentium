@@ -50,6 +50,7 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.kube
 /golden/home/.gnupg
 /golden/home/Library/Keychains
+/golden/home/.config/uv
 /Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build
@@ -174,6 +175,7 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.kube
 /golden/home/.gnupg
 /golden/home/Library/Keychains
+/golden/home/.config/uv
 /Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build
@@ -296,6 +298,7 @@ CLAUDE_CODE_TMPDIR=/golden/t/ag-0123456789
 /golden/home/.kube
 /golden/home/.gnupg
 /golden/home/Library/Keychains
+/golden/home/.config/uv
 /Library/Keychains
 /golden/home/Library/Caches/go-build
 /golden/home/.cache/go-build

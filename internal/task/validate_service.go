@@ -56,7 +56,7 @@ type Validating struct {
 	Toolchain Toolchain
 	// Checkout warms each validated task's build tools as runs do (Validator.Checkout); nil warms nothing. In sandbox
 	// mode (ValidateOptions.Grader) it must offer sandboxed commands (CheckoutCommands.Sandboxed).
-	Checkout func(ctx context.Context, base string, verify []string, logPath string) (CheckoutCommands, error)
+	Checkout func(ctx context.Context, base, module string, verify []string, logPath string) (CheckoutCommands, error)
 	// SkipInUse makes StoreValidation store nothing for a task that a locked experiment able to run still uses: it
 	// returns store.ErrTaskInUse instead (store.SetTaskValidationIdle). The task pool's re-validations set it; task
 	// validate, which the user asks for, does not.
@@ -86,7 +86,7 @@ func StatusOf(t store.Task) string {
 // SpecOf is what validation needs of t.
 func SpecOf(t store.Task) Spec {
 	return Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference,
-		Setup: t.Setup, Verify: t.Verify}
+		Setup: t.Setup, Verify: t.Verify, Module: t.Module}
 }
 
 // Gaps lists what the task's hidden tests require that the instruction and the base do not state. f caches searches, so

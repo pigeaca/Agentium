@@ -698,7 +698,7 @@ func TestPythonCredentialFilesAreDenied(t *testing.T) {
 	for _, want := range []string{"/home/u/.config/pip", "/home/u/Library/Application Support/pip", "/home/u/.pip",
 		"/home/u/.config/uv/uv.toml", "/home/u/.local/share/uv/credentials", "/home/u/.config/pypoetry/auth.toml",
 		"/home/u/Library/Application Support/pypoetry/auth.toml", "/home/u/.local/share/python_keyring", "/x/config/pip",
-		"/x/config/uv/uv.toml", "/x/config/pypoetry/auth.toml", "/x/data/uv/credentials", "/x/data/python_keyring",
+		"/x/config/uv", "/x/config/pypoetry/auth.toml", "/x/data/uv/credentials", "/x/data/python_keyring",
 		"/x/poetry/auth.toml", "/etc/custom/pip.conf", "/opt/uv.toml", "/secrets/netrc", "/x/uvcreds"} {
 		if !slices.Contains(got, want) {
 			t.Errorf("%s is not denied", want)

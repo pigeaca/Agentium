@@ -101,6 +101,10 @@ type LockedTask struct {
 	Reference   []string `json:"reference,omitempty"`
 	Setup       []string `json:"setup,omitempty"`
 	Verify      []string `json:"verify"`
+	// Module is the monorepo folder the task ran in (store.Task.Module), fixed at the lock: a resumed experiment grades
+	// in it whatever the project's setting is by then. Absent for the root, and in locks made before modules, whose
+	// digests are unchanged.
+	Module string `json:"module,omitempty"`
 	// Grading is task.GradingJudge for a judge-graded task (the judge grades its runs), empty for a test-graded one, so
 	// the digests of test-graded tasks stay as they were before judge grading.
 	Grading string `json:"grading,omitempty"`
@@ -110,7 +114,7 @@ type LockedTask struct {
 // NewLockedTask fixes a task and its digest.
 func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 	t := LockedTask{Name: name, Instruction: instruction, Base: spec.Base, Solution: spec.Solution, HiddenTests: spec.HiddenTests,
-		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify, Grading: task.GradingOf(spec.Grading)}
+		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify, Module: spec.Module, Grading: task.GradingOf(spec.Grading)}
 	encoded, _ := json.Marshal(t) // strings and string lists only: cannot fail
 	sum := sha256.Sum256(encoded)
 	t.Digest = hex.EncodeToString(sum[:])
@@ -120,7 +124,7 @@ func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 // Spec is the task's run specification.
 func (t LockedTask) Spec() task.Spec {
 	return task.Spec{Base: t.Base, Solution: t.Solution, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify,
-		Grading: t.Grading}
+		Module: t.Module, Grading: t.Grading}
 }
 
 // JudgeGraded reports whether the judge grades the task's runs.

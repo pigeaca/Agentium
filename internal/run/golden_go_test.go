@@ -155,7 +155,7 @@ func TestGoProfileGolden(t *testing.T) {
 	for _, verify := range [][]string{{"go test ./..."}, {"go vet ./... && go test -race -count=1 ./pkg/..."}, {"GOFLAGS=-mod=mod go test ./..."},
 		{"gofmt -l ."}, {"make test"}, {"./scripts/check.sh"}, {"sh scripts/check.sh go"}, {"bash test.sh"}, {"cargo test"},
 		{"go test ./...", "make lint", "npx jest"}, {"golangci-lint run", "go-junit-report"}, {"python3 -m pytest -q"}, {"vitest run"}} {
-		scripts, configs := checkFiles(verify, files)
+		scripts, configs := checkFiles(verify, "", files)
 		sort.Strings(configs)
 		fmt.Fprintf(&out, "== checkFiles %q\nscripts %q\nconfigs %q\n", verify, scripts, configs)
 	}

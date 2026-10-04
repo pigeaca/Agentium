@@ -33,6 +33,12 @@ type Info struct {
 	Skills       int        `json:"skills"`
 	Rules        int        `json:"rules"`
 	Warnings     []string   `json:"warnings"`
+	// Module is the monorepo module the commands above belong to (WithModule); absent at the root.
+	Module string `json:"module,omitempty"`
+	// Modules lists the candidate modules when the root has no build file (FindModules), ModulesTotal how many there are
+	// in all (Modules holds the first MaxModules). Both are absent when the root has a build file.
+	Modules      []Module `json:"modules,omitempty"`
+	ModulesTotal int      `json:"modules_total,omitempty"`
 }
 
 // ClaudeInfo describes the Claude Code CLI Agentium would run.
@@ -93,7 +99,10 @@ func Discover(ctx context.Context, dir string, env Env) (Info, error) {
 	info.TestCommands = testCommands(root)
 	if len(info.TestCommands) == 0 {
 		info.TestCommands = []string{} // stored as [], not null
-		info.Warnings = append(info.Warnings, "No test command detected: tasks will need explicit verification commands.")
+		info.Warnings = append(info.Warnings, noTestCommands)
+	}
+	if len(buildtool.DetectIn(root)) == 0 {
+		info.Modules, info.ModulesTotal = FindModules(root)
 	}
 	info.Instructions, info.Skills, info.Rules = instructionFiles(root)
 	if len(info.Instructions) == 0 {

@@ -809,7 +809,7 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 	meta := RunMeta{ExperimentID: x.stored.ID, Slot: slot.Position, Attempt: attempt}
 	if current, err := r.Project.DB.TaskByName(ctx, r.Project.ID, t.Name); err == nil && NewLockedTask(current.Name, current.Instruction,
 		task.Spec{Base: current.BaseCommit, Solution: current.SolutionCommit, HiddenTests: current.HiddenTests, Reference: current.Reference,
-			Setup: current.Setup, Verify: current.Verify, Grading: current.Grading}).Digest == t.Digest {
+			Setup: current.Setup, Verify: current.Verify, Module: current.Module, Grading: current.Grading}).Digest == t.Digest {
 		meta.TaskID = current.ID // linked only while the task is the one the lock ran
 	}
 	rec, err := r.ExecuteRun(ctx, e, meta, run.Spec{TaskName: t.Name, Instruction: t.Instruction, Task: t.Spec(),
@@ -1104,7 +1104,7 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 				t.Name, map[bool]string{true: "judge-graded", false: "graded by its tests"}[t.Grading == task.GradingJudge])
 		}
 		l.Tasks = append(l.Tasks, NewLockedTask(t.Name, t.Instruction, task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit,
-			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Grading: t.Grading}))
+			HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module, Grading: t.Grading}))
 		if v := task.ValidationOf(t); l.Grader != task.GraderHost && v.Grader == l.Grader && len(v.Harmless) > 0 {
 			if l.Harmless == nil {
 				l.Harmless = map[string][]task.DenialKey{}

@@ -17,8 +17,9 @@ type taskInfo struct {
 	Name           string  `json:"name"`
 	Source         string  `json:"source"`
 	BaseCommit     string  `json:"base_commit"`
-	SolutionCommit *string `json:"solution_commit"` // null for a task without a solution
-	GradedBy       string  `json:"graded_by"`       // tests | judge
+	SolutionCommit *string `json:"solution_commit"`  // null for a task without a solution
+	GradedBy       string  `json:"graded_by"`        // tests | judge
+	Module         string  `json:"module,omitempty"` // the monorepo folder the task runs in; absent for the root
 	HiddenTests    int     `json:"hidden_test_files"`
 	Reference      int     `json:"reference_files"`
 	// Status is the stored validation's: valid, invalid, flaky, unchecked, or unvalidated; StatusSummary says why in words.
@@ -31,7 +32,7 @@ type taskInfo struct {
 }
 
 func taskInfoOf(ctx context.Context, fair *task.Fairness, t store.Task) taskInfo {
-	info := taskInfo{Name: t.Name, Source: t.Source, BaseCommit: t.BaseCommit, GradedBy: grading(t),
+	info := taskInfo{Name: t.Name, Source: t.Source, BaseCommit: t.BaseCommit, Module: t.Module, GradedBy: grading(t),
 		HiddenTests: len(t.HiddenTests), Reference: len(t.Reference), Status: task.StatusOf(t), StatusSummary: validationStatus(t),
 		NeedsReview: t.NeedsReview, UntestedHunks: untestedCount(t)}
 	if t.SolutionCommit != "" {

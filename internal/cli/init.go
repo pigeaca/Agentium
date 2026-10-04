@@ -23,7 +23,7 @@ import (
 )
 
 const initUsage = `Usage: agentium init [path] [--verify CMD]... [--setup CMD]... [--require-lock[=false]] [--jobs N]
-                     [--verify-timeout DURATION] [--allow-local-binding[=false]] [--json]
+                     [--verify-timeout DURATION] [--module PATH] [--allow-local-binding[=false]] [--json]
 
 Registers the git repository containing path (default: the current folder), reports what Agentium found and prints
 the project's settings. It only reads the repository; data, settings included, goes to ~/.agentium (or AGENTIUM_HOME),
@@ -42,6 +42,10 @@ Settings (pool update, start, task import, task add and task validate use them):
                             run side by side (no fixed ports, shared /tmp paths or databases)
   --verify-timeout DURATION
                             the time limit of each setup or verification command (default 10m)
+  --module PATH             measure one module of a monorepo: a folder of the repository (relative to its root) that
+                            holds a build file (go.mod, pom.xml, pyproject.toml, ...). Build tools are detected there
+                            and setup and verification commands run in it; --module '' returns to the whole repository.
+                            When the root has no build file, init lists the folders that could be modules
   --allow-local-binding     let agent runs on a Gradle project bind local ports and connect to localhost in the
                             sandbox; --allow-local-binding=false turns it off
 
@@ -65,7 +69,7 @@ func parseInit(env Env, args []string) (a initArgs, code int, ok bool) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.BoolVar(&a.allow, "allow-local-binding", false, "")
 	removeFlags(fs, map[string]string{"no-allow-local-binding": "use --allow-local-binding=false"})
-	a.set = addSettingFlags(fs, settingVerifyTimeout, settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout)
+	a.set = addSettingFlags(fs, settingVerifyTimeout, settingVerify, settingSetup, settingRequireLock, settingJobs, settingVerifyTimeout, settingModule)
 	paths, code, ok := parseArgs(env, fs, args, initUsage)
 	if !ok {
 		return a, code, false
@@ -122,6 +126,12 @@ func runInit(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	env.noteRoot(info.Root)
+	if a.set.given(settingModule) { // checked before anything is created
+		if a.set.module, err = project.ValidateModule(ctx, info.Root, a.set.module); err != nil {
+			fmt.Fprintf(env.Stderr, "agentium init: %v\n", err)
+			return ExitUsage
+		}
+	}
 	layout, err := home.Resolve(env.Getenv)
 	if err != nil {
 		return fail(env, err)
@@ -137,6 +147,19 @@ func runInit(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	defer db.Close()
+	// The module in force: the one given, else the one stored; discovery then describes its folder (WithModule).
+	module := a.set.module
+	if !a.set.given(settingModule) {
+		if stored, err := db.ProjectByRoot(ctx, info.Root); err == nil {
+			module = stored.Settings.Module
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return fail(env, err)
+		}
+		if _, err := project.ValidateModule(ctx, info.Root, module); err != nil { // a folder removed or changed since
+			info.Warnings = append(info.Warnings, fmt.Sprintf("The stored module no longer works (%v): agentium init --module PATH picks another.", err))
+		}
+	}
+	info = info.WithModule(module)
 	discovery, err := info.JSON()
 	if err != nil {
 		return fail(env, fmt.Errorf("encode discovery: %w", err))
@@ -176,7 +199,17 @@ type initDoc struct {
 	Context      contextSizeDoc  `json:"context"`
 	LocalBinding localBindingDoc `json:"local_binding"`
 	Settings     settingsDoc     `json:"settings"`
-	Warnings     []string        `json:"warnings"`
+	// Modules lists the candidate modules when the repository's root has no build file (absent otherwise);
+	// ModulesTotal counts them all, Modules holding at most project.MaxModules.
+	Modules      []moduleDoc `json:"modules,omitempty"`
+	ModulesTotal int         `json:"modules_total,omitempty"`
+	Warnings     []string    `json:"warnings"`
+}
+
+// moduleDoc is a candidate module: its folder (relative to the root) and the build tools its files name.
+type moduleDoc struct {
+	Path  string   `json:"path"`
+	Tools []string `json:"tools"`
 }
 
 // settingsDoc is the project's settings as commands use them: the stored verify and setup commands (empty: not set),
@@ -191,6 +224,8 @@ type settingsDoc struct {
 	VerifyTimeoutSeconds float64  `json:"verify_timeout_seconds"`
 	AllowLocalBinding    bool     `json:"allow_local_binding"`
 	Defaults             []string `json:"defaults"`
+	// Module is the monorepo module the project measures; absent for the repository's root.
+	Module string `json:"module,omitempty"`
 }
 
 // projectSettings is what init shows of a project's settings: each one's value as commands use it, and whether it is
@@ -203,6 +238,13 @@ type projectSettings struct {
 
 func settingsOf(saved store.Project, info project.Info) projectSettings {
 	p := projectSettings{stored: saved.Settings, minedVerify: saved.Settings.Verify, importVerify: saved.Settings.Verify}
+	if saved.Settings.Module != "" { // nothing is mined inside a module yet: tasks are added or imported
+		p.minedVerify = nil
+		if len(p.importVerify) == 0 {
+			p.importVerify = info.TestCommands // the module's (WithModule)
+		}
+		return p
+	}
 	if len(p.minedVerify) == 0 {
 		if _, p.minedVerify = mine.TestLanguages(info.Root); len(p.minedVerify) == 0 {
 			p.minedVerify = info.TestCommands
@@ -230,7 +272,8 @@ func (p projectSettings) defaults() []string {
 
 func (p projectSettings) document(allowLocalBinding bool) settingsDoc {
 	return settingsDoc{Verify: list(p.stored.Verify), MinedVerify: list(p.minedVerify), Setup: list(p.stored.Setup), RequireLock: p.stored.RequireLock,
-		Jobs: jobsOf(p.stored), VerifyTimeoutSeconds: verifyTimeoutOf(p.stored).Seconds(), AllowLocalBinding: allowLocalBinding, Defaults: list(p.defaults())}
+		Jobs: jobsOf(p.stored), VerifyTimeoutSeconds: verifyTimeoutOf(p.stored).Seconds(), AllowLocalBinding: allowLocalBinding, Defaults: list(p.defaults()),
+		Module: p.stored.Module}
 }
 
 // print shows the settings under a heading that says how to change them.
@@ -255,19 +298,25 @@ func (p projectSettings) print(env Env, saved store.Project, gradle bool) {
 		verify = strings.Join(s.Verify, "; ")
 	case len(p.minedVerify) == 0 && len(p.importVerify) == 0:
 		verify = "not set, and no test command was detected: " + st.Command("agentium init --verify CMD") + " sets one"
+	case s.Module != "":
+		verify = "not set: tasks added or imported verify with " + none(p.importVerify) + " (mining inside a module comes in a later version)"
 	default:
 		verify = "not set: mined tasks verify with " + none(p.minedVerify)
 		if !slices.Equal(p.minedVerify, p.importVerify) {
 			verify += ", imported ones with " + none(p.importVerify)
 		}
 	}
-	rows := [][2]string{
+	var rows [][2]string
+	if s.Module != "" { // a project measured whole needs no word about modules
+		rows = append(rows, [2]string{"module", s.Module + st.Note(" (build tools, setup and verification run in this folder; --module '' returns to the whole repository)")})
+	}
+	rows = append(rows, [][2]string{
 		{"verify", verify},
 		{"setup", label(len(s.Setup) > 0, none(s.Setup))},
 		{"require lock", label(s.RequireLock, onOff(s.RequireLock))},
 		{"jobs", label(s.Jobs > 0, strconv.Itoa(jobsOf(s)))},
 		{"verify timeout", label(s.VerifyTimeout > 0, durationLabel(verifyTimeoutOf(s)))},
-	}
+	}...)
 	if gradle || saved.AllowLocalBinding { // a project without Gradle needs no word about it
 		rows = append(rows, [2]string{"local ports", localBindingLine(saved.AllowLocalBinding, gradle)})
 	}
@@ -331,8 +380,9 @@ func initDocument(saved store.Project, info project.Info, resolved claudectx.Con
 	return initDoc{header: hdr("init"), Project: projectDoc{ID: saved.ID, Name: saved.Name}, Head: info.Head,
 		ClaudeCode: claudeCodeDoc{Found: info.Claude.Path != "", Version: info.Claude.Version}, SignIn: info.Claude.SignIn,
 		TestCommands: list(info.TestCommands), Context: contextSize(resolved),
-		LocalBinding: localBindingDoc{Allowed: saved.AllowLocalBinding, Gradle: slices.Contains(buildtool.DetectIn(info.Root), "gradle")},
-		Settings:     settingsOf(saved, info).document(saved.AllowLocalBinding), Warnings: list(info.Warnings)}
+		LocalBinding: localBindingDoc{Allowed: saved.AllowLocalBinding, Gradle: slices.Contains(buildtool.DetectIn(moduleDir(info.Root, saved.Settings.Module)), "gradle")},
+		Settings:     settingsOf(saved, info).document(saved.AllowLocalBinding), Modules: moduleDocs(info.Modules), ModulesTotal: info.ModulesTotal,
+		Warnings: list(info.Warnings)}
 }
 
 func printInit(env Env, saved store.Project, info project.Info, layout home.Layout, resolved claudectx.Context) {
@@ -355,9 +405,41 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	fmt.Fprintf(w, "  context      about %d tokens at session start (estimated) from %d file(s); %d on demand; details: %s\n",
 		claudectx.EstimateTokens(resolved.StartupBytes()), startup, len(resolved.Entries)-startup, st.Command("agentium context show"))
 	fmt.Fprintf(w, "  data         %s (your repository was not modified)\n", layout.Root)
-	settingsOf(saved, info).print(env, saved, slices.Contains(buildtool.DetectIn(info.Root), "gradle"))
+	settingsOf(saved, info).print(env, saved, slices.Contains(buildtool.DetectIn(moduleDir(info.Root, saved.Settings.Module)), "gradle"))
+	printModules(env, saved.Settings.Module, info)
 	for _, text := range info.Warnings {
 		fmt.Fprintln(w, warning(st, text))
+	}
+}
+
+func moduleDocs(modules []project.Module) []moduleDoc {
+	var docs []moduleDoc
+	for _, m := range modules {
+		docs = append(docs, moduleDoc{Path: m.Path, Tools: list(m.Tools)})
+	}
+	return docs
+}
+
+// printModules lists the candidate modules of a repository whose root has no build file, marking the chosen one.
+func printModules(env Env, chosen string, info project.Info) {
+	if len(info.Modules) == 0 {
+		return
+	}
+	w, st := env.Stdout, env.style()
+	fmt.Fprintf(w, "%s (the root has no build file; %s measures one)\n", st.Heading("Modules"), st.Command("agentium init --module PATH"))
+	width := 0
+	for _, m := range info.Modules {
+		width = max(width, len(m.Path))
+	}
+	for _, m := range info.Modules {
+		mark := ""
+		if m.Path == chosen {
+			mark = "  " + st.Note("(chosen)")
+		}
+		fmt.Fprintf(w, "  %-*s  %s%s\n", width, m.Path, strings.Join(m.Tools, ", "), mark)
+	}
+	if more := info.ModulesTotal - len(info.Modules); more > 0 {
+		fmt.Fprintf(w, "  and %d more\n", more)
 	}
 }
 
