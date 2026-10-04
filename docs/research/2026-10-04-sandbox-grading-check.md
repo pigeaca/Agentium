@@ -42,7 +42,12 @@ Denials read from the stored sandbox validations (`task.SandboxGrade`). "Flagged
 
 Cargo also logs denied (not flagged) writes to the read-only deps cache (`<deps>/cargo/.package-cache`, `.global-cache`, `.package-cache-mutate`); the grades still pass, so Cargo tolerates them. These writes are a limit the agent's sandbox imposes too, so they are correctly not flagged.
 
-The two Cargo Mach lookups were absorbed by the per-task harmless mechanism (the reference stage logged them too while passing). Because they are pure system-service lookups that leak nothing when denied — the service is simply unreachable and the grade passes — they are now added to `sandbox.Denial.Noise` (system notification and Spotlight-metadata daemons), so they no longer depend on the per-task harmless set. `distributed_notifications` carries a per-boot instance suffix, so both match by prefix. The profile still **denies** them; Noise only stops the false flag. A unit test covers the new noise and a near-miss (`com.apple.metadata.mdwrite`, and a `file-read` of a like-named target, are not noise).
+The two Cargo Mach lookups were absorbed by the per-task harmless mechanism (the reference stage logged them too while passing). Because they are pure system-service lookups that leak nothing when denied — the service is simply unreachable and the grade passes — they are now added to `sandbox.Denial.Noise`, so they no longer depend on the per-task harmless set. launchd names distributed notifications' per-user and system instances (`@Uv3`, `@0v3`, `@1v3`) and Spotlight has a family (`mds`, `mds.index`, `mds.xpcs`), so both match by prefix. The profile still **denies** them; noise only stops the flag. Unit tests cover the new noise, that it is not flagged, and near-misses (`com.apple.metadata.mdwrite`, and a `file-read` of a like-named target, are not noise); removing either prefix fails them.
+
+Two trade-offs, both rare and accepted:
+
+- Claude Code's agent sandbox allows distributed notifications. So a failed grade blocked on that lookup, which decision 3 left out as `infra-sandbox`, now counts as the agent's failure. It matters only where the candidate makes a lookup the reference does not.
+- Noise is left out of `DenialCount`, so an attempt to post data through distributed notifications is still denied but no longer visible in the records.
 
 ### The open question: channels out of a grade
 
@@ -58,15 +63,15 @@ wrote-via-logger
 2
 ```
 
-**Decision (recommended): accept the risk explicitly for `sandbox-v1`.** The `/mp-` semaphore channel cannot be closed without breaking Python multiprocessing grades, so denying `log show` would close only one of two equivalent channels. Both require the model to collude with itself across runs (the hostile build and a later agent being the same model), and container mode (part 2) closes both cleanly. The code and the plan already document both as known limits.
+**The user's decision 8 (2026-10-04, "Accept, document it"): both channels are accepted for `sandbox-v1`.** It rests on the direct demonstrations above, not on the planned hostile fixture, which was not built. The `/mp-` semaphore channel cannot be closed without breaking Python multiprocessing grades, so denying `log show` would close only one of two equivalent channels. Both require the model to collude with itself across runs (the hostile build and a later agent being the same model), and container mode (part 2) closes both cleanly. The code and the plan already document both as known limits.
 
-A full stub-agent-through-grading hostile fixture was not built end to end; the channels were demonstrated directly under the real profile and by the committed `internal/sandbox` darwin tests, which answers the open question.
+The planned hostile fixture (a stub agent whose `build.rs`, `conftest.py` or Gradle script tries deps writes, data-folder reads, outbound connections and the keychain, then a later stub reading the channels back) was not built; that remains a gap.
 
 ## Paid part
 
 A small A/A calibration (both arms `base`), 2 Go tasks (`deny-login-file`, `scrub-whole-paths`) × 1 run per arm = 4 runs, `--grader sandbox`, `--run-budget 0.60`, `--budget 4`.
 
-Preview worst case: $3.00 for the 4 runs + at most $0.65 calibration = $3.65, within the $4 cap.
+Preview worst case: $3.00 for the 4 runs (each at its $0.60 cap plus the $0.15 overshoot allowance the budget holds per run) + at most $0.65 calibration = $3.65, within the $4 cap.
 
 The run paused once at the subscription usage limit (the 5-hour window was at 74%) after 2 runs and resumed after the window reset. Final:
 
@@ -86,4 +91,13 @@ Report note: "Graded in Agentium's grading sandbox (sandbox-v1): no network but 
 
 ## Verdict
 
-Sandboxed grading works on real Claude Code runs: the canary holds, grades run in the sandbox, denials are read, and legitimate Go and Cargo grades produce no flagged denials (after the noise tuning). The known loopback and exfiltration limits stand and are documented. The JVM toolchains could not be exercised end to end on this machine because of unrelated host drift; that gap, and the missing per-tree host/sandbox regrade, are the limits of this check.
+Done with gaps. Sandboxed grading works on real Claude Code runs: the canary holds, grades run in the sandbox, denials are read, and legitimate Go and Cargo grades produce no flagged denials (after the noise tuning). Loopback and the two channels stay as documented limits (decisions 7 and 8).
+
+Gaps:
+
+- the hostile fixture (above) was not built;
+- no pytest flagged-denial counts (the Python pilot was not re-validated);
+- reads back into the agent's old workspace path (a venv built in the checkout, with absolute shebangs; from the #142 review) were not checked;
+- no per-tree host vs sandbox regrade;
+- the JVM toolchains were not exercised (host drift on this machine);
+- docs: the guide names the new noise and the accepted channels; the code map and a verification note are not updated.
