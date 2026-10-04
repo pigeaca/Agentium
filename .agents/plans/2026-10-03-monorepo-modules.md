@@ -79,7 +79,7 @@ The agent still gets the whole repository: a module's code depends on its neighb
   - Limitations of step 2:
     - which `.claude` folders above the starting folder Claude Code loads (rules, skills, commands, settings) is Agentium's reading of the docs, not yet checked in a real session; only `CLAUDE.md` loading up the tree is documented. A paid probe session would settle it; a run's start-of-session skill list shows a difference;
     - `--add-dir` of the checkout may load the root's skills by itself (the docs say skills of added folders load); consistent with the model above, unverified;
-    - context lint, its hook and the pull-request screen still read the root's context only;
+    - context lint, its hook and the pull-request screen still read the root's context only, and calibration runs still start at the checkout's root;
     - test files are recognized by their root-relative path (as `task.Split` does): a module whose own path has a test folder name (`e2e/api`) mines nothing, and its imports are refused as tests only;
     - dismissals are the project's: a change dismissed at the root is not offered in a module either (and the other way round).
 - [ ] **3. Real check and docs** (free). Risk: low.

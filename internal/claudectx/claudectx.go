@@ -227,6 +227,9 @@ func (r *resolver) resolve() error {
 		p := prefix(folder)
 		agentsViaLink := false
 		for _, name := range roots[i] {
+			if r.seen[name] { // a folder above imported it already: it loads once, as that import
+				continue
+			}
 			if data, ok := r.read(name); ok {
 				r.add(name, KindInstructions, data, len(data), "")
 				r.imports([]string{name}, data, true)

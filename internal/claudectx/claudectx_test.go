@@ -495,3 +495,14 @@ func TestLoadsByPresenceIn(t *testing.T) {
 		t.Errorf("Folders: %v, %v", Folders("a/b/c"), Folders(""))
 	}
 }
+
+// A module's instruction file that the root's imports loads once, as that import.
+func TestResolveInAModuleImportedFromTheRoot(t *testing.T) {
+	got, err := ResolveIn(memSource{"CLAUDE.md": "root\n@svc/CLAUDE.md\n", "svc/CLAUDE.md": "module\n"}, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if k := kinds(got); len(got.Entries) != 2 || k["svc/CLAUDE.md"] != KindImport || got.StartupBytes() != len("root\n@svc/CLAUDE.md\n")+len("module\n") {
+		t.Errorf("entries %+v", got.Entries)
+	}
+}
