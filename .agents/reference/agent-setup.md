@@ -33,7 +33,7 @@ Pick the tier from the task's risk and ambiguity, not its size. These are starti
 | Investigation before planning | balanced | `investigator` subagent (Sonnet, medium) | balanced model, medium |
 | Routine features, tests, docs, inline-plan fixes | balanced | the coordinator, or an `implementer` subagent (Sonnet, medium) for an independent plan step | balanced model, medium |
 | Concurrency, persistence, security, public contracts, cross-package refactors, unclear requirements | deep | Opus, high (xhigh when stuck) | strongest model, high |
-| Independent review | deep | `reviewer` subagent (Opus, high) | strongest model, high |
+| Independent review (both, in parallel) | deep | `reviewer` subagent (Opus, high) | `codex review`, strongest model, high |
 | Long multi-hour increments | deep | Fable when available | strongest model, high |
 
 **Routing implementation steps by risk.** Sonnet implementers on risky steps needed 3–5 review rounds, against 1–2 for mechanical work, so pay for the stronger model up front where a missed case is expensive:
