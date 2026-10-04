@@ -22,7 +22,12 @@ const fixtureImageID = "sha256:84349ebd3bf9b6ffc6163a249e24a1223608a0fe2b77ef7cb
 
 // fixtureSpec is the spec testdata/inspect.json was recorded for (TestRealFixtures).
 func fixtureSpec() Spec {
-	return Spec{Data: "test", Run: "fixture", Role: "grade", Image: Image{Ref: goImage, ID: fixtureImageID}, Limits: DefaultLimits(4), Deadline: 600 * time.Second}
+	return Spec{Data: "test", Run: "fixture", Role: "grade", Image: Image{Ref: goImage, ID: fixtureImageID, Env: fixtureImageEnv()}, Limits: DefaultLimits(4), Deadline: 600 * time.Second}
+}
+
+// fixtureImageEnv is the pinned Go image's own environment (its Config.Env).
+func fixtureImageEnv() []string {
+	return []string{"PATH=/go/bin:/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "GOLANG_VERSION=1.27.1", "GOTOOLCHAIN=local", "GOPATH=/go"}
 }
 
 func readFixture(t *testing.T, name string) string {
@@ -39,13 +44,20 @@ func goodScenario(t *testing.T) scenario {
 	return scenario{
 		Endpoint: "unix:///var/run/docker.sock",
 		Version:  `{"Version":"27.4.0","ApiVersion":"1.47","Os":"linux","Arch":"arm64"}`,
-		Info:     `{"ServerVersion":"27.4.0","OSType":"linux","NCPU":4,"MemTotal":8308154368,"CgroupVersion":"2","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"]}`,
-		Image:    `{"Id":"` + fixtureImageID + `","RepoDigests":["` + goImage + `"],"Os":"linux","Architecture":"arm64","Config":{"Env":["PATH=/go/bin:/usr/local/go/bin:/usr/bin:/bin"]}}`,
+		Info:     `{"ServerVersion":"27.4.0","OSType":"linux","NCPU":4,"MemTotal":8308154368,"CgroupVersion":"2","DefaultRuntime":"runc","SecurityOptions":["name=apparmor","name=seccomp,profile=builtin","name=cgroupns"]}`,
+		Image:    `{"Id":"` + fixtureImageID + `","RepoDigests":["` + goImage + `"],"Os":"linux","Architecture":"arm64","Config":{"Env":` + mustJSON(t, fixtureImageEnv()) + `}}`,
 		Inspect:  readFixture(t, "inspect.json"),
 		Probe:    readFixture(t, "probe.txt"),
 		Counters: goodCounters,
 		Volume:   `{"Name":"agentium-deps-test","Driver":"local","Options":null}`,
 	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	must(t, err)
+	return string(data)
 }
 
 // fake is a fake docker client: the test binary linked under the name docker, answering from a scenario.
@@ -74,9 +86,17 @@ func (f *fake) set(t *testing.T, sc scenario) {
 	must(t, os.WriteFile(filepath.Join(f.dir, "scenario.json"), data, 0o600))
 }
 
+// opts gives the fake a user's environment (its own docker configuration among it) and an empty configuration folder
+// for every call after the endpoint lookup.
 func (f *fake) opts() Options {
-	return Options{Bin: f.bin, Environ: []string{"PATH=/usr/bin:/bin", "HOME=/home/agentium", "DOCKER_CONFIG=" + f.dir,
+	return Options{Bin: f.bin, ConfigDir: f.configDir(), Environ: []string{"PATH=/usr/bin:/bin", "HOME=/home/agentium", "DOCKER_CONFIG=/home/agentium/.docker",
 		"DOCKER_CONTEXT=colima", "ANTHROPIC_API_KEY=sk-placeholder", "DOCKER_AUTH_CONFIG={}", "AGENTIUM_HOME=/data", "GOFLAGS=-x"}}
+}
+
+func (f *fake) configDir() string {
+	dir := filepath.Join(f.dir, "config")
+	os.MkdirAll(dir, 0o700)
+	return dir
 }
 
 // calls is every argv the fake was given, in order.
@@ -142,7 +162,7 @@ func TestDriverArgvGolden(t *testing.T) {
 	ctx := context.Background()
 	d, images, err := Usable(ctx, f.opts(), DefaultLimits(4), goImage)
 	must(t, err)
-	if d.Engine() != (Engine{Version: "27.4.0", APIVersion: "1.47", OS: "linux", Arch: "arm64", CgroupVersion: "2", NCPU: 4, MemTotal: 8308154368}) {
+	if d.Engine() != (Engine{Version: "27.4.0", APIVersion: "1.47", OS: "linux", Arch: "arm64", CgroupVersion: "2", NCPU: 4, MemTotal: 8308154368, DefaultRuntime: "runc"}) {
 		t.Errorf("engine: %+v", d.Engine())
 	}
 	tree := t.TempDir()
@@ -156,7 +176,7 @@ func TestDriverArgvGolden(t *testing.T) {
 		if env := c.ImageEnv(); len(env) == 0 || !strings.HasPrefix(env[0], "PATH=") {
 			t.Errorf("image env: %v", env)
 		}
-		if _, err := c.CopyIn(ctx, tree, DefaultCopyLimit); err != nil {
+		if _, err := c.CopyIn(ctx, tree, DefaultCopyLimits()); err != nil {
 			return err
 		}
 		res, err := c.Exec(ctx, Command{Command: "go test ./...", Dir: "sub", Env: []string{"GOPROXY=off", "HOME=/grade/cache/home"}, Timeout: time.Minute, Output: &out})
@@ -193,6 +213,8 @@ func TestDriverArgvGolden(t *testing.T) {
 				argv[i] = "<probeScript>"
 			case countersScript:
 				argv[i] = "<countersScript>"
+			case f.configDir():
+				argv[i] = "<empty config>"
 			}
 		}
 		enc := json.NewEncoder(&golden)
@@ -215,11 +237,11 @@ func TestDriverArgvGolden(t *testing.T) {
 	calls := f.calls(t)
 	for i, argv := range calls {
 		switch {
-		case len(argv) > 2 && argv[2] == "cp":
+		case len(argv) > 4 && argv[4] == "cp":
 			if got := tarNames(t, f.stdin(t, i+1)); strings.Join(got, ",") != "work/ 5 65534 0700 ,cache/ 5 65534 0700 " {
 				t.Errorf("skeleton: %q", got)
 			}
-		case len(argv) > 3 && argv[2] == "exec" && argv[3] == "--interactive":
+		case len(argv) > 5 && argv[4] == "exec" && argv[5] == "--interactive":
 			if got := tarNames(t, f.stdin(t, i+1)); strings.Join(got, ",") != "go.mod 0 65534 0644 ,sub/ 5 65534 0755 ,sub/a_test.go 0 65534 0644 " {
 				t.Errorf("copy-in: %q", got)
 			}
@@ -227,8 +249,9 @@ func TestDriverArgvGolden(t *testing.T) {
 	}
 }
 
-// TestClientEnvironment: docker sees only its allowlist (no credentials, no Agentium settings), and after Open no
-// DOCKER_HOST or DOCKER_CONTEXT: --host pins the endpoint found once.
+// TestClientEnvironment: the endpoint lookup sees only its allowlist (no credentials, no Agentium settings), and every
+// later call sees only PATH, with an empty configuration (--config: the user's config.json, whose proxies the client
+// would copy into the container, is never read) and the endpoint found once (--host).
 func TestClientEnvironment(t *testing.T) {
 	t.Parallel()
 	sc := goodScenario(t)
@@ -255,10 +278,30 @@ func TestClientEnvironment(t *testing.T) {
 			}
 		}
 	}
+	if len(calls) < 3 {
+		t.Fatalf("calls: %v", calls)
+	}
 	for _, argv := range calls[1:] {
-		if argv[0] != "--host" || argv[1] != "unix:///var/run/docker.sock" || strings.Contains(envOf(argv), "DOCKER_HOST") || strings.Contains(envOf(argv), "DOCKER_CONTEXT") {
-			t.Errorf("a call after the lookup is not pinned: %v", argv)
+		if argv[0] != "--config" || argv[1] != opts.ConfigDir || argv[2] != "--host" || argv[3] != "unix:///var/run/docker.sock" || envOf(argv) != "ENV:PATH=/usr/bin:/bin" {
+			t.Errorf("a call after the lookup is not pinned to the empty configuration, the endpoint and PATH: %v", argv)
 		}
+	}
+	// Without a folder given, Open makes an empty one and Close removes it.
+	opts.ConfigDir = ""
+	d, err := Open(context.Background(), opts)
+	must(t, err)
+	if entries, err := os.ReadDir(d.config); err != nil || len(entries) != 0 || !strings.HasPrefix(filepath.Base(d.config), "agentium-docker-config-") {
+		t.Errorf("own configuration folder %s: %v, %v", d.config, entries, err)
+	}
+	must(t, d.Close())
+	if _, err := os.Stat(d.config); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("not removed: %v", err)
+	}
+	// A folder that holds a configuration is refused.
+	opts.ConfigDir = t.TempDir()
+	must(t, os.WriteFile(filepath.Join(opts.ConfigDir, "config.json"), []byte(`{"proxies":{}}`), 0o600))
+	if _, err := Open(context.Background(), opts); err == nil {
+		t.Error("a configuration folder with a config.json was accepted")
 	}
 }
 
@@ -465,7 +508,7 @@ func TestRunRemovesWhateverHappens(t *testing.T) {
 		f, d := openFake(t, sc)
 		ran := false
 		err := d.Run(context.Background(), spec, func(context.Context, *Container) error { ran = true; return nil })
-		if !errors.Is(err, ErrMismatch) || ran {
+		if !errors.Is(err, ErrMismatch) || errors.Is(err, ErrUnjudgeable) || ran {
 			t.Fatalf("%v (fn ran: %v)", err, ran)
 		}
 		if f.called(t, "start") || f.called(t, "cp") || !f.called(t, rm...) {
@@ -479,7 +522,7 @@ func TestRunRemovesWhateverHappens(t *testing.T) {
 		f, d := openFake(t, sc)
 		ran := false
 		err := d.Run(context.Background(), spec, func(context.Context, *Container) error { ran = true; return nil })
-		if !errors.Is(err, ErrProbe) || ran || !f.called(t, rm...) {
+		if !errors.Is(err, ErrProbe) || errors.Is(err, ErrUnjudgeable) || ran || !f.called(t, rm...) {
 			t.Fatalf("%v (fn ran: %v)", err, ran)
 		}
 	})
@@ -493,6 +536,23 @@ func TestRunRemovesWhateverHappens(t *testing.T) {
 		}
 		if !f.called(t, rm...) {
 			t.Error("a container that may exist was not removed")
+		}
+	})
+	t.Run("create cancelled", func(t *testing.T) {
+		t.Parallel()
+		// The client was killed mid-create: the daemon may have made the container, so it is removed.
+		sc := goodScenario(t)
+		sc.CreateBlock = true
+		f, d := openFake(t, sc)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		time.AfterFunc(300*time.Millisecond, cancel)
+		err := d.Run(ctx, spec, func(context.Context, *Container) error { return nil })
+		if !errors.Is(err, context.Canceled) || errors.Is(err, ErrUnjudgeable) {
+			t.Fatalf("%v", err)
+		}
+		if !f.called(t, rm...) {
+			t.Error("a container the cancelled create may have made was not removed")
 		}
 	})
 	t.Run("create refused", func(t *testing.T) {
@@ -552,8 +612,8 @@ func TestCancelKillsAndRemoves(t *testing.T) {
 		}
 		return err
 	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("Run: %v", err)
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrUnjudgeable) {
+		t.Fatalf("Run: %v (Agentium's own cancel is not the grade's doing)", err)
 	}
 	if time.Since(start) > 20*time.Second {
 		t.Errorf("the cancel took %s", time.Since(start))
@@ -579,24 +639,6 @@ func TestTimeoutReadsCountersThenRemoves(t *testing.T) {
 		}
 		if !f.called(t, "rm", "--force", "--volumes", Name(spec)) {
 			t.Error("the container was not removed after the timeout")
-		}
-		return nil
-	})
-	must(t, err)
-}
-
-// TestExecResultNeedsCounters: a command's result counts only when the counters can be read after it (a container
-// gone mid-command, at the deadline, is infrastructure, never a fail).
-func TestExecResultNeedsCounters(t *testing.T) {
-	t.Parallel()
-	sc := goodScenario(t)
-	sc.CommandExit = 1
-	sc.Counters = "== memory.events\n"
-	_, d := openFake(t, sc)
-	err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
-		res, err := c.Exec(ctx, Command{Command: "false"})
-		if err == nil {
-			t.Errorf("a result without counters: %+v", res)
 		}
 		return nil
 	})
@@ -630,32 +672,94 @@ func TestExecRefusesBadInput(t *testing.T) {
 	must(t, err)
 }
 
-// TestCopyInFailures: a tree over the limit, or a tar that fails inside, is an error and removes the container.
+// TestCopyInFailures: a tree the stream refuses (too much content, too many entries) or that the image's tar fails on
+// is ErrUnjudgeable (the agent controls the tree; a retry would be a re-roll), and removes the container. A root that
+// cannot be opened is Agentium's own failure, not the agent's.
 func TestCopyInFailures(t *testing.T) {
 	t.Parallel()
 	tree := t.TempDir()
-	writeTree(t, tree, map[string]string{"big": strings.Repeat("x", 4096)})
-	for name, sc := range map[string]func(*scenario){"too large": func(*scenario) {}, "tar fails": func(sc *scenario) { sc.TarExit = 2 }} {
+	writeTree(t, tree, map[string]string{"big": strings.Repeat("x", 4096), "a/b": "", "a/c": ""})
+	cases := map[string]struct {
+		root       string
+		limits     CopyLimits
+		tarExit    int
+		unjudgable bool
+		also       error
+	}{
+		"too much content": {tree, CopyLimits{Bytes: 1024, Entries: 100}, 0, true, ErrTooLarge},
+		"too many entries": {tree, CopyLimits{Bytes: 1 << 20, Entries: 3}, 0, true, ErrTooLarge},
+		"tar fails":        {tree, DefaultCopyLimits(), 2, true, nil},
+		"no root":          {filepath.Join(tree, "missing"), DefaultCopyLimits(), 0, false, nil},
+	}
+	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			s := goodScenario(t)
-			sc(&s)
+			s.TarExit = c.tarExit
 			f, d := openFake(t, s)
-			limit := DefaultCopyLimit
-			if name == "too large" {
-				limit = 1024
-			}
-			err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
-				_, err := c.CopyIn(ctx, tree, limit)
+			err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, ct *Container) error {
+				_, err := ct.CopyIn(ctx, c.root, c.limits)
 				if !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
 					t.Error("a partial copy was left in place")
 				}
 				return err
 			})
-			if err == nil || name == "too large" && !errors.Is(err, ErrTooLarge) {
-				t.Fatalf("%v", err)
+			if err == nil || errors.Is(err, ErrUnjudgeable) != c.unjudgable || c.also != nil && !errors.Is(err, c.also) {
+				t.Fatalf("%v (want unjudgeable %v, also %v)", err, c.unjudgable, c.also)
 			}
 		})
+	}
+}
+
+// TestUnjudgeableAfterTheGradesCode: after the grade's code ran, every way it can make the result unreadable is
+// ErrUnjudgeable, never a plain (retried) error: a fork bomb left running (the counters' exec cannot start), the
+// counters' read killed, the container ended mid-command (its main process killed), and a timeout whose counters
+// cannot be read. Each removes the container.
+func TestUnjudgeableAfterTheGradesCode(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(*scenario){
+		"fork bomb":                   func(sc *scenario) { sc.CommandExit = 1; sc.CountersExit = 126 },
+		"counters killed":             func(sc *scenario) { sc.CommandExit = 1; sc.CountersExit = 137 },
+		"counters cut short":          func(sc *scenario) { sc.CommandExit = 1; sc.Counters = "== memory.events\noom_kill 0\n" },
+		"container ended mid-command": func(sc *scenario) { sc.CommandGone = true },
+		"timeout, counters unread":    func(sc *scenario) { sc.CommandBlock = true; sc.CountersExit = 126 },
+	}
+	for name, change := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sc := goodScenario(t)
+			change(&sc)
+			f, d := openFake(t, sc)
+			var execErr error
+			err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
+				_, execErr = c.Exec(ctx, Command{Command: "go test ./...", Timeout: 2 * time.Second})
+				if !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
+					t.Error("the container was not removed")
+				}
+				return execErr
+			})
+			if !errors.Is(execErr, ErrUnjudgeable) || !errors.Is(err, ErrUnjudgeable) {
+				t.Fatalf("Exec: %v; Run: %v; want ErrUnjudgeable", execErr, err)
+			}
+		})
+	}
+}
+
+// TestOpenErrors: a failed endpoint lookup is ErrUnavailable without the socket's path, and a cancelled Open keeps
+// the cancellation in its error chain.
+func TestOpenErrors(t *testing.T) {
+	t.Parallel()
+	sc := goodScenario(t)
+	sc.ContextFail = "Cannot connect to the Docker daemon at unix:///home/someone/.colima/default/docker.sock. Is the docker daemon running?"
+	f := newFake(t, sc)
+	_, err := Open(context.Background(), f.opts())
+	if !errors.Is(err, ErrUnavailable) || strings.Contains(err.Error(), "someone") || !strings.Contains(err.Error(), "<docker endpoint>") {
+		t.Errorf("a failed lookup: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := Open(ctx, newFake(t, goodScenario(t)).opts()); !errors.Is(err, context.Canceled) || !errors.Is(err, ErrUnavailable) {
+		t.Errorf("a cancelled Open: %v", err)
 	}
 }
 

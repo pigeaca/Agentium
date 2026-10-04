@@ -24,7 +24,7 @@ func obj(m map[string]any, key string) map[string]any { return m[key].(map[strin
 // instance (name, IDs, run labels): two grades of one shape share it.
 func TestInspectAcceptsTheRealRecord(t *testing.T) {
 	spec := fixtureSpec()
-	digest, env, err := checkInspect([]byte(readFixture(t, "inspect.json")), spec)
+	digest, env, err := checkInspect([]byte(readFixture(t, "inspect.json")), spec, "runc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,14 +40,14 @@ func TestInspectAcceptsTheRealRecord(t *testing.T) {
 		obj(obj(c, "HostConfig")["Mounts"].([]any)[0].(map[string]any), "VolumeOptions")["Labels"].(map[string]any)[LabelRun] = "another"
 		c["Mounts"].([]any)[0].(map[string]any)["Name"] = strings.Repeat("w", 64)
 	})
-	digest2, _, err := checkInspect(raw, other)
+	digest2, _, err := checkInspect(raw, other, "runc")
 	if err != nil || digest2 != digest {
 		t.Errorf("another run of the same shape: %q, %v; want %q", digest2, err, digest)
 	}
 	bigger := spec
 	bigger.Limits.Pids = 8192
 	raw = inspectWith(t, func(c map[string]any) { obj(c, "HostConfig")["PidsLimit"] = 8192 })
-	if digest3, _, err := checkInspect(raw, bigger); err != nil || digest3 == digest {
+	if digest3, _, err := checkInspect(raw, bigger, "runc"); err != nil || digest3 == digest {
 		t.Errorf("another shape has the same digest: %v", err)
 	}
 }
@@ -111,17 +111,26 @@ func TestInspectMismatchRefused(t *testing.T) {
 		"no init":                {host("Init", false), "HostConfig.Init"},
 		"logs kept":              {host("LogConfig", map[string]any{"Type": "json-file"}), "HostConfig.LogConfig.Type"},
 		"root user":              {config("User", ""), "Config.User"},
-		"user 0":                 {config("User", "0:0"), "Config.User"},
-		"an entrypoint":          {config("Entrypoint", []string{"/entrypoint.sh"}), "Config.Entrypoint"},
-		"another deadline":       {config("Cmd", []string{"86400"}), "Config.Cmd"},
-		"process":                {func(c map[string]any) { c["Path"] = "sh" }, "Path"},
-		"a terminal":             {config("Tty", true), "Config.Tty"},
-		"stdin open":             {config("OpenStdin", true), "Config.OpenStdin"},
-		"labels missing":         {config("Labels", nil), "Config.Labels[agentium.data]"},
-		"another run's label":    {func(c map[string]any) { obj(obj(c, "Config"), "Labels")[LabelRun] = "other" }, "Config.Labels[agentium.run]"},
-		"another image":          {func(c map[string]any) { c["Image"] = "sha256:" + strings.Repeat("0", 64) }, "Image"},
-		"another name":           {func(c map[string]any) { c["Name"] = "/agentium-test-other-grade" }, "Name"},
-		"a bind asked":           {func(c map[string]any) { h := obj(c, "HostConfig"); h["Mounts"] = append(h["Mounts"].([]any), bind) }, "HostConfig.Mounts"},
+		"the grade's user":       {config("User", User), "Config.User"},
+		"proxies added": {func(c map[string]any) {
+			obj(c, "Config")["Env"] = append([]any{"HTTP_PROXY=http://user:FAKEPASS@proxy.example:3128", "http_proxy=http://user:FAKEPASS@proxy.example:3128"}, obj(c, "Config")["Env"].([]any)...)
+		}, "Config.Env"},
+		"a variable added":    {func(c map[string]any) { obj(c, "Config")["Env"] = append(obj(c, "Config")["Env"].([]any), "X=1") }, "Config.Env"},
+		"a variable changed":  {func(c map[string]any) { obj(c, "Config")["Env"].([]any)[0] = "PATH=/tmp/evil:/usr/bin" }, "Config.Env"},
+		"no environment":      {config("Env", nil), "Config.Env"},
+		"another runtime":     {host("Runtime", "runsc"), "HostConfig.Runtime"},
+		"no runtime":          {host("Runtime", ""), "HostConfig.Runtime"},
+		"user 0":              {config("User", "0:0"), "Config.User"},
+		"an entrypoint":       {config("Entrypoint", []string{"/entrypoint.sh"}), "Config.Entrypoint"},
+		"another deadline":    {config("Cmd", []string{"86400"}), "Config.Cmd"},
+		"process":             {func(c map[string]any) { c["Path"] = "sh" }, "Path"},
+		"a terminal":          {config("Tty", true), "Config.Tty"},
+		"stdin open":          {config("OpenStdin", true), "Config.OpenStdin"},
+		"labels missing":      {config("Labels", nil), "Config.Labels[agentium.data]"},
+		"another run's label": {func(c map[string]any) { obj(obj(c, "Config"), "Labels")[LabelRun] = "other" }, "Config.Labels[agentium.run]"},
+		"another image":       {func(c map[string]any) { c["Image"] = "sha256:" + strings.Repeat("0", 64) }, "Image"},
+		"another name":        {func(c map[string]any) { c["Name"] = "/agentium-test-other-grade" }, "Name"},
+		"a bind asked":        {func(c map[string]any) { h := obj(c, "HostConfig"); h["Mounts"] = append(h["Mounts"].([]any), bind) }, "HostConfig.Mounts"},
 		"the grade volume read-only": {func(c map[string]any) {
 			obj(c, "HostConfig")["Mounts"].([]any)[0].(map[string]any)["ReadOnly"] = true
 		}, "HostConfig.Mounts[0]"},
@@ -147,14 +156,20 @@ func TestInspectMismatchRefused(t *testing.T) {
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			_, _, err := checkInspect(inspectWith(t, c.change), fixtureSpec())
+			_, _, err := checkInspect(inspectWith(t, c.change), fixtureSpec(), "runc")
 			if !errors.Is(err, ErrMismatch) || !strings.Contains(err.Error(), c.field) {
 				t.Fatalf("%v, want ErrMismatch naming %s", err, c.field)
 			}
 		})
 	}
+	if _, _, err := checkInspect([]byte(readFixture(t, "inspect.json")), fixtureSpec(), "runsc"); !errors.Is(err, ErrMismatch) {
+		t.Errorf("a daemon whose default runtime is another: %v", err)
+	}
+	if _, _, err := checkInspect([]byte(readFixture(t, "inspect.json")), fixtureSpec(), ""); !errors.Is(err, ErrMismatch) {
+		t.Errorf("no default runtime known: %v", err)
+	}
 	for _, raw := range []string{"", "{}", "[]", "[{},{}]", "not json"} {
-		if _, _, err := checkInspect([]byte(raw), fixtureSpec()); !errors.Is(err, ErrMismatch) {
+		if _, _, err := checkInspect([]byte(raw), fixtureSpec(), "runc"); !errors.Is(err, ErrMismatch) {
 			t.Errorf("%q: %v", raw, err)
 		}
 	}
@@ -171,7 +186,7 @@ func TestInspectDepsVolume(t *testing.T) {
 			c["Mounts"] = append(c["Mounts"].([]any), map[string]any{"Type": "volume", "Name": src, "Destination": DepsDir, "RW": !ro, "Driver": "local"})
 		}
 	}
-	if _, _, err := checkInspect(inspectWith(t, deps(true, spec.Deps)), spec); err != nil {
+	if _, _, err := checkInspect(inspectWith(t, deps(true, spec.Deps)), spec, "runc"); err != nil {
 		t.Errorf("the deps volume read-only: %v", err)
 	}
 	for name, change := range map[string]func(map[string]any){
@@ -179,7 +194,7 @@ func TestInspectDepsVolume(t *testing.T) {
 		"another volume": deps(true, "other"),
 		"absent":         func(map[string]any) {},
 	} {
-		if _, _, err := checkInspect(inspectWith(t, change), spec); !errors.Is(err, ErrMismatch) {
+		if _, _, err := checkInspect(inspectWith(t, change), spec, "runc"); !errors.Is(err, ErrMismatch) {
 			t.Errorf("deps %s: %v", name, err)
 		}
 	}

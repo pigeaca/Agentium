@@ -34,6 +34,7 @@ type inspected struct {
 	}
 	HostConfig struct {
 		NetworkMode       string
+		Runtime           string
 		IpcMode           string
 		PidMode           string
 		UTSMode           string
@@ -96,6 +97,7 @@ type inspected struct {
 type shape struct {
 	Image          string            `json:"image"`
 	User           string            `json:"user"`
+	Runtime        string            `json:"runtime"`
 	Entrypoint     []string          `json:"entrypoint"`
 	Cmd            []string          `json:"cmd"`
 	Network        string            `json:"network"`
@@ -119,7 +121,11 @@ type shape struct {
 // checkInspect compares the daemon's record of the created container (raw: `docker container inspect` output, an
 // array of one) with spec, and returns the normalized digest of what it checked. Every difference is named; any one
 // refuses the container.
-func checkInspect(raw []byte, spec Spec) (digest string, imageEnv []string, err error) {
+//
+// runtime is the daemon's default runtime, the only one accepted. The container's environment must be the image's own,
+// exactly: the docker client adds variables to a create on its own (its configuration's proxies, credentials
+// included), and every command would inherit them.
+func checkInspect(raw []byte, spec Spec, runtime string) (digest string, imageEnv []string, err error) {
 	var list []inspected
 	if err := json.Unmarshal(raw, &list); err != nil {
 		return "", nil, fmt.Errorf("%w: unreadable record: %v", ErrMismatch, err)
@@ -142,7 +148,9 @@ func checkInspect(raw []byte, spec Spec) (digest string, imageEnv []string, err 
 	name := Name(spec)
 	want("Name", c.Name == "/"+name, c.Name, "/"+name)
 	want("Image", c.Image == spec.Image.ID, c.Image, spec.Image.ID)
-	want("Config.User", c.Config.User == User, c.Config.User, User)
+	want("Config.User", c.Config.User == MainUser, c.Config.User, MainUser)
+	want("Config.Env", slices.Equal(c.Config.Env, spec.Image.Env), c.Config.Env, spec.Image.Env)
+	want("HostConfig.Runtime", runtime != "" && h.Runtime == runtime, h.Runtime, runtime)
 	want("Config.Entrypoint", slices.Equal(c.Config.Entrypoint, []string{"sleep"}), c.Config.Entrypoint, "[sleep]")
 	want("Config.Cmd", slices.Equal(c.Config.Cmd, []string{spec.deadlineSeconds()}), c.Config.Cmd, "["+spec.deadlineSeconds()+"]")
 	want("Path", c.Path == "sleep" && slices.Equal(c.Args, []string{spec.deadlineSeconds()}), c.Path+" "+strings.Join(c.Args, " "), "sleep "+spec.deadlineSeconds())
@@ -199,7 +207,7 @@ func checkInspect(raw []byte, spec Spec) (digest string, imageEnv []string, err 
 	if len(bad) > 0 {
 		return "", nil, fmt.Errorf("%w: %s", ErrMismatch, strings.Join(bad, "; "))
 	}
-	norm := shape{Image: c.Image, User: c.Config.User, Entrypoint: c.Config.Entrypoint, Cmd: c.Config.Cmd, Network: h.NetworkMode, IPC: h.IpcMode,
+	norm := shape{Image: c.Image, User: c.Config.User, Runtime: h.Runtime, Entrypoint: c.Config.Entrypoint, Cmd: c.Config.Cmd, Network: h.NetworkMode, IPC: h.IpcMode,
 		Cgroupns: h.CgroupnsMode, CapDrop: h.CapDrop, SecurityOpt: h.SecurityOpt, ReadonlyRootfs: h.ReadonlyRootfs, Tmpfs: h.Tmpfs,
 		Memory: h.Memory, MemorySwap: h.MemorySwap, Pids: pids, NanoCPUs: h.NanoCpus, Shm: h.ShmSize, Log: h.LogConfig.Type,
 		AutoRemove: h.AutoRemove, Init: true, Mounts: []string{"volume " + GradeDir + " rw"}}

@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ func realDocker(t *testing.T) (*Docker, Image) {
 	if err != nil {
 		t.Skipf("no usable local docker daemon: %v", err)
 	}
+	t.Cleanup(func() { must(t, d.Close()) })
 	img, err := d.Image(ctx, goImage)
 	if err != nil {
 		t.Skipf("the pinned Go image is not usable here (never pulled by tests): %v", err)
@@ -163,7 +165,7 @@ func TestRealGoTestPasses(t *testing.T) {
 	var digest string
 	err := d.Run(context.Background(), realSpec(data, "gotest", img, d), func(ctx context.Context, c *Container) error {
 		digest = c.InspectDigest()
-		stats, err := c.CopyIn(ctx, tree, DefaultCopyLimit)
+		stats, err := c.CopyIn(ctx, tree, DefaultCopyLimits())
 		if err != nil {
 			return err
 		}
@@ -407,6 +409,164 @@ func assertNothingLeft(t *testing.T, d *Docker, data string) {
 	}
 }
 
+// TestRealProxyConfigNeverReachesTheGrade: the docker client copies its configuration's proxies, credentials included,
+// into every container it creates. The user's configuration (here one with a fake proxy password) is only read to find
+// the endpoint: the create runs with an empty one, so the grade's environment is the image's own.
+func TestRealProxyConfigNeverReachesTheGrade(t *testing.T) {
+	real, img := realDocker(t)
+	data := testData(t, real)
+	userConfig := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(userConfig, "config.json"),
+		[]byte(`{"proxies":{"default":{"httpProxy":"http://user:FAKEPASS@proxy.example:3128","httpsProxy":"http://user:FAKEPASS@proxy.example:3128","noProxy":"*.example"}}}`), 0o600))
+	d, err := Open(context.Background(), Options{Environ: []string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(), "DOCKER_CONFIG=" + userConfig, "DOCKER_HOST=" + real.host}})
+	must(t, err)
+	defer func() { must(t, d.Close()) }()
+	var out strings.Builder
+	err = d.Run(context.Background(), realSpec(data, "proxy", img, d), func(ctx context.Context, c *Container) error {
+		if !slices.Equal(c.ImageEnv(), img.Env) {
+			return fmt.Errorf("the container's environment %v is not the image's %v", c.ImageEnv(), img.Env)
+		}
+		_, err := c.Exec(ctx, Command{Command: "env; cat /proc/1/environ | tr '\\0' '\\n'", Timeout: time.Minute, Output: &out})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"FAKEPASS", "proxy.example", "PROXY", "proxy="} {
+		if strings.Contains(out.String(), leak) {
+			t.Errorf("the grade sees %q:\n%s", leak, out.String())
+		}
+	}
+	if !strings.Contains(out.String(), "GOLANG_VERSION=1.27.1") {
+		t.Errorf("the environment was not read:\n%s", out.String())
+	}
+	// The positive control: a create with the user's configuration does carry the password.
+	control := "agentium-" + data + "-proxycontrol"
+	docker := func(args ...string) string {
+		cmd := exec.Command("docker", append([]string{"--config", userConfig, "--host", real.host}, args...)...)
+		cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("docker %v: %v", args[0], err)
+		}
+		return string(out)
+	}
+	docker("create", "--pull", "never", "--name", control, "--label", LabelData+"="+data, "--label", LabelRun+"=proxycontrol", "--label", LabelMode+"="+Mode, img.Ref, "true")
+	env := docker("container", "inspect", "--format", "{{json .Config.Env}}", control)
+	docker("rm", "--force", "--volumes", control)
+	if !strings.Contains(env, "FAKEPASS") {
+		t.Errorf("the control did not get the proxies, so the test proves nothing: %s", env)
+	}
+}
+
+// TestRealGradeCannotStopTheDeadline: the main process (the init and the sleep that holds the deadline) runs as
+// MainUser, so the grade's code, as User, can neither stop the sleep (which would outlive the deadline) nor end it or
+// the init (which would end its own container mid-command, turning a failure into infrastructure). The deadline then
+// still removes the container.
+func TestRealGradeCannotStopTheDeadline(t *testing.T) {
+	d, img := realDocker(t)
+	data := testData(t, d)
+	spec := realSpec(data, "deadline", img, d)
+	spec.Deadline = 8 * time.Second
+	const attack = `s=""
+for p in /proc/[0-9]*; do if [ "$(cat "$p/comm" 2>/dev/null)" = sleep ]; then s=${p#/proc/}; fi; done
+[ -n "$s" ] || { echo "no sleep found"; exit 2; }
+echo "sleep runs as $(awk '/^Uid:/ {print $2}' /proc/$s/status 2>/dev/null || grep '^Uid:' /proc/$s/status)"
+for sig in STOP TERM KILL; do if kill -$sig "$s" 2>/dev/null; then echo "kill -$sig sleep succeeded"; else echo "kill -$sig sleep denied"; fi; done
+for sig in STOP TERM KILL; do if kill -$sig 1 2>/dev/null; then echo "kill -$sig 1 succeeded"; else echo "kill -$sig 1 denied"; fi; done
+grep '^State:' /proc/$s/status`
+	var out strings.Builder
+	started := time.Now()
+	var tail error
+	err := d.Run(context.Background(), spec, func(ctx context.Context, c *Container) error {
+		res, err := c.Exec(ctx, Command{Command: attack, Timeout: time.Minute, Output: &out})
+		if err != nil || res.ExitCode != 0 {
+			return fmt.Errorf("the attack: %+v, %v\n%s", res, err, out.String())
+		}
+		_, tail = c.Exec(ctx, Command{Command: "sleep 120"})
+		return nil
+	})
+	t.Logf("as the grade's user:\n%s\npast the deadline: %v", out.String(), tail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out.String(), "denied"); n != 6 || strings.Contains(out.String(), "succeeded") || !strings.Contains(out.String(), "State:\tS (sleeping)") {
+		t.Errorf("%d of 6 signals denied, or the sleep is not sleeping", n)
+	}
+	if !errors.Is(tail, ErrUnjudgeable) {
+		t.Errorf("a command cut by the deadline: %v, want ErrUnjudgeable", tail)
+	}
+	if took := time.Since(started); took > 60*time.Second {
+		t.Errorf("the deadline (8 s) took %s", took)
+	}
+	assertNothingLeft(t, d, data)
+}
+
+// TestRealForkBombIsUnjudgeable: a fork bomb left running after a failing command holds every process slot, so the
+// counters cannot be read: the result is ErrUnjudgeable (left out, never retried), and the container is removed.
+func TestRealForkBombIsUnjudgeable(t *testing.T) {
+	d, img := realDocker(t)
+	data := testData(t, d)
+	spec := realSpec(data, "forkbomb", img, d)
+	spec.Limits.Pids = 64
+	const bomb = `nohup python3 -c '
+import os, time
+while True:
+    try:
+        if os.fork() == 0:
+            time.sleep(600)
+            os._exit(0)
+    except OSError:
+        time.sleep(0.001)
+' > /dev/null 2>&1 &
+while read n < /sys/fs/cgroup/pids.current && [ "$n" -lt 64 ]; do :; done
+exit 1`
+	var execErr error
+	err := d.Run(context.Background(), spec, func(ctx context.Context, c *Container) error {
+		_, execErr = c.Exec(ctx, Command{Command: bomb, Timeout: time.Minute})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(execErr, ErrUnjudgeable) {
+		t.Errorf("after a fork bomb: %v, want ErrUnjudgeable", execErr)
+	}
+	t.Logf("after a fork bomb: %v", execErr)
+	assertNothingLeft(t, d, data)
+}
+
+// TestRealGradeCannotKillTheCounters: a killer the grade leaves running kills every process it can, over and over.
+// The counters' read runs as MainUser, so it survives, and the failing command's result is judged (with its counters),
+// not lost.
+func TestRealGradeCannotKillTheCounters(t *testing.T) {
+	d, img := realDocker(t)
+	data := testData(t, d)
+	const killer = `nohup sh -c 'read me rest < /proc/self/stat
+while :; do for p in /proc/[0-9]*; do q=${p#/proc/}; [ "$q" = "$me" ] || kill -9 "$q" 2> /dev/null; done; done' > /dev/null 2>&1 &
+sleep 1
+exit 1`
+	err := d.Run(context.Background(), realSpec(data, "killer", img, d), func(ctx context.Context, c *Container) error {
+		res, err := c.Exec(ctx, Command{Command: killer, Timeout: time.Minute})
+		if err != nil {
+			return fmt.Errorf("the counters did not survive the killer: %w", err)
+		}
+		if res.ExitCode == 0 {
+			return fmt.Errorf("the failing command passed: %+v", res)
+		}
+		time.Sleep(time.Second)
+		if _, err := c.Counters(ctx); err != nil {
+			return fmt.Errorf("a later read: %w", err)
+		}
+		t.Logf("judged: exit %d, counters %+v", res.ExitCode, res.Counters)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNothingLeft(t, d, data)
+}
+
 // TestRealFixtures checks the daemon's real record and the probes' real output against the checks, and with -update
 // rewrites testdata/inspect.json and testdata/probe.txt from them (normalized: the test's data ID becomes "test", and
 // the container's and volume's IDs and the image's layer paths become placeholders), which the unit tests mutate.
@@ -425,7 +585,7 @@ func TestRealFixtures(t *testing.T) {
 	must(t, err)
 	raw, err := d.output(ctx, "container", "inspect", c.name)
 	must(t, err)
-	if _, _, err := checkInspect(raw, spec); err != nil {
+	if _, _, err := checkInspect(raw, spec, d.Engine().DefaultRuntime); err != nil {
 		t.Fatal(err)
 	}
 	var skeleton bytes.Buffer
@@ -433,7 +593,7 @@ func TestRealFixtures(t *testing.T) {
 	must(t, c.check(d.call(ctx, []string{"cp", "-", c.name + ":" + GradeDir}, &skeleton, controlTimeout)))
 	_, err = d.output(ctx, "start", c.name)
 	must(t, err)
-	probes, err := d.output(ctx, c.execArgs(false, nil, "", "sh", "-c", probeScript)...)
+	probes, err := d.output(ctx, c.execArgs(User, false, nil, "", "sh", "-c", probeScript)...)
 	must(t, err)
 	if err := checkProbes(string(probes), false); err != nil {
 		t.Fatal(err)

@@ -43,11 +43,13 @@ section end
 
 // initNamespaces are the inodes of the kernel's initial namespaces (include/linux/proc_ns.h): a container that shows
 // one of these shares that namespace with the VM.
-var initNamespaces = map[string]string{
-	"ipc":    "ipc:[4026531839]",
-	"uts":    "uts:[4026531838]",
-	"pid":    "pid:[4026531836]",
-	"cgroup": "cgroup:[4026531835]",
+func initNamespaces() map[string]string {
+	return map[string]string{
+		"ipc":    "ipc:[4026531839]",
+		"uts":    "uts:[4026531838]",
+		"pid":    "pid:[4026531836]",
+		"cgroup": "cgroup:[4026531835]",
+	}
 }
 
 // sections splits a script's output into its "== name" sections.
@@ -109,9 +111,10 @@ func checkProbes(out string, deps bool) error {
 		fail("the routing table has %d routes, want none", max(0, len(route)-1))
 	}
 	nsSeen := 0
+	inits := initNamespaces()
 	for _, line := range s["ns"] {
 		kind, inode, _ := strings.Cut(line, " ")
-		init, ok := initNamespaces[kind]
+		init, ok := inits[kind]
 		if !ok {
 			continue
 		}
@@ -120,8 +123,8 @@ func checkProbes(out string, deps bool) error {
 			fail("the %s namespace is %q, the VM's own or unreadable", kind, inode)
 		}
 	}
-	if nsSeen != len(initNamespaces) {
-		fail("%d of %d namespaces were read", nsSeen, len(initNamespaces))
+	if nsSeen != len(inits) {
+		fail("%d of %d namespaces were read", nsSeen, len(inits))
 	}
 	status := map[string]string{}
 	for _, line := range s["status"] {
@@ -190,8 +193,8 @@ func checkMountTable(lines []string, deps bool) []string {
 	return bad
 }
 
-// countersScript prints the container's cgroup counters after a command. They are the kernel's: the grade can read
-// them and cannot write them.
+// countersScript prints the container's cgroup counters after a command, run as MainUser so the grade's code cannot
+// kill it. They are the kernel's: the grade can read them and cannot write them.
 const countersScript = `for f in memory.events pids.events memory.peak; do printf '== %s\n' "$f"; cat "/sys/fs/cgroup/$f" 2>/dev/null || echo unavailable; done; printf '== end\n'`
 
 // Counters are the container's cgroup counters, cumulative since it started.

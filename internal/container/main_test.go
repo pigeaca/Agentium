@@ -29,11 +29,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// scenario is what the fake docker answers, read from $DOCKER_CONFIG/scenario.json (DOCKER_CONFIG is on the client's
-// allowlist, so the driver passes it through unchanged). Every call is appended to $DOCKER_CONFIG/calls as one JSON
-// array of its argv after the binary, and what it reads from stdin is kept in $DOCKER_CONFIG/stdin-<n>.
+// scenario is what the fake docker answers, read from scenario.json in the folder above its own bin/ (found from its
+// path: after the endpoint lookup the driver passes docker no variable but PATH). Every call is appended to calls there
+// as one JSON array of its argv after the binary, and what it reads from stdin is kept in stdin-<n>. A file named gone
+// there means the container no longer exists.
 type scenario struct {
 	Endpoint     string // the context's endpoint
+	ContextFail  string // the endpoint lookup fails with this message
 	Version      string // docker version --format {{json .Server}}
 	Info         string // docker info --format {{json .}}
 	Image        string // docker image inspect --format {{json .}}; empty: no such image
@@ -47,13 +49,16 @@ type scenario struct {
 	CommandBlock bool   // a command blocks until it is killed
 	TarExit      int    // the copy-in's tar
 	CreateExit   int    // docker create's exit; not 0: refused, its name in use
+	CreateBlock  bool   // docker create hangs until it is killed
+	CountersExit int    // the counters' exec exit; not 0: it failed (a fork bomb holds every slot, or it was killed)
+	CommandGone  bool   // the container ends during a command (its main process killed): exit 137, and gone after
 	PS           string // docker ps output
 	Volumes      string // docker volume ls output
 	Env          bool   // record the environment of each call too
 }
 
 func fakeDocker() int {
-	dir := os.Getenv("DOCKER_CONFIG")
+	dir := filepath.Dir(filepath.Dir(os.Args[0]))
 	data, err := os.ReadFile(filepath.Join(dir, "scenario.json"))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "fake docker:", err)
@@ -77,8 +82,8 @@ func fakeDocker() int {
 	}
 	fmt.Fprintln(f, string(line))
 	f.Close()
-	if len(args) >= 2 && args[0] == "--host" {
-		args = args[2:]
+	if len(args) >= 4 && args[0] == "--config" && args[2] == "--host" {
+		args = args[4:]
 	}
 	saveStdin := func() {
 		n := countLines(calls)
@@ -87,10 +92,15 @@ func fakeDocker() int {
 	}
 	removed := func() bool {
 		data, _ := os.ReadFile(calls)
-		return strings.Contains(string(data), `"rm","--force"`)
+		_, err := os.Stat(filepath.Join(dir, "gone"))
+		return strings.Contains(string(data), `"rm","--force"`) || err == nil
 	}
 	switch {
 	case slices.Equal(args[:2], []string{"context", "inspect"}):
+		if sc.ContextFail != "" {
+			fmt.Fprintln(os.Stderr, sc.ContextFail)
+			return 1
+		}
 		fmt.Printf("%q\n", sc.Endpoint)
 	case args[0] == "version":
 		if sc.Version == "" {
@@ -113,6 +123,9 @@ func fakeDocker() int {
 		}
 		fmt.Println(sc.Volume)
 	case args[0] == "create":
+		if sc.CreateBlock {
+			time.Sleep(time.Minute) // bounded, so a fake orphaned by a failing test does not linger
+		}
 		if sc.CreateExit != 0 {
 			fmt.Fprintln(os.Stderr, `Error response from daemon: Conflict. The container name "/x" is already in use by container "y".`)
 			return sc.CreateExit
@@ -145,7 +158,14 @@ func fakeDocker() int {
 			fmt.Print(sc.Probe)
 			return sc.ProbeExit
 		case script == countersScript:
+			if sc.CountersExit != 0 {
+				fmt.Fprintln(os.Stderr, "OCI runtime exec failed: exec failed: unable to start container process: fork: resource temporarily unavailable")
+				return sc.CountersExit
+			}
 			fmt.Print(sc.Counters)
+		case sc.CommandGone:
+			os.WriteFile(filepath.Join(dir, "gone"), nil, 0o600)
+			return 137
 		case sc.CommandBlock:
 			time.Sleep(time.Minute) // bounded, so a fake orphaned by a failing test does not linger
 		default:

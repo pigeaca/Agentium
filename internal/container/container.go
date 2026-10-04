@@ -18,6 +18,15 @@ import (
 // ErrGone: the container was removed (after a timeout or a cancel) and runs nothing more.
 var ErrGone = errors.New("the grade's container is gone")
 
+// ErrUnjudgeable: the grade's own input was used (its code ran, or its tree was read) and the result cannot be judged:
+// the counters after a command cannot be read (a fork bomb left running holds every process slot), the container
+// ended mid-command, or the tree could not be copied in (too large, too many entries, changed or unreadable). The
+// grade's code can cause each of these on purpose after a failing test, so the caller settles it as left out (as a
+// limit hit, Counters.Hit, and infra-sandbox runs are), counted in the per-arm check, and never retries it: a retry
+// would be a re-roll (isolation decision 3). Errors before any of the grade's input is used (Open, Usable, Fits,
+// Image, ErrMismatch, ErrProbe, the create and start) are infrastructure, and may be retried.
+var ErrUnjudgeable = errors.New("the grade's result cannot be judged")
+
 const (
 	// removeTimeout bounds a removal, which runs even after ctx is cancelled.
 	removeTimeout = 30 * time.Second
@@ -91,7 +100,9 @@ func (c *Container) start(ctx context.Context) error {
 	c.mayExist = true
 	_, stderr, res, err := c.d.call(ctx, createArgs(c.spec), nil, controlTimeout)
 	if err == nil && res.ExitCode != 0 {
-		// The daemon answered and refused: nothing was created (the create call is atomic).
+		// The client exited with an error: almost always the daemon refused the create, and nothing was made. That is
+		// not certain (the client can fail after the daemon made it), but removing by name here could kill another
+		// grade's container of that name, so a container left that way is for recovery to remove by its labels.
 		c.mayExist = false
 		return fmt.Errorf("create %s: exit %d: %s", c.name, res.ExitCode, firstLine(stderr))
 	}
@@ -102,7 +113,7 @@ func (c *Container) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("inspect %s: %w", c.name, err)
 	}
-	if c.digest, c.imageEnv, err = checkInspect(raw, c.spec); err != nil {
+	if c.digest, c.imageEnv, err = checkInspect(raw, c.spec, c.d.engine.DefaultRuntime); err != nil {
 		return fmt.Errorf("%s: %w", c.name, err)
 	}
 	var skeleton bytes.Buffer
@@ -115,7 +126,9 @@ func (c *Container) start(ctx context.Context) error {
 	if _, err := c.d.output(ctx, "start", c.name); err != nil {
 		return fmt.Errorf("start %s: %w", c.name, err)
 	}
-	probes, probeErr, probeRes, err := c.d.call(ctx, c.execArgs(false, nil, "", "sh", "-c", probeScript), nil, controlTimeout)
+	// The probes run as the grade's user, since they prove the grade's own view (its user, what it can write). No code
+	// of the grade has run yet, so nothing can interfere with them.
+	probes, probeErr, probeRes, err := c.d.call(ctx, c.execArgs(User, false, nil, "", "sh", "-c", probeScript), nil, controlTimeout)
 	if err != nil {
 		return fmt.Errorf("probe %s: %w", c.name, err)
 	}
@@ -135,14 +148,14 @@ func (c *Container) check(_ []byte, stderr string, res runner.Result, err error)
 	return nil
 }
 
-// execArgs is a docker exec as the grade's user, in dir (under /grade/work; "" for the container's own folder), with
-// env, of argv; interactive passes stdin.
-func (c *Container) execArgs(interactive bool, env []string, dir string, argv ...string) []string {
+// execArgs is a docker exec as user (User for the grade's own, MainUser for Agentium's reads), in dir (under
+// /grade/work; "" for the container's own folder), with env, of argv; interactive passes stdin.
+func (c *Container) execArgs(user string, interactive bool, env []string, dir string, argv ...string) []string {
 	args := []string{"exec"}
 	if interactive {
 		args = append(args, "--interactive")
 	}
-	args = append(args, "--user", User)
+	args = append(args, "--user", user)
 	if dir != "" {
 		args = append(args, "--workdir", dir)
 	}
@@ -154,9 +167,9 @@ func (c *Container) execArgs(interactive bool, env []string, dir string, argv ..
 
 // CopyIn sends the tree at root into /grade/work as a tar stream (WriteTar: links never followed, the tree only read),
 // unpacked by the image's tar as the grade's user, so the daemon never resolves a path in a tree the agent wrote. A
-// tree over limit bytes is ErrTooLarge. A failed or cancelled copy-in leaves a partial tree, so the container is
-// removed.
-func (c *Container) CopyIn(ctx context.Context, root string, limit int64) (TarStats, error) {
+// tree the stream refuses (ErrTooLarge, or changed or unreadable) or the image's tar fails on is ErrUnjudgeable: the
+// agent controls the tree. A failed or cancelled copy-in leaves a partial tree, so the container is removed.
+func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) (TarStats, error) {
 	if c.gone {
 		return TarStats{}, ErrGone
 	}
@@ -166,19 +179,23 @@ func (c *Container) CopyIn(ctx context.Context, root string, limit int64) (TarSt
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		stats, writeErr = WriteTar(pw, root, limit)
+		stats, writeErr = WriteTar(pw, root, limits)
 		pw.CloseWithError(writeErr) // nil closes the stream normally
 	}()
-	_, stderr, res, err := c.d.call(ctx, c.execArgs(true, nil, WorkDir, "tar", "-x", "-f", "-"), pr, copyTimeout)
+	_, stderr, res, err := c.d.call(ctx, c.execArgs(User, true, nil, WorkDir, "tar", "-x", "-f", "-"), pr, copyTimeout)
 	pr.CloseWithError(errors.New("copy-in ended")) // unblocks the writer if docker stopped reading
 	<-done
 	switch {
-	case err != nil:
+	case ctx.Err() != nil:
+		err = ctx.Err()
+	case writeErr != nil && !errors.Is(writeErr, errNoRoot):
+		// The writer's error decides (tar may accept a stream cut at an entry's boundary), and it comes from the tree.
+		err = fmt.Errorf("%w: %w", ErrUnjudgeable, writeErr)
 	case writeErr != nil:
-		// The writer's error decides: tar may accept a stream cut at an entry's boundary.
 		err = writeErr
+	case err != nil:
 	case res.ExitCode != 0:
-		err = fmt.Errorf("tar exited %d: %s", res.ExitCode, firstLine(stderr))
+		err = fmt.Errorf("%w: tar exited %d: %s", ErrUnjudgeable, res.ExitCode, firstLine(stderr))
 	default:
 		return stats, nil
 	}
@@ -204,10 +221,12 @@ type Result struct {
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// Exec runs one command as the grade's user and reads the cgroup counters after it. A non-zero exit is a Result; an
-// error means the result cannot be trusted (the container is gone, or its counters cannot be read) and is
-// infrastructure. On a timeout the counters are read, then the container is removed: killing the docker client would
-// leave the command running inside. On a cancel the container is removed at once.
+// Exec runs one command as the grade's user and reads the cgroup counters after it (as MainUser, so the grade's code
+// cannot kill the read). A non-zero exit is a Result. On a timeout the counters are read, then the container is
+// removed: killing the docker client would leave the command running inside. On ctx's cancel the container is removed
+// at once and the error is ctx's. Any other error (the counters unreadable, the container ended mid-command, the
+// client failed) is ErrUnjudgeable, and the container is removed. Refused input (Env, Dir) is an error before
+// anything runs.
 func (c *Container) Exec(ctx context.Context, cmd Command) (Result, error) {
 	if c.gone {
 		return Result{ExitCode: -1}, ErrGone
@@ -226,21 +245,27 @@ func (c *Container) Exec(ctx context.Context, cmd Command) (Result, error) {
 	if out == nil {
 		out = io.Discard
 	}
-	res, err := runner.Run(ctx, runner.Spec{Args: append([]string{c.d.bin}, c.d.args(c.execArgs(false, cmd.Env, dir, "sh", "-c", cmd.Command))...),
+	res, err := runner.Run(ctx, runner.Spec{Args: append([]string{c.d.bin}, c.d.args(c.execArgs(User, false, cmd.Env, dir, "sh", "-c", cmd.Command))...),
 		Environ: c.d.environ, Timeout: cmd.Timeout, Output: out})
 	result := Result{ExitCode: res.ExitCode, TimedOut: res.TimedOut, Duration: res.Duration}
+	if ctx.Err() != nil {
+		return result, errors.Join(fmt.Errorf("exec in %s: %w", c.name, ctx.Err()), c.kill(ctx))
+	}
 	if err != nil {
-		return result, errors.Join(fmt.Errorf("exec in %s: %w", c.name, err), c.kill(ctx))
+		return result, errors.Join(fmt.Errorf("%w: exec in %s: %w", ErrUnjudgeable, c.name, err), c.kill(ctx))
 	}
 	if res.TimedOut {
 		result.ExitCode = -1
-		counters, cErr := c.Counters(ctx)
-		result.Counters = counters
-		return result, errors.Join(cErr, c.kill(ctx))
 	}
 	counters, err := c.Counters(ctx)
 	result.Counters = counters
-	return result, err
+	if err != nil {
+		return result, errors.Join(fmt.Errorf("%w: after the command: %w", ErrUnjudgeable, err), c.kill(ctx))
+	}
+	if res.TimedOut {
+		return result, c.kill(ctx)
+	}
+	return result, nil
 }
 
 // workDir is a command's folder in the container: under /grade/work, never above it.
@@ -255,14 +280,15 @@ func workDir(dir string) (string, error) {
 	return WorkDir + "/" + clean, nil
 }
 
-// Counters reads the container's cgroup counters (cumulative since it started).
+// Counters reads the container's cgroup counters (cumulative since it started), as MainUser: the grade's code, which
+// runs as User, cannot kill the read.
 func (c *Container) Counters(ctx context.Context) (Counters, error) {
 	if c.gone {
 		return Counters{}, ErrGone
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), countersTimeout)
 	defer cancel()
-	out, stderr, res, err := c.d.call(cctx, c.execArgs(false, nil, "", "sh", "-c", countersScript), nil, countersTimeout)
+	out, stderr, res, err := c.d.call(cctx, c.execArgs(MainUser, false, nil, "", "sh", "-c", countersScript), nil, countersTimeout)
 	if err == nil && res.ExitCode != 0 {
 		err = fmt.Errorf("exit %d: %s", res.ExitCode, firstLine(stderr))
 	}

@@ -22,8 +22,13 @@ const (
 )
 
 // User is the grade's user and group: nobody, which every image's /etc/passwd lists (a missing user gives Java
-// user.home=/). Nothing in a grade runs as root.
+// user.home=/). Every command of the grade, and the copy-in, runs as User. Nothing in a grade runs as root.
 const User = "65534:65534"
+
+// MainUser runs the container's main process (the init and the sleep that holds the deadline) and the counters'
+// reads: a user the grade is not, so the grade's code can neither stop nor end them (kill needs the same user or
+// CAP_KILL, and every capability is dropped). It owns nothing in the container.
+const MainUser = "65533:65533"
 
 // The grade's folders inside the container.
 const (
@@ -133,7 +138,7 @@ func createArgs(s Spec) []string {
 		"--rm", "--init",
 		"--network", "none", "--ipc", "private",
 		"--cap-drop", "ALL", "--security-opt", "no-new-privileges",
-		"--read-only", "--user", User,
+		"--read-only", "--user", MainUser,
 		"--memory", mem, "--memory-swap", mem,
 		"--pids-limit", strconv.FormatInt(s.Limits.Pids, 10),
 		"--cpus", strconv.Itoa(s.Limits.CPUs),

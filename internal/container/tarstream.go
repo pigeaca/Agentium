@@ -15,12 +15,17 @@ import (
 // ErrTooLarge: the grading copy holds more than the copy-in's limit.
 var ErrTooLarge = errors.New("the grading copy is too large to copy in")
 
-// DefaultCopyLimit caps the bytes of file content a copy-in sends (step 0's largest tree was 177 MB).
-const DefaultCopyLimit int64 = 2 << 30
+// errNoRoot: the tree's root could not be opened. That is Agentium's own folder, not the agent's content.
+var errNoRoot = errors.New("the tree cannot be opened")
 
-// MaxCopyEntries caps a copy-in's folders, files and links (step 0's largest tree had 9,092 files), so a tree of
-// countless empty files cannot stream without end.
-const MaxCopyEntries = 1_000_000
+// CopyLimits cap what a copy-in sends.
+type CopyLimits struct {
+	Bytes   int64 // file content
+	Entries int   // folders, files and links, so a tree of countless empty files cannot stream without end
+}
+
+// DefaultCopyLimits are 2 GiB of content and 1,000,000 entries (step 0's largest tree: 177 MB in 9,092 files).
+func DefaultCopyLimits() CopyLimits { return CopyLimits{Bytes: 2 << 30, Entries: 1_000_000} }
 
 // TarStats counts what a tar stream holds.
 type TarStats struct {
@@ -33,13 +38,13 @@ type TarStats struct {
 // owned by the grade's user, with their permission bits (setuid, setgid and sticky dropped) and times. It never follows
 // a link: a link is written as a link, with its target as text, and the tree is read through an os.Root, so neither a
 // link nor a folder swapped for one mid-walk leads outside root. A file is opened without following a link and must
-// still be the regular file it was listed as. Sockets, pipes and devices are skipped. More than limit bytes of content,
-// or more than MaxCopyEntries entries, is ErrTooLarge. The tree is only read.
-func WriteTar(w io.Writer, root string, limit int64) (TarStats, error) {
+// still be the regular file it was listed as. Sockets, pipes and devices are skipped. More than limits allow is
+// ErrTooLarge. The tree is only read.
+func WriteTar(w io.Writer, root string, limits CopyLimits) (TarStats, error) {
 	var stats TarStats
 	r, err := os.OpenRoot(root)
 	if err != nil {
-		return stats, fmt.Errorf("tar %s: %w", root, err)
+		return stats, fmt.Errorf("tar %s: %w: %w", root, errNoRoot, err)
 	}
 	defer r.Close()
 	tw := tar.NewWriter(w)
@@ -50,8 +55,8 @@ func WriteTar(w io.Writer, root string, limit int64) (TarStats, error) {
 		if name == "." {
 			return nil
 		}
-		if stats.Entries >= MaxCopyEntries {
-			return fmt.Errorf("%w: more than %d entries", ErrTooLarge, MaxCopyEntries)
+		if stats.Entries >= limits.Entries {
+			return fmt.Errorf("%w: more than %d entries", ErrTooLarge, limits.Entries)
 		}
 		info, err := r.Lstat(name)
 		if err != nil {
@@ -72,7 +77,7 @@ func WriteTar(w io.Writer, root string, limit int64) (TarStats, error) {
 			stats.Entries++
 			return tw.WriteHeader(hdr)
 		case info.Mode().IsRegular():
-			n, err := writeFile(tw, r, name, hdr, limit-stats.Bytes)
+			n, err := writeFile(tw, r, name, hdr, limits.Bytes-stats.Bytes)
 			stats.Bytes += n
 			if err == nil {
 				stats.Entries++

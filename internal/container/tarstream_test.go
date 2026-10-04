@@ -32,7 +32,7 @@ func TestWriteTarNeverFollowsLinks(t *testing.T) {
 	must(t, syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600))
 	must(t, os.Chtimes(filepath.Join(root, "a/f.txt"), time.Unix(1700000000, 0), time.Unix(1700000000, 0)))
 	var buf bytes.Buffer
-	stats, err := WriteTar(&buf, root, DefaultCopyLimit)
+	stats, err := WriteTar(&buf, root, DefaultCopyLimits())
 	must(t, err)
 	if stats != (TarStats{Entries: 7, Bytes: int64(len("hello") + len("#!/bin/sh\n") + 1), Skipped: 1}) {
 		t.Errorf("stats %+v", stats)
@@ -92,7 +92,7 @@ func TestWriteTarRefusesSwaps(t *testing.T) {
 	for _, name := range []string{"swapped", "pipe"} {
 		done := make(chan error, 1)
 		go func() {
-			_, err := writeFile(tw, r, name, &tar.Header{Name: name}, DefaultCopyLimit)
+			_, err := writeFile(tw, r, name, &tar.Header{Name: name}, DefaultCopyLimits().Bytes)
 			done <- err
 		}()
 		select {
@@ -109,18 +109,24 @@ func TestWriteTarRefusesSwaps(t *testing.T) {
 	}
 }
 
-// TestWriteTarLimit: more content than the limit is ErrTooLarge (and so are more than MaxCopyEntries entries, which
-// is a constant too large to test cheaply).
-func TestWriteTarLimit(t *testing.T) {
+// TestWriteTarLimits: more content, or more entries, than the limits allow is ErrTooLarge; a root that cannot be
+// opened is errNoRoot (Agentium's folder, not the agent's content).
+func TestWriteTarLimits(t *testing.T) {
 	root := t.TempDir()
-	writeTree(t, root, map[string]string{"a": strings.Repeat("x", 600), "b": strings.Repeat("y", 600)})
-	if _, err := WriteTar(io.Discard, root, 1000); !errors.Is(err, ErrTooLarge) {
+	writeTree(t, root, map[string]string{"a": strings.Repeat("x", 600), "b": strings.Repeat("y", 600), "d/e": ""})
+	if _, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1000, Entries: 10}); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("1200 bytes under a 1000-byte limit: %v", err)
 	}
-	if _, err := WriteTar(io.Discard, root, 1200); err != nil {
-		t.Errorf("1200 bytes under a 1200-byte limit: %v", err)
+	if stats, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1200, Entries: 4}); err != nil || stats.Entries != 4 {
+		t.Errorf("1200 bytes and 4 entries under limits of 1200 and 4: %+v, %v", stats, err)
 	}
-	if _, err := WriteTar(io.Discard, filepath.Join(root, "missing"), 1200); err == nil {
-		t.Error("a missing tree")
+	if _, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1200, Entries: 3}); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("4 entries under a limit of 3: %v", err)
+	}
+	if _, err := WriteTar(io.Discard, filepath.Join(root, "missing"), DefaultCopyLimits()); !errors.Is(err, errNoRoot) {
+		t.Errorf("a missing tree: %v", err)
+	}
+	if l := DefaultCopyLimits(); l.Bytes != 2<<30 || l.Entries != 1_000_000 {
+		t.Errorf("default limits: %+v", l)
 	}
 }

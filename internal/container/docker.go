@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -33,13 +36,18 @@ var (
 // create --pull. The shape was settled on 1.47 (engine 27.4).
 const MinAPIVersion = "1.41"
 
-// clientEnvNames is the docker client's environment allowlist: nothing else from Agentium's environment reaches it.
-// DOCKER_HOST and DOCKER_CONTEXT are only used to find the endpoint; later calls pin it with --host instead.
-var clientEnvNames = []string{"PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY"}
+// clientEnvNames is the docker client's environment allowlist for the endpoint lookup, the one call that reads the
+// user's own docker configuration (its contexts). Every later call sees only PATH, and an empty configuration of its
+// own (--config), so nothing from the user's config.json (its proxies, credentials included, which the client copies
+// into every container it creates) reaches a grade.
+func clientEnvNames() []string {
+	return []string{"PATH", "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG", "DOCKER_CERT_PATH", "DOCKER_TLS_VERIFY"}
+}
 
-// ClientEnv is environ filtered to what the docker client may see (credentials are dropped whatever their name).
+// ClientEnv is environ filtered to what the docker client's endpoint lookup may see (credentials are dropped whatever
+// their name).
 func ClientEnv(environ []string) []string {
-	out := runner.EnvPolicy{Allowlist: true, Names: clientEnvNames}.Filter(environ)
+	out := runner.EnvPolicy{Allowlist: true, Names: clientEnvNames()}.Filter(environ)
 	if out == nil {
 		out = []string{}
 	}
@@ -49,15 +57,21 @@ func ClientEnv(environ []string) []string {
 // Options says how to reach docker.
 type Options struct {
 	Bin     string   // the docker client; "docker" (looked up in PATH) when empty
-	Environ []string // Agentium's environment; ClientEnv filters it
+	Environ []string // Agentium's environment; ClientEnv filters it for the endpoint lookup
+	// ConfigDir is an empty folder of Agentium's own that every call after the endpoint lookup uses as the client's
+	// configuration (--config); it must hold no config.json. When empty, Open makes one in the temp folder and Close
+	// removes it.
+	ConfigDir string
 }
 
-// Docker is a client pinned to one local daemon. Open makes it; its zero value is not usable.
+// Docker is a client pinned to one local daemon. Open makes it, Close releases it; its zero value is not usable.
 type Docker struct {
-	bin     string
-	environ []string // ClientEnv, without DOCKER_HOST and DOCKER_CONTEXT: --host pins the endpoint
-	host    string   // the endpoint, unix://...; never recorded or printed (it holds a home path)
-	engine  Engine
+	bin       string
+	environ   []string // ClientEnv for the endpoint lookup; then PATH only
+	host      string   // the endpoint, unix://...; never recorded or printed (it holds a home path)
+	config    string   // the empty configuration folder of every call after the lookup
+	ownConfig bool     // Open made config, and Close removes it
+	engine    Engine
 }
 
 // Engine is what a record keeps about the daemon: never its endpoint, name or paths.
@@ -70,6 +84,8 @@ type Engine struct {
 	NCPU          int    `json:"ncpu"`
 	MemTotal      int64  `json:"mem_total"`
 	Rootless      bool   `json:"rootless,omitempty"`
+	// DefaultRuntime is the daemon's default OCI runtime (runc), the only one a grade's container may use.
+	DefaultRuntime string `json:"default_runtime"`
 }
 
 // controlTimeout bounds every docker call that is not a grade's command, so a hung daemon cannot hang a grade.
@@ -77,31 +93,56 @@ const controlTimeout = 2 * time.Minute
 
 // Open finds the daemon the user's docker client would use, refuses it unless it is local, and checks that it can
 // isolate a grade: Linux, seccomp, cgroup v2 and an API at least MinAPIVersion. Every later call goes to the same
-// endpoint (--host), whatever the user's context becomes meanwhile.
-func Open(ctx context.Context, opts Options) (*Docker, error) {
+// endpoint (--host), whatever the user's context becomes meanwhile, with an empty configuration (--config) and PATH
+// as its only variable. The caller closes it.
+func Open(ctx context.Context, opts Options) (_ *Docker, err error) {
 	bin := opts.Bin
 	if bin == "" {
 		bin = "docker"
 	}
-	env := ClientEnv(opts.Environ)
-	d := &Docker{bin: bin, environ: env}
+	d := &Docker{bin: bin, environ: ClientEnv(opts.Environ), config: opts.ConfigDir}
+	if d.config == "" {
+		if d.config, err = os.MkdirTemp("", "agentium-docker-config-"); err != nil {
+			return nil, fmt.Errorf("docker configuration folder: %w", err)
+		}
+		d.ownConfig = true
+		defer func() {
+			if err != nil {
+				d.Close()
+			}
+		}()
+	} else if _, statErr := os.Lstat(filepath.Join(d.config, "config.json")); !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, fmt.Errorf("docker configuration folder %s: must be empty (it has a config.json, or cannot be read)", d.config)
+	}
 	out, err := d.output(ctx, "context", "inspect", "--format", "{{json .Endpoints.docker.Host}}")
 	if err != nil {
-		return nil, fmt.Errorf("%w: find the endpoint: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: find the endpoint: %w", ErrUnavailable, err)
 	}
 	var host string
 	if err := json.Unmarshal(bytes.TrimSpace(out), &host); err != nil {
-		return nil, fmt.Errorf("%w: read the endpoint: %v", ErrUnavailable, err)
+		return nil, fmt.Errorf("%w: read the endpoint: %w", ErrUnavailable, err)
 	}
 	if err := CheckLocal(host); err != nil {
 		return nil, err
 	}
 	d.host = host
-	d.environ = dropNames(env, "DOCKER_HOST", "DOCKER_CONTEXT")
+	d.environ = runner.EnvPolicy{Allowlist: true, Names: []string{"PATH"}}.Filter(opts.Environ)
+	if d.environ == nil {
+		d.environ = []string{}
+	}
 	if d.engine, err = d.readEngine(ctx); err != nil {
 		return nil, err
 	}
 	return d, nil
+}
+
+// Close removes the configuration folder Open made (not one the caller gave).
+func (d *Docker) Close() error {
+	if !d.ownConfig {
+		return nil
+	}
+	d.ownConfig = false
+	return os.RemoveAll(d.config)
 }
 
 // CheckLocal refuses an endpoint that is not a Unix socket: tcp://, ssh:// and every other scheme can reach another
@@ -118,17 +159,6 @@ func CheckLocal(endpoint string) error {
 	return nil
 }
 
-func dropNames(env []string, names ...string) []string {
-	out := []string{}
-	for _, kv := range env {
-		name, _, _ := strings.Cut(kv, "=")
-		if !containsString(names, name) {
-			out = append(out, kv)
-		}
-	}
-	return out
-}
-
 func containsString(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {
@@ -142,7 +172,7 @@ func containsString(list []string, s string) bool {
 func (d *Docker) readEngine(ctx context.Context) (Engine, error) {
 	out, err := d.output(ctx, "version", "--format", "{{json .Server}}")
 	if err != nil {
-		return Engine{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return Engine{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	var v struct {
 		Version    string
@@ -155,7 +185,7 @@ func (d *Docker) readEngine(ctx context.Context) (Engine, error) {
 	}
 	out, err = d.output(ctx, "info", "--format", "{{json .}}")
 	if err != nil {
-		return Engine{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return Engine{}, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	var info struct {
 		ServerErrors    []string
@@ -165,14 +195,16 @@ func (d *Docker) readEngine(ctx context.Context) (Engine, error) {
 		MemTotal        int64
 		CgroupVersion   string
 		SecurityOptions []string
+		DefaultRuntime  string
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(out), &info); err != nil {
-		return Engine{}, fmt.Errorf("%w: read docker info: %v", ErrUnavailable, err)
+		return Engine{}, fmt.Errorf("%w: read docker info: %w", ErrUnavailable, err)
 	}
 	if len(info.ServerErrors) > 0 || info.ServerVersion == "" {
 		return Engine{}, fmt.Errorf("%w: docker info has no server", ErrUnavailable)
 	}
-	e := Engine{Version: v.Version, APIVersion: v.APIVersion, OS: v.Os, Arch: v.Arch, CgroupVersion: info.CgroupVersion, NCPU: info.NCPU, MemTotal: info.MemTotal}
+	e := Engine{Version: v.Version, APIVersion: v.APIVersion, OS: v.Os, Arch: v.Arch, CgroupVersion: info.CgroupVersion, NCPU: info.NCPU, MemTotal: info.MemTotal,
+		DefaultRuntime: info.DefaultRuntime}
 	seccomp := false
 	for _, opt := range info.SecurityOptions {
 		fields := securityFields(opt)
@@ -192,6 +224,8 @@ func (d *Docker) readEngine(ctx context.Context) (Engine, error) {
 		return e, fmt.Errorf("%w: cgroup v%s, not v2 (the counters a grade is judged by need v2)", ErrUnsupported, e.CgroupVersion)
 	case !apiAtLeast(e.APIVersion, MinAPIVersion):
 		return e, fmt.Errorf("%w: API %q is older than %s", ErrUnsupported, e.APIVersion, MinAPIVersion)
+	case e.DefaultRuntime == "":
+		return e, fmt.Errorf("%w: no default runtime", ErrUnsupported)
 	}
 	return e, nil
 }
@@ -298,31 +332,33 @@ func (d *Docker) Image(ctx context.Context, ref string) (Image, error) {
 }
 
 // Usable is the whole usability check before a command uses the mode: Open, Fits and every image present by digest.
+// The caller closes the client.
 func Usable(ctx context.Context, opts Options, limits Limits, refs ...string) (*Docker, []Image, error) {
 	d, err := Open(ctx, opts)
 	if err != nil {
 		return nil, nil, err
 	}
 	if err := d.Fits(limits); err != nil {
-		return nil, nil, err
+		return nil, nil, errors.Join(err, d.Close())
 	}
 	images := make([]Image, 0, len(refs))
 	for _, ref := range refs {
 		img, err := d.Image(ctx, ref)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.Join(err, d.Close())
 		}
 		images = append(images, img)
 	}
 	return d, images, nil
 }
 
-// args is a docker call's full argv after the binary: the pinned endpoint first, once Open has found it.
+// args is a docker call's full argv after the binary: once Open has found the endpoint, the empty configuration and
+// the pinned endpoint first.
 func (d *Docker) args(args []string) []string {
 	if d.host == "" {
 		return args
 	}
-	return append([]string{"--host", d.host}, args...)
+	return append([]string{"--config", d.config, "--host", d.host}, args...)
 }
 
 // call runs docker with args (argv only, never a shell) and returns its stdout and stderr; a non-zero exit is in the
@@ -354,12 +390,15 @@ func (d *Docker) output(ctx context.Context, args ...string) ([]byte, error) {
 	return out, nil
 }
 
+// socketURL matches a unix:// endpoint in docker's messages, which name the socket's path even before Open knows it.
+var socketURL = regexp.MustCompile(`unix://[^\s"']+`)
+
 func (d *Docker) redact(s string) string {
 	if d.host != "" {
 		s = strings.ReplaceAll(s, d.host, "<docker endpoint>")
 		s = strings.ReplaceAll(s, strings.TrimPrefix(d.host, "unix://"), "<docker endpoint>")
 	}
-	return s
+	return socketURL.ReplaceAllString(s, "<docker endpoint>")
 }
 
 func firstLine(s string) string {
