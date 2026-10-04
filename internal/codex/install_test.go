@@ -10,12 +10,12 @@ import (
 )
 
 // fakeCLI is a Codex CLI that writes its environment and arguments to a file beside it, prints out and exits with
-// code.
+// code. Like Codex 0.160.0, it prints `login status`'s answer on standard error, the rest on standard output.
 func fakeCLI(t *testing.T, out string, code int) (cli, record string) {
 	t.Helper()
 	dir := t.TempDir()
 	cli, record = filepath.Join(dir, "codex"), filepath.Join(dir, "record")
-	script := "#!/bin/sh\n{ env; echo \"ARGS=$*\"; echo \"PWD=$(pwd -P)\"; } > " + record + "\nprintf '%s\\n' '" + out + "'\nexit " + string(rune('0'+code)) + "\n"
+	script := "#!/bin/sh\n{ env; echo \"ARGS=$*\"; echo \"PWD=$(pwd -P)\"; } > " + record + "\nif [ \"$1\" = login ]; then exec 1>&2; fi\nprintf '%s\\n' '" + out + "'\nexit " + string(rune('0'+code)) + "\n"
 	if err := os.WriteFile(cli, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}

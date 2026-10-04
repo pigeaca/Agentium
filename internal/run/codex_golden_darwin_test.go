@@ -54,7 +54,7 @@ func fakeCodex() int {
 		fmt.Println("codex-cli 0.160.0")
 		return 0
 	case len(args) > 1 && args[0] == "login" && args[1] == "status":
-		fmt.Println("Logged in using ChatGPT")
+		fmt.Fprintln(os.Stderr, "Logged in using ChatGPT") // on standard error, as Codex 0.160.0 prints it
 		return 0
 	}
 	interrupted := make(chan os.Signal, 1)

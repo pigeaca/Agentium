@@ -70,7 +70,8 @@ func LoginStatus(ctx context.Context, cli, codexHome string) error {
 	return nil
 }
 
-// runCLI runs the Codex CLI with args, outside any repository, and returns its standard output and exit code. Its
+// runCLI runs the Codex CLI with args, outside any repository, and returns its output and exit code: standard output
+// and standard error together (`login status` writes to standard error, --version to standard output). Its
 // environment holds only PATH, a home that does not exist, and CODEX_HOME: codexHome, or (when empty) a folder that does
 // not exist either, so the command writes nowhere. Errors are for a command that did not run, timed out or failed;
 // exit is its exit code when it ran.
@@ -90,7 +91,7 @@ func runCLI(ctx context.Context, cli, codexHome string, args []string) (string, 
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + filepath.Join(dir, "home-absent"), "CODEX_HOME=" + codexHome, "NO_COLOR=1"}
 	cmd.WaitDelay = 2 * time.Second // a child that keeps stdout open cannot hold Output past the timeout
 	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
+	cmd.Stdout, cmd.Stderr = &stdout, &stdout
 	err = cmd.Run()
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {

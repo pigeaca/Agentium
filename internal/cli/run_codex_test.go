@@ -13,9 +13,9 @@ import (
 // it was given), makes the task's change, answers a calibration's sandbox check, and completes the turn.
 func fakeCodex(t *testing.T, version string, signedIn bool) string {
 	t.Helper()
-	login := `echo "Not logged in"; exit 1`
+	login := `echo "Not logged in" >&2; exit 1` // on standard error, as Codex 0.160.0 prints it
 	if signedIn {
-		login = `echo "Logged in using ChatGPT"; exit 0`
+		login = `echo "Logged in using ChatGPT" >&2; exit 0`
 	}
 	script := `#!/bin/sh
 case "$1" in
