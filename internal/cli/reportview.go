@@ -778,8 +778,12 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 	if u := rep.Analysis.Ungraded; u != nil && (u.Imbalanced || len(u.Disagrees) > 0) {
 		notes = append(notes, "the judge left more runs without a grade on one side, so the answer is not sure")
 	}
-	if !f.sandboxed && rep.Lock.Grader != "" {
+	switch {
+	case rep.Lock.Grader == "" || f.sandboxed:
+	case f.host:
 		notes = append(notes, "hidden tests ran on your machine, outside the sandbox")
+	default: // a mode this Agentium does not describe (container-v1 until the containers plan's step 4)
+		notes = append(notes, "hidden tests ran in "+term.Sanitize(rep.Lock.Grader)+", a mode this Agentium does not describe")
 	}
 	if note := earlyStopNote(rep, f); note != "" {
 		notes = append(notes, note)

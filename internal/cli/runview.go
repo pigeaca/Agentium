@@ -127,6 +127,7 @@ type runFacts struct {
 	question  string
 	aa        bool
 	goal      string
+	host      bool // the hidden tests run on the host, unsandboxed (an old lock's empty mode too): the screens warn
 	sandboxed bool // the hidden tests run in the grading sandbox (the agent always runs in its own)
 	perArm    [2]int
 	slotArm   []int // each schedule position's arm: 0 or 1
@@ -145,7 +146,7 @@ const maxNameWidth = 24
 func factsOf(lock experiment.Lock, usageLimit float64) runFacts {
 	d := lock.Design
 	f := runFacts{arms: map[string]int{}, aa: d.Template == experiment.TemplateAA, goal: d.Goal,
-		sandboxed: task.GraderOf(lock.Grader) == task.GraderSandbox, tasks: len(lock.Tasks), budget: d.BudgetUSD, limit: usageLimit / 100}
+		host: task.GraderOf(lock.Grader) == task.GraderHost, sandboxed: task.GraderOf(lock.Grader) == task.GraderSandbox, tasks: len(lock.Tasks), budget: d.BudgetUSD, limit: usageLimit / 100}
 	f.labels = armLabels(d)
 	for i, a := range d.Arms {
 		if i < 2 {

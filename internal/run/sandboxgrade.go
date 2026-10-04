@@ -62,7 +62,7 @@ func SandboxUsable(ctx context.Context, mode string) error {
 // unknownGrader is the refusal of a mode this Agentium does not grade in (container-v1 included, until the
 // containers plan's step 4): the same error for every entry point, and never a fall back to another mode.
 func unknownGrader(mode string) error {
-	return fmt.Errorf("grader %s: this Agentium grades on the host or in %s", mode, task.GraderSandbox)
+	return task.UnknownGrader(mode)
 }
 
 // sandboxApplies is the check every run and every validated task makes before it starts: a mode this Agentium knows,

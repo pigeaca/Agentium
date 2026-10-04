@@ -235,7 +235,7 @@ func (s *runScreen) header() []string {
 	lines := []string{"", " " + questionLine(s.sh, m, f),
 		" " + st.Paint(term.Muted, fmt.Sprintf("budget %s %s %s %s ", money(f.budget), m.sep, taskCount(f.tasks), m.sep)) + legendLine(s.sh, m),
 		" " + st.Paint(term.Muted, m.words(f.terms))}
-	if !f.sandboxed {
+	if f.host {
 		lines = append(lines, " "+hostWarning(s.sh, m))
 	}
 	return lines

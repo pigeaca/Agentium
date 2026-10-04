@@ -20,6 +20,16 @@ const (
 	GraderContainer = "container-v1"
 )
 
+// GradesOn names the modes this Agentium grades in, for the refusal of any other (UnknownGrader and callers that
+// add context): one text, so the places that refuse cannot drift. Step 4 of the containers plan extends it.
+const GradesOn = "on the host or in " + GraderSandbox
+
+// UnknownGrader is the refusal of a mode this Agentium does not grade in (container-v1 included, until the containers
+// plan's step 4): the same words at every entry point.
+func UnknownGrader(mode string) error {
+	return fmt.Errorf("grader %s: this Agentium grades %s", mode, GradesOn)
+}
+
 // GraderOf is a recorded mode as it counts: empty is host.
 func GraderOf(mode string) string {
 	if mode == "" {

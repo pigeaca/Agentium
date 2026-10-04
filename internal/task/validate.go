@@ -266,7 +266,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 	v.Module = spec.Module // the task's module, whatever the project's setting is now
 	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC(), Toolchain: maps.Clone(v.Toolchain), Grader: GraderOf(v.Grader)}
 	if !KnownGrader(v.Grader) {
-		return Validation{}, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", v.Grader, GraderSandbox)
+		return Validation{}, UnknownGrader(v.Grader)
 	}
 	if v.Repeats > 1 {
 		result.Repeats = v.Repeats
@@ -706,7 +706,7 @@ func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string,
 		return results, ok, nil, err
 	case GraderSandbox:
 	default:
-		return nil, false, nil, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", v.Grader, GraderSandbox)
+		return nil, false, nil, UnknownGrader(v.Grader)
 	}
 	root := filepath.Join(filepath.Dir(v.WorkDir), "grading", label)
 	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {

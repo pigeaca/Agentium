@@ -114,6 +114,26 @@ func TestContainerGraderIsRefusedAsUnknown(t *testing.T) {
 	if after := len(records(t, experimentRuns(t, f, "locked"))); after != before {
 		t.Errorf("a container lock resumed: %d runs, then %d", before, after)
 	}
+	// A report reads the lock without Lock.Check: it says it does not describe the mode, never "the sandbox" or "your machine".
+	for _, args := range [][]string{{"experiment", "report", "locked"}, {"experiment", "report", "locked", "--markdown"}} {
+		r := f.run(ctx, args...)
+		expect(t, r, ExitOK, "a mode this Agentium does not describe")
+		if strings.Contains(r.stdout, "outside the sandbox") || strings.Contains(r.stdout, "grading sandbox (") {
+			t.Errorf("%v: the report describes the mode as another:\n%s", args, r.stdout)
+		}
+	}
+}
+
+// A run record in a mode this Agentium does not describe draws a neutral grading box: not the sandbox's, and not the
+// host's warning.
+func TestRunShowDrawsAnUnknownModeNeutrally(t *testing.T) {
+	rec := runScenes()["passed"]
+	rec.Grader, rec.Sandbox = task.GraderContainer, nil
+	v := strings.Join(runShowView(rec, "", plainUnicode, 100), "\n")
+	box := v[strings.Index(v, "hidden tests"):strings.Index(v, "result")] // the agent's box above says "in a sandbox" too
+	if !strings.Contains(box, "in a container (container-v1)") || strings.Contains(box, "in a sandbox") || strings.Contains(box, "your machine") {
+		t.Errorf("an unknown mode's grading box:\n%s", v)
+	}
 }
 
 // An experiment locked before grader modes (its lock names none) resumes as it ran, on the host, whatever the default

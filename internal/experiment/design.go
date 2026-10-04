@@ -510,7 +510,7 @@ func (d Design) Validate() error {
 	}
 	errs = append(errs, d.validateMethod()...)
 	if !task.KnownGrader(d.Grader) {
-		errs = append(errs, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", d.Grader, task.GraderSandbox))
+		errs = append(errs, task.UnknownGrader(d.Grader))
 	}
 	if j := d.Judge; j != nil {
 		if j.Repeats < 1 || j.Repeats > MaxJudgeRepeats {
