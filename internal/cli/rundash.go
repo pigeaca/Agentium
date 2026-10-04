@@ -132,7 +132,7 @@ func (v stateView) panel(sh term.Shapes, lay rowLayout, level int, now time.Time
 		out = append(out, answerBox(sh, m, v.answer, v.facts, w)...)
 	case 2:
 		out = append(out, "")
-		out = append(out, answerLines(sh, m, v.answer, v.facts)...)
+		out = append(out, answerLines(sh, m, v.answer, v.facts, w)...)
 	default:
 		out = append(out, answerLine(sh, m, v.answer, v.facts))
 	}

@@ -1,0 +1,163 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+         10 tasks · 59 runs · $37.31 spent · 1h 00m
+
+  ┌──────────────────────────────────────────────────────┐
+  │                      the answer                      │
+  │              lean is cheaper: 20% less               │
+  │  whether lean passes as many tasks: too few to tell  │
+  │           after all 10 tasks · sure enough           │
+  │                                                      │
+  │  cheaper ◀ ───●━─────────│────────────── ▶ costlier  │
+  │                        same                          │
+  │                likely 19% to 21% less                │
+  └──────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────┐
+  │                        baseline                        │
+  │ ███████████████████████████████████████▋░░░░░░░░░░░░░░ │
+  │ 22 of 30 runs passed                                   │
+  │ typical cost  $0.39 a run                              │
+  │ typical time  44s a run                                │
+  └────────────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────┐
+  │                          lean                          │
+  │ █████████████████████████████████████████░░░░░░░░░░░░░ │
+  │ 22 of 29 runs passed                                   │
+  │ typical cost  $0.32 a run                              │
+  │ typical time  44s a run                                │
+  └────────────────────────────────────────────────────────┘
+
+  where they differ
+            baseline              lean
+  task-2    ✗✗✓  $0.49            ✓✗✓  $0.39
+  task-6    ✓✗✓  $0.32            –✗✓  $0.26
+  + 8 tasks where both ended the same: 3 passed · 5 mixed
+
+  the judge's opinion  an AI reading the fixes, not a test
+  baseline: the judge thinks 12 of 20 passing fixes are
+  right
+  lean: the judge thinks 11 of 20 passing fixes are right
+  the judge preferred lean's fix in 6 of 10 tasks
+  (unvalidated, may be chance)
+
+  3 runs not counted (1 setup changed, 1 infrastructure, 1
+  stopped); their cost is in the total
+  1 baseline run passed by changing the test setup: counted
+  as failed
+  the numbers behind this:
+  agentium experiment report lean-ab-pairs --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+                   10 tasks · 59 runs · $37.31 spent · 1h 00m
+
+          ┌──────────────────────────────────────────────────────────┐
+          │                        the answer                        │
+          │                lean is cheaper: 20% less                 │
+          │    whether lean passes as many tasks: too few to tell    │
+          │             after all 10 tasks · sure enough             │
+          │                                                          │
+          │  cheaper ◀ ───━●━──────────│──────────────── ▶ costlier  │
+          │  likely 19% to 21% less  same                            │
+          └──────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
+  │             baseline              │    │               lean                │
+  │ ████████████████████████▎░░░░░░░░ │    │ █████████████████████████░░░░░░░░ │
+  │ 22 of 30 runs passed              │    │ 22 of 29 runs passed              │
+  │ typical cost  $0.39 a run         │    │ typical cost  $0.32 a run         │
+  │ typical time  44s a run           │    │ typical time  44s a run           │
+  └───────────────────────────────────┘    └───────────────────────────────────┘
+
+  where they differ
+            baseline              lean
+  task-2    ✗✗✓  $0.49            ✓✗✓  $0.39
+  task-6    ✓✗✓  $0.32            –✗✓  $0.26
+  + 8 tasks where both ended the same: 3 passed · 5 mixed
+
+  the judge's opinion  an AI reading the fixes, not a test
+  baseline: the judge thinks 12 of 20 passing fixes are right
+  lean: the judge thinks 11 of 20 passing fixes are right
+  the judge preferred lean's fix in 6 of 10 tasks (unvalidated, may be chance)
+
+  3 runs not counted (1 setup changed, 1 infrastructure, 1 stopped); their cost
+  is in the total
+  1 baseline run passed by changing the test setup: counted as failed
+  the numbers behind this: agentium experiment report lean-ab-pairs --details
+=== 100 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                             10 tasks · 59 runs · $37.31 spent · 1h 00m
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │                lean is cheaper: 20% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │             after all 10 tasks · sure enough             │
+                    │                                                          │
+                    │  cheaper ◀ ───━●━──────────│──────────────── ▶ costlier  │
+                    │  likely 19% to 21% less  same                            │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████▌░░░░░░░░░░░ │    │ ████████████████████████████████▋░░░░░░░░░░ │
+  │ 22 of 30 runs passed                        │    │ 22 of 29 runs passed                        │
+  │ typical cost  $0.39 a run                   │    │ typical cost  $0.32 a run                   │
+  │ typical time  44s a run                     │    │ typical time  44s a run                     │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  where they differ
+            baseline              lean
+  task-2    ✗✗✓  $0.49            ✓✗✓  $0.39
+  task-6    ✓✗✓  $0.32            –✗✓  $0.26
+  + 8 tasks where both ended the same: 3 passed · 5 mixed
+
+  the judge's opinion  an AI reading the fixes, not a test
+  baseline: the judge thinks 12 of 20 passing fixes are right
+  lean: the judge thinks 11 of 20 passing fixes are right
+  the judge preferred lean's fix in 6 of 10 tasks (unvalidated, may be chance)
+
+  3 runs not counted (1 setup changed, 1 infrastructure, 1 stopped); their cost is in the total
+  1 baseline run passed by changing the test setup: counted as failed
+  the numbers behind this: agentium experiment report lean-ab-pairs --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                             10 tasks · 59 runs · $37.31 spent · 1h 00m
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │                lean is cheaper: 20% less                 │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │             after all 10 tasks · sure enough             │
+                    │                                                          │
+                    │  cheaper ◀ ───━●━──────────│──────────────── ▶ costlier  │
+                    │  likely 19% to 21% less  same                            │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████▌░░░░░░░░░░░ │    │ ████████████████████████████████▋░░░░░░░░░░ │
+  │ 22 of 30 runs passed                        │    │ 22 of 29 runs passed                        │
+  │ typical cost  $0.39 a run                   │    │ typical cost  $0.32 a run                   │
+  │ typical time  44s a run                     │    │ typical time  44s a run                     │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  where they differ
+            baseline              lean
+  task-2    ✗✗✓  $0.49            ✓✗✓  $0.39
+  task-6    ✓✗✓  $0.32            –✗✓  $0.26
+  + 8 tasks where both ended the same: 3 passed · 5 mixed
+
+  the judge's opinion  an AI reading the fixes, not a test
+  baseline: the judge thinks 12 of 20 passing fixes are right
+  lean: the judge thinks 11 of 20 passing fixes are right
+  the judge preferred lean's fix in 6 of 10 tasks (unvalidated, may be chance)
+
+  3 runs not counted (1 setup changed, 1 infrastructure, 1 stopped); their cost is in the total
+  1 baseline run passed by changing the test setup: counted as failed
+  the numbers behind this: agentium experiment report lean-ab-pairs --details
+=== end

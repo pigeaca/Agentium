@@ -1,7 +1,7 @@
 # Judge: which arm fixed it better
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-02): resumed without the judge gate, by the user's decision ("integrate it without any proofs"). Step 1a merged (#53). Step 1b starts after `seq-v1` merges (it touches `internal/experiment` and `internal/report`). Because the pilot's NO-GO on order flips (11%) stands unrefuted, pair preferences are labeled "judge, unvalidated" in reports, are exploratory, and never count as a decisive verdict or toward the north star.
+- Status: In Progress (2026-10-02): resumed without the judge gate, by the user's decision ("integrate it without any proofs"). Step 1a merged (#53), 1b merged (#126), step 2 done (2026-10-04). Step 1b started after `seq-v1` merges (it touches `internal/experiment` and `internal/report`). Because the pilot's NO-GO on order flips (11%) stands unrefuted, pair preferences are labeled "judge, unvalidated" in reports, are exploratory, and never count as a decisive verdict or toward the north star.
 - Scope: the user's question on 2026-09-30, "who fixed the bug, who did it better". It follows the [decision](../decisions/2026-10-01-llm-judge-alongside-tests.md) to use a judge alongside tests.
 
 ## Why
@@ -43,7 +43,12 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
   - Clustering: `experiment.PairPreferenceOf` counts the preference once per task (the arm its comparisons preferred more often), and the flip rate per pair; with one run per arm both agree. Chosen over an honesty note so that the binomial test and the Wilson interval stay valid at repeats above 1. Step 2 shows it.
   - JSON (additive): `experiment.judge_pairs`, `progress.pair_judge_usd` and `uncompared_pairs` (`judge_usd` is both judges'), a run's `pair_judge_cost_usd`.
   - Review of #126: no queued comparison starts while `--wait` waits for the usage window, and a pause at the usage limit drops the queue for the resume; a pair judge's usage limit pauses the runs at once (`Plan.Paused`, checked before every start and every seq-v1 stage); the comparisons' budget accounting has unit and CLI tests that fail under each reviewer mutation; `Recover` removes a leftover `pair-judge` folder on any command that takes the run lock; an interrupt never lowers a stored comparison's cost. Not done: the usage gate's projection leaves comparisons out, as it leaves the per-run judge out (no measured share of the window per comparison).
-- [ ] **2. Report.**
+- [x] **2. Report.** Done (2026-10-04, with step 3 of the [console design](2026-10-03-console-design.md), branch `claude/feat/report-redesign`):
+  - `Report.PairJudge` (`pair_judge` in the JSON, absent without `--judge-pairs`): the model and effort, `PairPreferenceOf`'s clustered statistics (`tasks`: one vote per task, its share, Wilson interval, exact binomial p and the floor of 5; `pairs`: complete, incomplete, empty, ties, flips), the pairs still to compare, the cost, and each task's vote with its complete comparisons, flips and one reason (scrubbed, one line, from the order with arm A's change first).
+  - The Markdown and `--details` add a Judge pairs section: the "Judge prefers" line (the arm preferred, its share with the interval and p, the other arm's count, "could be chance" or "unlikely to be chance alone"; "too few to say" below 5 tasks with a preference), the counts, the cost, and a per-task table. The terminal view says it in a line: "the judge preferred lean's fix in 6 of 10 tasks (unvalidated, may be chance)".
+  - Reports without the pair judge are byte for byte as before (the console plan's step 3 has the proof).
+  - `experiment.PairRecords` pairs a report's records as `PairsOf` pairs stored runs; `experiment.TaskVote` is exported for the per-task votes.
+  - Tests: goldens `lean-ab-pairs.{md,json,txt}`, the floor, one vote per task with repeats, scrubbed reasons, and the CLI with a fake judge in all formats.
 - [ ] **3. Real check (paid; approval).**
 
 ## Boundaries

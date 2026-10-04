@@ -169,6 +169,8 @@ func (r Report) Markdown(w io.Writer) error {
 		}
 	}
 
+	r.markdownPairs(&b)
+
 	b.WriteString("\n## Notes\n\n")
 	for _, n := range r.Notes {
 		fmt.Fprintf(&b, "- %s\n", n)

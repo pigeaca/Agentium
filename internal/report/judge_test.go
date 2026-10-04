@@ -3,7 +3,6 @@ package report
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,67 +10,12 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
-	"github.com/pigeaca/agentium/internal/task"
+	"github.com/pigeaca/agentium/internal/report/reporttest"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// judged is fixture() with the judge on (3 repeats): every task has a reference in code but task-9, whose reference is
-// only tests. Passing runs are judged fixed unless (task + repeat) % 3 is 0, when arm A's are "partly" and B's "no" (one
-// without a majority); failing runs are judged "no". One run changed no code and one got no answer. A reason names a
-// local path and a key, over two lines.
-func judged() Input {
-	in := fixture()
-	in.Name = "lean-ab-judged"
-	l := &in.Lock
-	l.Design.Judge = &judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 3}
-	for i := range l.Tasks {
-		reference := []string{"value.go", "value_test.go"}
-		if i == 9 {
-			reference = []string{"value_test.go"}
-		}
-		l.Tasks[i] = experiment.NewLockedTask(l.Tasks[i].Name, l.Tasks[i].Instruction, task.Spec{Base: "base-commit", Solution: "solution-commit",
-			Reference: reference, Verify: []string{"make test"}})
-	}
-	for i := range in.Runs {
-		r := &in.Runs[i]
-		rec := &r.Record
-		if rec.Passed == nil || rec.Task == "task-9" {
-			continue
-		}
-		var ti int
-		fmt.Sscanf(rec.Task, "task-%d", &ti)
-		repeat := l.Schedule[r.Slot].Repeat
-		v := judge.Verdict{Version: judge.Version, Requested: 3, Model: judge.DefaultModel, Effort: judge.DefaultEffort, CostUSD: 0.18 + 0.01*float64(ti)}
-		answer := func(fixed, reason string, answers ...string) {
-			v.Fixed, v.Reason, v.Answers = fixed, reason, answers
-			for range answers {
-				v.Reasons = append(v.Reasons, reason)
-			}
-		}
-		switch {
-		case r.Slot == 20:
-			v.Empty, v.CostUSD, v.Answers, v.Reasons = true, 0, []string{}, []string{}
-		case r.Slot == 21:
-			v.Answers, v.Reasons, v.Errors = []string{}, []string{}, []string{"exit 1, not JSON: in /home/someone/.agentium/records/x/judge"}
-		case !*rec.Passed:
-			answer(judge.No, "The change does not touch the failing path.", judge.No, judge.No, judge.No)
-		case (ti+repeat)%3 != 0:
-			answer(judge.Yes, "Does what the reference does.", judge.Yes, judge.Yes, judge.Yes)
-		case rec.Arm == "B" && ti == 2:
-			answer(judge.Partly, "Handles the empty case but\n  not a missing file; see /home/someone/.agentium/records/x/agent.diff with sk-ant-api03-"+ // secret-scan: allow
-				strings.Repeat("q", 40)+".", judge.Partly, judge.Partly, judge.Yes)
-		case rec.Arm == "A":
-			answer(judge.Partly, "Covers only the first of the two inputs the task names.", judge.Partly, judge.Partly, judge.Partly)
-		case ti == 5:
-			answer(judge.Partly, "", judge.Yes, judge.Partly, judge.No) // no majority
-			v.Reasons = []string{"a", "b", "c"}
-		default:
-			answer(judge.No, "Works around the check instead of fixing the parser.", judge.No, judge.No, judge.Yes)
-		}
-		rec.Judge = &v
-	}
-	return in
-}
+// judged is reporttest.Judged as a report's input.
+func judged() Input { return inputOf(reporttest.Judged()) }
 
 func renderAll(t *testing.T, rep Report) (md, js, txt string) {
 	t.Helper()

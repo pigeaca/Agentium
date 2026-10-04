@@ -86,6 +86,7 @@ func envSize(env Env) func() (int, int) {
 // marks are the screen's small symbols, in Unicode or, where the locale is not UTF-8, in ASCII.
 type marks struct {
 	ok, fail, none, sep, dot, warn string
+	atLeast                        string // before a cost that is a lower bound: "≥", or ">=" in ASCII
 	// box: the step boxes' corners and lines; outline: the sandbox's; line: the dotted connectors; rule: the header's.
 	boxTL, boxTR, boxBL, boxBR, boxH, boxV string
 	outTL, outTR, outBL, outBR, outH, outV string
@@ -101,11 +102,11 @@ func (m marks) words(text string) string {
 }
 
 var (
-	unicodeMarks = marks{ok: "✓", fail: "✗", none: "–", sep: "·", dot: "●", warn: "!",
+	unicodeMarks = marks{ok: "✓", fail: "✗", none: "–", sep: "·", dot: "●", warn: "!", atLeast: "≥",
 		boxTL: "┌", boxTR: "┐", boxBL: "└", boxBR: "┘", boxH: "─", boxV: "│",
 		outTL: "╭", outTR: "╮", outBL: "╰", outBR: "╯", outH: "┄", outV: "┆",
 		line: "╌", rule: "─", ellipsis: "…"}
-	asciiMarks = marks{ok: "+", fail: "x", none: "-", sep: "-", dot: "o", warn: "!",
+	asciiMarks = marks{ok: "+", fail: "x", none: "-", sep: "-", dot: "o", warn: "!", atLeast: ">=",
 		boxTL: "+", boxTR: "+", boxBL: "+", boxBR: "+", boxH: "-", boxV: "|",
 		outTL: ".", outTR: ".", outBL: "'", outBR: "'", outH: ".", outV: ":",
 		line: ".", rule: "-", ellipsis: "..."}
@@ -266,6 +267,9 @@ type answerState struct {
 	Next        int      // seq-v1: the tasks the next check counts; 0 when no check is left
 	All         int      // the experiment's tasks
 	Ended       string   // how the execution ended: "" while it runs, else its status (done, budget, usage or stopped)
+	// Settle is about how many tasks would settle an answer that is not sure (MetricResult.TasksToResolve); 0 when
+	// unknown.
+	Settle int
 }
 
 // Final reports whether the box holds the answer rather than the answer so far.
@@ -324,7 +328,7 @@ func answerOfAnalysis(an experiment.Analysis, tasks int) (answerState, bool) {
 			continue
 		}
 		a := answerState{Metric: r.Metric, Verdict: r.Verdict, Estimate: r.Boot95.Estimate, HasEstimate: r.Tasks >= 2, A: r.A, B: r.B,
-			All: tasks, Ended: experiment.StatusDone}
+			All: tasks, Ended: experiment.StatusDone, Settle: r.TasksToResolve}
 		if math.IsNaN(a.Estimate) || math.IsInf(a.Estimate, 0) {
 			a.HasEstimate = false
 		}
@@ -350,7 +354,12 @@ func answerWords(a answerState, labels [2]string, aa bool) (headline, status str
 		parts = append(parts, "stopped early", "more tasks are unlikely to settle it")
 	case a.Decision == experiment.LookFinal || a.Final():
 		parts = append(parts, afterAll(a.All))
-		if !a.decisive() && a.Verdict != "" {
+		switch {
+		case a.decisive():
+			parts = append(parts, "sure enough")
+		case a.Verdict != "" && a.Settle > 0 && !aa: // an A/A has nothing to settle
+			parts = append(parts, "not sure yet", fmt.Sprintf("about %d tasks in all could settle it", a.Settle))
+		case a.Verdict != "":
 			parts = append(parts, "not sure")
 		}
 	case a.Seq && a.Decision == "":
@@ -658,16 +667,45 @@ func answerBox(sh term.Shapes, m marks, a answerState, f runFacts, width int) []
 	}
 	center(1, a.Title(), term.Default, true)
 	center(2, headline, a.Role(), false)
-	center(3, status, term.Muted, false)
+	center(3, fitParts(status, inner-2, m), term.Muted, false)
 	return c.Lines(sh.Style)
 }
 
-// answerLines is the answer on two lines, for a short terminal: the title and the headline, then the status.
-func answerLines(sh term.Shapes, m marks, a answerState, f runFacts) []string {
+// fitParts fits a status of " · "-separated parts (in the marks' separator) in width cells without changing its
+// height: while it is too wide, it drops its least important part ("after all 16 tasks" before what settles it, and
+// that before how sure it is), the earliest of equals first; a lone part still too wide is cut.
+func fitParts(text string, width int, m marks) string {
+	sep := " " + m.sep + " "
+	parts := strings.Split(text, sep)
+	rank := func(p string) int {
+		switch {
+		case strings.Contains(p, "sure"):
+			return 3
+		case strings.Contains(p, "settle"), strings.HasPrefix(p, "stopped"), strings.HasPrefix(p, "paused"), strings.HasPrefix(p, "next check"),
+			strings.HasPrefix(p, "first check"):
+			return 2
+		}
+		return 1
+	}
+	for len(parts) > 1 && term.Width(strings.Join(parts, sep)) > width {
+		drop := 0
+		for i, p := range parts {
+			if rank(p) < rank(parts[drop]) {
+				drop = i
+			}
+		}
+		parts = append(parts[:drop:drop], parts[drop+1:]...)
+	}
+	return term.Truncate(strings.Join(parts, sep), width, m.ellipsis)
+}
+
+// answerLines is the answer on two lines, for a short terminal: the title and the headline, then the status, fitted
+// to width cells (fitParts).
+func answerLines(sh term.Shapes, m marks, a answerState, f runFacts, width int) []string {
 	headline, status := answerWords(a, f.labels, f.aa)
 	headline, status = m.words(headline), m.words(status)
 	st := sh.Style
-	return []string{" " + st.Paint(term.OutcomeOK, a.Title()+":") + " " + st.Paint(a.Role(), headline), "   " + st.Paint(term.Muted, status)}
+	return []string{" " + st.Paint(term.OutcomeOK, a.Title()+":") + " " + st.Paint(a.Role(), headline), "   " + st.Paint(term.Muted, fitParts(status, width-3, m))}
 }
 
 // answerLine is the answer on one line, for a very short terminal.

@@ -1,0 +1,118 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+       8 of 16 tasks · 16 runs · $7.32 spent · 16 min
+
+  ┌──────────────────────────────────────────────────────┐
+  │                      the answer                      │
+  │             no clear difference in cost              │
+  │  whether lean passes as many tasks: too few to tell  │
+  │ stopped early · more tasks are unlikely to settle it │
+  │                                                      │
+  │  cheaper ◀ ──────━━━━━━━━●━━━━━━━━━━━─── ▶ costlier  │
+  │                        same                          │
+  │             likely 22% less to 31% more              │
+  └──────────────────────────────────────────────────────┘
+
+  ┌────────────────────────────────────────────────────────┐
+  │                        baseline                        │
+  │ ██████████████████████████████████████████████████████ │
+  │ 8 of 8 passed                                          │
+  │ typical cost  $0.45 a task                             │
+  │ typical time  40s a task                               │
+  └────────────────────────────────────────────────────────┘
+  ┌────────────────────────────────────────────────────────┐
+  │                          lean                          │
+  │ ██████████████████████████████████████████████████████ │
+  │ 8 of 8 passed                                          │
+  │ typical cost  $0.45 a task                             │
+  │ typical time  40s a task                               │
+  └────────────────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this:
+  agentium experiment report lean-seq-futility --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+                 8 of 16 tasks · 16 runs · $7.32 spent · 16 min
+
+          ┌──────────────────────────────────────────────────────────┐
+          │                        the answer                        │
+          │               no clear difference in cost                │
+          │    whether lean passes as many tasks: too few to tell    │
+          │   stopped early · more tasks are unlikely to settle it   │
+          │                                                          │
+          │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
+          │                          same                            │
+          │               likely 22% less to 31% more                │
+          └──────────────────────────────────────────────────────────┘
+
+  ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
+  │             baseline              │    │               lean                │
+  │ █████████████████████████████████ │    │ █████████████████████████████████ │
+  │ 8 of 8 passed                     │    │ 8 of 8 passed                     │
+  │ typical cost  $0.45 a task        │    │ typical cost  $0.45 a task        │
+  │ typical time  40s a task          │    │ typical time  40s a task          │
+  └───────────────────────────────────┘    └───────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this:
+  agentium experiment report lean-seq-futility --details
+=== 100 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                           8 of 16 tasks · 16 runs · $7.32 spent · 16 min
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │               no clear difference in cost                │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │   stopped early · more tasks are unlikely to settle it   │
+                    │                                                          │
+                    │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
+                    │                          same                            │
+                    │               likely 22% less to 31% more                │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████████████████ │    │ ███████████████████████████████████████████ │
+  │ 8 of 8 passed                               │    │ 8 of 8 passed                               │
+  │ typical cost  $0.45 a task                  │    │ typical cost  $0.45 a task                  │
+  │ typical time  40s a task                    │    │ typical time  40s a task                    │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report lean-seq-futility --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                           8 of 16 tasks · 16 runs · $7.32 spent · 16 min
+
+                    ┌──────────────────────────────────────────────────────────┐
+                    │                        the answer                        │
+                    │               no clear difference in cost                │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │   stopped early · more tasks are unlikely to settle it   │
+                    │                                                          │
+                    │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
+                    │                          same                            │
+                    │               likely 22% less to 31% more                │
+                    └──────────────────────────────────────────────────────────┘
+
+  ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
+  │                  baseline                   │    │                    lean                     │
+  │ ███████████████████████████████████████████ │    │ ███████████████████████████████████████████ │
+  │ 8 of 8 passed                               │    │ 8 of 8 passed                               │
+  │ typical cost  $0.45 a task                  │    │ typical cost  $0.45 a task                  │
+  │ typical time  40s a task                    │    │ typical time  40s a task                    │
+  └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
+
+  every task ended the same in both: 8 passed
+
+  the numbers behind this: agentium experiment report lean-seq-futility --details
+=== end

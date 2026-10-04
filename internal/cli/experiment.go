@@ -51,10 +51,11 @@ var experimentUsage = `Usage:
                      prints styled lines instead, nothing redrawn. Piped, or with NO_COLOR, it prints plain lines
   agentium experiment show NAME
                      the lock and the progress per arm
-  agentium experiment report NAME [--json | --markdown] [--out FILE]
-                     verdicts, metrics with their intervals, per-task results, behavior, costs and notes (with
-                     --judge, its verdicts too): styled for a terminal; as Markdown (for a pull request) when piped,
-                     with --out or --markdown; or JSON (with the lock and every run)
+  agentium experiment report NAME [--details | --json | --markdown] [--out FILE]
+                     on a terminal, the answer in plain words: how sure it is, each arm's passes, cost and time, the
+                     tasks where the arms differ, the judges' opinion; --details shows every number instead (metrics
+                     with their intervals, per-task results, behavior, costs, notes). As Markdown (for a pull
+                     request) when piped, with --out or --markdown; or JSON (with the lock and every run)
   agentium experiment list
   agentium experiment rm NAME        (only one that has not run)
 
@@ -85,9 +86,11 @@ it holds no run's slot and no look; the budget holds back %d calls × $%.2f per 
 (another model or effort adds each call's overshoot allowance: experiment plan states the cap), about $%.2f a pair at
 the pilot's mean. A pair judge that hits a usage limit pauses the experiment as the judge does; queued comparisons
 wait while the experiment waits for the usage window, and a pause at the usage limit leaves them for the resume.
+The report counts one vote per task (the arm its comparisons preferred more often) and says "too few to say" below
+%d tasks with a preference; its Judge pairs section gives each task's vote with a reason.
 `, llmjudge.DefaultRepeats, llmjudge.DefaultModel, llmjudge.DefaultEffort, llmjudge.DefaultRepeats, llmjudge.CallCapUSD,
 	llmjudge.DefaultRepeats*int(llmjudge.CallTimeout.Minutes()), report.MaxFlagged, llmjudge.DefaultModel, llmjudge.DefaultEffort,
-	llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD)
+	llmjudge.PairCalls, llmjudge.CallCapUSD, llmjudge.PairEstimateUSD, llmjudge.MinPreferences)
 
 // experimentHidden are experiment new's expert flags: they parse, but experimentUsage leaves them out (docs/guide.md,
 // "Advanced flags", lists each with its default).

@@ -186,7 +186,7 @@ func TestModelABCalibratesBothModels(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "report", "m", "--markdown"), ExitOK, label, "B ("+opus+")")
 	expect(t, f.run(ctx, "experiment", "report", "m", "--json"), ExitOK, `"profile": "`+opus+`"`, `"calibration_usd": 0.04`)
 	*f.terminal = true
-	expect(t, f.run(ctx, "experiment", "report", "m"), ExitOK, label, "B ("+opus+")") // the headlines and the noise note need two tasks: the report tests cover them
+	expect(t, f.run(ctx, "experiment", "report", "m", "--details"), ExitOK, label, "B ("+opus+")") // the headlines and the noise note need two tasks: the report tests cover them
 	*f.terminal = false
 }
 
