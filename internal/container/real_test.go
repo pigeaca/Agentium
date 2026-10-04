@@ -711,8 +711,9 @@ func TestRealCopyInFolderSwappedForPipe(t *testing.T) {
 	}
 	t.Cleanup(func() { d.hooks = walkHooks{} })
 	start := time.Now()
-	err := d.Run(context.Background(), realSpec(data, "swap", img, d), func(ctx context.Context, c *Container) error {
-		_, err := c.CopyIn(ctx, tree, CopyLimits{Bytes: 1 << 20, Entries: 100, Timeout: 30 * time.Second})
+	// Guarded: a copy-in that hangs fails the test at once, and testData's cleanup still removes the container.
+	err := runSpecGuarded(t, d, context.Background(), realSpec(data, "swap", img, d), 30*time.Second, func(ctx context.Context, c *Container) error {
+		_, err := c.CopyIn(ctx, tree, CopyLimits{Bytes: 1 << 20, Entries: 100, Timeout: 20 * time.Second})
 		return err
 	})
 	if !errors.Is(err, ErrUnjudgeable) {

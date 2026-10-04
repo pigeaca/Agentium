@@ -66,8 +66,7 @@ type Container struct {
 	gone     bool
 	// stopped is set when a removal failed: the container runs nothing more, and Run tries the removal again.
 	stopped bool
-	// used is set once the grade's input was used: a copy-in streamed or was refused on the tree, or a command was
-	// sent. A failed removal after that is ErrUnjudgeable as well as ErrCleanup.
+	// used is set once the grade's input was used: a copy-in's walk opened the tree, or a command was sent. A failed removal after that is ErrUnjudgeable as well as ErrCleanup.
 	used bool
 	// mayExist is set from the moment create is sent until the container is known to be gone. A create the daemon
 	// refused (its name already in use, say) leaves it unset: the container of that name is not this grade's, and
@@ -175,7 +174,22 @@ func (c *Container) start(ctx context.Context) error {
 	if probeRes.ExitCode != 0 {
 		return fmt.Errorf("%w: the probe script exited %d: %s", ErrProbe, probeRes.ExitCode, firstLine(probeErr))
 	}
-	return checkProbes(string(probes), c.spec.Deps != "")
+	if err := checkProbes(string(probes), c.spec.Deps != ""); err != nil {
+		return err
+	}
+	// The daemon's record of commands judges every command (Exec), so a daemon that cannot give it fails here, as
+	// infrastructure, before any of the grade's input is used.
+	marker, err := newNonce()
+	if err != nil {
+		return err
+	}
+	w := c.watchExec(ctx, marker)
+	err = c.markReady(ctx, w, marker)
+	w.stop()
+	if err != nil {
+		return fmt.Errorf("%s: the daemon's record of commands, which judges them: %w", c.name, err)
+	}
+	return nil
 }
 
 func (c *Container) check(_ []byte, stderr string, res runner.Result, err error) error {
@@ -210,8 +224,8 @@ func (c *Container) execArgs(user string, interactive bool, env []string, dir st
 // way that can block, the tree only read), unpacked by the image's tar as the grade's user, so the daemon never
 // resolves a path in a tree the agent wrote. A tree the stream refuses (ErrTooLarge, or changed or unreadable) or the
 // image's tar fails on is ErrUnjudgeable: the agent controls the tree. So is a client failure or a timeout
-// (limits.Timeout) once the stream has started, since a tree can be made slow enough to reach it; before that, such an
-// error is plain. The walk stops as soon as docker stops reading, so CopyIn always returns. A failed or cancelled
+// (limits.Timeout) once the walk has opened the tree, since a tree can be made slow enough to reach it without writing
+// a byte; before that, such an error is plain. The walk stops as soon as docker stops reading, so CopyIn always returns. A failed or cancelled
 // copy-in leaves a partial tree, so the container is removed.
 func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) (TarStats, error) {
 	if c.gone || c.stopped {
@@ -229,10 +243,11 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 	var stats TarStats
 	var writeErr error
 	var started atomic.Bool // set once docker has taken the first bytes of the tree
+	var begun atomic.Bool   // set once the walk has opened the tree: from then on the agent's input is being read
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		stats, writeErr = writeTar(walkCtx, startWriter{walkCtx, pw, &started}, root, limits, c.d.hooks)
+		stats, writeErr = writeTar(walkCtx, startWriter{walkCtx, pw, &started}, root, limits, c.d.hooks, &begun)
 		pw.Close() // tar sees the stream's end; after an error, the writer's error decides
 	}()
 	timeout := limits.Timeout
@@ -245,9 +260,7 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 	pr.Close()
 	<-done
 	cut := errors.Is(writeErr, errCopyEnded)
-	if started.Load() || writeErr != nil && !cut && !errors.Is(writeErr, errNoRoot) {
-		c.used = true
-	}
+	c.used = c.used || begun.Load()
 	switch {
 	case ctx.Err() != nil:
 		err = ctx.Err()
@@ -256,9 +269,15 @@ func (c *Container) CopyIn(ctx context.Context, root string, limits CopyLimits) 
 	case writeErr != nil && !cut:
 		// The writer's error decides (tar may accept a stream cut at an entry's boundary), and it comes from the tree.
 		err = fmt.Errorf("%w: %w", ErrUnjudgeable, writeErr)
-	case err != nil && started.Load():
-		err = fmt.Errorf("%w: %w", ErrUnjudgeable, err)
+	case !begun.Load():
+		// Docker ended before the walk opened the tree: nothing of the agent's was read.
+		if err == nil {
+			err = fmt.Errorf("tar exited %d before the tree was read: %s", res.ExitCode, firstLine(stderr))
+		}
 	case err != nil:
+		// A client failure or a timeout once the walk has begun: a tree can be made slow enough to reach it, even one
+		// that never writes a byte (pipes and sockets are only skipped).
+		err = fmt.Errorf("%w: %w", ErrUnjudgeable, err)
 	case res.ExitCode != 0:
 		err = fmt.Errorf("%w: tar exited %d: %s", ErrUnjudgeable, res.ExitCode, firstLine(stderr))
 	case cut:
@@ -314,11 +333,13 @@ var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // An exit status counts only when the daemon's own record of this exec agrees with it: the docker client exits 1 both
 // when the command did and when its API calls failed, so the exit code alone cannot tell a failed test from a failed
 // client. A watch on the daemon's events (execWatch) finds the exec by a nonce in its argv and reads the exit code the
-// daemon logged for it. The command's stderr goes to its stdout inside the container, so the client's own stderr holds
+// daemon logged for it; a marker exec first (markReady) makes sure the watch is live. The command's stderr goes to its
+// stdout inside the container, so the client's own stderr holds
 // only the client's messages. Any of these is ErrUnjudgeable, and the container is removed: the client reported an
 // error, no record of the exec's end within statusTimeout, or a record that disagrees with the client.
 //
-// On a timeout (Agentium's clock) the daemon's record must show the command still running; the counters are read,
+// On a timeout (Agentium's clock) the client must have reported nothing and a healthy record must show the command
+// started and still running (waiting up to statusTimeout for its start); the counters are read,
 // then the container is removed: killing the docker client would leave the command running inside. If that removal
 // fails, the result still stands and Run retries the removal (and reports it); later calls are ErrGone. On ctx's
 // cancel the container is removed at once and the error is ctx's. Any other error (the counters unreadable, the
@@ -342,12 +363,26 @@ func (c *Container) Exec(ctx context.Context, cmd Command) (Result, error) {
 	if out == nil {
 		out = io.Discard
 	}
+	marker, err := newNonce()
+	if err != nil {
+		return Result{ExitCode: -1}, fmt.Errorf("exec in %s: %w", c.name, err)
+	}
 	nonce, err := newNonce()
 	if err != nil {
 		return Result{ExitCode: -1}, fmt.Errorf("exec in %s: %w", c.name, err)
 	}
-	w := c.watchExec(ctx, nonce)
+	w := c.watchExec(ctx, marker, nonce)
 	defer w.stop()
+	if err := c.markReady(ctx, w, marker); err != nil {
+		switch {
+		case ctx.Err() != nil:
+			err = ctx.Err()
+		case c.used:
+			// No command ran, but the grade's tree is in: a retry would still be a re-roll.
+			err = fmt.Errorf("%w: %w", ErrUnjudgeable, err)
+		}
+		return Result{ExitCode: -1}, errors.Join(fmt.Errorf("exec in %s: before the command: %w", c.name, err), c.kill(ctx))
+	}
 	clientErr := &capped{max: 64 << 10}
 	c.used = true
 	res, err := runner.Run(ctx, runner.Spec{Args: append([]string{c.d.bin}, c.d.args(c.execArgs(User, false, cmd.Env, dir, commandArgv(cmd.Command, nonce)...))...),
@@ -363,15 +398,24 @@ func (c *Container) Exec(ctx context.Context, cmd Command) (Result, error) {
 		return result, errors.Join(fmt.Errorf("%w: exec in %s: %w", ErrUnjudgeable, c.name, err), c.kill(ctx))
 	}
 	if res.TimedOut {
+		// A timeout settles only if the client stayed silent and a healthy record shows the command started and still
+		// running: a client that stalled after the command ended, or a watch that failed, says nothing of the grade.
 		result.ExitCode = -1
-		if started, ended := w.running(); !started || ended {
-			return unjudgeable("timed out, and the daemon's record has the command started %v, ended %v", started, ended)
+		if msg := strings.TrimSpace(clientErr.String()); msg != "" {
+			return unjudgeable("timed out, and the docker client reported: %s", firstLine(c.d.redact(msg)))
+		}
+		err := w.running(ctx, nonce, c.d.statusWait)
+		if ctx.Err() != nil {
+			return result, errors.Join(fmt.Errorf("exec in %s: %w", c.name, ctx.Err()), c.kill(ctx))
+		}
+		if err != nil {
+			return unjudgeable("timed out, and the daemon's record of the command: %v", err)
 		}
 	} else {
 		if msg := strings.TrimSpace(clientErr.String()); msg != "" {
 			return unjudgeable("the docker client exited %d and reported: %s", res.ExitCode, firstLine(c.d.redact(msg)))
 		}
-		exit, err := w.wait(ctx, c.d.statusWait)
+		exit, err := w.wait(ctx, nonce, c.d.statusWait)
 		if ctx.Err() != nil {
 			return result, errors.Join(fmt.Errorf("exec in %s: %w", c.name, ctx.Err()), c.kill(ctx))
 		}

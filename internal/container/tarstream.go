@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -56,14 +57,22 @@ type walkHooks struct {
 // than limits allow (every listed entry counts, skipped ones too) is ErrTooLarge. The walk checks ctx before each
 // entry and stops with its cause. The tree is only read.
 func WriteTar(ctx context.Context, w io.Writer, root string, limits CopyLimits) (TarStats, error) {
-	return writeTar(ctx, w, root, limits, walkHooks{})
+	return writeTar(ctx, w, root, limits, walkHooks{}, nil)
 }
 
-func writeTar(ctx context.Context, w io.Writer, root string, limits CopyLimits, hooks walkHooks) (TarStats, error) {
+// writeTar is WriteTar; it sets begun (when not nil) once the tree is opened, from when the walk reads the agent's
+// input. A walk stopped before that never opens the tree.
+func writeTar(ctx context.Context, w io.Writer, root string, limits CopyLimits, hooks walkHooks, begun *atomic.Bool) (TarStats, error) {
 	t := &tarWalk{ctx: ctx, limits: limits, hooks: hooks}
+	if err := t.stopped(); err != nil {
+		return t.stats, fmt.Errorf("tar %s: %w", root, err)
+	}
 	r, err := os.OpenRoot(root)
 	if err != nil {
 		return t.stats, fmt.Errorf("tar %s: %w: %w", root, errNoRoot, err)
+	}
+	if begun != nil {
+		begun.Store(true)
 	}
 	defer r.Close()
 	t.r, t.tw = r, tar.NewWriter(w)

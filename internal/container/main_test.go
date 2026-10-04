@@ -56,14 +56,17 @@ type scenario struct {
 	CommandGone  bool // the container ends during a command (its main process killed): exit 137, and gone after
 	// The daemon's events for a command's exec come from files the command's fake writes: exec-<nonce> (its
 	// exec_start action) and exit-<nonce> (the exit code the daemon logs).
-	ClientFail      bool   // the command runs and its exit is logged, then the client reports an error and exits 1
-	ClientFailEarly bool   // the client exits 1, silently, before the exec starts: no event at all
-	ClientExit      int    // not 0: the client exits with this, silently, whatever the command's logged exit
-	EventsFail      bool   // docker events fails at once
-	RmFail          bool   // docker rm fails (the daemon stopped answering): the container stays
-	PS              string // docker ps output
-	Volumes         string // docker volume ls output
-	Env             bool   // record the environment of each call too
+	ClientFail          bool   // the command runs and its exit is logged, then the client reports an error and exits 1
+	ClientFailEarly     bool   // the client exits 1, silently, before the exec starts: no event at all
+	ClientExit          int    // not 0: the client exits with this, silently, whatever the command's logged exit
+	EventsFail          bool   // docker events fails at once
+	EventsBare          bool   // the events carry no exec IDs or exit codes (an old engine)
+	EventsTwice         bool   // every event comes twice (from the replay and live)
+	EventsEndAfterStart bool   // the events stream ends with an error right after a command's exec_start
+	RmFail              bool   // docker rm fails (the daemon stopped answering): the container stays
+	PS                  string // docker ps output
+	Volumes             string // docker volume ls output
+	Env                 bool   // record the environment of each call too
 }
 
 func fakeDocker() int {
@@ -175,6 +178,13 @@ func fakeDocker() int {
 				return sc.CountersExit
 			}
 			fmt.Print(sc.Counters)
+		case len(args) >= 2 && args[len(args)-2] == ":":
+			// markReady's marker: a no-op, recorded like any marked exec.
+			nonce := args[len(args)-1]
+			sh := slices.Index(args, "sh")
+			event(dir, "exec-"+nonce, "exec_start: "+strings.Join(args[sh:], " "))
+			event(dir, "exit-"+nonce, "0")
+			return 0
 		case sc.ClientFailEarly:
 			return 1
 		default:
@@ -244,8 +254,14 @@ func fakeEvents(dir string, sc scenario) int {
 	}
 	const id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" // testdata/inspect.json's
 	emit := func(action string, attrs map[string]string) {
+		if sc.EventsBare {
+			attrs = map[string]string{}
+		}
 		line, _ := json.Marshal(map[string]any{"Type": "container", "Action": action, "Actor": map[string]any{"ID": id, "Attributes": attrs}})
 		fmt.Println(string(line))
+		if sc.EventsTwice {
+			fmt.Println(string(line))
+		}
 	}
 	seen := map[string]bool{}
 	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
@@ -259,6 +275,10 @@ func fakeEvents(dir string, sc scenario) int {
 			switch kind, nonce, _ := strings.Cut(name, "-"); {
 			case kind == "exec" && strings.HasPrefix(nonce, "agentium-exec-"):
 				emit(string(body), map[string]string{"execID": "id-" + nonce})
+				if sc.EventsEndAfterStart && strings.Contains(string(body), "exec sh -c") {
+					fmt.Fprintln(os.Stderr, "Error response from daemon: unexpected EOF")
+					return 1
+				}
 			case kind == "exit" && strings.HasPrefix(nonce, "agentium-exec-"):
 				emit("exec_die", map[string]string{"execID": "id-" + nonce, "exitCode": string(body)})
 			case name == "gone":
