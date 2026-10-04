@@ -12,7 +12,7 @@ Archived plans are history, not default context. Search this index by title or d
 - [Usage and cost estimates from task runs](2026-10-01-run-estimates.md) — 2026-10-01
 - [Task checks and context use](2026-09-30-task-checks-context-use.md) — 2026-09-30 to 2026-10-01
 - [LLM judge pilot](2026-09-30-judge-pilot.md) — 2026-09-30 to 2026-10-01
-- [Phase 2: agent comparison and Codex](2026-10-01-phase2-agents-codex.md) — 2026-10-01, deferred by the user
+- [Phase 2: agent comparison and Codex](2026-10-01-phase2-agents-codex.md) — 2026-10-01, deferred by the user; superseded 2026-10-04 by the Codex plan (`plans/2026-10-04-codex.md`)
 - [Runs isolated from Claude Code's shared temp folders](2026-10-01-run-temp-isolation.md) — 2026-10-01 (#58)
 - [Task mining](2026-10-01-task-mine.md) — 2026-10-01 (#57, #62)
 - [LLM judge per run](2026-10-01-llm-judge.md) — 2026-10-01 (#49, #54, #61; a real check)
