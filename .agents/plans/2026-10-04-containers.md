@@ -1,7 +1,7 @@
 # Container mode: grading in Docker first, agents later
 
 - Date: 2026-10-04
-- Status: Approved (2026-10-04). Step 0 (the spike) is done with gaps ([results](../../docs/research/2026-10-04-container-spike.md)). The user decided the open decisions below: 1–9 as recommended, and 10 as a local build per pinned base (git and less added). Step 1 (the mode seam) is next; the paid real check (cap $6) still needs separate approval. During the spike the Gradle warm-up also fetched from `download.eclipse.org` (Spotless's Eclipse formatter), which was not on the brief's list; it is recorded in the results.
+- Status: Approved (2026-10-04). Step 0 (the spike) is done with gaps ([results](../../docs/research/2026-10-04-container-spike.md)). The user decided the open decisions below: 1–9 as recommended, and 10 as a local build per pinned base (git and less added). Steps 1 (the mode seam) and 2 (the driver) are done; step 3 is next. The paid real check (cap $6) still needs separate approval. During the spike the Gradle warm-up also fetched from `download.eclipse.org` (Spotless's Eclipse formatter), which was not on the brief's list; it is recorded in the results.
 - Scope: the user's "Docker + codex" (2026-10-04). This plan covers Docker; Codex is planned separately and in parallel, and this plan names only the dependencies. It details the [isolation plan](2026-10-02-isolation.md)'s Part 2 and builds on the [direct-Docker decision](../decisions/2026-10-02-containers-direct-docker.md) and the isolation plan's decision 6. Planning only: nothing was pulled, built, started or paid for.
 
 ## Outcome
@@ -62,13 +62,13 @@ A third grader mode, `container-v1`, beside `host` and `sandbox-v1`. In it, a ru
 ```
 docker create --name agentium-<data8>-<run>-grade --label agentium.data=<data8> --label agentium.run=<run>
   --label agentium.mode=container-v1 --rm --init --network none --ipc private --cap-drop ALL
-  --security-opt no-new-privileges --read-only --user 65534:65534 --memory <m> --memory-swap <m>
+  --security-opt no-new-privileges --read-only --user 65533:65533 --memory <m> --memory-swap <m>
   --pids-limit <p> --cpus <c> --shm-size 256m --log-driver none --tmpfs /tmp:rw,exec,nosuid,nodev,size=<t>
   --mount type=volume,dst=/grade --mount type=volume,src=<deps volume>,dst=/deps,readonly
   <image>@sha256:<digest> sleep <deadline>
 docker cp - <name>:/grade < <work/ and cache/, owned by 65534, mode 0700>
 ```
-- **The user is 65534:65534 (`nobody`),** which every image's `/etc/passwd` lists.
+- **The grade's user is 65534:65534 (`nobody`),** which every image's `/etc/passwd` lists. Every command of the grade, and the copy-in, runs as it (`docker exec --user 65534:65534`). The main process (the init and the deadline's `sleep`) and the counters' reads run as 65533, which the grade cannot signal (step 2's review: as 65534, the grade could stop the `sleep` past its deadline, or end its own container).
   - Java then reads `user.home=/nonexistent`, where nothing can be written, as in the agent's sandbox. All five step-0 toolchains accepted that.
   - A user ID missing from `/etc/passwd` gives Java `user.name=?` and `user.home=/`, so it is not used.
   - `HOME` is set to `/grade/cache/home`.
@@ -96,7 +96,7 @@ docker cp - <name>:/grade < <work/ and cache/, owned by 65534, mode 0700>
   - The container's name is written in the grade's folder before `docker create`. Recovery (`RecoverWarn`) and `agentium clean` remove the containers of dead runs by label.
   - Agentium starts no daemon, VM or background process. The user starts Docker.
 - **A local daemon only** (a Unix socket). A remote `DOCKER_HOST` or an SSH context would send hidden tests off the machine, so the usability check refuses it (open decision 9).
-- **The `docker` client's environment** is an allowlist: `PATH`, `HOME`, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`.
+- **The `docker` client's environment** is an allowlist: `PATH`, `HOME`, `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, for the endpoint lookup only. Every later call sees only `PATH` and runs with an empty configuration (`--config`): the client copies its `config.json` proxies, credentials included, into every container it creates (step 2's review).
 
 ### Proof of isolation: the canary's counterpart
 There is no seatbelt log. Instead, three checks fail closed before the grade's code runs:
@@ -250,9 +250,72 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
     - *Tests:* `TestContainerModeIsNotKnownYet` (task), `TestContainerModeIsRefusedLikeAnUnknownMode` and `TestOnceRefusesTheContainerMode` (run), `TestContainerModeIsRefused` and `TestSandboxCheckIsOnlyTheSandboxs` (experiment), `TestContainerGraderIsRefusedAsUnknown` (cli: the three commands and a resumed lock).
     - *Mutation checks* (3, in `git archive` copies): the run's `SandboxUsable` and `sandboxApplies` back to "not host is the sandbox", `Validator.inSandbox` back to `!= GraderHost`, and `Ineligible` accepting the mode. Each made its test fail.
     - *Limits:* a new design version for container designs, and the report and `run show` lines for the mode, wait for step 4.
-- [ ] **2. `internal/container`.** The driver, names and labels, the usability check, the inspect check, the probes, the tar stream, and the kill and removal on cancel. Unit tests use a fake `docker` (its argv pinned). Tests that need a real daemon skip without one. Risk: high (isolation, cancellation).
+- [x] **2. `internal/container`.** The driver, names and labels, the usability check, the inspect check, the probes, the tar stream, and the kill and removal on cancel. Unit tests use a fake `docker` (its argv pinned). Tests that need a real daemon skip without one. Risk: high (isolation, cancellation).
+  - **Done (2026-10-04, branch `claude/feat/container-driver`).** Nothing is wired into grading; `container-v1` stays refused as unknown.
+    - *Files:* `docker.go` (the client: `Open`, `CheckLocal`, `Fits`, `Image`, `Usable`, the environment allowlist), `spec.go` (limits, names, labels, the create argv), `inspect.go` (the inspect check and its digest), `probe.go` (the probes and the counters), `tarstream.go` (`WriteTar` and the skeleton), `container.go` (`Run`, `CopyIn`, `Exec`, `Counters`, removal, `Leftovers`, `RemoveRun`).
+    - *Beyond the design above:*
+      - `Open` reads the endpoint once (`docker context inspect`, with the user's own configuration), refuses anything but `unix://`, and pins it with `--host` on every later call. Those calls see only `PATH` and an empty configuration folder (`--config`; one Open makes, which `Close` removes, or an empty one the caller gives), so the user's `config.json` proxies never reach a container. Errors never name the endpoint, which holds a home path under colima.
+      - The main process runs as 65533 (`MainUser`), the grade's commands and copy-in as 65534 (`User`), and the counters are read as 65533, so the grade can neither stop the deadline nor end its container or the counters' read.
+      - The inspect check requires the container's environment to be the image's own exactly, and its runtime to be the daemon's default.
+      - The daemon's API must be 1.41 (Docker 20.10) or newer. Images are found by digest reference or by image ID (step 3's local builds), never by tag, and `create` also runs with `--pull never`.
+      - `--entrypoint sleep` replaces the image's entrypoint, and the check requires exactly `sleep <deadline>`.
+      - The anonymous volume carries the labels too (`volume-label=`), so a volume orphaned without its container is found as well.
+      - Commands take `--env NAME=value` arguments instead of an env file. A bare `NAME`, which docker would fill from the client's own environment, is refused.
+      - A command's result counts only when the counters can be read after it. Once the grade's input is used, a result that cannot be judged is `ErrUnjudgeable`: the counters unreadable (a fork bomb left running), the container ended mid-command (the deadline), the client failed, or the copy-in refused or failed on the tree (`ErrTooLarge`, a file that changed or cannot be read, `tar` failing). Agentium's own cancel, and every error before the grade's input is used (`Open`, `Usable`, `ErrMismatch`, `ErrProbe`, create and start), stay plain errors. A timeout reads the counters and then removes the container; any later call is `ErrGone`.
+      - A deps volume must already exist and be a plain local volume: the local driver's options can bind a host folder.
+      - A `create` that the daemon refused (its name in use) never leads to a removal, since that container is not the grade's. A cancelled or timed-out create is removed. If the client exits non-zero after the daemon really made the container, it is left for recovery to remove by label.
+      - The probes run as the grade's user, since they prove its view (its user, what it can write); no code of the grade has run by then.
+      - The probes read the namespace inodes against the kernel's initial ones, and the routing table, instead of trying a TEST-NET connect, which would need a tool the image may lack. The real-daemon tests do try those connects.
+      - A copy-in's limits are a parameter (`CopyLimits`): by default 2 GiB of content, 1,000,000 entries and 10 minutes.
+    - *Unit tests (fake `docker`: the test binary linked as `docker`):*
+      - `testdata/argv.golden` pins all 21 calls: the usability check, create, inspect, the skeleton, start, the probes, the copy-in, a command, the counters, the removal, and recovery's listing and removal.
+      - The inspect check refuses 71 mismatches (and 5 unreadable records), each by name: network, IPC, PID, UTS, user and cgroup namespaces, privileges, capabilities, security options, a writable root, masked paths, binds (the Docker socket among them), devices, ports, sysctls, `/tmp`, limits, OOM-kill, `--rm`, `--init`, logs, the main user (the grade's own refused), the environment (proxy variables added, a variable added or changed, none), the runtime, entrypoint, deadline, labels, image, name, and the mounts. The probes refuse 33 failures.
+      - Each way to make a result unjudgeable is `ErrUnjudgeable` and removes the container: a fork bomb, the counters killed or cut short, the container ended mid-command, a timeout with unreadable counters, and a copy-in with too much content, too many entries or a failing `tar`. A missing root is not, nor are an inspect mismatch, a failed probe or a cancel.
+      - A cancelled create removes the container, and a refused one does not. The endpoint lookup's failure hides the socket path, and a cancelled `Open` keeps `context.Canceled` in its chain.
+      - Remote endpoints (tcp, ssh, npipe, fd, http, a relative or empty socket) are refused after one call. Unusable daemons are refused, and so are a missing image or one of another digest (with no pull) and unpinned references.
+      - The environment allowlist holds for the lookup, and every later call has `--config <empty>`, `--host` and only `PATH`. `Open` refuses a configuration folder that holds a `config.json`. `Run` removes the container after an error, a panic, an inspect mismatch, a failed probe and a failed inspect. A cancel removes it inside `Exec`, and a timeout reads the counters, then removes it.
+      - The tar never follows a link, drops setuid, skips pipes, refuses a swapped link or pipe without hanging, and honors the limit.
+      - The inspect and probe fixtures are the daemon's real output, normalized (`TestRealFixtures -update` rewrites them).
+    - *Real-daemon tests* (colima, engine 27.4.0; `golang:1.27` by digest; they skip without a local daemon or the image, and never pull):
+      - the shape: a Go test with an `httptest` server passes, offline, as user 65534; a planted link to a host file points nowhere; the host copy is unchanged;
+      - an OOM kill and a process-limit hit show in the counters (`{OOMKills:1 PidsMax:1}`);
+      - the side channels: grade A leaves a `/mp-` semaphore, POSIX shm, SysV shm and a message queue, and a `0.0.0.0` listener, and sees them itself. Grade B, beside A, and grade C, after it, see none of them. Their connects to A's port on `127.0.0.1` and `::1` are refused; connects to TEST-NET, the colima host, the slirp gateway and `1.1.1.1` are unreachable; DNS fails; there is no `/dev/log`, and `logger` fails;
+      - nothing is left after a cancel, a timeout, the deadline (`--rm`), or a container created and never started (found by label, then removed);
+      - a user configuration with a proxy password never reaches the grade: its environment is the image's own. A positive control, a create with that configuration, does carry the password;
+      - as 65534, `kill -STOP`, `-TERM` and `-KILL` on the deadline's `sleep` (running as 65533) and on pid 1 are all denied, the `sleep` keeps sleeping, and the deadline (8 s) still ends the next command, as `ErrUnjudgeable`, and removes the container;
+      - a Python fork bomb left running after a failing command (process limit 64) makes the result `ErrUnjudgeable`;
+      - a loop left running that kills every process it can does not stop the counters' read (as 65533): the failing command is judged, with its counters.
+      - Every test checks, by name and by label, that no container or volume is left. None was.
+    - *Mutation checks* (5, in `git archive` copies), each caught:
+      - `--network none` dropped: the golden, and the inspect check on the real daemon;
+      - a bind mount added: the same two;
+      - the inspect check never refusing: the mismatch tests;
+      - `Exec` not removing on cancel: the fake and the real cancel tests;
+      - `CheckLocal` accepting everything: the remote-endpoint tests.
+    - *Review (PR #155) fixes, with 4 more mutation checks, each caught:*
+      - `--config` dropped: `TestClientEnvironment` (and the golden). The real proxy test does not catch it, since its proxies come through `DOCKER_CONFIG`, which the `PATH`-only environment already drops; without `--config`, the user's own `~/.docker/config.json` would be read, which a test cannot plant;
+      - `MainUser` set to the grade's user: the real deadline test (`kill -KILL 1` ended the container) and the real killer test;
+      - `Exec` returning a plain error when the counters cannot be read: the fake unjudgeable cases and the real fork-bomb test;
+      - `mayExist` set only after a successful create: the cancelled-create case.
+    - *Re-review fixes:*
+      - a copy-in's client error or timeout once the tree streams is `ErrUnjudgeable` (`CopyLimits.Timeout`, 10 minutes by default);
+      - the probes and the counters run with `--workdir /`;
+      - a probe shows that the grade cannot signal pid 1;
+      - the `Config.Env` mismatch names variables, never their values;
+      - a real backstop test: proxies written into `Open`'s accepted empty folder make `Run` fail with `ErrMismatch` on `Config.Env`.
+
+      Two mutation checks were caught: the copy-in timeout returning a plain error (the fake test), and `--config` dropped (the real backstop test).
+    - *Verification:* `GOPROXY=off go test -race -count=1 ./internal/container` passed with the real-daemon tests; `harness.py check changed` passed.
+    - *Limits:*
+      - Background processes that a command leaves behind keep running into the next command. A fork bomb left running makes the counters unreadable, which is `ErrUnjudgeable` (left out under step 4's rule). Step 4 decides whether to sweep them between commands.
+      - The grade's code can still make its own result unjudgeable on purpose (a fork bomb, filling memory until the OOM killer picks the main process, a tree that fails the copy-in). That is why step 4 leaves such results out and counts them per arm, never retrying them.
+      - A command's environment is in docker's argv, which local processes can see, so it must never hold a credential.
+      - A Unix socket forwarded to another machine cannot be told from a local one.
+      - Podman, Docker Desktop and rootless Docker are untested.
+      - CI has Docker but not the image, so the real-daemon tests skip there. A CI job that pulls the pinned image needs the user's approval.
 - [ ] **3. Images and container deps.** The pin table and the version match. `agentium images`, with consent and sizes. Deps volumes warmed in containers, Python's venv included. Recovery and `clean` for containers and volumes; pulled images are only listed, and removed only with a flag. Risk: high (downloads, consent, supply chain, cleanup).
 - [ ] **4. Wiring and records.** `gradeInContainer` and validation's hook for containers; `--grader container`. Records, validations, designs and locks; the cgroup counters feed isolation decision 3's rule (open decision 7). Report and `run show` lines; the Linux default. Risk: high (hidden tests, persistence, concurrent runs).
+  - **No re-rolls (decision 3; from step 2's review).** Any failure after the grade's input was used settles as left out, exactly as `Counters.Hit()` failures and `infra-sandbox` runs do: no retry, counted in the per-arm check and the sensitivity line. That is every `container.ErrUnjudgeable`, from `Exec` (counters unreadable, the container ended mid-command, the client failed) and from `CopyIn` (`ErrTooLarge`, a tree that changed or cannot be read, `tar` failing). Only errors before the grade's input is used (the usability check, `ErrMismatch`, `ErrProbe`, create and start) are infrastructure that may be retried. A pass stays a pass.
 - [ ] **5. Real check and docs.** Risk: medium.
   - *Free:* validate this repository's tasks and the bytes pilot's in container mode, and count validation agreement across the three modes. The hostile stub and the side-channel tests run on a real daemon.
   - *Paid (approval):* the check in open decision 5.
