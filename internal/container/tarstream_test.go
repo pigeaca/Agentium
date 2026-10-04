@@ -3,6 +3,7 @@ package container
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -32,7 +33,7 @@ func TestWriteTarNeverFollowsLinks(t *testing.T) {
 	must(t, syscall.Mkfifo(filepath.Join(root, "pipe"), 0o600))
 	must(t, os.Chtimes(filepath.Join(root, "a/f.txt"), time.Unix(1700000000, 0), time.Unix(1700000000, 0)))
 	var buf bytes.Buffer
-	stats, err := WriteTar(&buf, root, DefaultCopyLimits())
+	stats, err := WriteTar(context.Background(), &buf, root, DefaultCopyLimits())
 	must(t, err)
 	if stats != (TarStats{Entries: 7, Bytes: int64(len("hello") + len("#!/bin/sh\n") + 1), Skipped: 1}) {
 		t.Errorf("stats %+v", stats)
@@ -114,16 +115,16 @@ func TestWriteTarRefusesSwaps(t *testing.T) {
 func TestWriteTarLimits(t *testing.T) {
 	root := t.TempDir()
 	writeTree(t, root, map[string]string{"a": strings.Repeat("x", 600), "b": strings.Repeat("y", 600), "d/e": ""})
-	if _, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1000, Entries: 10}); !errors.Is(err, ErrTooLarge) {
+	if _, err := WriteTar(context.Background(), io.Discard, root, CopyLimits{Bytes: 1000, Entries: 10}); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("1200 bytes under a 1000-byte limit: %v", err)
 	}
-	if stats, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1200, Entries: 4}); err != nil || stats.Entries != 4 {
+	if stats, err := WriteTar(context.Background(), io.Discard, root, CopyLimits{Bytes: 1200, Entries: 4}); err != nil || stats.Entries != 4 {
 		t.Errorf("1200 bytes and 4 entries under limits of 1200 and 4: %+v, %v", stats, err)
 	}
-	if _, err := WriteTar(io.Discard, root, CopyLimits{Bytes: 1200, Entries: 3}); !errors.Is(err, ErrTooLarge) {
+	if _, err := WriteTar(context.Background(), io.Discard, root, CopyLimits{Bytes: 1200, Entries: 3}); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("4 entries under a limit of 3: %v", err)
 	}
-	if _, err := WriteTar(io.Discard, filepath.Join(root, "missing"), DefaultCopyLimits()); !errors.Is(err, errNoRoot) {
+	if _, err := WriteTar(context.Background(), io.Discard, filepath.Join(root, "missing"), DefaultCopyLimits()); !errors.Is(err, errNoRoot) {
 		t.Errorf("a missing tree: %v", err)
 	}
 	if l := DefaultCopyLimits(); l.Bytes != 2<<30 || l.Entries != 1_000_000 || l.Timeout != 10*time.Minute {

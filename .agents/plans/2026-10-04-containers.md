@@ -305,6 +305,72 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
       - a real backstop test: proxies written into `Open`'s accepted empty folder make `Run` fail with `ErrMismatch` on `Config.Env`.
 
       Two mutation checks were caught: the copy-in timeout returning a plain error (the fake test), and `--config` dropped (the real backstop test).
+    - *Codex review of #155 (changes requested; fixed on branch `claude/fix/container-codex-review`).* Each finding was reproduced first.
+      - *P1: a folder swapped for a pipe hung the copy-in forever.* `fs.WalkDir` listed folders with a blocking open, which on a pipe never returns, so neither the timeout nor a cancel could end `CopyIn`, and cleanup never ran. The walk is now our own:
+        - each folder is opened through the `os.Root` with `O_DIRECTORY|O_NOFOLLOW|O_NONBLOCK`, checked with `Fstat`, and listed from that descriptor, in batches bounded by the entry limit (skipped entries now count toward it);
+        - the walk checks its context before each entry;
+        - `CopyIn` feeds docker through an OS pipe, so the call returns the moment docker exits, and the walk then stops.
+
+        The intermediate folders that `os.Root` opens use `O_DIRECTORY`, which fails with `ENOTDIR` on a pipe without blocking (checked on macOS; Linux checks it before the open).
+      - *P2: a docker client failure counted as a failed grade.* The client exits 1 for its own API or attach failures too.
+        - `Exec` now reads the daemon's own record. A `docker events` watch runs beside the exec, filtered to the container's ID, and replays from its creation in the daemon's clock. It finds the exec by a random nonce (the outer shell's last argument) and reads the `exitCode` of its `exec_die`. The watch ends by itself a minute past the container's deadline (`--until`, also in the daemon's clock), so even if Agentium crashes, no stream is left running.
+        - The command's stderr is joined to its stdout inside the container, so the client's stderr holds only the client's messages.
+        - The result is `ErrUnjudgeable`, and the container is removed, when the client reported anything, when the daemon has no record of the end within 10 s, or when the two exit codes disagree. On a timeout, the record must show the command started and not ended.
+        - Rejected alternatives:
+          - a wrapper that writes its own status runs as the grade's user, so the grade could forge a pass;
+          - `docker exec --detach` prints no exec ID, and the CLI cannot inspect an exec;
+          - the raw API would break the CLI-only decision.
+      - *P3: cleanup failures bypassed the no-re-roll rule.*
+        - A failed removal is now `ErrCleanup`. Once the grade's input was used (a copy-in streamed, or a command was sent), it is also `ErrUnjudgeable`, unless Agentium itself cancelled.
+        - `Exec`'s error is nil exactly when its result is settled. After a settled timeout, a failed removal leaves the container stopped (later calls are `ErrGone`); `Run` retries the removal and reports it.
+        - `Run`'s doc gives step 4 the order: a settled result stands, then Agentium's cancel, then `ErrUnjudgeable` (left out), then infrastructure that may be retried. A leftover is removed by label.
+      - *Also:* errors redact the URL-escaped socket path that the client's connection errors carry. The argv golden pins 22 calls; the new one is the events watch, and the command now runs as `sh -c 'exec sh -c "$1" 2>&1' sh <command> <nonce>`.
+      - *Tests (fake daemon):*
+        - a folder swapped for a pipe: alone, past a timeout, and past a cancel, each guarded against a hang, with the container removed;
+        - a slow walk of pipes stops once docker stops;
+        - a genuine exit 0 or 1 is judged; a client failure after a pass or a fail, a silent exit 1 on a pass, a failure before the exec starts, no events, and a timeout with no record are each `ErrUnjudgeable`;
+        - cleanup in both directions: a settled exit or timeout and then a failed removal; before the input was used; and on a cancel.
+      - *Tests (real daemon):*
+        - a wrapper client that fails, or exits 1 silently, after the real exec is `ErrUnjudgeable`, while a genuine exit 1 with output on stderr is judged;
+        - a real folder-to-pipe swap is refused at once;
+        - nothing is left.
+      - *Mutation checks* (4, in `git archive` copies), each caught:
+        - the blocking folder open restored: all three swap cases hung, and the guard failed them;
+        - client failures treated as the command's exit: the fake client cases and the real wrapper test;
+        - cleanup errors left unclassified: the cleanup tests;
+        - no context check during the walk: the slow-walk test (3.6 s against the 2 s bound).
+      - *Limits:*
+        - each command runs one more short-lived `docker events` client;
+        - a command whose argv is longer than 1 MiB cannot be found in the events, so it is unjudgeable;
+        - a client warning on stderr would make every command unjudgeable (none was seen with client 28.0.4 and engine 27.4.0);
+        - a process that the grade leaves running could race to open a new command's stderr before the redirect, but only to make its own result unjudgeable, which the grade can already do;
+        - the copy-in still trusts tar's exit from the client (a client failure there is already `ErrUnjudgeable` once the stream starts).
+    - *Reviews of #158 (Claude approved with low notes; Codex requested changes). Both found no way for grade code to forge the events record or the nonce.* Fixed on the same branch:
+      - *A failed watch could settle a timeout (Codex P2).* A timeout now settles only when the client reported nothing and a healthy watch shows the command started and not ended. It waits up to 10 s for the start (Claude's note 5). A watch that later lost its stream, read a bad record or saw the container die is `ErrUnjudgeable`.
+      - *Walking a slow tree before the first tar byte was retryable (Codex P2).* The copy-in now tracks when the walk opens the tree, apart from when bytes stream. From then on, a client failure or timeout is `ErrUnjudgeable`, and so is a failed removal (except on Agentium's own cancel). A walk stopped before it opens the tree reads nothing and stays plain.
+      - *Duplicate events (Codex P2).* Moby 27.4.0 can deliver one event both from its replay and live. A repeated `exec_start` with the same exec ID, or `exec_die` with the same ID and exit code, is now ignored. A second ID for one marker, or a second exit code for one exec, is an error.
+      - *A daemon without the record, and readiness (Claude's note 4; Codex's 256-event note):*
+        - Every command first runs a no-op marker exec (`sh -c : <marker>`, as 65533) on the same watch, and the command starts only once the daemon's record of the marker's end has arrived. The subscription is then live, so the command's record cannot be lost to the 256-event replay buffer.
+        - `start` runs the same marker after the probes, before any of the grade's input. A daemon whose events cannot judge a command (refused, or without exec IDs and exit codes) therefore fails there as plain, retryable infrastructure.
+        - A marker that fails after a copy-in is `ErrUnjudgeable`.
+        - The golden pins 25 calls; the new ones are a watch and a marker at start, and a marker before the command.
+      - *Watchdogs (Claude's note 6):* the fake and real swap tests run under a 30 s guard, so a hang fails the test and its cleanups still run.
+      - *Step 4's reading order (Claude's note 7)* is now spelled out in step 4's no-re-roll bullet.
+      - *Tests:*
+        - a watch that ends after the command started, both with a timeout and without;
+        - every event delivered twice, for an exit and for a timeout;
+        - a tree of only pipes past a timeout, alone and with a failed removal;
+        - a daemon whose events are refused, or lack IDs and exit codes, fails at start without `ErrUnjudgeable`;
+        - a unit test of duplicate and conflicting records.
+      - *Mutation checks* (4, in `git archive` copies), each caught:
+        - `running` ignoring the watch's failures: the timeout after the events ended;
+        - the walk's start not counted as input: the pipes-only tree;
+        - duplicate events treated as conflicts: the events-twice cases and the unit test;
+        - the start-time marker removed: the start test.
+      - *Limits:*
+        - each command costs one more exec (the marker), and each grade one more watch and marker at start;
+        - a marker whose record is evicted from the replay buffer before the watch subscribes (256 daemon events within that moment) fails closed: plain at start, `ErrUnjudgeable` after the input;
+        - a daemon outage during a copy-in, once the walk has begun, now leaves the run out instead of retrying it (the marker at start makes that rarer).
     - *Verification:* `GOPROXY=off go test -race -count=1 ./internal/container` passed with the real-daemon tests; `harness.py check changed` passed.
     - *Limits:*
       - Background processes that a command leaves behind keep running into the next command. A fork bomb left running makes the counters unreadable, which is `ErrUnjudgeable` (left out under step 4's rule). Step 4 decides whether to sweep them between commands.
@@ -315,7 +381,7 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
       - CI has Docker but not the image, so the real-daemon tests skip there. A CI job that pulls the pinned image needs the user's approval.
 - [ ] **3. Images and container deps.** The pin table and the version match. `agentium images`, with consent and sizes. Deps volumes warmed in containers, Python's venv included. Recovery and `clean` for containers and volumes; pulled images are only listed, and removed only with a flag. Risk: high (downloads, consent, supply chain, cleanup).
 - [ ] **4. Wiring and records.** `gradeInContainer` and validation's hook for containers; `--grader container`. Records, validations, designs and locks; the cgroup counters feed isolation decision 3's rule (open decision 7). Report and `run show` lines; the Linux default. Risk: high (hidden tests, persistence, concurrent runs).
-  - **No re-rolls (decision 3; from step 2's review).** Any failure after the grade's input was used settles as left out, exactly as `Counters.Hit()` failures and `infra-sandbox` runs do: no retry, counted in the per-arm check and the sensitivity line. That is every `container.ErrUnjudgeable`, from `Exec` (counters unreadable, the container ended mid-command, the client failed) and from `CopyIn` (`ErrTooLarge`, a tree that changed or cannot be read, `tar` failing). Only errors before the grade's input is used (the usability check, `ErrMismatch`, `ErrProbe`, create and start) are infrastructure that may be retried. A pass stays a pass.
+  - **No re-rolls (decision 3; from step 2's review).** Any failure after the grade's input was used settles as left out, exactly as `Counters.Hit()` failures and `infra-sandbox` runs do: no retry, counted in the per-arm check and the sensitivity line. That is every `container.ErrUnjudgeable`, from `Exec` (counters unreadable, the container ended mid-command, the client failed) and from `CopyIn` (`ErrTooLarge`, a tree that changed or cannot be read, `tar` failing). Only errors before the grade's input is used (the usability check, `ErrMismatch`, `ErrProbe`, create and start) are infrastructure that may be retried. A pass stays a pass. **Reading order matters:** check for a settled result (`Exec` returned a nil error) *before* `errors.Is(err, ErrUnjudgeable)` on what `Run` returns. A settled result stands even when the removal afterwards fails (`ErrCleanup`, which is also `ErrUnjudgeable` after input), and the container is left for recovery by label. The grade can make that removal fail on purpose, for example with millions of files that push `rm -v` past `removeTimeout`; read in the other order, a failure that should count would be left out. Then Agentium's own cancel, then `ErrUnjudgeable`, then retryable infrastructure (`Run`'s doc).
 - [ ] **5. Real check and docs.** Risk: medium.
   - *Free:* validate this repository's tasks and the bytes pilot's in container mode, and count validation agreement across the three modes. The hostile stub and the side-channel tests run on a real daemon.
   - *Paid (approval):* the check in open decision 5.

@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -152,8 +155,8 @@ func tarNames(t *testing.T, data []byte) []string {
 func fmtMode(m int64) string { return "0" + strconv.FormatInt(m, 8) }
 
 // TestDriverArgvGolden pins every argv the driver gives docker, through the whole path: the usability check, create,
-// the inspect check, the skeleton, start, the probes, the tar copy-in, a command, the counters, the removal, and
-// recovery's listing and removal by label. A change here is a change to the container's isolation, to be read line
+// the inspect check, the skeleton, start, the probes, the tar copy-in, a command with its events watch, the counters,
+// the removal, and recovery's listing and removal by label. A change here is a change to the container's isolation, to be read line
 // by line, never regenerated blindly. The probe and counters scripts show as placeholders; they are constants checked
 // on a real daemon.
 func TestDriverArgvGolden(t *testing.T) {
@@ -206,15 +209,25 @@ func TestDriverArgvGolden(t *testing.T) {
 	must(t, d.RemoveRun(ctx, "test", "orphan"))
 
 	var golden strings.Builder
-	for _, argv := range f.calls(t) {
+	calls := f.calls(t)
+	for i := 0; i+1 < len(calls); i++ {
+		// The command's events watch starts beside its exec, so the two calls come in either order; the golden has the
+		// watch first.
+		if slices.Contains(calls[i+1], "events") && slices.ContainsFunc(calls[i], func(a string) bool { return strings.HasPrefix(a, "agentium-exec-") }) {
+			calls[i], calls[i+1] = calls[i+1], calls[i]
+		}
+	}
+	for _, argv := range calls {
 		for i, a := range argv {
-			switch a {
-			case probeScript:
+			switch {
+			case a == probeScript:
 				argv[i] = "<probeScript>"
-			case countersScript:
+			case a == countersScript:
 				argv[i] = "<countersScript>"
-			case f.configDir():
+			case a == f.configDir():
 				argv[i] = "<empty config>"
+			case strings.HasPrefix(a, "agentium-exec-") && len(a) == len("agentium-exec-")+16:
+				argv[i] = "<nonce>"
 			}
 		}
 		enc := json.NewEncoder(&golden)
@@ -234,8 +247,7 @@ func TestDriverArgvGolden(t *testing.T) {
 		t.Errorf("output %q, digest %q", out.String(), digest)
 	}
 	// The skeleton (docker cp's stdin) and the copy-in (tar's stdin).
-	calls := f.calls(t)
-	for i, argv := range calls {
+	for i, argv := range f.calls(t) {
 		switch {
 		case len(argv) > 4 && argv[4] == "cp":
 			if got := tarNames(t, f.stdin(t, i+1)); strings.Join(got, ",") != "work/ 5 65534 0700 ,cache/ 5 65534 0700 " {
@@ -770,7 +782,8 @@ func TestOpenErrors(t *testing.T) {
 // TestRedactsEndpoint: docker's messages name the socket's path (a home path under colima); errors never do.
 func TestRedactsEndpoint(t *testing.T) {
 	d := &Docker{host: "unix:///home/someone/.colima/default/docker.sock"}
-	got := d.redact("Cannot connect to the Docker daemon at unix:///home/someone/.colima/default/docker.sock. Is it running? dial /home/someone/.colima/default/docker.sock")
+	got := d.redact("Cannot connect to the Docker daemon at unix:///home/someone/.colima/default/docker.sock. Is it running? dial /home/someone/.colima/default/docker.sock" +
+		` error during connect: Get "http://%2Fhome%2Fsomeone%2F.colima%2Fdefault%2Fdocker.sock/v1.47/exec/x/json": EOF`)
 	if strings.Contains(got, "someone") {
 		t.Errorf("redact: %q", got)
 	}
@@ -813,4 +826,382 @@ func TestSpecValidation(t *testing.T) {
 	if s.deadlineSeconds() != "2" {
 		t.Errorf("deadline rounds to %s", s.deadlineSeconds())
 	}
+}
+
+// runGuarded runs Run with fn and fails the test if it does not return within limit: a copy-in or a command that hangs
+// must show as a failure, not as a test binary that never ends.
+func runGuarded(t *testing.T, d *Docker, ctx context.Context, limit time.Duration, fn func(ctx context.Context, c *Container) error) error {
+	t.Helper()
+	return runSpecGuarded(t, d, ctx, fixtureSpec(), limit, fn)
+}
+
+// runSpecGuarded is runGuarded for spec. On a hang the test fails at once, so its cleanups (the real tests' removal of
+// leftovers by label) still run.
+func runSpecGuarded(t *testing.T, d *Docker, ctx context.Context, spec Spec, limit time.Duration, fn func(ctx context.Context, c *Container) error) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- d.Run(ctx, spec, fn) }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(limit):
+		t.Fatalf("Run hung for %s", limit)
+		return nil
+	}
+}
+
+// TestCopyInFolderSwappedForPipe: the agent swaps a folder for a pipe after its header is written and before it is
+// opened to be listed. The open never blocks (a blocking open of a pipe outlives every timeout and cancel, and cleanup
+// would never run): the copy-in returns at once with the tree refused (ErrUnjudgeable), or with the cancel, and the
+// container is removed. With a slow walk, the timeout and the cancel fire first, and still nothing hangs.
+func TestCopyInFolderSwappedForPipe(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		pause      time.Duration // after the swap, before the open
+		timeout    time.Duration
+		cancel     time.Duration // 0: no cancel
+		unjudgable bool
+	}{
+		"swap":                 {0, 5 * time.Second, 0, true},
+		"swap past a timeout":  {time.Second, 300 * time.Millisecond, 0, true},
+		"swap past the cancel": {time.Second, 5 * time.Second, 300 * time.Millisecond, false},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tree := t.TempDir()
+			writeTree(t, tree, map[string]string{"a/inner.go": "package a\n", "b.go": "package b\n"})
+			f, d := openFake(t, goodScenario(t))
+			d.hooks.openDir = func(name string) {
+				if name != "a" {
+					return
+				}
+				must(t, os.Rename(filepath.Join(tree, "a"), filepath.Join(tree, "moved")))
+				must(t, syscall.Mkfifo(filepath.Join(tree, "a"), 0o600))
+				time.Sleep(c.pause)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if c.cancel > 0 {
+				time.AfterFunc(c.cancel, cancel)
+			}
+			start := time.Now()
+			err := runGuarded(t, d, ctx, 30*time.Second, func(ctx context.Context, ct *Container) error {
+				_, err := ct.CopyIn(ctx, tree, CopyLimits{Bytes: 1 << 20, Entries: 100, Timeout: c.timeout})
+				return err
+			})
+			if took := time.Since(start); took > 10*time.Second {
+				t.Errorf("the copy-in took %s", took)
+			}
+			if err == nil || errors.Is(err, ErrUnjudgeable) != c.unjudgable {
+				t.Fatalf("%v (want unjudgeable %v)", err, c.unjudgable)
+			}
+			if c.cancel > 0 && !errors.Is(err, context.Canceled) {
+				t.Errorf("a cancelled copy-in: %v", err)
+			}
+			if !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
+				t.Error("a partial copy was left in place")
+			}
+		})
+	}
+}
+
+// TestCopyInStopsTheWalkWhenDockerStops: a tree of nothing but pipes, which are skipped and so never written, keeps
+// the walk away from the stream it would otherwise fail on; once the copy-in times out, the walk stops at its next
+// entry instead of walking the whole tree. Not a byte reached docker, but the walk read the agent's tree (slowly
+// enough to reach the timeout), so the copy-in is ErrUnjudgeable, and so is a removal that then fails: a retry would
+// be a re-roll.
+func TestCopyInStopsTheWalkWhenDockerStops(t *testing.T) {
+	t.Parallel()
+	for name, rmFail := range map[string]bool{"removed": false, "removal fails": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			tree := t.TempDir()
+			for i := range 300 {
+				must(t, syscall.Mkfifo(filepath.Join(tree, fmt.Sprintf("p%03d", i)), 0o600))
+			}
+			sc := goodScenario(t)
+			sc.RmFail = rmFail
+			f, d := openFake(t, sc)
+			d.hooks.entry = func(string) { time.Sleep(10 * time.Millisecond) } // 3 s for the whole tree
+			start := time.Now()
+			err := runGuarded(t, d, context.Background(), 30*time.Second, func(ctx context.Context, ct *Container) error {
+				_, err := ct.CopyIn(ctx, tree, CopyLimits{Bytes: 1 << 20, Entries: 1000, Timeout: 300 * time.Millisecond})
+				return err
+			})
+			if took := time.Since(start); took > 2*time.Second {
+				t.Errorf("the walk went on after docker stopped: %s", took)
+			}
+			if !errors.Is(err, ErrUnjudgeable) || !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) || errors.Is(err, ErrCleanup) != rmFail {
+				t.Fatalf("%v", err)
+			}
+		})
+	}
+}
+
+// TestDaemonWithoutExecRecordsFailsAtStart: a daemon whose events cannot judge a command (the stream refused, or
+// events without exec IDs and exit codes, as an old engine's) fails at start, before any of the grade's input is
+// used: infrastructure, retryable, never ErrUnjudgeable, and fn never runs.
+func TestDaemonWithoutExecRecordsFailsAtStart(t *testing.T) {
+	t.Parallel()
+	for name, change := range map[string]func(*scenario){
+		"events refused":                 func(sc *scenario) { sc.EventsFail = true },
+		"no exec IDs or exit codes":      func(sc *scenario) { sc.EventsBare = true },
+		"no exec IDs, every event twice": func(sc *scenario) { sc.EventsBare = true; sc.EventsTwice = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sc := goodScenario(t)
+			change(&sc)
+			f, d := openFake(t, sc)
+			d.statusWait = time.Second
+			ran := false
+			err := runGuarded(t, d, context.Background(), 30*time.Second, func(context.Context, *Container) error { ran = true; return nil })
+			if err == nil || errors.Is(err, ErrUnjudgeable) || ran || !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
+				t.Fatalf("%v (fn ran: %v)", err, ran)
+			}
+			t.Logf("%v", err)
+		})
+	}
+}
+
+// TestMarkerFailureBeforeTheCommand: the marker before a command fails (its exec cannot start, as when a fork bomb
+// left by an earlier command holds every process slot) or its record never arrives. No command ran, but once the
+// grade's tree is in, a retry would still be a re-roll: ErrUnjudgeable, and the container is removed. Without a
+// copy-in first, none of the grade's input was used, and the error is plain (retryable); the container is removed too.
+func TestMarkerFailureBeforeTheCommand(t *testing.T) {
+	t.Parallel()
+	tree := t.TempDir()
+	writeTree(t, tree, map[string]string{"go.mod": "module m\n"})
+	for name, change := range map[string]func(*scenario){
+		"marker exec fails":     func(sc *scenario) { sc.MarkerExit = 126 },
+		"marker record missing": func(sc *scenario) { sc.MarkerUnrecorded = true },
+	} {
+		for _, copyIn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, copy-in %v", name, copyIn), func(t *testing.T) {
+				t.Parallel()
+				sc := goodScenario(t)
+				change(&sc)
+				f, d := openFake(t, sc)
+				d.statusWait = time.Second
+				var execErr error
+				err := runGuarded(t, d, context.Background(), 30*time.Second, func(ctx context.Context, c *Container) error {
+					if copyIn {
+						if _, err := c.CopyIn(ctx, tree, DefaultCopyLimits()); err != nil {
+							return err
+						}
+					}
+					_, execErr = c.Exec(ctx, Command{Command: "go test ./..."})
+					if !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
+						t.Error("the container was not removed")
+					}
+					return execErr
+				})
+				if execErr == nil || errors.Is(execErr, ErrUnjudgeable) != copyIn || errors.Is(err, ErrUnjudgeable) != copyIn ||
+					errors.Is(execErr, context.Canceled) || errors.Is(execErr, ErrCleanup) {
+					t.Fatalf("Exec: %v; Run: %v; want unjudgeable %v", execErr, err, copyIn)
+				}
+				if f.called(t, "go test ./...") {
+					t.Error("the command ran after its marker failed")
+				}
+				t.Logf("%v", execErr)
+			})
+		}
+	}
+}
+
+// TestExecWatchRecords: the daemon can deliver an event twice (from the replay and live), so a repeat with the same
+// exec ID and exit code is the same record; a second exec ID for one marker, or a second exit code for one exec, is
+// not, and nothing is judged from it.
+func TestExecWatchRecords(t *testing.T) {
+	const id = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	line := func(action string, attrs map[string]string) string {
+		data, err := json.Marshal(map[string]any{"Type": "container", "Action": action, "Actor": map[string]any{"ID": id, "Attributes": attrs}})
+		must(t, err)
+		return string(data) + "\n"
+	}
+	start := func(execID string) string {
+		return line("exec_start: sh -c true agentium-exec-n", map[string]string{"execID": execID})
+	}
+	die := func(execID, code string) string {
+		return line("exec_die", map[string]string{"execID": execID, "exitCode": code})
+	}
+	cases := []struct {
+		name   string
+		events []string
+		exit   int
+		bad    bool
+	}{
+		{"once", []string{start("e1"), die("e1", "1")}, 1, false},
+		{"twice", []string{start("e1"), start("e1"), die("e1", "1"), die("e1", "1")}, 1, false},
+		{"another container", []string{strings.Replace(start("e2"), id, strings.Repeat("d", 64), 1), start("e1"), die("e1", "0")}, 0, false},
+		{"two IDs for one marker", []string{start("e1"), start("e2"), die("e1", "0")}, 0, true},
+		{"two exit codes", []string{start("e1"), die("e1", "0"), die("e1", "1")}, 0, true},
+		{"no exit code", []string{start("e1"), die("e1", "")}, 0, true},
+		{"split across writes", []string{start("e1")[:20], start("e1")[20:] + die("e1", "3")}, 3, false},
+	}
+	for _, c := range cases {
+		w := newExecWatch(id, "agentium-exec-n")
+		for _, ev := range c.events {
+			w.Write([]byte(ev))
+		}
+		exit, err := w.wait(context.Background(), "agentium-exec-n", 10*time.Millisecond)
+		if (err != nil) != c.bad || !c.bad && exit != c.exit {
+			t.Errorf("%s: exit %d, %v", c.name, exit, err)
+		}
+	}
+}
+
+// TestExecTrustsOnlyTheDaemonsRecord: the docker client exits 1 both when the command did and when its own API calls
+// failed. A command's exit counts only when the daemon's record of that exec agrees and the client reported nothing;
+// a client failure is ErrUnjudgeable (its input was used, so it is left out, never retried) and removes the
+// container, even with the counters healthy. A genuine exit 1 is a result.
+func TestExecTrustsOnlyTheDaemonsRecord(t *testing.T) {
+	t.Parallel()
+	cases := map[string]struct {
+		change  func(*scenario)
+		timeout time.Duration
+		judged  bool
+	}{
+		"genuine exit 1":                       {func(sc *scenario) { sc.CommandExit = 1 }, 0, true},
+		"genuine exit 0":                       {func(sc *scenario) {}, 0, true},
+		"client fails after a passing command": {func(sc *scenario) { sc.ClientFail = true }, 0, false},
+		"client fails after a failing command": {func(sc *scenario) { sc.CommandExit = 1; sc.ClientFail = true }, 0, false},
+		"client exits 1 silently on a pass":    {func(sc *scenario) { sc.ClientExit = 1 }, 0, false},
+		"client fails before the exec starts":  {func(sc *scenario) { sc.ClientFailEarly = true }, 0, false},
+		"events end after the command started": {func(sc *scenario) { sc.EventsEndAfterStart = true; sc.CommandExit = 1 }, 0, false},
+		"every event twice, exit 1":            {func(sc *scenario) { sc.EventsTwice = true; sc.CommandExit = 1 }, 0, true},
+		// The watch fails after it saw the command start; the client then stalls until the timeout. Nothing shows the
+		// command was still running, so the timeout does not settle.
+		"timeout after the events ended": {func(sc *scenario) { sc.EventsEndAfterStart = true; sc.CommandBlock = true }, time.Second, false},
+		"timeout, every event twice":     {func(sc *scenario) { sc.EventsTwice = true; sc.CommandBlock = true }, time.Second, true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sc := goodScenario(t)
+			c.change(&sc)
+			f, d := openFake(t, sc)
+			d.statusWait = time.Second
+			var res Result
+			var execErr error
+			err := runGuarded(t, d, context.Background(), 20*time.Second, func(ctx context.Context, ct *Container) error {
+				res, execErr = ct.Exec(ctx, Command{Command: "go test ./...", Timeout: c.timeout})
+				removed := f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec()))
+				if removed != (!c.judged || c.timeout > 0) {
+					t.Errorf("removed inside Exec: %v", removed)
+				}
+				return execErr
+			})
+			if c.judged {
+				want := sc.CommandExit
+				if c.timeout > 0 {
+					want = -1
+				}
+				if execErr != nil || res.ExitCode != want || res.TimedOut != (c.timeout > 0) || res.Counters != (Counters{MemoryPeak: 104857600}) {
+					t.Fatalf("result %+v, %v; want exit %d with its counters", res, execErr, want)
+				}
+				return
+			}
+			if !errors.Is(execErr, ErrUnjudgeable) || !errors.Is(err, ErrUnjudgeable) {
+				t.Fatalf("Exec: %v; Run: %v; want ErrUnjudgeable", execErr, err)
+			}
+			t.Logf("%v", execErr)
+		})
+	}
+}
+
+// TestCleanupFailureIsClassified: a removal that fails (the daemon stopped answering) is ErrCleanup, and never a plain
+// error that a caller might retry after the grade's input was used: then it is ErrUnjudgeable too. A settled result
+// (Exec's nil error) stands, and its removal is retried by Run. Before the input was used, and on Agentium's own
+// cancel, it is not ErrUnjudgeable.
+func TestCleanupFailureIsClassified(t *testing.T) {
+	t.Parallel()
+	rm := []string{"rm", "--force", "--volumes", Name(fixtureSpec())}
+	t.Run("settled exit, then the removal fails", func(t *testing.T) {
+		t.Parallel()
+		sc := goodScenario(t)
+		sc.CommandExit, sc.RmFail = 1, true
+		_, d := openFake(t, sc)
+		var res Result
+		var execErr error
+		err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
+			res, execErr = c.Exec(ctx, Command{Command: "go test ./..."})
+			return execErr
+		})
+		if execErr != nil || res.ExitCode != 1 {
+			t.Fatalf("Exec: %+v, %v", res, execErr)
+		}
+		if !errors.Is(err, ErrCleanup) || !errors.Is(err, ErrUnjudgeable) {
+			t.Fatalf("Run: %v; want ErrCleanup and ErrUnjudgeable", err)
+		}
+	})
+	t.Run("settled timeout, then the removal fails", func(t *testing.T) {
+		t.Parallel()
+		sc := goodScenario(t)
+		sc.CommandBlock, sc.RmFail = true, true
+		f, d := openFake(t, sc)
+		err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
+			res, err := c.Exec(ctx, Command{Command: "sleep 300", Timeout: time.Second})
+			if err != nil || !res.TimedOut || res.ExitCode != -1 {
+				t.Errorf("a settled timeout: %+v, %v", res, err)
+			}
+			if _, err := c.Exec(ctx, Command{Command: "true"}); !errors.Is(err, ErrGone) {
+				t.Errorf("an exec after a failed removal: %v, want ErrGone", err)
+			}
+			return nil
+		})
+		if !errors.Is(err, ErrCleanup) || !errors.Is(err, ErrUnjudgeable) {
+			t.Fatalf("Run: %v; want ErrCleanup and ErrUnjudgeable", err)
+		}
+		n := 0
+		for _, argv := range f.calls(t) {
+			if slices.Contains(argv, "rm") {
+				n++
+			}
+		}
+		if n != 2 {
+			t.Errorf("%d removals, want 2 (Exec's, then Run's)", n)
+		}
+	})
+	t.Run("unjudgeable, and the removal fails", func(t *testing.T) {
+		t.Parallel()
+		sc := goodScenario(t)
+		sc.ClientFail, sc.RmFail = true, true
+		_, d := openFake(t, sc)
+		err := d.Run(context.Background(), fixtureSpec(), func(ctx context.Context, c *Container) error {
+			_, err := c.Exec(ctx, Command{Command: "go test ./..."})
+			return err
+		})
+		if !errors.Is(err, ErrCleanup) || !errors.Is(err, ErrUnjudgeable) {
+			t.Fatalf("Run: %v", err)
+		}
+	})
+	t.Run("before the input, the removal fails", func(t *testing.T) {
+		t.Parallel()
+		sc := goodScenario(t)
+		sc.Probe = strings.Replace(sc.Probe, "NoNewPrivs:\t1", "NoNewPrivs:\t0", 1)
+		sc.RmFail = true
+		f, d := openFake(t, sc)
+		err := d.Run(context.Background(), fixtureSpec(), func(context.Context, *Container) error { return nil })
+		if !errors.Is(err, ErrProbe) || !errors.Is(err, ErrCleanup) || errors.Is(err, ErrUnjudgeable) || !f.called(t, rm...) {
+			t.Fatalf("Run: %v; want ErrProbe and ErrCleanup, not ErrUnjudgeable", err)
+		}
+	})
+	t.Run("cancelled after the input, the removal fails", func(t *testing.T) {
+		t.Parallel()
+		sc := goodScenario(t)
+		sc.CommandBlock, sc.RmFail = true, true
+		_, d := openFake(t, sc)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		err := d.Run(ctx, fixtureSpec(), func(ctx context.Context, c *Container) error {
+			time.AfterFunc(300*time.Millisecond, cancel)
+			_, err := c.Exec(ctx, Command{Command: "sleep 300"})
+			return err
+		})
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrCleanup) || errors.Is(err, ErrUnjudgeable) {
+			t.Fatalf("Run: %v; want the cancel and ErrCleanup, not ErrUnjudgeable", err)
+		}
+	})
 }
