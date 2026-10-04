@@ -686,6 +686,13 @@ def ci_state(runs: list[dict[str, Any]]) -> tuple[str, str]:
     return "success", f"CI passed: {runs[-1].get('html_url')}"
 
 
+class ReleaseFailed(Exception):
+    """The PR merged, but the release that was due did not happen: exit code RELEASE_FAILED_EXIT."""
+
+
+RELEASE_FAILED_EXIT = 3
+
+
 def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_minutes: float = LAND_TIMEOUT_MINUTES,
             sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
             no_release: bool = False) -> None:
@@ -699,7 +706,8 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
 
     Before merging it refuses a PR whose diff changes the contract (release.detect_contract) without declaring it, and
     after merging it plans a release and cuts one when due (release.after_merge) unless `no_release`; a release failure is
-    reported and never undoes the merge."""
+    reported and never undoes the merge: the last line printed is `[harness] release: <tag> published <url>`, `nothing to
+    release` or `NOT released: <why>`, and a due release that failed raises ReleaseFailed (exit code 3)."""
     import release
     repo = github_repo()
 
@@ -767,9 +775,11 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
     if no_release:
         return
     try:
-        release.after_merge(timeout_minutes)
+        outcome = release.after_merge(timeout_minutes)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
-        print(f"[harness] PR #{number} is merged, but the release step failed: {error}", file=sys.stderr)
+        print(f"[harness] release: NOT released: {error}", flush=True)
+        raise ReleaseFailed(f"PR #{number} is merged, but a due release failed: {error}") from None
+    print(f"[harness] release: {outcome}", flush=True)
 
 
 def pr_command(args: list[str]) -> None:
@@ -842,7 +852,8 @@ HELP = """Agentium harness (Python standard library)
                              Merge PR N once CI passes on a head that contains the default branch (wait 40
                              min by default); refuses closed, draft, conflicting or out-of-date PRs (--update
                              updates the branch instead), undeclared contract changes, and never merges on red
-                             or pending CI; then cuts a release when one is due (--no-release skips)
+                             or pending CI; then cuts a release when one is due (--no-release skips); exit 3 =
+                             merged, but the due release failed
   release plan [--json]      Next version and draft notes from the PRs merged since the last v* tag and the
                              contract diff (docs/harness.md#releases)
   release cut [--dry-run] [--first] [--local-checks]
@@ -921,6 +932,9 @@ def exit_code(args: list[str]) -> int:
     except subprocess.CalledProcessError as error:
         # A child killed by a signal has a negative return code; report it the way a shell would (SIGINT -> 130).
         code = 128 - error.returncode if error.returncode < 0 else (error.returncode or 1)
+    except ReleaseFailed as error:
+        print(f"[harness] {error}", file=sys.stderr)
+        code = RELEASE_FAILED_EXIT
     except (OSError, ValueError) as error:
         print(f"[harness] {error}", file=sys.stderr)
         code = 1

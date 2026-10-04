@@ -30,7 +30,7 @@ The first clear answer, on [samber/lo](https://github.com/samber/lo): Sonnet cos
 You need Go 1.27.1 with a C compiler, Git, [Claude Code](https://claude.com/claude-code) signed in (or `ANTHROPIC_API_KEY`), and your project's own build tool (Go, Maven, Gradle, Cargo or Python).
 
 ```sh
-go install github.com/pigeaca/agentium/cmd/agentium@latest
+go install github.com/pigeaca/agentium/cmd/agentium@latest   # the latest release, once one exists
 agentium version
 cd /path/to/your/repo
 agentium start
@@ -43,7 +43,7 @@ agentium start
 
 Before tasks are used, read them once for hints that give the answer away: `agentium task show NAME`, then `agentium task edit NAME --reviewed`.
 
-Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
+While the repository is private, `go install` needs access to it (a signed-in `gh` or a `GOPRIVATE` setup). Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
 
 ## Known limits
 

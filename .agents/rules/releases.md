@@ -16,7 +16,7 @@ Versions are SemVer (`vMAJOR.MINOR.PATCH`) applied to Agentium's **contract**, w
 
 **Before 1.0** a breaking change or a feature bumps MINOR (0.1 to 0.2) and a fix bumps PATCH (0.1.0 to 0.1.1). 1.0 is the user's decision; the tooling never proposes it.
 
-**Marking breaking changes:** a `!` in the PR title (`feat(cli)!: ...`) and a `Breaking:` line in the PR body saying what users must do. `harness.py pr land` also reads the diff and refuses a PR whose detected contract change is not declared; the release bump is the larger of the declared and the detected one, never lower.
+**Marking breaking changes:** a `!` in the PR title (`feat(cli)!: ...`) and a `Breaking:` line in the PR body saying what users must do. `harness.py pr land` also reads the diff and refuses a PR whose detected contract change is not declared; the release bump is the larger of the declared and the detected one, never lower. The diff is of `internal/cli/testdata/contract.golden`, generated from the code (commands, flags, exit codes, `--json` schemas, migrations, design and method versions). For a false positive, put `Contract: none - <reason>` in the PR body; the release notes list it.
 
 **What counts:** `feat`, `fix` and `perf` PRs, and any detected contract change, make a release due. `docs`, `test`, `chore`, `ci` and `refactor` PRs with no contract change never do on their own.
 

@@ -22,6 +22,12 @@ func TestBuildVersion(t *testing.T) {
 		{"local build, modified", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: settings("0123456789abcdef", "true")}, true, "dev+0123456789ab.modified"},
 		{"checkout stamped with a pseudo-version", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261004094733-d9fc500633ab+dirty"}, Settings: settings("d9fc500633abcdef", "true")}, true, "dev+d9fc500633ab.modified"},
 		{"checkout at a tag", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}, Settings: settings("d9fc500633abcdef", "false")}, true, "v0.1.0"},
+		{"go install @main, after a release", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.1-0.20261004094733-d9fc500633ab"}}, true, "v0.1.1-0.20261004094733-d9fc500633ab"},
+		{"go install @commit", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261004094733-d9fc500633ab"}}, true, "v0.0.0-20261004094733-d9fc500633ab"},
+		{"checkout after a prerelease", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3-pre.0.20261004094733-d9fc500633ab"}, Settings: settings("d9fc500633abcdef", "false")}, true, "dev+d9fc500633ab"},
+		{"checkout after a release, dirty", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.1-0.20261004094733-d9fc500633ab+dirty"}, Settings: settings("d9fc500633abcdef", "true")}, true, "dev+d9fc500633ab.modified"},
+		{"checkout at a tag, dirty", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0+dirty"}, Settings: settings("d9fc500633abcdef", "true")}, true, "dev+d9fc500633ab.modified"},
+		{"tag with dirty and no vcs data", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0+dirty"}}, true, "v0.1.0+dirty"},
 		{"no vcs information", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, "dev"},
 		{"no build info", "dev", nil, false, "dev"},
 	}

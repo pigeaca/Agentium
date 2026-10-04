@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,19 +23,17 @@ FIRST_VERSION = (0, 1, 0)
 LEVELS = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 CONVENTIONAL = re.compile(r"^(\w+)(?:\([^)]*\))?(!)?:\s*\S")
 BREAKING_LINE = re.compile(r"^(?:Breaking|BREAKING CHANGE):[ \t]*\S", re.M)
-MIGRATIONS = "internal/store/migrations/"
-# Sources of the public JSON documents and the flags/commands/constants users script against.
-JSON_SOURCES = ("internal/cli/json", "internal/report/")
-CLI_SOURCES = "internal/cli/"
-CONSTANT_SOURCES = (("internal/experiment/", re.compile(r"^\s*(?:const\s+)?((?:Design|Method)\w*)\s*(?:string\s*)?=\s*(.+?)\s*(?://.*)?$")),
-                    ("internal/cli/cli.go", re.compile(r"^\s*(Exit\w+)\s*=\s*(.+?)\s*(?://.*)?$")))
-GO_FLAG = re.compile(r"""\.(?:String|Bool|Int|Int64|Uint|Uint64|Float64|Duration|Func|BoolFunc)\("([\w-]+)"|"""
-                     r"""\.(?:StringVar|BoolVar|IntVar|Int64Var|UintVar|Float64Var|DurationVar|Var)\([^,]+,\s*"([\w-]+)\"""")
+# The contract golden is generated from the real code by TestContractSurface (internal/cli/contract_test.go): lines
+# "key<TAB>value" for commands, flags, exit codes, --json schemas, migrations and design/method versions.
+CONTRACT_GOLDEN = "internal/cli/testdata/contract.golden"
+# A PR whose detected contract change is a false positive says so, with a reason, in its body.
+CONTRACT_NONE = re.compile(r"^Contract:[ \t]*none[ \t]*(?:—|--|-|:)[ \t]*(\S.*)$", re.M)
 FIRST_CHECKLIST = """The first release (v0.1.0) is gated by this checklist; confirm every item before going on:
   [ ] the sandbox real check passed (isolation step 4)
   [ ] the repository cleanup is done: personal paths scrubbed, old branches deleted
-  [ ] checks are green: CI, or --local-checks while GitHub Actions runs no jobs
+  [ ] checks are green: CI, or --local-checks when GitHub Actions is not running
   [ ] the README has the install section and the known limits
+  [ ] the repository is public (go install needs it), or the README says access is needed until then
   [ ] `agentium version` works"""
 
 
@@ -60,9 +59,11 @@ def parse_tag(tag: str) -> tuple[int, int, int] | None:
     return (int(match[1]), int(match[2]), int(match[3])) if match else None
 
 
-def last_tag(repo: Path, rev: str = "HEAD") -> str | None:
-    """The highest vX.Y.Z tag reachable from rev, or None before the first release."""
-    tags = [t for t in git(repo, "tag", "--merged", rev, "--list", "v*").split() if parse_tag(t)]
+def last_tag(repo: Path, rev: str = "HEAD", released: set[str] | None = None) -> str | None:
+    """The highest vX.Y.Z tag reachable from rev, or None before the first release. With `released` (the remote's
+    tags), a local tag never published does not count."""
+    tags = [t for t in git(repo, "tag", "--merged", rev, "--list", "v*").split()
+            if parse_tag(t) and (released is None or t in released)]
     return max(tags, key=lambda t: parse_tag(t), default=None)
 
 
@@ -141,97 +142,39 @@ def list_prs(repo: Path, since: str | None, rev: str, lookup: dict[int, dict[str
 
 # --- Contract detection -------------------------------------------------------------------------
 
-def json_keys(text: str) -> set[str]:
-    def walk(value: Any, prefix: str) -> set[str]:
-        if isinstance(value, dict):
-            return {k for key, item in value.items() for k in [f"{prefix}.{key}"] + sorted(walk(item, f"{prefix}.{key}"))}
-        if isinstance(value, list):
-            return {k for item in value for k in walk(item, prefix + "[]")}
-        return set()
-    try:
-        return walk(json.loads(text), "")
-    except ValueError:
-        return set()
-
-
-def go_surface(path: str, text: str) -> dict[str, str]:
-    """What a Go file says about the contract: key -> value. JSON tags, flags, commands and listed constants."""
-    surface: dict[str, str] = {}
-    if path.endswith(".go") and not path.endswith("_test.go"):
-        if path.startswith(JSON_SOURCES):
-            struct = None
-            for line in text.split("\n"):
-                if m := re.match(r"^type (\w+) struct \{", line):
-                    struct = m[1]
-                elif line.startswith("}"):
-                    struct = None
-                elif struct and (m := re.search(r'json:"([^",]+)', line)) and m[1] != "-":
-                    surface[f"json {struct}.{m[1]}"] = ""
-        if path.startswith(CLI_SOURCES):
-            flagset, switch_indent = "?", None
-            for line in text.split("\n"):
-                if m := re.search(r'flag\.NewFlagSet\("([^"]+)"', line):
-                    flagset = m[1]
-                for m in GO_FLAG.finditer(line):
-                    surface[f"flag {path}:{flagset} --{m[1] or m[2]}"] = ""
-                if m := re.match(r"^(\t*)switch (?:command|args\[0\]) \{", line):
-                    switch_indent = m[1]
-                elif switch_indent is not None and line == switch_indent + "}":
-                    switch_indent = None
-                elif switch_indent is not None and (m := re.match(r"^\s*case ((?:\"[^\"]*\"(?:, )?)+):", line)):
-                    for word in re.findall(r'"([a-z][a-z-]*)"', m[1]):
-                        surface[f"command {path}: {word}"] = ""
-        for prefix, pattern in CONSTANT_SOURCES:
-            if path.startswith(prefix):
-                for line in text.split("\n"):
-                    if m := pattern.match(line):
-                        surface[f"constant {m[1]}"] = m[2]
-    return surface
+def golden(text: str) -> dict[str, str]:
+    """The golden's lines as key -> value."""
+    return {k: v for k, _, v in (line.partition("\t") for line in text.split("\n") if line)}
 
 
 def detect_contract(repo: Path, base: str | None, head: str) -> list[dict[str, str]]:
-    """Contract changes between two revisions, by static comparison: [{"kind": "breaking" | "additive", "text": ...}].
-    It sees new or changed migrations, JSON keys, flags, commands and design/method/exit constants; it cannot see a
-    changed meaning or exit code, which stay declared by a PR."""
-    if base is None:
+    """Contract changes between two revisions: [{"kind": "breaking" | "additive", "text": ...}], from the diff of the
+    contract golden. A removed key or a changed value is breaking (a new default design or method version is the one
+    additive change of a value), a new key additive. Internal renames and moved files do not change the golden. It sees
+    only what the golden lists; a changed meaning stays declared by a PR. A base without a golden (a tag from before it
+    existed) detects nothing."""
+    old = golden(show(repo, base, CONTRACT_GOLDEN))
+    if base is None or not old:
         return []
-    changes: list[dict[str, str]] = []
-
-    def add(kind: str, text: str) -> None:
-        changes.append({"kind": kind, "text": text})
-
-    status = git(repo, "diff", "--no-renames", "--name-status", base, head)
-    for line in filter(None, status.split("\n")):
-        flag, _, path = line.partition("\t")
-        old, new = show(repo, base, path), show(repo, head, path)
-        if path.startswith(MIGRATIONS):
-            if flag == "A":
-                add("additive", f"new migration {path.removeprefix(MIGRATIONS)} (applied automatically, forward-only)")
-            else:
-                add("breaking", f"{'deleted' if flag == 'D' else 'changed'} migration {path.removeprefix(MIGRATIONS)}")
-        elif path.endswith(".json") and "/testdata/" in path and path.startswith(("internal/cli/", "internal/report/")):
-            before, after = json_keys(old), json_keys(new)
-            for key in sorted(before - after):
-                add("breaking", f"JSON key {key} removed ({path})")
-            for key in sorted(after - before) if flag != "A" else []:
-                add("additive", f"JSON key {key} added ({path})")
-        elif path.endswith(".go"):
-            before, after = go_surface(path, old), go_surface(path, new)
-            for key in sorted(before):
-                if key not in after:
-                    add("breaking", f"{key} removed")
-                elif before[key] != after[key]:
-                    kind = "additive" if key == "constant MethodVersion" else "breaking"
-                    add(kind, f"{key} changed: {before[key]} -> {after[key]}")
-            for key in sorted(set(after) - set(before)):
-                add("additive", f"{key} added")
+    new = golden(show(repo, head, CONTRACT_GOLDEN))
+    if not new:
+        return [{"kind": "breaking", "text": f"{CONTRACT_GOLDEN} is missing: the contract can no longer be checked"}]
+    changes = []
+    for key in sorted(old):
+        if key not in new:
+            changes.append({"kind": "breaking", "text": f"{key} removed"})
+        elif old[key] != new[key]:
+            kind = "additive" if key == "experiment MethodVersion" else "breaking"
+            changes.append({"kind": kind, "text": f"{key} changed: {old[key]} -> {new[key]}"})
+    changes += [{"kind": "additive", "text": f"{key} added"} for key in sorted(set(new) - set(old))]
     return changes
 
 
 # --- The plan -----------------------------------------------------------------------------------
 
-def make_plan(repo: Path, rev: str = "HEAD", lookup: dict[int, dict[str, Any]] | None = None) -> dict[str, Any]:
-    tag = last_tag(repo, rev)
+def make_plan(repo: Path, rev: str = "HEAD", lookup: dict[int, dict[str, Any]] | None = None,
+              released: set[str] | None = None) -> dict[str, Any]:
+    tag = last_tag(repo, rev, released)
     prs = list_prs(repo, tag, rev, lookup)
     changes = detect_contract(repo, tag, rev)
     declared = max([{"breaking": 3, "feature": 2, "fix": 1}.get(pr["kind"], 0) for pr in prs], default=0)
@@ -246,7 +189,8 @@ def make_plan(repo: Path, rev: str = "HEAD", lookup: dict[int, dict[str, Any]] |
     bump = {v: k for k, v in LEVELS.items()}[level]
     plan = {"last_tag": tag, "next_version": fmt(version) if version else None, "due": version is not None, "bump": bump,
             "declared": {v: k for k, v in LEVELS.items()}[declared], "detected": {v: k for k, v in LEVELS.items()}[detected],
-            "prs": prs, "contract_changes": changes, "warnings": warnings, "first": tag is None}
+            "prs": prs, "contract_changes": changes, "warnings": warnings, "first": tag is None,
+            "overrides": [{"number": pr["number"], "reason": m[1].strip()} for pr in prs if (m := CONTRACT_NONE.search(pr["body"] or ""))]}
     plan["notes"] = notes(plan)
     return plan
 
@@ -262,6 +206,9 @@ def notes(plan: dict[str, Any]) -> str:
             out += [f"## {heading}", *map(item, rows), ""]
     if plan["contract_changes"]:
         out += ["## Contract changes", *(f"- {c['kind']}: {c['text']}" for c in plan["contract_changes"]), ""]
+    if plan["overrides"]:
+        out += ["## Contract overrides", "A PR declared that a detected change is not a contract change:",
+                *(f"- #{o['number']}: {o['reason']}" for o in plan["overrides"]), ""]
     other = sum(pr["kind"] == "other" for pr in plan["prs"])
     if other:
         out.append(f"{other} other change(s) (docs, tests, refactors, chores) are not listed.")
@@ -286,23 +233,116 @@ def print_plan(plan: dict[str, Any]) -> None:
 def release_plan(args: list[str]) -> None:
     if set(args) - {"--json"}:
         raise ValueError("Usage: release plan [--json]")
-    plan = make_plan(harness.ROOT)
+    plan = make_plan(harness.ROOT, "HEAD", released=published_tags(warn=True))
     if "--json" in args:
         print(json.dumps(plan, indent=2))
     else:
         print_plan(plan)
 
 
+# --- The remote's state -------------------------------------------------------------------------
+
+def remote_names() -> tuple[str, str]:
+    """(the default branch's remote, its HTTPS form or the remote's own URL when that is not SSH)."""
+    remote = harness.remote_default().partition("/")[0]
+    url = harness.git_output("remote", "get-url", remote).strip()
+    return remote, harness.https_url(url) or url
+
+
+def git_remote(*args: str) -> str:
+    """A git command that talks to the remote: over the remote itself, then its HTTPS form (as fetch_default does)."""
+    remote, https = remote_names()
+    for target in dict.fromkeys((remote, https)):
+        result = subprocess.run(["git", "-C", str(harness.ROOT), *[target if a == "<remote>" else a for a in args]],
+                                capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout
+    raise ValueError(f"git {args[0]} against the remote failed (SSH and HTTPS): {result.stderr.strip()}")
+
+
+def remote_tags() -> dict[str, str]:
+    """The remote's vX.Y.Z tags as tag -> commit (annotated tags are peeled)."""
+    tags: dict[str, str] = {}
+    for line in git_remote("ls-remote", "--tags", "<remote>", "refs/tags/v*").split("\n"):
+        sha, _, ref = line.partition("\t")
+        name = ref.removeprefix("refs/tags/").removesuffix("^{}")
+        if parse_tag(name) and (ref.endswith("^{}") or name not in tags):
+            tags[name] = sha
+    return tags
+
+
+def published_tags(warn: bool = False) -> set[str] | None:
+    """The tags that count as released: the remote's. When the remote cannot be asked, None (local tags decide)."""
+    try:
+        return set(remote_tags())
+    except ValueError as error:
+        if not warn:
+            raise
+        print(f"[harness] could not read the remote's tags ({error}); using local tags", file=sys.stderr)
+        return None
+
+
+def sync_tags(wanted: set[str]) -> None:
+    """Fetch the remote tags that are not local yet (never overwriting a local one)."""
+    have = set(git(harness.ROOT, "tag", "--list", "v*").split())
+    if wanted - have:
+        git_remote("fetch", "--quiet", "<remote>", "refs/tags/v*:refs/tags/v*")
+
+
+def has_github_release(repo_name: str, tag: str) -> bool:
+    try:
+        harness.gh("release", "view", tag, "--repo", repo_name)
+        return True
+    except ValueError as error:
+        if "not found" in str(error).lower():
+            return False
+        raise
+
+
+def create_github_release(repo_name: str, tag: str, notes_text: str) -> str:
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
+        handle.write(notes_text)
+    try:
+        return harness.gh("release", "create", tag, "--repo", repo_name, "--title", tag, "--notes-file", handle.name,
+                          "--verify-tag").strip()
+    finally:
+        Path(handle.name).unlink(missing_ok=True)
+
+
+def reconcile(repo_name: str, dry_run: bool = False) -> list[str]:
+    """Finish what a failed release left, so every cut is safe to rerun:
+    - a local vX.Y.Z tag the remote lacks was never published: delete it;
+    - the remote's last vX.Y.Z tag without a GitHub Release gets one, from the tag's message.
+    Returns what it did (or would do)."""
+    root, did = harness.ROOT, []
+    remote = remote_tags()
+    for tag in git(root, "tag", "--list", "v*").split():
+        if parse_tag(tag) and tag not in remote:
+            did.append(f"deleted local tag {tag}: it was never published")
+            if not dry_run:
+                git(root, "tag", "-d", tag)
+    if remote:
+        last = max(remote, key=parse_tag)
+        if not has_github_release(repo_name, last):
+            did.append(f"created the GitHub Release of {last}, which was pushed without one")
+            if not dry_run:
+                sync_tags({last})
+                message = git(root, "tag", "--list", "--format=%(contents)", last)
+                did[-1] += f": {create_github_release(repo_name, last, message)}"
+    for line in did:
+        print(("dry run: would have " if dry_run else "") + line)
+    return did
+
+
 # --- Cutting ------------------------------------------------------------------------------------
 
 CUT_USAGE = "Usage: release cut [--dry-run] [--first] [--local-checks]"
 CHECK_POLL_SECONDS = 30
-ACTIONS_NOTE = ("GitHub Actions currently runs no jobs (the account's minutes are likely exhausted), so the checks run "
-                "here instead of waiting for CI.")
+LOCAL_CHECKS_NOTE = "Running the CI-equivalent checks here, on the exact commit, instead of waiting for GitHub Actions."
 
 
-def local_checks() -> list[list[str]]:
-    script = str(harness.ROOT / "scripts" / "harness.py")
+def local_checks(tree: Path) -> list[list[str]]:
+    script = str(tree / "scripts" / "harness.py")
     commands = [[sys.executable, script, "check", "ci"], [sys.executable, script, "check", "vuln"]]
     if sys.platform == "darwin":
         commands.append([str(harness.go_binary()), "test", "-race", "-count=1", "./internal/sandbox", "./internal/run"])
@@ -310,97 +350,115 @@ def local_checks() -> list[list[str]]:
 
 
 def commit_ci(repo_name: str, sha: str) -> tuple[str, str]:
-    """('pending' | 'success' | 'failure', detail) of the CI workflow on one commit of the default branch (push runs)."""
+    """('pending' | 'success' | 'failure', detail) of the CI workflow on one commit of the default branch (push runs).
+    A run cancelled by a newer push (cancel-in-progress) counts as failure: that release is refused, and the next
+    one covers it."""
     runs = harness.gh_json("api", f"repos/{repo_name}/actions/runs?head_sha={sha}&per_page=100").get("workflow_runs", [])
     return harness.ci_state([r for r in runs if r.get("name") == harness.CI_WORKFLOW and r.get("head_sha") == sha])
 
 
-def sync_tags() -> None:
-    """Best effort: fetch the remote's tags, so a release made elsewhere is seen."""
-    for remote in harness.git_output("remote").split():
-        subprocess.run(["git", "fetch", "--quiet", "--tags", remote], cwd=harness.ROOT, capture_output=True)
+def run_local_checks(sha: str, dry_run: bool) -> None:
+    """The CI-equivalent checks, in a temporary detached worktree at exactly `sha` (removed afterwards, even on
+    failure), so no checkout of the user moves or is needed."""
+    root = harness.ROOT
+    if dry_run:
+        for command in local_checks(Path("<worktree at sha>")):
+            print(f"dry run: would run in a detached worktree at {sha[:12]}: {' '.join(command)}")
         return
+    scratch = Path(tempfile.mkdtemp(prefix="agentium-release-"))
+    tree = scratch / "tree"
+    try:
+        git(root, "worktree", "add", "--quiet", "--detach", str(tree), sha)
+        for command in local_checks(tree):
+            print(f"running in {tree}: {' '.join(command)}", flush=True)
+            try:
+                harness.run(*command, cwd=tree)
+            except subprocess.CalledProcessError as error:
+                raise ValueError(f"Refusing to release: `{' '.join(command[-3:])}` failed (exit {error.returncode}).") from None
+    finally:
+        subprocess.run(["git", "-C", str(root), "worktree", "remove", "--force", str(tree)], capture_output=True)
+        subprocess.run(["git", "-C", str(root), "worktree", "prune"], capture_output=True)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def release_cut(dry_run: bool = False, first: bool = False, use_local_checks: bool = False, timeout_minutes: float = 40,
-                sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> str:
-    """Tag and release the planned version; returns the tag. Every refusal is a ValueError and changes nothing."""
+                sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic) -> tuple[str, str]:
+    """Tag and release the planned version; returns (tag, release URL). It works on the fetched default branch's
+    commit, never on the current checkout: no branch or working tree moves, and a dirty tree does not matter. Every
+    refusal is a ValueError and changes nothing; a rerun after a half-done release first finishes it (reconcile). With
+    dry_run it fetches, but publishes and writes nothing else."""
     root = harness.ROOT
-    if git(root, "status", "--porcelain").strip():
-        raise ValueError("Refusing to release: the working tree is not clean.")
     ref, fetched = harness.fetch_default()
     if not fetched:
-        raise ValueError(f"Refusing to release: could not fetch {ref}, so HEAD cannot be proven current.")
-    head = git(root, "rev-parse", "HEAD").strip()
-    if head != git(root, "rev-parse", ref).strip():
-        raise ValueError(f"Refusing to release: HEAD is not the freshly fetched {ref}; check out the default branch and "
-                         "fast-forward it first.")
-    sync_tags()
-    plan = make_plan(root, "HEAD")
+        raise ValueError(f"Refusing to release: could not fetch {ref}, so the commit to release cannot be proven current.")
+    sha = git(root, "rev-parse", ref).strip()
+    repo_name = harness.github_repo()
+    prefix = "dry run: " if dry_run else ""
+    reconcile(repo_name, dry_run)
+    released = published_tags()
+    sync_tags(released)
+    plan = make_plan(root, sha, released=released)
     if not plan["due"]:
         raise ValueError("Nothing to release: no feature, fix or contract change since the last release.")
     tag = plan["next_version"]
-    if git(root, "tag", "--list", tag).strip():
-        raise ValueError(f"Refusing to release: tag {tag} already exists.")
+    if tag in released:
+        raise ValueError(f"Refusing to release: tag {tag} already exists on the remote.")
     if plan["first"] and not first:
         raise ValueError(f"The first release ({tag}) must be cut explicitly with --first.\n{FIRST_CHECKLIST}")
     if first and not plan["first"]:
         raise ValueError(f"--first is only for the first release; the last one is {plan['last_tag']}.")
-    prefix = "dry run: " if dry_run else ""
     print_plan(plan)
     if plan["first"]:
         print(f"\n{FIRST_CHECKLIST}")
-    repo_name = harness.github_repo()
     if use_local_checks:
-        print(f"\n{prefix}{ACTIONS_NOTE}")
-        for command in local_checks():
-            print(f"{prefix}{'would run' if dry_run else 'running'}: {' '.join(command)}")
-            if not dry_run:
-                try:
-                    harness.run(*command)
-                except subprocess.CalledProcessError as error:
-                    raise ValueError(f"Refusing to release: `{' '.join(command[-3:])}` failed (exit {error.returncode}).") from None
+        print(f"\n{prefix}{LOCAL_CHECKS_NOTE}")
+        state, detail = commit_ci(repo_name, sha)  # a red CI run still refuses; no runs at all does not
+        if state == "failure":
+            raise ValueError(f"Refusing to release: {detail}")
+        run_local_checks(sha, dry_run)
     elif dry_run:
-        state, detail = commit_ci(repo_name, head)
-        print(f"\ndry run: CI on {head[:12]}: {state} ({detail}); a real cut waits up to {timeout_minutes:g} min for success.")
+        state, detail = commit_ci(repo_name, sha)
+        print(f"\ndry run: CI on {sha[:12]}: {state} ({detail}); a real cut waits up to {timeout_minutes:g} min for success.")
         if state == "failure":
             raise ValueError(f"Refusing to release: {detail}")
     else:
         deadline = clock() + timeout_minutes * 60
         while True:
-            state, detail = commit_ci(repo_name, head)
+            state, detail = commit_ci(repo_name, sha)
             if state != "pending":
                 break
             if clock() >= deadline:
-                raise ValueError(f"Refusing to release: CI on {head[:12]} is still pending after {timeout_minutes:g} min "
+                raise ValueError(f"Refusing to release: CI on {sha[:12]} is still pending after {timeout_minutes:g} min "
                                  f"({detail}). If Actions runs no jobs, use --local-checks.")
             sleep(CHECK_POLL_SECONDS)
         if state != "success":
             raise ValueError(f"Refusing to release: {detail}")
-        print(f"\nCI is green on {head[:12]}: {detail}")
+        print(f"\nCI is green on {sha[:12]}: {detail}")
     push_url = f"https://github.com/{repo_name}.git"
-    steps = [f"git tag -a {tag} -F <notes> {head[:12]}", f"git push {push_url} refs/tags/{tag}",
+    steps = [f"git tag -a {tag} --cleanup=verbatim -F <notes> {sha[:12]}", f"git push {push_url} refs/tags/{tag}",
              f"gh release create {tag} --repo {repo_name} --title {tag} --notes-file <notes> --verify-tag"]
     if dry_run:
         print("\ndry run: would run\n  " + "\n  ".join(steps) + "\nNothing was tagged, pushed or created.")
-        return tag
+        return tag, ""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
         handle.write(plan["notes"])
     try:
-        subprocess.run(["git", "-C", str(root), "tag", "-a", tag, "-F", handle.name, head], check=True, capture_output=True)
+        git(root, "tag", "-a", tag, "--cleanup=verbatim", "-F", handle.name, sha)
         print(f"Created tag {tag}")
-        subprocess.run(["git", "-C", str(root), "push", push_url, f"refs/tags/{tag}"], check=True, capture_output=True)
+        pushed = subprocess.run(["git", "-C", str(root), "push", push_url, f"refs/tags/{tag}"], capture_output=True, text=True)
+        if pushed.returncode:
+            git(root, "tag", "-d", tag)  # never published: leave no local tag that would pass for a release
+            raise ValueError(f"Release {tag} not published: pushing the tag failed ({pushed.stderr.strip()}); the local tag was deleted. Rerun.")
         print(f"Pushed {tag}")
-        url = harness.gh("release", "create", tag, "--repo", repo_name, "--title", tag, "--notes-file", handle.name,
-                         "--verify-tag").strip()
-    except subprocess.CalledProcessError as error:
-        raise ValueError(f"Release {tag} stopped at `{' '.join(map(str, error.cmd[:4]))}`: "
-                         f"{(error.stderr or b'').decode(errors='replace').strip()} (the tag may exist locally; "
-                         "fix the cause and rerun, or delete it with `git tag -d`).") from None
     finally:
         Path(handle.name).unlink(missing_ok=True)
+    try:
+        url = create_github_release(repo_name, tag, plan["notes"])
+    except ValueError as error:
+        raise ValueError(f"Tag {tag} is pushed but its GitHub Release was not created ({error}). The next `release cut` "
+                         "(or the next land) creates it from the tag.") from None
     print(f"Released {tag}: {url}")
-    return tag
+    return tag, url
 
 
 def cut_command(args: list[str]) -> None:
@@ -438,10 +496,13 @@ def pr_contract_changes(repo_name: str, pr: dict[str, Any], tip: str) -> list[di
 
 def contract_refusal(pr: dict[str, Any], changes: list[dict[str, str]]) -> str | None:
     """Why a PR's detected contract changes are not declared, or None. Breaking needs `!` and a Breaking: line; additive
-    needs a feat, fix or breaking declaration."""
+    needs a feat, fix or breaking declaration. A `Contract: none - <reason>` line in the body overrides detected changes
+    (a false positive); the release notes show the override."""
     if not changes:
         return None
     title, body = pr.get("title", ""), pr.get("body", "")
+    if CONTRACT_NONE.search(body or ""):
+        return None
     kind = classify(title, body)
     match = CONVENTIONAL.match(title.strip())
     breaking = [c for c in changes if c["kind"] == "breaking"]
@@ -453,24 +514,26 @@ def contract_refusal(pr: dict[str, Any], changes: list[dict[str, str]]) -> str |
     if problem is None:
         return None
     listed = "\n".join(f"  - {c['kind']}: {c['text']}" for c in changes)
-    return f"PR #{pr.get('number')} changes the contract without declaring it ({problem}). Detected:\n{listed}"
+    return (f"PR #{pr.get('number')} changes the contract without declaring it ({problem}). Detected:\n{listed}\n"
+            "If these are not contract changes, add a `Contract: none - <reason>` line to the PR body.")
 
 
-def after_merge(timeout_minutes: float = 40) -> None:
-    """After a merge: plan, and cut when a release is due and one already exists (never the first). Failures raise
-    ValueError; the caller reports them without undoing the merge."""
-    root = harness.ROOT
+def after_merge(timeout_minutes: float = 40) -> str:
+    """After a merge: finish any half-done release, plan, and cut when a release is due and one already exists (never
+    the first). Returns the one-line outcome `pr land` prints; failures raise ValueError. It works on the fetched default
+    branch's commit and moves no local branch or working tree."""
     ref, fetched = harness.fetch_default()
-    default = ref.partition("/")[2]
-    branch = git(root, "branch", "--show-current").strip()
-    if fetched and branch == default and not git(root, "status", "--porcelain").strip():
-        subprocess.run(["git", "-C", str(root), "merge", "--quiet", "--ff-only", ref], capture_output=True)  # sync, never a commit
-    sync_tags()
-    plan = make_plan(root, ref if fetched else "HEAD")
+    if not fetched:
+        raise ValueError(f"could not fetch {ref}")
+    sha = git(harness.ROOT, "rev-parse", ref).strip()
+    reconcile(harness.github_repo())
+    released = published_tags()
+    sync_tags(released)
+    plan = make_plan(harness.ROOT, sha, released=released)
     if not plan["due"]:
-        print("[harness] release: nothing releasable yet.")
-    elif plan["first"]:
-        print(f"[harness] release: {plan['next_version']} is due but the first release is cut explicitly: release cut --first")
-    else:
-        print(f"[harness] release: {plan['next_version']} is due ({plan['bump']}); cutting it")
-        release_cut(timeout_minutes=timeout_minutes)
+        return "nothing to release"
+    if plan["first"]:
+        return f"nothing released: {plan['next_version']} is due, but the first release is cut explicitly (release cut --first)"
+    print(f"[harness] release: {plan['next_version']} is due ({plan['bump']}); cutting it")
+    tag, url = release_cut(timeout_minutes=timeout_minutes)
+    return f"{tag} published {url}"
