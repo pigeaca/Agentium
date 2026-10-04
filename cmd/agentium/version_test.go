@@ -18,8 +18,10 @@ func TestBuildVersion(t *testing.T) {
 	}{
 		{"linked release", "v1.2.3", &debug.BuildInfo{Main: debug.Module{Version: "v9.9.9"}}, true, "v1.2.3"},
 		{"go install", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}}, true, "v0.1.0"},
-		{"local build, clean", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: settings("0123456789abcdef", "false")}, true, "dev (0123456789ab)"},
-		{"local build, modified", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: settings("0123456789abcdef", "true")}, true, "dev (0123456789ab, modified)"},
+		{"local build, clean", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: settings("0123456789abcdef", "false")}, true, "dev+0123456789ab"},
+		{"local build, modified", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}, Settings: settings("0123456789abcdef", "true")}, true, "dev+0123456789ab.modified"},
+		{"checkout stamped with a pseudo-version", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.0.0-20261004094733-d9fc500633ab+dirty"}, Settings: settings("d9fc500633abcdef", "true")}, true, "dev+d9fc500633ab.modified"},
+		{"checkout at a tag", "dev", &debug.BuildInfo{Main: debug.Module{Version: "v0.1.0"}, Settings: settings("d9fc500633abcdef", "false")}, true, "v0.1.0"},
 		{"no vcs information", "dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true, "dev"},
 		{"no build info", "dev", nil, false, "dev"},
 	}
