@@ -149,7 +149,7 @@ Each step is one PR with green CI and a review, except step 5 (data, no code) an
 - Step 6: the report, and the preview's estimates compared with the actual spend and usage.
 
 ## Parallel ownership
-Steps 1–3 run in parallel from base `0f5e237`, one PR each, and the coordinator integrates them serially. Worktrees live under `/Users/pigeaca/GolandProjects/Agentium-worktrees/`.
+Steps 1–3 run in parallel from base `0f5e237`, one PR each, and the coordinator integrates them serially. Worktrees live under `<worktrees>/`.
 
 | Step | Owner | Branch / worktree | Editable scope | Must not touch |
 |---|---|---|---|---|
