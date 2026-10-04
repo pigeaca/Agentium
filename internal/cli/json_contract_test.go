@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/pigeaca/agentium/internal/run"
 )
 
 // assertKeys fails when the object's keys are not exactly the comma-separated list: a renamed, dropped or added field
@@ -33,7 +35,7 @@ func assertKeys(t *testing.T, v any, want string) {
 const (
 	taskInfoKeys = "base_commit,graded_by,hidden_test_files,name,needs_review,reference_files,solution_commit,source,status,status_summary,unstated_requirements,untested_hunks"
 	behaviorKeys = "bash_commands,checks_changed,commits,config_changed,denials,files_changed,lines_added,lines_removed,outside_reads,ran_checks,ran_tests,tests_changed,tests_removed"
-	runKeys      = "arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,graded_by,grader,id,judge_cost_usd,judge_grade,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
+	runKeys      = "agent,arm,behavior,cli_version,cost_estimated,cost_usd,drift,duration_ms,effort,finished,first_request_tokens,graded_by,grader,id,judge_cost_usd,judge_grade,model,notes,outcome,pair_judge_cost_usd,passed,permission_mode,sandbox,sign_in,skills,started,task,tools,turns"
 )
 
 func TestJSONFieldNamesAreFixed(t *testing.T) {
@@ -86,6 +88,9 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	once := jsonRun(t, f, ExitOK, "run", "once", "value")
 	keys(once, "command,run,schema")
 	assertKeys(t, once.get("run"), runKeys)
+	if agent := once.get("run", "agent"); agent != "claude-code" {
+		t.Errorf("run once: agent = %v, want claude-code", agent)
+	}
 	assertKeys(t, once.get("run", "behavior"), behaviorKeys)
 	runs := jsonRun(t, f, ExitOK, "run", "list")
 	keys(runs, "command,runs,schema")
@@ -291,5 +296,17 @@ func TestSmallDocumentKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run(name, func(t *testing.T) { assertKeys(t, m, v.keys) })
+	}
+}
+
+// A run recorded before agents were named (its record has no "agent" key) was Claude Code's, and its JSON says so.
+func TestRunInfoNamesClaudeCodeForOldRecords(t *testing.T) {
+	t.Parallel()
+	var rec run.Record
+	if err := json.Unmarshal([]byte(`{"id":"r1","task":"t","arm":"base","model":"claude-sonnet-5","outcome":"ok"}`), &rec); err != nil {
+		t.Fatal(err)
+	}
+	if got := runInfoOf(Env{}, rec).Agent; got != "claude-code" {
+		t.Errorf("agent = %q, want claude-code", got)
 	}
 }
