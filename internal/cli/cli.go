@@ -3,6 +3,7 @@ package cli
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"runtime"
@@ -58,7 +59,10 @@ type Env struct {
 	// FORCE_COLOR say); a command run inside another one's JSON output keeps Plain and clears JSON. Both are Run's, not
 	// the caller's: tests and main leave them false.
 	JSON, Plain bool
-	json        *jsonState
+	// flagSink, when set, receives every flag set a command builds before it parses (parseArgs). Only the contract
+	// test sets it, to list the real flags (contract_test.go).
+	flagSink func(*flag.FlagSet)
+	json     *jsonState
 	// notice, when set, is where notices go that must reach the screen at once even while a screen holds standard output
 	// (the dashboard holds it until the run ends): a run recovered from a dead Agentium, say. nil means Stdout.
 	notice io.Writer

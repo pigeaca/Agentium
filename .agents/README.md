@@ -16,6 +16,7 @@ Load references by the boundary being changed:
 |---|---|
 | Agent instructions, skills, roles, hooks or GitHub access | [Agent setup](reference/agent-setup.md) and [local skills](skills/README.md) |
 | Branches, commits, PRs or parallel agents | [Git workflow](rules/git-workflow.md) and [worktree ownership](rules/collaboration.md) |
+| Versions, releases or breaking changes | [Releases](rules/releases.md) |
 | Checks and evidence | [Verification](rules/testing.md) |
 | Dependencies, credentials or external data | [Dependencies](rules/supply-chain.md) and [secrets](rules/secrets.md) |
 | Architectural choices | [Decisions](decisions/README.md) |
