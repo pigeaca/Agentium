@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -77,7 +77,7 @@ func TestLockedTasksKeepTheirModule(t *testing.T) {
 	var meta RunMeta
 	x.r.ExecuteRun = func(_ context.Context, _ run.Env, m RunMeta, s run.Spec) (run.Record, error) {
 		got, meta = s, m
-		return run.Record{Outcome: claude.OutcomeOK, Passed: &passed}, nil
+		return run.Record{Outcome: agent.OutcomeOK, Passed: &passed}, nil
 	}
 	if _, err := x.slot(ctx, first, 1, nil); err != nil {
 		t.Fatal(err)

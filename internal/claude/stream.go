@@ -13,125 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/pricing"
 )
-
-// Metrics are what a run reports in its stream-json transcript. Totals come from the result event, which includes
-// subagents.
-type Metrics struct {
-	CLIVersion     string   `json:"cli_version"`
-	Model          string   `json:"model"`
-	PermissionMode string   `json:"permission_mode"`
-	Tools          []string `json:"tools"`  // offered to the agent
-	Skills         []string `json:"-"`      // names can be personal: compared, never stored
-	SlashCommands  []string `json:"-"`      // likewise
-	SkillCount     int      `json:"skills"` // offered to the agent
-	MCPTools       int      `json:"mcp_tools"`
-
-	CostUSD          float64        `json:"cost_usd"`
-	Turns            int            `json:"turns"`
-	DurationMS       int64          `json:"duration_ms"`
-	APIDurationMS    int64          `json:"api_ms"`
-	InputTokens      int64          `json:"input_tokens"`
-	OutputTokens     int64          `json:"output_tokens"`
-	CacheReadTokens  int64          `json:"cache_read_tokens"`
-	CacheWriteTokens int64          `json:"cache_write_tokens"`
-	FirstRequest     int64          `json:"first_request_tokens"` // context size of the first request: what the model saw at start
-	ToolUses         map[string]int `json:"tools_used"`
-	APIRetries       int            `json:"api_retries"`
-	// EstimatedCostUSD prices the transcript's requests at list prices, for a run that ended without Claude Code's own
-	// figure (CostUSD). Input and cache counts are exact per request; the stream reports output only in part, so output
-	// is estimated from the content's size. UnpricedRequests counts requests on models the price table lacks.
-	EstimatedCostUSD float64 `json:"estimated_cost_usd,omitempty"`
-	UnpricedRequests int     `json:"unpriced_requests,omitempty"`
-	Denials          int     `json:"permission_denials"` // requirement 7: sandbox or permission denials
-
-	Result        string `json:"result_subtype"` // success, error_max_turns, error_max_budget_usd, error_during_execution
-	ResultIsError bool   `json:"result_is_error"`
-	ResultExcerpt string `json:"result_excerpt"`
-	SawInit       bool   `json:"saw_init"`
-	SawResult     bool   `json:"saw_result"`
-
-	Commands []string `json:"-"` // Bash commands, in order, denied ones included
-	// RanCommands are Commands less the calls the result event lists as denied (permission_denials: Claude Code's
-	// permission checks and the sandbox's refusals), which never ran: "ran tests" and "ran the checks" come from them.
-	// A transcript without a result event (a run killed at its timeout) lists no denials, so all of Commands.
-	RanCommands []string `json:"-"`
-	FilePaths   []string `json:"-"` // paths the file tools touched
-	ReadPaths   []string `json:"-"` // paths the Read tool read: what the agent looked at, not what it wrote
-	// CWD is the folder Claude Code started in, from its init event: file tools name paths under it. A local path.
-	CWD string `json:"-"`
-	// SkillCalls are the skills the agent invoked through the Skill tool, in order. Names can be personal: compared,
-	// never stored.
-	SkillCalls []string `json:"-"`
-	// SubagentTypes are the subagent types the agent started through the Agent (Task) tool, sorted, each once.
-	SubagentTypes []string `json:"-"`
-
-	// UsageFirst and UsageLast are the first and last of the subscription's usage readings in the run (none with an
-	// API key): experiments pause before the five-hour limit, and estimate a run's share of the window from them.
-	UsageFirst *UsageReading `json:"usage_first,omitempty"`
-	UsageLast  *UsageReading `json:"usage_last,omitempty"`
-	// SubagentModels maps each subagent type the run used to the models its requests ran on. A role that names a
-	// model by alias (model: sonnet) follows Claude Code to newer models, which the run's pinned --model does not
-	// cover: an experiment compares these across its runs.
-	SubagentModels map[string][]string `json:"subagent_models,omitempty"`
-	// FirstReads are the cache reads the isolated-run cost reprices: the first real request of the main session (first
-	// in the list), then of each subagent launch that could not read its type's prefix from this run, in the order
-	// their first requests arrived (see launchLog.firstReads: the first launch of each type, and parallel or late ones).
-	// Nil when the transcript shows no real main-session request (and in records made before the field existed). Holds
-	// no subagent type names.
-	FirstReads []FirstRead `json:"first_reads,omitempty"`
-	// UnmatchedLaunches counts subagent launches whose requests name a parent tool call (parent_tool_use_id) that no
-	// Agent (Task) call in the transcript made: their type is unknown, so whether they are first launches is too.
-	UnmatchedLaunches int `json:"unmatched_launches,omitempty"`
-}
-
-// FirstRead is the first real request of the main session or of a repriced subagent launch, for the isolated-run
-// cost: how many tokens it read from the prompt cache, and at which time to live the launch wrote the cache.
-type FirstRead struct {
-	Main      bool   `json:"main,omitempty"`  // the main session's; otherwise a subagent launch's
-	Model     string `json:"model,omitempty"` // the request's model; empty when the stream did not name it
-	CacheRead int64  `json:"cache_read"`      // cache_read_input_tokens
-	// WriteTTL is the cache-write time to live of the launch's first request that wrote the cache, from the stream's
-	// cache_creation split: TTL5m when it wrote only five-minute entries, TTL1h when it wrote any one-hour entry. When
-	// no request of the launch reported a split write, it is what other launches of the type wrote in the run, else
-	// TTL5m for a subagent and TTL1h for the main session (what recorded runs wrote), and TTLAssumed is set. Empty
-	// only in records made before the fallback.
-	WriteTTL   string `json:"write_ttl,omitempty"`
-	TTLAssumed bool   `json:"ttl_assumed,omitempty"`
-}
-
-// Cache-write times to live, as FirstRead.WriteTTL records them.
-const (
-	TTL5m = "5m"
-	TTL1h = "1h"
-)
-
-// UsageReading is a subscription's usage as Claude Code reports it (rate_limit_event): the share of the five-hour and
-// seven-day windows used, when each resets, and the status (allowed, allowed_warning, rejected).
-type UsageReading struct {
-	FiveHour       float64   `json:"five_hour"`
-	FiveHourResets time.Time `json:"five_hour_resets"`
-	SevenDay       float64   `json:"seven_day"`
-	SevenDayResets time.Time `json:"seven_day_resets"`
-	Status         string    `json:"status"`
-}
-
-// FiveHourAt is the five-hour window's share used at now: nothing once the window has reset.
-func (u UsageReading) FiveHourAt(now time.Time) float64 {
-	if u.FiveHourResets.IsZero() || !now.Before(u.FiveHourResets) {
-		return 0
-	}
-	return u.FiveHour
-}
-
-// Newer reports whether u is a later reading than v: a later window, or more of the same window used.
-func (u UsageReading) Newer(v UsageReading) bool {
-	if !u.FiveHourResets.Equal(v.FiveHourResets) {
-		return u.FiveHourResets.After(v.FiveHourResets)
-	}
-	return u.FiveHour > v.FiveHour
-}
 
 var fileTools = map[string]bool{"Read": true, "Edit": true, "Write": true, "NotebookEdit": true}
 
@@ -207,10 +91,11 @@ type (
 	}
 )
 
-// Parse reads a stream-json transcript. Lines that are not JSON (a crash message, say) are skipped, and so are parts
+// Parse reads a stream-json transcript into what the run reports. Totals come from the result event, which includes
+// subagents. Lines that are not JSON (a crash message, say) are skipped, and so are parts
 // of an event that do not decode.
-func Parse(r io.Reader) (Metrics, error) {
-	m := Metrics{ToolUses: map[string]int{}}
+func Parse(r io.Reader) (agent.Metrics, error) {
+	m := agent.Metrics{ToolUses: map[string]int{}}
 	seen := map[string]bool{}
 	firstSeen := false
 	requests := map[string]*request{} // by message ID: a message's content blocks arrive as separate events
@@ -252,7 +137,7 @@ func Parse(r io.Reader) (Metrics, error) {
 				continue
 			}
 			w := limit.Info.Windows
-			reading := UsageReading{FiveHour: w.FiveHour.Utilization, FiveHourResets: unixTime(w.FiveHour.ResetsAt), Status: limit.Info.Status}
+			reading := agent.UsageReading{FiveHour: w.FiveHour.Utilization, FiveHourResets: unixTime(w.FiveHour.ResetsAt), Status: limit.Info.Status}
 			if w.SevenDay != nil {
 				reading.SevenDay, reading.SevenDayResets = w.SevenDay.Utilization, unixTime(w.SevenDay.ResetsAt)
 			}
@@ -468,57 +353,28 @@ func (r *request) usage() pricing.Usage {
 		Output: max(r.output, r.contentBytes/4)}
 }
 
-// Outcomes. ok, capped and timeout are the agent's; infra and unfair runs never had a fair attempt and are not counted.
-const (
-	OutcomeOK      = "ok"
-	OutcomeCapped  = "capped"  // hit the turn or budget cap
-	OutcomeTimeout = "timeout" // Agentium stopped it
-	OutcomeInfra   = "infra"   // no result, a crash, sign-in, limits, overload or transport
-	OutcomeUnfair  = "unfair"  // the environment drifted (see Check)
-	// OutcomeCancelled is Agentium's, not Claude Code's: the run was interrupted (Ctrl-C, or its Agentium process died
-	// and a later one recovered it). Never counted, and not an infrastructure failure either.
-	OutcomeCancelled = "cancelled"
-)
-
 // infraText matches results of runs that never reached the task. Agent outcomes never match.
 var infraText = regexp.MustCompile(`(?i)usage limit|rate limit|overloaded|authenticat|not logged in|oauth|credit balance|ECONN|socket|\b5\d\d \w`)
 
 // Classify decides a run's outcome from its metrics, whether Agentium stopped it, and its environment drift.
-func Classify(m Metrics, timedOut bool, drift []string) string {
+func Classify(m agent.Metrics, timedOut bool, drift []string) string {
 	switch {
 	case len(drift) > 0:
-		return OutcomeUnfair
+		return agent.OutcomeUnfair
 	case timedOut:
-		return OutcomeTimeout
+		return agent.OutcomeTimeout
 	case !m.SawResult:
-		return OutcomeInfra
+		return agent.OutcomeInfra
 	case m.Result == "error_max_turns" || m.Result == "error_max_budget_usd":
-		return OutcomeCapped
+		return agent.OutcomeCapped
 	case m.Result == "error_during_execution" || (m.ResultIsError && infraText.MatchString(m.ResultExcerpt)):
-		return OutcomeInfra
+		return agent.OutcomeInfra
 	}
-	return OutcomeOK
-}
-
-// Expect is what a fair run's environment looks like. Empty fields are not checked.
-type Expect struct {
-	CLIVersion string
-	Model      string
-	Tools      []string // the tool set every run of an experiment must get
-	// Skills and SlashCommands are the sets every run of an arm must get, taken from a calibration run under the same
-	// isolation (Claude Code bundles skills and commands of its own, so the resolver cannot list them). Reported by
-	// count: names can be personal.
-	Skills        []string
-	SlashCommands []string
-	// PersonalSkills are the names of the user's own skills: none may load (requirement 1). A name is not counted when
-	// the arm has a project skill of that name (ProjectSkills) or a calibration run had it (Skills): a bundled skill
-	// can share a personal skill's name. Personal commands show up as slash commands, which SlashCommands covers.
-	PersonalSkills []string
-	ProjectSkills  []string
+	return agent.OutcomeOK
 }
 
 // Check lists how a run's environment drifted from what was expected. Any drift makes a run unfair.
-func Check(m Metrics, expect Expect) []string {
+func Check(m agent.Metrics, expect agent.Expect) []string {
 	if !m.SawInit {
 		if m.SawResult {
 			return []string{"no init event: the environment is unknown"}
@@ -563,7 +419,7 @@ func Check(m Metrics, expect Expect) []string {
 
 // PersonalSkills lists the names of the user's own skills and commands in their Claude Code folder (configDir, see
 // UserConfigDir): skills/* and commands/*.md. Only names are read, to recognize them in a run; they are never stored.
-// Skills from user-level plugins are not listed; a lock's exact skill set (Expect.Skills) catches those.
+// Skills from user-level plugins are not listed; a lock's exact skill set (agent.Expect.Skills) catches those.
 func PersonalSkills(configDir string) []string {
 	var names []string
 	if entries, err := os.ReadDir(filepath.Join(configDir, "skills")); err == nil {

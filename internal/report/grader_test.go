@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/task"
@@ -21,7 +21,7 @@ func TestReportShowsTheGrader(t *testing.T) {
 	in.Lock.Grader = task.GraderSandbox
 	flagged := sandbox.Denial{Process: "java", Operation: "mach-lookup", Target: "com.apple.SecretLeakingName", Repeats: 1}
 	in.Runs[0].Record.Grader, in.Runs[0].Record.Sandbox = task.GraderSandbox, &task.SandboxGrade{Canary: "the grading sandbox is unavailable: nested"}
-	in.Runs[0].Record.Outcome, in.Runs[0].Record.Passed = claude.OutcomeInfra, nil
+	in.Runs[0].Record.Outcome, in.Runs[0].Record.Passed = agent.OutcomeInfra, nil
 	in.Runs[1].Record.Grader, in.Runs[1].Record.Sandbox = task.GraderSandbox, &task.SandboxGrade{Canary: task.CanaryPassed, DenialCount: 2,
 		FlaggedCount: 1, Denials: []sandbox.Denial{flagged}, Flagged: []sandbox.Denial{flagged}}
 	in.Runs[1].Record.Outcome, in.Runs[1].Record.Passed = run.OutcomeSandboxFlagged, nil
@@ -79,7 +79,7 @@ func TestReportShowsFlaggedExclusionsPerArm(t *testing.T) {
 	in.Lock.Grader = task.GraderSandbox
 	b := -1
 	for i, r := range in.Runs {
-		if r.Record.Arm == "B" && r.Record.Outcome == claude.OutcomeOK {
+		if r.Record.Arm == "B" && r.Record.Outcome == agent.OutcomeOK {
 			b = i
 			break
 		}

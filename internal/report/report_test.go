@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/report/reporttest"
 	"github.com/pigeaca/agentium/internal/run"
@@ -339,7 +339,7 @@ func TestReportArmWithoutCountedRuns(t *testing.T) {
 	in := fixture()
 	for i := range in.Runs {
 		if in.Runs[i].Record.Arm == "B" {
-			in.Runs[i].Record.Outcome, in.Runs[i].Record.Passed = claude.OutcomeUnfair, nil
+			in.Runs[i].Record.Outcome, in.Runs[i].Record.Passed = agent.OutcomeUnfair, nil
 		}
 	}
 	rep, err := Build(in)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/report"
@@ -754,8 +754,8 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 	if ex := rep.Analysis.Excluded; len(ex) > 0 {
 		n := 0
 		var why []string
-		for _, k := range []struct{ outcome, words string }{{claude.OutcomeUnfair, "setup changed"}, {claude.OutcomeInfra, "infrastructure"},
-			{run.OutcomeSandboxFlagged, "sandbox"}, {claude.OutcomeCancelled, "stopped"}, {experiment.OutcomeUngraded, "ungraded by the judge"},
+		for _, k := range []struct{ outcome, words string }{{agent.OutcomeUnfair, "setup changed"}, {agent.OutcomeInfra, "infrastructure"},
+			{run.OutcomeSandboxFlagged, "sandbox"}, {agent.OutcomeCancelled, "stopped"}, {experiment.OutcomeUngraded, "ungraded by the judge"},
 			{experiment.OutcomeGradePending, "awaiting the judge's grade"}} {
 			if c := ex[k.outcome]; c > 0 {
 				n += c

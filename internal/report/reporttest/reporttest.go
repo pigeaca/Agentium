@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
@@ -74,9 +75,9 @@ func LeanAB() Experiment {
 		}
 		isolated := cost + 0.02 // the first request's reads repriced as writes: a little above the actual cost
 		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, SignIn: claude.SignInLogin,
-			IsolatedCostUSD: &isolated, Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", RecordsDir: "/home/someone/.agentium/records/x",
+			IsolatedCostUSD: &isolated, Outcome: agent.OutcomeOK, Passed: passed, ContextHead: "ctx", RecordsDir: "/home/someone/.agentium/records/x",
 			Started: at.Add(time.Duration(s.Position) * time.Minute), Finished: at.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
-			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
+			Metrics: agent.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
 				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: first, SawInit: true, SawResult: true},
 			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, TestsChanged: s.Arm == "A", RanTests: true, RanChecks: s.Arm == "A",
 				BashCommands: 6}, Verify: []task.Command{{Command: "make test", ExitCode: 0, Seconds: 1.5}}}
@@ -103,7 +104,7 @@ func LeanAB() Experiment {
 		}
 		switch s.Position {
 		case 3:
-			rec.Outcome, rec.Passed = claude.OutcomeUnfair, nil
+			rec.Outcome, rec.Passed = agent.OutcomeUnfair, nil
 			rec.Drift = []string{"tools differ (added Monitor; missing none)", "1 file tool call(s) reached /home/someone/.agentium/projects"}
 		case 5: // what the agent said, and a note naming local paths, stay out of the report
 			rec.Metrics.ResultExcerpt = "Done in /home/someone/.agentium/workspaces/e1-s5-t1/repo with key sk-ant-api03-" + strings.Repeat("x", 40) // secret-scan: allow
@@ -117,10 +118,10 @@ func LeanAB() Experiment {
 		runs = append(runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
 		if s.Position == 10 { // an earlier attempt that failed for infrastructure, and one recovered after a stop
 			infra := rec
-			infra.ID, infra.Outcome, infra.Passed = "r10-infra", claude.OutcomeInfra, nil
+			infra.ID, infra.Outcome, infra.Passed = "r10-infra", agent.OutcomeInfra, nil
 			infra.Metrics.CostUSD, infra.CostEstimated = 0.05, true
 			cancelled := rec
-			cancelled.ID, cancelled.Outcome, cancelled.Passed, cancelled.Recovered = "r10-cancelled", claude.OutcomeCancelled, nil, run.RecoveredStopped
+			cancelled.ID, cancelled.Outcome, cancelled.Passed, cancelled.Recovered = "r10-cancelled", agent.OutcomeCancelled, nil, run.RecoveredStopped
 			runs = append(runs[:len(runs)-1], Run{ID: infra.ID, Slot: 10, Attempt: 1, Record: infra}, Run{ID: cancelled.ID, Slot: 10, Attempt: 2, Record: cancelled},
 				Run{ID: rec.ID, Slot: 10, Attempt: 2, Record: rec})
 		}
@@ -160,9 +161,9 @@ func OneRun(method, template string) Experiment {
 			passed = &no
 		}
 		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: l.Design.Model, SignIn: claude.SignInLogin,
-			Outcome: claude.OutcomeOK, Passed: passed, ContextHead: "ctx", Started: l.LockedAt.Add(time.Duration(s.Position) * time.Minute),
+			Outcome: agent.OutcomeOK, Passed: passed, ContextHead: "ctx", Started: l.LockedAt.Add(time.Duration(s.Position) * time.Minute),
 			Finished: l.LockedAt.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
-			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
+			Metrics: agent.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: int64(40000 + 1000*ti), InputTokens: 50,
 				OutputTokens: int64(3000 + 100*ti), CacheReadTokens: 400000, CacheWriteTokens: 30000, FirstRequest: 30000, SawInit: true, SawResult: true},
 			Behavior: run.Behavior{FilesChanged: 2, LinesAdded: 10, LinesRemoved: 3, RanTests: true, BashCommands: 6}}
 		runs = append(runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
@@ -261,9 +262,9 @@ func Seq(ratio float64, end int, futility bool, status string) (Experiment, erro
 		if s.Arm == "B" {
 			cost *= ratio
 		}
-		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, Outcome: claude.OutcomeOK, Passed: &yes,
+		rec := run.Record{ID: fmt.Sprintf("r%02d", s.Position), Task: s.Task, Arm: s.Arm, Model: d.Model, Outcome: agent.OutcomeOK, Passed: &yes,
 			Started: at.Add(time.Duration(s.Position) * time.Minute), Finished: at.Add(time.Duration(s.Position)*time.Minute + 50*time.Second),
-			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: 40000, OutputTokens: 3000, SawInit: true, SawResult: true}}
+			Metrics: agent.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", CostUSD: cost, DurationMS: 40000, OutputTokens: 3000, SawInit: true, SawResult: true}}
 		e.Runs = append(e.Runs, Run{ID: rec.ID, Slot: s.Position, Attempt: 1, Record: rec})
 	}
 	return e, nil
@@ -314,7 +315,7 @@ func FewPairs() Experiment {
 func comparePairs(e *Experiment, verdict func(n int, task string) judge.PairVerdict) {
 	passed := map[int]string{} // pair → its arm-A run's ID
 	for _, r := range e.Runs {
-		if r.Record.Arm == "A" && r.Record.Passed != nil && *r.Record.Passed && r.Record.Outcome == claude.OutcomeOK {
+		if r.Record.Arm == "A" && r.Record.Passed != nil && *r.Record.Passed && r.Record.Outcome == agent.OutcomeOK {
 			passed[e.Lock.Schedule[r.Slot].Pair] = r.ID
 		}
 	}
@@ -322,7 +323,7 @@ func comparePairs(e *Experiment, verdict func(n int, task string) judge.PairVerd
 	for i := range e.Runs {
 		r := &e.Runs[i]
 		a, ok := passed[e.Lock.Schedule[r.Slot].Pair]
-		if r.Record.Arm != "B" || !ok || r.Record.Passed == nil || !*r.Record.Passed || r.Record.Outcome != claude.OutcomeOK {
+		if r.Record.Arm != "B" || !ok || r.Record.Passed == nil || !*r.Record.Passed || r.Record.Outcome != agent.OutcomeOK {
 			continue
 		}
 		r.Record.PairJudge = &run.PairJudgement{RunA: a, Verdict: verdict(n, r.Record.Task)}

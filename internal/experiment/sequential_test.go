@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/stats"
 )
 
@@ -54,7 +54,7 @@ func seqRuns(l Lock, end int, ratio float64) []RunData {
 			cost *= ratio
 		}
 		yes := true
-		runs = append(runs, RunData{Slot: s.Position, Task: s.Task, Arm: s.Arm, Outcome: claude.OutcomeOK, Passed: &yes, CostUSD: cost, DurationS: 60, OutputTokens: 100})
+		runs = append(runs, RunData{Slot: s.Position, Task: s.Task, Arm: s.Arm, Outcome: agent.OutcomeOK, Passed: &yes, CostUSD: cost, DurationS: 60, OutputTokens: 100})
 	}
 	return runs
 }
@@ -239,7 +239,7 @@ func TestSeqLookCountsItsPrefixAndKeepsItBetweenLooks(t *testing.T) {
 		t.Errorf("counted runs %v: only the prefix's", an.Counted)
 	}
 	// A stage with a slot left unsettled (an interrupted run, stored as cancelled) is not looked at either.
-	cancelled := append(seqRuns(l, 24, 1.0)[:23], RunData{Slot: 23, Task: l.Schedule[23].Task, Arm: l.Schedule[23].Arm, Outcome: claude.OutcomeCancelled})
+	cancelled := append(seqRuns(l, 24, 1.0)[:23], RunData{Slot: 23, Task: l.Schedule[23].Task, Arm: l.Schedule[23].Arm, Outcome: agent.OutcomeCancelled})
 	if s, _, _ := SequentialStatus(l, cancelled); len(s.Looks) != 1 || s.NextStage != 2 {
 		t.Errorf("an unsettled stage was looked at: %+v", s)
 	}
@@ -293,7 +293,7 @@ func TestSeqLostTasks(t *testing.T) {
 	for _, r := range runs {
 		if lost[r.Task] && r.Arm == "A" { // arm A's run failed for good: three infrastructure failures
 			for range MaxAttempts {
-				kept = append(kept, RunData{Slot: r.Slot, Task: r.Task, Arm: r.Arm, Outcome: claude.OutcomeInfra})
+				kept = append(kept, RunData{Slot: r.Slot, Task: r.Task, Arm: r.Arm, Outcome: agent.OutcomeInfra})
 			}
 			continue
 		}
@@ -311,7 +311,7 @@ func TestSeqLostTasks(t *testing.T) {
 	if !look2.Analysed || look2.Counted != 9 || look2.Fraction != 9.0/16 || look2.EffLevel != want[0].EffLevel || s.Reported != 2 || costResult(t, an).Tasks != 9 {
 		t.Errorf("look 2 with 9 of 12 tasks: %+v, want level %.5f", look2, want[0].EffLevel)
 	}
-	if an.Excluded[claude.OutcomeInfra] != 2*MaxAttempts+MaxAttempts {
+	if an.Excluded[agent.OutcomeInfra] != 2*MaxAttempts+MaxAttempts {
 		t.Errorf("excluded %v", an.Excluded)
 	}
 }
@@ -376,9 +376,9 @@ func TestExecuteStopsAtTheStageEnd(t *testing.T) {
 		failed = failed || first
 		mu.Unlock()
 		time.Sleep(5 * time.Millisecond)
-		r := Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}
+		r := Result{Outcome: agent.OutcomeOK, CostUSD: 0.5}
 		if first {
-			r = Result{Outcome: claude.OutcomeInfra, CostUSD: 0.1}
+			r = Result{Outcome: agent.OutcomeInfra, CostUSD: 0.1}
 		}
 		mu.Lock()
 		attempts = append(attempts, Attempt{Slot: slot.Position, Outcome: r.Outcome, CostUSD: r.CostUSD})

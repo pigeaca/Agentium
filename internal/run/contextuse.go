@@ -13,7 +13,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/source"
@@ -42,19 +42,19 @@ var builtinSubagents = []string{"general-purpose", "Explore", "Plan"}
 // UseOf works out a run's context use from its transcript's metrics and the context its arm started with (resolved
 // from src). dirs are the folders the agent's file tools name paths under: its checkout (as written and resolved),
 // and the working folder its transcript reports.
-func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs ...string) ContextUse {
+func UseOf(resolved claudectx.Context, src source.Source, m agent.Metrics, dirs ...string) ContextUse {
 	return UseOfIn(resolved, src, m, "", dirs...)
 }
 
 // UseOfIn is UseOf for a run whose agent started in module (resolved with claudectx.ResolveIn): dirs still begin with
 // the checkout's root, so paths stay relative to it, but a command's relative file names are the module folder's, and
 // a module's path-scoped rules match paths in the module.
-func UseOfIn(resolved claudectx.Context, src source.Source, m claude.Metrics, module string, dirs ...string) ContextUse {
+func UseOfIn(resolved claudectx.Context, src source.Source, m agent.Metrics, module string, dirs ...string) ContextUse {
 	use := ContextUse{Start: []string{}}
 	touched := relativeAll(m.FilePaths, dirs) // files the agent worked with, through any file tool
 	read := relativeAll(m.ReadPaths, dirs)
 	used := map[string]bool{}
-	// Only Bash commands that ran: a denied `cat AGENTS.md` read nothing (claude.Metrics.RanCommands).
+	// Only Bash commands that ran: a denied `cat AGENTS.md` read nothing (agent.Metrics.RanCommands).
 	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, module, m.RanCommands, dirs) }
 	for _, e := range resolved.Entries {
 		switch e.Kind {
@@ -148,7 +148,7 @@ func (r *Recovery) Recover(ctx context.Context, rec Record, base, snapshotCommit
 	if transcript == "" {
 		return nil, nil
 	}
-	m, err := parseFile(transcript)
+	m, err := parseFile(adapterFor(rec.Agent), transcript)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

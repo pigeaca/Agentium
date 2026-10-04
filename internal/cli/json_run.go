@@ -20,6 +20,7 @@ type runInfo struct {
 	ID      string `json:"id"`
 	Task    string `json:"task"`
 	Arm     string `json:"arm"`
+	Agent   string `json:"agent"` // the coding agent that ran: "claude-code" (also for runs recorded before agents were named)
 	Model   string `json:"model"`
 	Effort  string `json:"effort"` // as asked for; empty is the CLI's default
 	SignIn  string `json:"sign_in"`
@@ -89,7 +90,7 @@ func behaviorOf(b run.Behavior) behaviorDoc {
 
 func runInfoOf(env Env, rec run.Record) runInfo {
 	spend := rec.Spend()
-	info := runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
+	info := runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Agent: rec.AgentName(), Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
 		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
 		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),

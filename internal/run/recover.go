@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
@@ -283,13 +284,13 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 			continue
 		}
 		rec := s.Record
-		rec.RecordsDir, rec.Outcome, rec.Passed = dir, claude.OutcomeCancelled, nil
+		rec.RecordsDir, rec.Outcome, rec.Passed = dir, agent.OutcomeCancelled, nil
 		rec.Finished = now.UTC()
 		transcript := filepath.Join(dir, "stream.jsonl")
 		if info, err := os.Stat(transcript); err == nil {
 			rec.Finished = info.ModTime().UTC()
 		}
-		rec.Metrics, _ = parseFile(transcript) // what can be read is kept; a missing transcript spent nothing visible
+		rec.Metrics, _ = parseFile(adapterFor(rec.Agent), transcript) // what can be read is kept; a missing transcript spent nothing visible
 		rec.Recovered = RecoveredStopped
 		rec.Notes = append(rec.Notes, fmt.Sprintf("Agentium stopped during this run; recovered on %s", now.UTC().Format("2006-01-02 15:04")))
 		if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {
@@ -352,9 +353,9 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 		return nil, "", fmt.Errorf("run %s: %w", id, statErr)
 	}
 	hasTranscript := statErr == nil
-	var m claude.Metrics
+	var m agent.Metrics
 	if hasTranscript {
-		m, _ = parseFile(transcript)
+		m, _ = parseFile(adapterFor(""), transcript) // the record is unreadable: its agent is unknown, so Claude Code's, the only agent so far
 	}
 	if match := pgidInTruncated.FindSubmatch(data); match != nil {
 		if pgid, err := strconv.Atoi(string(match[1])); err == nil && pgid > 0 && groupExists(pgid) {
@@ -415,7 +416,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	if err := os.Rename(startPath, aside); err != nil {
 		return nil, "", fmt.Errorf("run %s: start file unreadable (%v) and not moved aside: %w", id, parseErr, err)
 	}
-	rec := Record{ID: id, RecordsDir: dir, Outcome: claude.OutcomeCancelled, Recovered: RecoveredStopped, Finished: info.ModTime().UTC(), Metrics: m}
+	rec := Record{ID: id, RecordsDir: dir, Outcome: agent.OutcomeCancelled, Recovered: RecoveredStopped, Finished: info.ModTime().UTC(), Metrics: m}
 	if !m.SawResult && m.EstimatedCostUSD > 0 {
 		rec.Metrics.CostUSD, rec.CostEstimated = m.EstimatedCostUSD, true
 	}

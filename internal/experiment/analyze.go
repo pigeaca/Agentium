@@ -7,7 +7,7 @@ import (
 	"math/rand/v2"
 	"slices"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/task"
@@ -276,7 +276,7 @@ func asFails(runs []RunData) []RunData {
 	failed := false
 	for i, r := range out {
 		if r.Outcome == run.OutcomeSandboxFlagged {
-			out[i].Outcome, out[i].Passed = claude.OutcomeOK, &failed
+			out[i].Outcome, out[i].Passed = agent.OutcomeOK, &failed
 		}
 	}
 	return out

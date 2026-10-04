@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	llmjudge "github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/task"
@@ -67,7 +67,7 @@ func TestExperimentMixesJudgeGradedTasks(t *testing.T) {
 		switch rec.Task {
 		case "judged":
 			v := rec.Judge
-			if rec.GradedBy != task.GradingJudge || rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || v == nil || v.Requested != 5 ||
+			if rec.GradedBy != task.GradingJudge || rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || v == nil || v.Requested != 5 ||
 				len(v.Answers) != 5 || v.CostUSD < 0.2499 || v.CostUSD > 0.2501 || runs[i].CostUSD != 0.30 || len(rec.Verify) != 0 {
 				t.Errorf("a judge-graded run: graded by %q, %s, passed %v, verdict %+v, cost column %v, verify %v", rec.GradedBy, rec.Outcome, rec.Passed, v,
 					runs[i].CostUSD, rec.Verify)
@@ -124,7 +124,7 @@ func TestExperimentMixesJudgeGradedTasks(t *testing.T) {
 	expect(t, f.run(ctx, "experiment", "new", "refused", "--b", "lean", "--task", "value", "--task", "judged", "--goal", "better", "--repeats", "1"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "run", "refused"), ExitOK, "graded by the judge (unvalidated): not fixed (5 of 5 said partly or no)")
 	for _, rec := range records(t, experimentRuns(t, f, "refused")) {
-		if rec.Task == "judged" && (rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed) {
+		if rec.Task == "judged" && (rec.Outcome != agent.OutcomeOK || rec.Passed == nil || *rec.Passed) {
 			t.Errorf("a run the judge called not fixed: %s, passed %v", rec.Outcome, rec.Passed)
 		}
 	}
@@ -155,7 +155,7 @@ func TestExperimentJudgeGradeAtALimit(t *testing.T) {
 	expect(t, paused, ExitOK, "ok, $0.30; graded by the judge (unvalidated): grade pending (the judge answered 0 of 5 times",
 		"Paused: the judge hit a usage limit or a sign-in failure", "1 grade(s) pending, graded again from the run's change")
 	recs := records(t, experimentRuns(t, f, "limit"))
-	if len(recs) != 1 || recs[0].Outcome != claude.OutcomeOK || recs[0].Passed != nil || recs[0].Judge == nil || recs[0].Judge.Stopped != llmjudge.StoppedLimit ||
+	if len(recs) != 1 || recs[0].Outcome != agent.OutcomeOK || recs[0].Passed != nil || recs[0].Judge == nil || recs[0].Judge.Stopped != llmjudge.StoppedLimit ||
 		!strings.Contains(strings.Join(recs[0].Notes, "; "), "not graded yet: the judge answered 0 of 5 times") || recs[0].GradeErrors != 0 {
 		t.Fatalf("the pending run: %+v", recs)
 	}
@@ -176,7 +176,7 @@ func TestExperimentJudgeGradeAtALimit(t *testing.T) {
 		t.Fatalf("%d runs stored, %d agent runs: want 2 and 2 (one per slot)", len(runs), agentRuns(t, ctrl))
 	}
 	for i, rec := range records(t, runs) {
-		if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || runs[i].Passed == nil || !*runs[i].Passed {
+		if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || runs[i].Passed == nil || !*runs[i].Passed {
 			t.Errorf("run %s: %s, passed %v (column %v)", rec.ID, rec.Outcome, rec.Passed, runs[i].Passed)
 		}
 	}
@@ -202,7 +202,7 @@ func TestExperimentJudgeGradeErrorsAndRefusals(t *testing.T) {
 		t.Fatalf("%d runs stored, %d agent runs: want 2 and 2", len(runs), agentRuns(t, ctrl))
 	}
 	for _, rec := range records(t, runs) {
-		if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed {
+		if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed {
 			t.Errorf("run %s: %s, passed %v, notes %v", rec.ID, rec.Outcome, rec.Passed, rec.Notes)
 		}
 	}
@@ -222,7 +222,7 @@ func TestExperimentJudgeGradeErrorsAndRefusals(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "run", "list"), ExitOK, "ungraded (judge)")
 	for _, rec := range records(t, experimentRuns(t, f, "refusals")) {
-		if rec.Outcome != claude.OutcomeOK || rec.Passed != nil || rec.Ungraded == "" {
+		if rec.Outcome != agent.OutcomeOK || rec.Passed != nil || rec.Ungraded == "" {
 			t.Errorf("a refused run: %s, passed %v, ungraded %q", rec.Outcome, rec.Passed, rec.Ungraded)
 		}
 	}
@@ -271,7 +271,7 @@ func TestExperimentJudgeGradeSurvivesAKill(t *testing.T) {
 		t.Fatalf("%d runs stored, %d agent runs: want 2 and 2\n%s", len(runs), agentRuns(t, ctrl), resumed.stdout)
 	}
 	for _, rec := range records(t, runs) {
-		if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed {
+		if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed {
 			t.Errorf("run %s: %s, passed %v, recovered %q", rec.ID, rec.Outcome, rec.Passed, rec.Recovered)
 		}
 	}

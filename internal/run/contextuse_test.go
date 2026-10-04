@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claudectx"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -60,7 +60,7 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := claude.Metrics{
+	m := agent.Metrics{
 		CWD:       "/work/repo",
 		FilePaths: []string{"/work/repo/pkg/x.go", "/work/repo/docs/testing.md"}, // pkg/x.go loads go.md and pkg/CLAUDE.md
 		ReadPaths: []string{
@@ -92,16 +92,16 @@ func TestUseOfKeepsOnlyTheArmsOwnContext(t *testing.T) {
 
 	// A rule's file read directly counts too; one whose patterns nothing matched does not.
 	read := []string{"sed -n 1,20p ./.claude/rules/sql.md"}
-	direct := UseOf(resolved, project, claude.Metrics{Commands: read, RanCommands: read})
+	direct := UseOf(resolved, project, agent.Metrics{Commands: read, RanCommands: read})
 	if !reflect.DeepEqual(direct.Files, []string{".claude/rules/sql.md"}) {
 		t.Errorf("a rule read with sed: %v", direct.Files)
 	}
 	// The same command denied (in Commands, not in RanCommands) read nothing.
-	if denied := UseOf(resolved, project, claude.Metrics{Commands: read}); denied.Files != nil {
+	if denied := UseOf(resolved, project, agent.Metrics{Commands: read}); denied.Files != nil {
 		t.Errorf("a denied sed counted as reading: %v", denied.Files)
 	}
 	// Without any use, Start is still an empty list (not null) and nothing else is set.
-	none := UseOf(resolved, project, claude.Metrics{})
+	none := UseOf(resolved, project, agent.Metrics{})
 	if none.Start == nil || none.Files != nil || none.Skills != nil || none.Subagents != nil || none.OtherSubagents != 0 {
 		t.Errorf("no use: %+v", none)
 	}

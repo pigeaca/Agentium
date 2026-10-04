@@ -17,6 +17,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 	discover "github.com/pigeaca/agentium/internal/project"
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 var update = flag.Bool("update", false, "rewrite the golden files")
@@ -105,7 +106,7 @@ func TestGoProfileGolden(t *testing.T) {
 		}
 	}
 	fmt.Fprintf(&out, "== Environ (the allowlist alone)\n")
-	for _, kv := range claude.Environ(append(slices.Clone(user), "GOCACHE=/golden/home/gocache", "GOFLAGS=-mod=mod", "GOENV=/golden/goenv")) {
+	for _, kv := range sandbox.Environ(append(slices.Clone(user), "GOCACHE=/golden/home/gocache", "GOFLAGS=-mod=mod", "GOENV=/golden/goenv")) {
 		fmt.Fprintf(&out, "%s\n", kv)
 	}
 

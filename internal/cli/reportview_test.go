@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/report"
@@ -281,7 +281,7 @@ func TestReportViewKeepsTheLastAnalysedLook(t *testing.T) {
 		if r.Slot >= 16 && r.Slot < 24 { // stage 2: three infrastructure failures a slot, so look 2 counts nothing new
 			for attempt := 1; attempt <= 3; attempt++ {
 				failed := r
-				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = attempt, claude.OutcomeInfra, nil
+				failed.Attempt, failed.Record.Outcome, failed.Record.Passed = attempt, agent.OutcomeInfra, nil
 				runs = append(runs, failed)
 			}
 			continue
@@ -332,7 +332,7 @@ func TestReportViewAtLeastMark(t *testing.T) {
 	e := reporttest.OneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	for i := range e.Runs {
 		if r := &e.Runs[i].Record; r.Task == "task-1" && r.Arm == "B" {
-			r.Outcome = claude.OutcomeCapped
+			r.Outcome = agent.OutcomeCapped
 		}
 	}
 	rep := buildReport(t, e)

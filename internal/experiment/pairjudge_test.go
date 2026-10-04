@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -34,7 +34,7 @@ func pairExecution(t *testing.T) (*execution, []store.Run) {
 	}
 	l := pairLock(t, 2)
 	for _, s := range l.Schedule {
-		r := storedRun(t, "run-"+s.Task+"-"+s.Arm+string(rune('0'+s.Repeat)), s, claude.OutcomeOK, true, nil)
+		r := storedRun(t, "run-"+s.Task+"-"+s.Arm+string(rune('0'+s.Repeat)), s, agent.OutcomeOK, true, nil)
 		r.ProjectID, r.ExperimentID, r.Kind, r.Started, r.Finished = proj.ID, exp.ID, "task", time.Now(), time.Now()
 		if err := db.SaveRun(ctx, r); err != nil {
 			t.Fatal(err)

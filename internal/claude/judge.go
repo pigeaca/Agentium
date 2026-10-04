@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // Judgement is one headless judge call: Claude Code with no tools, a fixed system prompt instead of its own, and a JSON
@@ -32,7 +33,7 @@ type Judgement struct {
 }
 
 // Command returns the arguments and environment of the call. environ is the parent's environment (os.Environ()),
-// filtered through the same allowlist as runs (Environ).
+// filtered through the same allowlist as runs (sandbox.Environ).
 func (j Judgement) Command(environ []string) (args, env []string, err error) {
 	if j.CLI == "" || j.Dir == "" || j.Model == "" || j.SystemPrompt == "" || j.Schema == "" || j.Home == "" {
 		return nil, nil, errors.New("a judge call needs the CLI, a folder, a model, a system prompt, a schema and the home folder")
@@ -53,7 +54,7 @@ func (j Judgement) Command(environ []string) (args, env []string, err error) {
 	if j.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(j.BudgetUSD, 'f', -1, 64))
 	}
-	env = append(Environ(environ), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
+	env = append(sandbox.Environ(environ), "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1", "DISABLE_AUTOUPDATER=1", "ENABLE_CLAUDEAI_MCP_SERVERS=false")
 	// The sign-in as Invocation.Command sets it for runs.
 	if err := checkSignIn(j.SignIn, j.Secret, j.ConfigDir); err != nil {
 		return nil, nil, err

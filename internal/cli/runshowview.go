@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -108,7 +108,7 @@ func runResult(rec run.Record, m marks) (string, term.Role) {
 		return m.fail + " failed", term.OutcomeFailed
 	case rec.Outcome == run.OutcomeSandboxFlagged:
 		return m.warn + " left out (sandbox)", term.OutcomeInfra
-	case rec.Outcome == claude.OutcomeInfra || rec.Outcome == claude.OutcomeUnfair:
+	case rec.Outcome == agent.OutcomeInfra || rec.Outcome == agent.OutcomeUnfair:
 		return m.warn + " no fair attempt", term.OutcomeInfra
 	}
 	return m.none + " not graded", term.OutcomeLeftOut
@@ -176,24 +176,24 @@ func runChain(rec run.Record, sh term.Shapes, m marks) []term.Node {
 // agentOutcome says in words when the agent did not simply finish, with its color; "" when it did.
 func agentOutcome(outcome string) (string, term.Role) {
 	switch outcome {
-	case claude.OutcomeOK, run.OutcomeSandboxFlagged: // the latter is the grading's, said in its box
+	case agent.OutcomeOK, run.OutcomeSandboxFlagged: // the latter is the grading's, said in its box
 		return "", term.Default
-	case claude.OutcomeCapped:
+	case agent.OutcomeCapped:
 		return "hit its cap", term.OutcomeFailed
-	case claude.OutcomeTimeout:
+	case agent.OutcomeTimeout:
 		return "ran out of time", term.OutcomeFailed
-	case claude.OutcomeInfra:
+	case agent.OutcomeInfra:
 		return "infrastructure failed", term.OutcomeInfra
-	case claude.OutcomeUnfair:
+	case agent.OutcomeUnfair:
 		return "setup drifted", term.OutcomeInfra
-	case claude.OutcomeCancelled:
+	case agent.OutcomeCancelled:
 		return "stopped", term.OutcomeLeftOut
 	}
 	return term.Sanitize(outcome), term.OutcomeLeftOut
 }
 
 // toolsUsed names the tools the agent used most, with their counts: "used Bash ×5, Edit ×3, Read ×2 and 1 more".
-func toolsUsed(mt claude.Metrics, m marks) string {
+func toolsUsed(mt agent.Metrics, m marks) string {
 	type use struct {
 		name string
 		n    int

@@ -5,7 +5,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/task"
@@ -31,7 +31,7 @@ func TestSlotReportsItsSteps(t *testing.T) {
 				e.Step(s)
 			}
 		}
-		return run.Record{Outcome: claude.OutcomeOK, Passed: &passed}, nil
+		return run.Record{Outcome: agent.OutcomeOK, Passed: &passed}, nil
 	}
 	slot := x.lock.Schedule[1]
 	res, err := x.slot(context.Background(), slot, 2, nil)
@@ -77,7 +77,7 @@ func TestSlotCarriesFlaggedOperations(t *testing.T) {
 		t.Errorf("result %+v, %v", res, err)
 	}
 	passed := true
-	rec = run.Record{Outcome: claude.OutcomeOK, Passed: &passed, Sandbox: rec.Sandbox} // a flagged pass stays a pass
+	rec = run.Record{Outcome: agent.OutcomeOK, Passed: &passed, Sandbox: rec.Sandbox} // a flagged pass stays a pass
 	if res, err := x.slot(context.Background(), x.lock.Schedule[0], 2, nil); err != nil || res.SandboxFlagged != "" {
 		t.Errorf("a passing run: %+v, %v", res, err)
 	}

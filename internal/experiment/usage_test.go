@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 )
 
 // meter is a subscription's five-hour window as the fake runs see it: every finished run uses step of it.
@@ -24,7 +24,7 @@ func (m *meter) run(f *fake) Executor {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.used += m.step
-		res.Usage = &claude.UsageReading{FiveHour: m.used, FiveHourResets: m.resets}
+		res.Usage = &agent.UsageReading{FiveHour: m.used, FiveHourResets: m.resets}
 		return res, err
 	}
 }
@@ -49,7 +49,7 @@ func TestExecutePausesBeforeTheUsageLimit(t *testing.T) {
 	resets := time.Now().Add(time.Hour).Truncate(time.Second)
 	m := &meter{used: 0.30, resets: resets, step: 0.06}
 	f := &fake{}
-	gate := &UsageGate{Limit: 0.85, PerRun: 0.06, Latest: claude.UsageReading{FiveHour: 0.30, FiveHourResets: resets}}
+	gate := &UsageGate{Limit: 0.85, PerRun: 0.06, Latest: agent.UsageReading{FiveHour: 0.30, FiveHourResets: resets}}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate}, m.run(f))
 	if err != nil || sum.Status != StatusUsage || !sum.ResumeAt.Equal(resets) || sum.Pending == 0 {
 		t.Fatalf("summary %+v, %v", sum, err)
@@ -78,7 +78,7 @@ func TestExecuteWaitsForTheUsageWindow(t *testing.T) {
 	var waits []time.Time
 	var events []Event
 	var mu sync.Mutex
-	gate := &UsageGate{Limit: 0.85, PerRun: 0.03, Latest: claude.UsageReading{FiveHour: 0.75, FiveHourResets: first},
+	gate := &UsageGate{Limit: 0.85, PerRun: 0.03, Latest: agent.UsageReading{FiveHour: 0.75, FiveHourResets: first},
 		Wait: func(ctx context.Context, until time.Time) error {
 			waits = append(waits, until)
 			m.mu.Lock()
@@ -112,7 +112,7 @@ func TestExecuteUsageEdges(t *testing.T) {
 	slots := scheduleOf(t, 3, 1)
 	resets := time.Now().Add(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
-	gate := &UsageGate{Limit: 0.85, PerRun: 0.06, Latest: claude.UsageReading{FiveHour: 0.84, FiveHourResets: resets},
+	gate := &UsageGate{Limit: 0.85, PerRun: 0.06, Latest: agent.UsageReading{FiveHour: 0.84, FiveHourResets: resets},
 		Wait: func(ctx context.Context, until time.Time) error { cancel(); return ctx.Err() }}
 	sum, err := Execute(ctx, Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate}, (&fake{}).run)
 	if err != nil || sum.Status != StatusStopped || sum.Note != "interrupted" || sum.Settled != 0 {
@@ -127,7 +127,7 @@ func TestExecuteUsageEdges(t *testing.T) {
 	}
 
 	sum, err = Execute(context.Background(), Plan{Schedule: slots, Concurrency: 2, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3,
-		Usage: &UsageGate{Limit: 0.10, PerRun: 0.06, Latest: claude.UsageReading{FiveHour: 0.05, FiveHourResets: resets},
+		Usage: &UsageGate{Limit: 0.10, PerRun: 0.06, Latest: agent.UsageReading{FiveHour: 0.05, FiveHourResets: resets},
 			Wait: func(context.Context, time.Time) error { t.Error("waited for a window no pair fits"); return nil }}}, (&fake{}).run)
 	if err != nil || sum.Status != StatusUsage || !strings.Contains(sum.Note, "a pair needs about 12%") {
 		t.Errorf("a pair above the limit: %+v, %v", sum, err)
@@ -138,8 +138,8 @@ func TestUsagePerRunAndLatest(t *testing.T) {
 	usagePerRun := func(samples []UsageSample) (float64, int) { r := UsagePerRun(samples, ""); return r.PerRun, r.Runs }
 	w1, w2 := time.Date(2026, 9, 29, 20, 20, 0, 0, time.UTC), time.Date(2026, 9, 30, 1, 20, 0, 0, time.UTC)
 	sample := func(first, last float64, firstResets, lastResets time.Time) UsageSample {
-		return UsageSample{First: claude.UsageReading{FiveHour: first, FiveHourResets: firstResets},
-			Last: claude.UsageReading{FiveHour: last, FiveHourResets: lastResets}}
+		return UsageSample{First: agent.UsageReading{FiveHour: first, FiveHourResets: firstResets},
+			Last: agent.UsageReading{FiveHour: last, FiveHourResets: lastResets}}
 	}
 	if per, runs := usagePerRun(nil); per != DefaultUsagePerRun || runs != 0 {
 		t.Errorf("no runs: %v, %d", per, runs)
@@ -217,11 +217,11 @@ func TestUsageGateKeepsPairsWhole(t *testing.T) {
 	m := &meter{used: 0.72, resets: resets, step: 0.04}
 	f := &fake{outcome: func(slot Slot, attempt int) Result {
 		if slot.Position == second && attempt == 1 {
-			return Result{Outcome: claude.OutcomeInfra}
+			return Result{Outcome: agent.OutcomeInfra}
 		}
-		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.5}
+		return Result{Outcome: agent.OutcomeOK, CostUSD: 0.5}
 	}}
-	gate := &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: claude.UsageReading{FiveHour: 0.72, FiveHourResets: resets}}
+	gate := &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: agent.UsageReading{FiveHour: 0.72, FiveHourResets: resets}}
 	sum, err := Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate,
 		Backoff: func(int) time.Duration { return 20 * time.Millisecond }}, m.run(f))
 	if err != nil || sum.Status != StatusUsage || sum.Settled != 2 {
@@ -230,9 +230,9 @@ func TestUsageGateKeepsPairsWhole(t *testing.T) {
 
 	// Resumed with the pair's first run stored and the window nearly full: the second still runs, then it pauses.
 	f = &fake{}
-	gate = &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: claude.UsageReading{FiveHour: 0.84, FiveHourResets: resets}}
+	gate = &UsageGate{Limit: 0.85, PerRun: 0.04, Latest: agent.UsageReading{FiveHour: 0.84, FiveHourResets: resets}}
 	sum, err = Execute(context.Background(), Plan{Schedule: slots, Concurrency: 1, RunCapUSD: 1, BudgetUSD: 100, MaxAttempts: 3, Usage: gate,
-		Prior: []Attempt{{Slot: 0, Outcome: claude.OutcomeOK, CostUSD: 0.5}}}, f.run)
+		Prior: []Attempt{{Slot: 0, Outcome: agent.OutcomeOK, CostUSD: 0.5}}}, f.run)
 	if err != nil || sum.Status != StatusUsage || len(f.ran) != 1 || f.ran[0] != second {
 		t.Errorf("a half pair on resume: %+v, %v (ran %v, want [%d])", sum, err, f.ran, second)
 	}

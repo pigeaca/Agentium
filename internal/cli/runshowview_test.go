@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/task"
@@ -22,9 +22,9 @@ func runScenes() map[string]run.Record {
 	started := time.Date(2026, 10, 3, 14, 0, 0, 0, time.UTC)
 	base := func() run.Record {
 		return run.Record{
-			ID: "20261003T140000Z-a1b2c3", Task: "fix-parser", Arm: "B", ContextHead: "9f3c2d1e5a", Outcome: claude.OutcomeOK, Passed: ptr(true),
+			ID: "20261003T140000Z-a1b2c3", Task: "fix-parser", Arm: "B", ContextHead: "9f3c2d1e5a", Outcome: agent.OutcomeOK, Passed: ptr(true),
 			Grader: task.GraderSandbox, Started: started, Finished: started.Add(3*time.Minute + 12*time.Second), RecordsDir: "~/runs/20261003T140000Z-a1b2c3",
-			Metrics: claude.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", Turns: 9, DurationMS: 161000, CostUSD: 0.4231,
+			Metrics: agent.Metrics{CLIVersion: "2.1.281", Model: "claude-sonnet-5", Turns: 9, DurationMS: 161000, CostUSD: 0.4231,
 				ToolUses: map[string]int{"Bash": 5, "Edit": 3, "Read": 9, "Grep": 2}},
 			Behavior: run.Behavior{FilesChanged: 3, LinesAdded: 41, LinesRemoved: 2},
 			Setup:    []task.Command{{Command: "go mod download", Seconds: 4}},
@@ -43,13 +43,13 @@ func runScenes() map[string]run.Record {
 	judged.Judge = &judge.Verdict{Fixed: judge.Yes, Answers: []string{judge.Yes, judge.Yes, judge.Partly}, Requested: 3, Model: "claude-opus-5-5", CostUSD: 0.21}
 
 	infra := base()
-	infra.Outcome, infra.Passed, infra.Sandbox, infra.Verify, infra.Metrics.DurationMS = claude.OutcomeInfra, nil, nil, nil, 4000
+	infra.Outcome, infra.Passed, infra.Sandbox, infra.Verify, infra.Metrics.DurationMS = agent.OutcomeInfra, nil, nil, nil, 4000
 	infra.Metrics.ToolUses = nil
 
 	canary := base()
 	canary.Passed, canary.Verify = nil, nil
 	canary.Sandbox = &task.SandboxGrade{Canary: "the sandbox let a read through"}
-	canary.Outcome = claude.OutcomeCapped
+	canary.Outcome = agent.OutcomeCapped
 	canary.Drift = []string{"permission mode \"default\", not \"acceptEdits\""}
 
 	flagged := base()

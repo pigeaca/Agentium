@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
@@ -121,7 +122,7 @@ func judgeFixture(t *testing.T, script string) (Env, Spec, Record) {
 		Environ: []string{"PATH=" + os.Getenv("PATH")}}
 	spec := Spec{TaskName: "value", Instruction: "Make the value new.", Task: task.Spec{Base: base, Solution: solution,
 		HiddenTests: []string{"tests/value_test.sh"}, Reference: []string{"tests/value_test.sh", "value.txt"}, Verify: []string{"true"}}}
-	rec := Record{ID: "r1", Outcome: claude.OutcomeOK, Passed: &passed, RecordsDir: records, Metrics: claude.Metrics{CostUSD: 0.3}}
+	rec := Record{ID: "r1", Outcome: agent.OutcomeOK, Passed: &passed, RecordsDir: records, Metrics: agent.Metrics{CostUSD: 0.3}}
 	return env, spec, rec
 }
 
@@ -138,7 +139,7 @@ func TestJudgeStoresAVerdictAndLeavesTheRunAlone(t *testing.T) {
 	if strings.Contains(v.Reason, "tok-secret") || !strings.Contains(v.Reason, "[REDACTED]") {
 		t.Errorf("the reason is not redacted: %q", v.Reason)
 	}
-	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Metrics.CostUSD != 0.3 || rec.JudgeCostUSD() != v.CostUSD {
+	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Metrics.CostUSD != 0.3 || rec.JudgeCostUSD() != v.CostUSD {
 		t.Errorf("the run changed: %+v", rec)
 	}
 	if _, err := os.Stat(filepath.Join(rec.RecordsDir, "judge")); err == nil {
@@ -162,7 +163,7 @@ func TestJudgeFailuresNeverChangeTheRun(t *testing.T) {
 	if v := rec.Judge; v == nil || v.Fixed != "" || v.Stopped != judge.StoppedCall || len(v.Errors) != 1 {
 		t.Errorf("a judge that cannot start: %+v", v)
 	}
-	if rec.Outcome != claude.OutcomeOK || !*rec.Passed || rec.Metrics.CostUSD != 0.3 {
+	if rec.Outcome != agent.OutcomeOK || !*rec.Passed || rec.Metrics.CostUSD != 0.3 {
 		t.Errorf("the run changed: %+v", rec)
 	}
 
@@ -221,7 +222,7 @@ func TestJudgeInterrupted(t *testing.T) {
 	if v := rec.Judge; v == nil || v.Stopped != judge.StoppedCall || !NeedsJudging(rec, spec.Task) || !strings.HasPrefix(v.Errors[len(v.Errors)-1], "interrupted") {
 		t.Errorf("an interrupted judgement: %+v", v)
 	}
-	if rec.Outcome != claude.OutcomeOK || !*rec.Passed {
+	if rec.Outcome != agent.OutcomeOK || !*rec.Passed {
 		t.Errorf("the run changed: %+v", rec)
 	}
 }
@@ -292,7 +293,7 @@ func TestRecoverAJudgementCutShort(t *testing.T) {
 		}
 	}
 	passed := true
-	rec := Record{ID: "r1", Task: "fix", Arm: "A", Outcome: claude.OutcomeOK, Passed: &passed, RecordsDir: dir,
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Outcome: agent.OutcomeOK, Passed: &passed, RecordsDir: dir,
 		Judge: &judge.Verdict{Stopped: judge.StoppedCall, CostUSD: 0.05, Errors: []string{"Agentium stopped while judging"}}}
 	if err := (Env{}).writeStart(start{Record: rec, Workspace: filepath.Join(layout.Workspaces, "r1"), AgentStarted: true, Finished: true}); err != nil {
 		t.Fatal(err)

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/stats"
 	"github.com/pigeaca/agentium/internal/store"
@@ -259,7 +259,7 @@ func TestSeqLookDoesNotStopOnADemotedVerdict(t *testing.T) {
 // A run left out for flagged sandbox denials settles its slot at once: the scheduler does not try it again, so an
 // arm cannot re-roll its failures. A canary failure (ordinary infrastructure) is still retried.
 func TestFlaggedFailureSettlesWithoutARetry(t *testing.T) {
-	if !Settles(run.OutcomeSandboxFlagged) || Fair(run.OutcomeSandboxFlagged) || Settles(claude.OutcomeInfra) {
+	if !Settles(run.OutcomeSandboxFlagged) || Fair(run.OutcomeSandboxFlagged) || Settles(agent.OutcomeInfra) {
 		t.Fatal("Settles or Fair")
 	}
 	d := validDesign()
@@ -272,9 +272,9 @@ func TestFlaggedFailureSettlesWithoutARetry(t *testing.T) {
 			return Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.2}, nil
 		}
 		if attempts[s.Position] == 1 {
-			return Result{Outcome: claude.OutcomeInfra}, nil // a canary failure: tried again
+			return Result{Outcome: agent.OutcomeInfra}, nil // a canary failure: tried again
 		}
-		return Result{Outcome: claude.OutcomeOK, CostUSD: 0.2}, nil
+		return Result{Outcome: agent.OutcomeOK, CostUSD: 0.2}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -290,15 +290,15 @@ func TestFlaggedFailureSettlesWithoutARetry(t *testing.T) {
 func TestAsFails(t *testing.T) {
 	yes := true
 	runs := []RunData{
-		{Slot: 0, Arm: "A", Outcome: claude.OutcomeOK, Passed: &yes, CostUSD: 1},
+		{Slot: 0, Arm: "A", Outcome: agent.OutcomeOK, Passed: &yes, CostUSD: 1},
 		{Slot: 1, Arm: "B", Outcome: run.OutcomeSandboxFlagged, CostUSD: 2},
-		{Slot: 2, Arm: "B", Outcome: claude.OutcomeInfra},
+		{Slot: 2, Arm: "B", Outcome: agent.OutcomeInfra},
 	}
 	got := asFails(runs)
 	if !reflect.DeepEqual(got[0], runs[0]) || !reflect.DeepEqual(got[2], runs[2]) {
 		t.Errorf("other runs changed: %+v", got)
 	}
-	if r := got[1]; r.Outcome != claude.OutcomeOK || r.Passed == nil || *r.Passed || r.CostUSD != 2 || !Fair(r.Outcome) || Success(r.Outcome, r.Passed, nil) {
+	if r := got[1]; r.Outcome != agent.OutcomeOK || r.Passed == nil || *r.Passed || r.CostUSD != 2 || !Fair(r.Outcome) || Success(r.Outcome, r.Passed, nil) {
 		t.Errorf("the left-out run: %+v", r)
 	}
 	if runs[1].Outcome != run.OutcomeSandboxFlagged || runs[1].Passed != nil {
@@ -318,7 +318,7 @@ func TestFlaggedStreakStopsTheExperiment(t *testing.T) {
 			Backoff: func(int) time.Duration { return 0 }}, func(_ context.Context, s Slot, _ int, _ []int) (Result, error) {
 			attempts[s.Position]++
 			if counted[s.Position] {
-				return Result{Outcome: claude.OutcomeOK, CostUSD: 0.1}, nil
+				return Result{Outcome: agent.OutcomeOK, CostUSD: 0.1}, nil
 			}
 			return Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.1}, nil
 		})

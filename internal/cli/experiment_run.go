@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
@@ -383,13 +383,13 @@ type runStatus struct {
 	spent    float64
 	// usage is the latest reading, shown for the window that is open when the line is drawn: after a reset it reads
 	// 0% until a run reports again.
-	usage    claude.UsageReading
+	usage    agent.UsageReading
 	hasUsage bool
 	until    time.Time // when the usage window resets, while waiting for it
 }
 
 // read keeps u if it is later than the reading kept so far.
-func (s *runStatus) read(u claude.UsageReading) {
+func (s *runStatus) read(u agent.UsageReading) {
 	if !s.hasUsage || u.Newer(s.usage) {
 		s.usage, s.hasUsage = u, true
 	}
@@ -413,7 +413,7 @@ func (s *runStatus) update(e experiment.Event) {
 		}
 	case "wait":
 		s.until = e.Until
-		s.read(claude.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
+		s.read(agent.UsageReading{FiveHour: e.Usage, FiveHourResets: e.Until})
 	}
 }
 

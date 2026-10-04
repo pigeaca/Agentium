@@ -3,6 +3,8 @@ package claude
 import (
 	"math"
 	"testing"
+
+	"github.com/pigeaca/agentium/internal/agent"
 )
 
 // The allowance's floor follows the model's output price, measured on claude-sonnet-5 ($10 per million): a model
@@ -30,23 +32,23 @@ func TestCapOvershootScalesWithTheModel(t *testing.T) {
 // allowance.
 func TestCapOvershootRecord(t *testing.T) {
 	t.Parallel()
-	o := CapOvershoot(Metrics{Result: "error_max_budget_usd"}, 0.507, 0.5, "claude-sonnet-5-5")
+	o := CapOvershoot(agent.Metrics{Result: "error_max_budget_usd"}, 0.507, 0.5, "claude-sonnet-5-5")
 	if o == nil || math.Abs(o.OverUSD-0.007) > 1e-9 || o.AllowanceUSD != 0.15 || o.Exceeded() {
 		t.Errorf("the smoke check's run: %+v", o)
 	}
-	if o := CapOvershoot(Metrics{Result: "error_max_budget_usd"}, 0.9, 0.5, "claude-sonnet-5-5"); o == nil || !o.Exceeded() {
+	if o := CapOvershoot(agent.Metrics{Result: "error_max_budget_usd"}, 0.9, 0.5, "claude-sonnet-5-5"); o == nil || !o.Exceeded() {
 		t.Errorf("$0.40 past a $0.50 cap: %+v", o)
 	}
-	for _, m := range []Metrics{{Result: "success"}, {Result: "error_max_turns"}} {
+	for _, m := range []agent.Metrics{{Result: "success"}, {Result: "error_max_turns"}} {
 		if CapOvershoot(m, 0.45, 0.5, "claude-sonnet-5-5") != nil {
 			t.Errorf("%s within its cap has no overshoot", m.Result)
 		}
 	}
 	// A run that finished on the turn that crossed its cap went past it too.
-	if o := CapOvershoot(Metrics{Result: "success"}, 0.9, 0.5, "claude-sonnet-5-5"); o == nil || math.Abs(o.OverUSD-0.4) > 1e-9 || !o.Exceeded() {
+	if o := CapOvershoot(agent.Metrics{Result: "success"}, 0.9, 0.5, "claude-sonnet-5-5"); o == nil || math.Abs(o.OverUSD-0.4) > 1e-9 || !o.Exceeded() {
 		t.Errorf("a success past its cap: %+v", o)
 	}
-	if o := CapOvershoot(Metrics{Result: "success"}, 0.55, 0.5, "claude-sonnet-5-5"); o == nil || o.Exceeded() {
+	if o := CapOvershoot(agent.Metrics{Result: "success"}, 0.55, 0.5, "claude-sonnet-5-5"); o == nil || o.Exceeded() {
 		t.Errorf("a success just past its cap: %+v", o)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pigeaca/agentium/internal/claude"
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -132,7 +132,7 @@ func TestRunStatusText(t *testing.T) {
 	}
 	// An older reading of the same window, reported late, does not replace it.
 	s.update(experiment.Event{Kind: "finish", Slot: experiment.Slot{Position: 2}, SpentUSD: 0.9, Result: experiment.Result{Outcome: "ok",
-		Usage: &claude.UsageReading{FiveHour: 0.5, FiveHourResets: now.Add(23 * time.Minute)}}})
+		Usage: &agent.UsageReading{FiveHour: 0.5, FiveHourResets: now.Add(23 * time.Minute)}}})
 	if got := s.text(now); !strings.HasSuffix(got, "; usage 90%") {
 		t.Errorf("text %q, want the later reading kept", got)
 	}
@@ -142,7 +142,7 @@ func TestRunStatusText(t *testing.T) {
 	}
 	// A reading from the next window replaces it.
 	s.update(experiment.Event{Kind: "finish", Slot: experiment.Slot{Position: 3}, SpentUSD: 1.2, Result: experiment.Result{Outcome: "ok",
-		Usage: &claude.UsageReading{FiveHour: 0.06, FiveHourResets: now.Add(5 * time.Hour)}}})
+		Usage: &agent.UsageReading{FiveHour: 0.06, FiveHourResets: now.Add(5 * time.Hour)}}})
 	if got := s.text(now.Add(24 * time.Minute)); !strings.HasSuffix(got, "; usage 6%") {
 		t.Errorf("text %q, want the next window's reading", got)
 	}

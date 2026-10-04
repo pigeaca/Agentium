@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
@@ -92,7 +93,7 @@ func (f gradeFixture) newCopy(root string) string {
 // input is a grade of a fresh copy (newCopy) for the agent tools, cloned from seed ("" for none), in root.
 func (f gradeFixture) input(root, seed string, tools ...string) gradingInput {
 	return gradingInput{Root: root, Seed: seed, Copy: f.newCopy(root), Environ: []string{"PATH=/usr/bin:/bin", "HOME=" + filepath.Join(f.dir, "home")},
-		Agent: claude.Invocation{Tools: tools, Home: filepath.Join(f.dir, "home"), Deps: f.deps}}
+		Agent: agent.Invocation{Tools: tools, Home: filepath.Join(f.dir, "home"), Deps: f.deps}}
 }
 
 // tree reads every regular file under root (relative path: content).
@@ -477,17 +478,17 @@ func TestGradingEnvIsTheAgentsRecipe(t *testing.T) {
 	} {
 		t.Run(strings.Join(append(tc.tools, tc.kept...), "+"), func(t *testing.T) {
 			root := filepath.Join(f.env.Layout.Records, "r-"+strings.Join(append(tc.tools, tc.kept...), "-"), gradingFolder)
-			in := gradingInput{Root: root, Copy: f.newCopy(root), Environ: environ, Agent: claude.Invocation{Tools: tc.tools, AgentTools: tc.kept,
+			in := gradingInput{Root: root, Copy: f.newCopy(root), Environ: environ, Agent: agent.Invocation{Tools: tc.tools, AgentTools: tc.kept,
 				Home: filepath.Join(f.dir, "home"), Deps: f.deps, JavaHome: "/jdk/Contents/Home", Venv: venv, ProjectMetadata: meta, ImportRoot: "src"}}
 			g, err := prepareGrading(context.Background(), in)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer g.remove()
-			agent := in.Agent
-			agent.CLI, agent.Dir, agent.Prompt, agent.Model, agent.BuildCache = "/bin/claude", g.Copy, "fix it", "claude-sonnet-5", g.Cache
-			agent.SignIn, agent.Secret, agent.ConfigDir, agent.AllowLocalBinding = claude.SignInAPIKey, "sk-secret", filepath.Join(f.dir, "config"), true
-			_, agentEnv, err := agent.Command(environ)
+			inv := in.Agent
+			inv.CLI, inv.Dir, inv.Prompt, inv.Model, inv.BuildCache = "/bin/claude", g.Copy, "fix it", "claude-sonnet-5", g.Cache
+			inv.SignIn, inv.Secret, inv.ConfigDir, inv.AllowLocalBinding = claude.SignInAPIKey, "sk-secret", filepath.Join(f.dir, "config"), true
+			_, agentEnv, err := claude.Adapter{}.Command(inv, environ)
 			if err != nil {
 				t.Fatal(err)
 			}
