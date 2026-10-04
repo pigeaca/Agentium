@@ -772,6 +772,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		return err
 	}
 	scripts, configs := checkFiles(spec.Task.Verify, spec.Task.Module, start)
+	configs = append(configs, addedConfigs(spec.Task.Verify, spec.Task.Module, start, changed)...)
 	var restore []string
 	for _, p := range changed {
 		switch {
@@ -906,10 +907,89 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
 // restores) and the configuration of the test runners they call (reported when changed). The commands run in module's
 // folder (the root when it is ""), so the names they give are read from there and listed from the root, as base and
-// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. A runner's configuration is
-// looked for in the module's folder and every folder above it (inAncestors): svc/pom.xml and the parent pom.xml.
+// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. After a simple `cd DIR` in a
+// command (scriptTokens), a name is also read from DIR. A script that is a symbolic link in base brings the files it
+// leads to within the repository (linkTargets): an agent that edits only the target is restored too. A runner's
+// configuration is looked for in the module's folder and every folder above it (configNames): svc/pom.xml and the
+// parent pom.xml. Configuration the agent adds is addedConfigs'.
 func checkFiles(verify []string, module string, base source.Source) (scripts, configs []string) {
+	add := func(list []string, p string) []string {
+		if !slices.Contains(list, p) {
+			list = append(list, p)
+		}
+		return list
+	}
+	for _, command := range verify {
+		for _, p := range scriptTokens(command, module) {
+			if source.Has(base, p) {
+				scripts = add(scripts, p)
+				for _, target := range linkTargets(base, p) {
+					scripts = add(scripts, target)
+				}
+			}
+		}
+	}
+	for _, f := range matching(base, configNames(verify, module)) {
+		configs = add(configs, f)
+	}
+	return scripts, configs
+}
+
+// scriptTokens lists the paths, from the root, that command's words may name as files: each word read from module's
+// folder (an absolute word is outside the repository, as at the root, and is left out in a module) and, after a
+// `cd DIR` with a plain relative DIR earlier in the command, read from DIR too ("cd .. && sh tools/check.sh" in module
+// svc names tools/check.sh). The words are not parsed as a shell would: a cd in a subshell or a later command still
+// counts, which only adds a path, never loses the module's reading, so a command without cd reads as before. A DIR with
+// anything a shell would expand ($, ~, *, ?, -) stops the cd reading for the rest of the command.
+func scriptTokens(command, module string) []string {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
+	words := strings.FieldsFunc(command, split)
+	var out []string
+	cwd, moved, lost := "", false, false // cwd: where the cds lead, from the module's folder
+	for i, word := range words {
+		p := path.Clean(strings.TrimPrefix(word, "./"))
+		if module == "" || !path.IsAbs(p) {
+			out = append(out, path.Join(module, p)) // "../tools/check.sh" from the module is the repository's tools/check.sh
+			if moved && !lost && !path.IsAbs(p) {
+				out = append(out, path.Join(module, cwd, p))
+			}
+		}
+		if word == "cd" && i+1 < len(words) {
+			dir := words[i+1]
+			if path.IsAbs(dir) || strings.ContainsAny(dir, "$~*?[") || strings.HasPrefix(dir, "-") {
+				lost = true
+				continue
+			}
+			cwd, moved = path.Join(cwd, dir), true
+		}
+	}
+	return out
+}
+
+// linkTargets lists what a script that is a symbolic link in base leads to: each link's target, read from the link's
+// folder, while it stays in the repository and is a file in base (a chain of links, 8 at most). A target that is
+// absolute, above the root or not in base ends it: nothing outside the checkout is ever followed or restored. Only base
+// is read (git's record of the link), never the agent's tree.
+func linkTargets(base source.Source, p string) []string {
+	var out []string
+	for hops := 0; hops < 8; hops++ {
+		target, ok, err := source.Link(base, p)
+		if err != nil || !ok || target == "" || path.IsAbs(target) {
+			return out
+		}
+		next := path.Clean(path.Join(path.Dir(p), target))
+		if next == ".." || strings.HasPrefix(next, "../") || !source.Has(base, next) || slices.Contains(out, next) || next == p {
+			return out
+		}
+		out = append(out, next)
+		p = next
+	}
+	return out
+}
+
+// configNames lists the configuration names (or patterns) of the test runners the verification commands call, in
+// module's folder and each folder above it (inAncestors).
+func configNames(verify []string, module string) []string {
 	// The build tools' runners come from their profiles; the rest are runners without one.
 	runners := buildtool.RunnerConfigs()
 	for word, files := range map[string][]string{
@@ -918,30 +998,39 @@ func checkFiles(verify []string, module string, base source.Source) (scripts, co
 	} {
 		runners[word] = append(runners[word], files...)
 	}
+	var names []string
 	for _, command := range verify {
-		for _, token := range strings.FieldsFunc(command, split) {
-			p := path.Clean(strings.TrimPrefix(token, "./"))
-			if module != "" {
-				if path.IsAbs(p) {
-					continue // outside the repository, as at the root (base lists relative paths only)
-				}
-				p = path.Join(module, p) // "../tools/check.sh" from the module is the repository's tools/check.sh
-			}
-			if source.Has(base, p) && !slices.Contains(scripts, p) {
-				scripts = append(scripts, p)
-			}
-		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range matching(base, inAncestors(module, files)) {
-					if !slices.Contains(configs, f) {
-						configs = append(configs, f)
+				for _, name := range inAncestors(module, files) {
+					if !slices.Contains(names, name) {
+						names = append(names, name)
 					}
 				}
 			}
 		}
 	}
-	return scripts, configs
+	return names
+}
+
+// addedConfigs lists the files of changed (the agent's changes, from the root) that base does not have and that are a
+// runner's configuration the verification reads (configNames): a new pytest.ini, conftest.py or .mvn/maven.config
+// changes how the tests run as much as an edited one.
+func addedConfigs(verify []string, module string, base source.Source, changed []string) []string {
+	names := configNames(verify, module)
+	var out []string
+	for _, p := range changed {
+		if source.Has(base, p) || slices.Contains(out, p) {
+			continue
+		}
+		if slices.ContainsFunc(names, func(name string) bool {
+			ok, _ := path.Match(name, p) // a name without "*" matches only itself
+			return ok
+		}) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // inAncestors gives names (or patterns) in module's folder and in each folder above it, up to the root: for module
