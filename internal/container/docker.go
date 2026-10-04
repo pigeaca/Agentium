@@ -72,6 +72,10 @@ type Docker struct {
 	config    string   // the empty configuration folder of every call after the lookup
 	ownConfig bool     // Open made config, and Close removes it
 	engine    Engine
+	// statusWait bounds the wait, after a command's client returned, for the daemon's record of how it ended
+	// (statusTimeout; tests shorten it).
+	statusWait time.Duration
+	hooks      walkHooks // tests only: points in a copy-in's walk
 }
 
 // Engine is what a record keeps about the daemon: never its endpoint, name or paths.
@@ -100,7 +104,7 @@ func Open(ctx context.Context, opts Options) (_ *Docker, err error) {
 	if bin == "" {
 		bin = "docker"
 	}
-	d := &Docker{bin: bin, environ: ClientEnv(opts.Environ), config: opts.ConfigDir}
+	d := &Docker{bin: bin, environ: ClientEnv(opts.Environ), config: opts.ConfigDir, statusWait: statusTimeout}
 	if d.config == "" {
 		if d.config, err = os.MkdirTemp("", "agentium-docker-config-"); err != nil {
 			return nil, fmt.Errorf("docker configuration folder: %w", err)
@@ -395,8 +399,11 @@ var socketURL = regexp.MustCompile(`unix://[^\s"']+`)
 
 func (d *Docker) redact(s string) string {
 	if d.host != "" {
+		path := strings.TrimPrefix(d.host, "unix://")
 		s = strings.ReplaceAll(s, d.host, "<docker endpoint>")
-		s = strings.ReplaceAll(s, strings.TrimPrefix(d.host, "unix://"), "<docker endpoint>")
+		s = strings.ReplaceAll(s, path, "<docker endpoint>")
+		// The client's connection errors name the socket as a URL's host, escaped: http://%2Fhome%2F...%2Fdocker.sock.
+		s = strings.ReplaceAll(s, strings.ReplaceAll(path, "/", "%2F"), "<docker endpoint>")
 	}
 	return socketURL.ReplaceAllString(s, "<docker endpoint>")
 }

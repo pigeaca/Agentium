@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -642,3 +643,84 @@ var (
 	layerPath     = regexp.MustCompile(`/var/lib/docker/overlay2/[A-Za-z0-9/]+`)
 	trailingSpace = regexp.MustCompile(`(?m)[ \t]+$`)
 )
+
+// TestRealClientFailureIsUnjudgeable: a docker client that fails after the command ran (here a wrapper around the real
+// client that reports an error, or exits 1 silently, once the real exec is done) is told from the command's own exit:
+// the daemon's record of the exec disagrees, or the client spoke, so the result is ErrUnjudgeable and the container is
+// removed. A genuine exit 1, with output on stderr (joined to stdout inside the container), is judged as exit 1.
+func TestRealClientFailureIsUnjudgeable(t *testing.T) {
+	_, img := realDocker(t)
+	real, err := exec.LookPath("docker")
+	must(t, err)
+	wrapper := filepath.Join(t.TempDir(), "docker")
+	must(t, os.WriteFile(wrapper, []byte(`#!/bin/sh
+for a in "$@"; do
+  case "$a" in
+  *'#client-fails'*) '`+real+`' "$@" > /dev/null 2>&1; echo 'error during connect: simulated' >&2; exit 1 ;;
+  *'#client-silent'*) '`+real+`' "$@" > /dev/null 2>&1; exit 1 ;;
+  esac
+done
+exec '`+real+`' "$@"
+`), 0o755))
+	d, err := Open(context.Background(), Options{Bin: wrapper, Environ: os.Environ()})
+	must(t, err)
+	t.Cleanup(func() { must(t, d.Close()) })
+	data := testData(t, d)
+	var out strings.Builder
+	var judged Result
+	var failed error
+	err = d.Run(context.Background(), realSpec(data, "client", img, d), func(ctx context.Context, c *Container) error {
+		var err error
+		if judged, err = c.Exec(ctx, Command{Command: "echo to-stderr >&2; exit 1", Timeout: time.Minute, Output: &out}); err != nil {
+			return fmt.Errorf("a genuine exit 1: %w", err)
+		}
+		_, failed = c.Exec(ctx, Command{Command: "true #client-fails", Timeout: time.Minute})
+		return nil
+	})
+	must(t, err)
+	if judged.ExitCode != 1 || !strings.Contains(out.String(), "to-stderr") {
+		t.Errorf("a genuine exit 1: %+v, output %q", judged, out.String())
+	}
+	if !errors.Is(failed, ErrUnjudgeable) {
+		t.Errorf("a client that failed after a passing command: %v, want ErrUnjudgeable", failed)
+	}
+	t.Logf("client failed: %v", failed)
+	err = d.Run(context.Background(), realSpec(data, "silent", img, d), func(ctx context.Context, c *Container) error {
+		_, err := c.Exec(ctx, Command{Command: "exit 3 #client-silent", Timeout: time.Minute})
+		return err
+	})
+	if !errors.Is(err, ErrUnjudgeable) {
+		t.Errorf("a client that exited 1 where the command exited 3: %v, want ErrUnjudgeable", err)
+	}
+	t.Logf("client silent: %v", err)
+	assertNothingLeft(t, d, data)
+}
+
+// TestRealCopyInFolderSwappedForPipe: a folder swapped for a pipe between its header and its listing is refused at
+// once (the open never blocks), as ErrUnjudgeable, and nothing is left.
+func TestRealCopyInFolderSwappedForPipe(t *testing.T) {
+	d, img := realDocker(t)
+	data := testData(t, d)
+	tree := t.TempDir()
+	writeTree(t, tree, map[string]string{"a/inner.go": "package a\n", "b.go": "package b\n"})
+	d.hooks.openDir = func(name string) {
+		if name == "a" {
+			must(t, os.Rename(filepath.Join(tree, "a"), filepath.Join(tree, "moved")))
+			must(t, syscall.Mkfifo(filepath.Join(tree, "a"), 0o600))
+		}
+	}
+	t.Cleanup(func() { d.hooks = walkHooks{} })
+	start := time.Now()
+	err := d.Run(context.Background(), realSpec(data, "swap", img, d), func(ctx context.Context, c *Container) error {
+		_, err := c.CopyIn(ctx, tree, CopyLimits{Bytes: 1 << 20, Entries: 100, Timeout: 30 * time.Second})
+		return err
+	})
+	if !errors.Is(err, ErrUnjudgeable) {
+		t.Fatalf("%v, want ErrUnjudgeable", err)
+	}
+	if took := time.Since(start); took > 20*time.Second {
+		t.Errorf("the copy-in took %s", took)
+	}
+	t.Logf("swapped: %v", err)
+	assertNothingLeft(t, d, data)
+}

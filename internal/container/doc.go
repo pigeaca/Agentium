@@ -14,12 +14,15 @@
 //     given its work/ and cache/ folders by a trusted two-entry tar, started, and proved isolated from inside (the
 //     probes) before any of the grade's code runs. Run removes it whatever happens: on success, error, cancel and
 //     panic.
-//   - Inside (Container): the grading copy goes in as a tar stream written here (links are never followed and the
-//     host copy is only read) and unpacked by the image's own tar as the grade's user; commands run as that user with
-//     a timeout, their output to a writer, and the cgroup counters (OOM kills, process-limit hits) are read after each,
-//     as MainUser. A timeout or a cancel kills the container, since killing the docker client leaves its processes
-//     running. Once the grade's input is used, a result that cannot be judged is ErrUnjudgeable: left out, never
-//     retried, since the grade's code can cause it on purpose.
+//   - Inside (Container): the grading copy goes in as a tar stream written here (links are never followed, nothing is
+//     opened in a way that can block, and the host copy is only read) and unpacked by the image's own tar as the
+//     grade's user; commands run as that user with a timeout, their stdout and stderr joined to a writer, and the
+//     cgroup counters (OOM kills, process-limit hits) are read after each, as MainUser. A command's exit counts only
+//     when the daemon's own record of that exec (its events) agrees and the client reported nothing, since the docker
+//     client exits 1 for its own failures too. A timeout or a cancel kills the container, since killing the docker
+//     client leaves its processes running. Once the grade's input is used, a result that cannot be judged is
+//     ErrUnjudgeable: left out, never retried, since the grade's code can cause it on purpose; so is a failed removal
+//     then (ErrCleanup), though it never undoes a result already settled.
 //   - Leftovers: every container and its volume carry labels that tie them to the data folder and the run, so
 //     recovery and clean find them (Leftovers, RemoveRun), including a container created but never started, which
 //     neither --rm nor the deadline removes.

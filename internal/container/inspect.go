@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrMismatch: the daemon's record of the created container differs from what was asked. The container is removed
@@ -318,4 +320,25 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+var containerID = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// inspectIdentity reads the container's full ID and its creation time (the daemon's own clock) from its record: the
+// events of its commands are found by the one, from the other.
+func inspectIdentity(raw []byte) (id, created string, err error) {
+	var list []struct {
+		ID      string `json:"Id"`
+		Created string
+	}
+	if err := json.Unmarshal(raw, &list); err != nil || len(list) != 1 {
+		return "", "", fmt.Errorf("%w: unreadable record", ErrMismatch)
+	}
+	if !containerID.MatchString(list[0].ID) {
+		return "", "", fmt.Errorf("%w: ID %q", ErrMismatch, list[0].ID)
+	}
+	if _, err := time.Parse(time.RFC3339Nano, list[0].Created); err != nil {
+		return "", "", fmt.Errorf("%w: creation time %q", ErrMismatch, list[0].Created)
+	}
+	return list[0].ID, list[0].Created, nil
 }
