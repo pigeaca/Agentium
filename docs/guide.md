@@ -133,7 +133,7 @@ Free, no agent runs: `agentium pool update` is one pass over the pool.
 ```sh
 agentium pool update --dry-run    # what a pass would mine, validate, re-validate and retire; writes nothing
 agentium pool update              # mine the commits since the last pass, validate them, re-validate stale tasks, retire dead ones
-agentium pool status              # valid (and weak), flaky, invalid, awaiting review, retired; the last pass; the oldest valid base
+agentium pool status              # valid (and weak), flaky, invalid, awaiting review, retired, as bars; the last pass; the oldest valid base
 ```
 
 - **Mining** reads the default branch's commits since the last pass, oldest first (at most 2,000 per pass; the next pass reads on), within 270 days by committer date, and imports up to `--limit` (default 10) as tasks that need your review, validated the jobs setting at a time (default 2), with the project's verify and setup settings. Commits that are tasks already, and rebased or cherry-picked copies of any task's change (same patch ID), are skipped; so is a mined task's commit once you remove the task. A candidate whose base would retire within 30 days is not imported. `--dry-run` lists the candidates with their scores and the commits set aside, per reason (the scan's reasons, those older than the window, and candidates whose base is too old or whose change was mined before). Commits a pass set aside are not read again by later passes; `--since DATE` ([advanced flags](#advanced-flags)) re-reads them.
@@ -177,7 +177,7 @@ Known limits:
 ```sh
 agentium run once <name> --snapshot trimmed   # one run, graded with the hidden tests
 agentium experiment new lean --b trimmed      # a cost A/B: each task's own context against trimmed, on up to 16 valid tasks (method seq-v1, below)
-agentium experiment plan lean                 # runs, estimated cost (calibrations included), detectable effects; what is missing
+agentium experiment plan lean                 # what is missing, what it may spend as bars against the budget, when it checks the answer (--details: runs, estimated cost with calibrations, detectable effects)
 agentium experiment run lean                  # calibrates what is not calibrated (short checks: sandbox, large outputs, context size, tools), locks it, then runs interleaved pairs in stages, a look after each, within the budget; resumable; pauses before your plan's usage limit (--wait waits for the reset)
 agentium experiment show lean                 # the lock and the progress per arm
 agentium experiment report lean               # the answer in plain words (--details for every number, --markdown for a pull request, --json for everything)
@@ -200,6 +200,11 @@ agentium experiment report lean               # the answer in plain words (--det
 - **Where they differ:** only the tasks the two versions ended differently, each run as ✓ or ✗ with the mean cost; the rest in one line ("+ 7 tasks where both ended the same: 5 passed · 2 failed").
 - **The judge's opinion,** with `--judge` or `--judge-pairs`, labelled as an AI's opinion, not a test: how many passing fixes it thinks right per version, and which version's fix the pair judge preferred, by task (below).
 - **Notes,** dim, only when they matter: runs not counted, passes that changed the test setup, an unfinished experiment, the sandbox.
+
+**The other screens.** On a terminal, three more commands are pictures in the same style (colors, dotted lines, plain words), and each has the text it had before for a pipe, `NO_COLOR`, `TERM=dumb` or a terminal below 60 columns:
+- **`run show ID`** is the run as a chain of boxes, top to bottom: fresh copy, Claude works, hidden tests (or the judge, for a judge-graded task), result. Each box is two lines at most, with its time on the right; the boxes that run in a sandbox have a dashed purple outline. `--details` prints every line (cost, behavior, environment, files); `--diff` and `--log` still follow.
+- **`experiment plan NAME`** (and the preview `start` prints) shows whether everything is in place, what the experiment may spend (the likely spend, the most and the budget as bars) and, for a seq-v1 design, each check of the answer with its spend as a bar. `--details` prints the sizes, the detectable effects, the floors and every note.
+- **`pool status`** shows the pool's health as bars (valid, with weak tests, flaky, invalid, awaiting review, retired; states with no tasks are left out), then the last pass and the oldest valid base.
 
 `--details` shows every number instead (the metrics with both intervals, the looks, the noise, context use, behavior, the per-task table and every note). Piped, redirected, with `--markdown`, `--out` or `--json`, with `NO_COLOR`, on `TERM=dumb` or below 60 columns, the report is what it was: the Markdown, the JSON, or the `--details` text.
 
