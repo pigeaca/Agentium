@@ -147,7 +147,7 @@ func fakeDocker() int {
 		case script == countersScript:
 			fmt.Print(sc.Counters)
 		case sc.CommandBlock:
-			time.Sleep(time.Hour)
+			time.Sleep(time.Minute) // bounded, so a fake orphaned by a failing test does not linger
 		default:
 			fmt.Print(sc.CommandOut)
 			return sc.CommandExit

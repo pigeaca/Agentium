@@ -546,7 +546,8 @@ func TestCancelKillsAndRemoves(t *testing.T) {
 		if !f.called(t, "rm", "--force", "--volumes", Name(spec)) {
 			t.Error("Exec returned from a cancel without removing the container")
 		}
-		if _, err := c.Exec(context.Background(), Command{Command: "true"}); !errors.Is(err, ErrGone) {
+		// Bounded: were the container still there, the fake would block this exec too.
+		if _, err := c.Exec(context.Background(), Command{Command: "true", Timeout: time.Second}); !errors.Is(err, ErrGone) {
 			t.Errorf("exec after the cancel: %v", err)
 		}
 		return err
