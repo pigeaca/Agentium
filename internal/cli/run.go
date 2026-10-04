@@ -129,13 +129,9 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	arm := task.Arm{Name: "base"}
-	if *snapshotName != "" {
-		snap, err := w.db.SnapshotByName(ctx, w.project.ID, *snapshotName)
-		if err != nil {
-			return fail(env, err)
-		}
-		arm = task.Arm{Name: *snapshotName, Snapshot: snap.CommitID}
+	arm, err := w.onceArm(ctx, env, *snapshotName, t)
+	if err != nil {
+		return fail(env, err)
 	}
 	env, live := liveEnv(env)
 	defer live.Stop()
@@ -149,11 +145,6 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	case cal != nil:
 		runEnv.Expect = *cal
-	}
-	if n, err := w.taskModuleNote(ctx, *snapshotName, t); err != nil {
-		return fail(env, err)
-	} else if n != "" {
-		fmt.Fprintln(env.Stdout, note(env.style(), n))
 	}
 	if t.Grading == task.GradingJudge { // graded by the judge: its calls are paid too, and the consent names them
 		grading := llmjudge.GradingSettings()
@@ -180,6 +171,26 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	}
 	printRun(env, rec)
 	return ExitOK
+}
+
+// onceArm is run once's arm for task t: the base's own context, or the snapshot named (with a note when it was taken
+// for another module than t's: taskModuleNote).
+func (w *workspace) onceArm(ctx context.Context, env Env, snapshotName string, t store.Task) (task.Arm, error) {
+	if snapshotName == "" {
+		return task.Arm{Name: "base"}, nil
+	}
+	snap, err := w.db.SnapshotByName(ctx, w.project.ID, snapshotName)
+	if err != nil {
+		return task.Arm{}, err
+	}
+	n, err := w.taskModuleNote(ctx, snapshotName, t)
+	if err != nil {
+		return task.Arm{}, err
+	}
+	if n != "" {
+		fmt.Fprintln(env.Stdout, note(env.style(), n))
+	}
+	return task.Arm{Name: snapshotName, Snapshot: snap.CommitID}, nil
 }
 
 // harmlessFor is the flagged denials t's reference logged while passing its last validation, when that ran in mode.
