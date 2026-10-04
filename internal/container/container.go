@@ -62,6 +62,7 @@ type Container struct {
 	imageEnv []string
 	id       string // the daemon's full ID of the container, for its events
 	created  string // when the daemon created it, in the daemon's own clock (RFC 3339)
+	until    string // a minute past its deadline, in the same clock: no event of it can come later
 	gone     bool
 	// stopped is set when a removal failed: the container runs nothing more, and Run tries the removal again.
 	stopped bool
@@ -149,9 +150,12 @@ func (c *Container) start(ctx context.Context) error {
 	if c.digest, c.imageEnv, err = checkInspect(raw, c.spec, c.d.engine.DefaultRuntime); err != nil {
 		return fmt.Errorf("%s: %w", c.name, err)
 	}
-	if c.id, c.created, err = inspectIdentity(raw); err != nil {
+	var created time.Time
+	if c.id, created, err = inspectIdentity(raw); err != nil {
 		return fmt.Errorf("%s: %w", c.name, err)
 	}
+	c.created = created.Format(time.RFC3339Nano)
+	c.until = created.Add(c.spec.Deadline + time.Minute).Format(time.RFC3339Nano)
 	var skeleton bytes.Buffer
 	if err := skeletonTar(&skeleton); err != nil {
 		return fmt.Errorf("skeleton: %w", err)

@@ -313,7 +313,7 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
 
         The intermediate folders that `os.Root` opens use `O_DIRECTORY`, which fails with `ENOTDIR` on a pipe without blocking (checked on macOS; Linux checks it before the open).
       - *P2: a docker client failure counted as a failed grade.* The client exits 1 for its own API or attach failures too.
-        - `Exec` now reads the daemon's own record. A `docker events` watch runs beside the exec, filtered to the container's ID, and replays from its creation in the daemon's clock. It finds the exec by a random nonce (the outer shell's last argument) and reads the `exitCode` of its `exec_die`.
+        - `Exec` now reads the daemon's own record. A `docker events` watch runs beside the exec, filtered to the container's ID, and replays from its creation in the daemon's clock. It finds the exec by a random nonce (the outer shell's last argument) and reads the `exitCode` of its `exec_die`. The watch ends by itself a minute past the container's deadline (`--until`, also in the daemon's clock), so even if Agentium crashes, no stream is left running.
         - The command's stderr is joined to its stdout inside the container, so the client's stderr holds only the client's messages.
         - The result is `ErrUnjudgeable`, and the container is removed, when the client reported anything, when the daemon has no record of the end within 10 s, or when the two exit codes disagree. On a timeout, the record must show the command started and not ended.
         - Rejected alternatives:

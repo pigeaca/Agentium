@@ -23,7 +23,8 @@ const maxEventLine = 1 << 20
 // its nonce (only Agentium's argv can: the grade has no docker client), and the exit code the daemon logged when the
 // exec ended. The stream runs beside the exec and replays from the container's creation, in the daemon's own clock,
 // so neither a late subscription nor a long command loses the exec's events, and no clock is compared. It is a child
-// of the exec's call, stopped (its process group killed) when Exec returns.
+// of the exec's call, stopped (its process group killed) when Exec returns; should Agentium die first, the stream
+// still ends by itself shortly after the container's deadline (--until, in the daemon's clock), as the container does.
 type execWatch struct {
 	nonce     string
 	container string // the container's full ID
@@ -55,7 +56,7 @@ func newNonce() (string, error) {
 func (c *Container) watchExec(ctx context.Context, nonce string) *execWatch {
 	wctx, cancel := context.WithCancel(ctx)
 	w := &execWatch{nonce: nonce, container: c.id, cancel: cancel, ended: make(chan struct{}), changed: make(chan struct{}, 1), stderr: &capped{max: 4 << 10}}
-	args := []string{"events", "--since", c.created, "--filter", "type=container", "--filter", "container=" + c.id,
+	args := []string{"events", "--since", c.created, "--until", c.until, "--filter", "type=container", "--filter", "container=" + c.id,
 		"--filter", "event=exec_start", "--filter", "event=exec_die", "--filter", "event=die", "--format", "{{json .}}"}
 	go func() {
 		defer close(w.ended)
