@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,4 +174,34 @@ func TestMiningWaitsWhileAModuleIsSet(t *testing.T) {
 	if out := run("init"); strings.Contains(out.stdout, "mined tasks verify") {
 		t.Errorf("init offers a mined verify command in a module:\n%s", out.stdout)
 	}
+}
+
+// start with a module set mines nothing and says so in its own words: the history was not read, so it does not claim
+// the history has no more candidates, and it says how to go on (tasks in the module, or the whole repository).
+func TestStartWithAModuleSetDoesNotMine(t *testing.T) {
+	t.Parallel()
+	repo, data, _ := monorepo(t)
+	f := runFixtureAt(repo, data, t.TempDir())
+	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, t.TempDir())
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init", "--module", "services/billing"), ExitOK)
+	got := f.run(ctx, "start", "--yes")
+	expect(t, got, ExitError, "Mining: module set: mining inside a module comes in a later version",
+		"only 0 of the 8 an experiment needs are ready",
+		"start does not mine while the module services/billing is set: add tasks in the module with agentium task add or agentium task import --commit REF, then run agentium start again",
+		`agentium init --module "" measures the whole repository`)
+	if n := strings.Count(got.stdout, "Mining: "); n != 1 || strings.Contains(got.stdout, "no more candidates") {
+		t.Errorf("mined %d time(s), or blamed the history:\n%s", n, got.stdout)
+	}
+}
+
+// Validation prepares the build tools of the task's module, not the root's: a Python module's checks get Python's
+// command environment (its import root, in the module), which a root with no build file would not give them.
+func TestValidationPreparesTheTasksModule(t *testing.T) {
+	t.Parallel()
+	_, _, run := monorepo(t)
+	expect(t, run("init"), ExitOK) // the setting stays the root's: the task's own module decides
+	expect(t, run("task", "add", "report", "--base", "HEAD", "--instruction", "Anything.", "--module", "tools/report",
+		"--verify", `case "$PYTHONPATH" in */tools/report*) exit 0;; esac; exit 1`), ExitOK)
+	expect(t, run("task", "validate", "report"), ExitOK, "want pass got pass")
 }

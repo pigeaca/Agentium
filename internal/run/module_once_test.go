@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,12 @@ type moduleOnce struct {
 
 func newModuleOnce(t *testing.T, module, decoy, agent string) moduleOnce {
 	t.Helper()
+	return newModuleOnceWith(t, module, decoy, agent, nil)
+}
+
+// newModuleOnceWith is newModuleOnce with more files in the base commit (path from the root: content).
+func newModuleOnceWith(t *testing.T, module, decoy, agent string, files map[string]string) moduleOnce {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	user := filepath.Join(dir, "user")
@@ -42,6 +49,9 @@ func newModuleOnce(t *testing.T, module, decoy, agent string) moduleOnce {
 	writeFile(t, filepath.Join(user, module, "value.txt"), "old\n")
 	writeFile(t, filepath.Join(user, decoy, "run_tests.sh"), "exit 0\n")
 	writeFile(t, filepath.Join(user, decoy, "value.txt"), "old\n")
+	for name, content := range files {
+		writeFile(t, filepath.Join(user, filepath.FromSlash(name)), content)
+	}
 	gitIn("add", "-A")
 	gitIn("commit", "-q", "-m", "base")
 	base := gitIn("rev-parse", "HEAD")
@@ -146,5 +156,84 @@ func TestOnceRefusesASetupInAMissingModule(t *testing.T) {
 	f.spec.Task.Setup = []string{"touch setup-ran"}
 	if rec, err := Once(context.Background(), f.env, f.spec); err == nil || !strings.Contains(err.Error(), "setup") || rec.Passed != nil {
 		t.Errorf("a missing module at setup: %v, passed %v", err, rec.Passed)
+	}
+}
+
+// The module's own verification script is restored as the root's is: the commands run in the module's folder, so
+// "sh run_tests.sh" names svc/run_tests.sh, and an agent that rewrites it to pass is graded with the starting version.
+// A runner's configuration in the module (svc/Makefile, which make reads there) is reported when the agent changes it.
+func TestOnceRestoresTheModulesChecks(t *testing.T) {
+	f := newModuleOnce(t, "svc", "decoy", "printf 'exit 0\\n' > svc/run_tests.sh")
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || *rec.Passed {
+		t.Fatalf("outcome %s, passed %v, notes %v: the rewritten script decided the grade", rec.Outcome, rec.Passed, rec.Notes)
+	}
+	if !slices.Contains(rec.Behavior.ChecksChanged, "svc/run_tests.sh") {
+		t.Errorf("checks changed %q: want svc/run_tests.sh", rec.Behavior.ChecksChanged)
+	}
+	if !strings.Contains(strings.Join(rec.Notes, "\n"), "the agent changed the verification's own scripts; graded with the starting version: svc/run_tests.sh") {
+		t.Errorf("no note says the script was restored: %v", rec.Notes)
+	}
+
+	// ": make" names the runner (all checkFiles reads of it) without needing make installed.
+	f = newModuleOnceWith(t, "svc", "decoy", "printf 'new\\n' > svc/value.txt; printf 'all:\\n' >> svc/Makefile",
+		map[string]string{"svc/Makefile": "test:\n\tsh run_tests.sh\n", "Makefile": "test:\n\texit 0\n"})
+	f.spec.Task.Verify = []string{"sh run_tests.sh", ": make"}
+	if rec, err = Once(context.Background(), f.env, f.spec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Passed == nil || !*rec.Passed {
+		t.Fatalf("passed %v, notes %v", rec.Passed, rec.Notes)
+	}
+	if !slices.Equal(rec.Behavior.ConfigChanged, []string{"svc/Makefile"}) || !slices.Contains(rec.Behavior.ChecksChanged, "svc/Makefile") {
+		t.Errorf("config changed %q, checks changed %q: want svc/Makefile in both", rec.Behavior.ConfigChanged, rec.Behavior.ChecksChanged)
+	}
+}
+
+// What the verification of a module depends on is read from the module's folder and listed from the root; the root's
+// own files of the same names are not the module's, and an absolute path is outside the repository as at the root.
+func TestCheckFilesInAModule(t *testing.T) {
+	files := fakeSource{"Makefile", "run_tests.sh", "requirements.txt", "svc/Makefile", "svc/bin/sh", "svc/requirements-dev.txt",
+		"svc/run_tests.sh", "svc/sub/requirements.txt", "tools/check.sh"}
+	slices.Sort(files)
+	scripts, configs := checkFiles([]string{"sh run_tests.sh && sh ../tools/check.sh", "make test", "/bin/sh -c pytest"}, "svc", files)
+	slices.Sort(scripts)
+	slices.Sort(configs)
+	if want := []string{"svc/run_tests.sh", "tools/check.sh"}; !slices.Equal(scripts, want) {
+		t.Errorf("scripts %q, want %q", scripts, want)
+	}
+	if want := []string{"svc/Makefile", "svc/requirements-dev.txt"}; !slices.Equal(configs, want) {
+		t.Errorf("configs %q, want %q", configs, want)
+	}
+	// The root is unchanged.
+	scripts, configs = checkFiles([]string{"sh run_tests.sh", "make test"}, "", files)
+	if !slices.Equal(scripts, []string{"run_tests.sh"}) || !slices.Equal(configs, []string{"Makefile"}) {
+		t.Errorf("at the root: scripts %q, configs %q", scripts, configs)
+	}
+}
+
+// A grade's command finds the module's folder gone (a test of the agent's replaced it with a link between commands):
+// the grade fails with a note, and is not an error (which would make the run infrastructure).
+func TestGradeDirFailsAModuleGoneBetweenCommands(t *testing.T) {
+	copy := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(copy, "decoy"), 0o700))
+	must(t, os.MkdirAll(filepath.Join(copy, "svc"), 0o700))
+	env := Env{Module: "svc"}
+	var log strings.Builder
+	var notes []string
+	in := sandboxGrade{Log: &log, Note: func(n string) { notes = append(notes, n) }}
+	if dir, ok := env.gradeDir(copy, in); !ok || dir != filepath.Join(copy, "svc") {
+		t.Fatalf("the module's folder: %q, %v", dir, ok)
+	}
+	must(t, os.RemoveAll(filepath.Join(copy, "svc")))
+	must(t, os.Symlink("decoy", filepath.Join(copy, "svc")))
+	if dir, ok := env.gradeDir(copy, in); ok || dir != "" {
+		t.Fatalf("a linked module: %q, %v", dir, ok)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "the module's folder left the agent's tree") || !strings.Contains(log.String(), notes[0]) {
+		t.Errorf("notes %q, log %q", notes, log.String())
 	}
 }

@@ -130,6 +130,8 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
+	// noMining is why start does not mine at all (the project's module is set): not a history out of candidates.
+	noMining string
 	// lastScan is the last mining scan's result: why its commits were set aside, for the shortage message.
 	lastScan *mine.Result
 	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).

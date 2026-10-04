@@ -743,7 +743,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	if err != nil {
 		return err
 	}
-	scripts, configs := checkFiles(spec.Task.Verify, start)
+	scripts, configs := checkFiles(spec.Task.Verify, spec.Task.Module, start)
 	var restore []string
 	for _, p := range changed {
 		switch {
@@ -756,18 +756,21 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			}
 		}
 	}
-	if len(restore) > 0 {
+	// The grading copy is the agent's work: a module folder it deleted or replaced by a link (to grade another folder)
+	// is a failed grade, as when the hidden tests cannot be added, never an infrastructure outcome. It is checked before
+	// the module's scripts are restored, which would otherwise write through the link or bring a deleted module back.
+	verifyDir, moduleErr := env.moduleDir(graded)
+	if len(restore) > 0 && moduleErr == nil {
 		if err := checkout.Write(graded, start, restore); err != nil {
 			return fmt.Errorf("restore the checks: %w", err)
 		}
 		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...)
 		rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
+	} else if len(restore) > 0 {
+		rec.Behavior.ChecksChanged = append(rec.Behavior.ChecksChanged, restore...) // not graded at all (below)
 	}
 
 	failed := false
-	// The grading copy is the agent's work: a module folder it deleted or replaced by a link (to grade another folder)
-	// is a failed grade, as when the hidden tests cannot be added, never an infrastructure outcome.
-	verifyDir, moduleErr := env.moduleDir(graded)
 	if moduleErr != nil {
 		rec.Notes = append(rec.Notes, "the module's folder is not in the agent's tree as it must be, so nothing was graded: "+moduleErr.Error())
 		failed = true
@@ -846,6 +849,7 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 			fmt.Fprintf(log, "[agentium] warning: %s\n", w)
 			env.progress("  %s", env.Style.Warn("warning: "+w))
 		},
+		Note:    func(n string) { rec.Notes = append(rec.Notes, n) }, // Agentium's own words and the module's path, not the grade's output
 		Testing: func() { env.step(StepTests) }, Cleaning: func() { env.step(StepCleanup) },
 		Quarantined: func() { env.step(StepQuarantined) }}
 	if spec.Keep {
@@ -867,8 +871,10 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 }
 
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
-// restores) and the configuration of the test runners they call (reported when changed).
-func checkFiles(verify []string, base source.Source) (scripts, configs []string) {
+// restores) and the configuration of the test runners they call (reported when changed). The commands run in module's
+// folder (the root when it is ""), so the names they give are read from there and listed from the root, as base and
+// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh, and so is the runner's Makefile.
+func checkFiles(verify []string, module string, base source.Source) (scripts, configs []string) {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
 	// The build tools' runners come from their profiles; the rest are runners without one.
 	runners := buildtool.RunnerConfigs()
@@ -880,13 +886,20 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 	}
 	for _, command := range verify {
 		for _, token := range strings.FieldsFunc(command, split) {
-			if p := path.Clean(strings.TrimPrefix(token, "./")); source.Has(base, p) && !slices.Contains(scripts, p) {
+			p := path.Clean(strings.TrimPrefix(token, "./"))
+			if module != "" {
+				if path.IsAbs(p) {
+					continue // outside the repository, as at the root (base lists relative paths only)
+				}
+				p = path.Join(module, p) // "../tools/check.sh" from the module is the repository's tools/check.sh
+			}
+			if source.Has(base, p) && !slices.Contains(scripts, p) {
 				scripts = append(scripts, p)
 			}
 		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range matching(base, files) {
+				for _, f := range matching(base, inModule(module, files)) {
 					if !slices.Contains(configs, f) {
 						configs = append(configs, f)
 					}
@@ -895,6 +908,18 @@ func checkFiles(verify []string, base source.Source) (scripts, configs []string)
 		}
 	}
 	return scripts, configs
+}
+
+// inModule gives names (or patterns) inside module's folder; without a module they are unchanged.
+func inModule(module string, names []string) []string {
+	if module == "" {
+		return names
+	}
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = path.Join(module, name) // a "*" still matches within the module's folder only
+	}
+	return out
 }
 
 // matching lists the files of base that names give: a name that exists, or every path a pattern with "*" matches

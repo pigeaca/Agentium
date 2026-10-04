@@ -108,7 +108,7 @@ func TestPythonProfileGolden(t *testing.T) {
 	sort.Strings(files)
 	for _, verify := range [][]string{{"uv run pytest"}, {"python3 -m pytest -q tests/test_parser.py"}, {"python -m unittest tests.test_recipes"},
 		{"tox -e py312"}, {"nox -s tests"}, {"python3 scripts/check.py"}, {"make test"}} {
-		scripts, configs := checkFiles(verify, files)
+		scripts, configs := checkFiles(verify, "", files)
 		sort.Strings(configs)
 		fmt.Fprintf(&out, "== checkFiles %q\nscripts %q\nconfigs %q\n", verify, scripts, configs)
 	}
