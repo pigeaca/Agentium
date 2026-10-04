@@ -1,0 +1,1608 @@
+== root task, login, claude-sonnet-5, the CLI's default effort, a $1 cap
+-- working folder
+<T>/data/workspaces/<ID>/repo
+-- session folder
+<T>/home/.claude/projects/<T-AS-SESSION-NAME>-data-workspaces-<ID>-repo
+-- args
+-p
+"Make the value new.\n\nYou are working in this task's own checkout of the repository. Make the change here, in the working tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a short summary of what you changed and how you verified it."
+--model
+claude-sonnet-5
+--output-format
+stream-json
+--verbose
+--permission-mode
+acceptEdits
+--permission-prompts
+none
+--no-session-persistence
+--setting-sources
+project
+--strict-mcp-config
+--disallowedTools
+WebSearch,WebFetch,Artifact,DesignSync,CronCreate,CronDelete,ScheduleWakeup,Workflow,SendMessage,EnterWorktree,ExitWorktree,ArtifactComments,ArtifactData,Monitor,PushNotification,RemoteTrigger
+--settings
+<the settings below>
+--max-budget-usd
+1
+-- settings
+{
+  "autoMemoryEnabled": false,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "deny": [
+      "Read(/<T>/data/projects/**)",
+      "Read(/<T>/data/records/**)",
+      "Read(/<T>/data/artifacts/**)",
+      "Read(/<T>/data/cache/**)",
+      "Read(/<T>/data/agentium.db/**)",
+      "Read(/<T>/data/agentium.db-wal/**)",
+      "Read(/<T>/data/agentium.db-shm/**)",
+      "Read(/<T>/user/**)",
+      "Read(/<T>/user/.git/**)",
+      "Read(//golden/predicted/other-run/**)",
+      "Read(/<T>/home/.claude/file-history/**)",
+      "Read(/<T>/home/.claude/history.jsonl/**)",
+      "Read(/<T>/home/.claude/todos/**)",
+      "Read(/<T>/home/.claude/sessions/**)",
+      "Read(/<T>/home/.claude/plans/**)",
+      "Read(/<T>/home/.claude/.claude.json/**)",
+      "Read(/<T>/home/.claude/.credentials.json/**)",
+      "Read(/<T>/home/.claude.json/**)",
+      "Read(/<T>/home/.ssh/**)",
+      "Read(/<T>/home/.codex/**)",
+      "Read(/<T>/home/.config/gh/**)",
+      "Read(/<T>/home/.config/agentium/**)",
+      "Read(/<T>/home/.netrc/**)",
+      "Read(/<T>/home/.git-credentials/**)",
+      "Read(/<T>/home/.aws/**)",
+      "Read(/<T>/home/.docker/**)",
+      "Read(/<T>/home/.npmrc/**)",
+      "Read(/<T>/home/.pypirc/**)",
+      "Read(/<T>/home/.kube/**)",
+      "Read(/<T>/home/.gnupg/**)",
+      "Read(/<T>/home/Library/Keychains/**)",
+      "Read(/<T>/home/.config/uv/**)",
+      "Read(//Library/Keychains/**)",
+      "Read(//golden/gh/**)",
+      "Read(//golden/xdg/gh/**)",
+      "Read(/<T>/home/Library/Caches/go-build/**)",
+      "Read(/<T>/home/.cache/go-build/**)",
+      "Read(//golden/gocache/**)",
+      "Read(/<T>/home/.m2/**)",
+      "Read(/<T>/home/.gradle/caches/**)",
+      "Read(/<T>/home/.gradle/daemon/**)",
+      "Read(/<T>/home/.gradle/native/**)",
+      "Read(/<T>/home/.gradle/jdks/**)",
+      "Read(/<T>/home/.gradle/init.d/**)",
+      "Read(/<T>/home/.gradle/init.gradle/**)",
+      "Read(/<T>/home/.gradle/init.gradle.kts/**)",
+      "Read(/<T>/home/.gradle/gradle.properties/**)",
+      "Read(/<T>/home/.gradle/build-scan-data/**)",
+      "Read(/<T>/home/.gradle/.tmp/**)",
+      "Read(/<T>/home/.gradle/workers/**)",
+      "Read(/<T>/home/.gradle/notifications/**)",
+      "Read(/<T>/home/.cargo/registry/**)",
+      "Read(/<T>/home/.cargo/git/**)",
+      "Read(/<T>/home/.cargo/credentials.toml/**)",
+      "Read(/<T>/home/.cargo/credentials/**)",
+      "Read(/<T>/home/.cargo/build/**)",
+      "Read(//golden/cargo/registry/**)",
+      "Read(//golden/cargo/git/**)",
+      "Read(//golden/cargo/credentials.toml/**)",
+      "Read(//golden/cargo/credentials/**)",
+      "Read(//golden/cargo/build/**)",
+      "Read(/<T>/home/Library/Caches/Mozilla.sccache/**)",
+      "Read(/<T>/home/.cache/sccache/**)",
+      "Read(/<T>/home/.cache/uv/**)",
+      "Read(/<T>/home/.cache/pip/**)",
+      "Read(/<T>/home/Library/Caches/pip/**)",
+      "Read(/<T>/home/.cache/pypoetry/**)",
+      "Read(/<T>/home/Library/Caches/pypoetry/**)",
+      "Read(//golden/venv/**)",
+      "Read(/<T>/home/.config/pip/**)",
+      "Read(/<T>/home/Library/Application Support/pip/**)",
+      "Read(/<T>/home/.pip/**)",
+      "Read(/<T>/home/.config/uv/uv.toml/**)",
+      "Read(/<T>/home/.local/share/uv/credentials/**)",
+      "Read(/<T>/home/.config/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/Library/Application Support/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/.local/share/python_keyring/**)",
+      "Read(//golden/xdg/pip/**)",
+      "Read(//golden/xdg/uv/**)",
+      "Read(//golden/xdg/pypoetry/auth.toml/**)",
+      "Read(//etc/pip.conf/**)",
+      "Read(//private/etc/pip.conf/**)",
+      "Read(//etc/xdg/pip/pip.conf/**)",
+      "Read(//private/etc/xdg/pip/pip.conf/**)",
+      "Read(//etc/uv/uv.toml/**)",
+      "Read(//private/etc/uv/uv.toml/**)",
+      "Read(//Library/Application Support/pip/pip.conf/**)",
+      "Read(/<T>/home/.npm/**)",
+      "Read(/<T>/home/Library/pnpm/store/**)",
+      "Read(/<T>/home/.local/share/pnpm/store/**)",
+      "Read(/<T>/data/deps/1/gradle/**)",
+      "Read(/<T>/data/deps/1/build-cache/**)",
+      "Read(/<T>/data/deps/1/uv-cache/**)",
+      "Read(/<T>/data/deps/1/pip-cache/**)",
+      "Read(/<T>/data/deps/1/py-resolve/**)",
+      "Read(//tmp/claude-<UID>/**)",
+      "Read(//private/tmp/claude-<UID>/**)",
+      "Read(//tmp/claude/**)",
+      "Read(//private/tmp/claude/**)",
+      "Read(//tmp/cc-socks/**)",
+      "Read(//private/tmp/cc-socks/**)",
+      "Read(//tmp/cc-socks-<UID>/**)",
+      "Read(//private/tmp/cc-socks-<UID>/**)",
+      "Read(//tmp/cc-daemon-<UID>/**)",
+      "Read(//private/tmp/cc-daemon-<UID>/**)",
+      "Read(/<T>/home/.npm/_logs/**)",
+      "Read(/<T>/home/.claude/debug/**)"
+    ]
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "credentials": {
+      "envVars": [
+        {
+          "mode": "deny",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN"
+        },
+        {
+          "mode": "deny",
+          "name": "ANTHROPIC_API_KEY"
+        }
+      ],
+      "files": [
+        {
+          "mode": "deny",
+          "path": "<T>/home/.ssh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.codex"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/gh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/agentium"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.netrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.git-credentials"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.aws"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.docker"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.npmrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.pypirc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.kube"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.gnupg"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/Library/Keychains"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/uv"
+        },
+        {
+          "mode": "deny",
+          "path": "/Library/Keychains"
+        }
+      ]
+    },
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "<T>/data/workspaces/<ID>/go-build"
+      ],
+      "denyRead": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/home/.claude/file-history",
+        "<T>/home/.claude/history.jsonl",
+        "<T>/home/.claude/todos",
+        "<T>/home/.claude/sessions",
+        "<T>/home/.claude/plans",
+        "<T>/home/.claude/.claude.json",
+        "<T>/home/.claude/.credentials.json",
+        "<T>/home/.claude.json",
+        "<T>/home/.ssh",
+        "<T>/home/.codex",
+        "<T>/home/.config/gh",
+        "<T>/home/.config/agentium",
+        "<T>/home/.netrc",
+        "<T>/home/.git-credentials",
+        "<T>/home/.aws",
+        "<T>/home/.docker",
+        "<T>/home/.npmrc",
+        "<T>/home/.pypirc",
+        "<T>/home/.kube",
+        "<T>/home/.gnupg",
+        "<T>/home/Library/Keychains",
+        "<T>/home/.config/uv",
+        "/Library/Keychains",
+        "/golden/gh",
+        "/golden/xdg/gh",
+        "<T>/home/Library/Caches/go-build",
+        "<T>/home/.cache/go-build",
+        "/golden/gocache",
+        "<T>/home/.m2",
+        "<T>/home/.gradle/caches",
+        "<T>/home/.gradle/daemon",
+        "<T>/home/.gradle/native",
+        "<T>/home/.gradle/jdks",
+        "<T>/home/.gradle/init.d",
+        "<T>/home/.gradle/init.gradle",
+        "<T>/home/.gradle/init.gradle.kts",
+        "<T>/home/.gradle/gradle.properties",
+        "<T>/home/.gradle/build-scan-data",
+        "<T>/home/.gradle/.tmp",
+        "<T>/home/.gradle/workers",
+        "<T>/home/.gradle/notifications",
+        "<T>/home/.cargo/registry",
+        "<T>/home/.cargo/git",
+        "<T>/home/.cargo/credentials.toml",
+        "<T>/home/.cargo/credentials",
+        "<T>/home/.cargo/build",
+        "/golden/cargo/registry",
+        "/golden/cargo/git",
+        "/golden/cargo/credentials.toml",
+        "/golden/cargo/credentials",
+        "/golden/cargo/build",
+        "<T>/home/Library/Caches/Mozilla.sccache",
+        "<T>/home/.cache/sccache",
+        "<T>/home/.cache/uv",
+        "<T>/home/.cache/pip",
+        "<T>/home/Library/Caches/pip",
+        "<T>/home/.cache/pypoetry",
+        "<T>/home/Library/Caches/pypoetry",
+        "/golden/venv",
+        "<T>/home/.config/pip",
+        "<T>/home/Library/Application Support/pip",
+        "<T>/home/.pip",
+        "<T>/home/.config/uv/uv.toml",
+        "<T>/home/.local/share/uv/credentials",
+        "<T>/home/.config/pypoetry/auth.toml",
+        "<T>/home/Library/Application Support/pypoetry/auth.toml",
+        "<T>/home/.local/share/python_keyring",
+        "/golden/xdg/pip",
+        "/golden/xdg/uv",
+        "/golden/xdg/pypoetry/auth.toml",
+        "/etc/pip.conf",
+        "/private/etc/pip.conf",
+        "/etc/xdg/pip/pip.conf",
+        "/private/etc/xdg/pip/pip.conf",
+        "/etc/uv/uv.toml",
+        "/private/etc/uv/uv.toml",
+        "/Library/Application Support/pip/pip.conf",
+        "<T>/home/.npm",
+        "<T>/home/Library/pnpm/store",
+        "<T>/home/.local/share/pnpm/store",
+        "<T>/data/deps/1/gradle",
+        "<T>/data/deps/1/build-cache",
+        "<T>/data/deps/1/uv-cache",
+        "<T>/data/deps/1/pip-cache",
+        "<T>/data/deps/1/py-resolve",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ],
+      "denyWrite": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/deps/1",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}
+-- env
+PATH=/usr/bin:/bin
+HOME=<T>/home
+USER=u
+LOGNAME=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+LC_ALL=C
+TERM=xterm
+TZ=UTC
+GOPATH=/golden/go
+GOPROXY=https://proxy.golang.org
+JAVA_HOME=/golden/jdk
+CARGO_HOME=/golden/cargo
+RUSTC_WRAPPER=sccache
+XDG_CONFIG_HOME=/golden/xdg
+NODE_OPTIONS=--max-old-space-size=4096
+HOMEBREW_PREFIX=/opt/homebrew
+HTTPS_PROXY=http://proxy:3128
+SSL_CERT_FILE=/golden/certs.pem
+GOFLAGS=-mod=mod -buildvcs=false
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=<T>/data/workspaces/<ID>/go-build
+CLAUDE_CODE_TMPDIR=<RUNTEMP>
+== module task (svc), login, claude-opus-5-5, effort high, a $2.5 cap, the user's own config and temp folders
+-- working folder
+<T>/data/workspaces/<ID>/repo/svc
+-- session folder
+<T>/home/.claude-work/projects/<T-AS-SESSION-NAME>-data-workspaces-<ID>-repo-svc
+-- args
+-p
+"Make the value new.\n\nYou are working in this task's own checkout of the repository. Make the change here, in the working tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a short summary of what you changed and how you verified it."
+--model
+claude-opus-5-5
+--output-format
+stream-json
+--verbose
+--permission-mode
+acceptEdits
+--permission-prompts
+none
+--no-session-persistence
+--setting-sources
+project
+--strict-mcp-config
+--disallowedTools
+WebSearch,WebFetch,Artifact,DesignSync,CronCreate,CronDelete,ScheduleWakeup,Workflow,SendMessage,EnterWorktree,ExitWorktree,ArtifactComments,ArtifactData,Monitor,PushNotification,RemoteTrigger
+--settings
+<the settings below>
+--effort
+high
+--max-budget-usd
+2.5
+--add-dir
+<T>/data/workspaces/<ID>/repo
+-- settings
+{
+  "autoMemoryEnabled": false,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "deny": [
+      "Read(/<T>/data/projects/**)",
+      "Read(/<T>/data/records/**)",
+      "Read(/<T>/data/artifacts/**)",
+      "Read(/<T>/data/cache/**)",
+      "Read(/<T>/data/agentium.db/**)",
+      "Read(/<T>/data/agentium.db-wal/**)",
+      "Read(/<T>/data/agentium.db-shm/**)",
+      "Read(/<T>/user/**)",
+      "Read(/<T>/user/.git/**)",
+      "Read(//golden/predicted/other-run/**)",
+      "Read(/<T>/home/.claude-work/file-history/**)",
+      "Read(/<T>/home/.claude-work/history.jsonl/**)",
+      "Read(/<T>/home/.claude-work/todos/**)",
+      "Read(/<T>/home/.claude-work/sessions/**)",
+      "Read(/<T>/home/.claude-work/plans/**)",
+      "Read(/<T>/home/.claude-work/.claude.json/**)",
+      "Read(/<T>/home/.claude-work/.credentials.json/**)",
+      "Read(/<T>/home/.claude/**)",
+      "Read(/<T>/home/.claude.json/**)",
+      "Read(/<T>/home/.ssh/**)",
+      "Read(/<T>/home/.codex/**)",
+      "Read(/<T>/home/.config/gh/**)",
+      "Read(/<T>/home/.config/agentium/**)",
+      "Read(/<T>/home/.netrc/**)",
+      "Read(/<T>/home/.git-credentials/**)",
+      "Read(/<T>/home/.aws/**)",
+      "Read(/<T>/home/.docker/**)",
+      "Read(/<T>/home/.npmrc/**)",
+      "Read(/<T>/home/.pypirc/**)",
+      "Read(/<T>/home/.kube/**)",
+      "Read(/<T>/home/.gnupg/**)",
+      "Read(/<T>/home/Library/Keychains/**)",
+      "Read(/<T>/home/.config/uv/**)",
+      "Read(//Library/Keychains/**)",
+      "Read(//golden/gh/**)",
+      "Read(//golden/xdg/gh/**)",
+      "Read(/<T>/home/Library/Caches/go-build/**)",
+      "Read(/<T>/home/.cache/go-build/**)",
+      "Read(//golden/gocache/**)",
+      "Read(/<T>/home/.m2/**)",
+      "Read(/<T>/home/.gradle/caches/**)",
+      "Read(/<T>/home/.gradle/daemon/**)",
+      "Read(/<T>/home/.gradle/native/**)",
+      "Read(/<T>/home/.gradle/jdks/**)",
+      "Read(/<T>/home/.gradle/init.d/**)",
+      "Read(/<T>/home/.gradle/init.gradle/**)",
+      "Read(/<T>/home/.gradle/init.gradle.kts/**)",
+      "Read(/<T>/home/.gradle/gradle.properties/**)",
+      "Read(/<T>/home/.gradle/build-scan-data/**)",
+      "Read(/<T>/home/.gradle/.tmp/**)",
+      "Read(/<T>/home/.gradle/workers/**)",
+      "Read(/<T>/home/.gradle/notifications/**)",
+      "Read(/<T>/home/.cargo/registry/**)",
+      "Read(/<T>/home/.cargo/git/**)",
+      "Read(/<T>/home/.cargo/credentials.toml/**)",
+      "Read(/<T>/home/.cargo/credentials/**)",
+      "Read(/<T>/home/.cargo/build/**)",
+      "Read(//golden/cargo/registry/**)",
+      "Read(//golden/cargo/git/**)",
+      "Read(//golden/cargo/credentials.toml/**)",
+      "Read(//golden/cargo/credentials/**)",
+      "Read(//golden/cargo/build/**)",
+      "Read(/<T>/home/Library/Caches/Mozilla.sccache/**)",
+      "Read(/<T>/home/.cache/sccache/**)",
+      "Read(/<T>/home/.cache/uv/**)",
+      "Read(/<T>/home/.cache/pip/**)",
+      "Read(/<T>/home/Library/Caches/pip/**)",
+      "Read(/<T>/home/.cache/pypoetry/**)",
+      "Read(/<T>/home/Library/Caches/pypoetry/**)",
+      "Read(//golden/venv/**)",
+      "Read(/<T>/home/.config/pip/**)",
+      "Read(/<T>/home/Library/Application Support/pip/**)",
+      "Read(/<T>/home/.pip/**)",
+      "Read(/<T>/home/.config/uv/uv.toml/**)",
+      "Read(/<T>/home/.local/share/uv/credentials/**)",
+      "Read(/<T>/home/.config/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/Library/Application Support/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/.local/share/python_keyring/**)",
+      "Read(//golden/xdg/pip/**)",
+      "Read(//golden/xdg/uv/**)",
+      "Read(//golden/xdg/pypoetry/auth.toml/**)",
+      "Read(//etc/pip.conf/**)",
+      "Read(//private/etc/pip.conf/**)",
+      "Read(//etc/xdg/pip/pip.conf/**)",
+      "Read(//private/etc/xdg/pip/pip.conf/**)",
+      "Read(//etc/uv/uv.toml/**)",
+      "Read(//private/etc/uv/uv.toml/**)",
+      "Read(//Library/Application Support/pip/pip.conf/**)",
+      "Read(/<T>/home/.npm/**)",
+      "Read(/<T>/home/Library/pnpm/store/**)",
+      "Read(/<T>/home/.local/share/pnpm/store/**)",
+      "Read(/<T>/data/deps/1/gradle/**)",
+      "Read(/<T>/data/deps/1/build-cache/**)",
+      "Read(/<T>/data/deps/1/uv-cache/**)",
+      "Read(/<T>/data/deps/1/pip-cache/**)",
+      "Read(/<T>/data/deps/1/py-resolve/**)",
+      "Read(//tmp/claude-<UID>/**)",
+      "Read(//private/tmp/claude-<UID>/**)",
+      "Read(//tmp/claude/**)",
+      "Read(//private/tmp/claude/**)",
+      "Read(//tmp/cc-socks/**)",
+      "Read(//private/tmp/cc-socks/**)",
+      "Read(//tmp/cc-socks-<UID>/**)",
+      "Read(//private/tmp/cc-socks-<UID>/**)",
+      "Read(//tmp/cc-daemon-<UID>/**)",
+      "Read(//private/tmp/cc-daemon-<UID>/**)",
+      "Read(//golden/cc-tmp/claude-<UID>/**)",
+      "Read(//golden/cc-tmp/cc-socks/**)",
+      "Read(//golden/run/cc-socks/**)",
+      "Read(/<T>/home/.npm/_logs/**)",
+      "Read(/<T>/home/.claude/debug/**)",
+      "Read(/<T>/home/.claude-work/debug/**)"
+    ]
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "credentials": {
+      "envVars": [
+        {
+          "mode": "deny",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN"
+        },
+        {
+          "mode": "deny",
+          "name": "ANTHROPIC_API_KEY"
+        }
+      ],
+      "files": [
+        {
+          "mode": "deny",
+          "path": "<T>/home/.ssh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.codex"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/gh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/agentium"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.netrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.git-credentials"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.aws"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.docker"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.npmrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.pypirc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.kube"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.gnupg"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/Library/Keychains"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/uv"
+        },
+        {
+          "mode": "deny",
+          "path": "/Library/Keychains"
+        }
+      ]
+    },
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "<T>/data/workspaces/<ID>/go-build",
+        "<T>/data/workspaces/<ID>/repo"
+      ],
+      "denyRead": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/home/.claude-work/file-history",
+        "<T>/home/.claude-work/history.jsonl",
+        "<T>/home/.claude-work/todos",
+        "<T>/home/.claude-work/sessions",
+        "<T>/home/.claude-work/plans",
+        "<T>/home/.claude-work/.claude.json",
+        "<T>/home/.claude-work/.credentials.json",
+        "<T>/home/.claude",
+        "<T>/home/.claude.json",
+        "<T>/home/.ssh",
+        "<T>/home/.codex",
+        "<T>/home/.config/gh",
+        "<T>/home/.config/agentium",
+        "<T>/home/.netrc",
+        "<T>/home/.git-credentials",
+        "<T>/home/.aws",
+        "<T>/home/.docker",
+        "<T>/home/.npmrc",
+        "<T>/home/.pypirc",
+        "<T>/home/.kube",
+        "<T>/home/.gnupg",
+        "<T>/home/Library/Keychains",
+        "<T>/home/.config/uv",
+        "/Library/Keychains",
+        "/golden/gh",
+        "/golden/xdg/gh",
+        "<T>/home/Library/Caches/go-build",
+        "<T>/home/.cache/go-build",
+        "/golden/gocache",
+        "<T>/home/.m2",
+        "<T>/home/.gradle/caches",
+        "<T>/home/.gradle/daemon",
+        "<T>/home/.gradle/native",
+        "<T>/home/.gradle/jdks",
+        "<T>/home/.gradle/init.d",
+        "<T>/home/.gradle/init.gradle",
+        "<T>/home/.gradle/init.gradle.kts",
+        "<T>/home/.gradle/gradle.properties",
+        "<T>/home/.gradle/build-scan-data",
+        "<T>/home/.gradle/.tmp",
+        "<T>/home/.gradle/workers",
+        "<T>/home/.gradle/notifications",
+        "<T>/home/.cargo/registry",
+        "<T>/home/.cargo/git",
+        "<T>/home/.cargo/credentials.toml",
+        "<T>/home/.cargo/credentials",
+        "<T>/home/.cargo/build",
+        "/golden/cargo/registry",
+        "/golden/cargo/git",
+        "/golden/cargo/credentials.toml",
+        "/golden/cargo/credentials",
+        "/golden/cargo/build",
+        "<T>/home/Library/Caches/Mozilla.sccache",
+        "<T>/home/.cache/sccache",
+        "<T>/home/.cache/uv",
+        "<T>/home/.cache/pip",
+        "<T>/home/Library/Caches/pip",
+        "<T>/home/.cache/pypoetry",
+        "<T>/home/Library/Caches/pypoetry",
+        "/golden/venv",
+        "<T>/home/.config/pip",
+        "<T>/home/Library/Application Support/pip",
+        "<T>/home/.pip",
+        "<T>/home/.config/uv/uv.toml",
+        "<T>/home/.local/share/uv/credentials",
+        "<T>/home/.config/pypoetry/auth.toml",
+        "<T>/home/Library/Application Support/pypoetry/auth.toml",
+        "<T>/home/.local/share/python_keyring",
+        "/golden/xdg/pip",
+        "/golden/xdg/uv",
+        "/golden/xdg/pypoetry/auth.toml",
+        "/etc/pip.conf",
+        "/private/etc/pip.conf",
+        "/etc/xdg/pip/pip.conf",
+        "/private/etc/xdg/pip/pip.conf",
+        "/etc/uv/uv.toml",
+        "/private/etc/uv/uv.toml",
+        "/Library/Application Support/pip/pip.conf",
+        "<T>/home/.npm",
+        "<T>/home/Library/pnpm/store",
+        "<T>/home/.local/share/pnpm/store",
+        "<T>/data/deps/1/gradle",
+        "<T>/data/deps/1/build-cache",
+        "<T>/data/deps/1/uv-cache",
+        "<T>/data/deps/1/pip-cache",
+        "<T>/data/deps/1/py-resolve",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "/golden/cc-tmp/claude-<UID>",
+        "/golden/cc-tmp/cc-socks",
+        "/golden/run/cc-socks",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug",
+        "<T>/home/.claude-work/debug"
+      ],
+      "denyWrite": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/deps/1",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "/golden/cc-tmp/claude-<UID>",
+        "/golden/cc-tmp/cc-socks",
+        "/golden/run/cc-socks",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug",
+        "<T>/home/.claude-work/debug"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}
+-- env
+PATH=/usr/bin:/bin
+HOME=<T>/home
+USER=u
+LOGNAME=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+LC_ALL=C
+TERM=xterm
+TZ=UTC
+GOPATH=/golden/go
+GOPROXY=https://proxy.golang.org
+JAVA_HOME=/golden/jdk
+CARGO_HOME=/golden/cargo
+RUSTC_WRAPPER=sccache
+XDG_CONFIG_HOME=/golden/xdg
+NODE_OPTIONS=--max-old-space-size=4096
+HOMEBREW_PREFIX=/opt/homebrew
+HTTPS_PROXY=http://proxy:3128
+SSL_CERT_FILE=/golden/certs.pem
+XDG_RUNTIME_DIR=/golden/run
+GOFLAGS=-mod=mod -buildvcs=false
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=<T>/data/workspaces/<ID>/go-build
+CLAUDE_CODE_TMPDIR=<RUNTEMP>
+CLAUDE_CONFIG_DIR=<T>/home/.claude-work
+== root task, API key, claude-sonnet-5, effort low, no cap
+-- working folder
+<T>/data/workspaces/<ID>/repo
+-- session folder
+<T>/data/workspaces/<ID>/config/projects/<T-AS-SESSION-NAME>-data-workspaces-<ID>-repo
+-- args
+-p
+"Make the value new.\n\nYou are working in this task's own checkout of the repository. Make the change here, in the working tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a short summary of what you changed and how you verified it."
+--model
+claude-sonnet-5
+--output-format
+stream-json
+--verbose
+--permission-mode
+acceptEdits
+--permission-prompts
+none
+--no-session-persistence
+--setting-sources
+project
+--strict-mcp-config
+--disallowedTools
+WebSearch,WebFetch,Artifact,DesignSync,CronCreate,CronDelete,ScheduleWakeup,Workflow,SendMessage,EnterWorktree,ExitWorktree,ArtifactComments,ArtifactData,Monitor,PushNotification,RemoteTrigger
+--settings
+<the settings below>
+--effort
+low
+-- settings
+{
+  "autoMemoryEnabled": false,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "deny": [
+      "Read(/<T>/data/projects/**)",
+      "Read(/<T>/data/records/**)",
+      "Read(/<T>/data/artifacts/**)",
+      "Read(/<T>/data/cache/**)",
+      "Read(/<T>/data/agentium.db/**)",
+      "Read(/<T>/data/agentium.db-wal/**)",
+      "Read(/<T>/data/agentium.db-shm/**)",
+      "Read(/<T>/user/**)",
+      "Read(/<T>/user/.git/**)",
+      "Read(//golden/predicted/other-run/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/file-history/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/history.jsonl/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/todos/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/sessions/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/plans/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/.claude.json/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/.credentials.json/**)",
+      "Read(/<T>/home/.claude/**)",
+      "Read(/<T>/home/.claude.json/**)",
+      "Read(/<T>/home/.ssh/**)",
+      "Read(/<T>/home/.codex/**)",
+      "Read(/<T>/home/.config/gh/**)",
+      "Read(/<T>/home/.config/agentium/**)",
+      "Read(/<T>/home/.netrc/**)",
+      "Read(/<T>/home/.git-credentials/**)",
+      "Read(/<T>/home/.aws/**)",
+      "Read(/<T>/home/.docker/**)",
+      "Read(/<T>/home/.npmrc/**)",
+      "Read(/<T>/home/.pypirc/**)",
+      "Read(/<T>/home/.kube/**)",
+      "Read(/<T>/home/.gnupg/**)",
+      "Read(/<T>/home/Library/Keychains/**)",
+      "Read(/<T>/home/.config/uv/**)",
+      "Read(//Library/Keychains/**)",
+      "Read(//golden/gh/**)",
+      "Read(//golden/xdg/gh/**)",
+      "Read(/<T>/home/Library/Caches/go-build/**)",
+      "Read(/<T>/home/.cache/go-build/**)",
+      "Read(//golden/gocache/**)",
+      "Read(/<T>/home/.m2/**)",
+      "Read(/<T>/home/.gradle/caches/**)",
+      "Read(/<T>/home/.gradle/daemon/**)",
+      "Read(/<T>/home/.gradle/native/**)",
+      "Read(/<T>/home/.gradle/jdks/**)",
+      "Read(/<T>/home/.gradle/init.d/**)",
+      "Read(/<T>/home/.gradle/init.gradle/**)",
+      "Read(/<T>/home/.gradle/init.gradle.kts/**)",
+      "Read(/<T>/home/.gradle/gradle.properties/**)",
+      "Read(/<T>/home/.gradle/build-scan-data/**)",
+      "Read(/<T>/home/.gradle/.tmp/**)",
+      "Read(/<T>/home/.gradle/workers/**)",
+      "Read(/<T>/home/.gradle/notifications/**)",
+      "Read(/<T>/home/.cargo/registry/**)",
+      "Read(/<T>/home/.cargo/git/**)",
+      "Read(/<T>/home/.cargo/credentials.toml/**)",
+      "Read(/<T>/home/.cargo/credentials/**)",
+      "Read(/<T>/home/.cargo/build/**)",
+      "Read(//golden/cargo/registry/**)",
+      "Read(//golden/cargo/git/**)",
+      "Read(//golden/cargo/credentials.toml/**)",
+      "Read(//golden/cargo/credentials/**)",
+      "Read(//golden/cargo/build/**)",
+      "Read(/<T>/home/Library/Caches/Mozilla.sccache/**)",
+      "Read(/<T>/home/.cache/sccache/**)",
+      "Read(/<T>/home/.cache/uv/**)",
+      "Read(/<T>/home/.cache/pip/**)",
+      "Read(/<T>/home/Library/Caches/pip/**)",
+      "Read(/<T>/home/.cache/pypoetry/**)",
+      "Read(/<T>/home/Library/Caches/pypoetry/**)",
+      "Read(//golden/venv/**)",
+      "Read(/<T>/home/.config/pip/**)",
+      "Read(/<T>/home/Library/Application Support/pip/**)",
+      "Read(/<T>/home/.pip/**)",
+      "Read(/<T>/home/.config/uv/uv.toml/**)",
+      "Read(/<T>/home/.local/share/uv/credentials/**)",
+      "Read(/<T>/home/.config/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/Library/Application Support/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/.local/share/python_keyring/**)",
+      "Read(//golden/xdg/pip/**)",
+      "Read(//golden/xdg/uv/**)",
+      "Read(//golden/xdg/pypoetry/auth.toml/**)",
+      "Read(//etc/pip.conf/**)",
+      "Read(//private/etc/pip.conf/**)",
+      "Read(//etc/xdg/pip/pip.conf/**)",
+      "Read(//private/etc/xdg/pip/pip.conf/**)",
+      "Read(//etc/uv/uv.toml/**)",
+      "Read(//private/etc/uv/uv.toml/**)",
+      "Read(//Library/Application Support/pip/pip.conf/**)",
+      "Read(/<T>/home/.npm/**)",
+      "Read(/<T>/home/Library/pnpm/store/**)",
+      "Read(/<T>/home/.local/share/pnpm/store/**)",
+      "Read(/<T>/data/deps/1/gradle/**)",
+      "Read(/<T>/data/deps/1/build-cache/**)",
+      "Read(/<T>/data/deps/1/uv-cache/**)",
+      "Read(/<T>/data/deps/1/pip-cache/**)",
+      "Read(/<T>/data/deps/1/py-resolve/**)",
+      "Read(//tmp/claude-<UID>/**)",
+      "Read(//private/tmp/claude-<UID>/**)",
+      "Read(//tmp/claude/**)",
+      "Read(//private/tmp/claude/**)",
+      "Read(//tmp/cc-socks/**)",
+      "Read(//private/tmp/cc-socks/**)",
+      "Read(//tmp/cc-socks-<UID>/**)",
+      "Read(//private/tmp/cc-socks-<UID>/**)",
+      "Read(//tmp/cc-daemon-<UID>/**)",
+      "Read(//private/tmp/cc-daemon-<UID>/**)",
+      "Read(/<T>/home/.npm/_logs/**)",
+      "Read(/<T>/home/.claude/debug/**)"
+    ]
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "credentials": {
+      "envVars": [
+        {
+          "mode": "deny",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN"
+        },
+        {
+          "mode": "deny",
+          "name": "ANTHROPIC_API_KEY"
+        }
+      ],
+      "files": [
+        {
+          "mode": "deny",
+          "path": "<T>/home/.ssh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.codex"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/gh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/agentium"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.netrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.git-credentials"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.aws"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.docker"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.npmrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.pypirc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.kube"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.gnupg"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/Library/Keychains"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/uv"
+        },
+        {
+          "mode": "deny",
+          "path": "/Library/Keychains"
+        }
+      ]
+    },
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "<T>/data/workspaces/<ID>/go-build"
+      ],
+      "denyRead": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/workspaces/<ID>/config/file-history",
+        "<T>/data/workspaces/<ID>/config/history.jsonl",
+        "<T>/data/workspaces/<ID>/config/todos",
+        "<T>/data/workspaces/<ID>/config/sessions",
+        "<T>/data/workspaces/<ID>/config/plans",
+        "<T>/data/workspaces/<ID>/config/.claude.json",
+        "<T>/data/workspaces/<ID>/config/.credentials.json",
+        "<T>/home/.claude",
+        "<T>/home/.claude.json",
+        "<T>/home/.ssh",
+        "<T>/home/.codex",
+        "<T>/home/.config/gh",
+        "<T>/home/.config/agentium",
+        "<T>/home/.netrc",
+        "<T>/home/.git-credentials",
+        "<T>/home/.aws",
+        "<T>/home/.docker",
+        "<T>/home/.npmrc",
+        "<T>/home/.pypirc",
+        "<T>/home/.kube",
+        "<T>/home/.gnupg",
+        "<T>/home/Library/Keychains",
+        "<T>/home/.config/uv",
+        "/Library/Keychains",
+        "/golden/gh",
+        "/golden/xdg/gh",
+        "<T>/home/Library/Caches/go-build",
+        "<T>/home/.cache/go-build",
+        "/golden/gocache",
+        "<T>/home/.m2",
+        "<T>/home/.gradle/caches",
+        "<T>/home/.gradle/daemon",
+        "<T>/home/.gradle/native",
+        "<T>/home/.gradle/jdks",
+        "<T>/home/.gradle/init.d",
+        "<T>/home/.gradle/init.gradle",
+        "<T>/home/.gradle/init.gradle.kts",
+        "<T>/home/.gradle/gradle.properties",
+        "<T>/home/.gradle/build-scan-data",
+        "<T>/home/.gradle/.tmp",
+        "<T>/home/.gradle/workers",
+        "<T>/home/.gradle/notifications",
+        "<T>/home/.cargo/registry",
+        "<T>/home/.cargo/git",
+        "<T>/home/.cargo/credentials.toml",
+        "<T>/home/.cargo/credentials",
+        "<T>/home/.cargo/build",
+        "/golden/cargo/registry",
+        "/golden/cargo/git",
+        "/golden/cargo/credentials.toml",
+        "/golden/cargo/credentials",
+        "/golden/cargo/build",
+        "<T>/home/Library/Caches/Mozilla.sccache",
+        "<T>/home/.cache/sccache",
+        "<T>/home/.cache/uv",
+        "<T>/home/.cache/pip",
+        "<T>/home/Library/Caches/pip",
+        "<T>/home/.cache/pypoetry",
+        "<T>/home/Library/Caches/pypoetry",
+        "/golden/venv",
+        "<T>/home/.config/pip",
+        "<T>/home/Library/Application Support/pip",
+        "<T>/home/.pip",
+        "<T>/home/.config/uv/uv.toml",
+        "<T>/home/.local/share/uv/credentials",
+        "<T>/home/.config/pypoetry/auth.toml",
+        "<T>/home/Library/Application Support/pypoetry/auth.toml",
+        "<T>/home/.local/share/python_keyring",
+        "/golden/xdg/pip",
+        "/golden/xdg/uv",
+        "/golden/xdg/pypoetry/auth.toml",
+        "/etc/pip.conf",
+        "/private/etc/pip.conf",
+        "/etc/xdg/pip/pip.conf",
+        "/private/etc/xdg/pip/pip.conf",
+        "/etc/uv/uv.toml",
+        "/private/etc/uv/uv.toml",
+        "/Library/Application Support/pip/pip.conf",
+        "<T>/home/.npm",
+        "<T>/home/Library/pnpm/store",
+        "<T>/home/.local/share/pnpm/store",
+        "<T>/data/deps/1/gradle",
+        "<T>/data/deps/1/build-cache",
+        "<T>/data/deps/1/uv-cache",
+        "<T>/data/deps/1/pip-cache",
+        "<T>/data/deps/1/py-resolve",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ],
+      "denyWrite": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/deps/1",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}
+-- env
+PATH=/usr/bin:/bin
+HOME=<T>/home
+USER=u
+LOGNAME=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+LC_ALL=C
+TERM=xterm
+TZ=UTC
+GOPATH=/golden/go
+GOPROXY=https://proxy.golang.org
+JAVA_HOME=/golden/jdk
+CARGO_HOME=/golden/cargo
+RUSTC_WRAPPER=sccache
+XDG_CONFIG_HOME=/golden/xdg
+NODE_OPTIONS=--max-old-space-size=4096
+HOMEBREW_PREFIX=/opt/homebrew
+HTTPS_PROXY=http://proxy:3128
+SSL_CERT_FILE=/golden/certs.pem
+GOFLAGS=-mod=mod -buildvcs=false
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=<T>/data/workspaces/<ID>/go-build
+CLAUDE_CODE_TMPDIR=<RUNTEMP>
+CLAUDE_CONFIG_DIR=<T>/data/workspaces/<ID>/config
+ANTHROPIC_API_KEY=[REDACTED]
+== module task two folders deep (a/svc), token file, claude-sonnet-5, a $0.5 cap
+-- working folder
+<T>/data/workspaces/<ID>/repo/a/svc
+-- session folder
+<T>/data/workspaces/<ID>/config/projects/<T-AS-SESSION-NAME>-data-workspaces-<ID>-repo-a-svc
+-- args
+-p
+"Make the value new.\n\nYou are working in this task's own checkout of the repository. Make the change here, in the working tree. Do not commit, push, open a pull request, or create branches or worktrees. When you are done, reply with a short summary of what you changed and how you verified it."
+--model
+claude-sonnet-5
+--output-format
+stream-json
+--verbose
+--permission-mode
+acceptEdits
+--permission-prompts
+none
+--no-session-persistence
+--setting-sources
+project
+--strict-mcp-config
+--disallowedTools
+WebSearch,WebFetch,Artifact,DesignSync,CronCreate,CronDelete,ScheduleWakeup,Workflow,SendMessage,EnterWorktree,ExitWorktree,ArtifactComments,ArtifactData,Monitor,PushNotification,RemoteTrigger
+--settings
+<the settings below>
+--max-budget-usd
+0.5
+--add-dir
+<T>/data/workspaces/<ID>/repo
+-- settings
+{
+  "autoMemoryEnabled": false,
+  "disableClaudeAiConnectors": true,
+  "permissions": {
+    "deny": [
+      "Read(/<T>/data/projects/**)",
+      "Read(/<T>/data/records/**)",
+      "Read(/<T>/data/artifacts/**)",
+      "Read(/<T>/data/cache/**)",
+      "Read(/<T>/data/agentium.db/**)",
+      "Read(/<T>/data/agentium.db-wal/**)",
+      "Read(/<T>/data/agentium.db-shm/**)",
+      "Read(/<T>/user/**)",
+      "Read(/<T>/user/.git/**)",
+      "Read(//golden/predicted/other-run/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/file-history/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/history.jsonl/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/todos/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/sessions/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/plans/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/.claude.json/**)",
+      "Read(/<T>/data/workspaces/<ID>/config/.credentials.json/**)",
+      "Read(/<T>/home/.claude/**)",
+      "Read(/<T>/home/.claude.json/**)",
+      "Read(/<T>/home/.config/agentium/**)",
+      "Read(/<T>/home/.ssh/**)",
+      "Read(/<T>/home/.codex/**)",
+      "Read(/<T>/home/.config/gh/**)",
+      "Read(/<T>/home/.netrc/**)",
+      "Read(/<T>/home/.git-credentials/**)",
+      "Read(/<T>/home/.aws/**)",
+      "Read(/<T>/home/.docker/**)",
+      "Read(/<T>/home/.npmrc/**)",
+      "Read(/<T>/home/.pypirc/**)",
+      "Read(/<T>/home/.kube/**)",
+      "Read(/<T>/home/.gnupg/**)",
+      "Read(/<T>/home/Library/Keychains/**)",
+      "Read(/<T>/home/.config/uv/**)",
+      "Read(//Library/Keychains/**)",
+      "Read(//golden/gh/**)",
+      "Read(//golden/xdg/gh/**)",
+      "Read(/<T>/home/Library/Caches/go-build/**)",
+      "Read(/<T>/home/.cache/go-build/**)",
+      "Read(//golden/gocache/**)",
+      "Read(/<T>/home/.m2/**)",
+      "Read(/<T>/home/.gradle/caches/**)",
+      "Read(/<T>/home/.gradle/daemon/**)",
+      "Read(/<T>/home/.gradle/native/**)",
+      "Read(/<T>/home/.gradle/jdks/**)",
+      "Read(/<T>/home/.gradle/init.d/**)",
+      "Read(/<T>/home/.gradle/init.gradle/**)",
+      "Read(/<T>/home/.gradle/init.gradle.kts/**)",
+      "Read(/<T>/home/.gradle/gradle.properties/**)",
+      "Read(/<T>/home/.gradle/build-scan-data/**)",
+      "Read(/<T>/home/.gradle/.tmp/**)",
+      "Read(/<T>/home/.gradle/workers/**)",
+      "Read(/<T>/home/.gradle/notifications/**)",
+      "Read(/<T>/home/.cargo/registry/**)",
+      "Read(/<T>/home/.cargo/git/**)",
+      "Read(/<T>/home/.cargo/credentials.toml/**)",
+      "Read(/<T>/home/.cargo/credentials/**)",
+      "Read(/<T>/home/.cargo/build/**)",
+      "Read(//golden/cargo/registry/**)",
+      "Read(//golden/cargo/git/**)",
+      "Read(//golden/cargo/credentials.toml/**)",
+      "Read(//golden/cargo/credentials/**)",
+      "Read(//golden/cargo/build/**)",
+      "Read(/<T>/home/Library/Caches/Mozilla.sccache/**)",
+      "Read(/<T>/home/.cache/sccache/**)",
+      "Read(/<T>/home/.cache/uv/**)",
+      "Read(/<T>/home/.cache/pip/**)",
+      "Read(/<T>/home/Library/Caches/pip/**)",
+      "Read(/<T>/home/.cache/pypoetry/**)",
+      "Read(/<T>/home/Library/Caches/pypoetry/**)",
+      "Read(//golden/venv/**)",
+      "Read(/<T>/home/.config/pip/**)",
+      "Read(/<T>/home/Library/Application Support/pip/**)",
+      "Read(/<T>/home/.pip/**)",
+      "Read(/<T>/home/.config/uv/uv.toml/**)",
+      "Read(/<T>/home/.local/share/uv/credentials/**)",
+      "Read(/<T>/home/.config/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/Library/Application Support/pypoetry/auth.toml/**)",
+      "Read(/<T>/home/.local/share/python_keyring/**)",
+      "Read(//golden/xdg/pip/**)",
+      "Read(//golden/xdg/uv/**)",
+      "Read(//golden/xdg/pypoetry/auth.toml/**)",
+      "Read(//etc/pip.conf/**)",
+      "Read(//private/etc/pip.conf/**)",
+      "Read(//etc/xdg/pip/pip.conf/**)",
+      "Read(//private/etc/xdg/pip/pip.conf/**)",
+      "Read(//etc/uv/uv.toml/**)",
+      "Read(//private/etc/uv/uv.toml/**)",
+      "Read(//Library/Application Support/pip/pip.conf/**)",
+      "Read(/<T>/home/.npm/**)",
+      "Read(/<T>/home/Library/pnpm/store/**)",
+      "Read(/<T>/home/.local/share/pnpm/store/**)",
+      "Read(/<T>/data/deps/1/gradle/**)",
+      "Read(/<T>/data/deps/1/build-cache/**)",
+      "Read(/<T>/data/deps/1/uv-cache/**)",
+      "Read(/<T>/data/deps/1/pip-cache/**)",
+      "Read(/<T>/data/deps/1/py-resolve/**)",
+      "Read(//tmp/claude-<UID>/**)",
+      "Read(//private/tmp/claude-<UID>/**)",
+      "Read(//tmp/claude/**)",
+      "Read(//private/tmp/claude/**)",
+      "Read(//tmp/cc-socks/**)",
+      "Read(//private/tmp/cc-socks/**)",
+      "Read(//tmp/cc-socks-<UID>/**)",
+      "Read(//private/tmp/cc-socks-<UID>/**)",
+      "Read(//tmp/cc-daemon-<UID>/**)",
+      "Read(//private/tmp/cc-daemon-<UID>/**)",
+      "Read(/<T>/home/.npm/_logs/**)",
+      "Read(/<T>/home/.claude/debug/**)"
+    ]
+  },
+  "sandbox": {
+    "allowUnsandboxedCommands": false,
+    "autoAllowBashIfSandboxed": true,
+    "credentials": {
+      "envVars": [
+        {
+          "mode": "deny",
+          "name": "CLAUDE_CODE_OAUTH_TOKEN"
+        },
+        {
+          "mode": "deny",
+          "name": "ANTHROPIC_API_KEY"
+        }
+      ],
+      "files": [
+        {
+          "mode": "deny",
+          "path": "<T>/home/.ssh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.codex"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/gh"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/agentium"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.netrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.git-credentials"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.aws"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.docker"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.npmrc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.pypirc"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.kube"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.gnupg"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/Library/Keychains"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/uv"
+        },
+        {
+          "mode": "deny",
+          "path": "/Library/Keychains"
+        },
+        {
+          "mode": "deny",
+          "path": "<T>/home/.config/agentium"
+        }
+      ]
+    },
+    "enabled": true,
+    "failIfUnavailable": true,
+    "filesystem": {
+      "allowWrite": [
+        "<T>/data/workspaces/<ID>/go-build",
+        "<T>/data/workspaces/<ID>/repo"
+      ],
+      "denyRead": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/workspaces/<ID>/config/file-history",
+        "<T>/data/workspaces/<ID>/config/history.jsonl",
+        "<T>/data/workspaces/<ID>/config/todos",
+        "<T>/data/workspaces/<ID>/config/sessions",
+        "<T>/data/workspaces/<ID>/config/plans",
+        "<T>/data/workspaces/<ID>/config/.claude.json",
+        "<T>/data/workspaces/<ID>/config/.credentials.json",
+        "<T>/home/.claude",
+        "<T>/home/.claude.json",
+        "<T>/home/.config/agentium",
+        "<T>/home/.ssh",
+        "<T>/home/.codex",
+        "<T>/home/.config/gh",
+        "<T>/home/.netrc",
+        "<T>/home/.git-credentials",
+        "<T>/home/.aws",
+        "<T>/home/.docker",
+        "<T>/home/.npmrc",
+        "<T>/home/.pypirc",
+        "<T>/home/.kube",
+        "<T>/home/.gnupg",
+        "<T>/home/Library/Keychains",
+        "<T>/home/.config/uv",
+        "/Library/Keychains",
+        "/golden/gh",
+        "/golden/xdg/gh",
+        "<T>/home/Library/Caches/go-build",
+        "<T>/home/.cache/go-build",
+        "/golden/gocache",
+        "<T>/home/.m2",
+        "<T>/home/.gradle/caches",
+        "<T>/home/.gradle/daemon",
+        "<T>/home/.gradle/native",
+        "<T>/home/.gradle/jdks",
+        "<T>/home/.gradle/init.d",
+        "<T>/home/.gradle/init.gradle",
+        "<T>/home/.gradle/init.gradle.kts",
+        "<T>/home/.gradle/gradle.properties",
+        "<T>/home/.gradle/build-scan-data",
+        "<T>/home/.gradle/.tmp",
+        "<T>/home/.gradle/workers",
+        "<T>/home/.gradle/notifications",
+        "<T>/home/.cargo/registry",
+        "<T>/home/.cargo/git",
+        "<T>/home/.cargo/credentials.toml",
+        "<T>/home/.cargo/credentials",
+        "<T>/home/.cargo/build",
+        "/golden/cargo/registry",
+        "/golden/cargo/git",
+        "/golden/cargo/credentials.toml",
+        "/golden/cargo/credentials",
+        "/golden/cargo/build",
+        "<T>/home/Library/Caches/Mozilla.sccache",
+        "<T>/home/.cache/sccache",
+        "<T>/home/.cache/uv",
+        "<T>/home/.cache/pip",
+        "<T>/home/Library/Caches/pip",
+        "<T>/home/.cache/pypoetry",
+        "<T>/home/Library/Caches/pypoetry",
+        "/golden/venv",
+        "<T>/home/.config/pip",
+        "<T>/home/Library/Application Support/pip",
+        "<T>/home/.pip",
+        "<T>/home/.config/uv/uv.toml",
+        "<T>/home/.local/share/uv/credentials",
+        "<T>/home/.config/pypoetry/auth.toml",
+        "<T>/home/Library/Application Support/pypoetry/auth.toml",
+        "<T>/home/.local/share/python_keyring",
+        "/golden/xdg/pip",
+        "/golden/xdg/uv",
+        "/golden/xdg/pypoetry/auth.toml",
+        "/etc/pip.conf",
+        "/private/etc/pip.conf",
+        "/etc/xdg/pip/pip.conf",
+        "/private/etc/xdg/pip/pip.conf",
+        "/etc/uv/uv.toml",
+        "/private/etc/uv/uv.toml",
+        "/Library/Application Support/pip/pip.conf",
+        "<T>/home/.npm",
+        "<T>/home/Library/pnpm/store",
+        "<T>/home/.local/share/pnpm/store",
+        "<T>/data/deps/1/gradle",
+        "<T>/data/deps/1/build-cache",
+        "<T>/data/deps/1/uv-cache",
+        "<T>/data/deps/1/pip-cache",
+        "<T>/data/deps/1/py-resolve",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ],
+      "denyWrite": [
+        "<T>/data/projects",
+        "<T>/data/records",
+        "<T>/data/artifacts",
+        "<T>/data/cache",
+        "<T>/data/agentium.db",
+        "<T>/data/agentium.db-wal",
+        "<T>/data/agentium.db-shm",
+        "<T>/user",
+        "<T>/user/.git",
+        "/golden/predicted/other-run",
+        "<T>/data/deps/1",
+        "/tmp/claude-<UID>",
+        "/private/tmp/claude-<UID>",
+        "/tmp/claude",
+        "/private/tmp/claude",
+        "/tmp/cc-socks",
+        "/private/tmp/cc-socks",
+        "/tmp/cc-socks-<UID>",
+        "/private/tmp/cc-socks-<UID>",
+        "/tmp/cc-daemon-<UID>",
+        "/private/tmp/cc-daemon-<UID>",
+        "<T>/home/.npm/_logs",
+        "<T>/home/.claude/debug"
+      ]
+    },
+    "network": {
+      "allowedDomains": [],
+      "strictAllowlist": true
+    }
+  }
+}
+-- env
+PATH=/usr/bin:/bin
+HOME=<T>/home
+USER=u
+LOGNAME=u
+SHELL=/bin/zsh
+TMPDIR=/golden/tmp
+LANG=en_US.UTF-8
+LC_ALL=C
+TERM=xterm
+TZ=UTC
+GOPATH=/golden/go
+GOPROXY=https://proxy.golang.org
+JAVA_HOME=/golden/jdk
+CARGO_HOME=/golden/cargo
+RUSTC_WRAPPER=sccache
+XDG_CONFIG_HOME=/golden/xdg
+NODE_OPTIONS=--max-old-space-size=4096
+HOMEBREW_PREFIX=/opt/homebrew
+HTTPS_PROXY=http://proxy:3128
+SSL_CERT_FILE=/golden/certs.pem
+GOFLAGS=-mod=mod -buildvcs=false
+CLAUDE_CODE_DISABLE_AUTO_MEMORY=1
+DISABLE_AUTOUPDATER=1
+ENABLE_CLAUDEAI_MCP_SERVERS=false
+GOCACHE=<T>/data/workspaces/<ID>/go-build
+CLAUDE_CODE_TMPDIR=<RUNTEMP>
+CLAUDE_CONFIG_DIR=<T>/data/workspaces/<ID>/config
+CLAUDE_CODE_OAUTH_TOKEN=[REDACTED]
