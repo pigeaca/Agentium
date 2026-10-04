@@ -669,7 +669,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.Notes = append(rec.Notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}
 	if env.isCodex() {
-		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, env.sweepGuard)...)
+		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, env.sweepGuard, rec.RecordsDir)...)
 	}
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.

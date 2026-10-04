@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"syscall"
 	"testing"
@@ -28,9 +29,9 @@ func TestCodexSweepMatchesNothingElse(t *testing.T) {
 	for _, base := range []string{t.TempDir(), short, probe} {
 		s := fakeRun(t, base, "ws")
 		s.since = time.Time{}
-		found, err := codexLeftovers(s)
-		if err != nil || len(found) != 0 {
-			t.Errorf("a run in %s: the sweep would stop %v (%v)", base, found, err)
+		kill, report, err := codexLeftovers(s)
+		if err != nil || len(kill) != 0 || len(report) != 0 {
+			t.Errorf("a run in %s: the sweep would stop %v and report %v (%v)", base, kill, report, err)
 		}
 	}
 }
@@ -48,11 +49,14 @@ func fakeRun(t *testing.T, base, name string) codexSweep {
 }
 
 // sandboxed starts /bin/sleep in its own session under a Seatbelt profile (the test's own process: cleaned up here),
-// from /, holding no descriptor of any run, and waits until its sandbox applies.
-func sandboxed(t *testing.T, profile string) int {
+// in dir (/: holding nothing of any run), and waits until its sandbox applies. An empty profile: no sandbox.
+func sandboxed(t *testing.T, profile, dir string) int {
 	t.Helper()
 	c := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sleep", "60")
-	c.Dir, c.SysProcAttr = "/", &syscall.SysProcAttr{Setsid: true}
+	if profile == "" {
+		c = exec.Command("/bin/sleep", "60")
+	}
+	c.Dir, c.SysProcAttr = dir, &syscall.SysProcAttr{Setsid: true}
 	must(t, c.Start())
 	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
 	time.Sleep(300 * time.Millisecond)
@@ -68,38 +72,41 @@ func grants(root string, writable ...string) string {
 	return profile
 }
 
-// The matcher tells a run's processes by positive ownership. Not matched: an unrelated sandbox that grants several
-// runs' checkouts (workspaces/*/repo) and denies their workspaces (which a sweep by the checkout alone matched); a
-// concurrent second run's process; a process in the run's own profile that started before its agent. Matched: a
-// process in the run's own profile, started after.
-func TestCodexSweepNeedsOwnership(t *testing.T) {
+// The matcher kills only on combined proof, and reports the rest (codexLeftovers; nothing is stopped here, every
+// process is the test's own). Killed: the run's own child, in its sandbox and holding its cwd in the checkout. Reported,
+// never killed: a sandbox that grants by pattern (workspaces/[^/]+/[^/]+, which covers the marker without knowing it)
+// and denies the workspaces, started from /; a user's unsandboxed process holding its cwd in the workspace; the run's
+// own detached child (in its sandbox, holding nothing). Neither: a concurrent run's child, and a process in the run's
+// own profile that started before its agent.
+func TestCodexSweepNeedsCombinedProof(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
 		t.Skip("no sandbox-exec")
 	}
-	base := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	must(t, err)
 	runA, runB := fakeRun(t, base, "a"), fakeRun(t, base, "b")
 	root := filepath.Join(base, "workspaces")
-	early := sandboxed(t, grants(root, filepath.Join(runA.workspace, "repo"), runA.marker))
+	ownA := grants(root, filepath.Join(runA.workspace, "repo"), runA.marker)
+	early := sandboxed(t, ownA, filepath.Join(runA.workspace, "repo"))
 	runA.since, runB.since = time.Now(), time.Now()
 	time.Sleep(10 * time.Millisecond)
-	wildcard := sandboxed(t, grants(root, filepath.Join(runA.workspace, "repo"), filepath.Join(runB.workspace, "repo")))
-	other := sandboxed(t, grants(root, filepath.Join(runB.workspace, "repo"), runB.marker))
-	own := sandboxed(t, grants(root, filepath.Join(runA.workspace, "repo"), runA.marker))
+	pattern := sandboxed(t, fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath %q))(allow file-write* (regex #"^%s/[^/]+/[^/]+(/.*)?$"))`,
+		root, regexp.QuoteMeta(root)), "/")
+	user := sandboxed(t, "", filepath.Join(runA.workspace, "repo"))
+	child := sandboxed(t, ownA, filepath.Join(runA.workspace, "repo"))
+	detached := sandboxed(t, ownA, "/")
+	other := sandboxed(t, grants(root, filepath.Join(runB.workspace, "repo"), runB.marker), filepath.Join(runB.workspace, "repo"))
 
-	byCheckout, err := sandboxedIn(filepath.Join(runA.workspace, "repo"), runA.workspace)
+	kill, report, err := codexLeftoverPIDs(runA)
 	must(t, err)
-	if !slices.ContainsFunc(byCheckout, func(p process) bool { return p.pid == wildcard }) {
-		t.Fatalf("the wildcard sandbox does not overlap: the test proves nothing (%v)", byCheckout)
+	slices.Sort(report)
+	wantReport := []int{pattern, user, detached}
+	slices.Sort(wantReport)
+	if !slices.Equal(kill, []int{child}) || !slices.Equal(report, wantReport) {
+		t.Errorf("run A's sweep would stop %v (want only its child %d) and report %v (want %v: pattern %d, user %d, detached %d); early %d, run B's %d",
+			kill, child, report, wantReport, pattern, user, detached, early, other)
 	}
-	pidsOf := func(s codexSweep) []int {
-		pids, err := codexLeftoverPIDs(s)
-		must(t, err)
-		return pids
-	}
-	if got := pidsOf(runA); !slices.Equal(got, []int{own}) {
-		t.Errorf("run A's sweep would stop %v, want only its own process %d (wildcard %d, run B's %d, started early %d)", got, own, wildcard, other, early)
-	}
-	if got := pidsOf(runB); !slices.Equal(got, []int{other}) {
-		t.Errorf("run B's sweep would stop %v, want only %d", got, other)
+	if kill, _, err := codexLeftoverPIDs(runB); err != nil || !slices.Equal(kill, []int{other}) {
+		t.Errorf("run B's sweep would stop %v (want only %d), %v", kill, other, err)
 	}
 }

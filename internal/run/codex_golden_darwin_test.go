@@ -39,12 +39,12 @@ const spendForever = "AGENTIUM-SPEND-FOREVER"
 const loseAccounting = "AGENTIUM-LOSE-ACCOUNTING"
 
 // leaveAChild, in a run's prompt, makes the fake Codex leave a process in a session of its own (as unified exec's
-// commands run), in the checkout, which outlives Codex and its process group: the stream names its ID.
+// commands run), in a sandbox like the run's, in the checkout, which outlives Codex and its process group: the stream
+// names its ID.
 const leaveAChild = "AGENTIUM-LEAVE-A-CHILD"
 
-// leaveADetachedChild, in a run's prompt, makes the fake Codex leave a process that holds nothing of the run: in a
-// session of its own, in a Seatbelt sandbox like the run's (it may write the checkout, not the workspace folder),
-// started in /, with no descriptor but /dev/null, running a system binary. The stream names its ID.
+// leaveADetachedChild, in a run's prompt, makes the fake Codex leave a process that holds nothing of the run: as
+// leaveAChild's, but started in /, with no descriptor but /dev/null, running a system binary.
 const leaveADetachedChild = "AGENTIUM-LEAVE-A-DETACHED-CHILD"
 
 // fakeThread is the fake Codex's thread.
@@ -111,26 +111,26 @@ func fakeCodex() int {
 	usage := func(input, output int64) string {
 		return fmt.Sprintf(`{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0}`, input, output)
 	}
-	if strings.Contains(string(stdin), leaveADetachedChild) {
-		// Like the run's profile: its checkout and its marker writable, its workspace folder and the workspaces folder not.
+	if detached, child := strings.Contains(string(stdin), leaveADetachedChild), strings.Contains(string(stdin), leaveAChild); detached || child {
+		// In a sandbox like the run's (its checkout and its marker writable, its workspace folder and the workspaces
+		// folder not), in a session of its own: in the checkout (the run's child), or in / with nothing of the run's
+		// (detached).
 		workspace, _ := filepath.EvalSymlinks(filepath.Dir(cwd))
 		markers, _ := filepath.Glob(filepath.Join(workspace, "own-*"))
 		profile := `(version 1)(allow default)` + fmt.Sprintf(`(deny file-write* (subpath %q))(allow file-write* (subpath %q))`, filepath.Dir(workspace), filepath.Join(workspace, "repo"))
 		for _, m := range markers {
 			profile += fmt.Sprintf(`(allow file-write* (subpath %q))`, m)
 		}
-		child := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", "cd / && exec /bin/sleep 600")
-		child.Dir, child.SysProcAttr = "/", &syscall.SysProcAttr{Setsid: true}
-		if err := child.Start(); err == nil {
+		dir, script := cwd, "exec /bin/sleep 600"
+		if detached {
+			dir, script = "/", "cd / && exec /bin/sleep 600"
+		}
+		c := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", script)
+		c.Dir, c.SysProcAttr = dir, &syscall.SysProcAttr{Setsid: true}
+		if err := c.Start(); err == nil {
 			// As a command Codex ran for a while: its sandbox is applied by the time Codex ends.
 			time.Sleep(500 * time.Millisecond)
-			fmt.Printf(`{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"setsid sleep 600 & # pid %d","aggregated_output":"","exit_code":0,"status":"completed"}}`+"\n", child.Process.Pid)
-		}
-	} else if strings.Contains(string(stdin), leaveAChild) {
-		child := exec.Command("/bin/sleep", "600")
-		child.Dir, child.SysProcAttr = cwd, &syscall.SysProcAttr{Setsid: true}
-		if err := child.Start(); err == nil {
-			fmt.Printf(`{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"nohup sleep 600 & # pid %d","aggregated_output":"","exit_code":0,"status":"completed"}}`+"\n", child.Process.Pid)
+			fmt.Printf(`{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"setsid sleep 600 & # pid %d","aggregated_output":"","exit_code":0,"status":"completed"}}`+"\n", c.Process.Pid)
 		}
 	}
 	_ = os.MkdirAll(filepath.Join(home, "shell_snapshots"), 0o700)
@@ -521,10 +521,10 @@ func TestCodexRunRefusesAProjectConfig(t *testing.T) {
 	}
 }
 
-// A child that holds nothing of the run (its own session, started in /, no descriptor of the run's, a system binary)
-// escapes the process group and the sweep by path; the sweep by sandbox finds it: it may write the run's temp root but
-// not its workspace, which only the run's own profile allows.
-func TestCodexRunSweepsADetachedChild(t *testing.T) {
+// A child that holds nothing of the run (its own session, started in /, no descriptor of the run's) is in the run's
+// sandbox, but holds none of its folders: reported, never killed. The run's notes and records name it, and
+// `agentium clean` lists it and stops it with --yes (here the test's own child, the only item: checked first).
+func TestCodexRunReportsADetachedChild(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
 		t.Skip("no sandbox-exec")
 	}
@@ -546,6 +546,26 @@ func TestCodexRunSweepsADetachedChild(t *testing.T) {
 	if refused := guarded(pid); refused != "" {
 		t.Skip(refused)
 	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("the detached child was stopped: %v (notes %q)", err, rec.Notes)
+	}
+	if notes := strings.Join(rec.Notes, " "); !strings.Contains(notes, "not stopped") || !strings.Contains(notes, strconv.Itoa(pid)) {
+		t.Errorf("the notes do not report it: %q", rec.Notes)
+	}
+	plan, err := PlanClean(context.Background(), CleanInput{Layout: f.env.Layout, Now: time.Now()})
+	must(t, err)
+	var items []CleanItem
+	for _, it := range plan.Remove {
+		if it.Kind == CleanProcesses {
+			items = append(items, it)
+		}
+	}
+	if len(items) != 1 || items[0].PID() != pid || !strings.Contains(items[0].Detail, "left by run "+rec.ID) {
+		t.Skipf("clean would stop %+v, not only the test's own child %d: not stopping anything", items, pid)
+	}
+	if errs := RemoveClean(context.Background(), f.env.Layout, items); errs[0] != nil {
+		t.Fatal(errs[0])
+	}
 	gone := false
 	for range 40 {
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -555,10 +575,7 @@ func TestCodexRunSweepsADetachedChild(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	if !gone {
-		t.Errorf("process %d, detached from the run, outlived it (notes %q)", pid, rec.Notes)
-	}
-	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es)") {
-		t.Errorf("the sweep stopped something else too: %q", rec.Notes)
+		t.Errorf("clean --yes did not stop process %d", pid)
 	}
 }
 
@@ -602,5 +619,8 @@ func TestCodexRunWithLostAccounting(t *testing.T) {
 	}
 	if want := codex.Bound("gpt-6.1-sol", 3); rec.Outcome != agent.OutcomeInfra || rec.Spend().AgentUSD != want || !rec.CostEstimated || time.Since(start) > time.Minute {
 		t.Errorf("outcome %s, $%.2f (want $%.2f), estimated %v, after %v, notes %q", rec.Outcome, rec.Spend().AgentUSD, want, rec.CostEstimated, time.Since(start), rec.Notes)
+	}
+	if _, err := os.Stat(filepath.Join(rec.RecordsDir, codex.AccountingLost)); err != nil {
+		t.Errorf("the records do not say the accounting was lost: %v", err)
 	}
 }

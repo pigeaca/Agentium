@@ -53,6 +53,9 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 	if _, err := os.Stat(filepath.Join(records, Incomplete)); err == nil {
 		m.RolloutsIncomplete = true // Gather left a rollout behind
 	}
+	if _, err := os.Stat(filepath.Join(records, AccountingLost)); err == nil {
+		m.RolloutsIncomplete = true // the watcher lost track of the run's spend
+	}
 	for i, file := range files {
 		err := parseRollout(file, i == 0, &m, &s)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -74,6 +77,19 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 		return m, nil
 	}
 	m.CostUSD, m.UnpricedRequests = s.usd, s.unpriced
+	// The stream's ended turns against the rollouts (as the watcher checks while the run goes): rollouts that fall
+	// short missed requests. The cost is then the larger of the two (the stream's totals priced whole, at the session's
+	// model's prices), and the run is incomplete: it counts its bound.
+	recorded := pricing.OpenAIUsage{Input: m.InputTokens + m.CacheReadTokens + m.CacheWriteTokens, Cached: m.CacheReadTokens,
+		CacheWrite: m.CacheWriteTokens, Output: m.OutputTokens}
+	if turn != nil && behind(recorded, *turn) {
+		m.RolloutsIncomplete = true
+		if rates, ok := pricing.OpenAILookup(m.Model); ok {
+			whole := (float64(turn.Uncached())*rates.Input + float64(turn.Cached)*rates.CachedInput + float64(turn.CacheWrite)*rates.CacheWrite +
+				float64(turn.Output)*rates.Output) / 1e6
+			m.CostUSD = max(m.CostUSD, whole)
+		}
+	}
 	return m, nil
 }
 
@@ -143,7 +159,11 @@ func parseStream(file string, m *agent.Metrics) (turn *pricing.OpenAIUsage, err 
 		case "turn.completed":
 			m.SawResult, m.Result, m.ResultIsError = true, ResultCompleted, false
 			if u := e.Usage; u != nil { // the whole turn's: used only when there is no rollout (Parse)
-				turn = &pricing.OpenAIUsage{Input: u.Input, Cached: u.Cached, CacheWrite: u.CacheWrite, Output: u.Output, Reasoning: u.Reasoning}
+				ended := pricing.OpenAIUsage{Input: u.Input, Cached: u.Cached, CacheWrite: u.CacheWrite, Output: u.Output, Reasoning: u.Reasoning}
+				if turn == nil {
+					turn = &pricing.OpenAIUsage{}
+				}
+				*turn = addUsage(*turn, ended) // every turn's, summed
 			}
 		case "turn.failed":
 			m.Result, m.ResultIsError = ResultFailed, true

@@ -274,65 +274,89 @@ func TestWatcherBlindAndEnd(t *testing.T) {
 	}
 }
 
-// Lost accounting stops the run as blind (its spend could pass the cap unseen): the rollout gone or unreadable after it
-// was found, or the stream showing the model at work (a message, a command outside an open tool batch) while the
-// rollout does not follow. Commands inside a tool batch the rollout shows open need nothing more.
+// Lost accounting stops the run as blind, deterministically, and marks the records at once (AccountingLost): a rollout
+// that goes after it was found, or a turn whose end (the stream's turn.completed, with the turn's usage) the rollouts
+// do not match. A healthy run is never stopped for timing: a turn's message landing in the stream a poll after its
+// request's rollout lines, then a long silent tool call; several turns that match; and a stale open tool call in the
+// rollout does not keep a later turn from being checked.
 func TestWatcherFailsClosedOnLostAccounting(t *testing.T) {
-	stopped := func(w watcher) (agent.Stop, bool) {
+	run := func(w watcher, rollout string, feed func(w watcher, rollout string)) (agent.Stop, bool) {
 		t.Helper()
 		cancel, out := startWatch(w)
 		defer cancel()
+		fed := make(chan struct{})
+		go func() { defer close(fed); feed(w, rollout) }()
+		defer func() { <-fed }()
 		select {
 		case s := <-out:
 			return s, true
-		case <-time.After(700 * time.Millisecond):
+		case <-time.After(800 * time.Millisecond):
 			return agent.StopNone, false
 		}
 	}
-	appendStream := func(w watcher, line string) { // from a goroutine: no t
-		if f, err := os.OpenFile(w.transcript, os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+	appendLine := func(file, line string) { // from a goroutine: no t
+		if f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600); err == nil {
 			f.WriteString(line + "\n")
 			f.Close()
 		}
 	}
 	message := `{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"working"}}`
-	command := `{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"go test ./...","status":"completed"}}`
-	openCall := `{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec"}}` + "\n"
-
-	w, rollout := watchFixture(t)
-	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
-	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
-	go func(rollout string) {
-		time.Sleep(200 * time.Millisecond)
-		os.Remove(rollout)
-	}(rollout)
-	if s, ok := stopped(w); !ok || s != agent.StopBlind {
-		t.Errorf("the rollout gone mid-run: %q (stopped %v)", s, ok)
+	turnEnd := func(input int64) string {
+		return fmt.Sprintf(`{"type":"turn.completed","usage":{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}`, input)
+	}
+	lost := func(w watcher) bool {
+		_, err := os.Stat(filepath.Join(filepath.Dir(w.transcript), AccountingLost))
+		return err == nil
+	}
+	setup := func() (watcher, string) {
+		w, rollout := watchFixture(t)
+		w.capUSD, w.settle = 100, 100*time.Millisecond
+		writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
+		return w, rollout
 	}
 
-	w, rollout = watchFixture(t)
-	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
-	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
-	go func(w watcher) {
-		for range 6 {
-			time.Sleep(60 * time.Millisecond)
-			appendStream(w, message) // the model keeps answering; its usage is never written
-		}
-	}(w)
-	if s, ok := stopped(w); !ok || s != agent.StopBlind {
-		t.Errorf("the stream going on without the rollout: %q (stopped %v)", s, ok)
+	w, rollout := setup()
+	if s, ok := run(w, rollout, func(_ watcher, rollout string) { time.Sleep(200 * time.Millisecond); os.Remove(rollout) }); !ok || s != agent.StopBlind || !lost(w) {
+		t.Errorf("the rollout gone mid-run: %q (stopped %v, marked %v)", s, ok, lost(w))
 	}
 
-	w, rollout = watchFixture(t)
-	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
-	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)+openCall))
-	go func(w watcher) {
-		for range 6 {
-			time.Sleep(60 * time.Millisecond)
-			appendStream(w, command) // a long tool batch: its commands, its result not yet written
-		}
-	}(w)
-	if s, ok := stopped(w); ok {
-		t.Errorf("commands inside an open tool batch stopped the run: %q", s)
+	w, rollout = setup()
+	if s, ok := run(w, rollout, func(w watcher, rollout string) {
+		time.Sleep(100 * time.Millisecond)
+		appendLine(rollout, strings.TrimSuffix(request(2000), "\n")) // the next request's usage, this poll
+		time.Sleep(60 * time.Millisecond)
+		appendLine(w.transcript, message) // its message, the next: then a long silent tool call
+	}); ok {
+		t.Errorf("a healthy run whose writers interleave was stopped: %q", s)
+	}
+
+	w, rollout = setup()
+	if s, ok := run(w, rollout, func(w watcher, _ string) {
+		time.Sleep(100 * time.Millisecond)
+		appendLine(w.transcript, turnEnd(50_000)) // the turn used far more than the rollouts recorded
+	}); !ok || s != agent.StopBlind || !lost(w) {
+		t.Errorf("a turn the rollouts fall short of: %q (stopped %v, marked %v)", s, ok, lost(w))
+	}
+
+	w, rollout = setup()
+	if s, ok := run(w, rollout, func(w watcher, rollout string) {
+		time.Sleep(100 * time.Millisecond)
+		appendLine(w.transcript, turnEnd(1000))
+		appendLine(rollout, strings.TrimSuffix(request(3000), "\n"))
+		time.Sleep(60 * time.Millisecond)
+		appendLine(w.transcript, turnEnd(3000)) // a second turn, matched as well
+	}); ok {
+		t.Errorf("a healthy run of two turns was stopped: %q", s)
+	}
+
+	w, rollout = setup()
+	appendTo(t, rollout, `{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec"}}`+"\n")
+	if s, ok := run(w, rollout, func(w watcher, rollout string) {
+		time.Sleep(100 * time.Millisecond)
+		appendLine(w.transcript, turnEnd(1000))
+		time.Sleep(60 * time.Millisecond)
+		appendLine(w.transcript, turnEnd(40_000)) // a later turn, with a tool call still open in the rollout
+	}); !ok || s != agent.StopBlind {
+		t.Errorf("a later turn after a stale open call was not checked: %q (stopped %v)", s, ok)
 	}
 }

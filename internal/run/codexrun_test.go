@@ -325,3 +325,55 @@ func TestRecoveryKeepsAnIncompleteMarkWithoutTheSources(t *testing.T) {
 		t.Errorf("recovered $%.2f (want the bound $%.2f), estimated %v, notes %q", got.Spend().AgentUSD, bound, got.CostEstimated, got.Notes)
 	}
 }
+
+// The watcher's mark of lost accounting is in the records before anything else: recovery after a crash counts the
+// run's bound even though the rollout it finds parses whole.
+func TestRecoveryKeepsLostAccounting(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1")
+	stream, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "exec-interrupted.jsonl"))
+	must(t, err)
+	rollout, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "rollout-interrupted.jsonl"))
+	must(t, err)
+	must(t, os.MkdirAll(dir, 0o700))
+	must(t, os.MkdirAll(workspace, 0o700))
+	must(t, os.WriteFile(filepath.Join(dir, "stream.jsonl"), stream, 0o600))
+	must(t, os.WriteFile(filepath.Join(dir, codex.Rollout), rollout, 0o600))
+	must(t, os.WriteFile(filepath.Join(dir, codex.AccountingLost), []byte("the run's rollout went away\n"), 0o600))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 3, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if got, want := orphans[0].Record.Spend().AgentUSD, codex.Bound("gpt-6.1-sol", 3); got != want || !orphans[0].Record.CostEstimated {
+		t.Errorf("recovered $%.2f, want the bound $%.2f", got, want)
+	}
+}
+
+// A list of missing rollouts left empty (an older Agentium cut short while writing it in place) is kept, and the run
+// counts its bound: what it listed is unknown. The list is written whole or not at all (a temp file renamed).
+func TestAnEmptyMissingListIsKept(t *testing.T) {
+	records := recordsWith(t, filepath.Join("..", "codex", "testdata", "exec-ok.jsonl"))
+	main, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "rollout-ok.jsonl"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(records, codex.Rollout), main, 0o600))
+	must(t, os.WriteFile(filepath.Join(records, codex.Incomplete), nil, 0o600)) // the crash point: truncated, not yet written
+	if err := (codex.Adapter{}).Gather(t.TempDir(), records); err == nil {
+		t.Error("an empty list was taken as a complete collection")
+	}
+	if data, err := os.ReadFile(filepath.Join(records, codex.Incomplete)); err != nil || len(data) == 0 {
+		t.Errorf("the list: %q, %v", data, err)
+	}
+	rec := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
+	rec.Metrics, _ = parseRecords(codex.Adapter{}, records)
+	codexSpendFallback(&rec)
+	if rec.Spend().AgentUSD != codex.Bound("gpt-6.1-sol", 3) {
+		t.Errorf("$%.3f", rec.Spend().AgentUSD)
+	}
+	if strays, _ := filepath.Glob(filepath.Join(records, "."+codex.Incomplete+".tmp-*")); len(strays) != 0 {
+		t.Errorf("temp files left: %v", strays)
+	}
+}

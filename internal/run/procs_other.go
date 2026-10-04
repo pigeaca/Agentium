@@ -16,7 +16,15 @@ func stopSandboxed(string, string) ([]string, error) { return nil, nil }
 func usingGrade(string, string, []string) ([]string, error) { return nil, nil }
 
 // codexLeftoverPIDs finds nothing outside macOS (see processesUnder).
-func codexLeftoverPIDs(codexSweep) ([]int, error) { return nil, nil }
+func codexLeftoverPIDs(codexSweep) (kill, report []int, err error) { return nil, nil, nil }
 
 // stopCodexLeftovers stops nothing outside macOS (see processesUnder).
-func stopCodexLeftovers(codexSweep) ([]string, error) { return nil, nil }
+func stopCodexLeftovers(codexSweep, func([]int) bool) ([]string, []leftProcess, error) {
+	return nil, nil, nil
+}
+
+// leftAlive finds no process outside macOS (see processesUnder).
+func leftAlive(leftProcess) bool { return false }
+
+// stopLeft stops nothing outside macOS (see processesUnder).
+func stopLeft(leftProcess) error { return nil }

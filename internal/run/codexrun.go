@@ -3,10 +3,12 @@ package run
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -60,29 +62,76 @@ func markerIn(workspace string) string {
 	return dirs[0]
 }
 
-// sweepCodex stops the processes a Codex run's commands left (codexLeftovers), and says what it stopped, or could not.
-// Codex's unified exec starts each command in a session of its own, outside the process group the runner kills. A
-// process is stopped only once shown to be the run's: started no earlier than its agent, and in its own sandbox (the
-// marker) or using its folders. guard, when set (tests), sees the process IDs first and may refuse the sweep: a test
-// then never stops a process it did not start.
+// leftProcess is a process a Codex run's commands may have left, which the sweep only reported (codexLeftovers): kept
+// in the run's records (LeftoverProcesses) so that `agentium clean` can list it and, with --yes, stop it.
+type leftProcess struct {
+	PID       int    `json:"pid"`
+	Command   string `json:"command"`
+	StartSec  uint64 `json:"start_sec"`
+	StartUsec uint64 `json:"start_usec"`
+	Why       string `json:"why"`
+}
+
+// Started is when the process started.
+func (p leftProcess) Started() time.Time {
+	return time.Unix(int64(p.StartSec), int64(p.StartUsec)*1000)
+}
+
+// LeftoverProcesses, in a run's records, lists the processes its sweep reported but did not stop (leftProcess).
+const LeftoverProcesses = "leftover-processes.json"
+
+// sweepCodex stops the processes a Codex run's commands left that are shown to be its own on every count, and reports
+// the ones shown on one count only (codexLeftovers): in the run's notes, with their IDs, names and start times, and in
+// its records (LeftoverProcesses), which `agentium clean` reads. Codex's unified exec starts each command in a session
+// of its own, outside the process group the runner kills. guard, when set (tests), sees every round's targets before
+// any is stopped, and may refuse them: a test then never stops a process it did not start.
 //
 // In the spike none was left, even after SIGINT.
-func sweepCodex(s codexSweep, guard func(pids []int) bool) []string {
-	if guard != nil {
-		pids, err := codexLeftoverPIDs(s)
-		if err != nil || !guard(pids) {
-			return []string{fmt.Sprintf("the sweep of Codex's leftover processes was refused by its guard (it would stop %v; %v)", pids, err)}
-		}
-	}
+func sweepCodex(s codexSweep, guard func(pids []int) bool, records string) []string {
 	var notes []string
-	killed, err := stopCodexLeftovers(s)
+	killed, reported, err := stopCodexLeftovers(s, guard)
 	if len(killed) > 0 {
 		notes = append(notes, fmt.Sprintf("stopped %d process(es) Codex's commands left running: %s", len(killed), strings.Join(killed, ", ")))
 	}
 	if err != nil {
 		notes = append(notes, "Codex's leftover processes could not all be stopped: "+err.Error())
 	}
+	if len(reported) > 0 {
+		var shown []string
+		for _, p := range reported {
+			shown = append(shown, fmt.Sprintf("%d %q started %s (%s)", p.PID, p.Command, p.Started().UTC().Format(time.RFC3339), p.Why))
+		}
+		notes = append(notes, fmt.Sprintf("%d process(es) that may be what Codex's commands left are still running, not stopped (not shown to be the run's on every count): %s; `agentium clean` lists them, and stops them with --yes",
+			len(reported), strings.Join(shown, ", ")))
+		if err := recordLeftovers(records, reported); err != nil {
+			notes = append(notes, "the processes left could not be recorded for `agentium clean`: "+err.Error())
+		}
+	}
 	return notes
+}
+
+// recordLeftovers adds processes to the records' list of what the run left (LeftoverProcesses), each once.
+func recordLeftovers(records string, add []leftProcess) error {
+	if records == "" {
+		return nil
+	}
+	path := filepath.Join(records, LeftoverProcesses)
+	var all []leftProcess
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &all) // a list that cannot be read is replaced
+	}
+	for _, p := range add {
+		if !slices.ContainsFunc(all, func(q leftProcess) bool {
+			return q.PID == p.PID && q.StartSec == p.StartSec && q.StartUsec == p.StartUsec
+		}) {
+			all = append(all, p)
+		}
+	}
+	data, err := json.Marshal(all)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(path, data, 0o600)
 }
 
 // codexHomeOf is the Codex home of a run recorded with the sign-in mode, whose workspace was workspace (Env.codexHome).
@@ -98,7 +147,7 @@ func gatherOrphan(layout home.Layout, rec Record, workspace, records string) []s
 		return nil
 	}
 	notes := sweepCodex(codexSweep{workspace: workspace, tempRoot: layout.RunTemp(filepath.Base(workspace)), marker: markerIn(workspace),
-		since: rec.Started}, nil)
+		since: rec.Started}, nil, records)
 	if err := (codex.Adapter{}).Gather(codexHomeOf(layout, rec.SignIn, workspace), records); err != nil {
 		notes = append(notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}

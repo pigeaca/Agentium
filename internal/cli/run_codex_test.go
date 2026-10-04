@@ -79,7 +79,7 @@ func TestRunOnceWithCodex(t *testing.T) {
 
 	result := f.run(context.Background(), "run", "once", "value", "--agent", "codex")
 	expect(t, result, ExitOK, "Starting a real Codex run (gpt-6.1-sol, sign-in login, graded on the host)", "priced by Agentium",
-		"one request runs at a time", "the run costs at most $4.80; if the records stop, Agentium stops the run within 90 s and counts $4.80.",
+		"one request runs at a time", "the run costs at most $4.80. If its records go missing, Agentium stops the run and counts $4.80",
 		"outcome      ok; verification passed", "environment  Codex 0.160.0, gpt-6.1-sol, effort low, sandbox workspace-write, permission profile agentium",
 		"tokens       10000 input, 10000 cached, 500 output (100 reasoning); cost priced by Agentium at the list prices of 2026-10-04")
 	doc := jsonRun(t, f, ExitOK, "run", "once", "value", "--agent", "codex", "--model", "gpt-6.1-sol:high")

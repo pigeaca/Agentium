@@ -26,12 +26,21 @@ import (
 // it: a source that is gone (an API key run's workspace removed by recovery) is not a collection.
 const Incomplete = "rollouts-incomplete"
 
+// unreadableList stands, in the list of missing rollouts, for an earlier list that was empty or cut short: it is never
+// collected, so the list stays.
+const unreadableList = "(an earlier list that could not be read)"
+
 // markIncomplete updates the records' list of missing rollouts (Incomplete): what this gather could not move, plus
 // what an earlier one listed that is still not in the records (a line it cannot read as such stays, as missing). The
 // list goes only once it is empty; its error says what is still missing.
 func markIncomplete(records string, missing map[string]error) error {
 	marker := filepath.Join(records, Incomplete)
 	if data, err := os.ReadFile(marker); err == nil {
+		// A list with nothing on it was cut short (a crash while an older Agentium wrote it in place): what it held is
+		// unknown, so it stays, and the run counts its bound.
+		if listed := strings.TrimSpace(string(data)); listed == "" || !strings.Contains(listed, "\n") && strings.HasPrefix(listed, "#") {
+			missing[unreadableList] = errors.New("an earlier list of missing rollouts was empty or cut short")
+		}
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "#") {
@@ -65,7 +74,7 @@ func markIncomplete(records string, missing map[string]error) error {
 		errs = append(errs, fmt.Errorf("%s: %w", dest, err))
 	}
 	sort.Strings(lines[1:])
-	if err := os.WriteFile(marker, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+	if err := writeAtomic(marker, []byte(strings.Join(lines, "\n")+"\n")); err != nil { // never empty, even after a crash
 		errs = append(errs, fmt.Errorf("list the missing Codex rollouts: %w", err))
 	}
 	return fmt.Errorf("Codex rollouts not collected: %w", errors.Join(errs...))
@@ -284,16 +293,23 @@ func scrub(v any) any {
 // The bound: Codex runs with its subagents off (configOverrides), so one request is in flight at a time, and the spend
 // stays under the cap, unless the next request starts before the watcher reads the last one (it looks every poll):
 // then at most the cap plus one allowance (Bound), as long as Codex records each request's usage. A request too large
-// to price stops the run as capped. Lost accounting stops it as agent.StopBlind, and the run counts its bound: a thread
-// whose rollout it cannot find within blindAfter, a rollout that becomes unreadable or goes, and a stream that shows the
-// model at work while the rollout does not follow within lagAfter (Codex goes on when it cannot write its rollout).
+// to price stops the run as capped.
+//
+// Lost accounting stops the run as agent.StopBlind (and marks its records, AccountingLost, so it counts its bound
+// whatever happens next), in deterministic cases only: a thread whose rollout it cannot find within blindAfter; a
+// rollout, once found, that goes, cannot be opened or read, or holds a line too long to ever end; and a turn whose end
+// (the stream's turn.completed, with the turn's usage) the rollouts do not match (checkTurns). Codex 0.160 carries on
+// when it cannot write its rollout (persist_rollout_items' failure is ignored), so a turn's end is where a gap shows.
+// The residual: usage that silently stops being written in the middle of a turn is seen only when the turn ends; until
+// then the cap is not enforced, and the run's timeout is the backstop.
 type watcher struct {
 	transcript, codexHome string
 	rates                 pricing.OpenAIRates
 	capUSD, allowanceUSD  float64
 	// poll is how often it looks (zero: 50 ms); blindAfter how long a started thread may go without a rollout (zero: a
-	// minute); lagAfter how long the stream may show the model working without the rollout following (zero: 90 s).
-	poll, blindAfter, lagAfter time.Duration
+	// minute); settle how long the rollouts may trail a turn's end before the gap counts (zero: 2 s): the stream and
+	// the rollout are written by separate writers, and a turn's last request can land in the rollout just after.
+	poll, blindAfter, settle time.Duration
 }
 
 // tail is one rollout the watcher reads: how far, and whether it is the run's.
@@ -303,26 +319,34 @@ type tail struct {
 	known  bool // decided whether it is the run's (its first line was whole)
 }
 
-// read is what a rollout's new lines (whole lines only) held: the requests' price (priced is false when one could not
-// be priced), whether anything was written (grew), and the tool calls opened and closed (by call_id). lost is true
-// when the rollout cannot be read on: gone, unreadable, or a line too long to ever end.
+// readResult is what a rollout's new whole lines held: the requests' price (priced is false when one could not be
+// priced) and tokens. lost is true when the rollout cannot be read on: gone, unreadable, or a line too long to ever end.
 type readResult struct {
-	usd            float64
-	priced, grew   bool
-	opened, closed []string
-	lost           bool
+	usd    float64
+	priced bool
+	tokens pricing.OpenAIUsage
+	lost   bool
 }
 
+// AccountingLost, in a run's records, says that Agentium lost track of what the run spent while it ran (the watcher's
+// StopBlind): written at once, before anything else, so that recovery after a crash still counts the run's bound even
+// if the rollouts it finds parse whole.
+const AccountingLost = "accounting-lost"
+
 func (w watcher) watch(ctx context.Context) agent.Stop {
-	poll, blindAfter, lagAfter := w.poll, w.blindAfter, w.lagAfter
+	poll, blindAfter, settle := w.poll, w.blindAfter, w.settle
 	if poll <= 0 {
 		poll = 50 * time.Millisecond
 	}
 	if blindAfter <= 0 {
 		blindAfter = time.Minute
 	}
-	if lagAfter <= 0 {
-		lagAfter = 90 * time.Second
+	if settle <= 0 {
+		settle = 2 * time.Second
+	}
+	blind := func(why string) agent.Stop {
+		_ = writeAtomic(filepath.Join(filepath.Dir(w.transcript), AccountingLost), []byte(why+"\n"))
+		return agent.StopBlind
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
@@ -331,9 +355,9 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 	mainFound := false
 	tails := map[string]*tail{}
 	spent := 0.0
+	var recorded, turns pricing.OpenAIUsage // the rollouts' requests and the stream's ended turns, summed
 	stream := &streamTail{}
-	openCalls := map[string]bool{}
-	var unmatchedSince time.Time // the stream showed the model at work, and the rollout has not followed since
+	var turnEnded time.Time // a turn ended that the rollouts do not match yet
 	for {
 		select {
 		case <-ctx.Done():
@@ -346,7 +370,6 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 			}
 			threadSeen = time.Now()
 		}
-		grew := false
 		for _, f := range rolloutFiles(filepath.Join(w.codexHome, "sessions")) {
 			t := tails[f]
 			if t == nil {
@@ -371,50 +394,52 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 			}
 			r := t.read(f, w.rates)
 			if r.lost {
-				return agent.StopBlind // the run's accounting is lost: its spend could pass the cap unseen
+				return blind("the run's rollout " + filepath.Base(f) + " could not be read on")
 			}
 			spent += r.usd
+			recorded = addUsage(recorded, r.tokens)
 			if !r.priced {
 				return agent.StopCap // a request Agentium cannot price: the cap cannot be kept
 			}
-			grew = grew || r.grew
-			for _, id := range r.opened {
-				openCalls[id] = true
-			}
-			for _, id := range r.closed {
-				delete(openCalls, id)
-			}
 		}
-		// A main rollout found, then gone or emptied, is lost accounting too.
-		if mainFound {
-			if t := tails[mainRolloutOf(tails, thread)]; t == nil {
-				return agent.StopBlind
-			}
+		if mainFound && mainRolloutOf(tails, thread) == "" {
+			return blind("the run's rollout went away")
 		}
 		if spent+w.allowanceUSD > w.capUSD {
 			return agent.StopCap
 		}
 		if !mainFound && time.Since(threadSeen) > blindAfter {
-			return agent.StopBlind
+			return blind("no rollout of the run's thread appeared")
 		}
-		// Codex 0.160 carries on when it cannot write its rollout (persist_rollout_items' failure is ignored), so the
-		// stream is checked against it: every response the model finishes, and every tool result it is given, is written
-		// to the rollout as it happens. Stream events a tool batch still open in the rollout explains (its commands and
-		// changes) need nothing more; any other (a message, reasoning, a new command outside an open batch, the turn's
-		// end) must be followed by the rollout within lagAfter, or the run is stopped as blind and counts its bound.
-		unexplained := stream.read(w.transcript, len(openCalls) > 0)
+		for _, u := range stream.read(w.transcript) {
+			turns = addUsage(turns, u)
+			if turnEnded.IsZero() {
+				turnEnded = time.Now()
+			}
+		}
 		switch {
-		case grew:
-			unmatchedSince = time.Time{}
-		case unexplained && unmatchedSince.IsZero():
-			unmatchedSince = time.Now()
-		case !unmatchedSince.IsZero() && time.Since(unmatchedSince) > lagAfter:
-			return agent.StopBlind
+		case turnEnded.IsZero():
+		case !behind(recorded, turns):
+			turnEnded = time.Time{}
+		case time.Since(turnEnded) > settle:
+			return blind(fmt.Sprintf("the stream's ended turns used %d input and %d output tokens, the rollouts recorded %d and %d",
+				turns.Input, turns.Output, recorded.Input, recorded.Output))
 		}
 	}
 }
 
-// mainRolloutOf is the path of the main thread's rollout among the tails ("" when none).
+// behind reports whether the rollouts' recorded tokens fall short of the stream's ended turns' by more than 1% (of
+// input, or of output): the rollouts missed requests. Equal counts are the spike's finding; 1% absorbs rounding only.
+func behind(recorded, turns pricing.OpenAIUsage) bool {
+	return float64(recorded.Input) < 0.99*float64(turns.Input) || float64(recorded.Output) < 0.99*float64(turns.Output)
+}
+
+func addUsage(a, b pricing.OpenAIUsage) pricing.OpenAIUsage {
+	return pricing.OpenAIUsage{Input: a.Input + b.Input, Cached: a.Cached + b.Cached, CacheWrite: a.CacheWrite + b.CacheWrite,
+		Output: a.Output + b.Output, Reasoning: a.Reasoning + b.Reasoning}
+}
+
+// mainRolloutOf is the path of the main thread's rollout among the tails, while it exists ("" otherwise).
 func mainRolloutOf(tails map[string]*tail, thread string) string {
 	for f := range tails {
 		if isThreads(f, thread) {
@@ -426,50 +451,37 @@ func mainRolloutOf(tails map[string]*tail, thread string) string {
 	return ""
 }
 
-// streamTail reads the exec stream's new lines as they come.
+// streamTail reads the exec stream's new whole lines as they come.
 type streamTail struct{ offset int64 }
 
-// read reports whether the stream's new whole lines show the model at work in a way the rollout must follow: any item
-// or turn event but an item's start, except commands and changes while a tool batch is open in the rollout (inBatch),
-// which the batch's result will follow.
-func (s *streamTail) read(file string, inBatch bool) (unexplained bool) {
+// read returns the usage of each turn the stream's new lines end (turn.completed).
+func (s *streamTail) read(file string) []pricing.OpenAIUsage {
 	f, err := os.Open(file)
 	if err != nil {
-		return false
+		return nil
 	}
 	defer f.Close()
 	if _, err := f.Seek(s.offset, io.SeekStart); err != nil {
-		return false
+		return nil
 	}
 	data, _ := io.ReadAll(io.LimitReader(f, maxLine))
 	end := bytes.LastIndexByte(data, '\n')
 	if end < 0 {
-		return false
+		return nil
 	}
 	s.offset += int64(end) + 1
+	var turns []pricing.OpenAIUsage
 	for _, line := range bytes.Split(data[:end], []byte("\n")) {
 		var e streamEvent
-		if json.Unmarshal(line, &e) != nil {
-			continue
-		}
-		switch e.Type {
-		case "thread.started", "turn.started", "item.started", "item.updated":
-		case "item.completed":
-			kind := ""
-			if e.Item != nil {
-				kind = e.Item.Type
-			}
-			if !(inBatch && (kind == "command_execution" || kind == "file_change" || kind == "mcp_tool_call" || kind == "web_search")) {
-				unexplained = true
-			}
-		default: // the turn's end, an error
-			unexplained = true
+		if json.Unmarshal(line, &e) == nil && e.Type == "turn.completed" && e.Usage != nil {
+			turns = append(turns, pricing.OpenAIUsage{Input: e.Usage.Input, Cached: e.Usage.Cached, CacheWrite: e.Usage.CacheWrite,
+				Output: e.Usage.Output, Reasoning: e.Usage.Reasoning})
 		}
 	}
-	return unexplained
+	return turns
 }
 
-// read prices the requests written to the rollout since the last read (whole lines only), and notes its tool calls.
+// read prices the requests written to the rollout since the last read (whole lines only).
 func (t *tail) read(file string, rates pricing.OpenAIRates) readResult {
 	f, err := os.Open(file)
 	if err != nil {
@@ -487,39 +499,55 @@ func (t *tail) read(file string, rates pricing.OpenAIRates) readResult {
 	if end < 0 {
 		return readResult{priced: true, lost: len(data) >= maxLine}
 	}
-	r := readResult{priced: true, grew: true}
+	r := readResult{priced: true}
 	for _, line := range bytes.Split(data[:end], []byte("\n")) {
 		var l rolloutLine
-		if json.Unmarshal(line, &l) != nil {
+		if json.Unmarshal(line, &l) != nil || l.Type != "token_usage_record" {
 			continue
 		}
-		switch l.Type {
-		case "token_usage_record":
-			var u tokenUsageRecord
-			if json.Unmarshal(l.Payload, &u) != nil {
-				continue
-			}
-			cost, ok := rates.Cost(u.usage())
-			r.usd += cost
-			r.priced = r.priced && ok
-		case "response_item":
-			var item struct {
-				Type   string `json:"type"`
-				CallID string `json:"call_id"`
-			}
-			if json.Unmarshal(l.Payload, &item) != nil || item.CallID == "" {
-				continue
-			}
-			switch item.Type {
-			case "custom_tool_call", "function_call", "local_shell_call":
-				r.opened = append(r.opened, item.CallID)
-			case "custom_tool_call_output", "function_call_output":
-				r.closed = append(r.closed, item.CallID)
-			}
+		var u tokenUsageRecord
+		if json.Unmarshal(l.Payload, &u) != nil {
+			continue
 		}
+		cost, ok := rates.Cost(u.usage())
+		r.usd += cost
+		r.priced = r.priced && ok
+		r.tokens = addUsage(r.tokens, u.usage())
 	}
 	t.offset += int64(end) + 1
 	return r
+}
+
+// writeAtomic replaces path with data, owner-only, through a temp file renamed into place: a crash leaves the old
+// file or the new one, never a part.
+func writeAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // Bound is the most a capped run can spend: its cap, plus one allowance for a request that starts in the watcher's

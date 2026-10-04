@@ -266,3 +266,41 @@ func TestFailedTurnsByTheirError(t *testing.T) {
 		t.Errorf("the spike's network failure: %s", got)
 	}
 }
+
+// The stream's ended turns against the rollouts, when the run is read: rollouts that fall short of the turns' usage
+// missed requests, so the run is incomplete and costs the larger of the two; the watcher's mark of lost accounting
+// makes it incomplete too, whatever the rollouts say.
+func TestParseChecksTheTurnsAgainstTheRollouts(t *testing.T) {
+	dir := records(t, "ok", "")
+	full, err := os.ReadFile(filepath.Join("testdata", "rollout-ok.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	requests := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(full)), "\n") {
+		if strings.Contains(line, `"type":"token_usage_record"`) {
+			if requests++; requests > 2 {
+				continue // the last two requests never reached the rollout
+			}
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(filepath.Join(dir, Rollout), []byte(strings.Join(kept, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parse(t, dir)
+	if want := cost(44416, 21248, 316); !m.RolloutsIncomplete || math.Abs(m.CostUSD-want) > 1e-12 {
+		t.Errorf("rollouts short of the turn: incomplete %v, $%.6f (want the turn's $%.6f)", m.RolloutsIncomplete, m.CostUSD, want)
+	}
+	whole := records(t, "ok", "ok")
+	if m := parse(t, whole); m.RolloutsIncomplete {
+		t.Error("rollouts that match the turn were taken as incomplete")
+	}
+	if err := os.WriteFile(filepath.Join(whole, AccountingLost), []byte("lost\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if m := parse(t, whole); !m.RolloutsIncomplete {
+		t.Error("the watcher's mark of lost accounting was ignored")
+	}
+}
