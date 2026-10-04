@@ -13,6 +13,33 @@ import (
 	"github.com/pigeaca/agentium/internal/stats"
 )
 
+// modulesTitle names the monorepo modules the locked tasks ran in, for the report's title: " · svc/billing" when they
+// share one, " · modules a, b (root)" when they differ, and "" when every task ran at the repository's root (as every
+// experiment before modules did). The JSON report has each task's module in its lock.
+func modulesTitle(l experiment.Lock) string {
+	var modules []string
+	inModule := false
+	for _, t := range l.Tasks {
+		inModule = inModule || t.Module != ""
+		if !slices.Contains(modules, t.Module) {
+			modules = append(modules, t.Module)
+		}
+	}
+	switch {
+	case !inModule:
+		return ""
+	case len(modules) == 1:
+		return " · " + modules[0]
+	}
+	slices.Sort(modules)
+	for i, m := range modules {
+		if m == "" {
+			modules[i] = "(root)"
+		}
+	}
+	return " · modules " + strings.Join(modules, ", ")
+}
+
 // JSON writes the report as indented JSON.
 func (r Report) JSON(w io.Writer) error {
 	enc := json.NewEncoder(w)
@@ -25,7 +52,7 @@ func (r Report) JSON(w io.Writer) error {
 func (r Report) Markdown(w io.Writer) error {
 	var b strings.Builder
 	d, l := r.Lock.Design, r.Lock
-	fmt.Fprintf(&b, "# Experiment %s\n\n", r.Experiment)
+	fmt.Fprintf(&b, "# Experiment %s%s\n\n", r.Experiment, modulesTitle(l))
 	if r.Template == experiment.TemplateAA {
 		fmt.Fprintf(&b, "A/A calibration of context `%s` (both arms).\n\n", r.Arms[0].Context)
 	} else if d.PerArmProfiles() {

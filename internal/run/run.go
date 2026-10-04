@@ -110,9 +110,10 @@ type Env struct {
 	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
 	// Module is the monorepo module the commands run in (store.Task.Module; "": the repository's root, as before
-	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. Once
-	// sets it from the run's task; callers need not. The agent's own folder and sandbox stay the whole checkout. It is
-	// part of the keys of the warm-up stamps, the Python venvs and the grading seeds.
+	// modules): build tools are detected in its folder, the warm-up, setup and verification commands run there, and the
+	// agent starts there (its context is what a session there loads: claudectx.ResolveIn). Once sets it from the run's
+	// task; callers need not. The agent's sandbox stays the whole checkout (claude.Invocation.Repo). It is part of the
+	// keys of the warm-up stamps, the Python venvs and the grading seeds.
 	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
@@ -169,8 +170,11 @@ type Record struct {
 	Task     string `json:"task"`
 	Arm      string `json:"arm"`
 	Snapshot string `json:"snapshot,omitempty"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
+	// Module is the monorepo folder the task ran in (store.Task.Module), where the agent started and the commands ran;
+	// empty (and absent from the JSON) at the repository's root.
+	Module string `json:"module,omitempty"`
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
 	// EffortRecorded marks a record made when runs recorded their effort: without it an empty Effort is unknown (an
 	// older record), with it the CLI's default.
 	EffortRecorded bool           `json:"effort_recorded,omitempty"`
@@ -281,7 +285,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	env.Module = spec.Task.Module // a run uses its task's module, never the project's current setting
-	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Module: env.Module, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	if spec.Task.JudgeGraded() {
 		rec.GradedBy = task.GradingJudge
@@ -443,7 +447,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if err != nil {
 			return rec, err
 		}
-		overlay, err := snapshot.PlanOverlay(base, snap)
+		// What the arm loads is what a session in the task's module loads, where its agent starts.
+		overlay, err := snapshot.PlanOverlayIn(base, snap, env.Module)
 		if err != nil {
 			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
 		}
@@ -528,7 +533,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 	}
 	if spec.Probe != "" {
-		if rec.ProbeFile, err = appendProbe(ctx, repo, spec.Probe); err != nil {
+		if rec.ProbeFile, err = appendProbe(ctx, repo, env.Module, spec.Probe); err != nil {
 			return rec, err
 		}
 		if rec.ProbeFile == "" {
@@ -552,6 +557,17 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, fmt.Errorf("grading repository: %w", err)
 	}
 
+	// The agent starts in the task's module, as a developer of it would, so Claude Code loads the root's and the module's
+	// instructions; the whole checkout stays its own (Repo). The folder is checked as it is now, after the arm's files and
+	// the setup: neither may have made it a link or removed it.
+	if env.Module != "" {
+		dir, err := env.moduleDir(repo)
+		if err != nil {
+			return rec, fmt.Errorf("the agent's folder: %w", err)
+		}
+		inv.Dir, inv.Repo = dir, repo
+	}
+
 	// The agent.
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
 	transcript, err := os.Create(transcriptPath)
@@ -567,9 +583,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if env.SignIn == claude.SignInLogin {
 		activeConfig = claude.UserConfigDir(env.Environ, env.Home)
 	}
-	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after the checkout. Reads
-	// there are the run's own; any other session folder, even one created during the run, is someone else's.
-	ownSession := claude.SessionFolder(activeConfig, repo)
+	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after where it starts (the
+	// checkout, or its module's folder). Reads there are the run's own; any other session folder, even one created
+	// during the run, is someone else's.
+	ownSession := claude.SessionFolder(activeConfig, inv.Dir)
 	pastSessions := claude.SessionFolders(activeConfig)
 	agentStarted, pgid = true, 0
 	if err := writeStart(false); err != nil {
@@ -616,13 +633,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
 	// The context commit (Agentium's grading repository), not the agent's tree, which may have lost its .git.
-	armSource, armContext, err := contextAt(ctx, graded)
+	armSource, armContext, err := contextAt(ctx, graded, env.Module)
 	if err != nil {
 		return unfinished(err)
 	}
 	rec.ProjectSkills, rec.ProjectCommands = claudectx.SkillNames(armContext, armSource), claudectx.CommandNames(armContext)
 	realRepo, _ := filepath.EvalSymlinks(repo) // Claude Code may name files under the resolved path (/private/var)
-	use := UseOf(armContext, armSource, rec.Metrics, repo, realRepo, rec.Metrics.CWD)
+	use := UseOfIn(armContext, armSource, rec.Metrics, env.Module, repo, realRepo, rec.Metrics.CWD)
 	rec.ContextUse = &use
 	expect := env.Expect
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills
@@ -1192,14 +1209,14 @@ func parseFile(p string) (claude.Metrics, error) {
 	return claude.Parse(f)
 }
 
-// appendProbe appends line to the first startup instruction file of the context in repo and returns that file's path,
-// or "" when the context loads no instruction file at start.
-func appendProbe(ctx context.Context, repo, line string) (string, error) {
+// appendProbe appends line to the first startup instruction file of the context in repo (as a session started in
+// module loads it) and returns that file's path, or "" when the context loads no instruction file at start.
+func appendProbe(ctx context.Context, repo, module, line string) (string, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return "", err
 	}
@@ -1219,13 +1236,14 @@ func appendProbe(ctx context.Context, repo, line string) (string, error) {
 	return "", nil
 }
 
-// contextAt resolves the context of the working tree at repo: the arm's context as its run started.
-func contextAt(ctx context.Context, repo string) (source.Source, claudectx.Context, error) {
+// contextAt resolves the context of the working tree at repo: the arm's context as its run started, in module, where
+// its agent started ("": the root).
+func contextAt(ctx context.Context, repo, module string) (source.Source, claudectx.Context, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
 		return nil, claudectx.Context{}, err
 	}
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return nil, claudectx.Context{}, err
 	}

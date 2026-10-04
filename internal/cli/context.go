@@ -177,15 +177,23 @@ func contextShow(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	resolved, err := claudectx.Resolve(src)
+	// With a module set, the context is what a session started in the module loads: the module's tasks start there.
+	module := w.settings().Module
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return fail(env, err)
 	}
 	if env.JSON {
-		return env.emit(contextShowDocument(env, w.project.Name, src.Describe(), resolved, len(aboveRepository(w.root))))
+		doc := contextShowDocument(env, w.project.Name, src.Describe(), resolved, len(aboveRepository(w.root)))
+		doc.Module = module
+		return env.emit(doc)
 	}
 	st := env.style()
-	if err := printContext(env.Stdout, st, w.project.Name, src.Describe(), resolved); err != nil {
+	where := src.Describe()
+	if module != "" {
+		where += ", started in the module " + module
+	}
+	if err := printContext(env.Stdout, st, w.project.Name, where, resolved); err != nil {
 		return fail(env, err)
 	}
 	for _, file := range aboveRepository(w.root) {
@@ -274,8 +282,10 @@ type contextEntryDoc struct {
 
 type contextShowDoc struct {
 	header
-	Project  string            `json:"project"`
-	Where    string            `json:"where"` // "working tree" or "commit <short hash>"
+	Project string `json:"project"`
+	Where   string `json:"where"` // "working tree" or "commit <short hash>"
+	// Module is the monorepo module the context is resolved for (a session started there); absent at the root.
+	Module   string            `json:"module,omitempty"`
 	Context  contextSizeDoc    `json:"context"`
 	Entries  []contextEntryDoc `json:"entries"`
 	Linked   []string          `json:"linked"`
@@ -390,7 +400,7 @@ func contextSnapshot(ctx context.Context, env Env, args []string) int {
 		label = "working tree"
 	}
 	if *includeLinked {
-		resolved, err := claudectx.Resolve(src)
+		resolved, err := claudectx.ResolveIn(src, w.settings().Module)
 		if err != nil {
 			return fail(env, err)
 		}
@@ -438,9 +448,10 @@ func snapshotJSON(ctx context.Context, env Env, w *workspace, src source.Source,
 	return env.emit(doc)
 }
 
-// saveSnapshot builds the snapshot's commit in Agentium's repository and records it under name.
+// saveSnapshot builds the snapshot's commit in Agentium's repository and records it under name. With the project's
+// module set, it holds what a session started in the module loads (snapshot.BuildIn), and its manifest names the module.
 func saveSnapshot(ctx context.Context, env Env, w *workspace, name, label, commit string, src source.Source, include []string) (snapshot.Manifest, error) {
-	commitID, manifest, err := snapshot.Build(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include)
+	commitID, manifest, err := snapshot.BuildIn(ctx, w.bare, src, "snapshot "+name+" of "+label+" at "+commit, include, w.settings().Module)
 	if err != nil {
 		return manifest, err
 	}
@@ -464,7 +475,7 @@ func saveSnapshot(ctx context.Context, env Env, w *workspace, name, label, commi
 
 // notIncluded lists linked documents of src that the snapshot does not capture.
 func notIncluded(src source.Source, manifest snapshot.Manifest) []string {
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, manifest.Module)
 	if err != nil {
 		return nil
 	}

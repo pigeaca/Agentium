@@ -1,6 +1,7 @@
 package claudectx
 
 import (
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -389,5 +390,108 @@ func TestFrontmatterDelimiters(t *testing.T) {
 		if got := frontmatter([]byte(text)); !slices.Equal(got, want) {
 			t.Errorf("frontmatter(%q) = %q, want %q", text, got, want)
 		}
+	}
+}
+
+// A session started in a module loads the instruction files of every folder from the root down to it (an AGENTS.md
+// where its folder has no CLAUDE.md), with their imports, and the .claude folders of those folders; instruction files
+// elsewhere load on demand, and other folders' .claude files are not context. Resolve (the root) reads the same tree as
+// before modules: the module's CLAUDE.md is nested, its .claude nothing.
+func TestResolveInAModule(t *testing.T) {
+	tree := memSource{
+		"CLAUDE.md":                                "root\n",
+		".claude/skills/root/SKILL.md":             "---\nname: root\ndescription: r\n---\n",
+		"svc/AGENTS.md":                            "between\n",
+		"svc/billing/CLAUDE.md":                    "billing\n@notes.md\n",
+		"svc/billing/notes.md":                     "notes\n",
+		"svc/billing/AGENTS.md":                    "not loaded\n",
+		"svc/billing/.claude/rules/money.md":       "cents\n",
+		"svc/billing/.claude/rules/web.md":         "---\npaths: web/**\n---\nweb\n",
+		"svc/billing/.claude/skills/pay/SKILL.md":  "---\nname: pay\ndescription: Pay\n---\nbody\n",
+		"svc/billing/.claude/agents/auditor.md":    "---\nname: auditor\ndescription: Audits\n---\n",
+		"svc/billing/.claude/commands/ops/ship.md": "Ship\n",
+		"svc/billing/.claude/settings.json":        "{}",
+		"svc/billing/.mcp.json":                    "{}",
+		"svc/billing/sub/CLAUDE.md":                "sub\n",
+		"other/CLAUDE.md":                          "other\n",
+		"other/.claude/skills/x/SKILL.md":          "---\nname: x\ndescription: x\n---\n",
+		"svc/billing/main.go":                      "package main\n",
+	}
+	got, err := ResolveIn(tree, "svc/billing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"CLAUDE.md": KindInstructions, ".claude/skills/root/SKILL.md": KindSkill, "svc/AGENTS.md": KindInstructions,
+		"svc/billing/CLAUDE.md": KindInstructions, "svc/billing/notes.md": KindImport,
+		"svc/billing/.claude/rules/money.md": KindRule, "svc/billing/.claude/rules/web.md": KindScopedRule,
+		"svc/billing/.claude/skills/pay/SKILL.md": KindSkill, "svc/billing/.claude/agents/auditor.md": KindSubagent,
+		"svc/billing/.claude/commands/ops/ship.md": KindCommand, "svc/billing/.claude/settings.json": KindHarness,
+		"svc/billing/.mcp.json": KindHarness, "svc/billing/sub/CLAUDE.md": KindNested, "other/CLAUDE.md": KindNested,
+	}
+	if k := kinds(got); !maps.Equal(k, want) {
+		t.Errorf("kinds in the module:\n got %v\nwant %v", k, want)
+	}
+	// The startup instructions load root first.
+	var order []string
+	for _, e := range got.Entries {
+		if e.Kind == KindInstructions {
+			order = append(order, e.Path)
+		}
+	}
+	if !slices.Equal(order, []string{"CLAUDE.md", "svc/AGENTS.md", "svc/billing/CLAUDE.md"}) {
+		t.Errorf("instruction order %v", order)
+	}
+	if !hasWarning(got, "svc/billing/AGENTS.md is not loaded") {
+		t.Errorf("warnings %v", got.Warnings)
+	}
+	if names := CommandNames(got); !slices.Equal(names, []string{"ops:ship", "ship"}) {
+		t.Errorf("command names %v", names)
+	}
+	if names := SkillNames(got, tree); !slices.Equal(names, []string{"pay", "root"}) {
+		t.Errorf("skill names %v", names)
+	}
+
+	root := resolve(t, tree)
+	rootWant := map[string]string{
+		"CLAUDE.md": KindInstructions, ".claude/skills/root/SKILL.md": KindSkill, "svc/AGENTS.md": KindNested,
+		"svc/billing/CLAUDE.md": KindNested, "svc/billing/notes.md": KindImport, "svc/billing/AGENTS.md": KindNested,
+		"svc/billing/sub/CLAUDE.md": KindNested, "other/CLAUDE.md": KindNested,
+	}
+	if k := kinds(root); !maps.Equal(k, rootWant) {
+		t.Errorf("kinds at the root:\n got %v\nwant %v", k, rootWant)
+	}
+	if again, _ := ResolveIn(tree, ""); !slices.EqualFunc(again.Entries, root.Entries, func(a, b Entry) bool { return a == b }) ||
+		!slices.Equal(again.Warnings, root.Warnings) {
+		t.Error(`ResolveIn(src, "") is not Resolve(src)`)
+	}
+}
+
+// Without an instruction file on the way down to the module, the warning names the module.
+func TestResolveInAModuleWithoutInstructions(t *testing.T) {
+	got, err := ResolveIn(memSource{"svc/go.mod": "module x\n", "svc/sub/CLAUDE.md": "deep\n"}, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasWarning(got, "at the repository root or in the folders down to the module svc") || got.StartupBytes() != 0 {
+		t.Errorf("warnings %v, %d startup bytes", got.Warnings, got.StartupBytes())
+	}
+}
+
+func TestLoadsByPresenceIn(t *testing.T) {
+	for _, c := range []struct {
+		p, module string
+		want      bool
+	}{
+		{".claude/skills/a/SKILL.md", "", true}, {"svc/.claude/skills/a/SKILL.md", "", false}, {"svc/.claude/skills/a/SKILL.md", "svc", true},
+		{"svc/.mcp.json", "svc", true}, {"svc/.mcp.json", "", false}, {"a/.claude/x.md", "a/b", true}, {"a/b/.claude/x.md", "a", false},
+		{"b/.claude/x.md", "a/b", false}, {"svc/CLAUDE.md", "", true}, {"svc/main.go", "svc", false}, {"svcx/.claude/x", "svc", false},
+	} {
+		if got := LoadsByPresenceIn(c.p, c.module); got != c.want {
+			t.Errorf("LoadsByPresenceIn(%q, %q) = %v", c.p, c.module, got)
+		}
+	}
+	if !slices.Equal(Folders("a/b/c"), []string{"", "a", "a/b", "a/b/c"}) || !slices.Equal(Folders(""), []string{""}) {
+		t.Errorf("Folders: %v, %v", Folders("a/b/c"), Folders(""))
 	}
 }

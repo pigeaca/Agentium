@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -86,13 +89,13 @@ func TestInitModuleSettingStoresAndRefuses(t *testing.T) {
 	expect(t, run("init", "--jobs", "3"), ExitOK)
 	set := run("init", "--module", "tools/report")
 	expect(t, set, ExitOK, "module          tools/report", "tools/report      python  (chosen)", "python3 -m pytest",
-		"tasks added or imported verify with python3 -m pytest (mining inside a module comes in a later version)")
+		"not set: mined tasks verify with python3 -m pytest")
 	if got := storedSettings(t, data); got.Module != "tools/report" || got.Jobs != 3 {
 		t.Errorf("stored %+v: the module is stored with the other settings", got)
 	}
 	doc := jsonRun(t, f, ExitOK, "init", "--module", "./services//billing/")
 	if doc.get("settings", "module") != "services/billing" || !equalAny(doc.get("test_commands"), "go test ./...") ||
-		!equalAny(doc.get("settings", "mined_verify")) { // nothing is mined inside a module yet
+		!equalAny(doc.get("settings", "mined_verify"), "go test ./...") { // the module's own test command
 		t.Errorf("init --json with a module: %s", doc.stdout)
 	}
 	expect(t, run("init"), ExitOK, "module          services/billing") // init again keeps it
@@ -164,34 +167,155 @@ func TestTasksKeepTheirModule(t *testing.T) {
 	expect(t, run("task", "add", "bad", "--base", "HEAD", "--instruction", "x", "--module", "docs"), ExitUsage, "invalid module")
 }
 
-// While the project's module is set, pool update and start mine nothing and say why; init does not offer a mined
-// verify command. Clearing the module brings mining back.
-func TestMiningWaitsWhileAModuleIsSet(t *testing.T) {
+// monorepoHistory adds three commits to the monorepo fixture: one in services/billing (code and its test), one in
+// tools/report, and the hostile one: billing's code with a test outside the module. It returns their hashes.
+func monorepoHistory(t *testing.T, repo string) (billing, report, hostile string) {
+	t.Helper()
+	commit := func(message string, files map[string]string) string {
+		for name, body := range files {
+			writeFile(t, repo, name, body)
+		}
+		gitIn(t, repo, "add", "-A")
+		gitIn(t, repo, "commit", "-q", "-m", message)
+		return strings.TrimSpace(gitIn(t, repo, "rev-parse", "HEAD"))
+	}
+	billing = commit("Add the invoice total to billing\n\nThe total sums the invoice lines in cents.", map[string]string{
+		"services/billing/total.go":      "package main\n\nfunc total(lines []int) int {\n\tsum := 0\n\tfor _, l := range lines {\n\t\tsum += l\n\t}\n\treturn sum\n}\n",
+		"services/billing/total_test.go": "package main\n\nimport \"testing\"\n\nfunc TestTotal(t *testing.T) {\n\tif total([]int{1, 2}) != 3 {\n\t\tt.Fatal(\"total\")\n\t}\n}\n"})
+	report = commit("Sort the report by date\n\nThe report lists the newest entries first.", map[string]string{
+		"tools/report/report.py": "def entries():\n    return []\n", "tools/report/test_report.py": "def test_ok():\n    assert True\n"})
+	hostile = commit("Charge a late fee in billing\n\nA late payment pays a fixed fee of one euro.", map[string]string{
+		"services/billing/fee.go": "package main\n\nfunc fee() int { return 100 }\n", "tools/report/test_fee.py": "def test_fee():\n    assert True\n"})
+	return billing, report, hostile
+}
+
+// With a module set, pool update mines only the module's commits: another module's commit is outside it, and a commit
+// whose tests sit outside the module is set aside (its hidden tests would never run there). The mined task records the
+// module, and its hidden tests are the module's. Clearing the module mines the whole repository again.
+func TestPoolMinesOnlyTheModule(t *testing.T) {
 	t.Parallel()
-	_, _, run := monorepo(t)
-	expect(t, run("init", "--module", "services/billing"), ExitOK)
-	expect(t, run("pool", "update"), ExitOK, "module set: mining inside a module comes in a later version; use task import --commit or task add")
-	if out := run("init"); strings.Contains(out.stdout, "mined tasks verify") {
-		t.Errorf("init offers a mined verify command in a module:\n%s", out.stdout)
+	repo, data, run := monorepo(t)
+	billing, report, hostile := monorepoHistory(t, repo)
+	f := asFixture(t, repo, data, run)
+	expect(t, run("init", "--module", "services/billing", "--verify", "test -f total.go"), ExitOK)
+	dry := run("pool", "update", "--dry-run")
+	expect(t, dry, ExitOK, "Would mine main at "+hostile[:12]+" in services/billing: 4 commit(s) since the last pass, 1 candidate(s)", "Add the invoice total to billing",
+		"outside the module", "changes outside the module")
+	for _, absent := range []string{"Sort the report by date", "Charge a late fee", "later version"} {
+		if strings.Contains(dry.stdout, absent) {
+			t.Errorf("the dry run offers or says %q:\n%s", absent, dry.stdout)
+		}
+	}
+	doc := jsonRun(t, f, ExitOK, "pool", "update", "--dry-run")
+	candidates, _ := doc.get("candidates").([]any)
+	if doc.get("module") != "services/billing" || len(candidates) != 1 || doc.get("set_aside", "changes outside the module") != 1.0 ||
+		doc.get("set_aside", "outside the module") == nil {
+		t.Errorf("pool update --dry-run --json in a module: %s", doc.stdout)
+	}
+	if first, _ := candidates[0].(map[string]any); !strings.HasPrefix(billing, fmt.Sprint(first["commit"])) {
+		t.Errorf("the candidate is %v, want %s", first["commit"], billing)
+	}
+
+	expect(t, run("pool", "update"), ExitOK, "Mined main at "+hostile[:12]+" in services/billing", "Imported 1 of 1 candidate(s) tried")
+	tasks := jsonRun(t, f, ExitOK, "task", "list").get("tasks").([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("tasks: %v", tasks)
+	}
+	name := tasks[0].(map[string]any)["name"].(string)
+	if status := tasks[0].(map[string]any)["status"]; status != "valid" {
+		t.Errorf("the mined task's validation in the module: %v", status)
+	}
+	shown := jsonRun(t, f, ExitOK, "task", "show", name)
+	if shown.get("module") != "services/billing" || !equalAny(shown.get("hidden_tests"), "services/billing/total_test.go") ||
+		!equalAny(shown.get("reference"), "services/billing/total.go") {
+		t.Errorf("the mined task: %s", shown.stdout)
+	}
+	expect(t, run("task", "validate", name), ExitOK, "want pass got pass") // in the module's folder: total.go is there
+
+	// The whole repository again: the other commits are candidates, and the module's pass did not move the root's watermark.
+	expect(t, run("init", "--module", ""), ExitOK)
+	root := jsonRun(t, f, ExitOK, "pool", "update", "--dry-run")
+	var commits []string
+	for _, c := range root.get("candidates").([]any) {
+		commits = append(commits, fmt.Sprint(c.(map[string]any)["commit"]))
+	}
+	if root.get("module") != nil || !slices.ContainsFunc(commits, func(c string) bool { return strings.HasPrefix(report, c) }) ||
+		!slices.ContainsFunc(commits, func(c string) bool { return strings.HasPrefix(hostile, c) }) {
+		t.Errorf("at the root again: %s", root.stdout)
 	}
 }
 
-// start with a module set mines nothing and says so in its own words: the history was not read, so it does not claim
-// the history has no more candidates, and it says how to go on (tasks in the module, or the whole repository).
-func TestStartWithAModuleSetDoesNotMine(t *testing.T) {
+// task import into a module refuses a commit whose tests are outside it: they would be hidden tests the module's
+// commands never run. At the root, or into the module the tests are in, the same commit's tests are not the problem.
+func TestTaskImportRefusesTestsOutsideTheModule(t *testing.T) {
+	t.Parallel()
+	repo, _, run := monorepo(t)
+	billing, _, hostile := monorepoHistory(t, repo)
+	expect(t, run("init", "--module", "services/billing", "--verify", "true"), ExitOK)
+	expect(t, run("task", "import", "--commit", hostile), ExitError, "changes test files outside the module services/billing (tools/report/test_fee.py)")
+	expect(t, run("task", "import", "--commit", billing), ExitOK, "1 hidden test file(s)")
+	expect(t, run("task", "import", "--commit", hostile, "--module", ""), ExitOK, "1 hidden test file(s)")
+}
+
+// start with a module set mines that module's history, and says where it mined. A baseline snapshot taken at the root
+// is named as such: its arm loads none of the module's own .claude files.
+func TestStartMinesInTheModule(t *testing.T) {
 	t.Parallel()
 	repo, data, _ := monorepo(t)
+	monorepoHistory(t, repo)
 	f := runFixtureAt(repo, data, t.TempDir())
 	f.vars["AGENTIUM_CLAUDE"] = experimentAgent(t, t.TempDir())
 	ctx := context.Background()
-	expect(t, f.run(ctx, "init", "--module", "services/billing"), ExitOK)
+	expect(t, f.run(ctx, "init"), ExitOK)
+	expect(t, f.run(ctx, "context", "snapshot", "baseline"), ExitOK)
+	expect(t, f.run(ctx, "init", "--module", "services/billing", "--verify", "test -f total.go"), ExitOK)
 	got := f.run(ctx, "start", "--yes")
-	expect(t, got, ExitError, "Mining: module set: mining inside a module comes in a later version",
-		"only 0 of the 8 an experiment needs are ready",
-		"start does not mine while the module services/billing is set: add tasks in the module with agentium task add or agentium task import --commit REF, then run agentium start again",
-		`agentium init --module "" measures the whole repository`)
-	if n := strings.Count(got.stdout, "Mining: "); n != 1 || strings.Contains(got.stdout, "no more candidates") {
-		t.Errorf("mined %d time(s), or blamed the history:\n%s", n, got.stdout)
+	expect(t, got, ExitError, "Mining: 1 candidate(s) in 4 commit(s) read in services/billing; imported 1 of 1 tried", "1 valid of 1",
+		"snapshot baseline was taken for the repository's root, not for the module services/billing")
+	if strings.Contains(got.stdout, "later version") || strings.Contains(got.stdout, "does not mine") {
+		t.Errorf("start says it does not mine:\n%s", got.stdout)
+	}
+}
+
+// With a module set, the context is what a session started in the module loads (where the module's tasks' agents
+// start): the root's CLAUDE.md and the module's, both at start, and the module's skill; a snapshot holds them all and
+// names the module. At the root the module's CLAUDE.md loads on demand and its skill is no context.
+func TestContextOfAModule(t *testing.T) {
+	t.Parallel()
+	repo, data, run := monorepo(t)
+	writeFile(t, repo, "CLAUDE.md", "Root rules.\n")
+	writeFile(t, repo, "services/billing/CLAUDE.md", "Billing rules.\n")
+	writeFile(t, repo, "services/billing/.claude/skills/pay/SKILL.md", "---\nname: pay\ndescription: Pay an invoice\n---\nbody\n")
+	gitIn(t, repo, "add", "-A")
+	gitIn(t, repo, "commit", "-q", "-m", "context")
+	f := asFixture(t, repo, data, run)
+	expect(t, run("init", "--module", "services/billing"), ExitOK)
+	expect(t, run("context", "show"), ExitOK, "started in the module services/billing")
+	shown := jsonRun(t, f, ExitOK, "context", "show")
+	kinds := map[string]string{}
+	for _, e := range shown.get("entries").([]any) {
+		entry := e.(map[string]any)
+		kinds[entry["path"].(string)] = entry["kind"].(string)
+	}
+	want := map[string]string{"CLAUDE.md": "instructions", "services/billing/CLAUDE.md": "instructions", "services/billing/.claude/skills/pay/SKILL.md": "skill"}
+	if !maps.Equal(kinds, want) || shown.get("module") != "services/billing" {
+		t.Errorf("context show in the module: %v (%s)", kinds, shown.stdout)
+	}
+	expect(t, run("context", "snapshot", "billing"), ExitOK, "Saved snapshot billing from HEAD", "3 file(s)")
+	files := strings.TrimSpace(gitIn(t, filepath.Join(data, "projects", "1", "repo.git"), "ls-tree", "-r", "--name-only", "refs/agentium/snapshots/billing"))
+	if files != "CLAUDE.md\nservices/billing/.claude/skills/pay/SKILL.md\nservices/billing/CLAUDE.md" {
+		t.Errorf("the snapshot holds:\n%s", files)
+	}
+
+	expect(t, run("init", "--module", ""), ExitOK)
+	root := jsonRun(t, f, ExitOK, "context", "show")
+	kinds = map[string]string{}
+	for _, e := range root.get("entries").([]any) {
+		entry := e.(map[string]any)
+		kinds[entry["path"].(string)] = entry["kind"].(string)
+	}
+	if !maps.Equal(kinds, map[string]string{"CLAUDE.md": "instructions", "services/billing/CLAUDE.md": "nested"}) || root.get("module") != nil {
+		t.Errorf("context show at the root: %v", kinds)
 	}
 }
 

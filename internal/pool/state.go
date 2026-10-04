@@ -24,6 +24,10 @@ type State struct {
 	// whole range, and the tips of what a bounded scan read otherwise (Scanned.Through). It moves only when a pass ends
 	// having tried every candidate it found, so it never covers a commit no pass has handled.
 	Watermark []string `json:"watermark,omitempty"`
+	// Modules holds the watermark of each monorepo module mined (Pass.Module), by its path: a pass in a module sets
+	// aside every commit outside it, so a module's watermark says nothing of another module's commits, or the root's.
+	// Watermark stays the root's, so a project that never mined a module keeps its file as it was.
+	Modules map[string][]string `json:"module_watermarks,omitempty"`
 	// LastPass is when the last pass ended.
 	LastPass time.Time `json:"last_pass,omitzero"`
 	// Pending lists the candidates a pass is importing, written before the import: after a kill, the next pass finds
@@ -39,6 +43,26 @@ type State struct {
 	// its next write sets the file aside (pool.json.corrupt-<time>) before replacing it. It costs the review shortcut
 	// (--accept-mined must refuse) and the dismissals; an empty watermark only scans the window again.
 	Unreadable string `json:"-"`
+}
+
+// WatermarkOf is the watermark of module's passes ("": the root's, Watermark).
+func (st State) WatermarkOf(module string) []string {
+	if module == "" {
+		return st.Watermark
+	}
+	return st.Modules[module]
+}
+
+// setWatermark sets module's watermark ("": the root's).
+func (st *State) setWatermark(module string, commits []string) {
+	if module == "" {
+		st.Watermark = commits
+		return
+	}
+	if st.Modules == nil {
+		st.Modules = map[string][]string{}
+	}
+	st.Modules[module] = commits
 }
 
 // Pending is a candidate a pass began importing: its solution commit, and its patch ID when known.

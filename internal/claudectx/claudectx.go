@@ -1,5 +1,6 @@
-// Package claudectx works out which project files Claude Code loads, as experiments run it: from the repository root,
-// with project settings only (so CLAUDE.local.md, user files and settings.local.json never load).
+// Package claudectx works out which project files Claude Code loads, as experiments run it: from the repository root
+// (or a monorepo module's folder, ResolveIn), with project settings only (so CLAUDE.local.md, user files and
+// settings.local.json never load).
 //
 // Rules, from Claude Code's memory, skills and settings docs (checked 2026-09-28, CLI 2.1.281):
 //   - CLAUDE.md and .claude/CLAUDE.md at the root load at session start. If neither exists, AGENTS.md loads instead.
@@ -9,6 +10,13 @@
 //   - Skill, subagent and command descriptions load at start; their bodies load on demand.
 //   - CLAUDE.md files in subdirectories load on demand, when files there are read.
 //   - .claude/settings.json, .claude/hooks and .mcp.json change what runs, not what the model reads.
+//
+// A session started in a subfolder (a monorepo module's, ResolveIn) loads the CLAUDE.md files of every folder from the
+// root down to it (the memory docs: Claude Code reads them recursively up from where it starts). Agentium applies each
+// rule above to each of those folders alike: its instruction file (CLAUDE.md or .claude/CLAUDE.md, else AGENTS.md) and
+// imports, its .claude/rules, its skill, subagent and command descriptions, and its harness files. That the .claude
+// folders above the starting folder load too is Agentium's reading of the docs, not yet checked in a real session (a
+// run's own record of the skills and commands Claude Code reports at start shows any difference).
 package claudectx
 
 import (
@@ -86,9 +94,17 @@ func EstimateTokens(bytes int) int {
 	return (bytes + 3) / 4
 }
 
-// Resolve works out the context of src.
+// Resolve works out the context of src for a session started at the repository's root.
 func Resolve(src source.Source) (Context, error) {
-	r := &resolver{src: src, seen: map[string]bool{}}
+	return ResolveIn(src, "")
+}
+
+// ResolveIn works out the context of src for a session started in module, a folder of the repository (slash-separated,
+// relative to its root, as store.Task.Module holds it; "" is the root, and then it is Resolve): the instruction files,
+// rules, descriptions and harness files of every folder from the root down to the module load as the root's do (see
+// the package comment). Paths stay relative to the repository's root.
+func ResolveIn(src source.Source, module string) (Context, error) {
+	r := &resolver{src: src, seen: map[string]bool{}, folders: Folders(module), module: module}
 	if err := r.resolve(); err != nil {
 		return Context{}, err
 	}
@@ -121,7 +137,11 @@ func kindOrder(kind string) int {
 }
 
 type resolver struct {
-	src       source.Source
+	src source.Source
+	// folders are where context loads from at start, the root first ("" alone at the root: Folders), and module the
+	// folder the session starts in.
+	folders   []string
+	module    string
 	seen      map[string]bool
 	entries   []Entry
 	warnings  []string
@@ -157,46 +177,81 @@ func (r *resolver) read(p string) ([]byte, bool) {
 	return data, true
 }
 
+// Folders lists the folders a session started in module loads its context from, the root first: "" and each folder on
+// the way down to module ("svc/billing": "", "svc", "svc/billing"). At the root it is "" alone.
+func Folders(module string) []string {
+	folders := []string{""}
+	if module == "" {
+		return folders
+	}
+	parts := strings.Split(module, "/")
+	for i := range parts {
+		folders = append(folders, strings.Join(parts[:i+1], "/"))
+	}
+	return folders
+}
+
+// prefix is the path prefix of folder's files: "" for the root, else "folder/".
+func prefix(folder string) string {
+	if folder == "" {
+		return ""
+	}
+	return folder + "/"
+}
+
 func (r *resolver) resolve() error {
-	var roots []string
-	for _, name := range []string{"CLAUDE.md", ".claude/CLAUDE.md"} {
-		if source.Has(r.src, name) {
-			roots = append(roots, name)
+	// Each folder's instruction files: CLAUDE.md and .claude/CLAUDE.md, else AGENTS.md.
+	roots := make([][]string, len(r.folders))
+	agentsLoaded := make([]bool, len(r.folders))
+	found := false
+	for i, folder := range r.folders {
+		p := prefix(folder)
+		for _, name := range []string{"CLAUDE.md", ".claude/CLAUDE.md"} {
+			if source.Has(r.src, p+name) {
+				roots[i] = append(roots[i], p+name)
+			}
 		}
+		agentsLoaded[i] = len(roots[i]) == 0 && source.Has(r.src, p+"AGENTS.md")
+		if agentsLoaded[i] {
+			roots[i] = []string{p + "AGENTS.md"}
+		}
+		found = found || len(roots[i]) > 0
 	}
-	agentsLoaded := len(roots) == 0 && source.Has(r.src, "AGENTS.md")
-	if agentsLoaded {
-		roots = []string{"AGENTS.md"}
-	}
-	if len(roots) == 0 {
+	switch {
+	case !found && r.module == "":
 		r.warn("No CLAUDE.md, .claude/CLAUDE.md or AGENTS.md at the repository root: Claude Code loads no project instructions.")
+	case !found:
+		r.warn("No CLAUDE.md, .claude/CLAUDE.md or AGENTS.md at the repository root or in the folders down to the module %s: Claude Code loads no project instructions.", r.module)
 	}
-	agentsViaLink := false
-	for _, name := range roots {
-		if data, ok := r.read(name); ok {
-			r.add(name, KindInstructions, data, len(data), "")
-			r.imports([]string{name}, data, true)
-			// Source follows symbolic links, so a CLAUDE.md that links to AGENTS.md reads as AGENTS.md's own bytes:
-			// Claude Code loads that content through the link, though only CLAUDE.md is recorded.
-			if name != "AGENTS.md" && source.Has(r.src, "AGENTS.md") {
-				if agents, ok := r.read("AGENTS.md"); ok && bytes.Equal(agents, data) {
-					agentsViaLink = true
+	for i, folder := range r.folders {
+		p := prefix(folder)
+		agentsViaLink := false
+		for _, name := range roots[i] {
+			if data, ok := r.read(name); ok {
+				r.add(name, KindInstructions, data, len(data), "")
+				r.imports([]string{name}, data, true)
+				// Source follows symbolic links, so a CLAUDE.md that links to AGENTS.md reads as AGENTS.md's own bytes:
+				// Claude Code loads that content through the link, though only CLAUDE.md is recorded.
+				if name != p+"AGENTS.md" && source.Has(r.src, p+"AGENTS.md") {
+					if agents, ok := r.read(p + "AGENTS.md"); ok && bytes.Equal(agents, data) {
+						agentsViaLink = true
+					}
 				}
 			}
 		}
-	}
-	if source.Has(r.src, "AGENTS.md") && !agentsLoaded && !agentsViaLink && !r.seen["AGENTS.md"] {
-		r.warn("AGENTS.md is not loaded by Claude Code: a CLAUDE.md exists and does not import it (@AGENTS.md).")
-	}
-	if source.Has(r.src, "CLAUDE.local.md") {
-		r.warn("CLAUDE.local.md is personal: experiments run with project settings only and never load it.")
-	}
-	if source.Has(r.src, ".claude/settings.local.json") {
-		r.warn(".claude/settings.local.json is personal: experiments never load it.")
-	}
-	for _, dir := range []string{".claude/rules", ".claude/skills", ".claude/agents", ".claude/commands"} {
-		if source.Has(r.src, dir) { // git stores a symbolic link to a directory as one file
-			r.warn("%s is a symbolic link to a directory: Agentium does not follow it yet, so its files are not in this context.", dir)
+		if source.Has(r.src, p+"AGENTS.md") && !agentsLoaded[i] && !agentsViaLink && !r.seen[p+"AGENTS.md"] {
+			r.warn("%sAGENTS.md is not loaded by Claude Code: a CLAUDE.md exists and does not import it (@AGENTS.md).", p)
+		}
+		if source.Has(r.src, p+"CLAUDE.local.md") {
+			r.warn("%sCLAUDE.local.md is personal: experiments run with project settings only and never load it.", p)
+		}
+		if source.Has(r.src, p+".claude/settings.local.json") {
+			r.warn("%s.claude/settings.local.json is personal: experiments never load it.", p)
+		}
+		for _, dir := range []string{".claude/rules", ".claude/skills", ".claude/agents", ".claude/commands"} {
+			if source.Has(r.src, p+dir) { // git stores a symbolic link to a directory as one file
+				r.warn("%s%s is a symbolic link to a directory: Agentium does not follow it yet, so its files are not in this context.", p, dir)
+			}
 		}
 	}
 	for _, p := range r.src.Paths() {
@@ -218,11 +273,31 @@ func (r *resolver) resolve() error {
 
 // classify places a file that was not reached through the instruction files.
 func (r *resolver) classify(p string) {
+	for _, folder := range r.folders {
+		if rel, ok := strings.CutPrefix(p, prefix(folder)); ok && r.classifyIn(p, rel) {
+			return
+		}
+	}
+	// An instruction file in any other folder (below the starting folder, or beside it) loads on demand. One in a folder
+	// that loads at start but is not loaded there (an AGENTS.md beside a CLAUDE.md) does not load on demand either.
+	base := path.Base(p)
+	if (base == "CLAUDE.md" || base == "AGENTS.md") && strings.Contains(p, "/") && !strings.HasPrefix(p, ".claude/") &&
+		(len(r.folders) == 1 || !slices.Contains(r.folders[1:], path.Dir(p))) {
+		if data, ok := r.read(p); ok {
+			r.add(p, KindNested, data, 0, "")
+			r.importers = append(r.importers, importer{p, data, false})
+		}
+	}
+}
+
+// classifyIn places p, a file of a folder that loads at start, by rel, its path in that folder: the folder's rules,
+// skills, subagents, commands and harness files. It reports whether p is one.
+func (r *resolver) classifyIn(p, rel string) bool {
 	switch {
-	case strings.HasPrefix(p, ".claude/rules/") && strings.HasSuffix(p, ".md"):
+	case strings.HasPrefix(rel, ".claude/rules/") && strings.HasSuffix(rel, ".md"):
 		data, ok := r.read(p)
 		if !ok {
-			return
+			return true
 		}
 		startup := frontmatterField(data, "paths") == "" && !frontmatterHasKey(data, "paths")
 		if startup {
@@ -231,34 +306,32 @@ func (r *resolver) classify(p string) {
 			r.add(p, KindScopedRule, data, 0, "")
 		}
 		r.importers = append(r.importers, importer{p, data, startup})
-	case strings.HasPrefix(p, ".claude/skills/"):
+	case strings.HasPrefix(rel, ".claude/skills/"):
 		data, ok := r.read(p)
 		if !ok {
-			return
+			return true
 		}
-		if path.Base(p) == "SKILL.md" && strings.Count(p, "/") == 3 {
+		if path.Base(rel) == "SKILL.md" && strings.Count(rel, "/") == 3 {
 			r.add(p, KindSkill, data, descriptionBytes(data), "")
 		} else {
 			r.add(p, KindSkillFile, data, 0, "")
 		}
-	case strings.HasPrefix(p, ".claude/agents/") && strings.HasSuffix(p, ".md"):
+	case strings.HasPrefix(rel, ".claude/agents/") && strings.HasSuffix(rel, ".md"):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindSubagent, data, descriptionBytes(data), "")
 		}
-	case strings.HasPrefix(p, ".claude/commands/") && strings.HasSuffix(p, ".md"):
+	case strings.HasPrefix(rel, ".claude/commands/") && strings.HasSuffix(rel, ".md"):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindCommand, data, descriptionBytes(data), "")
 		}
-	case IsHarness(p):
+	case IsHarness(rel):
 		if data, ok := r.read(p); ok {
 			r.add(p, KindHarness, data, 0, "")
 		}
-	case (path.Base(p) == "CLAUDE.md" || path.Base(p) == "AGENTS.md") && strings.Contains(p, "/") && !strings.HasPrefix(p, ".claude/"):
-		if data, ok := r.read(p); ok {
-			r.add(p, KindNested, data, 0, "")
-			r.importers = append(r.importers, importer{p, data, false})
-		}
+	default:
+		return false
 	}
+	return true
 }
 
 // IsHarness reports whether Claude Code reads the file at p, a repository path, to decide what runs rather than as
@@ -411,6 +484,20 @@ func (h *HarnessFields) scan(line string) int {
 func LoadsByPresence(p string) bool {
 	base := path.Base(p)
 	return p == ".mcp.json" || strings.HasPrefix(p, ".claude/") || base == "CLAUDE.md" || base == "AGENTS.md"
+}
+
+// LoadsByPresenceIn is LoadsByPresence for a session started in module (ResolveIn): the .claude folder and .mcp.json
+// of every folder down to the module load by being present too. At the root it is LoadsByPresence.
+func LoadsByPresenceIn(p, module string) bool {
+	if LoadsByPresence(p) {
+		return true
+	}
+	for _, folder := range Folders(module)[1:] {
+		if rel, ok := strings.CutPrefix(p, folder+"/"); ok && (rel == ".mcp.json" || strings.HasPrefix(rel, ".claude/")) {
+			return true
+		}
+	}
+	return false
 }
 
 // importPattern finds @path tokens: "@" at the start of a line or after whitespace, followed by a path.
@@ -615,6 +702,17 @@ func descriptionBytes(data []byte) int {
 	return len(name) + len(description)
 }
 
+// commandPath is a command file's path inside its .claude/commands folder, whichever folder that is in.
+func commandPath(p string) string {
+	if rest, ok := strings.CutPrefix(p, ".claude/commands/"); ok {
+		return rest
+	}
+	if _, rest, ok := strings.Cut(p, "/.claude/commands/"); ok {
+		return rest
+	}
+	return p
+}
+
 // SkillNames lists the names the context's skills go by: each skill's folder name and its frontmatter name.
 func SkillNames(c Context, src source.Source) []string {
 	var names []string
@@ -641,7 +739,7 @@ func CommandNames(c Context) []string {
 		if e.Kind != KindCommand {
 			continue
 		}
-		rel := strings.TrimSuffix(strings.TrimPrefix(e.Path, ".claude/commands/"), ".md")
+		rel := strings.TrimSuffix(commandPath(e.Path), ".md")
 		names = append(names, path.Base(rel))
 		if strings.Contains(rel, "/") {
 			names = append(names, strings.ReplaceAll(rel, "/", ":"))

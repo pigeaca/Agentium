@@ -57,6 +57,13 @@ type Options struct {
 	// today's versions with a note (the user's decision 3 in the Python and TypeScript plan), but the base's tests can
 	// fail for that alone (the Python pilot's attrs base under today's mypy).
 	RequireLock bool
+	// Module, when set, is the monorepo folder tasks are mined for (store.Task.Module: slash-separated, relative to the
+	// root). A commit must change files in it (else ReasonNotInModule), and every test, code, dependency and vendored
+	// file it changes must be in it (else ReasonOutsideModule): the module's verify commands run only its own tests, so
+	// hidden tests elsewhere would never run, and a change elsewhere is not the module's task. Documents may change
+	// anywhere, as at the root. Every other rule, the size limits among them, then sees only the module's files. Callers
+	// detect Languages, TestCommand and the verify commands in the module's folder too.
+	Module string
 }
 
 // Reason says why a commit is not a candidate.
@@ -64,35 +71,37 @@ type Reason string
 
 // Rejection reasons. ReasonOrder lists them in the order Scan checks them.
 const (
-	ReasonUnreadable   Reason = "unreadable log record"
-	ReasonMerge        Reason = "merge commit"
-	ReasonShallow      Reason = "shallow clone boundary"
-	ReasonRoot         Reason = "no parent commit"
-	ReasonImported     Reason = "already a task"
-	ReasonDismissed    Reason = "dismissed" // the task pool's: a mined task the user removed, or a rebased copy of one
-	ReasonFixup        Reason = "fixup commit"
-	ReasonRevert       Reason = "revert"
-	ReasonEmpty        Reason = "no file changes"
-	ReasonDocsOnly     Reason = "documentation only"
-	ReasonNoTests      Reason = "no test changes"
-	ReasonVendored     Reason = "vendored code changes"
-	ReasonDependencies Reason = "dependency update"
-	ReasonTestsOnly    Reason = "tests only"
-	ReasonNoSource     Reason = "no source code"
-	ReasonTestLanguage Reason = "tests in another language"
-	ReasonFormatting   Reason = "formatting sweep"
-	ReasonTooLarge     Reason = "too large"
-	ReasonGenerated    Reason = "generated code"
-	ReasonInlineRust   Reason = "inline Rust tests"
-	ReasonUnlocked     Reason = "no lock file"              // a Python base that pins no dependencies (Options.RequireLock)
-	ReasonCopy         Reason = "the same change as a task" // the task pool's: a rebased or cherry-picked copy
+	ReasonUnreadable    Reason = "unreadable log record"
+	ReasonMerge         Reason = "merge commit"
+	ReasonShallow       Reason = "shallow clone boundary"
+	ReasonRoot          Reason = "no parent commit"
+	ReasonImported      Reason = "already a task"
+	ReasonDismissed     Reason = "dismissed" // the task pool's: a mined task the user removed, or a rebased copy of one
+	ReasonFixup         Reason = "fixup commit"
+	ReasonRevert        Reason = "revert"
+	ReasonEmpty         Reason = "no file changes"
+	ReasonNotInModule   Reason = "outside the module"         // Options.Module: nothing in the module changes
+	ReasonOutsideModule Reason = "changes outside the module" // Options.Module: tests or code elsewhere change too
+	ReasonDocsOnly      Reason = "documentation only"
+	ReasonNoTests       Reason = "no test changes"
+	ReasonVendored      Reason = "vendored code changes"
+	ReasonDependencies  Reason = "dependency update"
+	ReasonTestsOnly     Reason = "tests only"
+	ReasonNoSource      Reason = "no source code"
+	ReasonTestLanguage  Reason = "tests in another language"
+	ReasonFormatting    Reason = "formatting sweep"
+	ReasonTooLarge      Reason = "too large"
+	ReasonGenerated     Reason = "generated code"
+	ReasonInlineRust    Reason = "inline Rust tests"
+	ReasonUnlocked      Reason = "no lock file"              // a Python base that pins no dependencies (Options.RequireLock)
+	ReasonCopy          Reason = "the same change as a task" // the task pool's: a rebased or cherry-picked copy
 )
 
 // ReasonOrder lists every rejection reason in the order Scan checks them, for tables that must not depend on map
 // order.
 func ReasonOrder() []Reason {
 	return []Reason{ReasonUnreadable, ReasonMerge, ReasonShallow, ReasonRoot, ReasonImported, ReasonDismissed, ReasonFixup, ReasonRevert,
-		ReasonEmpty, ReasonDocsOnly, ReasonNoTests, ReasonVendored, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
+		ReasonEmpty, ReasonNotInModule, ReasonOutsideModule, ReasonDocsOnly, ReasonNoTests, ReasonVendored, ReasonDependencies, ReasonTestsOnly, ReasonNoSource, ReasonTestLanguage,
 		ReasonFormatting, ReasonTooLarge, ReasonGenerated, ReasonInlineRust, ReasonUnlocked, ReasonCopy}
 }
 
@@ -568,8 +577,22 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	}
 	cand := Candidate{Hash: c.hash, Parent: c.parents[0], Subject: c.subject, Body: stripTrailers(c.rawBody), Date: c.date, raw: c.rawBody}
 	codeLines, codeBinary := 0, 0
-	var vendored []string
+	var vendored, outside []string
+	inModule := 0
 	for _, f := range c.files {
+		if o.Module != "" {
+			if !strings.HasPrefix(f.path, o.Module+"/") {
+				// Outside the module only documents may change (as anywhere); a test file there would be a hidden test the
+				// module's commands never run, and anything else a change the module's task does not hold.
+				if !isVendored(f.path) && !task.IsTestFile(f.path) && claudectx.IsDocument(f.path) {
+					cand.Docs = append(cand.Docs, f.path)
+				} else {
+					outside = append(outside, f.path)
+				}
+				continue
+			}
+			inModule++
+		}
 		switch {
 		case isVendored(f.path):
 			vendored = append(vendored, f.path)
@@ -595,6 +618,10 @@ func classify(c commit, o Options, shallow bool) (Candidate, *Rejection) {
 	switch {
 	case len(c.files) == 0:
 		return reject(ReasonEmpty, "")
+	case o.Module != "" && inModule == 0:
+		return reject(ReasonNotInModule, "changes nothing in %s", o.Module)
+	case len(outside) > 0:
+		return reject(ReasonOutsideModule, "%d test, code or build file(s) outside %s, such as %s", len(outside), o.Module, outside[0])
 	case len(cand.Tests) == 0 && len(cand.Code) == 0 && len(cand.Dependencies) == 0 && len(vendored) == 0:
 		return reject(ReasonDocsOnly, "%d documents", len(cand.Docs))
 	case len(cand.Tests) == 0:
@@ -671,7 +698,7 @@ func inspect(ctx context.Context, root string, c *Candidate, o Options) (*Reject
 		return &Rejection{Reason: ReasonGenerated, Detail: strings.Join(generated, ", ")}, nil
 	}
 	if o.RequireLock && touchesPython(*c) {
-		python, locked, err := baseLock(ctx, root, c.Parent)
+		python, locked, err := baseLock(ctx, root, c.Parent, o.Module)
 		if err != nil {
 			return nil, err
 		}
@@ -699,10 +726,23 @@ func touchesPython(c Candidate) bool {
 	return slices.ContainsFunc(c.Tests, python) || slices.ContainsFunc(c.Code, python)
 }
 
-// baseLock reports whether commit is a Python project (the Python profile detects it at its root) and whether it pins
-// its dependencies (buildtool.PythonLocked), reading only its root and requirements/ listings and requirement files.
-func baseLock(ctx context.Context, root, commit string) (python, locked bool, err error) {
-	files, err := treeNames(ctx, root, commit, "")
+// baseLock reports whether commit is a Python project (the Python profile detects it in module's folder: the root's
+// when module is "") and whether it pins its dependencies (buildtool.PythonLocked), reading only that folder's and its
+// requirements/ listings and requirement files.
+func baseLock(ctx context.Context, root, commit, module string) (python, locked bool, err error) {
+	dir := ""
+	if module != "" {
+		dir = module + "/"
+	}
+	// The names relative to the folder, as detection and PythonLocked read them.
+	list := func(sub string) ([]string, error) {
+		names, err := treeNames(ctx, root, commit, dir+sub)
+		for i := range names {
+			names[i] = strings.TrimPrefix(names[i], dir)
+		}
+		return names, err
+	}
+	files, err := list("")
 	if err != nil {
 		return false, false, err
 	}
@@ -711,7 +751,7 @@ func baseLock(ctx context.Context, root, commit string) (python, locked bool, er
 		return false, false, nil
 	}
 	if slices.Contains(files, "requirements") {
-		more, err := treeNames(ctx, root, commit, "requirements/")
+		more, err := list("requirements/")
 		if err != nil {
 			return false, false, err
 		}
@@ -720,11 +760,11 @@ func baseLock(ctx context.Context, root, commit string) (python, locked bool, er
 	var reqs []string
 	for _, f := range files {
 		if strings.HasSuffix(f, ".txt") {
-			reqs = append(reqs, f)
+			reqs = append(reqs, dir+f)
 		}
 	}
 	contents := map[string][]byte{}
-	if _, err := batch(ctx, root, commit, reqs, "--batch", func(p string, content []byte) { contents[p] = content }); err != nil {
+	if _, err := batch(ctx, root, commit, reqs, "--batch", func(p string, content []byte) { contents[strings.TrimPrefix(p, dir)] = content }); err != nil {
 		return false, false, err
 	}
 	locked = buildtool.PythonLocked(files, func(p string) ([]byte, bool) {
@@ -736,10 +776,10 @@ func baseLock(ctx context.Context, root, commit string) (python, locked bool, er
 			return nil, false
 		}
 		got := map[string][]byte{}
-		if _, err := batch(ctx, root, commit, []string{p}, "--batch", func(p string, content []byte) { got[p] = content }); err != nil {
+		if _, err := batch(ctx, root, commit, []string{path.Join(dir, p)}, "--batch", func(p string, content []byte) { got[p] = content }); err != nil {
 			return nil, false
 		}
-		data, ok := got[p]
+		data, ok := got[path.Join(dir, p)]
 		return data, ok
 	})
 	return true, locked, nil

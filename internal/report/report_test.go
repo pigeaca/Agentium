@@ -621,3 +621,26 @@ func TestReportIsolatedCostIgnoresUncountedRuns(t *testing.T) {
 		t.Error("the note counts uncounted runs")
 	}
 }
+
+// The title names the modules the locked tasks ran in: one shared module, several (the root among them), or none at all
+// for an experiment at the repository's root, as before modules.
+func TestModulesTitle(t *testing.T) {
+	lock := func(modules ...string) experiment.Lock {
+		var l experiment.Lock
+		for _, m := range modules {
+			l.Tasks = append(l.Tasks, experiment.LockedTask{Module: m})
+		}
+		return l
+	}
+	for _, c := range []struct {
+		lock experiment.Lock
+		want string
+	}{
+		{lock("", ""), ""}, {lock(), ""}, {lock("svc/billing", "svc/billing"), " · svc/billing"},
+		{lock("b", "a", ""), " · modules (root), a, b"},
+	} {
+		if got := modulesTitle(c.lock); got != c.want {
+			t.Errorf("modulesTitle(%v) = %q, want %q", c.lock.Tasks, got, c.want)
+		}
+	}
+}
