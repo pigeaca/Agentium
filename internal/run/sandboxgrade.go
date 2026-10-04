@@ -159,7 +159,11 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 				return err
 			}
 			fmt.Fprintf(in.Log, "$ %s\n", command)
-			spec, err := sandbox.Wrap(runner.Spec{Dir: env.inModule(g.Copy), Command: command, Timeout: in.Timeout, Output: in.Log, Started: in.Running,
+			dir, err := env.moduleDir(g.Copy) // the caller checked it before the copy moved here: no one writes it now
+			if err != nil {
+				return err
+			}
+			spec, err := sandbox.Wrap(runner.Spec{Dir: dir, Command: command, Timeout: in.Timeout, Output: in.Log, Started: in.Running,
 				Environ: g.Environ}, file)
 			if err != nil {
 				return err

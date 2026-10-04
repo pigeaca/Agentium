@@ -1160,3 +1160,35 @@ func TestInModule(t *testing.T) {
 		t.Errorf("svc: %v", got)
 	}
 }
+
+// ModuleDir walks the module's components with Lstat: a real folder passes, and a missing component, a file, or a link
+// anywhere (the module itself or a parent) is refused; no module is the checkout.
+func TestModuleDirRefusesWhatIsNotARealFolder(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []string{"a/svc", "real/svc"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "real", "svc"), filepath.Join(root, "a", "svc-link")); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := ModuleDir(root, ""); err != nil || dir != root {
+		t.Errorf("no module: %s, %v", dir, err)
+	}
+	if dir, err := ModuleDir(root, "a/svc"); err != nil || dir != filepath.Join(root, "a", "svc") {
+		t.Errorf("a real module: %s, %v", dir, err)
+	}
+	for module, why := range map[string]string{"missing": "missing", "a/nope": "missing", "file": "not a folder", "linked/svc": "link",
+		"a/svc-link": "link", "linked": "link", "../x": "plain relative", "a//svc": "plain relative", "a/./svc": "plain relative"} {
+		if dir, err := ModuleDir(root, module); err == nil || !strings.Contains(err.Error(), why) {
+			t.Errorf("ModuleDir(%q) = %q, %v; want an error with %q", module, dir, err, why)
+		}
+	}
+}

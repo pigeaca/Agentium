@@ -57,21 +57,19 @@ func TestFindModulesShowsAtMostTwenty(t *testing.T) {
 }
 
 func TestValidateModule(t *testing.T) {
-	root := t.TempDir()
-	write(t, root, "svc/go.mod")
-	write(t, root, "docs/readme.md")
+	root := repo(t, map[string]string{"svc/go.mod": "module x\n", "docs/readme.md": "x"})
 	if err := os.Symlink(filepath.Join(root, "svc"), filepath.Join(root, "link")); err != nil {
 		t.Fatal(err)
 	}
 	for in, want := range map[string]string{"svc": "svc", "svc/": "svc", "./svc": "svc", "svc/../svc": "svc", "": "", "  ": ""} {
-		if got, err := ValidateModule(root, in); err != nil || got != want {
+		if got, err := ValidateModule(t.Context(), root, in); err != nil || got != want {
 			t.Errorf("ValidateModule(%q) = %q, %v; want %q", in, got, err, want)
 		}
 	}
 	for in, why := range map[string]string{"..": "inside the repository", "../x": "inside the repository", "svc/../..": "inside the repository",
 		"/svc": "inside the repository", root: "inside the repository", ".": "root", "docs": "no build file", "docs/readme.md": "not a folder",
 		"missing": "no such folder", "link": "link", "svc/go.mod": "not a folder"} {
-		if got, err := ValidateModule(root, in); err == nil || !strings.Contains(err.Error(), why) {
+		if got, err := ValidateModule(t.Context(), root, in); err == nil || !strings.Contains(err.Error(), why) {
 			t.Errorf("ValidateModule(%q) = %q, %v; want an error with %q", in, got, err, why)
 		}
 	}
@@ -106,5 +104,42 @@ func TestDiscoverModulesAndWithModule(t *testing.T) {
 	plain := repo(t, map[string]string{"go.mod": "module x\n", "svc/go.mod": "module y\n"})
 	if info, err := Discover(t.Context(), plain, testEnv(nil, "")); err != nil || len(info.Modules) != 0 || info.ModulesTotal != 0 {
 		t.Errorf("a root build file lists modules: %+v, %v", info.Modules, err)
+	}
+}
+
+// The module must be a folder HEAD commits, spelled as the tree spells it: an untracked folder, a gitignored one, a folder
+// only a case-insensitive file system finds under another spelling, and one reached through a committed link are no
+// module, whatever the working tree shows.
+func TestValidateModuleChecksTheCommit(t *testing.T) {
+	root := repo(t, map[string]string{"svc/go.mod": "module x\n", ".gitignore": "ignored/\n", "real/inner/go.mod": "module y\n"})
+	write(t, root, "untracked/go.mod")
+	write(t, root, "ignored/go.mod")
+	if err := os.Symlink("real", filepath.Join(root, "alias")); err != nil {
+		t.Fatal(err)
+	}
+	git(t, root, "add", "alias")
+	git(t, root, "commit", "-q", "-m", "link")
+	// Another spelling: on a case-insensitive file system the folder is found by Lstat, but HEAD has no such path.
+	_, caseErr := os.Lstat(filepath.Join(root, "SVC"))
+	for in, why := range map[string]string{"untracked": "HEAD has no such folder", "ignored": "HEAD has no such folder", "alias/inner": "link"} {
+		if got, err := ValidateModule(t.Context(), root, in); err == nil || !strings.Contains(err.Error(), why) {
+			t.Errorf("ValidateModule(%q) = %q, %v; want an error with %q", in, got, err, why)
+		}
+	}
+	if caseErr == nil { // case-insensitive file system
+		if got, err := ValidateModule(t.Context(), root, "SVC"); err == nil || !strings.Contains(err.Error(), "HEAD has no such folder") {
+			t.Errorf("ValidateModule(SVC) = %q, %v", got, err)
+		}
+	}
+	if got, err := ValidateModule(t.Context(), root, "svc"); err != nil || got != "svc" {
+		t.Errorf("a committed module: %q, %v", got, err)
+	}
+	// What HEAD commits is what counts, not what the folder holds now: a module deleted from the working tree is refused
+	// for that, and a module whose build file is committed but whose folder is a link in the tree is refused as a link.
+	if err := os.RemoveAll(filepath.Join(root, "svc")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ValidateModule(t.Context(), root, "svc"); err == nil {
+		t.Errorf("a module deleted from the working tree: %q", got)
 	}
 }

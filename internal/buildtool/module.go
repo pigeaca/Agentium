@@ -3,6 +3,11 @@ package buildtool
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -44,4 +49,33 @@ func InModule(paths []string, module string) []string {
 		}
 	}
 	return out
+}
+
+// ModuleDir is the folder commands run in for a checkout: the module's folder inside it (checkout itself without a
+// module). The checkout is the agent's to change, so the path is checked as it is now, component by component, with
+// Lstat: every component must exist and be a real folder, and none may be a link, which could lead anywhere (a
+// module the agent deleted, or replaced by a link to another folder). It never follows a link.
+func ModuleDir(checkout, module string) (string, error) {
+	if module == "" {
+		return checkout, nil
+	}
+	dir := checkout
+	for _, part := range strings.Split(module, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("module %q is not a plain relative folder", module)
+		}
+		dir = filepath.Join(dir, part)
+		info, err := os.Lstat(dir)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return "", fmt.Errorf("module %q: %s is missing from the checkout", module, part)
+		case err != nil:
+			return "", fmt.Errorf("module %q: %w", module, err)
+		case info.Mode()&fs.ModeSymlink != 0:
+			return "", fmt.Errorf("module %q: %s is a link, not a folder", module, part)
+		case !info.IsDir():
+			return "", fmt.Errorf("module %q: %s is not a folder", module, part)
+		}
+	}
+	return dir, nil
 }

@@ -111,7 +111,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	with := func(fake *fakeSandbox, grader string) Validator {
 		v, _ := validator(t, f.bare)
 		v.Grader = grader
-		v.Checkout = func(context.Context, string, []string, string) (CheckoutCommands, error) {
+		v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
 			return CheckoutCommands{Sandboxed: fake.run}, nil
 		}
 		return v
@@ -146,7 +146,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	// stage still runs, and passing without them shows they were not the toolchain's.
 	flagged := &fakeSandbox{flag: true}
 	v, progress := validator(t, f.bare)
-	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, []string, string) (CheckoutCommands, error) {
+	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
 		return CheckoutCommands{Sandboxed: flagged.run}, nil
 	}
 	result, err = v.Validate(ctx, spec, arms)
@@ -160,7 +160,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	// failure stands as wanted, and the validation keeps them as harmless for later grades of the task.
 	always := &fakeSandbox{always: true}
 	v, progress = validator(t, f.bare)
-	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, []string, string) (CheckoutCommands, error) {
+	v.Grader, v.Checkout = GraderSandbox, func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
 		return CheckoutCommands{Sandboxed: always.run}, nil
 	}
 	result, err = v.Validate(ctx, spec, arms)
@@ -191,7 +191,7 @@ func TestValidateInTheSandbox(t *testing.T) {
 	if _, err := v.Validate(ctx, spec, arms); err == nil {
 		t.Error("sandbox mode without Checkout validated")
 	}
-	v.Checkout = func(context.Context, string, []string, string) (CheckoutCommands, error) {
+	v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
 		return CheckoutCommands{}, nil
 	}
 	if _, err := v.Validate(ctx, spec, arms); err == nil {
@@ -221,7 +221,7 @@ func TestHarmlessFailureChecksEveryRepeat(t *testing.T) {
 		v, _ := validator(t, f.bare)
 		v.Grader, v.Repeats = GraderSandbox, 3
 		fake := &fakeSandbox{deny: deny}
-		v.Checkout = func(context.Context, string, []string, string) (CheckoutCommands, error) {
+		v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
 			return CheckoutCommands{Sandboxed: fake.run}, nil
 		}
 		result, err := v.Validate(ctx, spec, []Arm{{Name: "base"}})

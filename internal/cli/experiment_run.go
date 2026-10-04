@@ -152,7 +152,7 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 		KeepHead:  func(ctx context.Context) (string, error) { return w.keepCommit(ctx, "HEAD") },
 		NewRunEnv: func(verifyTimeout time.Duration) (run.Env, error) { return newRunEnv(env, w, verifyTimeout) },
 		NeedsLocalBinding: func(ctx context.Context, bases []string) (needed, allowed bool, err error) {
-			needed, err = run.NeedsLocalBindingIn(ctx, w.bare, w.settings().Module, bases)
+			needed, err = w.needsLocalBinding(ctx, bases)
 			return needed, w.project.AllowLocalBinding, err
 		},
 		ExecuteRun: func(ctx context.Context, e run.Env, meta experiment.RunMeta, spec run.Spec) (run.Record, error) {

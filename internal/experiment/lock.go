@@ -101,13 +101,17 @@ type LockedTask struct {
 	Reference   []string `json:"reference,omitempty"`
 	Setup       []string `json:"setup,omitempty"`
 	Verify      []string `json:"verify"`
-	Digest      string   `json:"digest"` // SHA-256 of everything above
+	// Module is the monorepo folder the task ran in (store.Task.Module), fixed at the lock: a resumed experiment grades
+	// in it whatever the project's setting is by then. Absent for the root, and in locks made before modules, whose
+	// digests are unchanged.
+	Module string `json:"module,omitempty"`
+	Digest string `json:"digest"` // SHA-256 of everything above
 }
 
 // NewLockedTask fixes a task and its digest.
 func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 	t := LockedTask{Name: name, Instruction: instruction, Base: spec.Base, Solution: spec.Solution, HiddenTests: spec.HiddenTests,
-		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify}
+		Reference: spec.Reference, Setup: spec.Setup, Verify: spec.Verify, Module: spec.Module}
 	encoded, _ := json.Marshal(t) // strings and string lists only: cannot fail
 	sum := sha256.Sum256(encoded)
 	t.Digest = hex.EncodeToString(sum[:])
@@ -116,7 +120,7 @@ func NewLockedTask(name, instruction string, spec task.Spec) LockedTask {
 
 // Spec is the task's run specification.
 func (t LockedTask) Spec() task.Spec {
-	return task.Spec{Base: t.Base, Solution: t.Solution, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify}
+	return task.Spec{Base: t.Base, Solution: t.Solution, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module}
 }
 
 // Expect is the environment the arm's runs are checked against.

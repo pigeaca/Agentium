@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
+	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -158,8 +160,46 @@ func verifyTimeoutOf(s store.Settings) time.Duration {
 // settings is the project's stored settings.
 func (w *workspace) settings() store.Settings { return w.project.Settings }
 
-// moduleDir is the folder of the repository the project's build tools are detected in: its module's, else its root.
-func (w *workspace) moduleDir() string { return moduleDir(w.root, w.settings().Module) }
+// taskModules lists the modules the project's tasks run in, the root ("") first and each once.
+func (w *workspace) taskModules(ctx context.Context) ([]string, error) {
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return nil, err
+	}
+	modules := []string{""}
+	for _, t := range tasks {
+		if !slices.Contains(modules, t.Module) {
+			modules = append(modules, t.Module)
+		}
+	}
+	return modules, nil
+}
+
+// needsLocalBinding reports whether runs on the bases need the sandbox's local binding: whether the Gradle files of the
+// module of any task that starts at one of them (the root's, for a base no task names) are there.
+func (w *workspace) needsLocalBinding(ctx context.Context, bases []string) (bool, error) {
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, base := range bases {
+		modules := []string{}
+		for _, t := range tasks {
+			if t.BaseCommit == base && !slices.Contains(modules, t.Module) {
+				modules = append(modules, t.Module)
+			}
+		}
+		if len(modules) == 0 {
+			modules = []string{""}
+		}
+		for _, module := range modules {
+			if needed, err := run.NeedsLocalBindingIn(ctx, w.bare, module, []string{base}); err != nil || needed {
+				return needed, err
+			}
+		}
+	}
+	return false, nil
+}
 
 // moduleDir is root's module folder (a slash-separated, relative path), or root itself without a module.
 func moduleDir(root, module string) string { return filepath.Join(root, filepath.FromSlash(module)) }

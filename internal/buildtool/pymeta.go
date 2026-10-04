@@ -123,7 +123,12 @@ func projectMetadata(ctx context.Context, in WarmInput, inputs pyInputs, uv, int
 	}
 	tries := ""
 	if in.State != "" && in.Base != "" {
-		tries = filepath.Join(in.State, filepath.Base(in.Base)+".metadata-tries")
+		// A module's count is its own: another module of the base has its own tries.
+		name := filepath.Base(in.Base)
+		if key := ModuleKey(in.Module); key != "" {
+			name += "-" + key
+		}
+		tries = filepath.Join(in.State, name+".metadata-tries")
 	}
 	failed := func(why string) (string, string, bool, error) {
 		note := "the project's metadata could not be made (" + why + "): its tests cannot ask importlib.metadata for the project's version"

@@ -84,13 +84,14 @@ func TestInitModuleSettingStoresAndRefuses(t *testing.T) {
 	f := asFixture(t, repo, data, run)
 	expect(t, run("init", "--jobs", "3"), ExitOK)
 	set := run("init", "--module", "tools/report")
-	expect(t, set, ExitOK, "module          tools/report", "tools/report      python  (chosen)", "python3 -m pytest")
+	expect(t, set, ExitOK, "module          tools/report", "tools/report      python  (chosen)", "python3 -m pytest",
+		"tasks added or imported verify with python3 -m pytest (mining inside a module comes in a later version)")
 	if got := storedSettings(t, data); got.Module != "tools/report" || got.Jobs != 3 {
 		t.Errorf("stored %+v: the module is stored with the other settings", got)
 	}
 	doc := jsonRun(t, f, ExitOK, "init", "--module", "./services//billing/")
 	if doc.get("settings", "module") != "services/billing" || !equalAny(doc.get("test_commands"), "go test ./...") ||
-		!equalAny(doc.get("settings", "mined_verify"), "go test ./...") {
+		!equalAny(doc.get("settings", "mined_verify")) { // nothing is mined inside a module yet
 		t.Errorf("init --json with a module: %s", doc.stdout)
 	}
 	expect(t, run("init"), ExitOK, "module          services/billing") // init again keeps it
@@ -122,18 +123,54 @@ func TestInitModuleSettingStoresAndRefuses(t *testing.T) {
 	}
 }
 
-// task validate runs the verification in the module's folder: a command that needs the module's go.mod passes there and
-// fails at the root.
-func TestTaskValidateRunsInTheModule(t *testing.T) {
+// A task records its module when it is made (the project's setting, or its own hidden --module), and runs there for good:
+// task validate uses the task's module, so changing the project's setting moves no task. task show and task list name it.
+func TestTasksKeepTheirModule(t *testing.T) {
 	t.Parallel()
-	_, _, run := monorepo(t)
+	repo, data, run := monorepo(t)
+	f := asFixture(t, repo, data, run)
 	expect(t, run("init"), ExitOK)
 	expect(t, run("task", "add", "root", "--base", "HEAD", "--instruction", "Anything.", "--verify", "test -f go.mod"), ExitOK)
 	expect(t, run("task", "validate", "root"), ExitError, "want pass got fail") // the root has no go.mod
+
 	expect(t, run("init", "--module", "services/billing"), ExitOK)
 	expect(t, run("task", "add", "mod", "--base", "HEAD", "--instruction", "Anything.", "--verify", "test -f go.mod && test -f main.go"), ExitOK)
-	out := run("task", "validate", "mod")
-	if !strings.Contains(out.stdout, "got pass") {
-		t.Errorf("the verification did not run in the module:\n%s%s", out.stdout, out.stderr)
+	expect(t, run("task", "add", "other", "--base", "HEAD", "--instruction", "Anything.", "--module", "tools/report", "--verify", "test -f pyproject.toml"), ExitOK)
+	expect(t, run("task", "add", "atroot", "--base", "HEAD", "--instruction", "Anything.", "--module", "", "--verify", "test -f README.md"), ExitOK)
+	expect(t, run("task", "validate", "mod"), ExitOK, "got pass")
+	expect(t, run("task", "validate", "other"), ExitOK, "got pass")
+	expect(t, run("task", "validate", "atroot"), ExitOK, "got pass")
+	expect(t, run("task", "validate", "root"), ExitError, "want pass got fail") // made before the setting: still a root task
+
+	// The setting is only the default for new tasks.
+	expect(t, run("init", "--module", ""), ExitOK)
+	expect(t, run("task", "validate", "mod"), ExitOK, "got pass")
+	expect(t, run("task", "add", "later", "--base", "HEAD", "--instruction", "Anything.", "--verify", "test -f README.md"), ExitOK)
+	expect(t, run("task", "validate", "later"), ExitOK, "got pass") // the root again
+
+	expect(t, run("task", "show", "mod"), ExitOK, "module     services/billing")
+	if out := run("task", "show", "root"); strings.Contains(out.stdout, "module ") {
+		t.Errorf("a root task shows a module:\n%s", out.stdout)
+	}
+	expect(t, run("task", "list"), ExitOK, "MODULE", "services/billing", "tools/report")
+	shown := jsonRun(t, f, ExitOK, "task", "show", "mod")
+	if shown.get("module") != "services/billing" {
+		t.Errorf("task show --json: %s", shown.stdout)
+	}
+	if rootShown := jsonRun(t, f, ExitOK, "task", "show", "root"); rootShown.get("module") != nil {
+		t.Errorf("a root task's json names a module: %s", rootShown.stdout)
+	}
+	expect(t, run("task", "add", "bad", "--base", "HEAD", "--instruction", "x", "--module", "docs"), ExitUsage, "invalid module")
+}
+
+// While the project's module is set, pool update and start mine nothing and say why; init does not offer a mined
+// verify command. Clearing the module brings mining back.
+func TestMiningWaitsWhileAModuleIsSet(t *testing.T) {
+	t.Parallel()
+	_, _, run := monorepo(t)
+	expect(t, run("init", "--module", "services/billing"), ExitOK)
+	expect(t, run("pool", "update"), ExitOK, "module set: mining inside a module comes in a later version; use task import --commit or task add")
+	if out := run("init"); strings.Contains(out.stdout, "mined tasks verify") {
+		t.Errorf("init offers a mined verify command in a module:\n%s", out.stdout)
 	}
 }

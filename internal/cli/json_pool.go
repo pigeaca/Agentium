@@ -166,7 +166,7 @@ func (p *poolPass) dryRunDocument(ctx context.Context, prev pool.Preview[mine.Ca
 		doc.Warnings = append(doc.Warnings, "the pool's state file is unreadable: a pass sets it aside and starts over")
 	}
 	if p.noMining {
-		doc.Warnings = append(doc.Warnings, noMiningNote)
+		doc.Warnings = append(doc.Warnings, p.noMiningWhy)
 	}
 	return doc
 }
@@ -217,7 +217,7 @@ func (p *poolPass) document(ctx context.Context, res pool.PassResult, accepted [
 		doc.Warnings = append(doc.Warnings, "--accept-mined accepted nothing: the pool's state file was unreadable")
 	}
 	if p.noMining {
-		doc.Warnings = append(doc.Warnings, noMiningNote)
+		doc.Warnings = append(doc.Warnings, p.noMiningWhy)
 	}
 	return doc
 }

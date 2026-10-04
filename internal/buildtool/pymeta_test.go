@@ -388,3 +388,30 @@ func TestProjectMetadataKeepsTheWheelsFolderName(t *testing.T) {
 		t.Errorf("the folder holds %q", got)
 	}
 }
+
+// The retry count of a failing metadata build is a module's own: a base's two modules count their tries apart, so one
+// module's failures never stamp the other's note, and the root keeps the count's name from before modules.
+func TestProjectMetadataTriesAreCountedPerModule(t *testing.T) {
+	f := newFakePython(t, "3.12.13", true, "")
+	deps, state, repo := depsDir(t), t.TempDir(), t.TempDir()
+	writeFiles(t, repo, map[string]string{"pyproject.toml": clickPackage, "uv.lock": "version = 1\n"})
+	warm := func(module string) Warmed {
+		t.Helper()
+		in := f.input(repo, deps, "FAKE_BUILD_FAIL=1")
+		in.Base, in.State, in.Module = "c1", state, module
+		w, err := WarmFuncs(context.Background(), Select([]string{"python"}), in)
+		if err != nil || !VenvReady(w.Venv) {
+			t.Fatalf("%+v %v", w, err)
+		}
+		return w
+	}
+	for _, module := range []string{"svc/a", "svc/b", ""} {
+		if w := warm(module); !strings.Contains(w.Failed, "(try 1 of 3)") {
+			t.Errorf("module %q: its first try is not counted on its own: %+v", module, w)
+		}
+	}
+	if !fileExists(filepath.Join(state, "c1.metadata-tries")) || !fileExists(filepath.Join(state, "c1-"+ModuleKey("svc/a")+".metadata-tries")) {
+		entries, _ := os.ReadDir(state)
+		t.Errorf("the counts' files: %v", entries)
+	}
+}

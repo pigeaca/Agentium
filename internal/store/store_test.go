@@ -958,11 +958,12 @@ func TestDatabaseWithTheRemovedWatchStillWorks(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := insertOldProject(t, old, "/work/app", now)
-	task, err := old.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix it.", Source: "manual", BaseCommit: "base",
-		Verify: []string{"go test ./..."}, CreatedAt: now})
-	if err != nil {
+	// Stored by SQL: this old schema has no column of the later migrations, which SaveTask writes.
+	if _, err := old.db.ExecContext(ctx, `INSERT INTO tasks (id, project_id, name, instruction, source, base_commit, verify, created_at, updated_at)
+		VALUES (1, ?, 'fix', 'Fix it.', 'manual', 'base', '["go test ./..."]', '2026-10-02T15:00:00Z', '2026-10-02T15:00:00Z')`, app.ID); err != nil {
 		t.Fatal(err)
 	}
+	task := Task{ID: 1}
 	enrolled, err := old.SaveExperiment(ctx, Experiment{ProjectID: app.ID, Name: "enrolled", Template: "context-ab", Design: []byte(`{}`), CreatedAt: now})
 	if err != nil {
 		t.Fatal(err)
@@ -1217,5 +1218,44 @@ func TestProjectModuleMigrationAndRoundTrip(t *testing.T) {
 	}
 	if got, _ := s.ProjectByRoot(ctx, "/work/app"); got.Settings.Module != "" || got.Settings.Jobs != 3 {
 		t.Errorf("clearing the module did not stick: %+v", got.Settings)
+	}
+}
+
+// A task made before the module migration is a root task after it; a task saved in a module keeps it through updates, and
+// changing the project's module setting moves no task.
+func TestTaskModuleMigrationAndRoundTrip(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "agentium.db")
+	ctx := context.Background()
+	now := time.Date(2026, 9, 1, 9, 0, 0, 0, time.UTC)
+	old, err := openOnce(ctx, file, migrationVersion(t, "project_module")-1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := insertOldProject(t, old, "/work/app", now)
+	if _, err := old.db.ExecContext(ctx, `INSERT INTO tasks (project_id, name, instruction, source, base_commit, verify, created_at, updated_at)
+		VALUES (?, 'old', 'Fix it.', 'manual', 'base', '["make test"]', '2026-09-28T10:00:00Z', '2026-09-28T10:00:00Z')`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s := open(t, file)
+	if got, err := s.TaskByName(ctx, app.ID, "old"); err != nil || got.Module != "" || got.Instruction != "Fix it." {
+		t.Fatalf("an old task after the migration: %+v, %v", got, err)
+	}
+	saved, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "billing", Instruction: "Fix.", Source: "manual", BaseCommit: "b", Verify: []string{"go test ./..."},
+		Module: "services/billing", CreatedAt: now})
+	if err != nil || saved.Module != "services/billing" {
+		t.Fatalf("saved %+v, %v", saved, err)
+	}
+	if err := s.SetSettings(ctx, app.ID, Settings{Module: "tools/report"}); err != nil {
+		t.Fatal(err)
+	}
+	saved.Instruction = "Fix it properly."
+	saved.Module = "somewhere/else" // UpdateTask never writes the module
+	if err := s.UpdateTask(ctx, saved, now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "billing"); got.Module != "services/billing" || got.Instruction != "Fix it properly." {
+		t.Errorf("after an update and a changed project setting: %+v", got)
 	}
 }

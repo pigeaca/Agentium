@@ -47,7 +47,6 @@ type Validating struct {
 	Bare      string // Agentium's bare repository for the project
 	Artifacts string // the data folder's artifacts folder
 	Env       []string
-	Module    string // the monorepo module the project measures: Validator.Module
 	Cache     string // the data folder's cache root: Validator.Cache
 	Now       func() time.Time
 	// ReferenceDiff returns the reference diff a judge-graded task's judge would read (judge.ReferenceDiff, which this
@@ -57,7 +56,7 @@ type Validating struct {
 	Toolchain Toolchain
 	// Checkout warms each validated task's build tools as runs do (Validator.Checkout); nil warms nothing. In sandbox
 	// mode (ValidateOptions.Grader) it must offer sandboxed commands (CheckoutCommands.Sandboxed).
-	Checkout func(ctx context.Context, base string, verify []string, logPath string) (CheckoutCommands, error)
+	Checkout func(ctx context.Context, base, module string, verify []string, logPath string) (CheckoutCommands, error)
 	// SkipInUse makes StoreValidation store nothing for a task that a locked experiment able to run still uses: it
 	// returns store.ErrTaskInUse instead (store.SetTaskValidationIdle). The task pool's re-validations set it; task
 	// validate, which the user asks for, does not.
@@ -87,7 +86,7 @@ func StatusOf(t store.Task) string {
 // SpecOf is what validation needs of t.
 func SpecOf(t store.Task) Spec {
 	return Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference,
-		Setup: t.Setup, Verify: t.Verify}
+		Setup: t.Setup, Verify: t.Verify, Module: t.Module}
 }
 
 // Gaps lists what the task's hidden tests require that the instruction and the base do not state. f caches searches, so
@@ -118,7 +117,7 @@ func (v Validating) Arms(ctx context.Context, projectID int64, snapshots []strin
 func (v Validating) Validator(t store.Task, o ValidateOptions) Validator {
 	folder := filepath.Join(v.Artifacts, "tasks", strconv.FormatInt(t.ID, 10), v.Now().UTC().Format("20060102T150405Z"))
 	return Validator{Bare: v.Bare, WorkDir: filepath.Join(folder, "checkouts"), LogDir: filepath.Join(folder, "logs"),
-		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Module: v.Module, Cache: v.Cache, Now: v.Now,
+		Timeout: o.Timeout, Keep: o.Keep, Repeats: o.Repeat, WeakTests: o.Weak, MaxHunks: o.MaxHunks, Env: v.Env, Cache: v.Cache, Now: v.Now,
 		Toolchain: v.Toolchain, Checkout: v.Checkout, Grader: o.Grader}
 }
 

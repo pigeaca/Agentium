@@ -241,6 +241,10 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 // history has no more to give.
 func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err error) {
 	w, out, settings := s.w, s.env.Stdout, s.settings()
+	if settings.Module != "" {
+		fmt.Fprintf(out, "Mining: %s\n", moduleMiningNote)
+		return true, nil
+	}
 	prep, err := mine.Prepare(ctx, mine.PrepareInput{DB: w.db, ProjectID: w.project.ID, Root: w.root,
 		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: settings.RequireLock},
 		Verify:  settings.Verify, DefaultVerify: w.defaultVerify()})

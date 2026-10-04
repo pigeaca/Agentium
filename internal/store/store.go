@@ -515,6 +515,9 @@ type Task struct {
 	// never write them: RetireTask and RestoreTask do.
 	RetiredAt     time.Time
 	RetiredReason string
+	// Module is the monorepo folder the task runs in (slash-separated, relative to the repository root); "": the root.
+	// Setup, verification, validation, warm-up and grading all use it, whatever the project's setting is now.
+	Module string
 }
 
 // Retired reports whether the task is retired.
@@ -533,10 +536,10 @@ func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
 	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO tasks (project_id, name, instruction, source, base_commit, solution_commit, hidden_tests,
-		                   reference_files, verify, setup, needs_review, grading, validation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   reference_files, verify, setup, needs_review, grading, validation, created_at, updated_at, module)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ProjectID, task.Name, task.Instruction, task.Source, task.BaseCommit, task.SolutionCommit, lists[0], lists[1],
-		lists[2], lists[3], task.NeedsReview, task.Grading, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt))
+		lists[2], lists[3], task.NeedsReview, task.Grading, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt), task.Module)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return Task{}, fmt.Errorf("task %q: %w", task.Name, ErrExists)
@@ -750,7 +753,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) er
 func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
-		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason
+		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason, module
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -762,7 +765,7 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		var hidden, reference, verify, setup, validation, created, updated, retired string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
 			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated,
-			&retired, &task.RetiredReason); err != nil {
+			&retired, &task.RetiredReason, &task.Module); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {

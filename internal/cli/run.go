@@ -158,7 +158,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	}
 	defer release()
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
-		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
+		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module},
 		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep, HarmlessDenials: harmlessFor(t, mode)})
 	live.Stop()
 	if err != nil {
@@ -235,7 +235,7 @@ func newRunEnv(env Env, w *workspace, verifyTimeout time.Duration) (run.Env, err
 	}
 	return run.Env{Layout: w.layout, Bare: w.bare, ProjectRoot: w.root, CLI: cli, Home: env.Getenv("HOME"), AccountHome: accountHome,
 		Environ: environ, SignIn: mode, Secret: secret, TokenFile: tokenFile, VerifyTimeout: verifyTimeout, Grace: 30 * time.Second,
-		CommandEnv: buildEnv, AllowLocalBinding: w.project.AllowLocalBinding, Module: w.settings().Module,
+		CommandEnv: buildEnv, AllowLocalBinding: w.project.AllowLocalBinding,
 		Progress: env.Stdout, Style: env.style(), Now: env.Now}, nil
 }
 

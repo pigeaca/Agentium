@@ -105,10 +105,10 @@ type Env struct {
 	// own build caches (buildtool.AgentCacheEnv: Go's GOCACHE). A sandboxed grade does not use it: it gets the agent's
 	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
-	// Module is the monorepo module the project measures (store.Settings.Module; "": the repository's root, as before
-	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. The
-	// agent's own folder and sandbox stay the whole checkout. It is part of the keys of the warm-up stamps, the Python
-	// venvs and the grading seeds.
+	// Module is the monorepo module the commands run in (store.Task.Module; "": the repository's root, as before
+	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. Once
+	// sets it from the run's task; callers need not. The agent's own folder and sandbox stay the whole checkout. It is
+	// part of the keys of the warm-up stamps, the Python venvs and the grading seeds.
 	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
@@ -266,6 +266,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // cancellation); an agent's failure is a Record. A cancelled run still returns its record, with what the transcript
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
+	env.Module = spec.Task.Module // a run uses its task's module, never the project's current setting
 	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
@@ -494,7 +495,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		setup.CommandEnv = append(setup.CommandEnv, env.checkoutEnv(repo)...)
 		setup.commandBase = env.checkoutBase
 		var ok bool
-		if rec.Setup, ok, err = setup.commands(ctx, env.inModule(repo), spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
+		// The checkout is the base commit's plus the arm's context: a module folder that is not a real folder there is
+		// Agentium's own failure, found before anything runs.
+		setupDir, err := env.moduleDir(repo)
+		if err != nil {
+			return rec, fmt.Errorf("setup: %w", err)
+		}
+		if rec.Setup, ok, err = setup.commands(ctx, setupDir, spec.Task.Setup, filepath.Join(rec.RecordsDir, "setup.log"), running); err != nil {
 			return rec, err
 		}
 		if !ok {
@@ -758,7 +765,14 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	}
 
 	failed := false
-	if spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
+	// The grading copy is the agent's work: a module folder it deleted or replaced by a link (to grade another folder)
+	// is a failed grade, as when the hidden tests cannot be added, never an infrastructure outcome.
+	verifyDir, moduleErr := env.moduleDir(graded)
+	if moduleErr != nil {
+		rec.Notes = append(rec.Notes, "the module's folder is not in the agent's tree as it must be, so nothing was graded: "+moduleErr.Error())
+		failed = true
+	}
+	if !failed && spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
 		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
 		if err != nil {
 			return err
@@ -791,7 +805,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			verify.commandBase = env.checkoutBase
 		}
 		env.step(StepTests)
-		commands, ok, err = verify.commands(ctx, env.inModule(graded), spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
+		commands, ok, err = verify.commands(ctx, verifyDir, spec.Task.Verify, filepath.Join(rec.RecordsDir, "verify.log"), running)
 		rec.Verify = commands
 		if err != nil {
 			return err
@@ -804,9 +818,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 	return nil
 }
 
-// inModule is the folder commands run in for a checkout dir: the module's folder inside it, or dir itself without a
-// module. The module was checked to be a plain relative folder (project.ValidateModule).
-func (env Env) inModule(dir string) string { return filepath.Join(dir, filepath.FromSlash(env.Module)) }
+// moduleDir is the folder commands run in for a checkout dir: the module's folder inside it, or dir itself without a
+// module. It is checked at each use (buildtool.ModuleDir): a checkout the agent worked in may no longer have it.
+func (env Env) moduleDir(dir string) (string, error) { return buildtool.ModuleDir(dir, env.Module) }
 
 // verifySandboxed runs the verification commands on the grading copy in the grading sandbox (gradeInSandbox), in the
 // run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept

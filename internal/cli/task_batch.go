@@ -254,7 +254,20 @@ func (w *workspace) hostToolchain(ctx context.Context, env Env) (task.Toolchain,
 	if env.Environ != nil {
 		environ = env.Environ()
 	}
-	found, err := pool.DetectToolchain(ctx, buildtool.DetectIn(w.moduleDir()), pool.HostVersions(w.layout.Root, environ))
+	// The tools of the root and of every module a task runs in: validations record the versions of the tools they use.
+	modules, err := w.taskModules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var tools []string
+	for _, module := range modules {
+		for _, name := range buildtool.DetectIn(moduleDir(w.root, module)) {
+			if !slices.Contains(tools, name) {
+				tools = append(tools, name)
+			}
+		}
+	}
+	found, err := pool.DetectToolchain(ctx, tools, pool.HostVersions(w.layout.Root, environ))
 	if err != nil {
 		return nil, err
 	}

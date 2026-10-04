@@ -127,7 +127,7 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	}
 	env.noteRoot(info.Root)
 	if a.set.given(settingModule) { // checked before anything is created
-		if a.set.module, err = project.ValidateModule(info.Root, a.set.module); err != nil {
+		if a.set.module, err = project.ValidateModule(ctx, info.Root, a.set.module); err != nil {
 			fmt.Fprintf(env.Stderr, "agentium init: %v\n", err)
 			return ExitUsage
 		}
@@ -155,7 +155,7 @@ func runInit(ctx context.Context, env Env, args []string) int {
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return fail(env, err)
 		}
-		if _, err := project.ValidateModule(info.Root, module); err != nil { // a folder removed or changed since
+		if _, err := project.ValidateModule(ctx, info.Root, module); err != nil { // a folder removed or changed since
 			info.Warnings = append(info.Warnings, fmt.Sprintf("The stored module no longer works (%v): agentium init --module PATH picks another.", err))
 		}
 	}
@@ -238,8 +238,15 @@ type projectSettings struct {
 
 func settingsOf(saved store.Project, info project.Info) projectSettings {
 	p := projectSettings{stored: saved.Settings, minedVerify: saved.Settings.Verify, importVerify: saved.Settings.Verify}
+	if saved.Settings.Module != "" { // nothing is mined inside a module yet: tasks are added or imported
+		p.minedVerify = nil
+		if len(p.importVerify) == 0 {
+			p.importVerify = info.TestCommands // the module's (WithModule)
+		}
+		return p
+	}
 	if len(p.minedVerify) == 0 {
-		if _, p.minedVerify = mine.TestLanguages(moduleDir(info.Root, saved.Settings.Module)); len(p.minedVerify) == 0 {
+		if _, p.minedVerify = mine.TestLanguages(info.Root); len(p.minedVerify) == 0 {
 			p.minedVerify = info.TestCommands
 		}
 		p.importVerify = info.TestCommands
@@ -291,6 +298,8 @@ func (p projectSettings) print(env Env, saved store.Project, gradle bool) {
 		verify = strings.Join(s.Verify, "; ")
 	case len(p.minedVerify) == 0 && len(p.importVerify) == 0:
 		verify = "not set, and no test command was detected: " + st.Command("agentium init --verify CMD") + " sets one"
+	case s.Module != "":
+		verify = "not set: tasks added or imported verify with " + none(p.importVerify) + " (mining inside a module comes in a later version)"
 	default:
 		verify = "not set: mined tasks verify with " + none(p.minedVerify)
 		if !slices.Equal(p.minedVerify, p.importVerify) {

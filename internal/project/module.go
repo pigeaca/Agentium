@@ -1,6 +1,7 @@
 package project
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
+	"github.com/pigeaca/agentium/internal/gitx"
 )
 
 // Module listing limits: how deep below the root a build file is looked for, and how many modules init shows.
@@ -73,8 +75,10 @@ var ErrModule = errors.New("invalid module")
 
 // ValidateModule checks a --module value against the repository at root and returns it in its stored form (slash-
 // separated, clean, relative). The path must name a folder inside the repository, reached through no link, that holds a
-// build file Agentium detects. "" is valid and means no module.
-func ValidateModule(root, module string) (string, error) {
+// build file Agentium detects, and that HEAD commits as a folder under exactly that spelling (runs check out commits,
+// so an untracked or ignored folder, or one only a case-insensitive file system finds under another spelling, is no
+// module). "" is valid and means no module.
+func ValidateModule(ctx context.Context, root, module string) (string, error) {
 	if strings.TrimSpace(module) == "" {
 		return "", nil
 	}
@@ -103,7 +107,26 @@ func ValidateModule(root, module string) (string, error) {
 	if len(buildtool.DetectIn(dir)) == 0 {
 		return "", fmt.Errorf("%w %q: no build file Agentium knows (go.mod, pom.xml, pyproject.toml, ...) is in it", ErrModule, module)
 	}
+	// Runs and validations check out commits: the module must be a folder of HEAD (a tree), spelled as the tree has it.
+	out, err := gitx.Output(ctx, nil, "-C", root, "--literal-pathspecs", "ls-tree", "-z", "HEAD", "--", clean)
+	if err != nil {
+		return "", fmt.Errorf("%w %q: %v", ErrModule, module, err)
+	}
+	committed := false
+	for _, entry := range strings.Split(string(out), "\x00") {
+		if meta, name, ok := strings.Cut(entry, "\t"); ok && name == clean && strings.HasPrefix(meta, "040000 tree ") {
+			committed = true
+		}
+	}
+	if !committed {
+		return "", fmt.Errorf("%w %q: HEAD has no such folder (is it untracked, ignored, or spelled with other letter case?)", ErrModule, module)
+	}
 	return clean, nil
+}
+
+// CommandsIn is the test commands of the module's folder ("": the root's), read from the working tree now.
+func (i Info) CommandsIn(module string) []string {
+	return testCommands(filepath.Join(i.Root, filepath.FromSlash(module)))
 }
 
 // WithModule is the discovery of the module's folder instead of the root's: the test commands are the module's, and
