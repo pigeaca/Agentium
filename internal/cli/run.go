@@ -150,6 +150,11 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	case cal != nil:
 		runEnv.Expect = *cal
 	}
+	if n, err := w.taskModuleNote(ctx, *snapshotName, t); err != nil {
+		return fail(env, err)
+	} else if n != "" {
+		fmt.Fprintln(env.Stdout, note(env.style(), n))
+	}
 	if t.Grading == task.GradingJudge { // graded by the judge: its calls are paid too, and the consent names them
 		grading := llmjudge.GradingSettings()
 		fmt.Fprintf(env.Stdout, "Starting a real Claude Code run (%s, sign-in %s, graded by the judge: %d calls on %s, unvalidated): it may cost up to $%.2f, and its grading up to $%.2f.\n",

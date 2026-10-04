@@ -15,6 +15,8 @@ import (
 // module, beside it, across it, and one whose tests sit outside it.
 type moduleHistory struct {
 	inside, docsBeside, otherModule, testsOutside, codeOutside, depsOutside, large string
+	// sibling's test is in svc/billing2, a folder whose name starts with the module's; siblingOnly changes only that folder.
+	sibling, siblingOnly string
 }
 
 func buildModuleHistory(t *testing.T) (*fixture, moduleHistory) {
@@ -44,6 +46,10 @@ func buildModuleHistory(t *testing.T) (*fixture, moduleHistory) {
 	for i := range 20 {
 		files[filepath.ToSlash(filepath.Join("svc/billing/gen", "f"+string(rune('a'+i))+".go"))] = lines("// g", 40)
 	}
+	h.sibling = f.commit("Bill in two currencies\n\nInvoices may now be in euros or dollars.",
+		map[string]string{"svc/billing/pay.go": lines("// pay", 130), "svc/billing2/x_test.go": lines("// t", 10)})
+	h.siblingOnly = f.commit("Start the second billing service\n\nA copy of billing for another market.",
+		map[string]string{"svc/billing2/x.go": lines("// x", 10), "svc/billing2/x_test.go": lines("// t", 12)})
 	h.large = f.commit("Add the invoice generator to billing\n\nInvoices are generated per customer.", files)
 	return f, h
 }
@@ -79,6 +85,8 @@ func TestScanInAModule(t *testing.T) {
 		{h.codeOutside, ReasonOutsideModule, "such as shared/util.go"},
 		{h.depsOutside, ReasonOutsideModule, "such as tools/report/pyproject.toml"},
 		{h.large, ReasonTooLarge, "22 files"},
+		{h.sibling, ReasonOutsideModule, "such as svc/billing2/x_test.go"},
+		{h.siblingOnly, ReasonNotInModule, "changes nothing in svc/billing"},
 	} {
 		rej, ok := rejectedFor(res, c.hash)
 		if !ok || rej.Reason != c.reason || !strings.Contains(rej.Detail, c.detail) {

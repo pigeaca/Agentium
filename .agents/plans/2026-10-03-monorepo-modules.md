@@ -81,7 +81,11 @@ The agent still gets the whole repository: a module's code depends on its neighb
     - `--add-dir` of the checkout may load the root's skills by itself (the docs say skills of added folders load); consistent with the model above, unverified;
     - context lint, its hook and the pull-request screen still read the root's context only, and calibration runs still start at the checkout's root;
     - test files are recognized by their root-relative path (as `task.Split` does): a module whose own path has a test folder name (`e2e/api`) mines nothing, and its imports are refused as tests only;
-    - dismissals are the project's: a change dismissed at the root is not offered in a module either (and the other way round).
+    - dismissals are the project's: a change dismissed at the root is not offered in a module either (and the other way round);
+    - an experiment locked with module tasks between #140 and this step resumes with its agent in the module and its arms applied there, so its runs mix two setups (near zero exposure: no such experiment is known);
+    - follow-up: at the root, a `CLAUDE.md` that imports `.claude/CLAUDE.md` counts it twice (an import and an instruction file), in entries and startup bytes, as it always has; a test pins it, so changing it must be deliberate (root manifests' `startup_bytes` and `context show` move);
+    - follow-up: pool update's `--accept-mined` skips tasks validation set aside, as start's does (fixed in 3c4d5fa for both), but only start's has a test.
+  - Review fixes (PR #146): `experiment new` and `run once` note an arm's snapshot taken for another module than its tasks' (as `start` does); tests for the root's double count, the notes, and a sibling folder whose name starts with the module's (`svc/billing2`) in mining and imports; the guide's caveat on the loading model.
 - [ ] **3. Real check and docs** (free). Risk: low.
 
 ## Boundaries

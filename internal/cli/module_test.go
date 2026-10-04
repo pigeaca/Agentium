@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"maps"
 	"os"
@@ -328,4 +329,48 @@ func TestValidationPreparesTheTasksModule(t *testing.T) {
 	expect(t, run("task", "add", "report", "--base", "HEAD", "--instruction", "Anything.", "--module", "tools/report",
 		"--verify", `case "$PYTHONPATH" in */tools/report*) exit 0;; esac; exit 1`), ExitOK)
 	expect(t, run("task", "validate", "report"), ExitOK, "want pass got pass")
+}
+
+// An arm's snapshot taken for the root, bound to a task in a module, loads none of the module's own .claude files
+// there: experiment new and run once say so, as start does. In its own module (here the root) no note is printed.
+func TestArmsNoteASnapshotOfAnotherModule(t *testing.T) {
+	t.Parallel()
+	f, _ := experimentFixture(t) // task value and snapshot lean, both at the root
+	ctx := context.Background()
+	const want = "snapshot lean was taken for the repository's root, not for the module svc"
+	root := f.run(ctx, "experiment", "new", "atroot", "--b", "lean", "--task", "value", "--repeats", "1", "--budget", "40")
+	expect(t, root, ExitOK)
+	if strings.Contains(root.stdout, "was taken for") {
+		t.Errorf("a root task with a root snapshot gets a note:\n%s", root.stdout)
+	}
+
+	db, err := sql.Open("sqlite3", filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET module = 'svc' WHERE name = 'value'`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	expect(t, f.run(ctx, "experiment", "new", "inmodule", "--b", "lean", "--task", "value", "--repeats", "1", "--budget", "40"), ExitOK,
+		want+", which 1 of its task(s) run in")
+	doc := jsonRun(t, f, ExitOK, "experiment", "new", "inmodule2", "--b", "lean", "--task", "value", "--repeats", "1", "--budget", "40")
+	if notes, _ := doc.get("notes").([]any); !slices.ContainsFunc(notes, func(n any) bool { return strings.Contains(fmt.Sprint(n), want) }) {
+		t.Errorf("experiment new --json notes: %s", doc.stdout)
+	}
+	// run once prints the note before it starts (the module is not in this fixture's repository, so the run then fails).
+	if got := f.run(ctx, "run", "once", "value", "--snapshot", "lean"); !strings.Contains(got.stdout, want+", which task value runs in") {
+		t.Errorf("run once:\n%s\n%s", got.stdout, got.stderr)
+	}
+}
+
+// A path is in the module only below its folder: a sibling folder whose name starts with the module's is outside it.
+func TestOutsideModule(t *testing.T) {
+	paths := []string{"svc/billing/a_test.go", "svc/billing2/x_test.go", "svc/billing_test.go", "other/b_test.go"}
+	if got := outsideModule(paths, "svc/billing"); !slices.Equal(got, []string{"svc/billing2/x_test.go", "svc/billing_test.go", "other/b_test.go"}) {
+		t.Errorf("outside svc/billing: %v", got)
+	}
+	if got := outsideModule(paths, ""); got != nil {
+		t.Errorf("at the root nothing is outside: %v", got)
+	}
 }

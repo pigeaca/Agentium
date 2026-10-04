@@ -506,3 +506,18 @@ func TestResolveInAModuleImportedFromTheRoot(t *testing.T) {
 		t.Errorf("entries %+v", got.Entries)
 	}
 }
+
+// A root CLAUDE.md that imports .claude/CLAUDE.md counts it twice, as an import and as an instruction file: Resolve
+// has always read the root's files so, and root manifests' startup bytes and context show rest on it. Pinned so a
+// change for modules cannot move them (a follow-up may fix the double count deliberately).
+func TestResolveRootDoubleCountIsUnchanged(t *testing.T) {
+	got := resolve(t, memSource{"CLAUDE.md": "see @.claude/CLAUDE.md\n", ".claude/CLAUDE.md": "inner\n"})
+	var entries []string
+	for _, e := range got.Entries {
+		entries = append(entries, e.Path+" "+e.Kind)
+	}
+	want := []string{"CLAUDE.md instructions", ".claude/CLAUDE.md import", ".claude/CLAUDE.md instructions"}
+	if !slices.Equal(entries, want) || got.StartupBytes() != 35 {
+		t.Errorf("entries %v, startup %d; want %v, 35", entries, got.StartupBytes(), want)
+	}
+}

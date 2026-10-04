@@ -203,10 +203,19 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return failNew(env, err)
 	}
+	notes, err := w.armModuleNotes(ctx, created.Design)
+	if err != nil {
+		return fail(env, err)
+	}
 	if env.JSON {
-		return env.emit(newDocument(name, created))
+		doc := newDocument(name, created)
+		doc.Notes = append(doc.Notes, notes...)
+		return env.emit(doc)
 	}
 	created.Write(env.Stdout, env.style(), name)
+	for _, n := range notes {
+		fmt.Fprintln(env.Stdout, note(env.style(), n))
+	}
 	return ExitOK
 }
 

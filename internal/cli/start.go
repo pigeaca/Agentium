@@ -256,11 +256,9 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 	if err := json.Unmarshal(snap.Manifest, &saved); err != nil {
 		return fmt.Errorf("snapshot %s: %w", snap.Name, err)
 	}
-	// A snapshot taken for another module (or the root) holds none of this module's own .claude files: an arm of it
-	// loads only the snapshot's files, so they are gone from it.
+	// A snapshot taken for another module (or the root) holds none of this module's own .claude files.
 	if module := s.w.settings().Module; saved.Module != module { // start has no --module: the stored setting
-		fmt.Fprintln(s.env.Stdout, note(s.env.style(), fmt.Sprintf("snapshot %s was taken for %s, not for %s, which the new tasks are in: its arm loads only "+
-			"its own files (agentium context snapshot NAME saves the module's context)", snap.Name, moduleLabel(saved.Module), moduleLabel(module))))
+		fmt.Fprintln(s.env.Stdout, note(s.env.style(), snapshotModuleNote(snap.Name, saved.Module, module, "the new tasks are")))
 	}
 	// HEAD's context as the snapshot was taken: for the module it names (the root's, for older snapshots).
 	resolved, err := claudectx.ResolveIn(src, saved.Module)
@@ -299,14 +297,6 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 			"then agentium start --b NAME compares it with %s", snap.Name, snap.Name)))
 	}
 	return nil
-}
-
-// moduleLabel names a module in a sentence: "the module svc/billing", or "the repository's root".
-func moduleLabel(module string) string {
-	if module == "" {
-		return "the repository's root"
-	}
-	return "the module " + module
 }
 
 // experimentName is stable for the same contexts, so running start again finds the experiment it made.
