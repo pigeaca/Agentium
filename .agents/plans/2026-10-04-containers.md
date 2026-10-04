@@ -266,7 +266,7 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
       - A `create` that the daemon refused (its name in use) never leads to a removal, since that container is not the grade's. A cancelled or timed-out create is removed. If the client exits non-zero after the daemon really made the container, it is left for recovery to remove by label.
       - The probes run as the grade's user, since they prove its view (its user, what it can write); no code of the grade has run by then.
       - The probes read the namespace inodes against the kernel's initial ones, and the routing table, instead of trying a TEST-NET connect, which would need a tool the image may lack. The real-daemon tests do try those connects.
-      - A copy-in's limits are a parameter (`CopyLimits`): by default 2 GiB of content and 1,000,000 entries.
+      - A copy-in's limits are a parameter (`CopyLimits`): by default 2 GiB of content, 1,000,000 entries and 10 minutes.
     - *Unit tests (fake `docker`: the test binary linked as `docker`):*
       - `testdata/argv.golden` pins all 21 calls: the usability check, create, inspect, the skeleton, start, the probes, the copy-in, a command, the counters, the removal, and recovery's listing and removal.
       - The inspect check refuses 71 mismatches (and 5 unreadable records), each by name: network, IPC, PID, UTS, user and cgroup namespaces, privileges, capabilities, security options, a writable root, masked paths, binds (the Docker socket among them), devices, ports, sysctls, `/tmp`, limits, OOM-kill, `--rm`, `--init`, logs, the main user (the grade's own refused), the environment (proxy variables added, a variable added or changed, none), the runtime, entrypoint, deadline, labels, image, name, and the mounts. The probes refuse 33 failures.
@@ -297,6 +297,14 @@ Each step is one PR with green CI and the reviewer's [threat checklist](../roles
       - `MainUser` set to the grade's user: the real deadline test (`kill -KILL 1` ended the container) and the real killer test;
       - `Exec` returning a plain error when the counters cannot be read: the fake unjudgeable cases and the real fork-bomb test;
       - `mayExist` set only after a successful create: the cancelled-create case.
+    - *Re-review fixes:*
+      - a copy-in's client error or timeout once the tree streams is `ErrUnjudgeable` (`CopyLimits.Timeout`, 10 minutes by default);
+      - the probes and the counters run with `--workdir /`;
+      - a probe shows that the grade cannot signal pid 1;
+      - the `Config.Env` mismatch names variables, never their values;
+      - a real backstop test: proxies written into `Open`'s accepted empty folder make `Run` fail with `ErrMismatch` on `Config.Env`.
+
+      Two mutation checks were caught: the copy-in timeout returning a plain error (the fake test), and `--config` dropped (the real backstop test).
     - *Verification:* `GOPROXY=off go test -race -count=1 ./internal/container` passed with the real-daemon tests; `harness.py check changed` passed.
     - *Limits:*
       - Background processes that a command leaves behind keep running into the next command. A fork bomb left running makes the counters unreadable, which is `ErrUnjudgeable` (left out under step 4's rule). Step 4 decides whether to sweep them between commands.
