@@ -43,7 +43,7 @@ agentium start
 
 Before tasks are used, read them once for hints that give the answer away: `agentium task show NAME`, then `agentium task edit NAME --reviewed`.
 
-While the repository is private, `go install` needs access to it (a signed-in `gh` or a `GOPRIVATE` setup). Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
+While the repository is private, `go install` needs `GOPRIVATE=github.com/pigeaca/*` and git credentials (for example `gh auth setup-git`). Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
 
 ## Known limits
 

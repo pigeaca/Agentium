@@ -300,24 +300,38 @@ def has_github_release(repo_name: str, tag: str) -> bool:
 
 
 def create_github_release(repo_name: str, tag: str, notes_text: str) -> str:
+    """Create the release; one that already exists for the tag (a concurrent cut) counts as success."""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
         handle.write(notes_text)
     try:
         return harness.gh("release", "create", tag, "--repo", repo_name, "--title", tag, "--notes-file", handle.name,
                           "--verify-tag").strip()
+    except ValueError as error:
+        if "already exists" in str(error).lower():
+            return f"https://github.com/{repo_name}/releases/tag/{tag}"
+        raise
     finally:
         Path(handle.name).unlink(missing_ok=True)
 
 
+TAG_MARKER = "Released-by: harness.py release"
+
+
+def made_by_release(root: Path, tag: str) -> bool:
+    """Whether the local tag is an annotated tag this tool made (its message ends with the marker)."""
+    return TAG_MARKER in git(root, "tag", "--list", "--format=%(contents)", tag)
+
+
 def reconcile(repo_name: str, dry_run: bool = False) -> list[str]:
     """Finish what a failed release left, so every cut is safe to rerun:
-    - a local vX.Y.Z tag the remote lacks was never published: delete it;
+    - a local vX.Y.Z tag this tool made (marked in its message) that the remote lacks was never published: delete it;
+      tags a person made by hand are left alone;
     - the remote's last vX.Y.Z tag without a GitHub Release gets one, from the tag's message.
     Returns what it did (or would do)."""
     root, did = harness.ROOT, []
     remote = remote_tags()
     for tag in git(root, "tag", "--list", "v*").split():
-        if parse_tag(tag) and tag not in remote:
+        if parse_tag(tag) and tag not in remote and made_by_release(root, tag):
             did.append(f"deleted local tag {tag}: it was never published")
             if not dry_run:
                 git(root, "tag", "-d", tag)
@@ -327,7 +341,7 @@ def reconcile(repo_name: str, dry_run: bool = False) -> list[str]:
             did.append(f"created the GitHub Release of {last}, which was pushed without one")
             if not dry_run:
                 sync_tags({last})
-                message = git(root, "tag", "--list", "--format=%(contents)", last)
+                message = git(root, "tag", "--list", "--format=%(contents)", last).replace(TAG_MARKER, "").rstrip() + "\n"
                 did[-1] += f": {create_github_release(repo_name, last, message)}"
     for line in did:
         print(("dry run: would have " if dry_run else "") + line)
@@ -434,20 +448,20 @@ def release_cut(dry_run: bool = False, first: bool = False, use_local_checks: bo
         if state != "success":
             raise ValueError(f"Refusing to release: {detail}")
         print(f"\nCI is green on {sha[:12]}: {detail}")
-    push_url = f"https://github.com/{repo_name}.git"
+    push_url = remote_names()[1]  # the same remote the tags were read from
     steps = [f"git tag -a {tag} --cleanup=verbatim -F <notes> {sha[:12]}", f"git push {push_url} refs/tags/{tag}",
              f"gh release create {tag} --repo {repo_name} --title {tag} --notes-file <notes> --verify-tag"]
     if dry_run:
         print("\ndry run: would run\n  " + "\n  ".join(steps) + "\nNothing was tagged, pushed or created.")
         return tag, ""
     with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False) as handle:
-        handle.write(plan["notes"])
+        handle.write(plan["notes"].rstrip("\n") + f"\n\n{TAG_MARKER}\n")
     try:
         git(root, "tag", "-a", tag, "--cleanup=verbatim", "-F", handle.name, sha)
         print(f"Created tag {tag}")
         pushed = subprocess.run(["git", "-C", str(root), "push", push_url, f"refs/tags/{tag}"], capture_output=True, text=True)
         if pushed.returncode:
-            git(root, "tag", "-d", tag)  # never published: leave no local tag that would pass for a release
+            git(root, "tag", "-d", tag, check=False)  # never published; a missing tag (a concurrent cut) must not hide the push error
             raise ValueError(f"Release {tag} not published: pushing the tag failed ({pushed.stderr.strip()}); the local tag was deleted. Rerun.")
         print(f"Pushed {tag}")
     finally:

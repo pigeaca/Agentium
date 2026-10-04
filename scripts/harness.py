@@ -778,7 +778,7 @@ def pr_land(number: int, dry_run: bool = False, update: bool = False, timeout_mi
         outcome = release.after_merge(timeout_minutes)
     except (ValueError, OSError, subprocess.CalledProcessError) as error:
         print(f"[harness] release: NOT released: {error}", flush=True)
-        raise ReleaseFailed(f"PR #{number} is merged, but a due release failed: {error}") from None
+        raise ReleaseFailed(f"PR #{number} is merged, but the release step failed: {error}") from None
     print(f"[harness] release: {outcome}", flush=True)
 
 
@@ -853,7 +853,7 @@ HELP = """Agentium harness (Python standard library)
                              min by default); refuses closed, draft, conflicting or out-of-date PRs (--update
                              updates the branch instead), undeclared contract changes, and never merges on red
                              or pending CI; then cuts a release when one is due (--no-release skips); exit 3 =
-                             merged, but the due release failed
+                             merged, but the release step failed
   release plan [--json]      Next version and draft notes from the PRs merged since the last v* tag and the
                              contract diff (docs/harness.md#releases)
   release cut [--dry-run] [--first] [--local-checks]

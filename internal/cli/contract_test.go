@@ -225,7 +225,7 @@ func contractLines(t *testing.T) []string {
 		}
 		add("command "+name, "")
 		found.VisitAll(func(f *flag.Flag) {
-			add(fmt.Sprintf("flag %s --%s", name, f.Name), fmt.Sprintf("%T default=%q", f.Value, f.DefValue))
+			add(fmt.Sprintf("flag %s --%s", name, f.Name), fmt.Sprintf("%s default=%q", flagKind(f.Value), f.DefValue))
 		})
 	}
 	for _, m := range regexp.MustCompile(`(?m)^  ([a-z][a-z-]*) {2,}\S`).FindAllStringSubmatch(usage, -1) {
@@ -269,6 +269,18 @@ func contractLines(t *testing.T) []string {
 	}
 	sort.Strings(lines)
 	return slicesCompact(lines)
+}
+
+// flagKind is how a flag takes its value, never the Go type that implements it: renaming an internal flag type must
+// not change the golden. "bool" appears without a value, "list" repeats, "value" takes one value.
+func flagKind(v flag.Value) string {
+	if b, ok := v.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+		return "bool"
+	}
+	if _, ok := v.(*stringList); ok {
+		return "list"
+	}
+	return "value"
 }
 
 func slicesCompact(lines []string) []string {
@@ -376,5 +388,25 @@ func TestSchemaIgnoresTypeNames(t *testing.T) {
 	schema("", reflect.TypeOf(after{}), 0, b)
 	if !reflect.DeepEqual(a, b) || a[".opt"] != "int?" || a[".schema"] != "int" || a[".list"] != "[]string" {
 		t.Errorf("schemas differ or are wrong: %v vs %v", a, b)
+	}
+}
+
+// A flag's kind comes from its behavior, so renaming the internal type behind it leaves the golden unchanged.
+func TestFlagKindIgnoresTypeNames(t *testing.T) {
+	fs := flag.NewFlagSet("x", flag.ContinueOnError)
+	fs.Bool("b", false, "")
+	fs.String("s", "", "")
+	fs.Int("i", 0, "")
+	var list stringList
+	fs.Var(&list, "l", "")
+	fs.Var(&removedFlag{name: "r"}, "r", "")
+	got := map[string]string{}
+	fs.VisitAll(func(f *flag.Flag) { got[f.Name] = flagKind(f.Value) })
+	want := map[string]string{"b": "bool", "s": "value", "i": "value", "l": "list", "r": "bool"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("flag kinds %v, want %v", got, want)
+	}
+	if lines := strings.Join(contractLines(t), "\n"); strings.Contains(lines, "*cli.") || strings.Contains(lines, "*flag.") {
+		t.Error("the golden names a Go type")
 	}
 }

@@ -866,7 +866,7 @@ class PullRequestLanding(unittest.TestCase):
         fake = FakeGitHub([{"headRefOid": self.A}], [[ci_run(self.A)]])
         failing = unittest.mock.Mock(side_effect=ValueError("CI on abc is still pending"))
         error, _, printed = self.land(fake, after_merge=failing, raises=harness.ReleaseFailed)
-        self.assertIn("is merged, but a due release failed: CI on abc is still pending", error)
+        self.assertIn("is merged, but the release step failed: CI on abc is still pending", error)
         self.assertIn("[harness] release: NOT released: CI on abc is still pending", printed)
         self.assertEqual(len(fake.merges()), 1)
         with patch.object(harness, "main", side_effect=harness.ReleaseFailed("merged, release failed")), patch.object(harness.sys, "stderr"):

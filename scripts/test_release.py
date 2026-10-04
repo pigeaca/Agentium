@@ -62,8 +62,9 @@ class Fixture:
         self.git("merge", "-q", "--no-ff", branch, *sum((["-m", part] for part in message), []))
         return self.number
 
-    def tag(self, name: str) -> None:
-        self.git("tag", "-a", name, "-m", name)
+    def tag(self, name: str, marked: bool = False) -> None:
+        """An annotated tag; `marked` ones carry the marker release cut writes (the tool's own tags)."""
+        self.git("tag", "-a", name, "-m", name + (f"\n\n{release.TAG_MARKER}" if marked else ""))
 
 
 class VersionComputation(unittest.TestCase):
@@ -299,6 +300,7 @@ class Cutting(unittest.TestCase):
             return f"https://github.com/o/r/releases/tag/{tag}"
 
         with patch.object(harness, "github_repo", return_value="o/r"), patch.object(release.subprocess, "run", fake_run), \
+                patch.object(release, "remote_names", return_value=("origin", "https://github.com/o/r.git")), \
                 patch.object(harness, "fetch_default", return_value=("origin/main", fetched)), patch.object(release, "sync_tags"), \
                 patch.object(release, "remote_tags", side_effect=lambda: {t: "x" for t in self.remote}), \
                 patch.object(release, "has_github_release", side_effect=lambda repo, tag: tag in self.releases), \
@@ -440,7 +442,7 @@ class Cutting(unittest.TestCase):
         self.assertIn("Released v0.2.0", out)
 
     def test_a_leftover_local_tag_that_was_never_pushed_is_deleted_and_the_release_is_not_skipped(self):
-        self.fx.tag("v0.2.0")  # left by a failed push
+        self.fx.tag("v0.2.0", marked=True)  # left by a failed push
         error, out = self.cut()
         self.assertIsNone(error)
         self.assertIn("deleted local tag v0.2.0: it was never published", out)
@@ -476,8 +478,37 @@ class Cutting(unittest.TestCase):
         self.assertIn("feat(x): y", self.created[0][1])  # the notes come from the tag message
         self.assertIn("Nothing to release", error)  # and v0.2.0 is not released twice or skipped into v0.2.1
 
+    def test_a_hand_made_local_tag_is_never_deleted(self):
+        self.fx.tag("v0.3.0")  # no marker: a person made it
+        error, out = self.cut()
+        self.assertIsNone(error)
+        self.assertEqual(self.fx.git("tag", "--list", "v0.3.0"), "v0.3.0")
+        self.assertNotIn("deleted local tag", out)
+
+    def test_a_push_error_is_reported_even_when_the_tag_is_already_gone(self):
+        self.push_fails = True
+        real = release.git
+
+        def vanishing(repo, *args, **kw):  # a concurrent cut removed the tag first
+            if args[:2] == ("tag", "-d"):
+                real(repo, *args, check=False)
+                return real(repo, *args, **kw)
+            return real(repo, *args, **kw)
+
+        with patch.object(release, "git", vanishing):
+            error, _ = self.cut()
+        self.assertIn("pushing the tag failed (denied)", error)
+        self.assertNotIn("not found", error)
+
+    def test_an_existing_github_release_counts_as_created(self):
+        with patch.object(harness, "gh", side_effect=ValueError("gh release create failed: Release.tag_name already exists")):
+            url = release.create_github_release("o/r", "v0.2.0", "n")
+        self.assertEqual(url, "https://github.com/o/r/releases/tag/v0.2.0")
+        with patch.object(harness, "gh", side_effect=ValueError("gh release create failed: HTTP 502")), self.assertRaises(ValueError):
+            release.create_github_release("o/r", "v0.2.0", "n")
+
     def test_a_dry_run_reconcile_changes_nothing(self):
-        self.fx.tag("v0.3.0")  # unpublished
+        self.fx.tag("v0.3.0", marked=True)  # unpublished, made by the tool
         self.remote.add("v0.2.0")  # published without a release
         error, out = self.cut(dry_run=True)
         self.assertIn("dry run: would have deleted local tag v0.3.0", out)
