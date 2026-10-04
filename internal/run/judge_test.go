@@ -2,6 +2,7 @@ package run
 
 import (
 	"context"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -222,6 +223,39 @@ func TestJudgeInterrupted(t *testing.T) {
 	}
 	if rec.Outcome != claude.OutcomeOK || !*rec.Passed {
 		t.Errorf("the run changed: %+v", rec)
+	}
+}
+
+// Ctrl-C during a judge call: the call is interrupted, Claude Code reports what it spent, and that spend is kept, in
+// the verdict and through the spend hook that stores it in the run's start file as the call ends.
+func TestJudgeInterruptedKeepsTheCallsSpend(t *testing.T) {
+	dir := t.TempDir()
+	marker, result := filepath.Join(dir, "calling"), filepath.Join(dir, "result.json")
+	must(t, os.WriteFile(result, []byte(`{"type":"result","subtype":"success","is_error":false,"result":"interrupted","total_cost_usd":0.07}`), 0o600))
+	env, spec, rec := judgeFixture(t, "trap 'cat "+result+"; exit 130' INT\ncat > /dev/null\ntouch "+marker+"\nwhile :; do sleep 0.05; done\n")
+	var seen []float64
+	env.judgeSpent = func(usd float64) { seen = append(seen, usd) }
+	rec.Judge = &judge.Verdict{Stopped: judge.StoppedLimit, CostUSD: 0.01} // judged before: its spend stays
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		for {
+			if _, err := os.Stat(marker); err == nil {
+				cancel()
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	env.Judge(ctx, spec, judge.Settings{Repeats: 2}, &rec)
+	v := rec.Judge
+	if v == nil || v.Stopped != judge.StoppedCall || !NeedsJudging(rec, spec.Task) {
+		t.Fatalf("an interrupted judgement: %+v", v)
+	}
+	if math.Abs(v.CostUSD-0.08) > 1e-9 {
+		t.Errorf("the verdict's cost $%.4f, want $0.08 (the earlier $0.01 and the interrupted call's $0.07)", v.CostUSD)
+	}
+	if len(seen) != 1 || math.Abs(seen[0]-0.08) > 1e-9 {
+		t.Errorf("spend hook: %v, want [0.08]", seen)
 	}
 }
 

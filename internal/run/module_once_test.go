@@ -28,7 +28,8 @@ func newModuleOnce(t *testing.T, module, decoy, agent string) moduleOnce {
 	return newModuleOnceWith(t, module, decoy, agent, nil)
 }
 
-// newModuleOnceWith is newModuleOnce with more files in the base commit (path from the root: content).
+// newModuleOnceWith is newModuleOnce with more files in the base commit (path from the root: content); a content of
+// "symlink:TARGET" makes the path a symbolic link to TARGET.
 func newModuleOnceWith(t *testing.T, module, decoy, agent string, files map[string]string) moduleOnce {
 	t.Helper()
 	ctx := context.Background()
@@ -50,6 +51,11 @@ func newModuleOnceWith(t *testing.T, module, decoy, agent string, files map[stri
 	writeFile(t, filepath.Join(user, decoy, "run_tests.sh"), "exit 0\n")
 	writeFile(t, filepath.Join(user, decoy, "value.txt"), "old\n")
 	for name, content := range files {
+		if target, ok := strings.CutPrefix(content, "symlink:"); ok {
+			must(t, os.MkdirAll(filepath.Dir(filepath.Join(user, filepath.FromSlash(name))), 0o755))
+			must(t, os.Symlink(target, filepath.Join(user, filepath.FromSlash(name))))
+			continue
+		}
 		writeFile(t, filepath.Join(user, filepath.FromSlash(name)), content)
 	}
 	gitIn("add", "-A")

@@ -416,9 +416,10 @@ func TestCheckVersionModelToolsAndMissingInit(t *testing.T) {
 	}
 }
 
-// fakeClaude writes a stand-in for the claude CLI: it records its arguments, environment and folder, prints a
-// transcript, and with hang set waits until interrupted, then reports a result as Claude Code does.
-func fakeClaude(t *testing.T, transcript string, hang bool) (cli, record string) {
+// fakeClaude writes a stand-in for the claude CLI: it records its arguments, environment and folder and prints a
+// transcript. With ready set it hangs instead: it prints the transcript's init event, creates the file ready, and waits
+// until interrupted, then reports a result as Claude Code does.
+func fakeClaude(t *testing.T, transcript, ready string) (cli, record string) {
 	t.Helper()
 	dir := t.TempDir()
 	record = filepath.Join(dir, "record")
@@ -426,12 +427,15 @@ func fakeClaude(t *testing.T, transcript string, hang bool) (cli, record string)
 		t.Fatal(err)
 	}
 	script := "#!/bin/sh\n"
-	if hang { // the trap comes first, so an early interrupt still gets a result
+	if ready != "" {
+		// The trap comes first, and the ready file only after the init event: a test sees the file only when an
+		// interrupt that came later must find a full transcript.
 		script += "trap 'echo \"{\\\"type\\\":\\\"result\\\",\\\"subtype\\\":\\\"success\\\",\\\"is_error\\\":false,\\\"result\\\":\\\"interrupted\\\"}\"; exit 130' INT\n"
+		script += "head -1 " + transcript + "\n: > " + ready + "\n"
 	}
 	script += "printf '%s\\n' \"$@\" > " + record + "/args\nenv > " + record + "/env\npwd > " + record + "/pwd\n"
-	if hang {
-		script += "head -1 " + transcript + "\nwhile :; do sleep 0.05; done\n"
+	if ready != "" {
+		script += "while :; do sleep 0.05; done\n"
 	} else {
 		script += "cat " + transcript + "\n"
 	}
@@ -444,7 +448,7 @@ func fakeClaude(t *testing.T, transcript string, hang bool) (cli, record string)
 
 func TestRunWithAFakeClaude(t *testing.T) {
 	fixture, _ := filepath.Abs(filepath.Join("testdata", "ok.jsonl"))
-	cli, record := fakeClaude(t, fixture, false)
+	cli, record := fakeClaude(t, fixture, "")
 	work := t.TempDir()
 	inv := invocation(t, SignInTokenFile, "tok-run")
 	inv.CLI, inv.Dir, inv.ConfigDir = cli, work, filepath.Join(work, "config")
@@ -478,23 +482,38 @@ func TestRunWithAFakeClaude(t *testing.T) {
 	}
 }
 
+// The timeout counts from the start, as a run's should; a fake that a loaded machine starts late can be interrupted
+// before its trap or its init event, which says nothing about Run. Such an attempt (no ready file) is retried with a
+// longer timeout; an attempt after the fake was ready must report the interrupted result.
 func TestRunTimeoutInterruptsFirst(t *testing.T) {
 	fixture, _ := filepath.Abs(filepath.Join("testdata", "ok.jsonl"))
-	cli, _ := fakeClaude(t, fixture, true)
+	ready := filepath.Join(t.TempDir(), "ready")
+	cli, _ := fakeClaude(t, fixture, ready)
 	inv := invocation(t, SignInLogin, "")
 	inv.CLI, inv.Dir = cli, t.TempDir()
-	transcript, _ := os.Create(filepath.Join(t.TempDir(), "stream.jsonl"))
-	stderr, _ := os.Create(filepath.Join(t.TempDir(), "stderr.txt"))
-	result, err := Run(context.Background(), inv, parentEnv, transcript, stderr, 2*time.Second, 5*time.Second)
-	if err != nil || !result.TimedOut {
-		t.Fatalf("%+v, %v", result, err)
-	}
-	transcript.Seek(0, 0)
-	m, _ := Parse(transcript)
-	if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
-		t.Errorf("an interrupted run should still report its result: %+v", m)
-		se, _ := os.ReadFile(stderr.Name())
-		t.Errorf("the run took %v, exit %d, stderr %q", result.Duration, result.ExitCode, se)
+	for timeout := 2 * time.Second; ; timeout *= 2 {
+		transcript, _ := os.Create(filepath.Join(t.TempDir(), "stream.jsonl"))
+		stderr, _ := os.Create(filepath.Join(t.TempDir(), "stderr.txt"))
+		os.Remove(ready)
+		result, err := Run(context.Background(), inv, parentEnv, transcript, stderr, timeout, 5*time.Second)
+		if err != nil || !result.TimedOut {
+			t.Fatalf("%+v, %v", result, err)
+		}
+		if _, err := os.Stat(ready); err != nil {
+			if timeout >= 16*time.Second {
+				t.Fatalf("the fake agent was not ready within %v", timeout)
+			}
+			t.Logf("the fake agent was not ready within %v; again with a longer timeout", timeout)
+			continue
+		}
+		transcript.Seek(0, 0)
+		m, _ := Parse(transcript)
+		if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
+			t.Errorf("an interrupted run should still report its result: %+v", m)
+			se, _ := os.ReadFile(stderr.Name())
+			t.Errorf("the run took %v, exit %d, stderr %q", result.Duration, result.ExitCode, se)
+		}
+		return
 	}
 }
 
