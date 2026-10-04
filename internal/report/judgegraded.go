@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/run"
@@ -24,18 +23,26 @@ type JudgeGrading struct {
 }
 
 // JudgeGradingArm is one arm's judge-graded runs: the counted ones the judge graded and how many it called fixed (with
-// the 95% Wilson interval), the runs it could not grade (infrastructure, not counted), and what grading them cost.
+// the 95% Wilson interval), the fair runs it left without a grade for good (a tie, refusals or malformed replies, or
+// errors on every attempt: not counted, not tried again), those whose grade is still pending, and what grading cost.
 type JudgeGradingArm struct {
 	Name     string     `json:"name"`
 	Profile  string     `json:"profile,omitempty"` // in a model-ab experiment
 	Graded   int        `json:"graded"`
 	Fixed    Proportion `json:"fixed"`
 	Ungraded int        `json:"ungraded"`
+	Pending  int        `json:"pending,omitempty"`
 	CostUSD  float64    `json:"cost_usd"`
 }
 
 // judgeGraded reports whether the run was graded by the judge.
 func judgeGraded(rec run.Record) bool { return rec.GradedBy == task.GradingJudge }
+
+// counted reports whether the analysis counts the run: a fair one, and for a judge-graded run one the judge graded (a
+// grade pending or left out for good counts nowhere, cost included). For a test-graded run it is experiment.Fair.
+func counted(rec run.Record) bool {
+	return experiment.Fair(rec.Outcome) && (!judgeGraded(rec) || rec.Passed != nil)
+}
 
 // judgeGradingSummary sums up the judge's grading; nil without judge-graded tasks.
 func judgeGradingSummary(in Input) *JudgeGrading {
@@ -63,12 +70,15 @@ func judgeGradingSummary(in Input) *JudgeGrading {
 			}
 			arm.CostUSD += rec.Spend().JudgeUSD
 			switch {
-			case experiment.Fair(rec.Outcome) && rec.Passed != nil:
+			case !experiment.Fair(rec.Outcome):
+			case rec.Passed != nil:
 				arm.Graded++
 				if experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged) {
 					fixed++
 				}
-			case rec.Outcome == claude.OutcomeInfra && rec.Judge != nil:
+			case run.NeedsGrading(rec):
+				arm.Pending++
+			default:
 				arm.Ungraded++
 			}
 		}
@@ -145,17 +155,39 @@ func (r Report) judgeGradingNote() string {
 	if g == nil {
 		return ""
 	}
-	ungraded := 0
-	for _, a := range g.Arms {
+	ungraded, pending := 0, 0
+	var perArm, pendingArms []string
+	for i, a := range g.Arms {
 		ungraded += a.Ungraded
+		pending += a.Pending
+		label := a.Name
+		if i < len(r.Arms) {
+			label = r.Arms[i].tag()
+		}
+		perArm = append(perArm, fmt.Sprintf("%s %d", label, a.Ungraded))
+		pendingArms = append(pendingArms, fmt.Sprintf("%s %d", label, a.Pending))
 	}
 	note := fmt.Sprintf("%d task(s) are judge-graded (%s): no tests ran; the judge compared each run's change with the reference solution, and a majority of its %d calls "+
-		"passed or failed the run (a run without a majority is infrastructure: not counted, tried again). These grades are unvalidated (the judge pilot's grading "+
-		"without tests was inconclusive), so they count toward \"the judge says fixed\" alone, never toward success, which is the tests'; no verdict rests on them, "+
-		"and the north star does not count them. Cost, time and output tokens count every graded run of both kinds.",
+		"passed or failed the run. A judge error leaves the grade pending, graded again later from the run's change, never by running the agent again; a tie, "+
+		"a refusal or a reply still malformed when asked again leaves the run without a grade: not counted, never a fail, not tried again. These grades are "+
+		"unvalidated (the judge pilot's grading without tests was inconclusive), so they count toward \"the judge says fixed\" alone, never toward success, "+
+		"which is the tests'; no verdict rests on them, and the north star leaves out an experiment with judge-graded tasks. Cost, time and output tokens count "+
+		"every graded run of both kinds.",
 		len(g.Tasks), strings.Join(g.Tasks, ", "), g.Repeats)
 	if ungraded > 0 {
-		note += fmt.Sprintf(" %d run(s) the judge could not grade are among the infrastructure failures.", ungraded)
+		note += fmt.Sprintf(" Runs the judge left without a grade (not counted, not tried again): %s", strings.Join(perArm, ", "))
+		if u := r.Analysis.Ungraded; u != nil {
+			switch {
+			case u.Imbalanced:
+				note += "; the arms differ, so the verdicts they would feed (cost, time, output tokens) are demoted to inconclusive"
+			case len(u.Disagrees) > 0:
+				note += "; counting them changes the " + strings.Join(u.Disagrees, " and ") + " verdict, so it is demoted to inconclusive"
+			}
+		}
+		note += "."
+	}
+	if pending > 0 {
+		note += fmt.Sprintf(" Grades still pending (not counted until graded): %s.", strings.Join(pendingArms, ", "))
 	}
 	if res := r.judgeSuccessResult(); res != nil {
 		note += fmt.Sprintf(" The judge says fixed: %d of %d task(s) have %d or more graded %s in both arms, against success's floor of %d tasks, counted over judge-graded tasks alone.",

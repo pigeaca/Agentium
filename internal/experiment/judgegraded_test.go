@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -272,5 +273,180 @@ func TestLockedTaskDigestCoversGrading(t *testing.T) {
 	}
 	if judged.Digest == plain.Digest || !judged.JudgeGraded() || !judged.Spec().JudgeGraded() || plain.Spec().JudgeGraded() {
 		t.Errorf("a judge-graded task: %+v", judged)
+	}
+}
+
+// ungradeAt marks the runs at the slots as left without a grade for good (pending false) or with their grade pending.
+func ungradeAt(runs []RunData, pending bool, slots ...int) []RunData {
+	runs = slices.Clone(runs)
+	for _, s := range slots {
+		runs[s].Passed, runs[s].Pending = nil, pending
+	}
+	return runs
+}
+
+// Judge-graded runs left without a grade (a tie, refusals, errors on every attempt) are counted per arm, as flagged
+// sandbox exclusions are: when the arms differ, every verdict those runs would feed (cost here) is demoted to
+// inconclusive, with what counting them gives; balanced arms keep an agreeing verdict. The tests' success never counts
+// a judge-graded run, so it is never demoted for them. A grade still pending is no exclusion of that kind.
+func TestUngradedCheckDemotesImbalancedArms(t *testing.T) {
+	l := mixedLock(GoalCheaper, 24, 4, 3)
+	runs := judgedRuns(l, synthetic(24, 3, 1.0, 0.7, func(task, repeat int, _ string) bool { return (task+repeat)%3 != 0 }))
+	var judgedB, judgedA []int
+	for i, r := range runs {
+		if r.Judged && r.Arm == "B" {
+			judgedB = append(judgedB, i)
+		}
+		if r.Judged && r.Arm == "A" {
+			judgedA = append(judgedA, i)
+		}
+	}
+	base := mustAnalyze(t, l, runs)
+	if cost := result(t, base, MetricCost); cost.Verdict != stats.Improved || base.Ungraded == nil || base.Ungraded.Imbalanced || base.Ungraded.AsCounted != nil {
+		t.Fatalf("nothing ungraded: cost %+v, check %+v", cost, base.Ungraded)
+	}
+	success := result(t, base, MetricSuccess)
+
+	imbalanced := mustAnalyze(t, l, ungradeAt(runs, false, judgedB[0], judgedB[1]))
+	u := imbalanced.Ungraded
+	if u == nil || u.Ungraded["A"] != 0 || u.Ungraded["B"] != 2 || !u.Imbalanced || u.AsCounted[MetricCost] != stats.Improved || imbalanced.Excluded[OutcomeUngraded] != 2 {
+		t.Fatalf("the check: %+v, excluded %v", u, imbalanced.Excluded)
+	}
+	if cost := result(t, imbalanced, MetricCost); cost.Verdict != stats.Inconclusive || !strings.Contains(cost.Note, "left without a grade differ (A 0, B 2)") ||
+		!strings.Contains(cost.Note, "counting them gives improved") {
+		t.Errorf("cost: %+v", cost)
+	}
+	if s := result(t, imbalanced, MetricSuccess); s.Verdict != success.Verdict || strings.Contains(s.Note, "without a grade") {
+		t.Errorf("the tests' success moved for judge-graded runs: %+v vs %+v", s, success)
+	}
+	if _, ok := u.AsCounted[MetricSuccess]; ok {
+		t.Errorf("as counted names success: %v", u.AsCounted)
+	}
+
+	balanced := mustAnalyze(t, l, ungradeAt(runs, false, judgedA[0], judgedB[0]))
+	if u := balanced.Ungraded; u.Imbalanced || u.Ungraded["A"] != 1 || u.Ungraded["B"] != 1 || len(u.Disagrees) != 0 {
+		t.Errorf("balanced: %+v", u)
+	}
+	if cost := result(t, balanced, MetricCost); cost.Verdict != stats.Improved || cost.Note != "" {
+		t.Errorf("balanced arms keep an agreeing verdict: %+v", cost)
+	}
+
+	// Pending grades are waiting, not left out for good: no per-arm count, no demotion, an exclusion of their own.
+	pending := mustAnalyze(t, l, ungradeAt(runs, true, judgedB[0], judgedB[1]))
+	if u := pending.Ungraded; u.Ungraded["B"] != 0 || u.Imbalanced || pending.Excluded[OutcomeGradePending] != 2 || pending.Excluded[OutcomeUngraded] != 0 {
+		t.Errorf("pending: %+v, excluded %v", u, pending.Excluded)
+	}
+	if cost := result(t, pending, MetricCost); cost.Verdict != stats.Improved {
+		t.Errorf("pending grades demoted cost: %+v", cost)
+	}
+	// A lock without judge-graded tasks has no such check.
+	if a := mustAnalyze(t, lockFor(GoalCheaper, 24, 3), synthetic(24, 3, 1.0, 0.7, func(int, int, string) bool { return true })); a.Ungraded != nil {
+		t.Errorf("a test-graded lock: %+v", a.Ungraded)
+	}
+}
+
+// A seq-v1 look waits for every grade of its stages: a judge-graded run whose grade is pending settles its slot for
+// the scheduler (the agent never runs again) but leaves the stage not done, so no look reads a grade that may still
+// change. Once graded, or left ungraded for good, the look is made.
+func TestSeqLookWaitsForPendingGrades(t *testing.T) {
+	d := seqDesign(16)
+	d.JudgeGraded = []string{d.Tasks[3]}
+	g := judge.GradingSettings()
+	d.JudgeGrading = &g
+	d.Version = d.WantVersion()
+	l := seqLock(t, d)
+	runs := seqRuns(l, 16, 0.5)
+	var at int
+	for i := range runs {
+		if runs[i].Task == d.Tasks[3] {
+			runs[i].Judged = true
+			at = i
+		}
+	}
+	if s, _, err := SequentialStatus(l, runs); err != nil || len(s.Looks) != 1 {
+		t.Fatalf("premise: every grade in, look 1 is made: %+v, %v", s, err)
+	}
+	waiting := ungradeAt(runs, true, at)
+	s, _, err := SequentialStatus(l, waiting)
+	if err != nil || len(s.Looks) != 0 || s.NextStage != 1 || s.Ended != "" {
+		t.Errorf("a pending grade in stage 1: %+v, %v", s, err)
+	}
+	if done := slotsDone(l, waiting); done[waiting[at].Slot] {
+		t.Error("the pending grade's slot is done")
+	}
+	if !Settles(waiting[at].Outcome) {
+		t.Error("the pending run does not settle its slot for the scheduler")
+	}
+	if s, _, err := SequentialStatus(l, ungradeAt(runs, false, at)); err != nil || len(s.Looks) != 1 {
+		t.Errorf("left ungraded for good: the look is made: %+v, %v", s, err)
+	}
+}
+
+// The judges' estimate holds the grading's: every judge-graded run's calls at the pilot's mean, beside the second
+// opinion's and the pair judge's.
+func TestJudgingEstimateHoldsGrading(t *testing.T) {
+	d := judgedDesign(10, 2)
+	if got := d.JudgingEstimateUSD(); got <= 0 || math.Abs(got-d.GradingEstimateUSD()) > 1e-9 {
+		t.Errorf("JudgingEstimateUSD = %v, want the grading's %v", got, d.GradingEstimateUSD())
+	}
+	d.Judge = &judge.Settings{Model: judge.DefaultModel, Effort: judge.DefaultEffort, Repeats: 3}
+	if got, want := d.JudgingEstimateUSD(), d.JudgeEstimateUSD()+d.GradingEstimateUSD()+d.PairJudgeEstimateUSD(); math.Abs(got-want) > 1e-9 {
+		t.Errorf("JudgingEstimateUSD = %v, want %v", got, want)
+	}
+}
+
+// Calibrations must leave room for the dearest pair: a judge-graded task's, with its grading, not a test-graded one's.
+func TestCalibrationBudgetHoldsTheDearestPair(t *testing.T) {
+	d := judgedDesign(10, 2)
+	d.BudgetUSD = d.PairCapUSD() + 2 // a test-graded pair and the calibrations fit; a judge-graded pair does not
+	if d.PairCapUSD()+1 > d.BudgetUSD || d.MaxPairCapUSD()+1 <= d.BudgetUSD {
+		t.Fatalf("premise: pair $%.2f, max pair $%.2f, budget $%.2f", d.PairCapUSD(), d.MaxPairCapUSD(), d.BudgetUSD)
+	}
+	if err := calibrationBudget(d, 0, 1); err == nil || !strings.Contains(err.Error(), fmt.Sprintf("($%.2f)", d.MaxPairCapUSD())) {
+		t.Errorf("calibrations beside a judge-graded pair: %v", err)
+	}
+	d.BudgetUSD = d.MaxPairCapUSD() + 1
+	if err := calibrationBudget(d, 0, 1); err != nil {
+		t.Errorf("room for both: %v", err)
+	}
+}
+
+// The scheduler's plan holds each slot's own cap when the lock has judge-graded tasks (a judge-graded run its
+// grading's, a test-graded one only its own), and the arms' caps as before without them.
+func TestLockPlanHoldsEachSlotsCap(t *testing.T) {
+	l := mixedLock(GoalCheaper, 4, 1, 1)
+	l.Schedule, l.MaxAttempts = Schedule(l.Design), MaxAttempts
+	p := lockPlan(l, 0.5)
+	if p.CapOf == nil || p.SpentUSD != 0.5 || p.BudgetUSD != l.Design.BudgetUSD || p.MaxAttempts != MaxAttempts || len(p.Schedule) != 8 {
+		t.Fatalf("plan %+v", p)
+	}
+	for _, s := range p.Schedule {
+		if got, want := p.CapOf(s), l.Design.SlotCapUSD(s.Arm, s.Task); got != want || (l.Design.IsJudgeGraded(s.Task) != (got > l.Design.ArmRunCapUSD(l.Design.Arms[0]))) {
+			t.Errorf("slot %d (%s): cap %v, want %v", s.Position, s.Task, got, want)
+		}
+	}
+	plain := lockFor(GoalCheaper, 4, 1)
+	if lockPlan(plain, 0).CapOf != nil {
+		t.Error("a test-graded lock's plan gives each slot a cap of its own")
+	}
+}
+
+// experiment new warns, without refusing, when the test-graded tasks beside judge-graded ones are fewer than success's
+// floor: the tests' success cannot reach a verdict, and the judge-graded tasks never count toward it.
+func TestSuccessFloorWarning(t *testing.T) {
+	d := judgedDesign(10, 2)
+	d.Goal = GoalCheaper
+	if w := SuccessFloorWarning(d); !strings.Contains(w, "only 8 test-graded task(s), below success's floor of 20: the success guard cannot reach a verdict") {
+		t.Errorf("warning %q", w)
+	}
+	d.Goal = GoalBetter
+	if w := SuccessFloorWarning(d); !strings.Contains(w, "success, the primary metric, cannot") {
+		t.Errorf("warning %q", w)
+	}
+	if w := SuccessFloorWarning(judgedDesign(10, 0)); w != "" {
+		t.Errorf("a test-graded design warns: %q", w)
+	}
+	if w := SuccessFloorWarning(judgedDesign(22, 2)); w != "" {
+		t.Errorf("20 test-graded tasks warn: %q", w)
 	}
 }

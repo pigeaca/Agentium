@@ -20,10 +20,11 @@ type ArmProgress struct {
 	// LeftOutSandbox counts runs left out because their sandboxed grade failed with flagged denials
 	// (run.OutcomeSandboxFlagged): settled, not counted, not tried again. Infra does not count them.
 	LeftOutSandbox int
-	// JudgeGraded counts the fair runs of judge-graded tasks, and JudgeFixed those the judge called fixed: kept apart
-	// from Successes, which are the tests'. Fair counts both kinds.
-	JudgeGraded, JudgeFixed int
-	CostUSD                 float64
+	// JudgeGraded counts the fair runs of judge-graded tasks the judge graded, and JudgeFixed those it called fixed:
+	// kept apart from Successes, which are the tests'. JudgePending counts the fair ones whose grade is pending
+	// (run.NeedsGrading), and JudgeUngraded those left without a grade for good (run.Record.Ungraded). Fair counts all.
+	JudgeGraded, JudgeFixed, JudgePending, JudgeUngraded int
+	CostUSD                                              float64
 }
 
 // Progress is where an experiment stands, from its stored runs: what WriteProgress prints and the experiment commands'
@@ -86,8 +87,15 @@ func (p Project) LoadProgress(ctx context.Context, name string, id int64, lock L
 		switch {
 		case Fair(r.Outcome) && rec.GradedBy == task.GradingJudge:
 			c.Fair++
-			c.JudgeGraded++
-			if Success(r.Outcome, r.Passed, rec.Behavior.ConfigChanged) {
+			switch {
+			case run.NeedsGrading(rec):
+				c.JudgePending++
+			case rec.Passed == nil:
+				c.JudgeUngraded++
+			default:
+				c.JudgeGraded++
+			}
+			if Success(r.Outcome, rec.Passed, rec.Behavior.ConfigChanged) {
 				c.JudgeFixed++
 			}
 		case Fair(r.Outcome):
@@ -183,7 +191,14 @@ func (p Project) WriteProgress(ctx context.Context, out io.Writer, st term.Style
 				c.Name, c.LeftOutSandbox, run.OutcomeSandboxFlagged)))
 		}
 		if lock.JudgeGraded() {
-			table.Line(st.Note(fmt.Sprintf("  arm %s: the judge says %d of %d judge-graded run(s) fixed (unvalidated; not in SUCCESSES)", c.Name, c.JudgeFixed, c.JudgeGraded)))
+			more := ""
+			if c.JudgePending > 0 {
+				more += fmt.Sprintf("; %d grade(s) pending, graded again from the run's change", c.JudgePending)
+			}
+			if c.JudgeUngraded > 0 {
+				more += fmt.Sprintf("; %d left without a grade (not counted, not tried again)", c.JudgeUngraded)
+			}
+			table.Line(st.Note(fmt.Sprintf("  arm %s: the judge says %d of %d judge-graded run(s) fixed (unvalidated; not in SUCCESSES)%s", c.Name, c.JudgeFixed, c.JudgeGraded, more)))
 		}
 		if c.Passed > c.Successes {
 			table.Line(st.Warn(fmt.Sprintf("  arm %s: %d passing run(s) changed the test runner's configuration beyond the task's reference: not counted as successes", c.Name, c.Passed-c.Successes)))

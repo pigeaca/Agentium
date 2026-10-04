@@ -131,10 +131,12 @@ type northStarDoc struct {
 	Verdict    *string  `json:"verdict"`
 	Seconds    *float64 `json:"seconds"`
 	SpentUSD   float64  `json:"spent_usd"`
+	// LeftOut names the finished experiments the north star leaves out and why (judge-graded tasks); absent when none.
+	LeftOut []report.LeftOut `json:"left_out,omitempty"`
 }
 
 func northStarOf(n report.NorthStar) *northStarDoc {
-	doc := &northStarDoc{Decisive: n.Decisive, SpentUSD: n.SpentUSD}
+	doc := &northStarDoc{Decisive: n.Decisive, SpentUSD: n.SpentUSD, LeftOut: n.LeftOut}
 	if n.Decisive {
 		doc.Experiment, doc.Metric, doc.Verdict, doc.Seconds = &n.Experiment, &n.Metric, &n.Verdict, &n.Seconds
 	}

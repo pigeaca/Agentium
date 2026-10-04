@@ -358,7 +358,7 @@ func armSummary(a experiment.LockedArm, runs []Run) Arm {
 	var cacheRead, input float64
 	for _, r := range runs {
 		rec := r.Record
-		if rec.Arm != a.Name || !experiment.Fair(rec.Outcome) {
+		if rec.Arm != a.Name || !counted(rec) {
 			continue
 		}
 		arm.Counted++
@@ -507,7 +507,7 @@ func taskRows(l experiment.Lock, runs []Run) []TaskRow {
 					continue
 				}
 				switch {
-				case !experiment.Fair(rec.Outcome):
+				case !counted(rec):
 					cell.Marks += "×"
 					continue
 				case experiment.Success(rec.Outcome, rec.Passed, rec.Behavior.ConfigChanged):
@@ -563,12 +563,14 @@ func notes(rep Report, in Input) []string {
 	out = append(out, seqNotes(rep, in)...)
 	if len(a.Excluded) > 0 {
 		var parts []string
-		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled, experiment.OutcomeUngraded}
+		known := []string{claude.OutcomeUnfair, claude.OutcomeInfra, run.OutcomeSandboxFlagged, claude.OutcomeCancelled, experiment.OutcomeUngraded,
+			experiment.OutcomeGradePending}
 		for _, outcome := range known {
 			if n := a.Excluded[outcome]; n > 0 {
 				parts = append(parts, fmt.Sprintf("%d %s", n, map[string]string{claude.OutcomeUnfair: "unfair (the environment drifted)",
 					claude.OutcomeInfra: plural(n, "infrastructure failure"), claude.OutcomeCancelled: "cancelled",
-					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)", experiment.OutcomeUngraded: "judge-graded without a grade"}[outcome]))
+					run.OutcomeSandboxFlagged: "left out for sandbox denials (not tried again)", experiment.OutcomeUngraded: "judge-graded, left without a grade (not tried again)",
+					experiment.OutcomeGradePending: "judge-graded, waiting for the judge's grade"}[outcome]))
 			}
 		}
 		for _, outcome := range slices.Sorted(func(yield func(string) bool) {

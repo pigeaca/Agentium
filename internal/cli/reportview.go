@@ -426,6 +426,9 @@ func sidesOf(rep report.Report) [2]armSide {
 		if left > 0 {
 			s[i].notes = append(s[i].notes, fmt.Sprintf("%d left out by the sandbox", left))
 		}
+		if g := rep.JudgeGrading; g != nil && i < len(g.Arms) && g.Arms[i].Ungraded > 0 {
+			s[i].notes = append(s[i].notes, fmt.Sprintf("%d without the judge's grade", g.Arms[i].Ungraded))
+		}
 	}
 	return s
 }
@@ -650,6 +653,9 @@ func taskCell(st term.Style, m marks, c report.TaskCell) string {
 			cost = m.atLeast + cost
 		}
 	}
+	if cost == "" { // no counted run: no cost, and no trailing spaces after the marks
+		return b.String()
+	}
 	return b.String() + "  " + st.Paint(term.Muted, cost)
 }
 
@@ -749,7 +755,8 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 		n := 0
 		var why []string
 		for _, k := range []struct{ outcome, words string }{{claude.OutcomeUnfair, "setup changed"}, {claude.OutcomeInfra, "infrastructure"},
-			{run.OutcomeSandboxFlagged, "sandbox"}, {claude.OutcomeCancelled, "stopped"}} {
+			{run.OutcomeSandboxFlagged, "sandbox"}, {claude.OutcomeCancelled, "stopped"}, {experiment.OutcomeUngraded, "ungraded by the judge"},
+			{experiment.OutcomeGradePending, "awaiting the judge's grade"}} {
 			if c := ex[k.outcome]; c > 0 {
 				n += c
 				why = append(why, fmt.Sprintf("%d %s", c, k.words))
@@ -767,6 +774,9 @@ func reportNotes(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) 
 	}
 	if s := rep.Analysis.Sandbox; s != nil && (s.Imbalanced || len(s.Disagrees) > 0) {
 		notes = append(notes, "the sandbox left out more runs on one side, so the answer is not sure")
+	}
+	if u := rep.Analysis.Ungraded; u != nil && (u.Imbalanced || len(u.Disagrees) > 0) {
+		notes = append(notes, "the judge left more runs without a grade on one side, so the answer is not sure")
 	}
 	if !f.sandboxed && rep.Lock.Grader != "" {
 		notes = append(notes, "hidden tests ran on your machine, outside the sandbox")

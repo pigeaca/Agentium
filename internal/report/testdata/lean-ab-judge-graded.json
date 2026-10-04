@@ -4,7 +4,7 @@
   "status": "done",
   "slots": 20,
   "settled": 20,
-  "spent_usd": 10.007047894799397,
+  "spent_usd": 9.057502073298158,
   "lock": {
     "method": "phase1-v2",
     "agentium": "test",
@@ -395,46 +395,47 @@
         "metric": "cost",
         "role": "primary",
         "ratio": true,
-        "tasks": 10,
+        "tasks": 9,
         "repeats": 1,
-        "full_tasks": 10,
+        "full_tasks": 9,
         "floor_tasks": 8,
         "floor_repeats": 1,
         "a": 0.3522090529504411,
-        "b": 0.27578522378936693,
+        "b": 0.25298724007285467,
         "bootstrap_95": {
-          "estimate": 0.7830157160332059,
-          "low": 0.6730742416272921,
-          "high": 0.9096284049807029
+          "estimate": 0.7392186614578548,
+          "low": 0.6525098763090298,
+          "high": 0.8228780970587168
         },
         "t_95": {
-          "estimate": 0.7830157160332059,
-          "low": 0.6508123700932742,
-          "high": 0.9420743054824279
+          "estimate": 0.7392186614578548,
+          "low": 0.6364620573020137,
+          "high": 0.8585652878726815
         },
         "bootstrap_90": {
-          "estimate": 0.7830157160332059,
-          "low": 0.689054157038434,
-          "high": 0.8876660711869683
+          "estimate": 0.7392186614578548,
+          "low": 0.6670256949995796,
+          "high": 0.811619426212532
         },
         "t_90": {
-          "estimate": 0.7830157160332059,
-          "low": 0.6740442458643463,
-          "high": 0.9096043995877167
+          "estimate": 0.7392186614578548,
+          "low": 0.6551744948778109,
+          "high": 0.8340438062221172
         },
-        "verdict": "improved"
+        "verdict": "inconclusive",
+        "note": "demoted to inconclusive: the arms' judge-graded runs the judge left without a grade differ (A 0, B 1); counting them gives improved"
       },
       {
         "metric": "time",
         "role": "secondary",
         "ratio": true,
-        "tasks": 10,
+        "tasks": 9,
         "repeats": 1,
-        "full_tasks": 10,
+        "full_tasks": 9,
         "floor_tasks": 8,
         "floor_repeats": 1,
         "a": 44.40705568201521,
-        "b": 44.40705568201521,
+        "b": 44.02482285037537,
         "bootstrap_95": {
           "estimate": 1,
           "low": 1,
@@ -461,13 +462,13 @@
         "metric": "output_tokens",
         "role": "secondary",
         "ratio": true,
-        "tasks": 10,
+        "tasks": 9,
         "repeats": 1,
-        "full_tasks": 10,
+        "full_tasks": 9,
         "floor_tasks": 8,
         "floor_repeats": 1,
         "a": 3437.9901308667518,
-        "b": 3437.9901308667518,
+        "b": 3399.9586004178573,
         "bootstrap_95": {
           "estimate": 1,
           "low": 1,
@@ -494,32 +495,32 @@
         "metric": "judge_success",
         "role": "secondary",
         "ratio": false,
-        "tasks": 4,
+        "tasks": 3,
         "repeats": 1,
         "full_tasks": 0,
         "floor_tasks": 20,
         "floor_repeats": 3,
         "a": 1,
-        "b": 0.75,
+        "b": 0.6666666666666666,
         "bootstrap_95": {
-          "estimate": -0.25,
-          "low": -0.75,
+          "estimate": -0.3333333333333333,
+          "low": -1,
           "high": 0
         },
         "t_95": {
-          "estimate": -0.25,
-          "low": -1.0456115763209262,
-          "high": 0.5456115763209262
+          "estimate": -0.3333333333333333,
+          "low": -1.7675509099164854,
+          "high": 1.1008842432498187
         },
         "bootstrap_90": {
-          "estimate": -0.25,
-          "low": -0.75,
+          "estimate": -0.3333333333333333,
+          "low": -0.6666666666666666,
           "high": 0
         },
         "t_90": {
-          "estimate": -0.25,
-          "low": -0.8383408587004553,
-          "high": 0.33834085870045527
+          "estimate": -0.3333333333333333,
+          "low": -1.3066618601179076,
+          "high": 0.6399951934512411
         },
         "verdict": "exploratory",
         "note": "the judge's grades, unvalidated: shown apart from the tests, never a verdict"
@@ -527,10 +528,10 @@
     ],
     "counted": {
       "A": 10,
-      "B": 10
+      "B": 9
     },
     "excluded": {
-      "infra": 1
+      "ungraded": 1
     },
     "pass_at_1": {
       "A": 0.5,
@@ -542,7 +543,7 @@
     },
     "judge_pass_at_1": {
       "A": 1,
-      "B": 0.75
+      "B": 0.6666666666666666
     },
     "not_discriminating": [
       "task-3",
@@ -550,15 +551,26 @@
       "task-0"
     ],
     "noise": {
-      "tasks": 10,
+      "tasks": 9,
       "repeats": 1,
       "tau_log_cost": {
         "estimate": 0,
         "low": 0,
-        "high": 0.3879906008780044,
-        "basis": "var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 9 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow"
+        "high": 0.25874063930614283,
+        "basis": "var(d) − 2σ², floored at zero, taking σ = 0.19 (the planner's default): one run per arm cannot separate σ from τ; chi-square range of var(d) on 8 degrees of freedom; it assumes normal noise, and heavier tails make it too narrow"
       },
       "success_varies": true
+    },
+    "ungraded": {
+      "ungraded": {
+        "A": 0,
+        "B": 1
+      },
+      "pairs": 9,
+      "imbalanced": true,
+      "as_counted": {
+        "cost": "improved"
+      }
     }
   },
   "arms": [
@@ -595,18 +607,18 @@
       "name": "B",
       "context": "lean",
       "snapshot": "b808beb3ddbaea19f7643ae0c20ec8167641da46",
-      "counted": 10,
+      "counted": 9,
       "capped": 0,
       "timed_out": 0,
       "first_request_tokens": 30000,
-      "cost_usd": 0.2927658164743392,
-      "cold_cost_usd": 1.812765816474339,
+      "cost_usd": 0.25867914924912827,
+      "cold_cost_usd": 1.778679149249128,
       "isolated_cost_usd": null,
       "cache_read_share": 0.9301244041390536,
       "behavior": {
         "tests_changed": 0,
         "tests_removed": 0,
-        "ran_tests": 10,
+        "ran_tests": 9,
         "ran_checks": 0,
         "committed": 0,
         "checks_changed": 0,
@@ -805,12 +817,12 @@
           "cost_usd": 0.45611451130129826
         },
         "B": {
-          "marks": "×●",
-          "successes": 1,
-          "counted": 1,
+          "marks": "×",
+          "successes": 0,
+          "counted": 0,
           "capped": 0,
           "timed_out": 0,
-          "cost_usd": 0.5995458215012371
+          "cost_usd": null
         }
       },
       "judged": true
@@ -864,23 +876,23 @@
       },
       {
         "name": "B",
-        "graded": 4,
+        "graded": 3,
         "fixed": {
-          "count": 3,
-          "of": 4,
-          "share": 0.75,
-          "low": 0.30064184009690814,
-          "high": 0.954412739704631
+          "count": 2,
+          "of": 3,
+          "share": 0.6666666666666666,
+          "low": 0.20765959880782422,
+          "high": 0.9385080559790691
         },
         "ungraded": 1,
-        "cost_usd": 1.54
+        "cost_usd": 1.19
       }
     ],
-    "cost_usd": 2.8000000000000003
+    "cost_usd": 2.45
   },
   "notes": [
-    "Runs not counted: 1 infrastructure failure. Their spend is in the total.",
-    "4 task(s) are judge-graded (task-6, task-7, task-8, task-9): no tests ran; the judge compared each run's change with the reference solution, and a majority of its 5 calls passed or failed the run (a run without a majority is infrastructure: not counted, tried again). These grades are unvalidated (the judge pilot's grading without tests was inconclusive), so they count toward \"the judge says fixed\" alone, never toward success, which is the tests'; no verdict rests on them, and the north star does not count them. Cost, time and output tokens count every graded run of both kinds. 1 run(s) the judge could not grade are among the infrastructure failures. The judge says fixed: 0 of 4 task(s) have 3 or more graded runs in both arms, against success's floor of 20 tasks, counted over judge-graded tasks alone.",
+    "Runs not counted: 1 judge-graded, left without a grade (not tried again). Their spend is in the total.",
+    "4 task(s) are judge-graded (task-6, task-7, task-8, task-9): no tests ran; the judge compared each run's change with the reference solution, and a majority of its 5 calls passed or failed the run. A judge error leaves the grade pending, graded again later from the run's change, never by running the agent again; a tie, a refusal or a reply still malformed when asked again leaves the run without a grade: not counted, never a fail, not tried again. These grades are unvalidated (the judge pilot's grading without tests was inconclusive), so they count toward \"the judge says fixed\" alone, never toward success, which is the tests'; no verdict rests on them, and the north star leaves out an experiment with judge-graded tasks. Cost, time and output tokens count every graded run of both kinds. Runs the judge left without a grade (not counted, not tried again): A 0, B 1; the arms differ, so the verdicts they would feed (cost, time, output tokens) are demoted to inconclusive. The judge says fixed: 0 of 3 task(s) have 3 or more graded runs in both arms, against success's floor of 20 tasks, counted over judge-graded tasks alone.",
     "Not discriminating for success (every run passed, or every run failed, in both arms): task-0, task-2, task-3. They stay in for cost.",
     "Success is exploratory: 0 of 6 task(s) have 3 or more counted runs in both arms, below the floor of 20 tasks (method phase1-v2).",
     "Cost's verdict rests on tasks with fewer than 3 runs per arm, as method phase1-v2 allows: each task's difference carries the run-to-run noise, and the t-interval across tasks, the wider of the two here, decides. A seeded simulation of 8–12 tasks × 1 run (σ = 0.19, τ = 0.10–0.25, normal and skewed noise) checked it: false differences in at most 6% of experiments without a true difference, and 95% intervals that cover the true effect at least 93% of the time.",
@@ -1040,7 +1052,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1115,7 +1127,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1190,7 +1202,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1265,7 +1277,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1442,7 +1454,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1517,7 +1529,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "no",
         "answers": [
           "no",
@@ -1592,7 +1604,7 @@
       },
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1619,12 +1631,12 @@
       "finished": "2026-09-29T12:10:50Z"
     },
     {
-      "id": "r11-ungraded",
+      "id": "r11",
       "slot": 11,
       "attempt": 1,
       "task": "task-8",
       "arm": "B",
-      "outcome": "infra",
+      "outcome": "ok",
       "success": false,
       "metrics": {
         "cli_version": "2.1.281",
@@ -1665,11 +1677,11 @@
         "outside_reads": 0
       },
       "notes": [
-        "not graded: the judge answered 2 of 5 times (2 fixed, 0 not), too few for a majority either way: it stopped at a usage limit or a sign-in failure (infrastructure: not counted, and an experiment tries the run again)"
+        "not graded: the judge answered 2 of 5 times (2 fixed, 0 not; 3 refused or malformed), too few for a majority either way (left out of the analysis, not tried again)"
       ],
       "context_commit": "ctx",
       "judge": {
-        "version": 1,
+        "version": 2,
         "fixed": "yes",
         "answers": [
           "yes",
@@ -1685,84 +1697,14 @@
         "effort": "high",
         "cost_usd": 0.14,
         "errors": [
-          "error result: Claude AI usage limit reached"
+          "no valid verdict in: I can't help with grading this change.",
+          "no valid verdict in: I can't help with grading this change.",
+          "no valid verdict in: I can't help with grading this change.",
+          "no valid verdict in: I can't help with grading this change.",
+          "no valid verdict in: I can't help with grading this change.",
+          "no valid verdict in: I can't help with grading this change."
         ],
-        "stopped": "limit"
-      },
-      "graded_by": "judge",
-      "started": "2026-09-29T12:11:00Z",
-      "finished": "2026-09-29T12:11:50Z"
-    },
-    {
-      "id": "r11",
-      "slot": 11,
-      "attempt": 2,
-      "task": "task-8",
-      "arm": "B",
-      "outcome": "ok",
-      "passed": true,
-      "success": true,
-      "metrics": {
-        "cli_version": "2.1.281",
-        "model": "claude-sonnet-5",
-        "permission_mode": "",
-        "tools": null,
-        "skills": 0,
-        "mcp_tools": 0,
-        "cost_usd": 0.5995458215012371,
-        "turns": 0,
-        "duration_ms": 48000,
-        "api_ms": 0,
-        "input_tokens": 50,
-        "output_tokens": 3800,
-        "cache_read_tokens": 400000,
-        "cache_write_tokens": 30000,
-        "first_request_tokens": 30000,
-        "tools_used": null,
-        "api_retries": 0,
-        "permission_denials": 0,
-        "result_subtype": "",
-        "result_is_error": false,
-        "result_excerpt": "",
-        "saw_init": true,
-        "saw_result": true
-      },
-      "behavior": {
-        "files_changed": 2,
-        "lines_added": 10,
-        "lines_removed": 3,
-        "tests_changed": false,
-        "tests_removed": 0,
-        "ran_tests": true,
-        "ran_checks": false,
-        "commits": 0,
-        "bash_commands": 6,
-        "denials": 0,
-        "outside_reads": 0
-      },
-      "context_commit": "ctx",
-      "judge": {
-        "version": 1,
-        "fixed": "yes",
-        "answers": [
-          "yes",
-          "yes",
-          "yes",
-          "partly",
-          "yes"
-        ],
-        "reasons": [
-          "Does what the reference does.",
-          "Does what the reference does.",
-          "Does what the reference does.",
-          "Does what the reference does.",
-          "Does what the reference does."
-        ],
-        "requested": 5,
-        "reason": "Does what the reference does.",
-        "model": "claude-opus-5-5",
-        "effort": "high",
-        "cost_usd": 0.35000000000000003
+        "refused": 3
       },
       "graded_by": "judge",
       "started": "2026-09-29T12:11:00Z",

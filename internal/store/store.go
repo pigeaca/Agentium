@@ -869,6 +869,23 @@ func (s *Store) SetRunRecord(ctx context.Context, id string, record []byte) erro
 	return nil
 }
 
+// SetRunGrade replaces a stored run's record and its passed column, and nothing else: a resume stores a judge-graded
+// run's grade this way, once the judge grades it from its stored change (its outcome and cost stay as stored).
+func (s *Store) SetRunGrade(ctx context.Context, id string, record []byte, passed *bool) error {
+	var p any
+	if passed != nil {
+		p = *passed
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE runs SET record = ?, passed = ? WHERE id = ?`, string(record), p, id)
+	if err != nil {
+		return fmt.Errorf("update run %s: %w", id, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("run %s: %w", id, errors.Join(ErrNotFound, err))
+	}
+	return nil
+}
+
 // RunByID returns a project's run, or ErrNotFound.
 func (s *Store) RunByID(ctx context.Context, projectID int64, id string) (Run, error) {
 	runs, err := s.queryRuns(ctx, `WHERE project_id = ? AND id = ?`, projectID, id)

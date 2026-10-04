@@ -224,6 +224,12 @@ type Record struct {
 	// GradedBy is task.GradingJudge for a run of a judge-graded task: the judge's majority grades it (Passed), not
 	// hidden tests, and its grade is unvalidated. Empty for every run graded by the tests (and every older record).
 	GradedBy string `json:"graded_by,omitempty"`
+	// Ungraded says why a fair judge-graded run has no grade for good (a tie, refusals or malformed replies, errors on
+	// MaxGradeErrors attempts): left out of the analysis, never a fail, never tried again. Empty while the grade is
+	// pending (NeedsGrading) or given.
+	Ungraded string `json:"ungraded,omitempty"`
+	// GradeErrors counts the grading attempts that ended in an error leaving the grade open (MaxGradeErrors).
+	GradeErrors int `json:"grade_errors,omitempty"`
 	// PairJudge is the pair judge's comparison of this run's change with its pair's arm-A run (an experiment with
 	// --judge-pairs, both runs passing): kept on the pair's arm-B run only. Unvalidated and exploratory, it decides
 	// nothing; its cost is kept here, apart from Metrics.CostUSD (Spend).
@@ -646,10 +652,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		} else if err != nil {
 			return unfinished(err)
 		}
-		if spec.Task.JudgeGraded() {
-			return env.gradeByJudge(ctx, spec, &rec, func(partial Record) error {
+		if spec.Task.JudgeGraded() { // the run is the agent's, whatever the judge does: its grade may stay pending, never a rerun
+			if err := env.gradeByJudge(ctx, spec, &rec, func(partial Record) error {
 				return env.writeStart(start{Record: partial, Workspace: workspace, AgentStarted: agentStarted, PGID: pgid, Finished: true, Meta: env.Meta})
-			}, unfinished)
+			}); err != nil {
+				return unfinished(err)
+			}
+			return rec, nil
 		}
 		if rec.Passed == nil { // the grade was infrastructure (flagged sandbox denials): nothing to judge
 			break

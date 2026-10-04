@@ -244,10 +244,13 @@ func Settles(outcome string) bool {
 	return Fair(outcome) || outcome == claude.OutcomeUnfair || outcome == run.OutcomeSandboxFlagged
 }
 
-// OutcomeUngraded is how the analysis counts a fair judge-graded run without a grade among the runs it leaves out
-// (Analysis.Excluded): the judge gave no majority. Runs are stored as infrastructure then (run.gradeByJudge), so it
-// shows only for a record that is not.
-const OutcomeUngraded = "ungraded"
+// OutcomeUngraded is how the analysis counts a fair judge-graded run left without a grade for good among the runs it
+// leaves out (Analysis.Excluded): a tie, refusals or malformed replies, or errors on every attempt (run.Record.Ungraded).
+// OutcomeGradePending counts one whose grade is still pending (run.NeedsGrading): graded again from its change later.
+const (
+	OutcomeUngraded     = "ungraded"
+	OutcomeGradePending = "grade-pending"
+)
 
 // LeftOutForSandbox reports whether a run was left out because its sandboxed grade failed with denials the agent's own
 // sandbox does not impose (run.OutcomeSandboxFlagged).

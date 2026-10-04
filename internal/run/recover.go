@@ -151,8 +151,9 @@ func (e *AliveError) runsText() string {
 // resists removal is moved into the quarantine with a warning (cleanGrade, RecoverWarn). A run's temp root is found from its
 // workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
 //
-// A stored run's records keep nothing to recover, but a pair's comparison (Env.JudgePair) that Agentium died in leaves
-// its folder there, with a config folder that may hold the sign-in: with the run lock held none is running, so it goes.
+// A stored run's records keep nothing to recover, but a judgement, a grading attempt (Env.Regrade) or a pair's
+// comparison (Env.JudgePair) that Agentium died in leaves its folder there, with a config folder that may hold the
+// sign-in: with the run lock held none is running, so it goes.
 func Recover(ctx context.Context, layout home.Layout, stored func(id string) (bool, error), secret string, now time.Time) ([]Orphan, error) {
 	return RecoverWarn(ctx, layout, stored, secret, now, nil)
 }
@@ -189,8 +190,12 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 			return orphans, err
 		}
 		if known {
-			if err := os.RemoveAll(filepath.Join(layout.Records, e.Name(), pairJudgeFolder)); err != nil {
-				return orphans, fmt.Errorf("remove the pair judge folder of %s: %w", e.Name(), err)
+			// A stored run is judged, graded again (Regrade) or compared in its records' judge folders: one Agentium died
+			// in is left, with a config folder that may hold the sign-in.
+			for _, sub := range []string{"judge", pairJudgeFolder} {
+				if err := os.RemoveAll(filepath.Join(layout.Records, e.Name(), sub)); err != nil {
+					return orphans, fmt.Errorf("remove the %s folder of %s: %w", sub, e.Name(), err)
+				}
 			}
 			// A grade's folder a failed removal left (the run is stored anyway).
 			cleanGrade(layout, filepath.Join(layout.Records, e.Name()), warn)

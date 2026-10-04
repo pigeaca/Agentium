@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
@@ -23,7 +24,9 @@ import (
 // A verdict is decisive when it is improved, regressed or no loss beyond the margin (also "improved, but small" and
 // "equivalent", which are as firm); inconclusive and exploratory verdicts do not count. Only the primary metric and the
 // guard have verdicts that count (the others are exploratory by role). An A/A calibration never counts: it measures
-// noise and answers nothing about a change.
+// noise and answers nothing about a change. Nor does an experiment with judge-graded tasks, until the paid real check
+// validates the judge (.agents/plans/2026-10-01-ticket-tasks.md, step 4): its cost verdict has no correctness guard from
+// tests over those tasks. LeftOut names such experiments, so the line says why they are not counted.
 type NorthStar struct {
 	Decisive bool `json:"decisive"`
 	// Experiment, Metric and Verdict name the first decisive verdict, the one whose experiment's last run finished first.
@@ -35,7 +38,19 @@ type NorthStar struct {
 	// SpentUSD is what every run of the project started up to that experiment's last run spent, the agent's and the
 	// judge's (run.Spend). Without a decisive verdict, it is what all the project's runs spent.
 	SpentUSD float64 `json:"spent_usd"`
+	// LeftOut lists the finished experiments the north star leaves out for a reason it states (judge-graded tasks), in
+	// stored order; absent when none.
+	LeftOut []LeftOut `json:"left_out,omitempty"`
 }
+
+// LeftOut is a finished experiment the north star does not count, and why, in words.
+type LeftOut struct {
+	Experiment string `json:"experiment"`
+	Why        string `json:"why"`
+}
+
+// whyJudgeGraded is why the north star leaves out an experiment with judge-graded tasks.
+const whyJudgeGraded = "it has judge-graded tasks, whose grades are unvalidated until the judge's paid real check"
 
 // Decisive reports whether verdict is one that ends the search for a first answer.
 func Decisive(verdict string) bool {
@@ -62,19 +77,24 @@ func LoadNorthStar(ctx context.Context, p experiment.Project) (NorthStar, error)
 		return NorthStar{}, err
 	}
 	var first *firstVerdict
+	var leftOut []LeftOut
 	for _, e := range experiments {
 		if e.Lock == nil || e.Status != store.StatusDone { // only an experiment that ran to its end gives a verdict to count
 			continue
 		}
-		found, err := decisiveOf(ctx, p, e)
+		found, why, err := decisiveOf(ctx, p, e)
 		if err != nil {
 			return NorthStar{}, err
+		}
+		if why != "" {
+			leftOut = append(leftOut, LeftOut{Experiment: e.Name, Why: why})
+			continue
 		}
 		if found != nil && (first == nil || found.finished.Before(first.finished)) {
 			first = found
 		}
 	}
-	var out NorthStar
+	out := NorthStar{LeftOut: leftOut}
 	for _, r := range all {
 		if first == nil || !r.Started.After(first.started) {
 			out.SpentUSD += run.StoredSpend(r.CostUSD, r.Record).TotalUSD()
@@ -94,28 +114,32 @@ type firstVerdict struct {
 }
 
 // decisiveOf analyzes a locked experiment as its report would and returns its decisive verdict, preferring the primary
-// metric's, or nil when it has none (or no runs).
-func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (*firstVerdict, error) {
+// metric's, or nil when it has none (or no runs). An experiment the north star leaves out whatever its verdict (one
+// with judge-graded tasks) gives no verdict and why, in words.
+func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (*firstVerdict, string, error) {
 	var lock experiment.Lock
 	if err := json.Unmarshal(e.Lock, &lock); err != nil {
-		return nil, fmt.Errorf("experiment %s: its lock cannot be read: %w", e.Name, err)
+		return nil, "", fmt.Errorf("experiment %s: its lock cannot be read: %w", e.Name, err)
+	}
+	if lock.Design.Template == experiment.TemplateAA {
+		return nil, "", nil // a calibration measures noise: it answers nothing about a change
+	}
+	if lock.JudgeGraded() {
+		return nil, whyJudgeGraded, nil
 	}
 	runs, err := p.DB.ExperimentRuns(ctx, e.ID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(runs) == 0 {
-		return nil, nil
-	}
-	if lock.Design.Template == experiment.TemplateAA {
-		return nil, nil // a calibration measures noise: it answers nothing about a change
+		return nil, "", nil
 	}
 	var data []experiment.RunData
 	out := &firstVerdict{experiment: e.Name}
 	for _, r := range runs {
 		var rec run.Record
 		if err := json.Unmarshal(r.Record, &rec); err != nil {
-			return nil, fmt.Errorf("run %s: %w", r.ID, err)
+			return nil, "", fmt.Errorf("run %s: %w", r.ID, err)
 		}
 		data = append(data, experiment.RunDataOf(r.Slot, rec))
 		out.started = latest(out.started, r.Started)
@@ -123,17 +147,17 @@ func decisiveOf(ctx context.Context, p experiment.Project, e store.Experiment) (
 	}
 	analysis, err := experiment.Analyze(lock, data)
 	if err != nil {
-		return nil, fmt.Errorf("experiment %s: %w", e.Name, err)
+		return nil, "", fmt.Errorf("experiment %s: %w", e.Name, err)
 	}
 	for _, role := range []string{experiment.RolePrimary, experiment.RoleGuard} {
 		for _, res := range analysis.Results {
 			if res.Role == role && Decisive(res.Verdict) {
 				out.metric, out.verdict = res.Metric, res.Verdict
-				return out, nil
+				return out, "", nil
 			}
 		}
 	}
-	return nil, nil
+	return nil, "", nil
 }
 
 func latest(a, b time.Time) time.Time {
@@ -143,13 +167,22 @@ func latest(a, b time.Time) time.Time {
 	return a
 }
 
-// Line is the one-line summary `start` and the report show.
+// Line is the one-line summary `start` and the report show, with what it left out and why: "First decisive verdict:
+// none yet ($4.20 spent since init); left out: tickets (it has judge-graded tasks, …)".
 func (n NorthStar) Line() string {
-	if !n.Decisive {
-		return fmt.Sprintf("First decisive verdict: none yet ($%.2f spent since init)", n.SpentUSD)
+	line := fmt.Sprintf("First decisive verdict: none yet ($%.2f spent since init)", n.SpentUSD)
+	if n.Decisive {
+		line = fmt.Sprintf("First decisive verdict: %s on %s in %s, %s after init, $%.2f spent up to it",
+			n.Verdict, n.Metric, n.Experiment, formatSpan(time.Duration(n.Seconds*float64(time.Second))), n.SpentUSD)
 	}
-	return fmt.Sprintf("First decisive verdict: %s on %s in %s, %s after init, $%.2f spent up to it",
-		n.Verdict, n.Metric, n.Experiment, formatSpan(time.Duration(n.Seconds*float64(time.Second))), n.SpentUSD)
+	if len(n.LeftOut) > 0 {
+		var parts []string
+		for _, l := range n.LeftOut {
+			parts = append(parts, fmt.Sprintf("%s (%s)", l.Experiment, l.Why))
+		}
+		line += "; left out: " + strings.Join(parts, ", ")
+	}
+	return line
 }
 
 // formatSpan writes d in its two largest units: "2d 3h", "3h 12m", "7m", "40s".

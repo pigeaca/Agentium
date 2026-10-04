@@ -488,6 +488,12 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if lock.Design.Judge != nil { // first the graded runs a stopped execution left without a verdict
 		judgeNote, unfunded, judgeErr = r.judgePending(ctx, runEnv, lock, runs, calibrationSpent)
 	}
+	// And the grades it left pending: graded from their changes, never run again (a seq-v1 experiment's stages do it).
+	if judgeNote == "" && judgeErr == nil && lock.Method != MethodSeq {
+		var graded regradeResult
+		graded, judgeErr = x.gradePending(ctx, runs, calibrationSpent)
+		judgeNote = graded.note
+	}
 	prior, standing := x.priorAttempts(runs)
 	standing.Spent += calibrationSpent
 	x.tries = maps.Clone(x.storedTries)
@@ -517,12 +523,8 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		sum = Summary{Status: StatusUsage, Note: judgeNote}
 		x.judgePaused.Store(true)
 	default:
-		plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
-			BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts, Prior: prior, Backoff: backoff, Progress: event, Usage: gate,
-			Paused: x.paused}
-		if len(design.JudgeGraded) > 0 { // a judge-graded task's run holds its grading's cap, a test-graded one its judgement's
-			plan.CapOf = func(s Slot) float64 { return design.SlotCapUSD(s.Arm, s.Task) }
-		}
+		plan := lockPlan(lock, calibrationSpent)
+		plan.Prior, plan.Backoff, plan.Progress, plan.Usage, plan.Paused = prior, backoff, event, gate, x.paused
 		if x.pairs != nil {
 			plan.PairHoldUSD, plan.Outside = design.PairJudgeCapUSD(), x.pairs.outside
 			x.pairs.start(ctx)
@@ -531,6 +533,11 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 			sum, runErr = x.runStages(ctx, plan, o)
 		} else {
 			sum, runErr = Execute(ctx, plan, x.slot)
+			if sum.Status == StatusDone && runErr == nil { // the grades the runs left pending
+				var regraded float64
+				regraded, runErr = x.regradeAfterRuns(ctx, calibrationSpent)
+				sum.SpentUSD += regraded
+			}
 		}
 	}
 	if sum.Status == "" { // Execute refused its input
@@ -558,6 +565,20 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, errors.Join(runErr, err)
 	}
 	return RunOutcome{Summary: sum, JudgePaused: x.judgePaused.Load(), Err: runErr}, nil
+}
+
+// lockPlan is the scheduler's plan of a locked experiment as far as the lock decides it: its schedule, concurrency,
+// attempts, budget (calibrationSpent spent outside its slots) and each slot's cap. A judge-graded task's run holds its
+// grading's cap, a test-graded one its judgement's (Design.SlotCapUSD); without judge-graded tasks the caps are the
+// arms' as they always were.
+func lockPlan(lock Lock, calibrationSpent float64) Plan {
+	design := lock.Design
+	plan := Plan{Schedule: lock.Schedule, Concurrency: design.Concurrency, RunCapUSD: design.RunCapUSD(), ArmCapUSD: armCaps(design),
+		BudgetUSD: design.BudgetUSD, SpentUSD: calibrationSpent, MaxAttempts: lock.MaxAttempts}
+	if len(design.JudgeGraded) > 0 {
+		plan.CapOf = func(s Slot) float64 { return design.SlotCapUSD(s.Arm, s.Task) }
+	}
+	return plan
 }
 
 // RunningLine is how the runs are run, as the plain lines say it before the first run: "Running up to 2 at a time; each
@@ -621,17 +642,43 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 	r, lock := x.r, x.lock
 	made := 0           // looks reported in this execution
 	spent := p.SpentUSD // as of the last stage's end
+	erred := 0          // passes in a row that left grades pending for an error
 	for {
 		if ctx.Err() != nil { // cancelled between stages: Execute has nothing in flight
 			return Summary{Status: StatusStopped, Note: "interrupted", SpentUSD: spent}, nil
+		}
+		if erred > 0 && !x.regradeWait(ctx, erred) {
+			continue // cancelled while waiting: the check above ends it
 		}
 		runs, err := x.storedRuns(ctx)
 		if err != nil {
 			return Summary{}, err
 		}
+		// Grades left pending (by a judge error, the usage limit or an interrupt) are graded again before a look: a look
+		// waits for every grade of its stages (slotsDone), and the agent never runs again for them.
+		graded, err := x.gradePending(ctx, runs, p.SpentUSD)
+		if err != nil {
+			return Summary{}, err
+		}
+		if graded.pending > 0 && graded.attempted > 0 { // the next pass waits, longer each time in a row
+			erred++
+		} else {
+			erred = 0
+		}
 		data, err := RunDataOfStored(runs)
 		if err != nil {
 			return Summary{}, err
+		}
+		if graded.note != "" || graded.unfunded > 0 {
+			_, standing := attemptsOf(runs) // runs hold the grades just stored
+			sum := Summary{Status: StatusUsage, Note: graded.note, SpentUSD: p.SpentUSD + standing.Spent}
+			if graded.note != "" {
+				x.judgePaused.Store(true)
+			} else {
+				sum.Status, sum.Note = StatusBudget, fmt.Sprintf("%d run(s) still wait for the judge's grade, but the budget leaves no room for one ($%.2f)",
+					graded.unfunded, lock.Design.GradingCapUSD())
+			}
+			return sum, nil
 		}
 		status, _, err := SequentialStatus(lock, data)
 		if err != nil {
@@ -708,7 +755,7 @@ func RunDataOfStored(runs []store.Run) ([]RunData, error) {
 func RunDataOf(slot int, rec run.Record) RunData {
 	return RunData{Slot: slot, Task: rec.Task, Arm: rec.Arm, Outcome: rec.Outcome, Passed: rec.Passed,
 		ConfigChanged: rec.Behavior.ConfigChanged, CostUSD: rec.Spend().AgentUSD, DurationS: float64(rec.Metrics.DurationMS) / 1000,
-		OutputTokens: float64(rec.Metrics.OutputTokens), Judged: rec.GradedBy == task.GradingJudge}
+		OutputTokens: float64(rec.Metrics.OutputTokens), Judged: rec.GradedBy == task.GradingJudge, Pending: run.NeedsGrading(rec)}
 }
 
 // usageGate is the gate that pauses pairs before the subscription's usage limit; nil with an API key, whose runs use no
@@ -771,7 +818,7 @@ func (x *execution) slot(ctx context.Context, slot Slot, attempt int, overlap []
 		Timeout: design.Timeout, Judge: design.Judge, JudgeGrading: design.JudgeGrading})
 	result := spentResult(rec.Spend())
 	result.Outcome, result.Usage, result.WarmWait, result.Passed = rec.Outcome, rec.Metrics.UsageLast, rec.WarmWait, rec.Passed
-	result.JudgeGraded = rec.GradedBy == task.GradingJudge
+	result.JudgeGraded, result.GradePending = rec.GradedBy == task.GradingJudge, run.NeedsGrading(rec)
 	if o := rec.Overshoot; o != nil && o.Exceeded() {
 		result.Overshoot = run.OvershootNote(*o)
 	}
@@ -835,7 +882,7 @@ func (x *execution) checkSubagents(arm string, models map[string][]string, resul
 // It returns runErr with any error of counting them.
 func (x *execution) settle(ctx context.Context, sum *Summary, runErr error, unfunded int) error {
 	design := x.lock.Design
-	if sum.Status != StatusDone || design.Judge == nil && design.JudgePairs == nil {
+	if sum.Status != StatusDone || design.Judge == nil && design.JudgePairs == nil && !x.lock.JudgeGraded() {
 		return runErr
 	}
 	runs, err := x.r.Project.DB.ExperimentRuns(context.WithoutCancel(ctx), x.stored.ID)
@@ -843,6 +890,10 @@ func (x *execution) settle(ctx context.Context, sum *Summary, runErr error, unfu
 		return errors.Join(runErr, err)
 	}
 	n, err := unjudgedOf(x.lock, runs)
+	if err != nil {
+		return errors.Join(runErr, err)
+	}
+	g, err := pendingGrades(x.lock, runs)
 	if err != nil {
 		return errors.Join(runErr, err)
 	}
@@ -855,6 +906,13 @@ func (x *execution) settle(ctx context.Context, sum *Summary, runErr error, unfu
 		pairsUnfunded = x.pairs.unfunded
 	}
 	var budget, waiting []string
+	if g > 0 {
+		waiting = append(waiting, fmt.Sprintf("%d run(s) still wait for the judge's grade", g))
+		spent := sum.SpentUSD
+		if design.BudgetUSD-spent < design.GradingCapUSD()-1e-9 {
+			budget = append(budget, fmt.Sprintf("%d run(s) still wait for the judge's grade, but the budget leaves no room for one ($%.2f)", g, design.GradingCapUSD()))
+		}
+	}
 	if n > 0 {
 		waiting = append(waiting, fmt.Sprintf("%d run(s) still need the judge", n))
 		if unfunded > 0 {

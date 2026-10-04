@@ -354,6 +354,9 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 	}
 	if len(d.JudgeGraded) > 0 {
 		fmt.Fprintln(out, st.Note("note: "+JudgeGradedWords(d)))
+		if w := SuccessFloorWarning(d); w != "" {
+			fmt.Fprintln(out, st.Warn("warning: "+w))
+		}
 	}
 	switch {
 	case !c.Explicit && c.Eligible < c.Tier.Tasks && d.Sequential():
@@ -362,6 +365,23 @@ func (c Created) Write(out io.Writer, st term.Style, name string) {
 		fmt.Fprintln(out, st.Note(fmt.Sprintf("note: the %s tier asks for %d tasks; only %d can be in it", c.Tier.Name, c.Tier.Tasks, c.Eligible)))
 	}
 	fmt.Fprintf(out, "Preview what it costs and can detect: %s\n", st.Command("agentium experiment plan "+name))
+}
+
+// SuccessFloorWarning warns, for a design with judge-graded tasks, when its test-graded tasks are fewer than success's
+// floor (FloorsFor): success, the tests' (the guard of a cost experiment), is then exploratory whatever the runs show,
+// and the judge-graded tasks never count toward it. It does not refuse: "" when there is nothing to say.
+func SuccessFloorWarning(d Design) string {
+	tested := len(d.Tasks) - d.judgedTasks()
+	floor := FloorsFor(d.LockMethod()).SuccessTasks
+	if d.judgedTasks() == 0 || tested >= floor {
+		return ""
+	}
+	role := "the success guard"
+	if d.Goal == GoalBetter {
+		role = "success, the primary metric,"
+	}
+	return fmt.Sprintf("only %d test-graded task(s), below success's floor of %d: %s cannot reach a verdict (the judge-graded tasks never count toward it)",
+		tested, floor, role)
 }
 
 // JudgeGradedWords says what a design's judge-graded tasks mean: "2 task(s) are judge-graded (fix-a, fix-b): the judge

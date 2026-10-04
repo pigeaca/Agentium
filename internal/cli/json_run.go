@@ -144,6 +144,9 @@ type runListEntry struct {
 	Passed  *bool     `json:"passed"`
 	CostUSD float64   `json:"cost_usd"`
 	Started time.Time `json:"started"`
+	// GradedBy is "judge" for a run of a judge-graded task (Passed is the judge's unvalidated grade); absent for a run
+	// graded by tests.
+	GradedBy string `json:"graded_by,omitempty"`
 }
 
 type runListDoc struct {

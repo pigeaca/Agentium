@@ -159,6 +159,8 @@ type judgeCheckDoc struct {
 	CodeFiles              []string `json:"code_files"`
 	ChangedLines           int      `json:"changed_lines"`
 	ReferenceDiffTruncated bool     `json:"reference_diff_truncated"` // the judge reads a cut copy
+	// InstructionTruncated: the instruction is longer than the grading judge reads (judge.MaxInstructionChars).
+	InstructionTruncated bool `json:"instruction_truncated,omitempty"`
 }
 
 type validatedDoc struct {

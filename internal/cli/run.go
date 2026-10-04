@@ -303,8 +303,17 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 			release()
 			return nil, err
 		}
-		fmt.Fprintf(out, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f\n",
-			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status("cancelled"), o.Record.Spend().AgentUSD)
+		// A run that had finished (only storing it was cut short) keeps its outcome; one stopped mid-run is cancelled.
+		outcome := o.Record.Outcome
+		if outcome == "" {
+			outcome = claude.OutcomeCancelled
+		}
+		pending := ""
+		if run.NeedsGrading(o.Record) {
+			pending = " (its grade is pending: graded again from its change)"
+		}
+		fmt.Fprintf(out, "Recovered run %s (task %s, arm %s), left behind by a stopped Agentium: %s, $%.2f%s\n",
+			o.Record.ID, o.Record.Task, o.Record.Arm, env.style().Status(outcome), o.Record.Spend().AgentUSD, pending)
 	}
 	if recoverErr != nil {
 		release()
@@ -458,7 +467,8 @@ func runList(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		doc := runListDoc{header: hdr("run list"), Runs: []runListEntry{}}
 		for _, r := range runs {
-			entry := runListEntry{ID: r.ID, Task: r.TaskName, Kind: r.Kind, Arm: r.Arm, Outcome: r.Outcome, Passed: r.Passed, CostUSD: r.CostUSD, Started: r.Started}
+			entry := runListEntry{ID: r.ID, Task: r.TaskName, Kind: r.Kind, Arm: r.Arm, Outcome: r.Outcome, Passed: r.Passed, CostUSD: r.CostUSD, Started: r.Started,
+				GradedBy: listGrade(r).gradedBy}
 			if entry.Kind == "" {
 				entry.Kind = "task"
 			}
@@ -480,6 +490,16 @@ func runList(ctx context.Context, env Env, args []string) int {
 		if r.Passed != nil {
 			passed = map[bool]string{true: "yes", false: "no"}[*r.Passed]
 		}
+		if g := listGrade(r); g.gradedBy == task.GradingJudge { // the judge's grade, labelled wherever a pass shows
+			switch {
+			case r.Passed != nil:
+				passed += " (judge)"
+			case g.pending:
+				passed = "pending (judge)"
+			case g.ungraded:
+				passed = "ungraded (judge)"
+			}
+		}
 		name := r.TaskName
 		if r.Kind == "calibration" {
 			name = st.Note("(calibration)")
@@ -490,6 +510,23 @@ func runList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// runGrade is what run list shows of who graded a stored run.
+type runGrade struct {
+	gradedBy string // task.GradingJudge, or "" for the tests
+	pending  bool   // a judge-graded run whose grade is pending (run.NeedsGrading)
+	ungraded bool   // a judge-graded run left without a grade for good (run.Record.Ungraded)
+}
+
+// listGrade reads who graded a stored run from its record; a record it cannot read was graded by the tests, as every
+// run before judge grading was.
+func listGrade(r store.Run) runGrade {
+	var rec run.Record
+	if json.Unmarshal(r.Record, &rec) != nil {
+		return runGrade{}
+	}
+	return runGrade{gradedBy: rec.GradedBy, pending: run.NeedsGrading(rec), ungraded: rec.Ungraded != ""}
 }
 
 func runShow(ctx context.Context, env Env, args []string) int {

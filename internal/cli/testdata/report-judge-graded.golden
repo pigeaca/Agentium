@@ -1,20 +1,20 @@
 === 60 columns
        BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────
-         10 tasks · 20 runs · $10.01 spent · 20 min
+         10 tasks · 19 runs · $9.06 spent · 20 min
 
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
-  │              lean is cheaper: 22% less               │
+  │             no clear difference in cost              │
   │ by the tests: whether lean passes as many tasks: too │
   │                     few to tell                      │
   │  by the judge (unvalidated): baseline 4 of 4 fixed,  │
-  │                     lean 3 of 4                      │
-  │           after all 10 tasks · sure enough           │
+  │                     lean 2 of 3                      │
+  │            after all 10 tasks · not sure             │
   │                                                      │
-  │  cheaper ◀ ───━━━━●━━━━━─│────────────── ▶ costlier  │
+  │  cheaper ◀ ───━━━●━━━━───│────────────── ▶ costlier  │
   │                        same                          │
-  │                likely 6% to 35% less                 │
+  │                likely 14% to 36% less                │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -24,14 +24,16 @@
   │ 4 of 4 fixed, says the judge                           │
   │ typical cost  $0.35 a task                             │
   │ typical time  44s a task                               │
+  │                                                        │
   └────────────────────────────────────────────────────────┘
   ┌────────────────────────────────────────────────────────┐
   │                          lean                          │
   │ ██████████████████████████████████████████████████████ │
   │ 6 of 6 passed the tests                                │
-  │ 3 of 4 fixed, says the judge                           │
-  │ typical cost  $0.28 a task                             │
+  │ 2 of 3 fixed, says the judge                           │
+  │ typical cost  $0.25 a task                             │
   │ typical time  44s a task                               │
+  │ ! 1 without the judge's grade                          │
   └────────────────────────────────────────────────────────┘
 
   where they differ
@@ -40,37 +42,41 @@
   task-4          ✗  $0.36      ✓  $0.32
   task-5          ✗  $0.49      ✓  $0.24
   task-7 (judge)  ✓  $0.32      ✗  $0.27
-  + 6 tasks where both ended the same: 6 passed · 3 of them…
+  task-8 (judge)  ✓  $0.46      –
+  + 5 tasks where both ended the same: 5 passed · 2 of them…
 
-  1 run not counted (1 infrastructure); their cost is in
-  the total
+  1 run not counted (1 ungraded by the judge); their cost
+  is in the total
+  the judge left more runs without a grade on one side, so
+  the answer is not sure
   the numbers behind this:
   agentium experiment report lean-ab-judge-graded --details
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
-                   10 tasks · 20 runs · $10.01 spent · 20 min
+                   10 tasks · 19 runs · $9.06 spent · 20 min
 
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
-          │                lean is cheaper: 22% less                 │
+          │               no clear difference in cost                │
           │ by the tests: whether lean passes as many tasks: too few │
           │                         to tell                          │
           │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-          │                          3 of 4                          │
-          │             after all 10 tasks · sure enough             │
+          │                          2 of 3                          │
+          │              after all 10 tasks · not sure               │
           │                                                          │
-          │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-          │   likely 6% to 35% less  same                            │
+          │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
+          │  likely 14% to 36% less  same                            │
           └──────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
   │             baseline              │    │               lean                │
   │ ████████████████▌░░░░░░░░░░░░░░░░ │    │ █████████████████████████████████ │
   │ 3 of 6 passed the tests           │    │ 6 of 6 passed the tests           │
-  │ 4 of 4 fixed, says the judge      │    │ 3 of 4 fixed, says the judge      │
-  │ typical cost  $0.35 a task        │    │ typical cost  $0.28 a task        │
+  │ 4 of 4 fixed, says the judge      │    │ 2 of 3 fixed, says the judge      │
+  │ typical cost  $0.35 a task        │    │ typical cost  $0.25 a task        │
   │ typical time  44s a task          │    │ typical time  44s a task          │
+  │                                   │    │ ! 1 without the judge's grade     │
   └───────────────────────────────────┘    └───────────────────────────────────┘
 
   where they differ
@@ -79,36 +85,40 @@
   task-4          ✗  $0.36      ✓  $0.32
   task-5          ✗  $0.49      ✓  $0.24
   task-7 (judge)  ✓  $0.32      ✗  $0.27
-  + 6 tasks where both ended the same: 6 passed · 3 of them graded by the judge
+  task-8 (judge)  ✓  $0.46      –
+  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
 
-  1 run not counted (1 infrastructure); their cost is in the total
+  1 run not counted (1 ungraded by the judge); their cost is in the total
+  the judge left more runs without a grade on one side, so the answer is not
+  sure
   the numbers behind this:
   agentium experiment report lean-ab-judge-graded --details
 === 100 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $10.01 spent · 20 min
+                             10 tasks · 19 runs · $9.06 spent · 20 min
 
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
+                    │               no clear difference in cost                │
                     │ by the tests: whether lean passes as many tasks: too few │
                     │                         to tell                          │
                     │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-                    │                          3 of 4                          │
-                    │             after all 10 tasks · sure enough             │
+                    │                          2 of 3                          │
+                    │              after all 10 tasks · not sure               │
                     │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
+                    │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
+                    │  likely 14% to 36% less  same                            │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
   │ █████████████████████▌░░░░░░░░░░░░░░░░░░░░░ │    │ ███████████████████████████████████████████ │
   │ 3 of 6 passed the tests                     │    │ 6 of 6 passed the tests                     │
-  │ 4 of 4 fixed, says the judge                │    │ 3 of 4 fixed, says the judge                │
-  │ typical cost  $0.35 a task                  │    │ typical cost  $0.28 a task                  │
+  │ 4 of 4 fixed, says the judge                │    │ 2 of 3 fixed, says the judge                │
+  │ typical cost  $0.35 a task                  │    │ typical cost  $0.25 a task                  │
   │ typical time  44s a task                    │    │ typical time  44s a task                    │
+  │                                             │    │ ! 1 without the judge's grade               │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
   where they differ
@@ -117,35 +127,38 @@
   task-4          ✗  $0.36      ✓  $0.32
   task-5          ✗  $0.49      ✓  $0.24
   task-7 (judge)  ✓  $0.32      ✗  $0.27
-  + 6 tasks where both ended the same: 6 passed · 3 of them graded by the judge
+  task-8 (judge)  ✓  $0.46      –
+  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
 
-  1 run not counted (1 infrastructure); their cost is in the total
+  1 run not counted (1 ungraded by the judge); their cost is in the total
+  the judge left more runs without a grade on one side, so the answer is not sure
   the numbers behind this: agentium experiment report lean-ab-judge-graded --details
 === 120 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $10.01 spent · 20 min
+                             10 tasks · 19 runs · $9.06 spent · 20 min
 
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
+                    │               no clear difference in cost                │
                     │ by the tests: whether lean passes as many tasks: too few │
                     │                         to tell                          │
                     │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-                    │                          3 of 4                          │
-                    │             after all 10 tasks · sure enough             │
+                    │                          2 of 3                          │
+                    │              after all 10 tasks · not sure               │
                     │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
+                    │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
+                    │  likely 14% to 36% less  same                            │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
   │ █████████████████████▌░░░░░░░░░░░░░░░░░░░░░ │    │ ███████████████████████████████████████████ │
   │ 3 of 6 passed the tests                     │    │ 6 of 6 passed the tests                     │
-  │ 4 of 4 fixed, says the judge                │    │ 3 of 4 fixed, says the judge                │
-  │ typical cost  $0.35 a task                  │    │ typical cost  $0.28 a task                  │
+  │ 4 of 4 fixed, says the judge                │    │ 2 of 3 fixed, says the judge                │
+  │ typical cost  $0.35 a task                  │    │ typical cost  $0.25 a task                  │
   │ typical time  44s a task                    │    │ typical time  44s a task                    │
+  │                                             │    │ ! 1 without the judge's grade               │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
   where they differ
@@ -154,8 +167,10 @@
   task-4          ✗  $0.36      ✓  $0.32
   task-5          ✗  $0.49      ✓  $0.24
   task-7 (judge)  ✓  $0.32      ✗  $0.27
-  + 6 tasks where both ended the same: 6 passed · 3 of them graded by the judge
+  task-8 (judge)  ✓  $0.46      –
+  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
 
-  1 run not counted (1 infrastructure); their cost is in the total
+  1 run not counted (1 ungraded by the judge); their cost is in the total
+  the judge left more runs without a grade on one side, so the answer is not sure
   the numbers behind this: agentium experiment report lean-ab-judge-graded --details
 === end

@@ -332,8 +332,9 @@ func comparePairs(e *Experiment, verdict func(n int, task string) judge.PairVerd
 
 // JudgeGraded is OneRun (an A/B of 10 tasks × 1 run, arm B cheaper) with tasks 6 to 9 judge-graded: their runs are
 // graded by the judge's majority of 5 calls instead of tests (task-7's in arm B "not fixed", task-9's in arm A by 3 "yes"
-// of 5 with two calls failing), and task-8's first run in arm B could not be graded (the judge stopped at a usage
-// limit: infrastructure, tried again). A reason names a local path and a key.
+// of 5 with two calls failing), and task-8's run in arm B was left without a grade (two "yes", three refusals: no
+// majority within reach; not counted, not tried again), so the arms' ungraded runs differ and the cost verdict is
+// demoted. A reason names a local path and a key.
 func JudgeGraded() Experiment {
 	e := OneRun(experiment.MethodV2, experiment.TemplateContextAB)
 	e.Name = "lean-ab-judge-graded"
@@ -354,7 +355,7 @@ func JudgeGraded() Experiment {
 		}
 	}
 	verdict := func(answers ...string) *judge.Verdict {
-		v := &judge.Verdict{Version: judge.Version, Requested: grading.Repeats, Model: grading.Model, Effort: grading.Effort, Answers: answers,
+		v := &judge.Verdict{Version: judge.GradingVersion, Requested: grading.Repeats, Model: grading.Model, Effort: grading.Effort, Answers: answers,
 			CostUSD: 0.07 * float64(len(answers))}
 		for range answers {
 			v.Reasons = append(v.Reasons, "Does what the reference does.")
@@ -388,14 +389,15 @@ func JudgeGraded() Experiment {
 		}
 		passed, _, _ := judge.Grade(*rec.Judge)
 		rec.Passed = &passed
-		if rec.Task == "task-8" && rec.Arm == "B" { // its first try: the judge stopped at a usage limit before a majority
-			ungraded := *rec
-			ungraded.ID, ungraded.Outcome, ungraded.Passed = rec.ID+"-ungraded", claude.OutcomeInfra, nil
-			ungraded.Judge = verdict(judge.Yes, judge.Yes)
-			ungraded.Judge.Stopped, ungraded.Judge.Errors = judge.StoppedLimit, []string{"error result: Claude AI usage limit reached"}
-			ungraded.Notes = []string{"not graded: the judge answered 2 of 5 times (2 fixed, 0 not), too few for a majority either way: it stopped at a usage limit or a sign-in failure (infrastructure: not counted, and an experiment tries the run again)"}
-			runs = append(runs, Run{ID: ungraded.ID, Slot: r.Slot, Attempt: 1, Record: ungraded})
-			r.Attempt = 2
+		if rec.Task == "task-8" && rec.Arm == "B" { // refused 3 times of 5: left without a grade
+			rec.Judge = verdict(judge.Yes, judge.Yes)
+			rec.Judge.Refused = 3
+			for range 6 {
+				rec.Judge.Errors = append(rec.Judge.Errors, "no valid verdict in: I can't help with grading this change.")
+			}
+			_, _, why := judge.Grade(*rec.Judge)
+			rec.Passed, rec.Ungraded = nil, why
+			rec.Notes = []string{"not graded: " + why + " (left out of the analysis, not tried again)"}
 		}
 		runs = append(runs, r)
 	}

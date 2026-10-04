@@ -1121,6 +1121,11 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The reference diff has %d characters; the judge reads the first %d, so it will see a cut copy "+
 			"(the task stays valid)", chars, llmjudge.MaxDiffChars)))
 	}
+	instructionCut := utf8.RuneCountInString(t.Instruction) > llmjudge.MaxInstructionChars
+	if instructionCut { // each of the grading's single-turn calls reads it: cut, so one call cannot overshoot its cap far
+		fmt.Fprintln(out, st.Warn(fmt.Sprintf("The instruction has %d characters; the grading judge reads the first %d, so it will judge against a cut copy "+
+			"(the task stays valid; shorten it with agentium task edit %s --instruction @FILE)", utf8.RuneCountInString(t.Instruction), llmjudge.MaxInstructionChars, t.Name)))
+	}
 	fmt.Fprintln(out, note(st, "hidden-test checks are skipped: there are no hidden tests"))
 	fmt.Fprintln(out, note(st, judgeGradedNote()))
 	if t.NeedsReview {
@@ -1131,7 +1136,7 @@ func validateJudged(ctx context.Context, env Env, w *workspace, t store.Task, no
 		doc := validatedDoc{header: env.hdr(), Task: t.Name, Status: result.Status, Summary: result.Summary(), NeedsReview: t.NeedsReview, Grader: task.GraderOf(result.Grader),
 			Arms: []string{}, Repeats: 1, Gaps: []gapDoc{}, HarnessChanged: map[string][]string{}, Warnings: []string{},
 			Judge: &judgeCheckDoc{InstructionWords: words, CodeFiles: list(result.Judge.CodeFiles), ChangedLines: result.Judge.ChangedLines,
-				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars}}
+				ReferenceDiffTruncated: utf8.RuneCountInString(diff) > llmjudge.MaxDiffChars, InstructionTruncated: instructionCut}}
 		return env.emitCode(doc, validationExit(result.Status))
 	}
 	fmt.Fprintf(out, "Result: %s\n", st.Status(result.Summary()))

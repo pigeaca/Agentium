@@ -25,7 +25,8 @@ import (
 // killed after starting. "version" overrides what --version prints, "init-version" what the transcript reports.
 // Called as the judge (--json-schema), it keeps its prompt and folder in ctrl ("judge-prompt-PID", "judge-dir-PID") and
 // answers "yes" at $0.05 a call, or what "judge-answer" holds ("no", "partly"); with "judge-limit" it fails with a usage limit ($0.01), as it does from the call
-// numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON. "cost" sets what a run
+// numbered in "judge-limit-after" on (counting from 0); with "judge-broken" it prints no JSON, as it does for the calls
+// numbered below "judge-broken-calls"; while "judge-block" exists each call waits (up to a minute) after keeping its prompt. "cost" sets what a run
 // reports it cost (default 0.30), with "capped" as a run Claude Code stopped at its cost cap, "cost-lean" what a run in the lean context (CLAUDE.md says "Keep it short") reports,
 // "cost-MODEL" what a run on that model reports,
 // and with "cost-jitter" each slot's cost is scaled by 1 + (slot × 7 mod 11)/40, so tasks' differences vary. "usage" holds a subscription's five-hour window ("used step resets"): each run reports it at its start and at its
@@ -57,6 +58,8 @@ esac
 case " $* " in *" --json-schema "*)
   calls=$(ls "$CTRL" | grep -c '^judge-prompt-')
   cat > "$CTRL/judge-prompt-$$"; pwd > "$CTRL/judge-dir-$$"
+  n=0; while [ -f "$CTRL/judge-block" ] && [ $n -lt 1200 ]; do sleep 0.05; n=$((n+1)); done
+  [ -f "$CTRL/judge-broken-calls" ] && [ "$calls" -lt "$(cat "$CTRL/judge-broken-calls")" ] && { echo 'not json'; exit 1; }
   [ -f "$CTRL/judge-limit-after" ] && [ "$calls" -ge "$(cat "$CTRL/judge-limit-after")" ] && touch "$CTRL/judge-limit"
   [ -f "$CTRL/judge-limit" ] && { echo '{"type":"result","subtype":"error","is_error":true,"result":"Claude AI usage limit reached","total_cost_usd":0.01}'; exit 1; }
   [ -f "$CTRL/judge-broken" ] && { echo 'not json'; exit 1; }

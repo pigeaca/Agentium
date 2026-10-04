@@ -57,6 +57,9 @@ type Result struct {
 	// (run.GradeWords: "fixed (4 of 5)") and JudgeVotes how many calls carried it ("4 of 5").
 	JudgeGraded bool
 	JudgeVotes  string
+	// GradePending: the judge-graded run's grade is pending (run.NeedsGrading): the execution grades it again from its
+	// change; the slot is settled, and the agent never runs again.
+	GradePending bool
 	// SandboxFlagged, for a run left out for flagged sandbox denials (run.OutcomeSandboxFlagged), lists their
 	// operations ("mach-lookup, file-read-data"), never their paths: for progress displays.
 	SandboxFlagged string

@@ -327,7 +327,9 @@ func wider(boot, t stats.Interval) stats.Interval {
 }
 
 // slotsDone reports, per schedule position, whether its slot is settled or out of attempts, as Execute counts them:
-// a settling run settles it; other runs, cancelled ones aside, are attempts.
+// a settling run settles it; other runs, cancelled ones aside, are attempts. A judge-graded run whose grade is pending
+// (RunData.Pending) leaves its slot not done, though Execute never runs it again: its grade may still change, so no
+// look reads it before it is graded or left ungraded for good.
 func slotsDone(l Lock, runs []RunData) []bool {
 	settled := make([]bool, len(l.Schedule))
 	attempts := make([]int, len(l.Schedule))
@@ -336,6 +338,7 @@ func slotsDone(l Lock, runs []RunData) []bool {
 			continue
 		}
 		switch {
+		case Settles(r.Outcome) && r.Pending:
 		case Settles(r.Outcome):
 			settled[r.Slot] = true
 		case r.Outcome != claude.OutcomeCancelled:

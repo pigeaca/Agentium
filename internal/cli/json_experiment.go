@@ -372,10 +372,13 @@ type armProgressDoc struct {
 	LeftOutSandbox int     `json:"left_out_sandbox"`
 	Cancelled      int     `json:"cancelled"`
 	CostUSD        float64 `json:"cost_usd"` // the agent's alone
-	// JudgeGraded counts the fair runs of judge-graded tasks, and JudgeFixed those the judge called fixed (unvalidated);
+	// JudgeGraded counts the fair runs of judge-graded tasks the judge graded, and JudgeFixed those it called fixed (unvalidated);
 	// both 0 without such tasks. Successes are the test-graded runs' alone.
 	JudgeGraded int `json:"judge_graded"`
 	JudgeFixed  int `json:"judge_fixed"`
+	// JudgePending counts the fair judge-graded runs whose grade is pending, JudgeUngraded those left without one.
+	JudgePending  int `json:"judge_pending,omitempty"`
+	JudgeUngraded int `json:"judge_ungraded,omitempty"`
 }
 
 // progressDoc is where a locked experiment stands. Slots are the schedule's runs (both arms); Settled counts slots with
@@ -403,7 +406,7 @@ func progressOf(p experiment.Progress) *progressDoc {
 	for _, a := range p.Arms {
 		doc.Arms = append(doc.Arms, armProgressDoc{Name: a.Name, Context: a.Context, Settled: a.Settled, Fair: a.Fair, Successes: a.Successes,
 			Unfair: a.Unfair, Infra: a.Infra, LeftOutSandbox: a.LeftOutSandbox, Cancelled: a.Cancelled, CostUSD: a.CostUSD,
-			JudgeGraded: a.JudgeGraded, JudgeFixed: a.JudgeFixed})
+			JudgeGraded: a.JudgeGraded, JudgeFixed: a.JudgeFixed, JudgePending: a.JudgePending, JudgeUngraded: a.JudgeUngraded})
 	}
 	if s := p.Sequential; s != nil && s.Ended != "" {
 		doc.EndedBy = &s.Ended

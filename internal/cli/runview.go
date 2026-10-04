@@ -551,6 +551,10 @@ func outcomeWords(r experiment.Result, requeued, sandboxDown bool, m marks) (box
 		return "not graded", "sandbox unavailable (not counted)", term.OutcomeLeftOut
 	case r.Outcome == "" && requeued:
 		return "stopped", "stopped before Claude began · runs again next time", term.OutcomeLeftOut
+	case experiment.Fair(r.Outcome) && r.Passed == nil && r.GradePending:
+		return "judge: pending", "judge: grade pending · graded again from its change", term.OutcomeLeftOut
+	case experiment.Fair(r.Outcome) && r.Passed == nil && r.JudgeGraded:
+		return "not graded", "judge: not graded (not counted, not tried again)", term.OutcomeLeftOut
 	case experiment.Fair(r.Outcome) && r.Passed == nil:
 		return "not graded", "not graded", term.OutcomeLeftOut
 	case experiment.Fair(r.Outcome) && r.JudgeGraded && *r.Passed: // the judge's grade, labelled wherever a pass shows
