@@ -56,17 +56,21 @@ type scenario struct {
 	CommandGone  bool // the container ends during a command (its main process killed): exit 137, and gone after
 	// The daemon's events for a command's exec come from files the command's fake writes: exec-<nonce> (its
 	// exec_start action) and exit-<nonce> (the exit code the daemon logs).
-	ClientFail          bool   // the command runs and its exit is logged, then the client reports an error and exits 1
-	ClientFailEarly     bool   // the client exits 1, silently, before the exec starts: no event at all
-	ClientExit          int    // not 0: the client exits with this, silently, whatever the command's logged exit
-	EventsFail          bool   // docker events fails at once
-	EventsBare          bool   // the events carry no exec IDs or exit codes (an old engine)
-	EventsTwice         bool   // every event comes twice (from the replay and live)
-	EventsEndAfterStart bool   // the events stream ends with an error right after a command's exec_start
-	RmFail              bool   // docker rm fails (the daemon stopped answering): the container stays
-	PS                  string // docker ps output
-	Volumes             string // docker volume ls output
-	Env                 bool   // record the environment of each call too
+	ClientFail          bool // the command runs and its exit is logged, then the client reports an error and exits 1
+	ClientFailEarly     bool // the client exits 1, silently, before the exec starts: no event at all
+	ClientExit          int  // not 0: the client exits with this, silently, whatever the command's logged exit
+	EventsFail          bool // docker events fails at once
+	EventsBare          bool // the events carry no exec IDs or exit codes (an old engine)
+	EventsTwice         bool // every event comes twice (from the replay and live)
+	EventsEndAfterStart bool // the events stream ends with an error right after a command's exec_start
+	// Markers after start's own (the one before each command): MarkerExit, when not 0, is their client's exit, as when
+	// a fork bomb left running holds every process slot; MarkerUnrecorded leaves them out of the events.
+	MarkerExit       int
+	MarkerUnrecorded bool
+	RmFail           bool   // docker rm fails (the daemon stopped answering): the container stays
+	PS               string // docker ps output
+	Volumes          string // docker volume ls output
+	Env              bool   // record the environment of each call too
 }
 
 func fakeDocker() int {
@@ -180,6 +184,15 @@ func fakeDocker() int {
 			fmt.Print(sc.Counters)
 		case len(args) >= 2 && args[len(args)-2] == ":":
 			// markReady's marker: a no-op, recorded like any marked exec.
+			data, _ := os.ReadFile(calls)
+			later := strings.Count(string(data), `"sh","-c",":"`) > 1
+			if later && sc.MarkerExit != 0 {
+				fmt.Fprintln(os.Stderr, "OCI runtime exec failed: exec failed: unable to start container process: fork: resource temporarily unavailable")
+				return sc.MarkerExit
+			}
+			if later && sc.MarkerUnrecorded {
+				return 0
+			}
 			nonce := args[len(args)-1]
 			sh := slices.Index(args, "sh")
 			event(dir, "exec-"+nonce, "exec_start: "+strings.Join(args[sh:], " "))

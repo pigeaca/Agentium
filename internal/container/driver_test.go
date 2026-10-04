@@ -965,6 +965,51 @@ func TestDaemonWithoutExecRecordsFailsAtStart(t *testing.T) {
 	}
 }
 
+// TestMarkerFailureBeforeTheCommand: the marker before a command fails (its exec cannot start, as when a fork bomb
+// left by an earlier command holds every process slot) or its record never arrives. No command ran, but once the
+// grade's tree is in, a retry would still be a re-roll: ErrUnjudgeable, and the container is removed. Without a
+// copy-in first, none of the grade's input was used, and the error is plain (retryable); the container is removed too.
+func TestMarkerFailureBeforeTheCommand(t *testing.T) {
+	t.Parallel()
+	tree := t.TempDir()
+	writeTree(t, tree, map[string]string{"go.mod": "module m\n"})
+	for name, change := range map[string]func(*scenario){
+		"marker exec fails":     func(sc *scenario) { sc.MarkerExit = 126 },
+		"marker record missing": func(sc *scenario) { sc.MarkerUnrecorded = true },
+	} {
+		for _, copyIn := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, copy-in %v", name, copyIn), func(t *testing.T) {
+				t.Parallel()
+				sc := goodScenario(t)
+				change(&sc)
+				f, d := openFake(t, sc)
+				d.statusWait = time.Second
+				var execErr error
+				err := runGuarded(t, d, context.Background(), 30*time.Second, func(ctx context.Context, c *Container) error {
+					if copyIn {
+						if _, err := c.CopyIn(ctx, tree, DefaultCopyLimits()); err != nil {
+							return err
+						}
+					}
+					_, execErr = c.Exec(ctx, Command{Command: "go test ./..."})
+					if !f.called(t, "rm", "--force", "--volumes", Name(fixtureSpec())) {
+						t.Error("the container was not removed")
+					}
+					return execErr
+				})
+				if execErr == nil || errors.Is(execErr, ErrUnjudgeable) != copyIn || errors.Is(err, ErrUnjudgeable) != copyIn ||
+					errors.Is(execErr, context.Canceled) || errors.Is(execErr, ErrCleanup) {
+					t.Fatalf("Exec: %v; Run: %v; want unjudgeable %v", execErr, err, copyIn)
+				}
+				if f.called(t, "go test ./...") {
+					t.Error("the command ran after its marker failed")
+				}
+				t.Logf("%v", execErr)
+			})
+		}
+	}
+}
+
 // TestExecWatchRecords: the daemon can deliver an event twice (from the replay and live), so a repeat with the same
 // exec ID and exit code is the same record; a second exec ID for one marker, or a second exit code for one exec, is
 // not, and nothing is judged from it.
