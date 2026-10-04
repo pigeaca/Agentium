@@ -72,7 +72,11 @@ func (env Env) gradingSeed(profiles []buildtool.Profile, base string) (string, e
 	if env.Bare != "" {
 		project = filepath.Base(filepath.Dir(env.Bare))
 	}
-	return filepath.Join(env.Layout.Cache, seedsFolder, project, buildtool.SeedKey(profiles)+"-"+base), nil
+	key := buildtool.SeedKey(profiles)
+	if m := buildtool.ModuleKey(env.Module); m != "" { // two modules of one repository never share a seed
+		key += "-" + m
+	}
+	return filepath.Join(env.Layout.Cache, seedsFolder, project, key+"-"+base), nil
 }
 
 // quarantine is where removeOrQuarantine moves what it cannot remove: in the data folder's cache.

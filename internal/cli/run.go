@@ -158,7 +158,7 @@ func runOnce(ctx context.Context, env Env, args []string) int {
 	}
 	defer release()
 	rec, err := executeRun(ctx, env, w, runEnv, runMeta{TaskID: t.ID, Kind: "task"}, run.Spec{TaskName: t.Name, Instruction: t.Instruction,
-		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify},
+		Task: task.Spec{Base: t.BaseCommit, Solution: t.SolutionCommit, HiddenTests: t.HiddenTests, Reference: t.Reference, Setup: t.Setup, Verify: t.Verify, Module: t.Module},
 		Arm:  arm, Model: model, Effort: effort, BudgetUSD: *budget, Timeout: *timeout, Keep: *keep, HarmlessDenials: harmlessFor(t, mode)})
 	live.Stop()
 	if err != nil {

@@ -13,10 +13,16 @@ A user registers one module of a monorepo and measures it like a whole repositor
 The agent still gets the whole repository: a module's code depends on its neighbours. It starts in the module's folder, as a developer would, so Claude Code loads the root's and the module's instructions the way it does in real use.
 
 ## Design
-- **The module setting:** a project setting stored with the others (#128), `init --module PATH`.
-  - The path must be a folder inside the repository holding a detected build file.
+- **The module is each task's.** A task records its module (`tasks.module`, migration 0013; old tasks are root tasks).
+  - Setup, verify, validation, warm-up and grading all use the task's module, never the project's current setting.
+  - Experiment locks record each task's module (`LockedTask.Module`, omitted for the root, so old locks and digests are unchanged), so resuming grades where the lock says.
+  - One registration holds tasks from several modules.
+- **The module setting:** a project setting stored with the others (#128), `init --module PATH`; it is only the default module of new tasks (added or imported; mined ones in step 2). A hidden `--module` of `task add` and `task import` overrides it.
+  - The path must be a folder inside the repository, reached through no link, holding a detected build file, and committed in HEAD under exactly that spelling.
   - `--module ""` clears it.
   - Without a setting, behaviour is today's.
+  - Until step 2, `pool update` and `start` mine nothing while the setting is set (they say so).
+- **The module's folder is not trusted at grading time:** every use walks the path with `Lstat` (`buildtool.ModuleDir`). In grading (host and sandbox) a module the agent removed or linked is a failed grade with a note, never infra. At setup and validation it is an error before anything runs.
 - **Detection:**
   - Build profiles are detected in the module's folder instead of the root (`DetectIn(module)`).
   - `init` lists candidate modules: folders up to 4 levels deep holding a build file, nested ones folded into their nearest parent module, at most 20 shown.
@@ -58,17 +64,24 @@ The agent still gets the whole repository: a module's code depends on its neighb
 6. **Docs:** the guide gets a "Monorepos" section.
 
 ## Work
-- [ ] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium.
+- [x] **1. Setting, detection and commands:** `init --module`, module listing, detection and verify in the module, deps keyed by module. Risk: medium. Done on `claude/feat/monorepo-module` (migration 0013; stamps, venvs and seeds keyed by `buildtool.ModuleKey`; the deps folder stays per project). Re-review fixes: the scripts and runner configuration grading restores or reports are read from the task's module (`svc/run_tests.sh`, `svc/Makefile`), and the module's folder is checked before they are restored; a module folder that a test swaps out between two sandboxed commands fails the grade with a note, never infra; `start` with a module set says mining is off and how to go on, never "no more candidates"; tests for the lock's module and for validation using the task's module. Second re-review: runner configuration is matched in the module's folder and every folder above it (Maven's parent `pom.xml` and `.mvn`, pytest's root `pyproject.toml` and `conftest.py`, Gradle's root build files), so an edited ancestor config lands in `ConfigChanged` and the run is no success; a script that cannot be restored (its folder linked or replaced) fails the grade with a note, never infra (also at the root).
+  - Limitations of step 1:
+    - host verify does not re-check the module's folder between commands; acceptable, as host grading runs the agent's code unsandboxed anyway;
+    - follow-up: a verify script that is a symlink is not protected when only its target is edited (also at the root);
+    - follow-up: runner configuration the agent adds (a new `pytest.ini` or `conftest.py`) is never reported (also at the root);
+    - follow-up: verify tokens are read from the module's folder, so in `cd .. && sh tools/check.sh` the script is looked for as `<module>/tools/check.sh`.
 - [ ] **2. Mining and the agent:** module-scoped mining and hidden tests, the agent's starting folder, `claudectx` from the module, records and reports. Risk: high (hidden tests; the context experiments' meaning).
 - [ ] **3. Real check and docs** (free). Risk: low.
 
 ## Boundaries
-- One module per registered project. Measuring several modules means registering each; a combined view is later.
+- A project is one registration (`projects.root` is unique) and holds tasks from several modules; a task is in one module. An experiment may mix modules (each task runs in its own); a combined per-module view is later.
 - No new modules (Go dependencies), and no paid runs.
 - Starts after the console screens (the user's order). Steps 1–2 touch `internal/buildtool`, `internal/project`, `internal/mine`, `internal/run`, `internal/claudectx` and `internal/cli`.
 
 ## Verification
 `python3 scripts/harness.py check changed`, the fixtures above, a review per step (with the threat checklist for step 2), and the free real check.
+
+Step 1, after its re-reviews (2026-10-04): `GOPROXY=off go test -race -count=1` passes for `internal/run`, `internal/experiment`, `internal/cli` and `internal/buildtool`, with the sandbox tests run on macOS; each new test fails with its fix reverted.
 
 ## Metrics
 - Agent: <client> / <exact model id> / <effort>

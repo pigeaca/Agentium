@@ -55,6 +55,10 @@ type Settings struct {
 	RequireLock   bool
 	Jobs          int           // how many tasks to validate at once; 0: the built-in default
 	VerifyTimeout time.Duration // the time limit of each setup or verification command; 0: the built-in default
+	// Module is the monorepo folder the project measures, slash-separated and relative to the repository root (checked by
+	// project.ValidateModule); "": the repository's root. Setup and verification commands run in it, and the build tools
+	// are detected there.
+	Module string
 }
 
 // openRetry bounds how long Open waits for other processes opening the same database. Switching a new database to WAL
@@ -314,8 +318,8 @@ func (s *Store) SetSettings(ctx context.Context, projectID int64, set Settings) 
 	if err != nil {
 		return fmt.Errorf("save the project's settings: %w", err)
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE projects SET verify = ?, setup = ?, require_lock = ?, jobs = ?, verify_timeout_ms = ? WHERE id = ?`,
-		lists[0], lists[1], set.RequireLock, set.Jobs, set.VerifyTimeout.Milliseconds(), projectID)
+	result, err := s.db.ExecContext(ctx, `UPDATE projects SET verify = ?, setup = ?, require_lock = ?, jobs = ?, verify_timeout_ms = ?, module = ? WHERE id = ?`,
+		lists[0], lists[1], set.RequireLock, set.Jobs, set.VerifyTimeout.Milliseconds(), set.Module, projectID)
 	if err != nil {
 		return fmt.Errorf("save the project's settings: %w", err)
 	}
@@ -351,7 +355,7 @@ func (s *Store) Projects(ctx context.Context) ([]Project, error) {
 }
 
 func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) ([]Project, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, allow_local_binding, verify, setup, require_lock, jobs, verify_timeout_ms,
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root, name, discovery, allow_local_binding, verify, setup, require_lock, jobs, verify_timeout_ms, module,
 		created_at, updated_at FROM projects `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query projects: %w", err)
@@ -363,7 +367,7 @@ func (s *Store) queryProjects(ctx context.Context, clause string, args ...any) (
 		var discovery, verify, setup, created, updated string
 		var timeoutMS int64
 		if err := rows.Scan(&p.ID, &p.Root, &p.Name, &discovery, &p.AllowLocalBinding, &verify, &setup, &p.Settings.RequireLock, &p.Settings.Jobs,
-			&timeoutMS, &created, &updated); err != nil {
+			&timeoutMS, &p.Settings.Module, &created, &updated); err != nil {
 			return nil, fmt.Errorf("read project: %w", err)
 		}
 		p.Discovery = []byte(discovery)
@@ -511,6 +515,9 @@ type Task struct {
 	// never write them: RetireTask and RestoreTask do.
 	RetiredAt     time.Time
 	RetiredReason string
+	// Module is the monorepo folder the task runs in (slash-separated, relative to the repository root); "": the root.
+	// Setup, verification, validation, warm-up and grading all use it, whatever the project's setting is now.
+	Module string
 }
 
 // Retired reports whether the task is retired.
@@ -529,10 +536,10 @@ func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
 	}
 	result, err := s.db.ExecContext(ctx, `
 		INSERT INTO tasks (project_id, name, instruction, source, base_commit, solution_commit, hidden_tests,
-		                   reference_files, verify, setup, needs_review, grading, validation, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   reference_files, verify, setup, needs_review, grading, validation, created_at, updated_at, module)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ProjectID, task.Name, task.Instruction, task.Source, task.BaseCommit, task.SolutionCommit, lists[0], lists[1],
-		lists[2], lists[3], task.NeedsReview, task.Grading, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt))
+		lists[2], lists[3], task.NeedsReview, task.Grading, string(task.Validation), formatTime(task.CreatedAt), formatTime(task.CreatedAt), task.Module)
 	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			return Task{}, fmt.Errorf("task %q: %w", task.Name, ErrExists)
@@ -746,7 +753,7 @@ func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) er
 func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
-		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason
+		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason, module
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -758,7 +765,7 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		var hidden, reference, verify, setup, validation, created, updated, retired string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
 			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated,
-			&retired, &task.RetiredReason); err != nil {
+			&retired, &task.RetiredReason, &task.Module); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {

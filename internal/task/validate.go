@@ -42,7 +42,10 @@ const (
 
 // Spec is what validation needs from a task.
 type Spec struct {
-	Base, Solution         string // commits in the bare repository; Solution may be empty
+	Base, Solution string // commits in the bare repository; Solution may be empty
+	// Module is the monorepo folder the task runs in (store.Task.Module; "": the root): its setup and verification
+	// commands run there. It is part of a locked task's digest only when set, so old locks keep theirs.
+	Module                 string
 	HiddenTests, Reference []string
 	Setup                  []string // shell commands a fresh checkout needs first (for example, building embedded assets)
 	Verify                 []string // shell commands, run in order in the checkout
@@ -225,6 +228,9 @@ type Validator struct {
 	MaxHunks  int      // how many hunks that tries; 0 means DefaultMaxHunks
 	Repeats   int      // runs per stage, each in a fresh checkout; below 2 means once
 	Env       []string // added to every setup and verification command (a build cache of Agentium's own)
+	// Module is the monorepo module the project measures (store.Settings.Module; "": the root): setup and verification
+	// commands run in its folder of each checkout, and its build files decide the tools' caches.
+	Module string
 	// Cache is the data folder's cache root (home.Layout.Cache): with it, each checkout's own build tools (Maven,
 	// Gradle, Cargo) keep their caches there too, or have their wrappers cleared, like Go's in Env. Empty: Env alone.
 	Cache    string
@@ -239,7 +245,7 @@ type Validator struct {
 	// Checkout, when set, warms the base's build tools once per validation, before any stage, as a run's setup does
 	// (the same deps folder, lock and stamp: run.CheckoutCommands), so validation runs the verification with the same
 	// interpreter, dependencies and variables as grading. logPath gets the warm-up's commands.
-	Checkout func(ctx context.Context, base string, verify []string, logPath string) (CheckoutCommands, error)
+	Checkout func(ctx context.Context, base, module string, verify []string, logPath string) (CheckoutCommands, error)
 	// Grader is the mode the verification commands run in (GraderOf: empty is host). In sandbox mode each stage's
 	// verification runs through Checkout's Sandboxed, in a grading folder of its own: a validation in sandbox mode needs
 	// Checkout. Setup commands run on the host in either mode, as a run's setup does.
@@ -250,6 +256,7 @@ type Validator struct {
 
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
 func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validation, error) {
+	v.Module = spec.Module // the task's module, whatever the project's setting is now
 	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC(), Toolchain: maps.Clone(v.Toolchain), Grader: GraderOf(v.Grader)}
 	if !KnownGrader(v.Grader) {
 		return Validation{}, fmt.Errorf("grader %s: this Agentium grades on the host or in %s", v.Grader, GraderSandbox)
@@ -264,7 +271,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		return Validation{}, fmt.Errorf("validation logs: %w", err)
 	}
 	if v.Checkout != nil {
-		cc, err := v.Checkout(ctx, spec.Base, spec.Verify, filepath.Join(v.LogDir, "warm.log"))
+		cc, err := v.Checkout(ctx, spec.Base, spec.Module, spec.Verify, filepath.Join(v.LogDir, "warm.log"))
 		if err != nil {
 			return Validation{}, fmt.Errorf("prepare the build tools: %w", err)
 		}
@@ -642,6 +649,9 @@ func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string
 			return stage, fmt.Errorf("arm %s: %w", arm.Name, err)
 		}
 	}
+	if _, err := buildtool.ModuleDir(dir, spec.Module); err != nil { // before setup or anything else runs
+		return stage, fmt.Errorf("arm %s: %w", arm.Name, err)
+	}
 	log, err := os.Create(stage.Log)
 	if err != nil {
 		return stage, fmt.Errorf("validation log: %w", err)
@@ -710,12 +720,18 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 	fmt.Fprintln(v.Progress, line)
 }
 
+// inModule is the module's folder in dir by name alone, for detecting its build tools; commands run through
+// buildtool.ModuleDir, which checks the folder.
+func (v Validator) inModule(dir string) string {
+	return filepath.Join(dir, filepath.FromSlash(v.Module))
+}
+
 // envFor is Env plus the caches of the build tools the checkout in dir uses (see Cache), then what the warmed tools add
 // in dir (Checkout: Python's venv).
 func (v Validator) envFor(dir string) []string {
 	env := v.Env
 	if v.Cache != "" {
-		env = append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(dir)), v.Cache)...)
+		env = append(slices.Clone(v.Env), buildtool.CommandEnvFor(buildtool.Select(buildtool.DetectIn(v.inModule(dir))), v.Cache)...)
 	}
 	if v.checkout.Env != nil {
 		env = append(slices.Clone(env), v.checkout.Env(dir)...)
@@ -725,9 +741,13 @@ func (v Validator) envFor(dir string) []string {
 
 // run runs commands in dir, logging to log, until one fails; ok is whether all of them passed.
 func (v Validator) run(ctx context.Context, log io.Writer, dir string, commands []string) (results []Command, ok bool, err error) {
+	workDir, err := buildtool.ModuleDir(dir, v.Module) // an error here is Agentium's, before anything runs
+	if err != nil {
+		return nil, false, fmt.Errorf("validation: %w", err)
+	}
 	for _, command := range commands {
 		fmt.Fprintf(log, "$ %s\n", command)
-		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir),
+		result, err := runner.Run(ctx, runner.Spec{Dir: workDir, Command: command, Timeout: v.Timeout, Output: log, Env: v.envFor(dir),
 			Environ: v.checkout.Environ})
 		results = append(results, Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
 			Seconds: result.Duration.Round(time.Millisecond).Seconds()})

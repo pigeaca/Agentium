@@ -316,7 +316,7 @@ func TestValidationUsesTheRunsVenv(t *testing.T) {
 	out := filepath.Join(data, "env.txt")
 	v := task.Validator{Bare: bare, WorkDir: filepath.Join(data, "checkouts"), LogDir: filepath.Join(data, "logs"), Timeout: 20 * time.Second,
 		Cache: layout.Cache, Now: time.Now,
-		Checkout: func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
+		Checkout: func(ctx context.Context, base, _ string, verify []string, logPath string) (task.CheckoutCommands, error) {
 			return CheckoutCommands(ctx, c, base, verify, logPath)
 		}}
 	// The verification fills its hypothesis database, which goes with the validation's checkout.

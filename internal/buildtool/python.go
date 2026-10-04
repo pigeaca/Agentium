@@ -449,6 +449,7 @@ func warmPython(ctx context.Context, in WarmInput) (Warmed, error) {
 	if err != nil {
 		return permanent(err.Error())
 	}
+	key = moduleVenvKey(key, in.Module)
 	root := filepath.Join(in.Deps, "py", key)
 	venv := filepath.Join(root, "venv")
 	// The user's own settings must not move the venv or what goes into it; their index settings stay (private packages).

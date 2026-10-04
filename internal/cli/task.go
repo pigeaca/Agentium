@@ -123,6 +123,19 @@ func (w *workspace) keepCommit(ctx context.Context, ref string) (string, error) 
 	return commit, nil
 }
 
+// defaultVerifyIn is the detected test commands of a task in module: the project's own (defaultVerify) when module is the
+// project's setting, else those of the module's folder, which discovery did not store.
+func (w *workspace) defaultVerifyIn(module string) []string {
+	if module == w.settings().Module {
+		return w.defaultVerify()
+	}
+	var info project.Info
+	if err := json.Unmarshal(w.project.Discovery, &info); err != nil {
+		return nil
+	}
+	return info.CommandsIn(module)
+}
+
 // defaultVerify is the project's detected test commands.
 func (w *workspace) defaultVerify() []string {
 	var info project.Info
@@ -176,6 +189,17 @@ func instructionText(env Env, v string) (string, error) {
 	return strings.TrimSpace(v), nil
 }
 
+// taskModule is the module a new task runs in: the hidden --module flag when given (checked against the repository), else
+// the project's setting (the default for new tasks only: tasks made before keep theirs).
+func (w *workspace) taskModule(ctx context.Context, fs *flag.FlagSet, flagValue string) (string, error) {
+	given := false
+	fs.Visit(func(f *flag.Flag) { given = given || f.Name == "module" })
+	if !given {
+		return w.settings().Module, nil
+	}
+	return project.ValidateModule(ctx, w.root, flagValue)
+}
+
 func taskAdd(ctx context.Context, env Env, args []string) int {
 	fs := flag.NewFlagSet("task add", flag.ContinueOnError)
 	base := fs.String("base", "", "the commit the agent starts from")
@@ -185,6 +209,7 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	judgeGraded := fs.Bool("judge-graded", false, "with --solution that changes no test files: grade runs with the judge")
 	acceptGaps := fs.Bool("accept-gaps", false, "accept the requirements the hidden tests have that nothing states")
 	commands := addSettingFlags(fs, "", settingVerify, settingSetup)
+	module := fs.String("module", "", "the monorepo folder the task runs in (hidden: the project's module setting is the default; '' the root)")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
@@ -231,6 +256,10 @@ func taskAdd(ctx context.Context, env Env, args []string) int {
 	}
 	defer w.Close()
 	t.ProjectID = w.project.ID
+	if t.Module, err = w.taskModule(ctx, fs, *module); err != nil {
+		fmt.Fprintf(env.Stderr, "agentium task add: %v\n", err)
+		return ExitUsage
+	}
 	if t.BaseCommit, err = w.keepCommit(ctx, *base); err != nil {
 		return fail(env, err)
 	}
@@ -284,6 +313,7 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 	pr := fs.Int("pr", 0, "import this merged pull request (read through gh)")
 	name := fs.String("name", "", "task name (default: from the commit subject)")
 	commands := addSettingFlags(fs, "", settingVerify, settingSetup) // hidden: the project's settings apply
+	module := fs.String("module", "", "the monorepo folder the task runs in (hidden: the project's module setting is the default; '' the root)")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
@@ -299,6 +329,10 @@ func taskImport(ctx context.Context, env Env, args []string) int {
 	defer w.Close()
 	verify, setup := commands.taskCommands()
 	t := store.Task{ProjectID: w.project.ID, Name: *name, Verify: verify, Setup: setup, NeedsReview: true, CreatedAt: env.Now()}
+	if t.Module, err = w.taskModule(ctx, fs, *module); err != nil {
+		fmt.Fprintf(env.Stderr, "agentium task import: %v\n", err)
+		return ExitUsage
+	}
 	if *pr == 0 {
 		if t, err = w.commitTask(ctx, *commitRef, "", t); err != nil {
 			return fail(env, err)
@@ -375,7 +409,7 @@ func (w *workspace) completeTask(ctx context.Context, t store.Task, judging judg
 	// empty (not nil) means none.
 	if len(t.Verify) == 0 {
 		if t.Verify = w.settings().Verify; len(t.Verify) == 0 {
-			t.Verify = w.defaultVerify()
+			t.Verify = w.defaultVerifyIn(t.Module)
 		}
 		if len(t.Verify) == 0 {
 			return t, errors.New("no test commands were detected for this project: set them with `agentium init --verify CMD`")
@@ -662,9 +696,19 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	fair := task.NewFairness("--git-dir", w.bare)
 	st := env.style()
-	table := term.NewTable(st, term.Left("NAME"), term.Left("SOURCE"), term.Left("GRADED BY"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS"))
+	// A MODULE column appears only when some task is in a module.
+	inModules := slices.ContainsFunc(tasks, func(t store.Task) bool { return t.Module != "" })
+	columns := []term.Column{term.Left("NAME"), term.Left("SOURCE"), term.Left("GRADED BY"), term.Right("TESTS"), term.Right("FILES"), term.Left("STATUS")}
+	if inModules {
+		columns = slices.Insert(columns, 1, term.Left("MODULE"))
+	}
+	table := term.NewTable(st, columns...)
 	for _, t := range tasks {
-		table.Row(t.Name, t.Source, grading(t), strconv.Itoa(len(t.HiddenTests)), strconv.Itoa(len(t.Reference)), taskStatus(ctx, st, fair, t))
+		row := []string{t.Name, t.Source, grading(t), strconv.Itoa(len(t.HiddenTests)), strconv.Itoa(len(t.Reference)), taskStatus(ctx, st, fair, t)}
+		if inModules {
+			row = slices.Insert(row, 1, term.OrNone(t.Module))
+		}
+		table.Row(row...)
 	}
 	if err := table.Write(env.Stdout); err != nil {
 		return fail(env, err)
@@ -786,6 +830,9 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "%s\n  base       %s\n", st.Heading(fmt.Sprintf("Task %s (%s)", t.Name, t.Source)), t.BaseCommit)
 	if t.SolutionCommit != "" {
 		fmt.Fprintf(out, "  solution   %s\n", t.SolutionCommit)
+	}
+	if t.Module != "" {
+		fmt.Fprintf(out, "  module     %s\n", t.Module)
 	}
 	if len(t.Setup) > 0 {
 		fmt.Fprintf(out, "  setup      %s\n", strings.Join(t.Setup, "; "))
@@ -1084,7 +1131,9 @@ func (w *workspace) validating(env Env, buildEnv []string, timeout time.Duration
 		}
 		c := run.CommandsEnv{Layout: w.layout, Bare: w.bare, Environ: environ, CommandEnv: buildEnv, Timeout: timeout, Now: env.Now,
 			Grader: grader, Home: env.Getenv("HOME"), AccountHome: accountHome, ProjectRoot: w.root}
-		v.Checkout = func(ctx context.Context, base string, verify []string, logPath string) (task.CheckoutCommands, error) {
+		v.Checkout = func(ctx context.Context, base, module string, verify []string, logPath string) (task.CheckoutCommands, error) {
+			c := c
+			c.Module = module // the task's, not the project's setting
 			return run.CheckoutCommands(ctx, c, base, verify, logPath)
 		}
 	}
