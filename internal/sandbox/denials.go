@@ -320,7 +320,7 @@ func (d Denial) Noise() bool {
 
 // Flagged reports whether d is a limit the grading profile imposes but the agent's own sandbox (Claude Code's, from the
 // run's settings) does not, so a grade that failed with it cannot be told from a sandbox failure (the isolation plan's
-// decision 3: such a failed grade is infrastructure, retried or left out). Noise is never flagged. The agent's sandbox
+// decision 3: such a failed grade is infrastructure, left out with no retry). Noise is never flagged. The agent's sandbox
 // imposes the same limits on:
 //   - reads (the credential stores grading denies are denied to agents too: CredentialFiles and the build tools' user
 //     caches, which a test holds together with graderCredentialFiles);
