@@ -1,8 +1,10 @@
 package sandbox
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/buildtool"
@@ -91,6 +93,47 @@ func TestSharedLogDirs(t *testing.T) {
 	} {
 		if got := SharedLogDirs("/h", c.loginConfig); !slices.Equal(got, c.want) {
 			t.Errorf("SharedLogDirs(/h, %q) = %q, want %q", c.loginConfig, got, c.want)
+		}
+	}
+}
+
+// Every path of the shared deny list is listed in its resolved form too, the form the macOS sandbox matches: here the
+// home folder, Agentium's data, the deps folder and the shared folders are all reached through a link.
+func TestAgentDeniedListsResolvedForms(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := AgentDenied{Deny: []string{filepath.Join(link, "data")}, AgentData: []string{filepath.Join(link, "agent-history")},
+		SecretFile: filepath.Join(link, "secrets", "token"), Home: link, Environ: []string{"HOME=" + link},
+		Deps: filepath.Join(link, "deps"), Shared: []string{filepath.Join(link, "shared")}}
+	reads, writes := d.Reads(), d.Writes()
+	for _, rel := range []string{"data", "agent-history", "secrets", ".ssh", "Library/Keychains", ".aws", ".cache/go-build", "shared"} {
+		for _, p := range []string{filepath.Join(link, rel), filepath.Join(resolved, rel)} {
+			if !slices.Contains(reads, p) {
+				t.Errorf("reads lack %s", p)
+			}
+		}
+	}
+	for _, p := range buildtool.DepsDenied(d.Deps) {
+		if !slices.Contains(reads, filepath.Join(resolved, strings.TrimPrefix(p, link))) {
+			t.Errorf("reads lack the resolved form of %s", p)
+		}
+	}
+	for _, rel := range []string{"data", "deps", "shared"} {
+		for _, p := range []string{filepath.Join(link, rel), filepath.Join(resolved, rel)} {
+			if !slices.Contains(writes, p) {
+				t.Errorf("writes lack %s", p)
+			}
 		}
 	}
 }

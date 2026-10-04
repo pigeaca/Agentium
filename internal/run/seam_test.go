@@ -117,11 +117,21 @@ func TestTranscriptsAreReadWithTheirAgent(t *testing.T) {
 	}
 }
 
-// The run's timeout reaches the agent through the seam's invocation (agent.Invocation.Timeout): an agent that runs past
-// it is stopped, and the run is the agent's timeout.
+// The run's timeout and grace reach the agent through the seam's invocation (agent.Invocation.Timeout, Grace): an
+// agent that runs past its timeout is interrupted first, and the result it reports on SIGINT is kept (without the grace
+// it would be killed outright and report nothing), and the run is the agent's timeout.
 func TestOnceStopsTheAgentAtItsTimeout(t *testing.T) {
-	f := newModuleOnce(t, "", "decoy", "sleep 60")
+	f := newModuleOnce(t, "", "decoy", `echo '{"type":"system","subtype":"init","claude_code_version":"2.1.285","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash"],"skills":[],"slash_commands":[]}'
+on_int() {
+	kill $! 2>/dev/null
+	echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"interrupted","total_cost_usd":0.1,"num_turns":1}'
+	exit 0
+}
+trap on_int INT
+sleep 60 &
+wait`)
 	f.spec.Timeout = time.Second
+	f.env.Grace = 10 * time.Second
 	start := time.Now()
 	rec, err := Once(context.Background(), f.env, f.spec)
 	if err != nil {
@@ -129,5 +139,8 @@ func TestOnceStopsTheAgentAtItsTimeout(t *testing.T) {
 	}
 	if rec.Outcome != agent.OutcomeTimeout || time.Since(start) > 30*time.Second {
 		t.Errorf("outcome %s after %v, notes %v: want the agent stopped at its timeout", rec.Outcome, time.Since(start), rec.Notes)
+	}
+	if !rec.Metrics.SawResult || rec.Metrics.ResultExcerpt != "interrupted" {
+		t.Errorf("the agent's result on SIGINT was lost (saw result %v, %q): the grace did not reach it", rec.Metrics.SawResult, rec.Metrics.ResultExcerpt)
 	}
 }
