@@ -227,7 +227,9 @@ func (r *resolver) resolve() error {
 		p := prefix(folder)
 		agentsViaLink := false
 		for _, name := range roots[i] {
-			if r.seen[name] { // a folder above imported it already: it loads once, as that import
+			// A folder above imported it already: it loads once, as that import. (The root's own files are read as they
+			// always were, so a root project's context is unchanged.)
+			if i > 0 && r.seen[name] {
 				continue
 			}
 			if data, ok := r.read(name); ok {
