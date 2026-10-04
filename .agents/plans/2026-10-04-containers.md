@@ -1,7 +1,7 @@
 # Container mode: grading in Docker first, agents later
 
 - Date: 2026-10-04
-- Status: Step 0 (the spike) done with gaps (2026-10-04; [results](../../docs/research/2026-10-04-container-spike.md)). Nothing built. The open decisions below await the user, including a new one (10) from the spike.
+- Status: Approved (2026-10-04). Step 0 (the spike) is done with gaps ([results](../../docs/research/2026-10-04-container-spike.md)). The user decided the open decisions below: 1–9 as recommended, and 10 as a local build per pinned base (git and less added). Step 1 (the mode seam) is next; the paid real check (cap $6) still needs separate approval. During the spike the Gradle warm-up also fetched from `download.eclipse.org` (Spotless's Eclipse formatter), which was not on the brief's list; it is recorded in the results.
 - Scope: the user's "Docker + codex" (2026-10-04). This plan covers Docker; Codex is planned separately and in parallel, and this plan names only the dependencies. It details the [isolation plan](2026-10-02-isolation.md)'s Part 2 and builds on the [direct-Docker decision](../decisions/2026-10-02-containers-direct-docker.md) and the isolation plan's decision 6. Planning only: nothing was pulled, built, started or paid for.
 
 ## Outcome
@@ -261,6 +261,8 @@ A CI job running the real-daemon tests on GitHub's Linux runners would pull one 
 - Console samples of `images`, `run once --grader container` and `run show`.
 
 ## Open decisions (for the user)
+Decided by the user on 2026-10-04: 1–9 as recommended ("Yes, as recommended"); 10 as a local build from each pinned official base, adding `git` and `less` through apt, with the download shown and consented once per base ("Local build per base"). That changes 2: grading images are now built locally from the pinned bases, and no Agentium image is published.
+
 1. **Grading only first, or agents too?** Recommended: grading first. It closes the open channels and Linux's gap without putting credentials into containers. Agents follow in their own plan after Codex's, which designs the proxy and the credentials once, for both agents.
 2. **Where do the images come from?** Recommended: official images pinned by digest and pulled with consent, with no build for grading. Python with uv uses Astral's image, which is the vendor's own, not a Docker Official Image. A local build from pinned bases comes only when agents move into containers. No published Agentium image: it would make Agentium a registry to secure and sign. Downloads were 890 MB for all four toolchains in step 0, or 0.3 GB for Go alone. Step 0 found that the images lack tools that builds and tests run (decision 10).
 3. **The default on Linux and macOS.** Recommended: `container-v1` on Linux. Without a usable Docker, `experiment new` refuses and names `--grader host`, which is today's behavior made explicit. macOS keeps `sandbox-v1`. Existing experiments keep their mode. The alternative keeps `host` as Linux's default and prints a warning.
