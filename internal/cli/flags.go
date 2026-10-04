@@ -13,6 +13,9 @@ import (
 // error and usage to stderr. When ok is false the command returns code.
 func parseArgs(env Env, fs *flag.FlagSet, args []string, usage string) (positional []string, code int, ok bool) {
 	fs.SetOutput(io.Discard)
+	if env.flagSink != nil {
+		env.flagSink(fs)
+	}
 	for {
 		err := fs.Parse(args)
 		if errors.Is(err, flag.ErrHelp) {
