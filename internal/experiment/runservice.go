@@ -680,6 +680,12 @@ func (x *execution) runStages(ctx context.Context, p Plan, o RunOptions) (Summar
 			}
 			return sum, nil
 		}
+		// Not reachable today: every stored run's task is in the lock, so a pass that leaves grades pending (with no
+		// pause, budget stop or cancel) has attempted one. Were that to change, the loop would spin: Execute has nothing to
+		// run while slotsDone waits for those grades.
+		if graded.pending > 0 && graded.attempted == 0 && ctx.Err() == nil {
+			return Summary{}, fmt.Errorf("%d run(s) wait for the judge's grade, but none could be graded again", graded.pending)
+		}
 		status, _, err := SequentialStatus(lock, data)
 		if err != nil {
 			return Summary{}, err
