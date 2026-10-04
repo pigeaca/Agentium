@@ -34,8 +34,20 @@ func installedCodex(t *testing.T) string {
 // arguments for it, and the environment the CLI gets.
 func liveSetup(t *testing.T, files map[string]string) (repo string, settings []string, env []string) {
 	t.Helper()
-	root := t.TempDir()
+	return liveSetupIn(t, files, "")
+}
+
+// liveSetupIn is liveSetup for a run that starts in module (a folder of the checkout; "" for its root).
+func liveSetupIn(t *testing.T, files map[string]string, module string) (repo string, settings []string, env []string) {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	repo = filepath.Join(root, "repo")
+	if err := os.MkdirAll(filepath.Join(repo, module), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	for rel, content := range files {
 		writeFile(t, filepath.Join(repo, filepath.FromSlash(rel)), []byte(content))
 	}
@@ -44,7 +56,7 @@ func liveSetup(t *testing.T, files map[string]string) (repo string, settings []s
 	if out, err := git.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
-	inv := agent.Invocation{CLI: "codex", Dir: repo, Prompt: "p", Model: DefaultModel, BudgetUSD: 3, SignIn: SignInLogin, Home: filepath.Join(root, "home"),
+	inv := agent.Invocation{CLI: "codex", Dir: filepath.Join(repo, module), Repo: repo, Prompt: "p", Model: DefaultModel, BudgetUSD: 3, SignIn: SignInLogin, Home: filepath.Join(root, "home"),
 		ConfigDir: filepath.Join(root, "codex-home"), State: filepath.Join(root, "state"), Records: filepath.Join(root, "records"),
 		TempRoot: filepath.Join(root, "tmp"), UID: os.Getuid()}
 	cmd, err := Adapter{}.Command(inv, []string{"PATH=/usr/bin:/bin", "HOME=" + inv.Home})
@@ -126,6 +138,7 @@ allow_local_binding = true
 		t.Fatal(err)
 	}
 	for _, key := range []string{"approval_policy", "default_permissions", "model", "model_reasoning_effort", "allow_login_shell", "features.hooks",
+		"agents.enabled", "features.multi_agent",
 		"shell_environment_policy.ignore_default_excludes", "permissions.agentium.network.enabled"} {
 		if got := read.Origins[key].Name.Type; got != "sessionFlags" {
 			t.Errorf("%s comes from %q, not the run's settings", key, got)
@@ -190,4 +203,41 @@ func must(data []byte, err error) []byte {
 		panic(err)
 	}
 	return data
+}
+
+// Codex's subagents are off under the run's settings: the multi-agent instructions are gone from what the model is
+// given (the session's multi-agent version is Disabled, which offers no multi-agent tools), so one request runs at a
+// time and one allowance bounds the cap's overshoot.
+func TestLiveCodexSubagentsOff(t *testing.T) {
+	cli := installedCodex(t)
+	repo, settings, env := liveSetup(t, map[string]string{"AGENTS.md": "x\n"})
+	c := exec.Command(cli, append([]string{"debug", "prompt-input"}, settings...)...)
+	c.Dir, c.Env = repo, env
+	out, err := c.Output()
+	if err != nil {
+		t.Fatalf("prompt-input: %v", err)
+	}
+	if strings.Contains(string(out), "multi_agent.") || strings.Contains(string(out), "spawn_agent") {
+		t.Error("the model is still offered subagents under the run's settings")
+	}
+}
+
+// In a module run, every project layer's .codex and .agents stay read-only in the agent's sandbox: Codex alone keeps
+// only the checkout's top-level ones so, and the module's .codex would be a layer it loads (`codex sandbox`, the run's
+// own profile).
+func TestLiveCodexKeepsLayerConfigReadOnly(t *testing.T) {
+	cli := installedCodex(t)
+	repo, settings, env := liveSetupIn(t, map[string]string{"AGENTS.md": "x\n"}, "svc")
+	script := "for p in svc/.codex svc/.agents .codex svc/ok; do mkdir \"" + repo + "/$p\" 2>/dev/null && echo \"$p made\" || echo \"$p refused\"; done"
+	c := exec.Command(cli, append(append([]string{"sandbox", "-P", Profile, "-C", filepath.Join(repo, "svc")}, settings...), "--", "/bin/sh", "-c", script)...)
+	c.Dir, c.Env = filepath.Join(repo, "svc"), env
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("codex sandbox: %v %s", err, out)
+	}
+	for _, want := range []string{"svc/.codex refused", "svc/.agents refused", ".codex refused", "svc/ok made"} {
+		if !strings.Contains(string(out), want+"\n") {
+			t.Errorf("want %q in:\n%s", want, out)
+		}
+	}
 }

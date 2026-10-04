@@ -80,6 +80,7 @@ func TestCommandIsTheVerifiedRecipe(t *testing.T) {
 		"history.persistence": `"none"`, "web_search": `"disabled"`, "check_for_update_on_startup": "false",
 		"sqlite_home": `"/data/workspaces/r1/agent/sqlite"`, "log_dir": `"/data/workspaces/r1/agent/log"`,
 		"allow_login_shell": "false",
+		"agents.enabled":    "false", // no subagents: one request in flight at a time
 		"shell_environment_policy.ignore_default_excludes": "false",
 		"shell_environment_policy.exclude":                 `["CODEX_*","OPENAI_*"]`,
 		"shell_environment_policy.set":                     `{"HOME"="/hm/u","TMPDIR"="/tmp/ag-0123456789","TMPPREFIX"="/tmp/ag-0123456789/zsh","ZDOTDIR"="/tmp/ag-0123456789/zdotdir"}`,
@@ -89,7 +90,8 @@ func TestCommandIsTheVerifiedRecipe(t *testing.T) {
 			t.Errorf("-c %s=%s, want %s", key, overrides[key], want)
 		}
 	}
-	for _, off := range []string{"apps", "plugins", "memories", "hooks", "daemon_auto_start", "fast_mode", "unbounded_connection_retries", "image_generation", "computer_use"} {
+	for _, off := range []string{"apps", "plugins", "memories", "hooks", "daemon_auto_start", "fast_mode", "unbounded_connection_retries", "image_generation", "computer_use",
+		"multi_agent", "multi_agent_v2"} {
 		if !strings.Contains(overrides["features"], off+"=false") {
 			t.Errorf("feature %s is not off: %s", off, overrides["features"])
 		}
@@ -257,6 +259,12 @@ func TestModuleRun(t *testing.T) {
 	}
 	if !strings.Contains(overrides["permissions.agentium.filesystem"], `"/data/workspaces/r1/repo"="write"`) {
 		t.Error("the checkout is not writable")
+	}
+	// Every project layer's .codex and .agents, from the root to the start folder, stay read-only.
+	for _, p := range []string{"/data/workspaces/r1/repo/.codex", "/data/workspaces/r1/repo/.agents", "/data/workspaces/r1/repo/svc/.codex", "/data/workspaces/r1/repo/svc/.agents"} {
+		if !strings.Contains(overrides["permissions.agentium.filesystem"], `"`+p+`"="read"`) {
+			t.Errorf("%s is not kept read-only", p)
+		}
 	}
 	for _, p := range []string{"/data/workspaces/r1/repo/svc", "/data/workspaces/r1/repo"} {
 		if !strings.Contains(overrides["projects"], `"`+p+`"={trust_level="trusted"}`) {

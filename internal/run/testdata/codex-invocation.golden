@@ -34,7 +34,9 @@ feedback.enabled=false
 -c
 allow_login_shell=false
 -c
-features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false}
+features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false,multi_agent=false,multi_agent_v2=false}
+-c
+agents.enabled=false
 -c
 shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh","ZDOTDIR"="<RUNTEMP>/zdotdir"}
 -c
@@ -48,6 +50,8 @@ permissions.agentium.filesystem={
   "<T>/data/workspaces/<ID>/go-build"="write"
   "<RUNTEMP>"="write"
   "/private<RUNTEMP>"="write"
+  "<T>/data/workspaces/<ID>/repo/.codex"="read"
+  "<T>/data/workspaces/<ID>/repo/.agents"="read"
   "<T>/data/projects"="deny"
   "<T>/data/records"="deny"
   "<T>/data/artifacts"="deny"
@@ -242,7 +246,9 @@ feedback.enabled=false
 -c
 allow_login_shell=false
 -c
-features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false}
+features={apps=false,plugins=false,remote_plugin=false,browser_use=false,browser_use_external=false,computer_use=false,image_generation=false,memories=false,hooks=false,tool_suggest=false,daemon_auto_start=false,fast_mode=false,realtime_conversation=false,skill_mcp_dependency_install=false,goals=false,unbounded_connection_retries=false,multi_agent=false,multi_agent_v2=false}
+-c
+agents.enabled=false
 -c
 shell_environment_policy.set={"HOME"="<T>/home","TMPDIR"="<RUNTEMP>","TMPPREFIX"="<RUNTEMP>/zsh","ZDOTDIR"="<RUNTEMP>/zdotdir"}
 -c
@@ -256,6 +262,10 @@ permissions.agentium.filesystem={
   "<T>/data/workspaces/<ID>/go-build"="write"
   "<RUNTEMP>"="write"
   "/private<RUNTEMP>"="write"
+  "<T>/data/workspaces/<ID>/repo/.codex"="read"
+  "<T>/data/workspaces/<ID>/repo/.agents"="read"
+  "<T>/data/workspaces/<ID>/repo/svc/.codex"="read"
+  "<T>/data/workspaces/<ID>/repo/svc/.agents"="read"
   "<T>/data/projects"="deny"
   "<T>/data/records"="deny"
   "<T>/data/artifacts"="deny"
@@ -265,6 +275,7 @@ permissions.agentium.filesystem={
   "<T>/data/agentium.db-shm"="deny"
   "<T>/user"="deny"
   "<T>/user/.git"="deny"
+  "<T>/data/codex"="deny"
   "/golden/predicted/other-run"="deny"
   "<T>/home/.codex"="deny"
   "/golden/codex"="deny"

@@ -38,6 +38,11 @@ const spendForever = "AGENTIUM-SPEND-FOREVER"
 // commands run), in the checkout, which outlives Codex and its process group: the stream names its ID.
 const leaveAChild = "AGENTIUM-LEAVE-A-CHILD"
 
+// leaveADetachedChild, in a run's prompt, makes the fake Codex leave a process that holds nothing of the run: in a
+// session of its own, in a Seatbelt sandbox like the run's (it may write the checkout, not the workspace folder),
+// started in /, with no descriptor but /dev/null, running a system binary. The stream names its ID.
+const leaveADetachedChild = "AGENTIUM-LEAVE-A-DETACHED-CHILD"
+
 // fakeThread is the fake Codex's thread.
 const fakeThread = "00000000-0000-7000-8000-00000000f00d"
 
@@ -102,7 +107,17 @@ func fakeCodex() int {
 	usage := func(input, output int64) string {
 		return fmt.Sprintf(`{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0}`, input, output)
 	}
-	if strings.Contains(string(stdin), leaveAChild) {
+	if strings.Contains(string(stdin), leaveADetachedChild) {
+		workspace, _ := filepath.EvalSymlinks(filepath.Dir(cwd))
+		profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath %q))(allow file-write* (subpath %q))`, workspace, filepath.Join(workspace, "repo"))
+		child := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", "cd / && exec /bin/sleep 600")
+		child.Dir, child.SysProcAttr = "/", &syscall.SysProcAttr{Setsid: true}
+		if err := child.Start(); err == nil {
+			// As a command Codex ran for a while: its sandbox is applied by the time Codex ends.
+			time.Sleep(500 * time.Millisecond)
+			fmt.Printf(`{"type":"item.completed","item":{"id":"item_9","type":"command_execution","command":"setsid sleep 600 & # pid %d","aggregated_output":"","exit_code":0,"status":"completed"}}`+"\n", child.Process.Pid)
+		}
+	} else if strings.Contains(string(stdin), leaveAChild) {
 		child := exec.Command("/bin/sleep", "600")
 		child.Dir, child.SysProcAttr = cwd, &syscall.SysProcAttr{Setsid: true}
 		if err := child.Start(); err == nil {
@@ -472,5 +487,42 @@ func TestCodexRunRefusesAProjectConfig(t *testing.T) {
 	rec, err := Once(context.Background(), f.env, f.spec)
 	if err != nil || rec.Outcome != agent.OutcomeOK || rec.Metrics.Model != "gpt-6.1-sol" || rec.Metrics.Effort != "low" {
 		t.Errorf("allowed settings: %v, outcome %s, model %s, effort %s, notes %q", err, rec.Outcome, rec.Metrics.Model, rec.Metrics.Effort, rec.Notes)
+	}
+}
+
+// A child that holds nothing of the run (its own session, started in /, no descriptor of the run's, a system binary)
+// escapes the process group and the sweep by path; the sweep by sandbox finds it: it may write the run's temp root but
+// not its workspace, which only the run's own profile allows.
+func TestCodexRunSweepsADetachedChild(t *testing.T) {
+	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
+		t.Skip("no sandbox-exec")
+	}
+	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
+	f.spec.Instruction = "Leave one: " + leaveADetachedChild
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := os.ReadFile(filepath.Join(rec.RecordsDir, "stream.jsonl"))
+	must(t, err)
+	match := regexp.MustCompile(`# pid (\d+)`).FindSubmatch(stream)
+	if match == nil {
+		t.Fatalf("the fake left no child: %s", stream)
+	}
+	pid, _ := strconv.Atoi(string(match[1]))
+	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	gone := false
+	for range 40 {
+		if err := syscall.Kill(pid, 0); err != nil {
+			gone = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !gone {
+		t.Errorf("process %d, detached from the run, outlived it (notes %q)", pid, rec.Notes)
+	}
+	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es)") {
+		t.Errorf("the sweep stopped something else too: %q", rec.Notes)
 	}
 }

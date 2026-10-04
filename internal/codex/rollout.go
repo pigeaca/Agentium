@@ -19,6 +19,10 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
+// Incomplete, in a run's records, says that a rollout of the run could not be moved there (Gather): what the records
+// hold of its spend is a part, and the run's cost is estimated so that it never undercounts (run's codexSpendFallback).
+const Incomplete = "rollouts-incomplete"
+
 // Codex keeps each session's rollout at CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl, always: no
 // setting moves it (the spike, [source]). In login mode CODEX_HOME is the shared login home, which Agentium's runs
 // take one at a time; with an API key it is the run's own. Either way, a run's sessions are its main thread's rollout
@@ -106,12 +110,16 @@ func (Adapter) Gather(configDir, records string) error {
 	if thread == "" || configDir == "" {
 		return nil
 	}
+	// Each rollout is moved on its own: one that fails is left where it is (moveScrubbed removes a source only once its
+	// copy is written), the others still move, and the records say the collection is incomplete (Incomplete), so the
+	// run's spend is never read as whole from part of it.
+	var failed []error
 	files := rolloutFiles(filepath.Join(configDir, "sessions"))
 	mainFile := filepath.Join(records, Rollout)
 	for _, f := range files {
 		if isThreads(f, thread) {
 			if err := moveScrubbed(f, mainFile); err != nil {
-				return err
+				failed = append(failed, err)
 			}
 		}
 	}
@@ -126,15 +134,27 @@ func (Adapter) Gather(configDir, records string) error {
 				continue
 			}
 			if err := os.MkdirAll(filepath.Join(records, Subagents), 0o700); err != nil {
-				return fmt.Errorf("Codex rollouts: %w", err)
+				failed = append(failed, fmt.Errorf("Codex rollouts: %w", err))
+				continue
 			}
 			if err := moveScrubbed(f, filepath.Join(records, Subagents, filepath.Base(f))); err != nil {
-				return err
+				failed = append(failed, err)
+				continue
 			}
 			if threadPattern.MatchString(meta.ID) {
 				threads = append(threads, meta.ID)
 			}
 		}
+	}
+	marker := filepath.Join(records, Incomplete)
+	if len(failed) > 0 {
+		if err := os.WriteFile(marker, []byte(fmt.Sprintf("%d Codex rollout(s) could not be moved into these records\n", len(failed))), 0o600); err != nil {
+			failed = append(failed, fmt.Errorf("mark the Codex rollouts incomplete: %w", err))
+		}
+		return errors.Join(failed...)
+	}
+	if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) { // a later gather completed it
+		return fmt.Errorf("Codex rollouts: %w", err)
 	}
 	for _, t := range threads {
 		snapshots, _ := filepath.Glob(filepath.Join(configDir, "shell_snapshots", t+".*.sh"))
@@ -219,9 +239,10 @@ func scrub(v any) any {
 // stops the run once what it spent plus one full-context request (the allowance) would pass the cap: a request in
 // flight when the run stops is never recorded, so the cap holds while at most one is. Subagents' rollouts count too.
 //
-// What it cannot promise: the next request can start before the watcher reads the last one (it looks every poll);
-// subagents can each have a request in flight; and a request too large to price stops the run as capped. A thread
-// whose rollout it cannot find within blindAfter stops the run as agent.StopBlind: its spend would be unseen.
+// The bound: Codex runs with its subagents off (configOverrides), so one request is in flight at a time, and the spend
+// stays under the cap, unless the next request starts before the watcher reads the last one (it looks every poll):
+// then at most the cap plus one allowance (Bound). A request too large to price stops the run as capped. A thread whose
+// rollout it cannot find within blindAfter stops the run as agent.StopBlind: its spend would be unseen.
 type watcher struct {
 	transcript, codexHome string
 	rates                 pricing.OpenAIRates
@@ -335,4 +356,11 @@ func (t *tail) read(file string, rates pricing.OpenAIRates) (usd float64, priced
 	}
 	t.offset += int64(end) + 1
 	return usd, priced
+}
+
+// Bound is the most a capped run can spend: its cap, plus one allowance for a request that starts in the watcher's
+// poll gap, before it read the request that ended just before (one request at a time: subagents are off).
+func Bound(model string, capUSD float64) float64 {
+	allowance, _ := Allowance(model)
+	return capUSD + allowance
 }

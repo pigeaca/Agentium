@@ -241,6 +241,9 @@ func TestFailedTurnsByTheirError(t *testing.T) {
 		"Your input exceeds the context window of this model. Please adjust your input": agent.OutcomeOK,
 		"This request was refused under the usage policies.":                            agent.OutcomeOK,
 		"something else went wrong":                                                     agent.OutcomeOK,
+		"unexpected status 502 Bad Gateway":                                             agent.OutcomeInfra,
+		"HTTP/1.1 500 from the API":                                                     agent.OutcomeInfra,
+		"the test on line 512 failed and the context window filled":                     agent.OutcomeOK,
 	} {
 		line := `{"type":"turn.failed","error":{"message":` + strconv.Quote(message) + `}}`
 		dir := t.TempDir()

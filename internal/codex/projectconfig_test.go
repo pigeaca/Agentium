@@ -63,4 +63,18 @@ func TestProjectConfigRefusal(t *testing.T) {
 	if err := ProjectConfigRefusal(link, ""); err == nil {
 		t.Error("a linked .codex was followed")
 	}
+	// A config.toml that is a link (to a file outside, here a stand-in for ~/.netrc) is refused, never read: only a
+	// regular file is a project's configuration.
+	outside := filepath.Join(t.TempDir(), ".netrc")
+	if err := os.WriteFile(outside, []byte("model = \"gpt-6.1-sol\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	linked := t.TempDir()
+	write(linked, ".codex/skills/s/SKILL.md", "x")
+	if err := os.Symlink(outside, filepath.Join(linked, ".codex", "config.toml")); err != nil {
+		t.Fatal(err)
+	}
+	if err := ProjectConfigRefusal(linked, ""); err == nil || !strings.Contains(err.Error(), ".codex/config.toml") {
+		t.Errorf("a linked config.toml: %v", err)
+	}
 }

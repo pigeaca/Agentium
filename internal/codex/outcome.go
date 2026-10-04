@@ -8,10 +8,11 @@ import (
 )
 
 // infraText matches a failed turn's error that never reached the task: a usage or rate limit, the sign-in, the network,
-// or the API itself. Any other failure (the context window overflowing, a policy refusal) is the agent's.
+// or the API itself (a 5xx only as an HTTP status: "unexpected status 503", "HTTP/1.1 502", never any number in a
+// message). Any other failure (the context window overflowing, a policy refusal) is the agent's.
 var infraText = regexp.MustCompile(`(?i)usage limit|rate limit|too many requests|\b429\b|quota|billing|unauthori[sz]ed|\b40[13]\b|forbidden|` +
 	`not logged in|log in again|sign in|authenticat|token (has )?expired|refresh token|connection|network|stream disconnected|` +
-	`error sending request|timed out|overloaded|server error|service unavailable|bad gateway|\b5\d\d\b`)
+	`error sending request|timed out|overloaded|server error|service unavailable|bad gateway|gateway timeout|(?:status|http)[ :/0-9.]*\b5\d\d\b`)
 
 // Classify decides a Codex run's outcome:
 //   - unfair, on any drift (Check);

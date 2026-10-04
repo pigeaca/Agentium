@@ -95,6 +95,9 @@ type Metrics struct {
 	// Rollouts counts the session files the metrics were read from (Codex: the main session's rollout and any
 	// subagent's); zero when the agent keeps none.
 	Rollouts int `json:"rollouts,omitempty"`
+	// RolloutsIncomplete: a session file of the run could not be collected or read whole, so the spend read from the
+	// others is a part (Codex: its rollouts); the run's cost is then an estimate that never undercounts.
+	RolloutsIncomplete bool `json:"rollouts_incomplete,omitempty"`
 }
 
 // FirstRead is the first real request of the main session or of a repriced subagent launch, for the isolated-run

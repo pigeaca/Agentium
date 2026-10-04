@@ -840,6 +840,7 @@ json experiment report .runs[].metrics.result_excerpt	string
 json experiment report .runs[].metrics.result_is_error	bool
 json experiment report .runs[].metrics.result_subtype	string
 json experiment report .runs[].metrics.rollouts	int?
+json experiment report .runs[].metrics.rollouts_incomplete	bool?
 json experiment report .runs[].metrics.sandbox_policy	string?
 json experiment report .runs[].metrics.saw_init	bool
 json experiment report .runs[].metrics.saw_result	bool

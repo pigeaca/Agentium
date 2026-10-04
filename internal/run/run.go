@@ -346,6 +346,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			env.step(StepCleanup)
 		}
 		rec.Finished = env.Now().UTC()
+		// What is stored (the start file, the caller's database) holds no secret: the record carries the agent's output.
+		rec = redactRecord(rec, append([]string{env.Secret}, env.RedactAlso...)...)
 		if recordsReady {
 			if startErr := writeStart(true); startErr != nil && err == nil {
 				err = startErr
@@ -725,9 +727,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	env.progress("  %s: %s, $%.2f, %d turn(s)", env.agentLabel(), env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
 	if env.isCodex() {
 		// Agentium's own cap stops Codex while one more full-context request still fits under it: passing it means a
-		// request started before the watcher saw the last one, or subagents' requests overlapped.
+		// request started in the watcher's poll gap (codex.Bound).
 		if spend := rec.Spend().AgentUSD; spec.BudgetUSD > 0 && spend > spec.BudgetUSD {
-			note := fmt.Sprintf("it spent $%.3f, past its $%.2f cost cap: a request started before Agentium's watcher saw the one before it, or subagents' requests overlapped", spend, spec.BudgetUSD)
+			note := fmt.Sprintf("it spent $%.3f, past its $%.2f cost cap: a request started before Agentium's watcher saw the one before it", spend, spec.BudgetUSD)
 			rec.Notes = append(rec.Notes, note)
 			env.progress("  %s", env.Style.Warn("warning: "+note))
 		}
@@ -1277,8 +1279,9 @@ func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	}
 	paths = append(paths, temps...)
 	// Agentium's own Codex home holds the ChatGPT sign-in (home.Layout.CodexHome): no agent may read it, Claude Code's
-	// included. It exists only once the user signed Codex in there, and is listed only then.
-	if _, err := os.Lstat(env.Layout.CodexHome()); env.Layout.Root != "" && err == nil {
+	// included. It is denied whether or not it exists yet: the user may sign Codex in while a run is going, and a deny
+	// list fixed at the start would miss it.
+	if env.Layout.Root != "" {
 		paths = append(paths, env.Layout.CodexHome())
 	}
 	return paths, nil

@@ -47,6 +47,7 @@ case "$prompt" in
 	printf '{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"SANDBOX=agentium-sandbox-ok CODEWORD=%s"}}\n' "$code" ;;
 *)
 	printf 'new\n' > value.txt
+	printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"done, with %s"}}\n' "${CODEX_API_KEY:-no key}"
 	printf '{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"%s/value.txt","kind":"update"}],"status":"completed"}}\n' "$(pwd -P)" ;;
 esac
 printf '{"type":"turn.completed","usage":{"input_tokens":20000,"cached_input_tokens":10000,"cache_write_input_tokens":0,"output_tokens":500,"reasoning_output_tokens":100}}\n'
@@ -78,6 +79,7 @@ func TestRunOnceWithCodex(t *testing.T) {
 
 	result := f.run(context.Background(), "run", "once", "value", "--agent", "codex")
 	expect(t, result, ExitOK, "Starting a real Codex run (gpt-6.1-sol, sign-in login, graded on the host)", "priced by Agentium",
+		"one request runs at a time", "it may cost up to $4.80.",
 		"outcome      ok; verification passed", "environment  Codex 0.160.0, gpt-6.1-sol, effort low, sandbox workspace-write, permission profile agentium",
 		"tokens       10000 input, 10000 cached, 500 output (100 reasoning); cost priced by Agentium at the list prices of 2026-10-04")
 	doc := jsonRun(t, f, ExitOK, "run", "once", "value", "--agent", "codex", "--model", "gpt-6.1-sol:high")
@@ -111,7 +113,8 @@ func TestRunOnceWithCodexAndAnAPIKey(t *testing.T) {
 		t.Error("the key was printed")
 	}
 	records, _ := filepath.Glob(filepath.Join(f.data, "records", "*", "*"))
-	for _, p := range records {
+	stored, _ := filepath.Glob(filepath.Join(f.data, "agentium.db*")) // the stored run: the database and its log
+	for _, p := range append(records, stored...) {
 		if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), "codex-key-for-the-test") {
 			t.Errorf("the key is in %s", p)
 		}

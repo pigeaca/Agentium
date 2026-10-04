@@ -50,12 +50,17 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 		files = append(files, extra...)
 	}
 	var s spend
+	if _, err := os.Stat(filepath.Join(records, Incomplete)); err == nil {
+		m.RolloutsIncomplete = true // Gather left a rollout behind
+	}
 	for i, file := range files {
 		err := parseRollout(file, i == 0, &m, &s)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
+			// What was read is kept, and marked as a part: the run's cost is estimated from it (never less).
+			m.CostUSD, m.UnpricedRequests, m.RolloutsIncomplete = s.usd, s.unpriced, true
 			return m, err
 		}
 		m.Rollouts++

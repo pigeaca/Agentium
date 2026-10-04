@@ -223,10 +223,11 @@ func zshDotDir(tempRoot string) string { return filepath.Join(tempRoot, "zdotdir
 // features are Codex's features a run turns off: outward-facing tools (apps, plugins, browser and computer use, image
 // generation), what keeps state across sessions (memories, goals), what runs code Agentium did not choose (hooks, tool
 // suggestions, MCP dependency installs), the background daemon, the fast tier, and realtime conversation. Unbounded
-// connection retries go too (also --disable): without network a run would otherwise wait for ever.
+// connection retries go too (also --disable): without network a run would otherwise wait for ever. So do the
+// multi-agent tools (multi_agent, multi_agent_v2, and agents.enabled=false in configOverrides).
 var features = []string{"apps", "plugins", "remote_plugin", "browser_use", "browser_use_external", "computer_use", "image_generation",
 	"memories", "hooks", "tool_suggest", "daemon_auto_start", "fast_mode", "realtime_conversation", "skill_mcp_dependency_install", "goals",
-	"unbounded_connection_retries"}
+	"unbounded_connection_retries", "multi_agent", "multi_agent_v2"}
 
 // configOverrides are the run's settings, every one a -c override (exec has no flag for a configuration file, and
 // --ignore-user-config skips CODEX_HOME's): see the package documentation. Codex's defaults that Agentium keeps (the
@@ -272,6 +273,14 @@ func configOverrides(inv agent.Invocation, environ []string, effort string) ([]s
 		// ZDOTDIR below keeps out their .zshenv, which every zsh reads).
 		"allow_login_shell=false",
 		"features={" + strings.Join(featureTable, ",") + "}",
+		// No subagents: every subagent thread can have a request in flight at once, and the cap's allowance holds back
+		// one request. In 0.160.0 the session's multi-agent version is the features' override (multi_agent_v2 on: V2;
+		// agents.enabled false: Disabled) before the model catalog's (V2 for gpt-6.1-sol), and Disabled offers no
+		// multi-agent tools at all (the source at rust-v0.160.0: Config::multi_agent_version_for_model,
+		// tools/spec_plan.rs). Codex's own limit (features.multi_agent_v2.max_concurrent_threads_per_session, which
+		// counts the root, default 4) would keep the tools and need an allowance per thread. Claude Code's subagents
+		// stay on: a fairness difference the plan records.
+		"agents.enabled=false",
 		// The agent's shells: the user's HOME (Codex's own is run-local), the run's temp root, zsh's heredocs in it, an
 		// empty ZDOTDIR (zshDotDir); the
 		// default excludes (*KEY*, *SECRET*, *TOKEN*) on, which 0.160.0 turns off when read from TOML, and Codex's and
@@ -287,8 +296,9 @@ func configOverrides(inv agent.Invocation, environ []string, effort string) ([]s
 }
 
 // permissions is the profile's filesystem table, in order: the whole disk readable (":root"), then what the agent may
-// write (the checkout, the run's build cache and temp root, each in every form), then every denied path (DeniedPaths),
-// which Codex denies for reading and writing. A path both writable and denied is refused: the run could not work.
+// write (the checkout, the run's build cache and temp root, each in every form), then each project layer's .codex and
+// .agents kept read-only, then every denied path (DeniedPaths), which Codex denies for reading and writing. A path both
+// allowed and denied is refused: the run could not work.
 func permissions(inv agent.Invocation, environ []string) ([][2]string, error) {
 	entries := [][2]string{{":root", "read"}}
 	access := map[string]string{}
@@ -303,9 +313,22 @@ func permissions(inv agent.Invocation, environ []string) ([][2]string, error) {
 			}
 		}
 	}
+	// Every project layer's .codex and .agents, from the checkout's root down to the start folder, existing or not, stay
+	// read-only: Codex keeps only the top-level ones of a writable root read-only, so an agent started in a module could
+	// otherwise create svc/.codex/config.toml (a project layer Codex would load on a later rebuild of its config).
+	for _, layer := range layers(inv) {
+		for _, name := range []string{".codex", ".agents"} {
+			for _, form := range sandbox.Forms(filepath.Join(layer, name)) {
+				if access[form] == "" {
+					access[form] = "read"
+					entries = append(entries, [2]string{form, "read"})
+				}
+			}
+		}
+	}
 	for _, p := range deniedPaths(inv, environ) {
 		switch access[p] {
-		case "write":
+		case "write", "read":
 			return nil, fmt.Errorf("the run's folder %s is also a path the agent may not read", p)
 		case "":
 			access[p] = "deny"
@@ -313,6 +336,23 @@ func permissions(inv agent.Invocation, environ []string) ([][2]string, error) {
 		}
 	}
 	return entries, nil
+}
+
+// layers are the folders whose .codex Codex loads as project layers: the checkout's root, then each folder down to
+// where the agent starts.
+func layers(inv agent.Invocation) []string {
+	root := checkout(inv)
+	out := []string{root}
+	rel, err := filepath.Rel(root, inv.Dir)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return out
+	}
+	dir := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		dir = filepath.Join(dir, part)
+		out = append(out, dir)
+	}
+	return out
 }
 
 // DeniedPaths is every path the run's agent may not read or write (see deniedPaths).

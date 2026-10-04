@@ -281,7 +281,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 			rec := s.Record
 			rec.Recovered = RecoveredFinished
 			rec.Notes = append(rec.Notes, "stored on recovery: Agentium stopped after the run finished, before storing it")
-			orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
+			orphans = append(orphans, Orphan{Record: redactRecord(rec, secrets...), Meta: s.Meta})
 			continue
 		}
 		if !s.AgentStarted || s.Finished { // nothing spent, or a run that ended before its agent (executeRun drops those)
@@ -317,7 +317,7 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		if err := (Env{RedactAlso: secrets}).redactRecords(dir); err != nil {
 			return orphans, err
 		}
-		orphans = append(orphans, Orphan{Record: rec, Meta: s.Meta})
+		orphans = append(orphans, Orphan{Record: redactRecord(rec, secrets...), Meta: s.Meta})
 	}
 	slices.SortFunc(orphans, func(a, b Orphan) int { return strings.Compare(a.Record.ID, b.Record.ID) })
 	if len(alive.Runs) > 0 || len(alive.Unreadable) > 0 {
@@ -434,7 +434,7 @@ func recoverUnreadable(layout home.Layout, dir, id string, data []byte, parseErr
 	}
 	rec.IsolatedCostUSD = isolatedCost(rec)
 	rec.Notes = append(rec.Notes, fmt.Sprintf("start file unreadable (%v): moved to %s; judge spend, if any, is not included", parseErr, aside))
-	return &Orphan{Record: rec, Unreadable: aside}, "", nil
+	return &Orphan{Record: redactRecord(rec, secrets...), Unreadable: aside}, "", nil
 }
 
 // cleanGrade stops what a dead run's grade left running, then removes its grading copy and grade folder in the run's
