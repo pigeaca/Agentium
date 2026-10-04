@@ -19,14 +19,17 @@ import (
 	"github.com/pigeaca/agentium/internal/home"
 )
 
-// Cleanup (agentium clean) frees what the data folder keeps for reuse and no longer needs. It looks in four places:
+// Cleanup (agentium clean) frees what the data folder keeps for reuse and no longer needs. It looks in five places:
 //   - seeds: the grading seeds, <cache>/grading-seed/<project>/<key>-<base> (gradingSeed), and what a dead maker left
 //     (<seed>.tmp);
 //   - dependencies: a project's deps folder (<deps>/<project>, depsFolder), whole, or else its Python venvs and
 //     metadata folders (<deps>/<project>/py/<key>, py-meta/<key>) one by one;
 //   - the quarantine (<cache>/quarantine): what a grade's cleanup could not remove;
 //   - leftovers: the workspaces, temp roots and grading copies of runs whose Agentium process died, which recovery
-//     (RecoverWarn) removes; PlanClean only lists them (planLeftovers), and the caller runs the recovery.
+//     (RecoverWarn) removes; PlanClean only lists them (planLeftovers), and the caller runs the recovery;
+//   - validations: the grade folders of sandboxed validations that stopped (<artifacts>/tasks/<id>/<time>/grading/
+//     <label>), which recovery does not know: never one whose validation still holds its lock (task.GradeLock), and
+//     removed as a grade's own cleanup removes its folder (clean_validations.go).
 //
 // A seed, and a base's dependencies, stay while a locked, unfinished experiment uses the base, and while a task in the
 // pool does unless they have not been used for CleanInput.OlderThan (CleanInput.InUse, judge); they are made again on
@@ -42,14 +45,15 @@ import (
 
 // The kinds of what cleanup removes, in the order it reports them.
 const (
-	CleanSeeds      = "seeds"
-	CleanDeps       = "dependencies"
-	CleanQuarantine = "quarantine"
-	CleanLeftovers  = "leftovers"
+	CleanSeeds       = "seeds"
+	CleanDeps        = "dependencies"
+	CleanQuarantine  = "quarantine"
+	CleanLeftovers   = "leftovers"
+	CleanValidations = "validations"
 )
 
 // CleanKinds lists the kinds in report order.
-var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers}
+var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations}
 
 // Why an item goes (CleanItem.Reason of a removal).
 const (
@@ -57,6 +61,8 @@ const (
 	CleanOld         = "old"         // in use, but not used for longer than CleanInput.OlderThan
 	CleanQuarantined = "quarantined" // in the quarantine
 	CleanStoppedRun  = "stopped_run" // left by a run whose Agentium process ended
+	// CleanStoppedValidation: a grade folder left by a validation that stopped (its lock is free).
+	CleanStoppedValidation = "stopped_validation"
 )
 
 // Why an item stays (CleanItem.Reason of a kept one).
@@ -64,7 +70,7 @@ const (
 	CleanKeptTask       = "in_use_by_task"
 	CleanKeptExperiment = "in_use_by_experiment"
 	CleanKeptRecent     = "recently_used" // used within CleanGrace
-	CleanKeptRunning    = "running"       // a run whose process group still exists
+	CleanKeptRunning    = "running"       // a run whose process group still exists, or a validation grading in the folder
 	CleanKeptUnreadable = "unreadable"    // a run whose start file cannot be read: recovery decides when it is safe
 )
 
@@ -152,7 +158,7 @@ var commitSuffix = regexp.MustCompile(`-([0-9a-f]{40}|[0-9a-f]{64})$`)
 func PlanClean(ctx context.Context, in CleanInput) (CleanPlan, error) {
 	in.OlderThan = max(in.OlderThan, CleanGrace)
 	c := planner{in: in}
-	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine} {
+	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine, c.validations} {
 		if err := step(ctx); err != nil {
 			return CleanPlan{}, err
 		}
@@ -649,7 +655,8 @@ const cleanLockWait = 3 * time.Second
 // RemoveClean removes the plan's items of every kind but leftovers (those are recovery's: the caller runs it), each
 // under its lock when it has one and only if not used since the plan, and returns each item's error (nil: removed).
 // Call it holding the run lock (home.Layout.LockRuns), so that no run uses what goes; a validation may, which the lock
-// and the recheck cover. It refuses any path outside the cache and deps folders (cleanable).
+// and the recheck cover. It refuses any path outside the cache and deps folders (cleanable), but a validation's grade
+// folder, which it checks for its own place (gradeCleanable).
 func RemoveClean(ctx context.Context, layout home.Layout, items []CleanItem) []error {
 	errs := make([]error, len(items))
 	for i, it := range items {
@@ -665,6 +672,9 @@ func RemoveClean(ctx context.Context, layout home.Layout, items []CleanItem) []e
 func removeItem(ctx context.Context, layout home.Layout, it CleanItem) error {
 	if it.Kind == CleanLeftovers {
 		return errors.New("a run's leftovers are removed by recovery")
+	}
+	if it.Kind == CleanValidations {
+		return removeValidationGrade(ctx, layout, it)
 	}
 	if err := cleanable(layout, it.Path); err != nil {
 		return err
