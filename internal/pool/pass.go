@@ -83,7 +83,11 @@ type Pass[C any] struct {
 	// whatever the watermark says, reaching commits an earlier pass set aside (under other settings, say), and it
 	// leaves the watermark where it is, since it read another range than the one after it. Commits that are tasks are
 	// still never offered.
-	Since  time.Time
+	Since time.Time
+	// Module is the monorepo module the pass mines for (its Scan reads only that module's commits; "": the whole
+	// repository): its watermark is the module's own (State.Modules), so passes in one module never move another's.
+	// Dismissals, pending and mined records are the project's, whatever the module.
+	Module string
 	Now    func() time.Time
 	Commit func(C) string    // a candidate's solution commit
 	Patch  func(C) string    // optional: its patch ID ("" when unknown)
@@ -131,7 +135,7 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 	if err != nil {
 		return res, err
 	}
-	start := slices.Clone(st.Watermark)
+	start := slices.Clone(st.WatermarkOf(p.Module))
 	if res.Head, err = p.Head(ctx); err != nil {
 		return res, err
 	}
@@ -194,8 +198,9 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 	}
 	_, err = Update(p.File, func(st *State) error {
 		st.LastPass = p.Now().UTC()
-		if slices.Equal(st.Watermark, start) && !slices.Equal(next, start) {
-			st.Watermark, res.Moved = next, true
+		if slices.Equal(st.WatermarkOf(p.Module), start) && !slices.Equal(next, start) {
+			st.setWatermark(p.Module, next)
+			res.Moved = true
 		}
 		return nil
 	})
@@ -206,7 +211,7 @@ func (p Pass[C]) Run(ctx context.Context) (PassResult, error) {
 // re-scan (Since), every commit from Since on within it. window is the Window's start (zero: none), which bounds the
 // candidates' bases (keep).
 func (p Pass[C]) scanRange(head string, st State) (r ScanRange, window time.Time) {
-	r = ScanRange{Head: head, Exclude: st.Watermark, Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
+	r = ScanRange{Head: head, Exclude: st.WatermarkOf(p.Module), Dismissed: st.Dismissed, DismissedPatches: st.DismissedPatches}
 	if p.Window > 0 {
 		window = p.Now().Add(-p.Window)
 	}

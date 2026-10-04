@@ -2,7 +2,9 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/snapshot"
 	"github.com/pigeaca/agentium/internal/task"
 )
 
@@ -21,6 +24,8 @@ import (
 type moduleOnce struct {
 	env  Env
 	spec Spec
+	// started and args are files the fake agent writes: the folder it started in (resolved), and its arguments, one a line.
+	started, args string
 }
 
 func newModuleOnce(t *testing.T, module, decoy, agent string) moduleOnce {
@@ -77,8 +82,11 @@ func newModuleOnceWith(t *testing.T, module, decoy, agent string, files map[stri
 		must(t, gitx.FetchCommit(ctx, user, c, gitx.SourceRef(c), "--git-dir", bare))
 	}
 	cli := filepath.Join(dir, "claude")
-	// The fake agent starts in the checkout's root (the module is not its folder yet), as the real one does.
-	writeFile(t, cli, "#!/bin/sh\n"+agent+"\n"+`cat <<'EOF'
+	// The fake agent records where it started (the module's folder, as the real one starts there) and its arguments, then
+	// runs the test's commands from the checkout's root, where they name their files.
+	started, args := filepath.Join(dir, "started"), filepath.Join(dir, "args")
+	writeFile(t, cli, "#!/bin/sh\nstart=$(pwd -P)\nprintf '%s\\n' \"$start\" > "+started+"\nprintf '%s\\n' \"$@\" > "+args+
+		"\ncd \"${start%/"+module+"}\"\n"+agent+"\n"+`cat <<'EOF'
 {"type":"system","subtype":"init","claude_code_version":"2.1.281","model":"claude-sonnet-5","permissionMode":"acceptEdits","tools":["Bash"],"skills":[],"slash_commands":[]}
 {"type":"result","subtype":"success","is_error":false,"result":"done","total_cost_usd":0.25,"num_turns":2,"duration_ms":1000,"modelUsage":{}}
 EOF
@@ -91,9 +99,9 @@ EOF
 	env := Env{ID: id, Layout: layout, Bare: bare, ProjectRoot: user, CLI: cli, Home: homeDir, Environ: []string{"PATH=/usr/bin:/bin", "HOME=" + homeDir},
 		SignIn: claude.SignInLogin, VerifyTimeout: time.Minute, Grace: time.Second, Now: time.Now}
 	spec := Spec{TaskName: "value", Instruction: "Make the value new.", Arm: task.Arm{Name: "base"}, Model: "claude-sonnet-5", BudgetUSD: 1,
-		Timeout: time.Minute, Task: task.Spec{Base: base, Solution: solution, HiddenTests: []string{hidden}, Reference: []string{module + "/value.txt"},
+		Timeout: time.Minute, Task: task.Spec{Base: base, Solution: solution, HiddenTests: []string{hidden}, Reference: []string{path.Join(module, "value.txt")},
 			Verify: []string{"sh run_tests.sh"}, Module: module}}
-	return moduleOnce{env: env, spec: spec}
+	return moduleOnce{env: env, spec: spec, started: started, args: args}
 }
 
 // A run of a task in a module sets up, and grades, in the module's folder: run_tests.sh exists only there, and the
@@ -333,5 +341,120 @@ func TestInAncestorsEndsOnAnAbsoluteModule(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("inAncestors did not end on an absolute module")
+	}
+}
+
+// The agent of a task in a module starts in the module's folder, as a developer of the module would; the whole checkout
+// stays its own (a working folder it may edit, the sandbox's allowWrite). The record names the module, and the context
+// the run started with is what a session there loads: the root's CLAUDE.md and the module's. A root task starts at the
+// checkout's root with no extra working folder, and its record has no module.
+func TestOnceStartsTheAgentInTheTasksModule(t *testing.T) {
+	f := newModuleOnceWith(t, "svc/api", "decoy", "printf 'new\\n' > svc/api/value.txt",
+		map[string]string{"CLAUDE.md": "root rules\n", "svc/api/CLAUDE.md": "module rules\n", "decoy/CLAUDE.md": "decoy\n"})
+	f.spec.Keep = true
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Outcome != claude.OutcomeOK || rec.Passed == nil || !*rec.Passed || rec.Module != "svc/api" {
+		t.Fatalf("outcome %s, passed %v, module %q, notes %v", rec.Outcome, rec.Passed, rec.Module, rec.Notes)
+	}
+	repo, err := filepath.EvalSymlinks(filepath.Join(f.env.Layout.Workspaces, f.env.workspaceName(), "repo"))
+	must(t, err)
+	if started := readTrimmed(t, f.started); started != filepath.Join(repo, "svc", "api") {
+		t.Errorf("the agent started in %s, want the module's folder in %s", started, repo)
+	}
+	args := strings.Split(readTrimmed(t, f.args), "\n")
+	i := slices.Index(args, "--add-dir")
+	if i < 0 || i+1 >= len(args) || !sameFolder(args[i+1], repo) {
+		t.Errorf("the whole checkout is no working folder of the agent: %v", args)
+	}
+	var settings struct {
+		Sandbox struct {
+			Filesystem struct {
+				AllowWrite []string `json:"allowWrite"`
+			} `json:"filesystem"`
+		} `json:"sandbox"`
+	}
+	must(t, json.Unmarshal([]byte(args[slices.Index(args, "--settings")+1]), &settings))
+	if !slices.ContainsFunc(settings.Sandbox.Filesystem.AllowWrite, func(p string) bool { return sameFolder(p, repo) }) {
+		t.Errorf("the sandbox does not let the agent write its checkout: %v", settings.Sandbox.Filesystem.AllowWrite)
+	}
+	if rec.ContextUse == nil || !slices.Equal(rec.ContextUse.Start, []string{"CLAUDE.md", "svc/api/CLAUDE.md"}) {
+		t.Errorf("the context at start: %+v", rec.ContextUse)
+	}
+	if data, err := json.Marshal(rec); err != nil || !strings.Contains(string(data), `"module":"svc/api"`) {
+		t.Errorf("the record's JSON: %s, %v", data, err)
+	}
+
+	root := newModuleOnceWith(t, "", "decoy", "printf 'new\\n' > value.txt", map[string]string{"CLAUDE.md": "root rules\n", "decoy/CLAUDE.md": "decoy\n"})
+	root.spec.Keep = true
+	if rec, err = Once(context.Background(), root.env, root.spec); err != nil || rec.Passed == nil || !*rec.Passed {
+		t.Fatalf("the root task: %v, %v, %v", rec.Passed, rec.Notes, err)
+	}
+	repo, err = filepath.EvalSymlinks(filepath.Join(root.env.Layout.Workspaces, root.env.workspaceName(), "repo"))
+	must(t, err)
+	if started := readTrimmed(t, root.started); started != repo {
+		t.Errorf("a root task's agent started in %s, want %s", started, repo)
+	}
+	if args := readTrimmed(t, root.args); strings.Contains(args, "--add-dir") {
+		t.Errorf("a root task's agent has another working folder: %s", args)
+	}
+	if data, _ := json.Marshal(rec); strings.Contains(string(data), `"module"`) || !slices.Equal(rec.ContextUse.Start, []string{"CLAUDE.md"}) {
+		t.Errorf("a root task's record: %s", data)
+	}
+}
+
+// A module that is no longer a real folder when the agent would start (the task's setup replaced it with a link) is
+// Agentium's own failure, before the agent starts: it would start somewhere else.
+func TestOnceRefusesToStartTheAgentInALinkedModule(t *testing.T) {
+	f := newModuleOnce(t, "svc", "decoy", "")
+	f.spec.Task.Setup = []string{"cd .. && mv svc svc-real && ln -s svc-real svc"}
+	_, err := Once(context.Background(), f.env, f.spec)
+	if err == nil || !strings.Contains(err.Error(), "the agent's folder") || !strings.Contains(err.Error(), "is a link") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, statErr := os.Stat(f.started); statErr == nil {
+		t.Error("the agent started")
+	}
+}
+
+func readTrimmed(t *testing.T, file string) string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	must(t, err)
+	return strings.TrimSpace(string(data))
+}
+
+// sameFolder reports whether a and b are one folder once links are resolved.
+func sameFolder(a, b string) bool {
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
+}
+
+// An arm's snapshot is applied as a session in the task's module loads context: the module's own .claude files that
+// the snapshot lacks are gone from the arm's checkout (at the root they would be no context, and stay), and its
+// instruction files are the snapshot's.
+func TestOnceAppliesAnArmInTheTasksModule(t *testing.T) {
+	f := newModuleOnceWith(t, "svc", "decoy", "printf 'new\\n' > svc/value.txt", map[string]string{"CLAUDE.md": "root rules\n",
+		"svc/CLAUDE.md": "module rules\n", "svc/.claude/skills/pay/SKILL.md": "---\nname: pay\ndescription: Pay\n---\n"})
+	lean, manifest, err := snapshot.BuildIn(context.Background(), f.env.Bare, memSource{"CLAUDE.md": "root rules\n", "svc/CLAUDE.md": "lean\n"},
+		"snapshot lean", nil, "svc")
+	must(t, err)
+	if manifest.Module != "svc" {
+		t.Fatalf("manifest %+v", manifest)
+	}
+	f.spec.Arm, f.spec.Keep = task.Arm{Name: "lean", Snapshot: lean}, true
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil || rec.Passed == nil || !*rec.Passed {
+		t.Fatalf("passed %v, notes %v, %v", rec.Passed, rec.Notes, err)
+	}
+	repo := filepath.Join(f.env.Layout.Workspaces, f.env.workspaceName(), "repo")
+	if _, err := os.Stat(filepath.Join(repo, "svc", ".claude", "skills", "pay", "SKILL.md")); err == nil {
+		t.Error("the module's skill, which the snapshot lacks, is still in the arm's checkout")
+	}
+	if got := readTrimmed(t, filepath.Join(repo, "svc", "CLAUDE.md")); got != "lean" {
+		t.Errorf("the module's CLAUDE.md is %q", got)
 	}
 }

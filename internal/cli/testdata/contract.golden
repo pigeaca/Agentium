@@ -251,6 +251,7 @@ json context show .entries[].path	string
 json context show .entries[].startup_bytes	int
 json context show .entries[].via	string
 json context show .linked	[]string
+json context show .module	string?
 json context show .project	string
 json context show .schema	int
 json context show .warnings	[]string
@@ -1112,6 +1113,7 @@ json pool update .kept[].name	string
 json pool update .kept[].problem	string
 json pool update .kept[].reasons	[]string
 json pool update .kept[].status	string
+json pool update .module	string?
 json pool update .outside_window	int
 json pool update .ref	string
 json pool update .retired	[]object

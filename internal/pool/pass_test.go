@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -742,5 +743,46 @@ func TestARescanNeverMovesTheWatermarkPastUnreadCommits(t *testing.T) {
 			}
 			w.check("after the plain pass")
 		})
+	}
+}
+
+// A pass in a module keeps its own watermark: it never moves the root's (or another module's), so a pass at the root
+// after one in a module still reads the commits the module's pass set aside, and the module's next pass reads only
+// new ones. A project that never mined a module keeps its state file without the field.
+func TestPassWatermarkPerModule(t *testing.T) {
+	w := newWorld(t, 4, "c2")
+	if _, died, err := w.run(5); died || err != nil {
+		t.Fatal(died, err)
+	}
+	data, err := os.ReadFile(w.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "module_watermarks") {
+		t.Errorf("a root-only state names module watermarks: %s", data)
+	}
+	root := slices.Clone(w.state().Watermark)
+
+	w.commit(2) // c5, c6
+	pass := w.pass(5)
+	pass.Module = "svc"
+	if _, err := pass.Run(w.ctx); err != nil {
+		t.Fatal(err)
+	}
+	st := w.state()
+	if !slices.Equal(st.Watermark, root) || !slices.Equal(st.WatermarkOf("svc"), []string{"c6"}) || st.WatermarkOf("other") != nil {
+		t.Fatalf("after the module's pass: root %v (was %v), svc %v", st.Watermark, root, st.Modules)
+	}
+	if w.reads["c1"] != 2 {
+		t.Errorf("the module's first pass read c1 %d time(s), want 2 (once at the root, once for the module)", w.reads["c1"])
+	}
+	if _, died, err := w.run(5); died || err != nil { // the root again: only what it has not read
+		t.Fatal(died, err)
+	}
+	if w.reads["c1"] != 2 || w.reads["c5"] != 2 {
+		t.Errorf("the root's second pass read c1 %d and c5 %d time(s)", w.reads["c1"], w.reads["c5"])
+	}
+	if st := w.state(); !slices.Equal(st.Watermark, []string{"c6"}) || !slices.Equal(st.WatermarkOf("svc"), []string{"c6"}) {
+		t.Errorf("watermarks: root %v, modules %v", st.Watermark, st.Modules)
 	}
 }

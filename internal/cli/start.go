@@ -130,8 +130,6 @@ type starter struct {
 	held        map[string]string
 	imported    int
 	stopped     string
-	// noMining is why start does not mine at all (the project's module is set): not a history out of candidates.
-	noMining string
 	// lastScan is the last mining scan's result: why its commits were set aside, for the shortage message.
 	lastScan *mine.Result
 	// invalidStreak counts the tasks mined in this run since its last valid one, all invalid (see minStopSample).
@@ -254,13 +252,18 @@ func (s *starter) noteDrift(ctx context.Context, snap store.Snapshot) error {
 	if err != nil {
 		return err
 	}
-	resolved, err := claudectx.Resolve(src)
-	if err != nil {
-		return err
-	}
 	var saved snapshot.Manifest
 	if err := json.Unmarshal(snap.Manifest, &saved); err != nil {
 		return fmt.Errorf("snapshot %s: %w", snap.Name, err)
+	}
+	// A snapshot taken for another module (or the root) holds none of this module's own .claude files.
+	if module := s.w.settings().Module; saved.Module != module { // start has no --module: the stored setting
+		fmt.Fprintln(s.env.Stdout, note(s.env.style(), snapshotModuleNote(snap.Name, saved.Module, module, "the new tasks are")))
+	}
+	// HEAD's context as the snapshot was taken: for the module it names (the root's, for older snapshots).
+	resolved, err := claudectx.ResolveIn(src, saved.Module)
+	if err != nil {
+		return err
 	}
 	// Read only: hash what HEAD's context loads and compare it with the snapshot's own files.
 	var now, was []string

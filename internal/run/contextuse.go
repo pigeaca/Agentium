@@ -43,12 +43,19 @@ var builtinSubagents = []string{"general-purpose", "Explore", "Plan"}
 // from src). dirs are the folders the agent's file tools name paths under: its checkout (as written and resolved),
 // and the working folder its transcript reports.
 func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs ...string) ContextUse {
+	return UseOfIn(resolved, src, m, "", dirs...)
+}
+
+// UseOfIn is UseOf for a run whose agent started in module (resolved with claudectx.ResolveIn): dirs still begin with
+// the checkout's root, so paths stay relative to it, but a command's relative file names are the module folder's, and
+// a module's path-scoped rules match paths in the module.
+func UseOfIn(resolved claudectx.Context, src source.Source, m claude.Metrics, module string, dirs ...string) ContextUse {
 	use := ContextUse{Start: []string{}}
 	touched := relativeAll(m.FilePaths, dirs) // files the agent worked with, through any file tool
 	read := relativeAll(m.ReadPaths, dirs)
 	used := map[string]bool{}
 	// Only Bash commands that ran: a denied `cat AGENTS.md` read nothing (claude.Metrics.RanCommands).
-	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, m.RanCommands, dirs) }
+	byReading := func(p string) bool { return slices.Contains(read, p) || namedByReader(p, module, m.RanCommands, dirs) }
 	for _, e := range resolved.Entries {
 		switch e.Kind {
 		case claudectx.KindInstructions, claudectx.KindImport, claudectx.KindRule:
@@ -57,8 +64,14 @@ func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs
 		case claudectx.KindScopedRule:
 			data, _ := src.ReadFile(e.Path)
 			globs := claudectx.RuleGlobs(data)
+			// A rule's patterns name paths in the folder whose .claude holds it (the root's, or a module's).
+			folder := ""
+			if before, _, ok := strings.Cut(e.Path, "/.claude/rules/"); ok {
+				folder = before + "/"
+			}
 			used[e.Path] = byReading(e.Path) || slices.ContainsFunc(touched, func(p string) bool {
-				return slices.ContainsFunc(globs, func(g string) bool { return claudectx.GlobMatch(g, p) })
+				rel, ok := strings.CutPrefix(p, folder)
+				return ok && slices.ContainsFunc(globs, func(g string) bool { return claudectx.GlobMatch(g, rel) })
 			})
 		case claudectx.KindNested: // loads when the agent works with a file in its folder
 			dir := path.Dir(e.Path) + "/"
@@ -103,7 +116,7 @@ func UseOf(resolved claudectx.Context, src source.Source, m claude.Metrics, dirs
 // resolved context, or why it could not be resolved, which every run of a task in that arm shares.
 type Recovery struct {
 	Bare, Records string
-	contexts      map[[2]string]armStart
+	contexts      map[[3]string]armStart // by base, snapshot and module
 }
 
 type armStart struct {
@@ -142,33 +155,39 @@ func (r *Recovery) Recover(ctx context.Context, rec Record, base, snapshotCommit
 	if err != nil {
 		return nil, fmt.Errorf("a transcript of arm %s: %w", rec.Arm, err)
 	}
-	start, err := r.start(ctx, base, snapshotCommit)
+	start, err := r.start(ctx, base, snapshotCommit, rec.Module)
 	if err != nil {
 		return nil, fmt.Errorf("arm %s: %w", rec.Arm, err)
 	}
-	use := UseOf(start.resolved, start.src, m, m.CWD)
+	// The transcript names only where the agent started: in a module, the checkout's root is that folder's ancestor.
+	root := m.CWD
+	if rec.Module != "" {
+		root = strings.TrimSuffix(filepath.Clean(m.CWD), string(filepath.Separator)+filepath.FromSlash(rec.Module))
+	}
+	use := UseOfIn(start.resolved, start.src, m, rec.Module, root, m.CWD)
 	return &use, nil
 }
 
-// start resolves the context a run started with: base with snapshotCommit applied (none: base's own). Failures are kept
-// too, except cancellation, which leaves nothing behind (a cancelled read can make a context look smaller than it is).
-func (r *Recovery) start(ctx context.Context, base, snapshotCommit string) (armStart, error) {
-	key := [2]string{base, snapshotCommit}
+// start resolves the context a run started with, in module (where its agent started): base with snapshotCommit applied
+// (none: base's own). Failures are kept too, except cancellation, which leaves nothing behind (a cancelled read can make
+// a context look smaller than it is).
+func (r *Recovery) start(ctx context.Context, base, snapshotCommit, module string) (armStart, error) {
+	key := [3]string{base, snapshotCommit, module}
 	if s, ok := r.contexts[key]; ok {
 		return s, s.err
 	}
-	s := r.resolve(ctx, base, snapshotCommit)
+	s := r.resolve(ctx, base, snapshotCommit, module)
 	if err := ctx.Err(); err != nil {
 		return armStart{}, err
 	}
 	if r.contexts == nil {
-		r.contexts = map[[2]string]armStart{}
+		r.contexts = map[[3]string]armStart{}
 	}
 	r.contexts[key] = s
 	return s, s.err
 }
 
-func (r *Recovery) resolve(ctx context.Context, base, snapshotCommit string) armStart {
+func (r *Recovery) resolve(ctx context.Context, base, snapshotCommit, module string) armStart {
 	src, err := source.Commit(ctx, base, "--git-dir", r.Bare)
 	if err != nil {
 		return armStart{err: err}
@@ -178,11 +197,11 @@ func (r *Recovery) resolve(ctx context.Context, base, snapshotCommit string) arm
 		if err != nil {
 			return armStart{err: err}
 		}
-		if src, err = snapshot.Apply(src, snap); err != nil {
+		if src, err = snapshot.ApplyIn(src, snap, module); err != nil {
 			return armStart{err: err}
 		}
 	}
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return armStart{err: err}
 	}
@@ -222,10 +241,17 @@ var (
 )
 
 // namedByReader reports whether a shell command reads p: p is a file argument of a reading command (cat, sed, grep...),
-// written as p, ./p or under one of dirs. Not counted: a search pattern (grep's first operand, unless -e or -f gave
+// written as p, ./p (relative to module's folder when module is set: where the agent started) or under one of dirs. Not counted: a search pattern (grep's first operand, unless -e or -f gave
 // the pattern), a redirection's target, sed -i (which writes) and sort -o's output.
-func namedByReader(p string, commands, dirs []string) bool {
+func namedByReader(p, module string, commands, dirs []string) bool {
+	// Relative names are the starting folder's: the root's, or the module's (where a root file has no plain name).
 	names := []string{p, "./" + p}
+	if module != "" {
+		names = nil
+		if rel, ok := strings.CutPrefix(p, module+"/"); ok {
+			names = []string{rel, "./" + rel}
+		}
+	}
 	for _, dir := range dirs {
 		if dir != "" {
 			names = append(names, filepath.ToSlash(filepath.Clean(dir))+"/"+p)

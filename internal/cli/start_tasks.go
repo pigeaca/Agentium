@@ -140,7 +140,7 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 			if err := s.validate(ctx, c.pending, attempted); err != nil {
 				return false, err
 			}
-		case s.reachable(c) < target && !exhausted && s.stopped == "" && s.noMining == "":
+		case s.reachable(c) < target && !exhausted && s.stopped == "":
 			worked = true
 			room := maxMineFactor*target - s.imported
 			if room <= 0 {
@@ -152,10 +152,7 @@ func (s *starter) supplyTasks(ctx context.Context) (bool, error) {
 			}
 		case len(c.ready) >= floor && s.reachable(c) == len(c.ready):
 			why := s.stopped
-			switch {
-			case why == "" && s.noMining != "":
-				why = s.noMining
-			case why == "":
+			if why == "" {
 				why = "the history has no more candidates"
 			}
 			fmt.Fprintf(out, "Tasks: %d ready (aims for %d; %s)%s: the experiment takes them all, %s\n", len(c.ready), target, why, took,
@@ -241,18 +238,13 @@ func (s *starter) validate(ctx context.Context, tasks []store.Task, attempted ma
 }
 
 // mineMore imports up to want more candidates from the history as tasks (unvalidated); exhausted is whether the
-// history has no more to give. With the project's module set it mines nothing and sets noMining instead: the history
-// was not read, so it is not exhausted.
+// history has no more to give. With the project's module set it mines that module's commits (mine.Options.Module), into
+// tasks that record it.
 func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err error) {
 	w, out, settings := s.w, s.env.Stdout, s.settings()
-	if settings.Module != "" {
-		fmt.Fprintf(out, "Mining: %s\n", moduleMiningNote)
-		s.noMining = "start does not mine while the module " + settings.Module + " is set"
-		return false, nil
-	}
 	prep, err := mine.Prepare(ctx, mine.PrepareInput{DB: w.db, ProjectID: w.project.ID, Root: w.root,
-		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: settings.RequireLock},
-		Verify:  settings.Verify, DefaultVerify: w.defaultVerify()})
+		Options: mine.Options{MaxFiles: mine.DefaultMaxFiles, MaxLines: mine.DefaultMaxLines, RequireLock: settings.RequireLock, Module: settings.Module},
+		Verify:  settings.Verify, DefaultVerify: w.defaultVerify()}) // the module's detected commands, with a module
 	if err != nil {
 		return false, err
 	}
@@ -260,7 +252,7 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 	candidates := slices.DeleteFunc(slices.Clone(prep.Result.Candidates), func(c mine.Candidate) bool { return s.dismissed[c.Hash] })
 	found := len(candidates)
 	if found == 0 {
-		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read", prep.Result.Scanned)
+		fmt.Fprintf(out, "Mining: no more candidates in %d commit(s) read%s", prep.Result.Scanned, inModule(settings.Module))
 		if n := prep.Result.Counts()[mine.ReasonUnlocked]; settings.RequireLock && n > 0 {
 			// The setting alone can empty a Python project's history: say so, not just "no more".
 			fmt.Fprintf(out, "; the require-lock setting set aside %d Python commit(s) whose base pins no dependencies "+
@@ -271,9 +263,9 @@ func (s *starter) mineMore(ctx context.Context, want int) (exhausted bool, err e
 	}
 	imp := mine.Import(ctx, mine.ImportInput{Importer: w.importer(prep.Names), Candidates: candidates, Limit: want,
 		NewTask: func() store.Task {
-			return store.Task{ProjectID: w.project.ID, Verify: prep.Verify, Setup: append([]string{}, settings.Setup...), CreatedAt: s.env.Now()}
+			return store.Task{ProjectID: w.project.ID, Verify: prep.Verify, Setup: append([]string{}, settings.Setup...), Module: settings.Module, CreatedAt: s.env.Now()}
 		}})
-	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned,
+	fmt.Fprintf(out, "Mining: %d candidate(s) in %d commit(s) read%s; imported %d of %d tried (verify: %s)\n", found, prep.Result.Scanned, inModule(settings.Module),
 		len(imp.Tasks), imp.Tried, strings.Join(prep.Verify, "; "))
 	for _, f := range imp.Failed {
 		fmt.Fprintf(out, "  not imported: %s (%s): %v\n", cut(f.Candidate.Subject, maxSubject), experiment.ShortCommit(f.Candidate.Hash), f.Err)
@@ -525,17 +517,20 @@ func (s *starter) explainShortage(c taskCounts, floor, target int, exhausted boo
 		fmt.Fprintf(out, "  %s: look at the tasks set aside above (%s shows each task's status), or add tasks with %s\n", s.stopped,
 			st.Command("agentium task list"), st.Command("agentium task import --commit REF"))
 	}
-	if s.noMining != "" && s.reachable(c) < floor {
-		fmt.Fprintf(out, "  %s: add tasks in the module with %s or %s, then run %s again (or %s measures the whole repository, with mining)\n",
-			s.noMining, st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"),
-			st.Command(`agentium init --module ""`))
-	}
 	if exhausted && s.reachable(c) < floor {
 		fmt.Fprintf(out, "  the history has no more candidates%s; add tasks with %s or %s, then run %s again "+
 			"(%s lists the pool's candidates: commits since its last pass, within 270 days)\n", s.setAsideSummary(),
 			st.Command("agentium task add"), st.Command("agentium task import --commit REF"), st.Command("agentium start"),
 			st.Command("agentium pool update --dry-run"))
 	}
+}
+
+// inModule names a module for a mining line: " in svc/billing", or "" for the whole repository.
+func inModule(module string) string {
+	if module == "" {
+		return ""
+	}
+	return " in " + module
 }
 
 // setAsideSummary says why start's last scan, over the whole history, set commits aside, per reason in the order the

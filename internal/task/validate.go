@@ -407,7 +407,8 @@ func (v Validator) validateArm(ctx context.Context, spec Spec, arm Arm, solution
 		if snap, err = source.Commit(ctx, arm.Snapshot, "--git-dir", v.Bare); err != nil {
 			return nil, nil, nil, err
 		}
-		if overlay, err = snapshot.PlanOverlay(base, snap); err != nil {
+		// The arm's files as a run of the task applies them: what a session in the task's module loads.
+		if overlay, err = snapshot.PlanOverlayIn(base, snap, spec.Module); err != nil {
 			return nil, nil, nil, fmt.Errorf("arm %s: %w", arm.Name, err)
 		}
 		for _, p := range append(slices.Clone(overlay.Writes), overlay.Deletes...) {

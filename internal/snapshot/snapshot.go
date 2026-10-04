@@ -48,6 +48,9 @@ type Manifest struct {
 	Files        []File   `json:"files"`
 	StartupBytes int      `json:"startup_bytes"`
 	Warnings     []string `json:"warnings"`
+	// Module is the monorepo folder the context was resolved for (BuildIn): what a session started there loads. Empty
+	// (and absent from the JSON, so older manifests read the same): the repository's root.
+	Module string `json:"module,omitempty"`
 }
 
 // Paths lists the manifest's files.
@@ -63,7 +66,13 @@ func (m Manifest) Paths() []string {
 // Build writes the context of src, plus the documents in include, into bare as a parentless commit whose tree holds
 // only those files. Commit metadata is fixed, so identical content and message give the identical commit.
 func Build(ctx context.Context, bare string, src source.Source, message string, include []string) (string, Manifest, error) {
-	resolved, err := claudectx.Resolve(src)
+	return BuildIn(ctx, bare, src, message, include, "")
+}
+
+// BuildIn is Build of the context a session started in module loads (claudectx.ResolveIn): the root's and the module's
+// instruction files and .claude folders, and the folders' between. The manifest records the module.
+func BuildIn(ctx context.Context, bare string, src source.Source, message string, include []string, module string) (string, Manifest, error) {
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return "", Manifest{}, err
 	}
@@ -84,7 +93,7 @@ func Build(ctx context.Context, bare string, src source.Source, message string, 
 			resolved.Entries = entries // keep Paths() current for duplicate includes
 		}
 	}
-	manifest := Manifest{StartupBytes: resolved.StartupBytes(), Warnings: resolved.Warnings}
+	manifest := Manifest{StartupBytes: resolved.StartupBytes(), Warnings: resolved.Warnings, Module: module}
 	var index strings.Builder
 	for _, entry := range entries {
 		data, err := src.ReadFile(entry.Path)
@@ -159,14 +168,23 @@ var ErrArmMismatch = errors.New("the base with the snapshot applied would load a
 // checks the result: it refuses to change base files other than instruction files and documents, even ones the base
 // imports, and the arm must load exactly the snapshot's context.
 func PlanOverlay(base, snap source.Source) (Overlay, error) {
-	baseContext, err := claudectx.Resolve(base)
+	return PlanOverlayIn(base, snap, "")
+}
+
+// PlanOverlayIn is PlanOverlay for a task in module (store.Task.Module), whose agent starts in the module's folder:
+// what loads, and so what is deleted when snap lacks it and what the arm must load, is what a session started there
+// loads (claudectx.ResolveIn, LoadsByPresenceIn). snap's own module (Manifest.Module) does not matter: a snapshot
+// is a set of files, and an arm loads exactly what a session in the task's module would load of them. At the root it
+// is PlanOverlay.
+func PlanOverlayIn(base, snap source.Source, module string) (Overlay, error) {
+	baseContext, err := claudectx.ResolveIn(base, module)
 	if err != nil {
 		return Overlay{}, err
 	}
 	overlay := Overlay{Writes: snap.Paths()}
 	var conflicts []string
 	for _, p := range overlay.Writes {
-		if claudectx.LoadsByPresence(p) || claudectx.IsDocument(p) || !source.Has(base, p) {
+		if claudectx.LoadsByPresenceIn(p, module) || claudectx.IsDocument(p) || !source.Has(base, p) {
 			continue
 		}
 		baseData, err := base.ReadFile(p)
@@ -185,15 +203,15 @@ func PlanOverlay(base, snap source.Source) (Overlay, error) {
 		return Overlay{}, fmt.Errorf("%w: %s", ErrTouchesNonContext, strings.Join(conflicts, ", "))
 	}
 	for _, p := range baseContext.Paths() {
-		if !source.Has(snap, p) && claudectx.LoadsByPresence(p) {
+		if !source.Has(snap, p) && claudectx.LoadsByPresenceIn(p, module) {
 			overlay.Deletes = append(overlay.Deletes, p)
 		}
 	}
-	arm, err := claudectx.Resolve(&applied{base: base, snap: snap, deleted: overlay.Deletes})
+	arm, err := claudectx.ResolveIn(&applied{base: base, snap: snap, deleted: overlay.Deletes}, module)
 	if err != nil {
 		return Overlay{}, err
 	}
-	want, err := claudectx.Resolve(snap)
+	want, err := claudectx.ResolveIn(snap, module)
 	if err != nil {
 		return Overlay{}, err
 	}
@@ -209,7 +227,12 @@ func PlanOverlay(base, snap source.Source) (Overlay, error) {
 // Apply returns base as an arm's checkout holds it: snap written over it, and the files that load by being present but
 // that snap lacks deleted. It makes PlanOverlay's checks, so it refuses what an arm would refuse.
 func Apply(base, snap source.Source) (source.Source, error) {
-	overlay, err := PlanOverlay(base, snap)
+	return ApplyIn(base, snap, "")
+}
+
+// ApplyIn is Apply for a task in module (PlanOverlayIn).
+func ApplyIn(base, snap source.Source, module string) (source.Source, error) {
+	overlay, err := PlanOverlayIn(base, snap, module)
 	if err != nil {
 		return nil, err
 	}
