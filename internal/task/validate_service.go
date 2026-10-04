@@ -55,7 +55,7 @@ type Validating struct {
 	// Toolchain is recorded in each validation (Validator.Toolchain); nil records none.
 	Toolchain Toolchain
 	// Checkout warms each validated task's build tools as runs do (Validator.Checkout); nil warms nothing. In sandbox
-	// mode (ValidateOptions.Grader) it must offer sandboxed commands (CheckoutCommands.Sandboxed).
+	// mode (ValidateOptions.Grader) it must offer isolated commands (CheckoutCommands.Isolated).
 	Checkout func(ctx context.Context, base, module string, verify []string, logPath string) (CheckoutCommands, error)
 	// SkipInUse makes StoreValidation store nothing for a task that a locked experiment able to run still uses: it
 	// returns store.ErrTaskInUse instead (store.SetTaskValidationIdle). The task pool's re-validations set it; task

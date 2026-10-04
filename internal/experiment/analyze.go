@@ -256,7 +256,7 @@ func asCounted(runs []RunData) []RunData {
 // sandboxCheck counts the flagged exclusions per arm and the counted pairs (by the lock's schedule) in runs; nil for an
 // experiment that does not grade in the sandbox.
 func sandboxCheck(l Lock, runs []RunData) *SandboxCheck {
-	if task.GraderOf(l.Grader) == task.GraderHost {
+	if task.GraderOf(l.Grader) != task.GraderSandbox { // host has none; so does a mode not graded in: experiment report reads such a lock without Lock.Check
 		return nil
 	}
 	a, b := l.Design.Arms[0].Name, l.Design.Arms[1].Name

@@ -197,8 +197,8 @@ func (l Lock) Check(cliVersion, signIn string) error {
 		}
 	}
 	if !task.KnownGrader(l.Grader) {
-		return fmt.Errorf("its runs were graded in %s, which this Agentium does not grade in (it grades on the host or in %s): its later runs would not compare; start a new experiment",
-			l.Grader, task.GraderSandbox)
+		return fmt.Errorf("its runs were graded in %s, which this Agentium does not grade in (it grades %s): its later runs would not compare; start a new experiment",
+			l.Grader, task.GradesOn)
 	}
 	switch {
 	case cliVersion != l.ClaudeCode:

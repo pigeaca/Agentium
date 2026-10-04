@@ -117,7 +117,7 @@ func (v stateView) panel(sh term.Shapes, lay rowLayout, level int, now time.Time
 	}
 	out = append(out, center(v.statusLine(sh, m, now)))
 	out = append(out, v.infoLines(sh, m, w, level, now)...)
-	if !v.facts.sandboxed {
+	if v.facts.host {
 		out = append(out, center(hostWarning(sh, m)))
 	}
 	if level == 0 {
