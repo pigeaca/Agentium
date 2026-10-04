@@ -320,9 +320,10 @@ func (d Denial) Noise() bool {
 
 // Flagged reports whether d is a limit the grading profile imposes but the agent's own sandbox (Claude Code's, from the
 // run's settings) does not, so a grade that failed with it cannot be told from a sandbox failure (the isolation plan's
-// decision 3: such a failed grade is infrastructure, retried or left out). Noise is never flagged. The agent's sandbox
+// decision 3: such a failed grade is infrastructure, left out with no retry). Noise is never flagged. The agent's sandbox
 // imposes the same limits on:
-//   - reads, except the grader's own credential stores (graderCredentialFiles), which agents may still read;
+//   - reads (the credential stores grading denies are denied to agents too: CredentialFiles and the build tools' user
+//     caches, which a test holds together with graderCredentialFiles);
 //   - writes (file-write*, hard links): the agent writes only its checkout, build cache and temp root;
 //   - the network to addresses (an agent has no direct network; local binding is the grade's wider allowance);
 //   - signals, process information and sysctl reads (the same rules).
@@ -336,11 +337,6 @@ func (p Profile) Flagged(d Denial) bool {
 	op := d.Operation
 	switch {
 	case strings.HasPrefix(op, "file-read"):
-		for _, path := range p.graderOnly() {
-			if within(filepath.Clean(d.Target), path) {
-				return true
-			}
-		}
 		return false
 	case strings.HasPrefix(op, "file-write"), op == "file-link":
 		return false
@@ -350,13 +346,4 @@ func (p Profile) Flagged(d Denial) bool {
 		return false
 	}
 	return true
-}
-
-// graderOnly are the grader's own credential stores, in every form: denied to grades, not yet to agents.
-func (p Profile) graderOnly() []string {
-	var paths []string
-	for _, name := range graderCredentialFiles() {
-		paths = append(paths, filepath.Join(p.Home, name))
-	}
-	return WithForms(paths)
 }

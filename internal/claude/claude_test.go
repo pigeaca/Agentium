@@ -493,6 +493,8 @@ func TestRunTimeoutInterruptsFirst(t *testing.T) {
 	m, _ := Parse(transcript)
 	if !m.SawInit || !m.SawResult || m.ResultExcerpt != "interrupted" || Classify(m, true, Check(m, Expect{})) != OutcomeTimeout {
 		t.Errorf("an interrupted run should still report its result: %+v", m)
+		se, _ := os.ReadFile(stderr.Name())
+		t.Errorf("the run took %v, exit %d, stderr %q", result.Duration, result.ExitCode, se)
 	}
 }
 
