@@ -42,3 +42,20 @@ func TestClassifyWritesTheGradeFolder(t *testing.T) {
 		t.Error("a sibling folder sharing the prefix was rewritten")
 	}
 }
+
+// A grade that reads a credential store grading denies (Maven's ~/.m2/settings.xml, read by default) is denied what
+// agents are denied too: the denial is counted, not flagged, so a failed grade stays a counted failure and is not left
+// out as infrastructure.
+func TestClassifyCredentialReadIsACountedFailure(t *testing.T) {
+	home := t.TempDir()
+	p := sandbox.Profile{Home: home, Data: "/data"}
+	var denials []sandbox.Denial
+	for _, path := range []string{".m2/settings.xml", ".config/pip/pip.conf", ".cargo/credentials.toml"} {
+		denials = append(denials, sandbox.Denial{Process: "mvn", Operation: "file-read-data", Target: filepath.Join(home, path), Repeats: 1})
+	}
+	var report task.SandboxGrade
+	classify(&report, p, denials, filepath.Join(t.TempDir(), "grading"), nil)
+	if report.DenialCount != 3 || report.FlaggedCount != 0 || report.FlaggedFailure(false) {
+		t.Errorf("report %+v: want 3 counted denials, none flagged, the failed grade not left out", report)
+	}
+}

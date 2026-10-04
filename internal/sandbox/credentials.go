@@ -13,21 +13,24 @@ import (
 // through /usr/bin/security and so likely readable by it without a prompt. Denied, the keychain file cannot be opened
 // even by an explicit path (the security client fails with "Operation not permitted"), and the login keychain leaves
 // the shell's search list. Claude Code reads its own login outside the sandbox, which covers only its tools' commands,
-// so sign-in is unaffected. (Grading profiles also deny the security server's lookups: Profile.)
+// so sign-in is unaffected. (Grading profiles also deny the security server's lookups: Profile.) .config/uv is uv's
+// configuration folder (uv.toml can name an index with a token): the folder, not only uv.toml, which the run's
+// build-tool lists (buildtool.UserCaches) already deny; the interpreters in ~/.local/share/uv/python stay readable.
 func CredentialFiles() []string {
 	return []string{".ssh", ".codex", ".config/gh", ".config/agentium", ".netrc", ".git-credentials", ".aws", ".docker",
-		".npmrc", ".pypirc", ".kube", ".gnupg", "Library/Keychains"}
+		".npmrc", ".pypirc", ".kube", ".gnupg", "Library/Keychains", ".config/uv"}
 }
 
 // graderCredentialFiles are credential stores grading profiles deny beyond CredentialFiles (relative to the home
 // folder): pip's configuration (which can hold an index URL with a token) and uv's credentials; Maven's settings and
-// its master password, Gradle's gradle.properties and Cargo's registry tokens (each also inside a folder agents are
-// denied as the user's caches, buildtool.UserCaches, when the caller passes those). The grader's offline recipe reads
-// none of them: Maven runs offline from the deps' repository, and Gradle and Cargo use homes of their own. uv's
-// interpreters (~/.local/share/uv/python) stay readable. Agent runs do not list pip's and uv's yet: adding them
-// changes every run's settings (a security change to the run goldens), a follow-up.
+// its master password, Gradle's gradle.properties and Cargo's registry tokens. Agent runs deny every one of them too,
+// through the build tools' user caches (buildtool.UserCaches: pip's and uv's configs and credentials, poetry's
+// auth.toml, keyring's folder, the machine's pip.conf, and PIP_CONFIG_FILE, UV_CONFIG_FILE and the like; ~/.m2,
+// gradle.properties and Cargo's credentials folder and files); a test holds the two lists together (the agent's
+// denied paths cover this list). The grader's offline recipe reads none of them: Maven runs offline from the deps'
+// repository, and Gradle and Cargo use homes of their own. uv's interpreters (~/.local/share/uv/python) stay readable.
 func graderCredentialFiles() []string {
-	return []string{".config/pip", "Library/Application Support/pip", ".config/uv", ".local/share/uv/credentials",
+	return []string{".config/pip", "Library/Application Support/pip", ".local/share/uv/credentials",
 		".m2/settings.xml", ".m2/settings-security.xml", ".gradle/gradle.properties", ".cargo/credentials", ".cargo/credentials.toml"}
 }
 
