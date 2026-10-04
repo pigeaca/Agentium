@@ -298,7 +298,8 @@ func LogReadable(ctx context.Context, wait time.Duration) error {
 // (the isolation plan's step 1): every process's /dev/dtracehelper, bash's /dev/tty, the JVM's hsperfdata files in the
 // user's temp folder and its configd lookups, the mDNSResponder socket (name lookups, which fail offline anyway), and
 // the analytics lookups of tools such as security, and the Go toolchain's telemetry counters
-// (~/Library/Application Support/go/telemetry), which every go command writes.
+// (~/Library/Application Support/go/telemetry), which every go command writes, and the system notification and
+// Spotlight-metadata daemon lookups that other toolchains (Cargo/rustc) make.
 func (d Denial) Noise() bool {
 	switch {
 	case d.Operation == Unparsed: // its text is the grade's choice
@@ -312,7 +313,13 @@ func (d Denial) Noise() bool {
 	case strings.HasPrefix(d.Operation, "file-write") && strings.Contains(d.Target, "/Library/Application Support/go/telemetry/"):
 		return true
 	case d.Operation == "mach-lookup" && (strings.HasPrefix(d.Target, "com.apple.SystemConfiguration.") ||
-		d.Target == "com.apple.analyticsd" || d.Target == "com.apple.diagnosticd"):
+		d.Target == "com.apple.analyticsd" || d.Target == "com.apple.diagnosticd" ||
+		// System notification and Spotlight-metadata daemons that toolchains look up and that leak nothing when
+		// denied: the lookup simply fails, and the profile still denies them; this only stops a false flag. Seen in
+		// every real Cargo/rustc grade of the Java/Rust pilot (isolation step 4). distributed_notifications carries a
+		// per-boot instance suffix (com.apple.distributed_notifications@Uv3), so both match by prefix.
+		strings.HasPrefix(d.Target, "com.apple.distributed_notifications") ||
+		strings.HasPrefix(d.Target, "com.apple.metadata.mds")):
 		return true
 	}
 	return false

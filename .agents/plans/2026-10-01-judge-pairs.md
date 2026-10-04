@@ -49,7 +49,7 @@ So each comparison must be asked in both orders, and a flip counts as a tie.
   - Reports without the pair judge are byte for byte as before (the console plan's step 3 has the proof).
   - `experiment.PairRecords` pairs a report's records as `PairsOf` pairs stored runs; `experiment.TaskVote` is exported for the per-task votes.
   - Tests: goldens `lean-ab-pairs.{md,json,txt}`, the floor, one vote per task with repeats, scrubbed reasons, and the CLI with a fake judge in all formats.
-- [ ] **3. Real check (paid; approval).**
+- [ ] **3. Real check (paid; approval). Attempted 2026-10-04; not run** (branch `claude/feat/real-checks`); see [docs/research/2026-10-04-judge-pairs-check.md](../../docs/research/2026-10-04-judge-pairs-check.md). The approved cap for this check is a worst case of at most $3. The preview for the required shape (A/A, `--judge-pairs`, 4 tasks × 1) reports a worst case of **$11.60**: four pair comparisons are held at $2.00 each ($8.00 alone, the judge's fixed 4-calls × $0.50 overshoot allowance per pair), plus 8 runs at their cap. No run cap or judge model can bring 4 pairs under $3. Per the money rules (worst case must fit the cap; never raise it myself), it was not run; $0.00 spent. The expected cost was $2.86 (near the approved ~$2) and a $3 budget would bound actual spend to about $3, but proceeding was not authorized because the stated worst case exceeds the cap. The coordinator/user can raise this check's cap to about $12, confirm the budget-bound reading, or run a smaller (1-pair) shape that fits $3. No arm-bias, flip or reason data was produced.
 
 ## Boundaries
 - Pairs whose two runs both passed only. Quality is never compared across failing runs.
