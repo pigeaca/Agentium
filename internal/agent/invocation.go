@@ -75,4 +75,8 @@ type Invocation struct {
 	// State is a folder of the run's own, in its workspace, for the agent's state outside its config folder (Codex: its
 	// run-local HOME, SQLite state and logs); the agent may not read it. Claude Code does not use it.
 	State string
+	// Marker is a folder of a random name in the run's workspace that only this run's sandbox may write, which tells
+	// the run's processes from any other's (Codex: listed writable in its profile; run's sweep of leftovers). Empty:
+	// none. Claude Code does not use it.
+	Marker string
 }

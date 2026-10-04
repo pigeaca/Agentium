@@ -150,7 +150,7 @@ func TestCodexSpendWithoutItsRollout(t *testing.T) {
 		t.Errorf("a completed turn without its rollout: $%.6f (want $%.6f), estimated %v, notes %q", completed.Spend().AgentUSD, want, completed.CostEstimated, completed.Notes)
 	}
 	interrupted := read("exec-interrupted.jsonl")
-	if interrupted.Spend().AgentUSD != 3 || !interrupted.CostEstimated || !strings.Contains(strings.Join(interrupted.Notes, " "), "the run's cap, is counted") {
+	if interrupted.Spend().AgentUSD != codex.Bound("gpt-6.1-sol", 3) || !interrupted.CostEstimated || !strings.Contains(strings.Join(interrupted.Notes, " "), "the cap and one more request") {
 		t.Errorf("an interrupted run without its rollout: $%.2f, estimated %v, notes %q", interrupted.Spend().AgentUSD, interrupted.CostEstimated, interrupted.Notes)
 	}
 	never := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
@@ -182,7 +182,7 @@ func TestRecoverACodexRunWithoutItsRollout(t *testing.T) {
 	if err != nil || len(orphans) != 1 {
 		t.Fatalf("Recover = %+v, %v", orphans, err)
 	}
-	if got := orphans[0].Record; got.Spend().AgentUSD != 2.5 || !got.CostEstimated {
+	if got := orphans[0].Record; got.Spend().AgentUSD != codex.Bound("gpt-6.1-sol", 2.5) || !got.CostEstimated {
 		t.Errorf("recovered $%.2f, estimated %v, notes %q", got.Spend().AgentUSD, got.CostEstimated, got.Notes)
 	}
 }
@@ -222,15 +222,22 @@ func TestRecoveryRedactsEveryAgentsSecret(t *testing.T) {
 // record it was given.
 func TestRedactRecord(t *testing.T) {
 	rec := Record{Notes: []string{"a note with s3cr3t-value"}, Drift: []string{"drift s3cr3t-value"},
-		Metrics:    agent.Metrics{ResultExcerpt: "done; key s3cr3t-value", ToolUses: map[string]int{"x": 1}, Commands: []string{"echo s3cr3t-value"}},
+		Metrics: agent.Metrics{ResultExcerpt: "done; key s3cr3t-value", Commands: []string{"echo s3cr3t-value"},
+			// Keys from the transcript: two that redact to one merge (counts add up, lists join, in the keys' order).
+			ToolUses:       map[string]int{"tool s3cr3t-value": 2, "tool sk-proj-abcdefghijklmnopqrstuvwx": 3, "x": 1},         // secret-scan: allow
+			SubagentModels: map[string][]string{"role s3cr3t-value": {"m1"}, "role sk-proj-abcdefghijklmnopqrstuvwx": {"m2"}}}, // secret-scan: allow
 		ContextUse: &ContextUse{}, Judge: &judge.Verdict{Reasons: []string{"because s3cr3t-value"}}}
 	clean := redactRecord(rec, "", "s3cr3t-value")
 	data, err := json.Marshal(clean)
 	must(t, err)
-	if strings.Contains(string(data), "s3cr3t") || strings.Contains(strings.Join(clean.Metrics.Commands, " "), "s3cr3t") {
+	if strings.Contains(string(data), "s3cr3t") || strings.Contains(string(data), "sk-proj") || strings.Contains(strings.Join(clean.Metrics.Commands, " "), "s3cr3t") {
 		t.Errorf("a secret is left: %s", data)
 	}
-	if !strings.Contains(rec.Judge.Reasons[0], "s3cr3t") || !strings.Contains(rec.Notes[0], "s3cr3t") {
+	if clean.Metrics.ToolUses["tool [REDACTED]"] != 5 || clean.Metrics.ToolUses["x"] != 1 ||
+		!slices.Equal(clean.Metrics.SubagentModels["role [REDACTED]"], []string{"m1", "m2"}) {
+		t.Errorf("map keys: tools %v, subagent models %v", clean.Metrics.ToolUses, clean.Metrics.SubagentModels)
+	}
+	if !strings.Contains(rec.Judge.Reasons[0], "s3cr3t") || !strings.Contains(rec.Notes[0], "s3cr3t") || rec.Metrics.ToolUses["x"] != 1 {
 		t.Error("the record given was changed in place")
 	}
 }
@@ -260,7 +267,7 @@ func TestCodexSpendWithAPartialCollection(t *testing.T) {
 	rec := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
 	rec.Metrics, _ = parseRecords(codex.Adapter{}, records)
 	codexSpendFallback(&rec)
-	if !rec.Metrics.RolloutsIncomplete || rec.Spend().AgentUSD != 3 || !rec.CostEstimated {
+	if !rec.Metrics.RolloutsIncomplete || rec.Spend().AgentUSD != codex.Bound("gpt-6.1-sol", 3) || !rec.CostEstimated {
 		t.Errorf("a partial collection: incomplete %v, $%.3f, estimated %v, notes %q", rec.Metrics.RolloutsIncomplete, rec.Spend().AgentUSD, rec.CostEstimated, rec.Notes)
 	}
 	// Completed later (the subagents' folder made right): the mark goes, and the spend is what was read.
@@ -282,7 +289,39 @@ func TestCodexSpendWithAPartialCollection(t *testing.T) {
 	}
 	short := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3, Metrics: m}
 	codexSpendFallback(&short)
-	if short.Spend().AgentUSD != 3 {
+	if short.Spend().AgentUSD != codex.Bound("gpt-6.1-sol", 3) {
 		t.Errorf("a rollout cut short counts $%.3f", short.Spend().AgentUSD)
+	}
+}
+
+// A crash between recovery removing an API key run's workspace (its Codex home, with a rollout the first gather left
+// behind) and recording the run: the next recovery finds no source, and that is no collection. The records' list of
+// missing rollouts stays, and the run counts its bound, never what was read alone.
+func TestRecoveryKeepsAnIncompleteMarkWithoutTheSources(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1") // the workspace is gone
+	stream, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "exec-ok.jsonl"))
+	must(t, err)
+	rollout, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "rollout-ok.jsonl"))
+	must(t, err)
+	must(t, os.MkdirAll(dir, 0o700))
+	must(t, os.WriteFile(filepath.Join(dir, "stream.jsonl"), stream, 0o600))
+	must(t, os.WriteFile(filepath.Join(dir, codex.Rollout), rollout, 0o600))
+	missing := "# Codex rollouts of this run that are not in these records\nrollouts/rollout-2026-10-04T14-59-00-00000000-0000-7000-8000-0000000000aa.jsonl\n"
+	must(t, os.WriteFile(filepath.Join(dir, codex.Incomplete), []byte(missing), 0o600))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 3, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, codex.Incomplete)); err != nil || !strings.Contains(string(data), "0000000000aa") {
+		t.Errorf("the list of missing rollouts was cleared without them: %q, %v", data, err)
+	}
+	bound := codex.Bound("gpt-6.1-sol", 3)
+	if got := orphans[0].Record; got.Spend().AgentUSD != bound || !got.CostEstimated {
+		t.Errorf("recovered $%.2f (want the bound $%.2f), estimated %v, notes %q", got.Spend().AgentUSD, bound, got.CostEstimated, got.Notes)
 	}
 }

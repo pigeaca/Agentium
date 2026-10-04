@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,9 +20,56 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
-// Incomplete, in a run's records, says that a rollout of the run could not be moved there (Gather): what the records
-// hold of its spend is a part, and the run's cost is estimated so that it never undercounts (run's codexSpendFallback).
+// Incomplete, in a run's records, lists the rollouts of the run that could not be moved there (Gather), one
+// records-relative path a line: what the records hold of its spend is a part, and the run's cost is estimated so that
+// it never undercounts (run's codexSpendFallback). Only a gather that finds each listed rollout in the records removes
+// it: a source that is gone (an API key run's workspace removed by recovery) is not a collection.
 const Incomplete = "rollouts-incomplete"
+
+// markIncomplete updates the records' list of missing rollouts (Incomplete): what this gather could not move, plus
+// what an earlier one listed that is still not in the records (a line it cannot read as such stays, as missing). The
+// list goes only once it is empty; its error says what is still missing.
+func markIncomplete(records string, missing map[string]error) error {
+	marker := filepath.Join(records, Incomplete)
+	if data, err := os.ReadFile(marker); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if _, already := missing[line]; already {
+				continue
+			}
+			collected := false
+			if line == Rollout || filepath.Dir(line) == Subagents && filepath.IsLocal(line) {
+				info, err := os.Lstat(filepath.Join(records, line))
+				collected = err == nil && info.Mode().IsRegular()
+			}
+			if !collected {
+				missing[line] = errors.New("listed as missing by an earlier gather, and still not in the records")
+			}
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("Codex rollouts: %w", err)
+	}
+	if len(missing) == 0 {
+		if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("Codex rollouts: %w", err)
+		}
+		return nil
+	}
+	lines := []string{"# Codex rollouts of this run that are not in these records"}
+	var errs []error
+	for dest, err := range missing {
+		lines = append(lines, dest)
+		errs = append(errs, fmt.Errorf("%s: %w", dest, err))
+	}
+	sort.Strings(lines[1:])
+	if err := os.WriteFile(marker, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		errs = append(errs, fmt.Errorf("list the missing Codex rollouts: %w", err))
+	}
+	return fmt.Errorf("Codex rollouts not collected: %w", errors.Join(errs...))
+}
 
 // Codex keeps each session's rollout at CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl, always: no
 // setting moves it (the spike, [source]). In login mode CODEX_HOME is the shared login home, which Agentium's runs
@@ -111,15 +159,15 @@ func (Adapter) Gather(configDir, records string) error {
 		return nil
 	}
 	// Each rollout is moved on its own: one that fails is left where it is (moveScrubbed removes a source only once its
-	// copy is written), the others still move, and the records say the collection is incomplete (Incomplete), so the
-	// run's spend is never read as whole from part of it.
-	var failed []error
+	// copy is written), the others still move, and the records list what is missing (Incomplete), so the run's spend is
+	// never read as whole from part of it.
+	missing := map[string]error{} // records-relative destinations not collected
 	files := rolloutFiles(filepath.Join(configDir, "sessions"))
 	mainFile := filepath.Join(records, Rollout)
 	for _, f := range files {
 		if isThreads(f, thread) {
 			if err := moveScrubbed(f, mainFile); err != nil {
-				failed = append(failed, err)
+				missing[Rollout] = err
 			}
 		}
 	}
@@ -133,12 +181,13 @@ func (Adapter) Gather(configDir, records string) error {
 			if !ok || !belongs(meta, main) {
 				continue
 			}
+			dest := filepath.Join(Subagents, filepath.Base(f))
 			if err := os.MkdirAll(filepath.Join(records, Subagents), 0o700); err != nil {
-				failed = append(failed, fmt.Errorf("Codex rollouts: %w", err))
+				missing[dest] = fmt.Errorf("Codex rollouts: %w", err)
 				continue
 			}
-			if err := moveScrubbed(f, filepath.Join(records, Subagents, filepath.Base(f))); err != nil {
-				failed = append(failed, err)
+			if err := moveScrubbed(f, filepath.Join(records, dest)); err != nil {
+				missing[dest] = err
 				continue
 			}
 			if threadPattern.MatchString(meta.ID) {
@@ -146,15 +195,8 @@ func (Adapter) Gather(configDir, records string) error {
 			}
 		}
 	}
-	marker := filepath.Join(records, Incomplete)
-	if len(failed) > 0 {
-		if err := os.WriteFile(marker, []byte(fmt.Sprintf("%d Codex rollout(s) could not be moved into these records\n", len(failed))), 0o600); err != nil {
-			failed = append(failed, fmt.Errorf("mark the Codex rollouts incomplete: %w", err))
-		}
-		return errors.Join(failed...)
-	}
-	if err := os.Remove(marker); err != nil && !errors.Is(err, fs.ErrNotExist) { // a later gather completed it
-		return fmt.Errorf("Codex rollouts: %w", err)
+	if err := markIncomplete(records, missing); err != nil {
+		return err
 	}
 	for _, t := range threads {
 		snapshots, _ := filepath.Glob(filepath.Join(configDir, "shell_snapshots", t+".*.sh"))
@@ -241,13 +283,17 @@ func scrub(v any) any {
 //
 // The bound: Codex runs with its subagents off (configOverrides), so one request is in flight at a time, and the spend
 // stays under the cap, unless the next request starts before the watcher reads the last one (it looks every poll):
-// then at most the cap plus one allowance (Bound). A request too large to price stops the run as capped. A thread whose
-// rollout it cannot find within blindAfter stops the run as agent.StopBlind: its spend would be unseen.
+// then at most the cap plus one allowance (Bound), as long as Codex records each request's usage. A request too large
+// to price stops the run as capped. Lost accounting stops it as agent.StopBlind, and the run counts its bound: a thread
+// whose rollout it cannot find within blindAfter, a rollout that becomes unreadable or goes, and a stream that shows the
+// model at work while the rollout does not follow within lagAfter (Codex goes on when it cannot write its rollout).
 type watcher struct {
 	transcript, codexHome string
 	rates                 pricing.OpenAIRates
 	capUSD, allowanceUSD  float64
-	poll, blindAfter      time.Duration // zero: 50ms and a minute
+	// poll is how often it looks (zero: 50 ms); blindAfter how long a started thread may go without a rollout (zero: a
+	// minute); lagAfter how long the stream may show the model working without the rollout following (zero: 90 s).
+	poll, blindAfter, lagAfter time.Duration
 }
 
 // tail is one rollout the watcher reads: how far, and whether it is the run's.
@@ -257,13 +303,26 @@ type tail struct {
 	known  bool // decided whether it is the run's (its first line was whole)
 }
 
+// read is what a rollout's new lines (whole lines only) held: the requests' price (priced is false when one could not
+// be priced), whether anything was written (grew), and the tool calls opened and closed (by call_id). lost is true
+// when the rollout cannot be read on: gone, unreadable, or a line too long to ever end.
+type readResult struct {
+	usd            float64
+	priced, grew   bool
+	opened, closed []string
+	lost           bool
+}
+
 func (w watcher) watch(ctx context.Context) agent.Stop {
-	poll, blindAfter := w.poll, w.blindAfter
+	poll, blindAfter, lagAfter := w.poll, w.blindAfter, w.lagAfter
 	if poll <= 0 {
 		poll = 50 * time.Millisecond
 	}
 	if blindAfter <= 0 {
 		blindAfter = time.Minute
+	}
+	if lagAfter <= 0 {
+		lagAfter = 90 * time.Second
 	}
 	ticker := time.NewTicker(poll)
 	defer ticker.Stop()
@@ -272,6 +331,9 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 	mainFound := false
 	tails := map[string]*tail{}
 	spent := 0.0
+	stream := &streamTail{}
+	openCalls := map[string]bool{}
+	var unmatchedSince time.Time // the stream showed the model at work, and the rollout has not followed since
 	for {
 		select {
 		case <-ctx.Done():
@@ -284,6 +346,7 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 			}
 			threadSeen = time.Now()
 		}
+		grew := false
 		for _, f := range rolloutFiles(filepath.Join(w.codexHome, "sessions")) {
 			t := tails[f]
 			if t == nil {
@@ -306,10 +369,26 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 			if !t.run {
 				continue
 			}
-			usd, priced := t.read(f, w.rates)
-			spent += usd
-			if !priced {
+			r := t.read(f, w.rates)
+			if r.lost {
+				return agent.StopBlind // the run's accounting is lost: its spend could pass the cap unseen
+			}
+			spent += r.usd
+			if !r.priced {
 				return agent.StopCap // a request Agentium cannot price: the cap cannot be kept
+			}
+			grew = grew || r.grew
+			for _, id := range r.opened {
+				openCalls[id] = true
+			}
+			for _, id := range r.closed {
+				delete(openCalls, id)
+			}
+		}
+		// A main rollout found, then gone or emptied, is lost accounting too.
+		if mainFound {
+			if t := tails[mainRolloutOf(tails, thread)]; t == nil {
+				return agent.StopBlind
 			}
 		}
 		if spent+w.allowanceUSD > w.capUSD {
@@ -318,44 +397,129 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 		if !mainFound && time.Since(threadSeen) > blindAfter {
 			return agent.StopBlind
 		}
+		// Codex 0.160 carries on when it cannot write its rollout (persist_rollout_items' failure is ignored), so the
+		// stream is checked against it: every response the model finishes, and every tool result it is given, is written
+		// to the rollout as it happens. Stream events a tool batch still open in the rollout explains (its commands and
+		// changes) need nothing more; any other (a message, reasoning, a new command outside an open batch, the turn's
+		// end) must be followed by the rollout within lagAfter, or the run is stopped as blind and counts its bound.
+		unexplained := stream.read(w.transcript, len(openCalls) > 0)
+		switch {
+		case grew:
+			unmatchedSince = time.Time{}
+		case unexplained && unmatchedSince.IsZero():
+			unmatchedSince = time.Now()
+		case !unmatchedSince.IsZero() && time.Since(unmatchedSince) > lagAfter:
+			return agent.StopBlind
+		}
 	}
 }
 
-// read prices the requests written to the rollout since the last read (whole lines only); priced is false when one
-// could not be priced.
-func (t *tail) read(file string, rates pricing.OpenAIRates) (usd float64, priced bool) {
+// mainRolloutOf is the path of the main thread's rollout among the tails ("" when none).
+func mainRolloutOf(tails map[string]*tail, thread string) string {
+	for f := range tails {
+		if isThreads(f, thread) {
+			if _, err := os.Stat(f); err == nil {
+				return f
+			}
+		}
+	}
+	return ""
+}
+
+// streamTail reads the exec stream's new lines as they come.
+type streamTail struct{ offset int64 }
+
+// read reports whether the stream's new whole lines show the model at work in a way the rollout must follow: any item
+// or turn event but an item's start, except commands and changes while a tool batch is open in the rollout (inBatch),
+// which the batch's result will follow.
+func (s *streamTail) read(file string, inBatch bool) (unexplained bool) {
 	f, err := os.Open(file)
 	if err != nil {
-		return 0, true // moved or gone: what it held was counted
+		return false
+	}
+	defer f.Close()
+	if _, err := f.Seek(s.offset, io.SeekStart); err != nil {
+		return false
+	}
+	data, _ := io.ReadAll(io.LimitReader(f, maxLine))
+	end := bytes.LastIndexByte(data, '\n')
+	if end < 0 {
+		return false
+	}
+	s.offset += int64(end) + 1
+	for _, line := range bytes.Split(data[:end], []byte("\n")) {
+		var e streamEvent
+		if json.Unmarshal(line, &e) != nil {
+			continue
+		}
+		switch e.Type {
+		case "thread.started", "turn.started", "item.started", "item.updated":
+		case "item.completed":
+			kind := ""
+			if e.Item != nil {
+				kind = e.Item.Type
+			}
+			if !(inBatch && (kind == "command_execution" || kind == "file_change" || kind == "mcp_tool_call" || kind == "web_search")) {
+				unexplained = true
+			}
+		default: // the turn's end, an error
+			unexplained = true
+		}
+	}
+	return unexplained
+}
+
+// read prices the requests written to the rollout since the last read (whole lines only), and notes its tool calls.
+func (t *tail) read(file string, rates pricing.OpenAIRates) readResult {
+	f, err := os.Open(file)
+	if err != nil {
+		return readResult{lost: true}
 	}
 	defer f.Close()
 	if _, err := f.Seek(t.offset, io.SeekStart); err != nil {
-		return 0, true
+		return readResult{lost: true}
 	}
 	data, err := io.ReadAll(io.LimitReader(f, maxLine))
 	if err != nil && !errors.Is(err, io.EOF) {
-		return 0, true
+		return readResult{lost: true}
 	}
 	end := bytes.LastIndexByte(data, '\n')
 	if end < 0 {
-		return 0, true
+		return readResult{priced: true, lost: len(data) >= maxLine}
 	}
-	priced = true
+	r := readResult{priced: true, grew: true}
 	for _, line := range bytes.Split(data[:end], []byte("\n")) {
 		var l rolloutLine
-		if json.Unmarshal(line, &l) != nil || l.Type != "token_usage_record" {
+		if json.Unmarshal(line, &l) != nil {
 			continue
 		}
-		var r tokenUsageRecord
-		if json.Unmarshal(l.Payload, &r) != nil {
-			continue
+		switch l.Type {
+		case "token_usage_record":
+			var u tokenUsageRecord
+			if json.Unmarshal(l.Payload, &u) != nil {
+				continue
+			}
+			cost, ok := rates.Cost(u.usage())
+			r.usd += cost
+			r.priced = r.priced && ok
+		case "response_item":
+			var item struct {
+				Type   string `json:"type"`
+				CallID string `json:"call_id"`
+			}
+			if json.Unmarshal(l.Payload, &item) != nil || item.CallID == "" {
+				continue
+			}
+			switch item.Type {
+			case "custom_tool_call", "function_call", "local_shell_call":
+				r.opened = append(r.opened, item.CallID)
+			case "custom_tool_call_output", "function_call_output":
+				r.closed = append(r.closed, item.CallID)
+			}
 		}
-		cost, ok := rates.Cost(r.usage())
-		usd += cost
-		priced = priced && ok
 	}
 	t.offset += int64(end) + 1
-	return usd, priced
+	return r
 }
 
 // Bound is the most a capped run can spend: its cap, plus one allowance for a request that starts in the watcher's

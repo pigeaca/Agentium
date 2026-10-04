@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pigeaca/agentium/internal/agent"
+	"github.com/pigeaca/agentium/internal/sandbox"
 )
 
 // parentEnv is a user's environment with credentials and settings that must not reach a run: Codex's and OpenAI's
@@ -121,8 +122,9 @@ func TestPermissionProfile(t *testing.T) {
 			t.Errorf("%s is not denied in the profile", p)
 		}
 	}
-	if strings.Count(table, `="write"`) != 3+1 { // /tmp/ag-... also in its /private/tmp form
-		t.Errorf("writable: %s", table)
+	// The checkout, the build cache and the temp root, each in every form the code resolves (/tmp's /private/tmp on macOS).
+	if want := len(sandbox.Forms(inv.Dir)) + len(sandbox.Forms(inv.BuildCache)) + len(sandbox.Forms(inv.TempRoot)); strings.Count(table, `="write"`) != want {
+		t.Errorf("writable (want %d): %s", want, table)
 	}
 }
 

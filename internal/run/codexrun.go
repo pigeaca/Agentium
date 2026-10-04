@@ -1,11 +1,15 @@
 package run
 
 import (
-	"errors"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/claude"
@@ -14,28 +18,68 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
-// sweepCodex stops the processes a Codex run's commands left, and says what it stopped, or could not. Codex's unified
-// exec starts each command in a session of its own, outside the process group the runner kills, so two sweeps follow
-// the agent, as for a grade's leftovers:
-//   - by sandbox (stopSandboxed): every process in the run's own Seatbelt sandbox, the one profile that lets a process
-//     write the run's checkout but not the workspace folder that holds it (another run's agent, a grade, an unsandboxed
-//     process and the system's own sandboxed agents each fail one of the two: theirs allow both or neither). It finds a
-//     detached child however little it holds (setsid, cd /, every descriptor closed, a system binary exec'd), as long
-//     as the checkout is the folder the profile names: the agent can write in it, but not rename or replace it (the
-//     workspace folder is not writable to it). Not the temp root: in /tmp, which the system's sandboxed agents may
-//     write too (cfprefsd, sharingd: found by a first version of this sweep);
-//   - by path (stopProcessesUnder): whatever still uses the workspace or the temp root, sandboxed or not.
+// codexSweep is what tells a Codex run's leftover processes (codexLeftovers): its workspace and temp root, its marker
+// (a folder of a random name in its workspace that only its sandbox profile lets a process write; "": none known) and
+// when its agent started (no process older than that is its).
+type codexSweep struct {
+	workspace, tempRoot, marker string
+	since                       time.Time
+}
+
+// markerPrefix starts the name of a Codex run's marker folder in its workspace (newMarker).
+const markerPrefix = "own-"
+
+// newMarker makes a Codex run's marker folder: a random, unguessable name in its workspace, which the run's profile
+// lists as writable (agent.Invocation.Marker) and no other profile can (a grant for workspaces/*/repo does not cover
+// it). The agent can write in it but not rename or remove it: the workspace folder is not writable to it.
+func newMarker(workspace string) (string, error) {
+	suffix := make([]byte, 16)
+	if _, err := rand.Read(suffix); err != nil {
+		return "", fmt.Errorf("the run's marker: %w", err)
+	}
+	marker := filepath.Join(workspace, markerPrefix+hex.EncodeToString(suffix))
+	if err := os.Mkdir(marker, 0o700); err != nil {
+		return "", fmt.Errorf("the run's marker: %w", err)
+	}
+	return marker, nil
+}
+
+// markerIn finds a Codex run's marker folder in its workspace (recovery: the start file does not name it), or "" when
+// there is not exactly one.
+func markerIn(workspace string) string {
+	found, _ := filepath.Glob(filepath.Join(workspace, markerPrefix+"*"))
+	var dirs []string
+	for _, f := range found {
+		if info, err := os.Lstat(f); err == nil && info.IsDir() {
+			dirs = append(dirs, f)
+		}
+	}
+	if len(dirs) != 1 {
+		return ""
+	}
+	return dirs[0]
+}
+
+// sweepCodex stops the processes a Codex run's commands left (codexLeftovers), and says what it stopped, or could not.
+// Codex's unified exec starts each command in a session of its own, outside the process group the runner kills. A
+// process is stopped only once shown to be the run's: started no earlier than its agent, and in its own sandbox (the
+// marker) or using its folders. guard, when set (tests), sees the process IDs first and may refuse the sweep: a test
+// then never stops a process it did not start.
 //
 // In the spike none was left, even after SIGINT.
-func sweepCodex(workspace, tempRoot string) []string {
+func sweepCodex(s codexSweep, guard func(pids []int) bool) []string {
+	if guard != nil {
+		pids, err := codexLeftoverPIDs(s)
+		if err != nil || !guard(pids) {
+			return []string{fmt.Sprintf("the sweep of Codex's leftover processes was refused by its guard (it would stop %v; %v)", pids, err)}
+		}
+	}
 	var notes []string
-	killed, err := stopSandboxed(filepath.Join(workspace, "repo"), workspace)
-	more, err2 := stopProcessesUnder([]string{workspace, tempRoot})
-	killed = append(killed, more...)
+	killed, err := stopCodexLeftovers(s)
 	if len(killed) > 0 {
 		notes = append(notes, fmt.Sprintf("stopped %d process(es) Codex's commands left running: %s", len(killed), strings.Join(killed, ", ")))
 	}
-	if err := errors.Join(err, err2); err != nil {
+	if err != nil {
 		notes = append(notes, "Codex's leftover processes could not all be stopped: "+err.Error())
 	}
 	return notes
@@ -53,7 +97,8 @@ func gatherOrphan(layout home.Layout, rec Record, workspace, records string) []s
 	if agent.Name(rec.Agent) != codex.Name {
 		return nil
 	}
-	notes := sweepCodex(workspace, layout.RunTemp(filepath.Base(workspace)))
+	notes := sweepCodex(codexSweep{workspace: workspace, tempRoot: layout.RunTemp(filepath.Base(workspace)), marker: markerIn(workspace),
+		since: rec.Started}, nil)
 	if err := (codex.Adapter{}).Gather(codexHomeOf(layout, rec.SignIn, workspace), records); err != nil {
 		notes = append(notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}
@@ -77,7 +122,7 @@ func sniffAdapter(transcript string) agent.Adapter {
 //     long-context limit cannot be checked;
 //   - a collection or a read left incomplete (Metrics.RolloutsIncomplete: a rollout left behind, one cut short), or no
 //     usage at all (an interrupted run: Codex prints usage only when its turn completes), or no list price: the larger
-//     of what was read and the run's cap (CapUSD), which Agentium's watcher kept its spend under.
+//     of what was read and the most a run with its cap (CapUSD) can spend: the cap and one more request (codex.Bound).
 //
 // A run whose stream shows no session (no thread.started) never reached the API and spent nothing; rollouts read whole,
 // even without requests, are the spend: nothing changes. An estimate only ever raises the cost.
@@ -102,9 +147,10 @@ func codexSpendFallback(rec *Record) {
 		rec.Notes = append(rec.Notes, what+", and the run had no cap: what it spent is unknown beyond what was read")
 		return
 	}
-	usd := max(m.CostUSD, rec.CapUSD)
+	usd := max(m.CostUSD, codex.Bound(rec.Model, rec.CapUSD))
 	m.CostUSD, m.EstimatedCostUSD, m.UnpricedRequests, rec.CostEstimated = usd, usd, 0, true
-	rec.Notes = append(rec.Notes, fmt.Sprintf("%s: $%.2f, the larger of that and the run's cap, is counted as its spend", what, usd))
+	rec.Notes = append(rec.Notes, fmt.Sprintf("%s: $%.2f, the larger of that and the most a run with its $%.2f cap can spend (the cap and one more request), is counted as its spend",
+		what, usd, rec.CapUSD))
 }
 
 // redactRecord is rec with each secret, and every credential-shaped string (Redact), removed from all its text: the
@@ -148,11 +194,36 @@ func redactValue(v reflect.Value, secrets []string) reflect.Value {
 		if v.IsNil() {
 			return v
 		}
+		// Keys are redacted too (a tool or subagent name comes from the transcript). Two keys that redact to one are
+		// merged, in the keys' sorted order so the result does not depend on the map's: counts add up, lists join,
+		// otherwise the first stays.
+		keys := v.MapKeys()
+		sort.Slice(keys, func(i, j int) bool { return fmt.Sprint(keys[i].Interface()) < fmt.Sprint(keys[j].Interface()) })
 		out := reflect.MakeMapWithSize(v.Type(), v.Len())
-		for _, key := range v.MapKeys() {
-			out.SetMapIndex(key, redactValue(v.MapIndex(key), secrets))
+		for _, key := range keys {
+			k, value := redactValue(key, secrets), redactValue(v.MapIndex(key), secrets)
+			if prev := out.MapIndex(k); prev.IsValid() {
+				value = mergeValues(prev, value)
+			}
+			out.SetMapIndex(k, value)
 		}
 		return out
 	}
 	return v
+}
+
+// mergeValues is two map values whose keys redact to one: numbers summed, slices joined, else the first.
+func mergeValues(a, b reflect.Value) reflect.Value {
+	out := reflect.New(a.Type()).Elem()
+	switch a.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		out.SetInt(a.Int() + b.Int())
+	case reflect.Float32, reflect.Float64:
+		out.SetFloat(a.Float() + b.Float())
+	case reflect.Slice:
+		return reflect.AppendSlice(reflect.AppendSlice(reflect.MakeSlice(a.Type(), 0, a.Len()+b.Len()), a), b)
+	default:
+		return a
+	}
+	return out
 }

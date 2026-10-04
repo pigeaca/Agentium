@@ -34,6 +34,10 @@ const fakeCodexName = "codex-golden-fake"
 // spendForever, in a run's prompt, makes the fake Codex spend $0.40 a request until it is interrupted.
 const spendForever = "AGENTIUM-SPEND-FOREVER"
 
+// loseAccounting, in a run's prompt, makes the fake Codex lose its rollout after one request (as when Codex can no
+// longer write it) and keep answering until it is interrupted.
+const loseAccounting = "AGENTIUM-LOSE-ACCOUNTING"
+
 // leaveAChild, in a run's prompt, makes the fake Codex leave a process in a session of its own (as unified exec's
 // commands run), in the checkout, which outlives Codex and its process group: the stream names its ID.
 const leaveAChild = "AGENTIUM-LEAVE-A-CHILD"
@@ -108,8 +112,13 @@ func fakeCodex() int {
 		return fmt.Sprintf(`{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":%d,"reasoning_output_tokens":0}`, input, output)
 	}
 	if strings.Contains(string(stdin), leaveADetachedChild) {
+		// Like the run's profile: its checkout and its marker writable, its workspace folder and the workspaces folder not.
 		workspace, _ := filepath.EvalSymlinks(filepath.Dir(cwd))
-		profile := fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath %q))(allow file-write* (subpath %q))`, workspace, filepath.Join(workspace, "repo"))
+		markers, _ := filepath.Glob(filepath.Join(workspace, "own-*"))
+		profile := `(version 1)(allow default)` + fmt.Sprintf(`(deny file-write* (subpath %q))(allow file-write* (subpath %q))`, filepath.Dir(workspace), filepath.Join(workspace, "repo"))
+		for _, m := range markers {
+			profile += fmt.Sprintf(`(allow file-write* (subpath %q))`, m)
+		}
 		child := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sh", "-c", "cd / && exec /bin/sleep 600")
 		child.Dir, child.SysProcAttr = "/", &syscall.SysProcAttr{Setsid: true}
 		if err := child.Start(); err == nil {
@@ -126,6 +135,19 @@ func fakeCodex() int {
 	}
 	_ = os.MkdirAll(filepath.Join(home, "shell_snapshots"), 0o700)
 	_ = os.WriteFile(filepath.Join(home, "shell_snapshots", fakeThread+".1.sh"), []byte("export FROM_THE_SHELL=1\n"), 0o600)
+	if strings.Contains(string(stdin), loseAccounting) {
+		write(`{"type":"token_usage_record","payload":{"usage":` + usage(10_000, 100) + `}}`)
+		time.Sleep(200 * time.Millisecond)
+		os.Remove(rollout)
+		for {
+			fmt.Println(`{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"still working"}}`)
+			select {
+			case <-interrupted:
+				return 1
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
 	if strings.Contains(string(stdin), spendForever) {
 		fmt.Println(`{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"sleep 900","status":"in_progress"}}`)
 		for {
@@ -292,6 +314,11 @@ func captureCodex(t *testing.T, c codexGoldenCase) string {
 	runTemp := f.env.Layout.RunTemp(f.env.workspaceName())
 	replace := map[string]string{runTemp: "<RUNTEMP>", realOf(runTemp): "<RUNTEMP>", f.temps: "<TEMPS>", realOf(f.temps): "<TEMPS>",
 		f.dir: "<T>", realOf(f.dir): "<T>", f.env.ID: "<ID>", f.exe: "<TEST-BINARY>"}
+	if marker := markerIn(filepath.Join(f.env.Layout.Workspaces, f.env.workspaceName())); marker != "" { // a random name
+		replace[filepath.Base(marker)] = markerPrefix + "<RANDOM>"
+	} else {
+		t.Fatalf("%s: the run made no marker folder", c.name)
+	}
 	keys := make([]string, 0, len(replace))
 	for k := range replace {
 		keys = append(keys, k)
@@ -437,6 +464,7 @@ func TestCodexRunRefusals(t *testing.T) {
 func TestCodexRunSweepsLeftoverProcesses(t *testing.T) {
 	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
 	f.spec.Instruction = "Leave one: " + leaveAChild
+	guarded := guardSweep(t, &f)
 	rec, err := Once(context.Background(), f.env, f.spec)
 	if err != nil {
 		t.Fatal(err)
@@ -449,6 +477,9 @@ func TestCodexRunSweepsLeftoverProcesses(t *testing.T) {
 	}
 	pid, _ := strconv.Atoi(string(match[1]))
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if refused := guarded(pid); refused != "" {
+		t.Skip(refused)
+	}
 	gone := false
 	for range 40 {
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -499,6 +530,7 @@ func TestCodexRunSweepsADetachedChild(t *testing.T) {
 	}
 	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
 	f.spec.Instruction = "Leave one: " + leaveADetachedChild
+	guarded := guardSweep(t, &f)
 	rec, err := Once(context.Background(), f.env, f.spec)
 	if err != nil {
 		t.Fatal(err)
@@ -511,6 +543,9 @@ func TestCodexRunSweepsADetachedChild(t *testing.T) {
 	}
 	pid, _ := strconv.Atoi(string(match[1]))
 	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	if refused := guarded(pid); refused != "" {
+		t.Skip(refused)
+	}
 	gone := false
 	for range 40 {
 		if err := syscall.Kill(pid, 0); err != nil {
@@ -524,5 +559,48 @@ func TestCodexRunSweepsADetachedChild(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es)") {
 		t.Errorf("the sweep stopped something else too: %q", rec.Notes)
+	}
+}
+
+// guardSweep makes a run's leftover sweep (sweepCodex) show its targets to the test first, and refuse to stop anything
+// unless the only one is the child the fake Codex started (its ID is in the stream): a sweep that would match anything
+// else on this machine is a failed guard and a skipped test, never a killed process. guarded(pid) says, after the run,
+// why the sweep was refused ("" when it ran).
+func guardSweep(t *testing.T, f *codexOnce) (guarded func(pid int) string) {
+	t.Helper()
+	var refusal string
+	f.env.sweepGuard = func(pids []int) bool {
+		stream, err := os.ReadFile(filepath.Join(f.env.Layout.Records, f.env.ID, "stream.jsonl"))
+		match := regexp.MustCompile(`# pid (\d+)`).FindSubmatch(stream)
+		if err != nil || match == nil {
+			refusal = fmt.Sprintf("the fake's child is unknown; the sweep would stop %v", pids)
+			return false
+		}
+		child, _ := strconv.Atoi(string(match[1]))
+		for _, p := range pids {
+			if p != child {
+				refusal = fmt.Sprintf("the sweep would stop process %d, not the test's own child %d: refused, and the test skipped", p, child)
+				t.Errorf("%s", refusal) // a regression in the matcher, caught before it kills anything
+				return false
+			}
+		}
+		return true
+	}
+	return func(int) string { return refusal }
+}
+
+// A run whose accounting is lost (its rollout gone after one request) is stopped as blind, is infrastructure, and
+// counts the most a run with its cap can spend, marked estimated: never what was read alone.
+func TestCodexRunWithLostAccounting(t *testing.T) {
+	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
+	f.spec.Instruction = "Lose it: " + loseAccounting
+	f.env.Grace = 10 * time.Second
+	start := time.Now()
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := codex.Bound("gpt-6.1-sol", 3); rec.Outcome != agent.OutcomeInfra || rec.Spend().AgentUSD != want || !rec.CostEstimated || time.Since(start) > time.Minute {
+		t.Errorf("outcome %s, $%.2f (want $%.2f), estimated %v, after %v, notes %q", rec.Outcome, rec.Spend().AgentUSD, want, rec.CostEstimated, time.Since(start), rec.Notes)
 	}
 }

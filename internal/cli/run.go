@@ -440,9 +440,9 @@ func startingRun(agentName, profile, model, mode, grading string, budget float64
 	allowance, _ := codex.Allowance(model)
 	return func(signIn string) string {
 		return fmt.Sprintf("Starting a real Codex run (%s, sign-in %s, graded %s), priced by Agentium at OpenAI's list prices of %s (the cached-input rate assumed). "+
-			"Agentium stops it while one more full-context request (up to $%.2f) still fits under its $%.2f budget; its subagents are off, so one request runs at a time, "+
-			"but one that starts within Agentium's 50 ms look can still finish: it may cost up to $%.2f.",
-			profile, signIn, task.DescribeGrader(mode), pricing.OpenAIDate, allowance, budget, codex.Bound(model, budget))
+			"Agentium stops it at about its $%.2f budget, while one more full-context request (up to $%.2f) still fits; its subagents are off, so one request runs at a time. "+
+			"While Codex records each request's usage, the run costs at most $%.2f; if the records stop, Agentium stops the run within 90 s and counts $%.2f.",
+			profile, signIn, task.DescribeGrader(mode), pricing.OpenAIDate, budget, allowance, codex.Bound(model, budget), codex.Bound(model, budget))
 	}, nil
 }
 

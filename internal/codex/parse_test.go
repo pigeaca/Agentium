@@ -244,6 +244,8 @@ func TestFailedTurnsByTheirError(t *testing.T) {
 		"unexpected status 502 Bad Gateway":                                             agent.OutcomeInfra,
 		"HTTP/1.1 500 from the API":                                                     agent.OutcomeInfra,
 		"the test on line 512 failed and the context window filled":                     agent.OutcomeOK,
+		"Ran 500 tests before the context window filled":                                agent.OutcomeOK,
+		"exit status 503 from the project's own test server":                            agent.OutcomeInfra,
 	} {
 		line := `{"type":"turn.failed","error":{"message":` + strconv.Quote(message) + `}}`
 		dir := t.TempDir()

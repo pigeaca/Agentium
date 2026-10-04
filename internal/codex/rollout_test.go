@@ -273,3 +273,66 @@ func TestWatcherBlindAndEnd(t *testing.T) {
 		t.Fatal("the watcher outlived its run")
 	}
 }
+
+// Lost accounting stops the run as blind (its spend could pass the cap unseen): the rollout gone or unreadable after it
+// was found, or the stream showing the model at work (a message, a command outside an open tool batch) while the
+// rollout does not follow. Commands inside a tool batch the rollout shows open need nothing more.
+func TestWatcherFailsClosedOnLostAccounting(t *testing.T) {
+	stopped := func(w watcher) (agent.Stop, bool) {
+		t.Helper()
+		cancel, out := startWatch(w)
+		defer cancel()
+		select {
+		case s := <-out:
+			return s, true
+		case <-time.After(700 * time.Millisecond):
+			return agent.StopNone, false
+		}
+	}
+	appendStream := func(w watcher, line string) { // from a goroutine: no t
+		if f, err := os.OpenFile(w.transcript, os.O_APPEND|os.O_WRONLY, 0o600); err == nil {
+			f.WriteString(line + "\n")
+			f.Close()
+		}
+	}
+	message := `{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"working"}}`
+	command := `{"type":"item.completed","item":{"id":"item_2","type":"command_execution","command":"go test ./...","status":"completed"}}`
+	openCall := `{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec"}}` + "\n"
+
+	w, rollout := watchFixture(t)
+	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
+	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
+	go func(rollout string) {
+		time.Sleep(200 * time.Millisecond)
+		os.Remove(rollout)
+	}(rollout)
+	if s, ok := stopped(w); !ok || s != agent.StopBlind {
+		t.Errorf("the rollout gone mid-run: %q (stopped %v)", s, ok)
+	}
+
+	w, rollout = watchFixture(t)
+	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
+	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
+	go func(w watcher) {
+		for range 6 {
+			time.Sleep(60 * time.Millisecond)
+			appendStream(w, message) // the model keeps answering; its usage is never written
+		}
+	}(w)
+	if s, ok := stopped(w); !ok || s != agent.StopBlind {
+		t.Errorf("the stream going on without the rollout: %q (stopped %v)", s, ok)
+	}
+
+	w, rollout = watchFixture(t)
+	w.capUSD, w.lagAfter = 100, 100*time.Millisecond
+	writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)+openCall))
+	go func(w watcher) {
+		for range 6 {
+			time.Sleep(60 * time.Millisecond)
+			appendStream(w, command) // a long tool batch: its commands, its result not yet written
+		}
+	}(w)
+	if s, ok := stopped(w); ok {
+		t.Errorf("commands inside an open tool batch stopped the run: %q", s)
+	}
+}

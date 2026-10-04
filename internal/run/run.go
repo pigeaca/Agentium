@@ -140,6 +140,9 @@ type Env struct {
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
+	// sweepGuard, when set (tests), sees the process IDs a Codex run's leftover sweep would stop, and may refuse it
+	// (sweepCodex).
+	sweepGuard func(pids []int) bool
 	// checkoutRemoved removes what checkoutEnv gave a checkout alone in the data folder (buildtool.RemoveCheckoutCaches),
 	// once the checkout is gone.
 	checkoutRemoved func(dir string)
@@ -643,8 +646,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	inv.Started = running
+	if env.isCodex() { // the folder only this run's sandbox may write: how its leftover processes are told (sweepCodex)
+		if inv.Marker, err = newMarker(workspace); err != nil {
+			transcript.Close()
+			stderr.Close()
+			return rec, err
+		}
+	}
 	env.step(StepAgent)
 	env.progress("  workspace ready; %s is working (up to %s)", env.agentLabel(), spec.Timeout)
+	agentStart := time.Now().Add(-100 * time.Millisecond) // the real clock: no process older than this is the agent's (sweepCodex)
 	result, runErr := agent.Run(ctx, env.adapter(), inv, env.Environ, transcript, stderr)
 	if runErr == nil && startErr != nil {
 		runErr = startErr
@@ -658,7 +669,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.Notes = append(rec.Notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}
 	if env.isCodex() {
-		rec.Notes = append(rec.Notes, sweepCodex(workspace, tempRoot)...)
+		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, env.sweepGuard)...)
 	}
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
@@ -681,6 +692,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if env.isCodex() { // Codex reports no cost: its requests' tokens, priced here (codex.Adapter.Parse)
 		rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+		if result.Stop == agent.StopBlind { // its accounting was lost: what the rollouts hold is a part
+			rec.Metrics.RolloutsIncomplete = true
+		}
 		codexSpendFallback(&rec)
 		if rec.Metrics.UnpricedRequests > 0 {
 			rec.Notes = append(rec.Notes, fmt.Sprintf("%d request(s) could not be priced (a model without a list price, or a request above the long-context limit): they are not in the cost", rec.Metrics.UnpricedRequests))

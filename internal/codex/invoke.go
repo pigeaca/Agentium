@@ -110,7 +110,7 @@ func check(inv agent.Invocation) error {
 		return errors.New("a Codex run needs the CLI, a folder, a prompt, a model, the home folder, its Codex home, state and records folders, and a temp root")
 	}
 	for _, p := range append([]string{inv.Dir, inv.Home, inv.ConfigDir, inv.State, inv.Records, inv.TempRoot, inv.TokenFile, inv.BuildCache,
-		inv.Deps, inv.JavaHome, inv.Venv, inv.ProjectMetadata, inv.AccountHome, inv.Repo}, inv.Deny...) {
+		inv.Deps, inv.JavaHome, inv.Venv, inv.ProjectMetadata, inv.AccountHome, inv.Repo, inv.Marker}, inv.Deny...) {
 		if p != "" && !filepath.IsAbs(p) {
 			return fmt.Errorf("path %q is not absolute", p)
 		}
@@ -302,7 +302,7 @@ func configOverrides(inv agent.Invocation, environ []string, effort string) ([]s
 func permissions(inv agent.Invocation, environ []string) ([][2]string, error) {
 	entries := [][2]string{{":root", "read"}}
 	access := map[string]string{}
-	for _, dir := range []string{checkout(inv), inv.BuildCache, inv.TempRoot} {
+	for _, dir := range []string{checkout(inv), inv.BuildCache, inv.TempRoot, inv.Marker} {
 		if dir == "" {
 			continue
 		}

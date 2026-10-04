@@ -14,3 +14,9 @@ func stopSandboxed(string, string) ([]string, error) { return nil, nil }
 
 // usingGrade finds nothing outside macOS (see processesUnder).
 func usingGrade(string, string, []string) ([]string, error) { return nil, nil }
+
+// codexLeftoverPIDs finds nothing outside macOS (see processesUnder).
+func codexLeftoverPIDs(codexSweep) ([]int, error) { return nil, nil }
+
+// stopCodexLeftovers stops nothing outside macOS (see processesUnder).
+func stopCodexLeftovers(codexSweep) ([]string, error) { return nil, nil }

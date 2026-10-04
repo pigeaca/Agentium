@@ -183,6 +183,20 @@ func underAny(p string, roots []string) bool {
 	return false
 }
 
+// allPIDs lists every process ID.
+func allPIDs() ([]int, error) {
+	buf := make([]C.int, 1<<16)
+	n := C.ag_listpids(&buf[0], C.int(len(buf)))
+	if n < 0 {
+		return nil, fmt.Errorf("list processes: %w", syscall.Errno(-n))
+	}
+	pids := make([]int, 0, int(n))
+	for _, pid := range buf[:min(int(n), len(buf))] {
+		pids = append(pids, int(pid))
+	}
+	return pids, nil
+}
+
 // sandboxedIn lists this user's processes (not Agentium's own) that run in a grade's own sandbox: sandboxed, with a
 // sandbox that may write own (the grade's temp root, which must exist) and may not write outside (the folder above the
 // grade's). Only that grade's profile allows both: another grade's or an agent's sandbox cannot write this grade's
