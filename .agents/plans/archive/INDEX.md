@@ -24,3 +24,4 @@ Archived plans are history, not default context. Search this index by title or d
 - [A simpler command line](2026-10-02-simpler-cli.md) — 2026-10-02 to 2026-10-03 (#128, #129; visible flags 66 → 40, project settings set once, one way to mine)
 - [agentium clean: free the space of caches nothing uses](2026-10-03-clean-command.md) — 2026-10-03 (#132)
 - [A designed console: a live dashboard and visual reports](2026-10-03-console-design.md) — 2026-10-03 to 2026-10-04 (#133, #134, #136, #137, #139, #144; the live dashboard and log view, the visual report, run show, plan, start and pool status)
+- [Judge: which arm fixed it better](2026-10-01-judge-pairs.md) — 2026-10-01 to 2026-10-04 (#53, #126, #139, #147; unvalidated and exploratory; the real check's 4 pairs: 0 flips, too few to say on bias)

@@ -298,7 +298,8 @@ func LogReadable(ctx context.Context, wait time.Duration) error {
 // (the isolation plan's step 1): every process's /dev/dtracehelper, bash's /dev/tty, the JVM's hsperfdata files in the
 // user's temp folder and its configd lookups, the mDNSResponder socket (name lookups, which fail offline anyway), and
 // the analytics lookups of tools such as security, and the Go toolchain's telemetry counters
-// (~/Library/Application Support/go/telemetry), which every go command writes.
+// (~/Library/Application Support/go/telemetry), which every go command writes, and the distributed-notifications and
+// Spotlight-metadata lookups Cargo/rustc make (with the trade-offs noted below).
 func (d Denial) Noise() bool {
 	switch {
 	case d.Operation == Unparsed: // its text is the grade's choice
@@ -312,7 +313,18 @@ func (d Denial) Noise() bool {
 	case strings.HasPrefix(d.Operation, "file-write") && strings.Contains(d.Target, "/Library/Application Support/go/telemetry/"):
 		return true
 	case d.Operation == "mach-lookup" && (strings.HasPrefix(d.Target, "com.apple.SystemConfiguration.") ||
-		d.Target == "com.apple.analyticsd" || d.Target == "com.apple.diagnosticd"):
+		d.Target == "com.apple.analyticsd" || d.Target == "com.apple.diagnosticd" ||
+		// The distributed-notifications and Spotlight-metadata daemons, which every real Cargo/rustc grade of the
+		// Java/Rust pilot looked up (isolation step 4) and passed with the lookups denied. The profile still denies
+		// them; noise only stops the flag. launchd names distributed notifications' per-user and system instances
+		// (com.apple.distributed_notifications@Uv3, @0v3, @1v3) and Spotlight has a family (mds, mds.index,
+		// mds.xpcs), so both match by prefix. Two trade-offs, both rare and accepted: Claude Code's agent sandbox
+		// allows distributed notifications (machServices), so a failed grade blocked on that lookup, which decision 3
+		// left out as infra-sandbox, now counts as the agent's failure (it matters only where the candidate makes a
+		// lookup the reference does not); and noise is left out of DenialCount, so an attempt to post data through
+		// distributed notifications is still denied but no longer visible in the records.
+		strings.HasPrefix(d.Target, "com.apple.distributed_notifications") ||
+		strings.HasPrefix(d.Target, "com.apple.metadata.mds")):
 		return true
 	}
 	return false

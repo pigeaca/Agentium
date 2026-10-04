@@ -51,6 +51,7 @@ While the repository is private, `go install` needs `GOPRIVATE=github.com/pigeac
 - Claude Code only; Codex comes later.
 - The judge features (judge reports, pairs, graded tasks without tests) are experimental and unvalidated.
 - No TypeScript yet: Go, Maven, Gradle, Cargo and Python.
+- A grade can leave data for later grades through `/mp-` POSIX semaphores and the macOS unified log. This is accepted for the first sandbox version; containers will close it.
 
 ## Everyday commands
 

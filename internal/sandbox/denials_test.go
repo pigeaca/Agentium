@@ -73,6 +73,11 @@ func TestDenialNoise(t *testing.T) {
 		{Operation: "mach-lookup", Target: "com.apple.analyticsd"},
 		{Operation: "mach-lookup", Target: "com.apple.diagnosticd"},
 		{Operation: "file-write-data", Target: "/Users/u/Library/Application Support/go/telemetry/local/compile@go1.27.0-darwin-arm64.v1.count"},
+		{Operation: "mach-lookup", Target: "com.apple.distributed_notifications@Uv3"}, // the per-user instance
+		{Operation: "mach-lookup", Target: "com.apple.distributed_notifications@1v3"}, // a system instance
+		{Operation: "mach-lookup", Target: "com.apple.metadata.mds"},
+		{Operation: "mach-lookup", Target: "com.apple.metadata.mds.index"},
+		{Operation: "mach-lookup", Target: "com.apple.metadata.mds.xpcs"},
 	} {
 		if !d.Noise() {
 			t.Errorf("not noise: %+v", d)
@@ -80,6 +85,8 @@ func TestDenialNoise(t *testing.T) {
 	}
 	for _, d := range []Denial{
 		{Operation: "mach-lookup", Target: "com.apple.SecurityServer"},
+		{Operation: "mach-lookup", Target: "com.apple.metadata.mdwrite"},                                            // not the Spotlight mds family
+		{Operation: "file-read-data", Target: "com.apple.distributed_notifications@Uv3"},                            // a read of a like-named path is not noise
 		{Operation: Unparsed, Target: "x(1) deny(1) file-write-data /dev/dtracehelper /hsperfdata_u mDNSResponder"}, // chosen text: never noise
 		{Operation: "file-read-data", Target: "/Users/u/.ssh/id_ed25519"},
 		{Operation: "file-write-data", Target: "/dev/ttys001"},
@@ -130,6 +137,9 @@ func TestDenialFlagged(t *testing.T) {
 		{Operation: "sysctl-read", Target: "kern.boottime"},
 		{Operation: "file-write-data", Target: "/dev/dtracehelper"}, // noise
 		{Operation: "mach-lookup", Target: "com.apple.analyticsd"},  // noise
+		// noise since isolation step 4: once flagged (a failed grade left out), now the agent's failure
+		{Operation: "mach-lookup", Target: "com.apple.distributed_notifications@Uv3"},
+		{Operation: "mach-lookup", Target: "com.apple.metadata.mds"},
 	}
 	for _, d := range shared {
 		if p.Flagged(d) {
