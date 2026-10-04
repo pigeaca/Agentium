@@ -702,7 +702,9 @@ func poolStatus(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		return env.emit(poolStatusDoc{header: env.hdr(), Health: healthDocOf(health)})
 	}
-	printHealth(env, health)
+	if err := writeHealth(env, health); err != nil {
+		return fail(env, err)
+	}
 	return ExitOK
 }
 

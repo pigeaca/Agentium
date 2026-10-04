@@ -1,0 +1,22 @@
+=== 60 columns
+╭─ task pool · 4 tasks ────────────────────────────────────╮
+│ valid           ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0 │
+│ not validated   ███████████████████████████████████    4 │
+╰──────────────────────────────────────────────────────────╯
+ last pass never · oldest valid base none
+ agentium pool update mines, validates and retires (no agen…
+=== 80 columns
+╭─ task pool · 4 tasks ────────────────────────────────────────────────────────╮
+│ valid           ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0 │
+│ not validated   ███████████████████████████████████████████████████████    4 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ last pass never · oldest valid base none
+ agentium pool update mines, validates and retires (no agent runs)
+=== 120 columns
+╭─ task pool · 4 tasks ────────────────────────────────────────────────────────────────────────────╮
+│ valid           ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    0 │
+│ not validated   ███████████████████████████████████████████████████████████████████████████    4 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+ last pass never · oldest valid base none
+ agentium pool update mines, validates and retires (no agent runs)
+=== end
