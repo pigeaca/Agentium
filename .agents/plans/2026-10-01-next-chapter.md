@@ -48,7 +48,8 @@
 | 4 Where developers work | Automation A2 (task pool) and A4 (a warn-only cost screen on pull requests); A5 (scheduled watch) cancelled by the user (2026-10-02) | A Python or TypeScript smoke test ([plan](2026-10-02-python-ts.md)); the Java and Rust pilot (paid; estimate first) | Dollars, minutes and usage-window share per check are measured |
 | Judge (no gate) | [Judge pairs](archive/2026-10-01-judge-pairs.md) (1b) and [ticket grading](2026-10-01-ticket-tasks.md) (step 2), after `seq-v1`, labeled unvalidated and exploratory (the user, 2026-10-02) | `seq-v1` | — |
 | Isolation | [Isolation](2026-10-02-isolation.md): sandboxed grading on macOS (on by default), then a container mode driving Docker directly (the user, 2026-10-02) | — | — |
-| Later | a Claude Code skill; autopilot; [Codex](archive/2026-10-01-phase2-agents-codex.md); hosted CI; live Jira; positioning against `claude plugin eval` and Promptfoo's CI | | |
+| Codex (v1.0) | [Codex](2026-10-04-codex.md) (planned 2026-10-04): Codex-only experiments, then Claude Code against Codex; containers after the isolation plan's part 2 | — | A Codex A/A passes before any Codex verdict counts |
+| Later | a Claude Code skill; autopilot; hosted CI; live Jira; positioning against `claude plugin eval` and Promptfoo's CI | | |
 
 ## Wave 3 requirement: a statistics note before any code
 Run reuse, early stopping and the deep watch each break a safeguard the engine has today:
