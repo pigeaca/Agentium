@@ -366,6 +366,8 @@
 Steps go in order. Each is one PR with green CI, the reviewer's [threat checklist](../roles/reviewer.md#threat-checklist), and a second review from the other client (Codex) for steps 1–3.
 
 ## Part 2: container mode (later, its own track)
+Planned in detail in the [container plan](2026-10-04-containers.md) (2026-10-04): grading in containers first (`container-v1`), agents in containers later, after Codex. This section keeps the original shape; decision 6 stands.
+
 - **Images per toolchain, not per project:** Go; JDK with Maven and Gradle; Python with uv; Node with pnpm. Each is built from an official base image pinned by digest, with a shared Claude Code layer pinned to the lock's version.
   - Project dependencies are warmed into a volume, mounted read-only for the agent and the grader.
   - When a repository has its own `Dockerfile` or `.devcontainer`, that is reused instead (built with network, before any agent runs).
