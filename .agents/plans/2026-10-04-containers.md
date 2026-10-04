@@ -1,7 +1,7 @@
 # Container mode: grading in Docker first, agents later
 
 - Date: 2026-10-04
-- Status: Planned (2026-10-04). Nothing built. The open decisions below await the user.
+- Status: Step 0 (the spike) done with gaps (2026-10-04; [results](../../docs/research/2026-10-04-container-spike.md)). Nothing built. The open decisions below await the user, including a new one (10) from the spike.
 - Scope: the user's "Docker + codex" (2026-10-04). This plan covers Docker; Codex is planned separately and in parallel, and this plan names only the dependencies. It details the [isolation plan](2026-10-02-isolation.md)'s Part 2 and builds on the [direct-Docker decision](../decisions/2026-10-02-containers-direct-docker.md) and the isolation plan's decision 6. Planning only: nothing was pulled, built, started or paid for.
 
 ## Outcome
@@ -17,6 +17,7 @@ A third grader mode, `container-v1`, beside `host` and `sandbox-v1`. In it, a ru
 - No daemon answers (`docker version` cannot connect). The only context is `default` (`/var/run/docker.sock`, which is absent); colima adds and activates its own context when it starts. There is no buildx plugin. `~/.docker/config.json` holds registry logins (`auths`, not read).
 - Which images the VM holds is unknown until it runs.
 - So step 0 needs the user to start colima, with more memory for JVM grades (for example `colima start --cpu 4 --memory 8`). Agentium never starts or configures it. Grades mount no host folders (below), so sshfs's speed and file locking do not matter.
+- For step 0 the user started colima with 4 CPUs and 8 GiB: context `colima`, engine 27.4.0, linux/arm64, cgroup v2, seccomp and AppArmor on, 84 GB free on the VM's disk.
 
 ## Design
 
@@ -28,10 +29,13 @@ A third grader mode, `container-v1`, beside `host` and `sandbox-v1`. In it, a ru
 - **One image per toolchain**: official images, pinned by multi-arch index digest in Agentium's source. The table lists toolchain, version, digest and compressed size per architecture.
   - Go: `golang:<ver>`.
   - JDK: `eclipse-temurin:<jdk>-jdk`. Projects without `mvnw` use `maven:<ver>-eclipse-temurin-<jdk>`. Gradle runs through the project's wrapper, and its distribution is warmed with the deps.
-  - Python with uv: Astral's `ghcr.io/astral-sh/uv:<ver>-python<minor>-<debian>-slim`.
-  - Rust: `rust:<ver>-slim`.
+  - Python with uv: Astral's `ghcr.io/astral-sh/uv:<ver>-python<minor>-trixie-slim`. Step 0 found no version-pinned bookworm tags for uv 0.11.28, and the unversioned bookworm tag stopped being rebuilt in February 2026 (uv 0.9.30). So the pin is trixie.
+  - Rust: `rust:<ver>-slim`, pinned to a minor version. Step 0's `rust:slim` was 1.99, against the host's 1.95.
+  - The JDK image is Ubuntu-based (26.04), not Debian.
   - Node with pnpm comes with the TypeScript work.
-- **No image build for grading.** A grade needs the toolchain, `sh` and `tar`, which these images have. There is no Dockerfile and no published Agentium image (open decision 2).
+- **No image build for grading** (open decision 2). There is no Dockerfile and no published Agentium image.
+  - **Step 0 showed that a grade needs more than the toolchain, `sh` and `tar`.** junit-pioneer's build runs `git describe` while it configures, and the JDK image has no git. click's pager tests run `less`, which the slim uv image lacks. That made one pilot task invalid in the container.
+  - What images must hold beyond the toolchain is open decision 10.
 - **Run by digest** (`golang@sha256:…`), so the daemon cannot substitute another image. After a pull, Agentium checks the image's `RepoDigests`.
 - **Version match.** The image's toolchain matches the agent's on the host, as `pool.DetectToolchain` reads it: Go major.minor, the JDK major version, the Python minor version, the Rust minor version. When no pinned image matches, the mode is refused and the error names the pinned versions (open decision 6). The record keeps both toolchains, the host's and the image's.
 - **Consent.** Agentium never pulls on its own.
@@ -39,36 +43,56 @@ A third grader mode, `container-v1`, beside `host` and `sandbox-v1`. In it, a ru
   - `agentium images pull` shows the total, asks (or takes `--yes`), then runs `docker pull` by digest.
   - `experiment new --grader container` and `task validate --grader container` refuse while an image is missing, naming the command and the size.
   - Changing a pin is a dependency change and needs approval ([supply chain](../rules/supply-chain.md)).
-- **Sizes** (approximate compressed downloads for arm64; step 0 measures them): Go about 0.3 GB, the JDK 0.2 GB, Python with uv under 0.1 GB, Rust 0.3 GB. That is under 1 GB for all four, and about 2.5 GB on disk in the VM.
+- **Sizes** (measured in step 0, arm64): compressed, Go 309 MB, the JDK 225 MB, Python with uv 67 MB and Rust (slim) 291 MB, 890 MB for all four. Unpacked in the VM: 2.44 GB. Pulls took 23–53 s each.
 
 ### Dependencies
 - The host's deps folder cannot be used as it is. Python venvs and native pieces are macOS builds. Mounting host folders into the VM is slow (sshfs here) and reaches outside the container.
-- Container deps are **warmed inside a container** of the same image, with network, from the base commit only. This follows the trusted-repository rule that host warm-ups already follow. They go into a Docker volume per project and image digest (`agentium-deps-<data>-<project>-<digest12>`).
+- Container deps go into a Docker volume per project and image digest (`agentium-deps-<data>-<project>-<digest12>`). Step 0 measured two sources:
+  - **Seeded from the host's deps folder**, where the cache is platform-independent: Go's module downloads, Maven's repository and wrapper, Gradle's `modules-2` and wrapper distributions, and Cargo's registry. Agentium writes them as a tar, and the daemon unpacks it into the volume (`docker cp`) before a container starts. This took 0.04–1.8 s per fixture, and no network.
+  - **Warmed inside a container** of the same image, with network, from the base commit only, where the seed falls short. This follows the trusted-repository rule that host warm-ups already follow.
+    - Python always warms this way: the host's venvs are macOS builds, and its uv cache could not resolve offline.
+    - Gradle warms this way when the host's warm-up failed. A Gradle 8.5 base took 52 s and 58 MiB.
+- **Every folder in a seed's tar is listed.** `docker cp` creates missing parents as root, and the volume's own root stays root-owned. So Agentium makes the volume's top-level folders, owned by the grade's user, with the first tar.
+- **Per-grade caches are seeded** from a seed in the volume that only trusted commands write (validation, warm-up): Go's build cache and the Gradle home, including the wrapper distribution and Gradle's other caches. Spotless's Eclipse formatter, for one, lives in `caches/p2-data`, not `modules-2`. This is the container counterpart of the sandbox's cloned seed. Copying a seed into the grade's `cache/` took 0.12–0.17 s for 124–404 MB. It cut the Go fixture's grade from 21 s to 0.3 s, and junit-pioneer's from 86 s to 13 s.
 - The host deps folder's rules apply to this volume too: a warm-up lock (a host file), per-base stamps, last-use marks and cleanup.
 - Grades mount the volume read-only. Each project, base and image needs one warm-up (time and network, measured in step 0).
 
 ### The grade's container
-**Nothing from the host is mounted**: not the copy, the data folder, the home folder or the Docker socket. Each grade has one container, in this shape (step 0 settles the details it names):
+**Nothing from the host is mounted**: not the copy, the data folder, the home folder or the Docker socket. Each grade has one container, in this shape (settled by step 0):
 ```
 docker create --name agentium-<data8>-<run>-grade --label agentium.data=<data8> --label agentium.run=<run>
   --label agentium.mode=container-v1 --rm --init --network none --ipc private --cap-drop ALL
-  --security-opt no-new-privileges --read-only --user <non-root> --memory <m> --memory-swap <m>
-  --pids-limit <p> --cpus <c> --shm-size 256m --log-driver none --tmpfs /tmp
-  <writable /work and /cache> --mount type=volume,src=<deps volume>,dst=/deps,readonly
+  --security-opt no-new-privileges --read-only --user 65534:65534 --memory <m> --memory-swap <m>
+  --pids-limit <p> --cpus <c> --shm-size 256m --log-driver none --tmpfs /tmp:rw,exec,nosuid,nodev,size=<t>
+  --mount type=volume,dst=/grade --mount type=volume,src=<deps volume>,dst=/deps,readonly
   <image>@sha256:<digest> sleep <deadline>
+docker cp - <name>:/grade < <work/ and cache/, owned by 65534, mode 0700>
 ```
+- **The user is 65534:65534 (`nobody`),** which every image's `/etc/passwd` lists.
+  - Java then reads `user.home=/nonexistent`, where nothing can be written, as in the agent's sandbox. All five step-0 toolchains accepted that.
+  - A user ID missing from `/etc/passwd` gives Java `user.name=?` and `user.home=/`, so it is not used.
+  - `HOME` is set to `/grade/cache/home`.
+- **`/grade/work` and `/grade/cache` are on one anonymous volume.** The daemon makes both folders from a two-entry tar before the container starts, so no step runs as root and no capability is added.
+  - The volume's root stays root-owned, which is why the two subfolders exist.
+  - A tmpfs with `uid=`/`gid=` options also works. Its files count against the memory limit, though, and a Gradle grade keeps 0.4–0.7 GB there.
+  - The volume has no size limit (overlay2 on ext4), so a grade can fill the VM's disk until its deadline (Risks).
+  - `--rm` and `rm -v` remove the volume.
 - **Inspect before start.** `docker inspect` of the created container is checked against what was asked, before it starts: network, IPC, capabilities, privileges, user, the read-only root, mounts and their modes, devices, limits and the image ID. Its normalized digest is recorded, as the sandbox's profile digest is.
-- **Copy in.** Agentium writes the grading copy as a tar with `archive/tar`, never following a link, and caps its size. The image's own `tar` unpacks it into `/work` (`docker exec -i`), as the grade's user, before any agent code runs.
+- **Copy in.** Agentium writes the grading copy as a tar with `archive/tar`, never following a link, and caps its size. The image's own `tar` unpacks it into `/grade/work` (`docker exec -i`), as the grade's user, before any agent code runs.
   - A link the agent planted points nowhere inside the container.
   - The host copy is never changed by the grade, so `--keep` keeps it as it was graded.
-  - If copying in is too slow for large trees, the fallback is a read-only bind of the copy with a writable layer inside the container (step 0 measures).
+  - `docker cp` is used only for trusted content (the skeleton and the seeds), so the daemon never resolves paths from a tree the agent wrote. It is refused anyway for a read-only root and for a tmpfs (`container rootfs is marked read-only`).
+  - Step 0 timings: 0.05–0.19 s for 0.4–6.2 MB trees, and 0.53 s for 177 MB in 9,092 files. No bind fallback is needed.
 - **Commands.** Each verification command runs as `docker exec --env-file <file> -w /work/<module> <name> sh -c <command>` through `runner`, in order, and stops at the first failure.
-  - The environment is the agent's recipe (`buildtool.GraderEnv`) with paths inside the container (`/work`, `/cache`, `/deps`, `/tmp`), plus `GOPROXY=off` and `GOTOOLCHAIN=local`.
-  - Loopback inside the container works, so `httptest` and Gradle workers need no special rule.
+  - The environment is the agent's recipe (`buildtool.GraderEnv`) with paths inside the container (`/grade/work`, `/grade/cache`, `/deps`, `/tmp`), plus `GOPROXY=off` and `GOTOOLCHAIN=local`.
+  - `docker exec` inherits the image's environment (`PATH`, `JAVA_HOME`, `CARGO_HOME`, `RUSTUP_HOME`), and `--env-file` overrides it. A `PATH` the recipe sets, such as Python's venv first, extends the image's `PATH`, which Agentium reads from `inspect`'s `Config.Env`.
+  - Loopback inside the container works, `::1` included, so `httptest` and Gradle workers need no special rule. Gradle's Checkstyle workers connected without `GRADLE_DAEMON_BIND_ADDRESS`.
+  - Output streams to the client with `--log-driver none`, and exit codes pass through.
 - **Cleanup.** `docker rm -f -v <name>` runs after the grade, on an error, on cancel (with `context.WithoutCancel` and a time bound) and on a panic.
   - Killing the `docker` client does not stop processes in the container, so a timeout or cancel kills the container, not just the client.
 - **Nothing outlives its command.**
-  - The container's main process ends at the deadline: every command's timeout plus a margin. `--rm` then removes the container and its anonymous volumes, even after Agentium itself was killed.
+  - The container's main process ends at the deadline: every command's timeout plus a margin. `--rm` then removes the container and its anonymous volumes, even after Agentium itself was killed. In step 0 an exec'd process was killed (exit 137) at the deadline, and the container and its volume were gone.
+  - **A created container that never started is the gap.** Neither `--rm` nor the deadline applies to it, so it stays `Created`. If Agentium dies between `create` and `start`, only recovery or `clean` removes it, by label.
   - The container's name is written in the grade's folder before `docker create`. Recovery (`RecoverWarn`) and `agentium clean` remove the containers of dead runs by label.
   - Agentium starts no daemon, VM or background process. The user starts Docker.
 - **A local daemon only** (a Unix socket). A remote `DOCKER_HOST` or an SSH context would send hidden tests off the machine, so the usability check refuses it (open decision 9).
@@ -79,7 +103,7 @@ There is no seatbelt log. Instead, three checks fail closed before the grade's c
 1. **The daemon's record.** The created container's `docker inspect` matches what was asked (above).
 2. **In-container probes**, as the grade's user:
    - `true` runs;
-   - `/tmp`, `/work` and `/cache` are writable; `/deps` and `/` are not (EROFS);
+   - `/tmp`, `/grade/work` and `/grade/cache` are writable; `/deps` and `/` are not (EROFS);
    - `/sys/class/net` lists only `lo`, and a connect to a TEST-NET address fails at once;
    - `/proc/self/status` shows `NoNewPrivs: 1`, `Seccomp: 2` and an empty `CapEff`;
    - there is no Docker socket, and the user is not root.
@@ -88,7 +112,11 @@ There is no seatbelt log. Instead, three checks fail closed before the grade's c
 A failure is infrastructure and is retried. It is never a fail, and the grade is never run in another mode instead.
 
 ### Resource limits: isolation decision 3's counterpart
-- Resource limits are the only limits a container imposes that the agent's sandbox does not. After the commands, an end probe reads the container's cgroup counters (`memory.events` `oom_kill`, `pids.events` `max`). The grade cannot write these kernel counters.
+- Resource limits are the only limits a container imposes that the agent's sandbox does not. After the commands, an end probe reads the container's cgroup counters (`memory.events` `oom_kill`, `pids.events` `max`, and `memory.peak` for the record). The grade cannot write these kernel counters. Step 0 confirmed this:
+  - The container has its own cgroup namespace, and the files are readable but not writable.
+  - An exec'd process killed by the OOM killer set `oom_kill 1`, and the container kept running. `docker inspect` then reports `State.OOMKilled=true`.
+  - A process-limit hit set `pids.events max`.
+  - A grade can trip a counter on purpose, to have a failure left out rather than counted. The per-arm check is the guard, as for `infra-sandbox` runs.
 - A failed grade where either counter is above zero is left out, as `infra-sandbox` runs are: no retry, the per-arm check and the sensitivity line (open decision 7). A pass stays a pass.
 - A failure from no network or from read-only deps counts as the agent's own, as in `sandbox-v1`: the agent's sandbox imposes both limits too.
 
@@ -99,6 +127,10 @@ A failure is infrastructure and is retried. It is never a fail, and the grade is
 | The unified log (`logger`, `syslog`, paths in denial lines) | There is no `/dev/log` and no logd. Output goes only to Agentium's `verify.log`, and `--log-driver none` keeps nothing in the daemon | `logger` writes nowhere readable later; `docker logs` has nothing |
 | Loopback means every address of the Mac (listening on the LAN, reaching local services) | `--network none` leaves only the container's own `lo`. Nothing outside can be reached or can reach in, and concurrent grades cannot reach each other | A server on `0.0.0.0` is unreachable from the host and the LAN; connects to the host gateway and to another grade fail |
 | (no counterpart) | The kernel keyring is blocked by Docker's default seccomp profile | A `keyctl` probe fails |
+
+Step 0 showed every row closed on a real daemon, with a positive control in the grade itself ([results](../../docs/research/2026-10-04-container-spike.md#side-channels)). `/mp-` semaphores, POSIX and SysV shared memory, and SysV message queues left in grade A were invisible to a concurrent grade, a later grade and the VM. There is no `/dev/log`, and kernel-log reads are denied. Listeners on `0.0.0.0`, `::` and abstract Unix sockets were refused from outside the grade, and every connect out was `Network is unreachable`. `add_key`, `keyctl` and `request_key` returned EPERM.
+
+**The Docker socket is the new channel.** An agent that reaches the host's Docker socket (colima's `~/.colima/default/docker.sock`) can `docker exec` or `docker cp` into a concurrent grade and read its hidden tests, or start a privileged container. The agent's sandbox must keep Unix sockets denied. Step 4 shows, in a real agent run, that a `docker` command fails.
 
 What remains is a container escape (a kernel or runtime bug), which reaches the VM. colima mounts the home folder there, writable, by default. Grades need no VM mounts, so the user may narrow them; Agentium never changes them.
 
@@ -177,18 +209,39 @@ What remains is a container escape (a kernel or runtime bug), which reaches the 
 ## Work
 Each step is one PR with green CI and the reviewer's [threat checklist](../roles/reviewer.md#threat-checklist). Steps go in order; step 0 informs steps 2–4.
 
-- [ ] **0. Spike.** Free of charge, but it needs the user to start colima with at least 4 CPUs and 8 GiB, and the user's consent to pull the Go, JDK, Python and Rust images (about 1 GB). No code. Risk: low.
+- [x] **0. Spike.** Free of charge. It needed the user to start colima with at least 4 CPUs and 8 GiB, and the user's consent to pull the Go, JDK, Python and Rust images (about 1 GB). No code. Risk: low.
   - *Fixtures:* the isolation plan's step-0 set: Go with `httptest`, Maven jackson-core, Gradle junit-pioneer with Checkstyle, Cargo bytes with `build.rs`, pytest click. They are graded by hand, in this shape.
-  - *Acceptance:* each fixture matches its host result or names its break. Timings for start, copy-in, warm-up and tests are compared with host and sandbox grades. Image and volume sizes are measured. These points are settled:
-    - how `/work` and `/cache` become writable for a non-root user with every capability dropped (a tmpfs with owner options, a volume, or a step run as root);
-    - a user the toolchains accept (Java takes `user.home` from the user database, not `HOME`);
-    - whether `lo` has IPv6 under `--network none` (Gradle's bind address);
-    - `docker exec` output with `--log-driver none`;
-    - copying in by `docker cp` or by a tar through `docker exec -i` with a read-only root;
-    - the cgroup counters readable inside, and an OOM of an exec'd process seen there;
-    - what stays after killing the client, after `docker kill`, and at the deadline;
-    - the side-channel probes.
+  - *Acceptance:* each fixture matches its host result or names its break. Timings for start, copy-in, warm-up and tests are compared with host and sandbox grades. Image and volume sizes are measured. The questions listed under the results below are settled, and so are the side-channel probes.
   - *Packages:* none.
+  - **Done with gaps (2026-10-04;** [results](../../docs/research/2026-10-04-container-spike.md)**).** No agent session ran, and nothing was spent.
+    - *Pulled* (approved): `golang:1.27`, `eclipse-temurin:21-jdk`, `rust:slim` and `ghcr.io/astral-sh/uv:python3.12-bookworm-slim`. That is 890 MB compressed and 2.44 GB unpacked; the index digests are in the results.
+    - *Dependencies fetched* by warm-up containers: 58 MiB for a Gradle 8.5 base, including Spotless's Eclipse formatter from `download.eclipse.org`, which the build fetches; and 1.8 MiB from PyPI for click's tests. Everything else came from the host's caches.
+    - *Fixtures:*
+      - Go (with cgo), Maven jackson-core and Cargo bytes with `build.rs` match their host results exactly: 2 passed; 1983 run, 2 skipped; 1305 passed.
+      - Gradle junit-pioneer breaks at configuration, because the JDK image has no `git` (the build runs `git describe`). With a stub `git`, it matches: Checkstyle passed and 37 tests passed, without `GRADLE_DAEMON_BIND_ADDRESS`.
+      - pytest click breaks on 24 `test_echo_via_pager` cases, because the slim image has no `less`. Otherwise it matches: 2159 passed against 2182 on the host, with 24 failed and one fewer skipped.
+    - *Pilot tasks* (the base with the hidden tests must fail, and the reference must pass):
+      - These grade correctly: one Go task (Agentium's), one Maven 3.x task and one Cargo task.
+      - **Two Gradle tasks that the host cannot grade today now grade correctly on JDK 21:** one on Gradle 8.5 (after a network warm-up) and one on 8.14.2. The host's break is its default JDK 22.
+      - The jackson 2.x tasks stay broken: their parent POM was purged upstream.
+      - The click task is invalid in the container, because of `less`.
+    - *Timings:* a grade's overhead is 0.3–0.5 s (create, skeleton and start, copy-in, removal). The tests ran as fast as on the host or faster. Cold per-grade caches cost 21 s (Go with cgo) and about 70 s (Gradle); seeded caches remove that.
+    - *Settled:*
+      - writable folders: one anonymous volume with daemon-made subfolders (a tmpfs counts against memory);
+      - the user: 65534 `nobody`;
+      - `lo` has `::1` under `--network none`;
+      - `docker exec` output streams with `--log-driver none`, and `docker logs` keeps nothing;
+      - copying in: `tar` through `docker exec -i` (`docker cp` is refused for a read-only root and for a tmpfs);
+      - the cgroup counters are readable and not writable, and an exec'd process's OOM kill shows;
+      - after a killed client, the exec'd process keeps running. `docker kill` and the deadline remove the container and its volume. A created, never-started container stays.
+    - *Side channels:* `/mp-` semaphores and POSIX shm, SysV IPC, the system log, loopback and LAN listeners, and the kernel keyring are all closed. The design above records each result.
+    - *Cleanup:* no `agentium-spike-*` container or volume remains. The images are kept.
+    - *Gaps:*
+      - the `rust:1.95-slim` and trixie uv images that the version match needs were not pulled;
+      - no hostile stub agent was used (the probes ran as builds would);
+      - the Docker socket is not yet shown closed to a real agent run (step 4);
+      - Podman and Docker Desktop are not covered;
+      - timings come from a shared, noisy machine.
 - [ ] **1. The mode seam** (no behavior change). The sites listed under The Go seam ask for the mode, not "not host". `task.GraderContainer` exists but is refused as unknown until step 4. Risk: medium. *Packages:* `task`, `run`, `experiment`, `report`, `cli`.
 - [ ] **2. `internal/container`.** The driver, names and labels, the usability check, the inspect check, the probes, the tar stream, and the kill and removal on cancel. Unit tests use a fake `docker` (its argv pinned). Tests that need a real daemon skip without one. Risk: high (isolation, cancellation).
 - [ ] **3. Images and container deps.** The pin table and the version match. `agentium images`, with consent and sizes. Deps volumes warmed in containers, Python's venv included. Recovery and `clean` for containers and volumes; pulled images are only listed, and removed only with a flag. Risk: high (downloads, consent, supply chain, cleanup).
@@ -209,21 +262,28 @@ A CI job running the real-daemon tests on GitHub's Linux runners would pull one 
 
 ## Open decisions (for the user)
 1. **Grading only first, or agents too?** Recommended: grading first. It closes the open channels and Linux's gap without putting credentials into containers. Agents follow in their own plan after Codex's, which designs the proxy and the credentials once, for both agents.
-2. **Where do the images come from?** Recommended: official images pinned by digest and pulled with consent, with no build for grading. Python with uv uses Astral's image, which is the vendor's own, not a Docker Official Image. A local build from pinned bases comes only when agents move into containers. No published Agentium image: it would make Agentium a registry to secure and sign. Downloads are about 1 GB for all four toolchains, or 0.3 GB for Go alone.
+2. **Where do the images come from?** Recommended: official images pinned by digest and pulled with consent, with no build for grading. Python with uv uses Astral's image, which is the vendor's own, not a Docker Official Image. A local build from pinned bases comes only when agents move into containers. No published Agentium image: it would make Agentium a registry to secure and sign. Downloads were 890 MB for all four toolchains in step 0, or 0.3 GB for Go alone. Step 0 found that the images lack tools that builds and tests run (decision 10).
 3. **The default on Linux and macOS.** Recommended: `container-v1` on Linux. Without a usable Docker, `experiment new` refuses and names `--grader host`, which is today's behavior made explicit. macOS keeps `sandbox-v1`. Existing experiments keep their mode. The alternative keeps `host` as Linux's default and prints a warning.
 4. **Replace the macOS sandbox, or sit beside it?** Recommended: beside it. `sandbox-v1` stays the macOS default: it uses the agent's own toolchains, needs no VM and no downloads, and is faster. `--grader container` opts in, for untrusted repositories, for the closed channels, or for comparability with Linux. Revisit with step 5's agreement and timings.
 5. **The paid real check.** Recommended: an A/A experiment graded in containers, on 2 Go tasks and 1 Cargo task (bytes), 1 run per arm: 6 runs. Within the same cap, keep 2 trees with `run once --keep` and regrade them in the three modes for free. Expected about $1–2: the sandbox check's 4 Go runs cost $0.71, and Cargo runs cost more. The worst case under `--run-budget 0.60` is about $5. **Cap: $6.** It gets its own approval when step 4 lands.
 6. **No matching image.** Recommended: refuse, naming the pinned versions and how a pin is added, rather than grade with another toolchain version.
 7. **Failures at a resource limit.** Recommended: isolation decision 3's rule. A failed grade with an OOM kill or a hit on the process limit is left out (no retry, the per-arm check); a pass stays a pass.
-8. **Default limits per grade.** Recommended: 4 GiB of memory, 4,096 processes, and min(4, the VM's) CPUs. Refuse when the VM has less memory than one grade's limit, and warn when slots × the limit exceed it. This machine's colima VM (2 GiB) would be refused until the user gives it more.
+8. **Default limits per grade.** Recommended: 4 GiB of memory, 4,096 processes, and min(4, the VM's) CPUs. Refuse when the VM has less memory than one grade's limit, and warn when slots × the limit exceed it. This machine's colima VM (2 GiB) would be refused until the user gives it more. Step 0's peaks fit: Gradle 1.8–2.6 GiB, Maven 1.6 GiB, Go up to 0.8 GiB, Cargo 0.5 GiB and pytest 0.14 GiB.
 9. **Remote Docker.** Recommended: refuse a daemon that is not local, since hidden tests would leave the machine.
+10. **What the images hold beyond the toolchain** (from step 0). junit-pioneer's build runs `git` and click's tests run `less`. The JDK and slim uv images have neither, while the host has both. Choices:
+    - (a) A local image built from each pinned base, adding a short, fixed package list (`git` and `less` so far), and tagged with its base and list digests. The build needs network, apt and the user's consent once per base. This is the build that decision 2 put off until agents move into containers.
+    - (b) Fuller official images: `golang` is already built on `buildpack-deps` and holds git. JDK and Python images with git were not checked or pulled.
+    - (c) Plain images, with the breaks recorded as disagreement between the modes (step 5).
+
+    Recommended: (a), if the user accepts one apt build per base. Of the three, only (a) is known to grade both of step 0's broken fixtures as the host does. Otherwise (c), with the break named in validation.
 
 ## Risks
 - **Toolchains differ on a Mac.** The agent's macOS toolchain and the grade's Linux one differ, so a correct tree can fail in Linux (case-sensitive paths, OS-specific code). Step 5 measures it; macOS keeps `sandbox-v1` as its default until then.
 - **Docker CLI and engine changes** (flags, inspect fields, OOM reporting). Tests pin the argv and inspect fixtures, and the usability check requires a minimum engine version.
 - **A shared kernel in the VM.** An escape reaches the VM and colima's writable home mount. No host mounts, dropped capabilities, seccomp and a non-root user reduce the risk; some remains.
 - **Time.** Container start, copy-in, a second deps warm-up per project and image, and cold caches add time. Step 0 measures each.
-- **Disk.** Images (about 2.5 GB) and deps volumes grow inside the VM. `clean` handles volumes and containers, and removes images only on request.
+- **Disk.** Images (2.44 GB for four) and deps volumes (0.1–1.4 GB per project in step 0) grow inside the VM. `clean` handles volumes and containers, and removes images only on request. A grade's anonymous volume has no size limit, so a hostile grade can fill the VM's disk until its deadline. A full disk fails other grades as infrastructure.
+- **The Docker socket.** An agent that reaches it can read concurrent grades' hidden tests (Side channels). The agent's sandbox must deny it, and step 4 shows that it does.
 - **Friction.** A consent and a pull come before the first container grade. Docker Hub limits anonymous pulls.
 - **A small VM.** Several concurrent grades can exhaust the VM's memory beyond the containers' own limits; the usability check compares them.
 - **Docker is down at recovery.** A dead run's container stays until its deadline, when `--rm` removes it, and its marker stays until Docker is back.
