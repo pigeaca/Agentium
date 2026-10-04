@@ -11,3 +11,6 @@ func stopProcessesUnder([]string) ([]string, error) { return nil, nil }
 
 // stopSandboxed stops nothing outside macOS (see processesUnder).
 func stopSandboxed(string, string) ([]string, error) { return nil, nil }
+
+// usingGrade finds nothing outside macOS (see processesUnder).
+func usingGrade(string, string, []string) ([]string, error) { return nil, nil }

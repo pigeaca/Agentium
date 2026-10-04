@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/mine"
@@ -33,7 +34,8 @@ const poolUsage = `Usage:
                          scores, why other commits were set aside, and the tasks it would validate, re-validate
                          and retire. --accept-mined accepts the tasks this pass imported without your review,
                          after the automatic checks start --accept-mined makes. Mined tasks verify, set up and
-                         validate as the project's settings say (agentium init); passes read only new commits, so
+                         validate as the project's settings say (agentium init; with a module set, only the
+                         module's commits are mined, into tasks of the module); passes read only new commits, so
                          commits a pass set aside are not read again by later ones (the guide's advanced flags
                          re-read them)
   agentium pool status   the pool's health: valid, weak, flaky, invalid, awaiting review and retired tasks, the
@@ -128,10 +130,14 @@ type poolPass struct {
 	verify, setup []string
 	jobs          int
 	timeout       time.Duration
-	// noMining: no test command was detected, so the pass mines nothing (newPoolPass).
+	// noMining: no test command was detected (or the module's folder is not one), so the pass mines nothing
+	// (newPoolPass).
 	noMining bool
-	// noMiningWhy is the note that says why (noMiningNote, or moduleMiningNote).
+	// noMiningWhy is the note that says why (noMiningNote, or the module's problem).
 	noMiningWhy string
+	// module is the monorepo module the pass mines (the project's setting; "": the whole repository): its commits only,
+	// with its own watermark, into tasks that record it.
+	module string
 	// acceptRefused: --accept-mined accepted nothing because the state file was unreadable.
 	acceptRefused bool
 
@@ -155,13 +161,19 @@ type poolMaintenance struct {
 
 func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 	settings := a.set.apply(w.settings())
-	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy(), setup: settings.Setup, jobs: jobsOf(settings), timeout: verifyTimeoutOf(settings)}
+	p := &poolPass{env: env, w: w, a: a, policy: pool.DefaultPolicy(), setup: settings.Setup, jobs: jobsOf(settings), timeout: verifyTimeoutOf(settings),
+		module: settings.Module}
 	p.policy.Limit = a.limit
+	// The tests mining picks commits by are the module's: its build tools are detected in its folder, checked as it is
+	// now (a folder removed or replaced by a link since init mines nothing, and says why).
+	dir, dirErr := buildtool.ModuleDir(w.root, p.module)
 	var commands []string
-	p.opts.Languages, commands = mine.TestLanguages(w.root)
+	if dirErr == nil {
+		p.opts.Languages, commands = mine.TestLanguages(dir)
+	}
 	p.opts.TestCommand = strings.Join(commands, ", ")
 	p.opts.MaxFiles, p.opts.MaxLines, p.opts.MaxCommits = a.maxFiles, a.maxLines, mine.DefaultMaxCommits
-	p.opts.RequireLock = settings.RequireLock
+	p.opts.RequireLock, p.opts.Module = settings.RequireLock, p.module
 	// The project's verify setting, else the build tools' own test commands (the tests mining picks commits by: other
 	// commands, linters say, fail at old commits for reasons no agent can fix), else the project's detected ones.
 	if p.verify = settings.Verify; len(p.verify) == 0 {
@@ -172,15 +184,11 @@ func newPoolPass(env Env, w *workspace, a poolArgs) *poolPass {
 	// Without a test command, mined tasks would have nothing to verify with: the pass mines nothing (its watermark stays),
 	// and still validates, re-validates and retires.
 	p.noMining, p.noMiningWhy = len(p.verify) == 0, noMiningNote
-	if settings.Module != "" { // mining inside a module is step 2 of the monorepo plan
-		p.noMining, p.noMiningWhy = true, moduleMiningNote
+	if dirErr != nil {
+		p.noMining, p.noMiningWhy = true, fmt.Sprintf("the pass mines nothing: %v (agentium init --module PATH picks another module)", dirErr)
 	}
 	return p
 }
-
-// moduleMiningNote says why a pass mines nothing while the project's module is set. A task is added or imported into
-// a module (the project's setting is its default); mining reads the whole history, which a module's tasks must not.
-const moduleMiningNote = "module set: mining inside a module comes in a later version; use task import --commit or task add"
 
 // noMiningNote says why a pass mines nothing.
 const noMiningNote = "no test commands were detected for this project, so the pass mines nothing (mined tasks would have nothing to verify with); " +
@@ -190,7 +198,7 @@ const noMiningNote = "no test commands were detected for this project, so the pa
 func (p *poolPass) pass() pool.Pass[mine.Candidate] {
 	w, env := p.w, p.env
 	return pool.Pass[mine.Candidate]{
-		File: pool.StateFile(w.bare), Limit: p.policy.Limit, Window: p.policy.RetireAge, Margin: p.policy.StaleAfter, Since: p.a.since, Now: env.Now,
+		File: pool.StateFile(w.bare), Limit: p.policy.Limit, Window: p.policy.RetireAge, Margin: p.policy.StaleAfter, Since: p.a.since, Module: p.module, Now: env.Now,
 		Commit: func(c mine.Candidate) string { return c.Hash },
 		Patch:  func(c mine.Candidate) string { return c.Patch },
 		Base:   func(c mine.Candidate) time.Time { return c.BaseDate },
@@ -235,7 +243,7 @@ func (p *poolPass) importCandidates(ctx context.Context, candidates []mine.Candi
 	_, live := liveEnv(env) // nothing prints while it shows
 	p.imp = mine.Import(ctx, mine.ImportInput{Importer: w.importer(names), Candidates: candidates, Limit: limit,
 		NewTask: func() store.Task {
-			return store.Task{ProjectID: w.project.ID, Verify: p.verify, Setup: append([]string{}, p.setup...), CreatedAt: env.Now()}
+			return store.Task{ProjectID: w.project.ID, Verify: p.verify, Setup: append([]string{}, p.setup...), Module: p.module, CreatedAt: env.Now()}
 		},
 		Progress: func(imported int, c mine.Candidate) {
 			live.Step(fmt.Sprintf("importing %d of %d: %s", imported+1, limit, experiment.ShortCommit(c.Hash)))
@@ -567,7 +575,7 @@ func (p *poolPass) setAside(kept int) []setAside {
 func (p *poolPass) printScan() {
 	env, st, scan := p.env, p.env.style(), p.scan
 	line := fmt.Sprintf("%s: %d commit(s) read %s, %d candidate(s)",
-		st.Heading(fmt.Sprintf("Mined %s at %s", p.ref, experiment.ShortCommit(p.head))), scan.Result.Scanned, p.readSince(), len(scan.Scanned.Candidates))
+		st.Heading(fmt.Sprintf("Mined %s at %s%s", p.ref, experiment.ShortCommit(p.head), inModule(p.module))), scan.Result.Scanned, p.readSince(), len(scan.Scanned.Candidates))
 	if scan.Old > 0 {
 		line += fmt.Sprintf(" (%d older commit(s) are outside the pool's %d days)", scan.Old, int(p.policy.RetireAge/pool.Day))
 	}
@@ -628,7 +636,7 @@ func (p *poolPass) dryRun(ctx context.Context) int {
 		return env.emit(doc)
 	}
 	fmt.Fprintln(env.Stdout, st.Heading("Dry run: nothing is imported, validated, re-validated, retired or written"))
-	fmt.Fprintf(env.Stdout, "Would mine %s at %s: %d commit(s) %s, %d candidate(s)\n", p.ref, experiment.ShortCommit(prev.Head),
+	fmt.Fprintf(env.Stdout, "Would mine %s at %s%s: %d commit(s) %s, %d candidate(s)\n", p.ref, experiment.ShortCommit(prev.Head), inModule(p.module),
 		p.scan.Result.Scanned, p.readSince(), len(prev.Candidates))
 	if p.scan.Result.Shallow {
 		fmt.Fprintln(env.Stdout, note(st, "this is a shallow clone: older history is missing (git fetch --unshallow to mine it)"))
@@ -702,7 +710,9 @@ func poolStatus(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		return env.emit(poolStatusDoc{header: env.hdr(), Health: healthDocOf(health)})
 	}
-	printHealth(env, health)
+	if err := writeHealth(env, health); err != nil {
+		return fail(env, err)
+	}
 	return ExitOK
 }
 

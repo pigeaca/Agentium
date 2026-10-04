@@ -21,11 +21,11 @@ type PrepareInput struct {
 	DB        *store.Store
 	ProjectID int64
 	Root      string  // the user's repository
-	Options   Options // Since, MaxFiles and MaxLines; Prepare adds the exclusions and the test languages
-	// Verify is the verification commands asked for (empty: the detected build tools' test commands, else
-	// DefaultVerify).
+	Options   Options // Since, MaxFiles, MaxLines and Module; Prepare adds the exclusions and the test languages
+	// Verify is the verification commands asked for (empty: the detected build tools' test commands, in the module's
+	// folder when Options.Module is set, else DefaultVerify).
 	Verify        []string
-	DefaultVerify []string // the project's detected test commands
+	DefaultVerify []string // the project's detected test commands (the module's, with a module)
 	DryRun        bool     // nothing is imported, so no verification command is needed
 }
 
@@ -63,8 +63,13 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 			opts.Exclude[t.SolutionCommit] = true
 		}
 	}
+	// The tests mining picks commits by are the module's: its build tools are detected in its folder.
+	dir, err := buildtool.ModuleDir(in.Root, opts.Module)
+	if err != nil {
+		return Prepared{}, fmt.Errorf("mine: %w", err)
+	}
 	var toolCommands []string
-	opts.Languages, toolCommands = TestLanguages(in.Root)
+	opts.Languages, toolCommands = TestLanguages(dir)
 	opts.TestCommand = strings.Join(toolCommands, ", ")
 	// Mined tasks verify with the build tools' own test commands: the tests mining picked commits by. Other commands the
 	// project runs (linters, documentation checks) would fail at old commits for reasons no agent can fix, and are saved
@@ -85,8 +90,8 @@ func Prepare(ctx context.Context, in PrepareInput) (Prepared, error) {
 	return Prepared{Result: res, Options: opts, Verify: verify, Names: names}, nil
 }
 
-// TestLanguages names the languages of the tests the project's detected build tools run (Options.Languages), and those
-// tools' test commands.
+// TestLanguages names the languages of the tests the build tools detected in folder root run (Options.Languages), and
+// those tools' test commands. For a module, root is the module's folder.
 func TestLanguages(root string) (languages, commands []string) {
 	has := func(name string) bool {
 		_, err := os.Stat(filepath.Join(root, name))

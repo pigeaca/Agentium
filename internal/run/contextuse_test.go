@@ -140,7 +140,7 @@ func TestNamedByReader(t *testing.T) {
 		{"sort -o docs/a.md docs/b.md", false}, // sort writes -o's file
 		{"sort --output=x.txt docs/a.md", true},
 	} {
-		if got := namedByReader("docs/a.md", []string{c.command}, []string{"/work/repo"}); got != c.want {
+		if got := namedByReader("docs/a.md", "", []string{c.command}, []string{"/work/repo"}); got != c.want {
 			t.Errorf("%q: %v, want %v", c.command, got, c.want)
 		}
 	}

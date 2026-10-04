@@ -25,7 +25,7 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 	}
 	table := func(cols ...term.Column) *term.Table { return term.NewTable(st, cols...) }
 
-	b.WriteString(st.Heading("Experiment "+r.Experiment) + "\n\n")
+	b.WriteString(st.Heading("Experiment "+r.Experiment+modulesTitle(l)) + "\n\n")
 	if r.Template == experiment.TemplateAA {
 		fmt.Fprintf(&b, "A/A calibration of context %s (both arms).\n\n", r.Arms[0].Context)
 	} else if d.PerArmProfiles() {

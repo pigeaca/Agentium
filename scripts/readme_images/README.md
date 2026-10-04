@@ -32,3 +32,12 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
   judge-graded runs, from the test scenes); `console-run-judge-graded.svg` is it, after a `$ agentium experiment run`
   line, through `ansi2svg.py` at 80 columns. `console-report-judge-graded.svg` is `report-judge-graded.ans` from
   `TestReportViewPreview` (`AGENTIUM_REPORT_DEMO`), the same way.
+- `AGENTIUM_RECORD_SCREENS=/tmp/screens go test ./internal/cli -run TestRecordConsoleScreens -count=1` (into an existing
+  folder) runs `start --accept-mined` on a small fixture repository, and `experiment plan`, `pool status` and
+  `run show` on a 16-task seq-v1 experiment, as on a 120-column terminal at 256 colors with the test stand-in (no paid
+  runs), and writes `start.ans`, `plan.ans`, `pool-status.ans` and `run-show.ans`; temporary paths become `~/…`.
+  `console-start.svg` (with the settings block replaced by a `…` line), `console-plan.svg` and `console-run-show.svg`
+  are those through `ansi2svg.py` at 120 columns.
+- `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestRunShowPreview -count=1` and
+  `AGENTIUM_PLAN_DEMO=/tmp/demo go test ./internal/cli -run TestPlanViewPreview -count=1` write each scene's view
+  (five runs, three plans, three pools) at 80 columns, for looking at the variants by eye.

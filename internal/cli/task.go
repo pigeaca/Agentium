@@ -428,6 +428,13 @@ func (w *workspace) completeTask(ctx context.Context, t store.Task, judging judg
 	if err := task.RefuseInlineRustTests(ctx, t.BaseCommit, t.SolutionCommit, t.Reference, "--git-dir", w.bare); err != nil {
 		return t, err
 	}
+	// A task in a module verifies with the module's commands, in its folder: a test file elsewhere would be a hidden test
+	// that never runs, grading nothing. Mining sets such commits aside (mine.ReasonOutsideModule); an import is refused.
+	if outside := outsideModule(t.HiddenTests, t.Module); len(outside) > 0 {
+		return t, fmt.Errorf("%s changes test files outside the module %s (%s): the module's verify commands would never run them; "+
+			"choose another commit, or make it a task of the module its tests are in (--module PATH)",
+			experiment.ShortCommit(t.SolutionCommit), t.Module, strings.Join(outside, ", "))
+	}
 	switch {
 	case len(t.HiddenTests) == 0 && len(t.Reference) == 0:
 		return t, fmt.Errorf("%s changes no files against the base, so there is nothing to implement", experiment.ShortCommit(t.SolutionCommit))
@@ -443,6 +450,20 @@ func (w *workspace) completeTask(ctx context.Context, t store.Task, judging judg
 		return t, fmt.Errorf("%s changes only test files, so there is nothing for an agent to implement", experiment.ShortCommit(t.SolutionCommit))
 	}
 	return t, nil
+}
+
+// outsideModule lists the paths (relative to the repository's root) that are not in module's folder; none at the root.
+func outsideModule(paths []string, module string) []string {
+	if module == "" {
+		return nil
+	}
+	var outside []string
+	for _, p := range paths {
+		if !strings.HasPrefix(p, module+"/") {
+			outside = append(outside, p)
+		}
+	}
+	return outside
 }
 
 // saveTask completes the task (completeTask), checks its gaps if it is reviewed from the start, stores it and reports

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -296,5 +297,83 @@ func TestApplyIsTheArmsView(t *testing.T) {
 	}
 	if _, err := Apply(full, memSource{"CLAUDE.md": "# Lean\n", "main.go": "package other\n"}); !errors.Is(err, ErrTouchesNonContext) {
 		t.Errorf("a snapshot changing code: %v", err)
+	}
+}
+
+// A snapshot of a module's context holds what a session started in the module loads: the root's and the module's
+// instruction files and the module's .claude folder; its manifest names the module. A root snapshot of the same tree
+// leaves the module's .claude out, and its manifest has no module field at all.
+func TestBuildInAModule(t *testing.T) {
+	tree := memSource{
+		"CLAUDE.md":                         "root\n",
+		"svc/CLAUDE.md":                     "module\n",
+		"svc/.claude/skills/pay/SKILL.md":   "---\nname: pay\ndescription: Pay\n---\n",
+		"svc/.claude/settings.json":         "{}",
+		"svc/main.go":                       "package main\n",
+		"other/.claude/skills/x/SKILL.md":   "---\nname: x\ndescription: x\n---\n",
+		"other/.claude/settings.json":       "{}",
+		"svc/.claude/skills/pay/helper.txt": "help\n",
+	}
+	bare := bareRepo(t)
+	_, inModule, err := BuildIn(context.Background(), bare, tree, "m", nil, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"CLAUDE.md", "svc/.claude/settings.json", "svc/.claude/skills/pay/SKILL.md", "svc/.claude/skills/pay/helper.txt", "svc/CLAUDE.md"}
+	if got := inModule.Paths(); !slices.Equal(got, want) || inModule.Module != "svc" {
+		t.Errorf("module snapshot: %v (module %q), want %v", got, inModule.Module, want)
+	}
+	_, atRoot, err := Build(context.Background(), bare, tree, "r", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := atRoot.Paths(); !slices.Equal(got, []string{"CLAUDE.md", "svc/CLAUDE.md"}) {
+		t.Errorf("root snapshot: %v", got)
+	}
+	if encoded, _ := json.Marshal(atRoot); strings.Contains(string(encoded), "module") {
+		t.Errorf("a root manifest names a module: %s", encoded)
+	}
+}
+
+// Applied to a task in a module, a snapshot replaces what a session there loads: the module's .claude files the
+// snapshot lacks are deleted (at the root they are not context and stay), a module's settings the snapshot changes
+// are a harness change (at the root, a changed file that is not context: refused), and the arm loads the snapshot's
+// context.
+func TestPlanOverlayInAModule(t *testing.T) {
+	base := memSource{
+		"CLAUDE.md":                       "root\n",
+		"svc/CLAUDE.md":                   "module\n",
+		"svc/.claude/skills/pay/SKILL.md": "---\nname: pay\ndescription: Pay\n---\n",
+		"svc/.claude/settings.json":       "{}",
+		"svc/main.go":                     "package main\n",
+	}
+	lean := memSource{"CLAUDE.md": "root\n", "svc/CLAUDE.md": "module, shorter\n", "svc/.claude/settings.json": "{}"}
+	overlay, err := PlanOverlayIn(base, lean, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(overlay.Deletes, []string{"svc/.claude/skills/pay/SKILL.md"}) || len(overlay.HarnessChanged) != 0 {
+		t.Errorf("module overlay: %+v", overlay)
+	}
+	rootOverlay, err := PlanOverlay(base, lean)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rootOverlay.Deletes) != 0 {
+		t.Errorf("at the root the module's skill is no context, yet the overlay deletes %v", rootOverlay.Deletes)
+	}
+	hooked := memSource{"CLAUDE.md": "root\n", "svc/CLAUDE.md": "module\n", "svc/.claude/settings.json": `{"hooks":{}}`}
+	if overlay, err = PlanOverlayIn(base, hooked, "svc"); err != nil || !slices.Equal(overlay.HarnessChanged, []string{"svc/.claude/settings.json"}) {
+		t.Errorf("module settings changed: %+v, %v", overlay, err)
+	}
+	if _, err := PlanOverlay(base, hooked); !errors.Is(err, ErrTouchesNonContext) {
+		t.Errorf("at the root a changed module settings file is not context: %v", err)
+	}
+	arm, err := ApplyIn(base, lean, "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if source := arm.Paths(); slices.Contains(source, "svc/.claude/skills/pay/SKILL.md") || !slices.Contains(source, "svc/main.go") {
+		t.Errorf("the arm's files: %v", source)
 	}
 }

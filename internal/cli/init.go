@@ -175,7 +175,8 @@ func runInit(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	resolved, err := claudectx.Resolve(src)
+	// The context a session in the module loads, where the agent of the module's tasks starts.
+	resolved, err := claudectx.ResolveIn(src, saved.Settings.Module)
 	if err != nil {
 		return fail(env, err)
 	}
@@ -238,15 +239,10 @@ type projectSettings struct {
 
 func settingsOf(saved store.Project, info project.Info) projectSettings {
 	p := projectSettings{stored: saved.Settings, minedVerify: saved.Settings.Verify, importVerify: saved.Settings.Verify}
-	if saved.Settings.Module != "" { // nothing is mined inside a module yet: tasks are added or imported
-		p.minedVerify = nil
-		if len(p.importVerify) == 0 {
-			p.importVerify = info.TestCommands // the module's (WithModule)
-		}
-		return p
-	}
 	if len(p.minedVerify) == 0 {
-		if _, p.minedVerify = mine.TestLanguages(info.Root); len(p.minedVerify) == 0 {
+		// The build tools of the module's folder (the root's without a module), as mining detects them; info's test
+		// commands are that folder's too (WithModule).
+		if _, p.minedVerify = mine.TestLanguages(moduleDir(info.Root, saved.Settings.Module)); len(p.minedVerify) == 0 {
 			p.minedVerify = info.TestCommands
 		}
 		p.importVerify = info.TestCommands
@@ -298,8 +294,6 @@ func (p projectSettings) print(env Env, saved store.Project, gradle bool) {
 		verify = strings.Join(s.Verify, "; ")
 	case len(p.minedVerify) == 0 && len(p.importVerify) == 0:
 		verify = "not set, and no test command was detected: " + st.Command("agentium init --verify CMD") + " sets one"
-	case s.Module != "":
-		verify = "not set: tasks added or imported verify with " + none(p.importVerify) + " (mining inside a module comes in a later version)"
 	default:
 		verify = "not set: mined tasks verify with " + none(p.minedVerify)
 		if !slices.Equal(p.minedVerify, p.importVerify) {
@@ -308,7 +302,7 @@ func (p projectSettings) print(env Env, saved store.Project, gradle bool) {
 	}
 	var rows [][2]string
 	if s.Module != "" { // a project measured whole needs no word about modules
-		rows = append(rows, [2]string{"module", s.Module + st.Note(" (build tools, setup and verification run in this folder; --module '' returns to the whole repository)")})
+		rows = append(rows, [2]string{"module", s.Module + st.Note(" (new tasks belong to this folder: they are mined there, and their agents start, build and verify there; --module '' returns to the whole repository)")})
 	}
 	rows = append(rows, [][2]string{
 		{"verify", verify},

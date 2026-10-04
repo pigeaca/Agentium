@@ -110,9 +110,10 @@ type Env struct {
 	// recipe (buildtool.GraderEnv).
 	CommandEnv []string
 	// Module is the monorepo module the commands run in (store.Task.Module; "": the repository's root, as before
-	// modules): build tools are detected in its folder, and the warm-up, setup and verification commands run there. Once
-	// sets it from the run's task; callers need not. The agent's own folder and sandbox stay the whole checkout. It is
-	// part of the keys of the warm-up stamps, the Python venvs and the grading seeds.
+	// modules): build tools are detected in its folder, the warm-up, setup and verification commands run there, and the
+	// agent starts there (its context is what a session there loads: claudectx.ResolveIn). Once sets it from the run's
+	// task; callers need not. The agent's sandbox stays the whole checkout (claude.Invocation.Repo). It is part of the
+	// keys of the warm-up stamps, the Python venvs and the grading seeds.
 	Module string
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
@@ -169,8 +170,11 @@ type Record struct {
 	Task     string `json:"task"`
 	Arm      string `json:"arm"`
 	Snapshot string `json:"snapshot,omitempty"`
-	Model    string `json:"model"`
-	Effort   string `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
+	// Module is the monorepo folder the task ran in (store.Task.Module), where the agent started and the commands ran;
+	// empty (and absent from the JSON) at the repository's root.
+	Module string `json:"module,omitempty"`
+	Model  string `json:"model"`
+	Effort string `json:"effort,omitempty"` // as asked for (--effort); empty: the CLI's default
 	// EffortRecorded marks a record made when runs recorded their effort: without it an empty Effort is unknown (an
 	// older record), with it the CLI's default.
 	EffortRecorded bool           `json:"effort_recorded,omitempty"`
@@ -281,7 +285,7 @@ const suffix = "\n\nYou are working in this task's own checkout of the repositor
 // shows it spent.
 func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	env.Module = spec.Task.Module // a run uses its task's module, never the project's current setting
-	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
+	rec = Record{ID: env.ID, Task: spec.TaskName, Arm: spec.Arm.Name, Snapshot: spec.Arm.Snapshot, Module: env.Module, Model: spec.Model, Effort: spec.Effort, EffortRecorded: true,
 		SignIn: env.SignIn, Started: env.Now().UTC(), RecordsDir: filepath.Join(env.Layout.Records, env.ID), Grader: task.GraderOf(env.Grader)}
 	if spec.Task.JudgeGraded() {
 		rec.GradedBy = task.GradingJudge
@@ -443,7 +447,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if err != nil {
 			return rec, err
 		}
-		overlay, err := snapshot.PlanOverlay(base, snap)
+		// What the arm loads is what a session in the task's module loads, where its agent starts.
+		overlay, err := snapshot.PlanOverlayIn(base, snap, env.Module)
 		if err != nil {
 			return rec, fmt.Errorf("arm %s: %w", spec.Arm.Name, err)
 		}
@@ -528,7 +533,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 	}
 	if spec.Probe != "" {
-		if rec.ProbeFile, err = appendProbe(ctx, repo, spec.Probe); err != nil {
+		if rec.ProbeFile, err = appendProbe(ctx, repo, env.Module, spec.Probe); err != nil {
 			return rec, err
 		}
 		if rec.ProbeFile == "" {
@@ -552,6 +557,17 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, fmt.Errorf("grading repository: %w", err)
 	}
 
+	// The agent starts in the task's module, as a developer of it would, so Claude Code loads the root's and the module's
+	// instructions; the whole checkout stays its own (Repo). The folder is checked as it is now, after the arm's files and
+	// the setup: neither may have made it a link or removed it.
+	if env.Module != "" {
+		dir, err := env.moduleDir(repo)
+		if err != nil {
+			return rec, fmt.Errorf("the agent's folder: %w", err)
+		}
+		inv.Dir, inv.Repo = dir, repo
+	}
+
 	// The agent.
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
 	transcript, err := os.Create(transcriptPath)
@@ -567,9 +583,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if env.SignIn == claude.SignInLogin {
 		activeConfig = claude.UserConfigDir(env.Environ, env.Home)
 	}
-	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after the checkout. Reads
-	// there are the run's own; any other session folder, even one created during the run, is someone else's.
-	ownSession := claude.SessionFolder(activeConfig, repo)
+	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after where it starts (the
+	// checkout, or its module's folder). Reads there are the run's own; any other session folder, even one created
+	// during the run, is someone else's.
+	ownSession := claude.SessionFolder(activeConfig, inv.Dir)
 	pastSessions := claude.SessionFolders(activeConfig)
 	agentStarted, pgid = true, 0
 	if err := writeStart(false); err != nil {
@@ -616,13 +633,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	userConfig := claude.UserConfigDir(env.Environ, env.Home)
 	// The context commit (Agentium's grading repository), not the agent's tree, which may have lost its .git.
-	armSource, armContext, err := contextAt(ctx, graded)
+	armSource, armContext, err := contextAt(ctx, graded, env.Module)
 	if err != nil {
 		return unfinished(err)
 	}
 	rec.ProjectSkills, rec.ProjectCommands = claudectx.SkillNames(armContext, armSource), claudectx.CommandNames(armContext)
 	realRepo, _ := filepath.EvalSymlinks(repo) // Claude Code may name files under the resolved path (/private/var)
-	use := UseOf(armContext, armSource, rec.Metrics, repo, realRepo, rec.Metrics.CWD)
+	use := UseOfIn(armContext, armSource, rec.Metrics, env.Module, repo, realRepo, rec.Metrics.CWD)
 	rec.ContextUse = &use
 	expect := env.Expect
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills
@@ -772,6 +789,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		return err
 	}
 	scripts, configs := checkFiles(spec.Task.Verify, spec.Task.Module, start)
+	configs = append(configs, addedConfigs(spec.Task.Verify, spec.Task.Module, start, changed)...)
 	var restore []string
 	for _, p := range changed {
 		switch {
@@ -906,10 +924,94 @@ func (env Env) verifySandboxed(ctx context.Context, spec Spec, graded string, re
 // checkFiles lists what the verification commands depend on in base: the files they name (scripts, which grading
 // restores) and the configuration of the test runners they call (reported when changed). The commands run in module's
 // folder (the root when it is ""), so the names they give are read from there and listed from the root, as base and
-// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. A runner's configuration is
-// looked for in the module's folder and every folder above it (inAncestors): svc/pom.xml and the parent pom.xml.
+// the agent's changes list them: "sh run_tests.sh" in module svc is svc/run_tests.sh. After a simple `cd DIR` in a
+// command (scriptTokens), a name is also read from DIR. A script that is a symbolic link in base brings the files it
+// leads to within the repository (linkTargets): an agent that edits only the target is restored too. A runner's
+// configuration is looked for in the module's folder and every folder above it (configNames): svc/pom.xml and the
+// parent pom.xml. Configuration the agent adds is addedConfigs'.
 func checkFiles(verify []string, module string, base source.Source) (scripts, configs []string) {
+	add := func(list []string, p string) []string {
+		if !slices.Contains(list, p) {
+			list = append(list, p)
+		}
+		return list
+	}
+	for _, command := range verify {
+		for _, p := range scriptTokens(command, module) {
+			if source.Has(base, p) {
+				scripts = add(scripts, p)
+				for _, target := range linkTargets(base, p) {
+					scripts = add(scripts, target)
+				}
+			}
+		}
+	}
+	for _, f := range matching(base, configNames(verify, module)) {
+		configs = add(configs, f)
+	}
+	return scripts, configs
+}
+
+// scriptTokens lists the paths, from the root, that command's words may name as files: each word read from module's
+// folder (an absolute word is outside the repository, as at the root, and is left out in a module) and, after a
+// `cd DIR` with a plain relative DIR earlier in the command, read from DIR too ("cd .. && sh tools/check.sh" in module
+// svc names tools/check.sh). The words are not parsed as a shell would: a cd in a subshell or a later command still
+// counts, which only adds a path, never loses the module's reading, so a command without cd reads as before. A DIR with
+// anything a shell would expand ($, ~, *, ?, -) stops the cd reading for the rest of the command.
+func scriptTokens(command, module string) []string {
 	split := func(r rune) bool { return strings.ContainsRune(" \t\n;&|()<>\"'`", r) }
+	words := strings.FieldsFunc(command, split)
+	var out []string
+	cwd, moved, lost := "", false, false // cwd: where the cds lead, from the module's folder
+	for i, word := range words {
+		p := path.Clean(strings.TrimPrefix(word, "./"))
+		if module == "" || !path.IsAbs(p) {
+			out = append(out, path.Join(module, p)) // "../tools/check.sh" from the module is the repository's tools/check.sh
+			if moved && !lost && !path.IsAbs(p) {
+				out = append(out, path.Join(module, cwd, p))
+			}
+		}
+		if word == "cd" && i+1 < len(words) {
+			dir := words[i+1]
+			if path.IsAbs(dir) || strings.ContainsAny(dir, "$~*?[") || strings.HasPrefix(dir, "-") {
+				lost = true
+				continue
+			}
+			cwd, moved = path.Join(cwd, dir), true
+		}
+	}
+	return out
+}
+
+// linkTargets lists what a script that is a symbolic link in base leads to: each link's target, read from the link's
+// folder, while it stays in the repository and is a file in base (a chain of links, 8 at most). A target that is
+// absolute, above the root or not in base ends it: nothing outside the checkout is ever followed or restored. Only base
+// is read (git's record of the link), never the agent's tree.
+func linkTargets(base source.Source, p string) []string {
+	var out []string
+	for hops := 0; hops < 8; hops++ {
+		target, ok, err := source.Link(base, p)
+		if err != nil || !ok || target == "" || path.IsAbs(target) {
+			return out
+		}
+		next := path.Clean(path.Join(path.Dir(p), target))
+		if next == ".." || strings.HasPrefix(next, "../") || !source.Has(base, next) || slices.Contains(out, next) || next == p {
+			return out
+		}
+		out = append(out, next)
+		p = next
+	}
+	return out
+}
+
+// toolWritten names the runner configuration files build tools write themselves while they build or test: lock files
+// and a pinned interpreter version. addedConfigs does not report them when the agent's tree adds them.
+var toolWritten = []string{"Cargo.lock", "uv.lock", "poetry.lock", "pdm.lock", "Pipfile.lock", "package-lock.json", "yarn.lock",
+	"pnpm-lock.yaml", "go.sum", "gradle.lockfile", ".python-version"}
+
+// configNames lists the configuration names (or patterns) of the test runners the verification commands call, in
+// module's folder and each folder above it (inAncestors).
+func configNames(verify []string, module string) []string {
 	// The build tools' runners come from their profiles; the rest are runners without one.
 	runners := buildtool.RunnerConfigs()
 	for word, files := range map[string][]string{
@@ -918,30 +1020,41 @@ func checkFiles(verify []string, module string, base source.Source) (scripts, co
 	} {
 		runners[word] = append(runners[word], files...)
 	}
+	var names []string
 	for _, command := range verify {
-		for _, token := range strings.FieldsFunc(command, split) {
-			p := path.Clean(strings.TrimPrefix(token, "./"))
-			if module != "" {
-				if path.IsAbs(p) {
-					continue // outside the repository, as at the root (base lists relative paths only)
-				}
-				p = path.Join(module, p) // "../tools/check.sh" from the module is the repository's tools/check.sh
-			}
-			if source.Has(base, p) && !slices.Contains(scripts, p) {
-				scripts = append(scripts, p)
-			}
-		}
 		for word, files := range runners {
 			if regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`).MatchString(command) {
-				for _, f := range matching(base, inAncestors(module, files)) {
-					if !slices.Contains(configs, f) {
-						configs = append(configs, f)
+				for _, name := range inAncestors(module, files) {
+					if !slices.Contains(names, name) {
+						names = append(names, name)
 					}
 				}
 			}
 		}
 	}
-	return scripts, configs
+	return names
+}
+
+// addedConfigs lists the files of changed (the agent's changes, from the root) that base does not have and that are a
+// runner's configuration the verification reads (configNames): a new pytest.ini, conftest.py or .mvn/maven.config
+// changes how the tests run as much as an edited one. Files the tools write on their own (toolWritten: Cargo.lock
+// after `cargo test` in a repository that neither commits nor ignores it, uv.lock, .python-version) are left out:
+// a run that only ran the tests would be reported. An edit to one the base has is still checkFiles' config.
+func addedConfigs(verify []string, module string, base source.Source, changed []string) []string {
+	names := configNames(verify, module)
+	var out []string
+	for _, p := range changed {
+		if source.Has(base, p) || slices.Contains(out, p) || slices.Contains(toolWritten, path.Base(p)) {
+			continue
+		}
+		if slices.ContainsFunc(names, func(name string) bool {
+			ok, _ := path.Match(name, p) // a name without "*" matches only itself
+			return ok
+		}) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // inAncestors gives names (or patterns) in module's folder and in each folder above it, up to the root: for module
@@ -1192,14 +1305,14 @@ func parseFile(p string) (claude.Metrics, error) {
 	return claude.Parse(f)
 }
 
-// appendProbe appends line to the first startup instruction file of the context in repo and returns that file's path,
-// or "" when the context loads no instruction file at start.
-func appendProbe(ctx context.Context, repo, line string) (string, error) {
+// appendProbe appends line to the first startup instruction file of the context in repo (as a session started in
+// module loads it) and returns that file's path, or "" when the context loads no instruction file at start.
+func appendProbe(ctx context.Context, repo, module, line string) (string, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
 		return "", err
 	}
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return "", err
 	}
@@ -1219,13 +1332,14 @@ func appendProbe(ctx context.Context, repo, line string) (string, error) {
 	return "", nil
 }
 
-// contextAt resolves the context of the working tree at repo: the arm's context as its run started.
-func contextAt(ctx context.Context, repo string) (source.Source, claudectx.Context, error) {
+// contextAt resolves the context of the working tree at repo: the arm's context as its run started, in module, where
+// its agent started ("": the root).
+func contextAt(ctx context.Context, repo, module string) (source.Source, claudectx.Context, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
 		return nil, claudectx.Context{}, err
 	}
-	resolved, err := claudectx.Resolve(src)
+	resolved, err := claudectx.ResolveIn(src, module)
 	if err != nil {
 		return nil, claudectx.Context{}, err
 	}

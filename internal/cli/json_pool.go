@@ -78,9 +78,10 @@ type poolUpdateDoc struct {
 	DryRun           bool               `json:"dry_run"`
 	Ref              string             `json:"ref"`
 	Head             string             `json:"head"`
-	CommitsRead      int                `json:"commits_read"`   // since the last pass, inside the window
-	OutsideWindow    int                `json:"outside_window"` // read past: older than the window
-	Complete         bool               `json:"complete"`       // the scan read every new commit (false: bounded, the next pass reads on)
+	Module           string             `json:"module,omitempty"` // the monorepo module mined (its commits only); absent at the root
+	CommitsRead      int                `json:"commits_read"`     // since the last pass, inside the window
+	OutsideWindow    int                `json:"outside_window"`   // read past: older than the window
+	Complete         bool               `json:"complete"`         // the scan read every new commit (false: bounded, the next pass reads on)
 	UnknownWatermark []string           `json:"unknown_watermark"`
 	CandidatesFound  int                `json:"candidates_found"`
 	Candidates       []mineCandidateDoc `json:"candidates"`
@@ -130,7 +131,7 @@ func setAsideDoc(rows []setAside) map[string]int {
 // baseDocument is the part of both documents that the scan and the plan give.
 func (p *poolPass) baseDocument(health pool.Health) poolUpdateDoc {
 	scan := p.scan
-	return poolUpdateDoc{header: p.env.hdr(), Ref: p.ref, Head: p.head, CommitsRead: scan.Result.Scanned, OutsideWindow: scan.Old,
+	return poolUpdateDoc{header: p.env.hdr(), Ref: p.ref, Head: p.head, Module: p.module, CommitsRead: scan.Result.Scanned, OutsideWindow: scan.Old,
 		Complete: scan.Scanned.Complete, UnknownWatermark: list(scan.Scanned.Unknown), Candidates: []mineCandidateDoc{}, SetAside: map[string]int{},
 		Verify: list(p.verify), Imported: []string{},
 		Tasks: []batchRowDoc{}, Revalidated: []staleDoc{}, Kept: []staleDoc{}, Retired: []retiredDoc{}, Accepted: []string{}, HeldBack: []heldDoc{},

@@ -134,7 +134,10 @@ func PartialClone(ctx context.Context, dir string) (bool, error) {
 
 // Environ is environ without GIT_* variables and without credentials (Agentium's git calls are all local, and a
 // filter or program configured in a repository must not see an API key), plus: never prompt, ignore system-wide
-// config, and never take optional locks (so `git status` does not rewrite the user's index).
+// config, and never take optional locks (so `git status` does not rewrite the user's index). Every git Agentium runs
+// gets it, gh in the user's repository too. It does not cover `git diff` against a work tree, which refreshes and
+// writes a stale index even with GIT_OPTIONAL_LOCKS=0 (git 2.49): run none in the user's repository (diffs there
+// compare commits only).
 func Environ(environ []string) []string {
 	out := runner.EnvPolicy{DropPrefixes: []string{runner.GitPrefix}}.Filter(environ)
 	return append(out, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_OPTIONAL_LOCKS=0")

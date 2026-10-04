@@ -186,6 +186,45 @@ func TestFlowConnectors(t *testing.T) {
 	}
 }
 
+// A dotted chain joins its boxes with a dotted cell and no arrowhead or tee; a dashed panel has the sandbox's outline.
+func TestFlowDottedAndDashedPanels(t *testing.T) {
+	d := Shapes{}
+	box := func(title string, dashed bool) Node {
+		return Node{Width: 12, Panel: Panel{Title: title, Dashed: dashed, Lines: []string{"x"}}}
+	}
+	rows := [][]Node{{box("a", false)}, {box("b", true)}, {box("c", false)}}
+	got := strings.Join(d.Flow(Flow{Rows: rows, Dotted: true}, 30), "\n")
+	want := strings.Join([]string{
+		"         ╭─ a ──────╮",
+		"         │ x        │",
+		"         ╰──────────╯",
+		"              ┊",
+		"         ╭┄ b ┄┄┄┄┄┄╮",
+		"         ┆ x        ┆",
+		"         ╰┄┄┄┄┄┄┄┄┄┄╯",
+		"              ┊",
+		"         ╭─ c ──────╮",
+		"         │ x        │",
+		"         ╰──────────╯",
+	}, "\n")
+	if got != want {
+		t.Errorf("dotted flow:\n%s\nwant:\n%s", got, want)
+	}
+	for _, bad := range []string{"▼", "┬", "┴"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("a dotted flow has %q:\n%s", bad, got)
+		}
+	}
+	if !strings.Contains(got, "╭┄ b ┄") || !strings.Contains(got, "┆ x") || !strings.Contains(got, "╰┄┄┄") {
+		t.Errorf("dashed panel:\n%s", got)
+	}
+	d.ASCII = true
+	got = strings.Join(d.Flow(Flow{Rows: rows, Dotted: true}, 30), "\n")
+	if strings.Contains(got, "v") || !strings.Contains(got, ":") || !strings.Contains(got, ".- b ") && !strings.Contains(got, ". b ") {
+		t.Errorf("ASCII dotted flow:\n%s", got)
+	}
+}
+
 func TestFlowPairsBoxesThatLineUp(t *testing.T) {
 	d := Shapes{}
 	box := func(title string) Node { return Node{Panel: Panel{Title: title}} }

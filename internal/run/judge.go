@@ -2,7 +2,6 @@ package run
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,7 +150,8 @@ func (env Env) judge(ctx context.Context, spec Spec, s judge.Settings, rec *Reco
 }
 
 // countSpend has call report each call's cost as it lands to env.judgeSpent, with priorUSD before it, so a crash loses
-// none of it; call itself without judgeSpent.
+// none of it: an interrupted call's too, which the reply reports with the error (judge.Cost); call itself without
+// judgeSpent.
 func (env Env) countSpend(call judge.Caller, priorUSD float64) judge.Caller {
 	if env.judgeSpent == nil {
 		return call
@@ -159,11 +159,8 @@ func (env Env) countSpend(call judge.Caller, priorUSD float64) judge.Caller {
 	spent := 0.0
 	return func(ctx context.Context, prompt string) (judge.Reply, error) {
 		reply, err := call(ctx, prompt)
-		var out struct {
-			CostUSD float64 `json:"total_cost_usd"`
-		}
-		if err == nil && json.Unmarshal(reply.Stdout, &out) == nil && out.CostUSD > 0 {
-			spent += out.CostUSD
+		if cost := judge.Cost(reply); cost > 0 && (err == nil || ctx.Err() != nil) { // as judge.Judge counts it
+			spent += cost
 			env.judgeSpent(priorUSD + spent)
 		}
 		return reply, err

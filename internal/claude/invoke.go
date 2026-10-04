@@ -34,7 +34,7 @@ const PermissionMode = "acceptEdits"
 // Invocation is one headless Claude Code run.
 type Invocation struct {
 	CLI       string // path to the claude executable
-	Dir       string // the run's checkout, where Claude Code starts
+	Dir       string // where Claude Code starts: the run's checkout, or a monorepo module's folder inside it (Repo)
 	Prompt    string
 	Model     string
 	Effort    string  // empty: the CLI's default
@@ -44,6 +44,12 @@ type Invocation struct {
 	ConfigDir string  // a fresh, empty CLAUDE_CONFIG_DIR for SignInAPIKey and SignInTokenFile
 	TokenFile string  // for SignInTokenFile: the token's file, whose folder the agent may not read
 	Home      string  // the user's home folder
+	// Repo, when set, is the run's whole checkout and Dir a folder inside it (a monorepo module's, where the agent starts
+	// as a developer would, so Claude Code loads the root's and the module's instructions). The whole checkout stays the
+	// agent's, as at the root: it is a working folder (--add-dir) the sandbox lets it write (allowWrite), and the build
+	// tools' environment names it (Python's import root is relative to it). Empty: Dir is the checkout, and the
+	// command is exactly what it was before modules.
+	Repo string
 	// AccountHome is the account's home folder in the user database (user.Current), when known. HOME (Home) can point
 	// elsewhere, but the account's login keychain stays in the real home folder, where an explicit path opens it, so
 	// that folder is denied too (sandbox.CredentialPaths). Empty: only Home's.
@@ -216,6 +222,11 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.CLI == "" || inv.Dir == "" || inv.Prompt == "" || inv.Model == "" || inv.Home == "" {
 		return nil, nil, errors.New("a run needs the CLI, a folder, a prompt, a model and the home folder")
 	}
+	if inv.Repo != "" {
+		if rel, err := filepath.Rel(inv.Repo, inv.Dir); !filepath.IsAbs(inv.Repo) || err != nil || !filepath.IsLocal(rel) && rel != "." {
+			return nil, nil, fmt.Errorf("the run's folder %q is not inside its checkout %q", inv.Dir, inv.Repo)
+		}
+	}
 	userConfig := UserConfigDir(environ, inv.Home)
 	for _, p := range append([]string{userConfig, inv.Home}, inv.Deny...) {
 		if !filepath.IsAbs(p) {
@@ -257,11 +268,14 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	if inv.BudgetUSD > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(inv.BudgetUSD, 'f', -1, 64))
 	}
+	if inv.inModule() {
+		args = append(args, "--add-dir", inv.Repo) // edits anywhere in the checkout are accepted, as at its root
+	}
 	// The build tools' own variables (Go's GOFLAGS) replace any of the same name the allowlist kept, and come right
 	// after it; the run's build cache variables (Go's GOCACHE) replace the user's and come after Claude Code's own.
 	profiles := buildtool.SelectRun(inv.Tools, inv.AgentTools)
 	allowed := EnvironFor(environ, profiles)
-	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.Dir,
+	toolEnv := buildtool.AgentEnv(profiles, buildtool.AgentContext{Allowed: allowed, Environ: environ, Home: inv.Home, Repo: inv.checkout(),
 		BuildCache: inv.BuildCache, Deps: inv.Deps, JavaHome: inv.JavaHome, Venv: inv.Venv, Metadata: inv.ProjectMetadata, ImportRoot: inv.ImportRoot})
 	replaced := map[string]bool{}
 	for _, kv := range toolEnv {
@@ -289,6 +303,19 @@ func (inv Invocation) Command(environ []string) (args, env []string, err error) 
 	}
 	env = append(env, signInEnv(inv.SignIn, inv.Secret, inv.ConfigDir, inv.Home, userConfig)...) // requirement 4
 	return args, env, nil
+}
+
+// checkout is the run's whole checkout: Repo, else Dir.
+func (inv Invocation) checkout() string {
+	if inv.Repo != "" {
+		return inv.Repo
+	}
+	return inv.Dir
+}
+
+// inModule reports whether the agent starts in a folder inside its checkout (Repo) rather than at its root.
+func (inv Invocation) inModule() bool {
+	return inv.Repo != "" && filepath.Clean(inv.Repo) != filepath.Clean(inv.Dir)
 }
 
 // checkSignIn refuses a sign-in the mode cannot use: a login takes no secret, and the other modes need a secret and a
@@ -434,8 +461,16 @@ func (inv Invocation) settings(userConfig string, environ []string) map[string]a
 	if writes := inv.deniedWrites(userConfig, environ); len(writes) > 0 {
 		filesystem["denyWrite"] = writes
 	}
+	var writable []string
 	if inv.BuildCache != "" {
-		filesystem["allowWrite"] = sandbox.Forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
+		writable = sandbox.Forms(inv.BuildCache) // it exists by now, so a symlinked data folder resolves
+	}
+	if inv.inModule() {
+		// The sandbox lets the agent write only where it starts (the module) by default: the rest of its checkout too.
+		writable = append(writable, sandbox.Forms(inv.Repo)...)
+	}
+	if len(writable) > 0 {
+		filesystem["allowWrite"] = writable
 	}
 	network := map[string]any{"strictAllowlist": true, "allowedDomains": []string{}}
 	if inv.AllowLocalBinding && buildtool.LocalBinding(buildtool.Select(inv.Tools)) {

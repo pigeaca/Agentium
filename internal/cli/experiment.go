@@ -36,7 +36,7 @@ var experimentUsage = `Usage:
                      macOS: no network but this machine's, writes only to the grade's own folders) or host (unsandboxed,
                      the default elsewhere). The lock fixes it; tasks validated on the host are validated again in the
                      sandbox when it locks
-  agentium experiment plan NAME
+  agentium experiment plan NAME [--details]
                      the runs, the estimated cost (calibrations included) and the effects each size can detect; what is missing
   agentium experiment run NAME [--budget USD] [--usage-limit PCT] [--wait] [--yes] [--view dashboard|log]
                      lock the experiment (first time) and run it: real Claude Code runs, interleaved in pairs, within
@@ -203,10 +203,19 @@ func experimentNew(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return failNew(env, err)
 	}
+	notes, err := w.armModuleNotes(ctx, created.Design)
+	if err != nil {
+		return fail(env, err)
+	}
 	if env.JSON {
-		return env.emit(newDocument(name, created))
+		doc := newDocument(name, created)
+		doc.Notes = append(doc.Notes, notes...)
+		return env.emit(doc)
 	}
 	created.Write(env.Stdout, env.style(), name)
+	for _, n := range notes {
+		fmt.Fprintln(env.Stdout, note(env.style(), n))
+	}
 	return ExitOK
 }
 
@@ -278,7 +287,9 @@ func failNew(env Env, err error) int {
 }
 
 func experimentPlan(ctx context.Context, env Env, args []string) int {
-	rest, code, ok := parseArgs(env, flag.NewFlagSet("experiment plan", flag.ContinueOnError), args, experimentUsage)
+	fs := flag.NewFlagSet("experiment plan", flag.ContinueOnError)
+	details := fs.Bool("details", false, "on a terminal, print every line instead of the picture")
+	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
 	}
@@ -302,7 +313,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 		return env.emit(doc)
 	}
 	mode, _ := signInMode(env)
-	if err := review.Write(ctx, env.Stdout, env.style(), rest[0], mode, env.Now()); err != nil {
+	if err := writeReview(ctx, env, review, rest[0], mode, *details); err != nil {
 		return fail(env, err)
 	}
 	return ExitOK
