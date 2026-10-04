@@ -16,7 +16,9 @@ Run `python3 scripts/harness.py <command>` from the repository root, or use the 
 | `worktree new <branch> [--base REF]` | Task worktree from the fetched remote default branch, without upstream, with offline dependency install | Starting any task |
 | `worktree deps` | Offline install of locked dependencies into the current checkout | Existing worktree without dependencies |
 | `worktree remove <branch>` | Remove a merged, clean task worktree and delete its local branch (never forced) | After the PR is merged |
-| `pr land <N> [--dry-run] [--update] [--timeout MINUTES]` | Wait for CI on PR N's up-to-date head commit, then merge it; never on red or pending CI ([details](#landing-pull-requests)) | Under a user's merge authorization |
+| `pr land <N> [--dry-run] [--update] [--timeout MINUTES] [--no-release]` | Wait for CI on PR N's up-to-date head commit, then merge it; never on red or pending CI; refuses undeclared contract changes; then releases when due ([details](#landing-pull-requests)) | Under a user's merge authorization |
+| `release plan [--json]` | Last tag, merged PRs since, detected contract changes, the next version and draft notes ([details](#releases)) | Before a release; any time |
+| `release cut [--dry-run] [--first] [--local-checks]` | Tag, push the tag and create the GitHub Release for the planned version ([details](#releases)) | Releasing |
 | `metrics` | Summarize archived plans' Metrics blocks by client/model/effort | Reviewing model routing |
 
 ## Boundaries
@@ -85,6 +87,22 @@ Parallel worktrees running `go test -race` at once starve each other: three at o
 5. exits 1 naming the run's URL on failure or cancellation, and on timeout; it never merges then.
 
 The PR is re-read on every poll: a new head commit restarts the wait on that commit within the same deadline (its old CI run, cancelled by the push, doesn't count), and a PR that becomes closed, draft, conflicting or out of date is refused (or updated, with `--update`). A failed GitHub read is retried twice, after 5 and 10 s; the merge and the update are never retried. A base that moves between the last poll and the merge is not caught; the next PR's CI runs on the result. `--dry-run` reports the PR, its head, whether it is up to date, its CI state and what it would do, without waiting, updating or merging. It never pushes, and changes no branch except through `--update`. Use it only under the user's [merge authorization](../.agents/rules/git-workflow.md#merge-authorization), with a `--timeout` that ends inside its window.
+
+## Releases
+
+The [policy](../.agents/rules/releases.md) says what each bump means. The code is `scripts/release.py`.
+
+`release plan [--json]` reads the last `v*` tag (none: the first release is v0.1.0), the first-parent `Merge pull request #N` commits since it (titles and bodies through `gh`, commit subjects when `gh` fails) and classifies each as breaking (`!` or a `Breaking:` line), feature (`feat`), fix (`fix`, `perf`) or other. It also compares the two revisions' files for contract changes whatever the titles say:
+- a new file in `internal/store/migrations` is additive; a changed or deleted one is breaking;
+- the key set of each JSON golden (`testdata/*.json`): a removed key or file is breaking, an added key additive;
+- flags (`flag.NewFlagSet` plus `fs.String/Bool/...`) and top-level commands in `internal/cli`: a removed one is breaking;
+- the `Design*` and `Method*` constants of `internal/experiment`: a new one is additive, a removed or changed one breaking (the default `MethodVersion` moving is additive).
+
+The bump is the larger of the declared and the detected one. A breaking-looking change that no PR declares is a warning and still counts. Before 1.0, MAJOR and MINOR both give a MINOR bump. It prints the next version and notes grouped as Breaking, Features and Fixes with PR links, then the Contract changes. Nothing releasable prints so and exits 0. The detection is static: a changed meaning or exit code is seen only when a PR declares it.
+
+`release cut` refuses unless the tree is clean, HEAD is the freshly fetched default branch, the tag does not exist and a release is due. CI must be green on HEAD (the `CI` workflow's runs for that commit); `--local-checks` runs `check ci`, `check vuln` and, on macOS, `go test -race -count=1 ./internal/sandbox ./internal/run` locally instead, and says that it does so because GitHub Actions currently runs no jobs. The first release needs `--first` and prints the readiness checklist. It then creates the annotated tag (message: the notes), pushes it over HTTPS, runs `gh release create --notes-file` (no binaries; `go install` is the install path) and prints the URL. It commits nothing. `--dry-run` prints each step and writes nothing.
+
+After a merge, `pr land` runs `release plan`, and when a release is due and a release already exists, `release cut`; the first release is never automatic. `--no-release` skips it, and a release failure is reported without undoing the merge. Before merging, `pr land` fetches the PR head and refuses a PR whose detected contract change is not declared: breaking needs `!` and a `Breaking:` line, additive needs a `feat` or `fix` title.
 
 ## Adding stack checks
 
