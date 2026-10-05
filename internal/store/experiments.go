@@ -123,6 +123,19 @@ func (s *Store) LockExperiment(ctx context.Context, id int64, lock []byte) error
 	return nil
 }
 
+// AmendDesign replaces the stored design of an experiment that is not locked yet (an experiment designed before a
+// grading rule takes it up when it locks); ErrLocked once it is, whose design the lock fixes.
+func (s *Store) AmendDesign(ctx context.Context, id int64, design []byte) error {
+	result, err := s.db.ExecContext(ctx, `UPDATE experiments SET design = ? WHERE id = ? AND lock IS NULL`, string(design), id)
+	if err != nil {
+		return fmt.Errorf("amend the design of experiment %d: %w", id, err)
+	}
+	if n, err := result.RowsAffected(); err != nil || n == 0 {
+		return fmt.Errorf("experiment %d: %w", id, errors.Join(ErrLocked, err))
+	}
+	return nil
+}
+
 // AmendLock replaces a locked experiment's lock (only to record a raised budget).
 func (s *Store) AmendLock(ctx context.Context, id int64, lock []byte) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE experiments SET lock = ? WHERE id = ? AND lock IS NOT NULL`, string(lock), id)

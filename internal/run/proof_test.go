@@ -113,6 +113,16 @@ func gradeGo(t *testing.T, f moduleOnce) (Record, string) {
 // skipErr, when set (the sandbox's tests, on macOS), may skip a test for an error Once returned.
 var skipErr func(t *testing.T, err error)
 
+// hasNotePrefix reports whether a record has a note that starts with prefix.
+func hasNotePrefix(rec Record, prefix string) bool {
+	for _, n := range rec.Notes {
+		if strings.HasPrefix(n, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // notRun reports whether a record carries the note of a pass without the proof.
 func notRun(rec Record) bool {
 	for _, n := range rec.Notes {
@@ -140,6 +150,10 @@ func checkIssue160(t *testing.T, fixture func(t *testing.T, agent string) module
 		}
 		if m := rec.Proof.Missing; len(m) != 1 || m[0].Test != "TestHidden" || m[0].Saw != task.SawNone {
 			t.Errorf("%s: missing %+v", name, m)
+		}
+		// The owner is told of a TestMain the agent wrote in a package the proof checks; an init is not a TestMain.
+		if testMain := hasNotePrefix(rec, "the agent's change adds or changes a TestMain in a package the proof checks (bypass_test.go)"); testMain != (agentCmd == goTestMain) {
+			t.Errorf("%s: the TestMain note %v, notes %v", name, testMain, rec.Notes)
 		}
 		if !strings.Contains(log, "$ go test -json -count=1 -run '^(TestHidden)$' .\n") ||
 			!strings.Contains(log, "[agentium] the hidden tests did not run: go test -json showed no pass for TestHidden in . (not run)") {

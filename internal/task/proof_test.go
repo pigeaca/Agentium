@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -113,22 +114,66 @@ func TestPlanGoProof(t *testing.T) {
 		"a/testdata/fixture_test.go": "package fixture\n\nimport \"testing\"\n\nfunc TestFixture(t *testing.T) {}\n",
 		"_skip/x_test.go":            "package skip\n\nimport \"testing\"\n\nfunc TestIgnored(t *testing.T) {}\n",
 	}
-	proof, goFiles := PlanGoProof([]string{"a/a_test.go", "b/b_test.go", "a/testdata/fixture_test.go", "_skip/x_test.go", "README.md"}, base, solution)
+	hidden := []string{"a/a_test.go", "b/b_test.go", "a/testdata/fixture_test.go", "_skip/x_test.go", "README.md"}
+	proof, goFiles := PlanGoProof(Spec{HiddenTests: hidden, Verify: []string{"go test ./..."}}, base, solution)
 	want := GoProof{Packages: []ProofPackage{{Dir: "a", Tests: []string{"TestNew", "TestTable"}}, {Dir: "b", Tests: []string{"ExampleB"}}}}
 	if !goFiles || !reflect.DeepEqual(proof, want) || proof.Tests() != 3 {
 		t.Errorf("own tests: %+v, %v", proof, goFiles)
 	}
+	// A folder the wildcards skip is proven when a verify command names it, from the module's folder.
+	proof, _ = PlanGoProof(Spec{HiddenTests: hidden, Verify: []string{"go test ./... && go test -count=1 -run Fix ./testdata", "go test ../_skip"}, Module: "a"},
+		base, solution)
+	want = GoProof{Packages: []ProofPackage{{Dir: "_skip", Tests: []string{"TestIgnored"}}, {Dir: "a", Tests: []string{"TestNew", "TestTable"}},
+		{Dir: "a/testdata", Tests: []string{"TestFixture"}}, {Dir: "b", Tests: []string{"ExampleB"}}}}
+	if !reflect.DeepEqual(proof, want) {
+		t.Errorf("named folders: %+v", proof)
+	}
 	// None is new or changed: all of the hidden files' tests.
-	proof, _ = PlanGoProof([]string{"table/x_test.go", "b/b_test.go"}, base, snapSource{"table/x_test.go": solution["table/x_test.go"], "b/b_test.go": base["b/b_test.go"]})
+	proof, _ = PlanGoProof(Spec{HiddenTests: []string{"table/x_test.go", "b/b_test.go"}}, base, snapSource{"table/x_test.go": solution["table/x_test.go"], "b/b_test.go": base["b/b_test.go"]})
 	if want := (GoProof{Packages: []ProofPackage{{Dir: "b", Tests: []string{"TestB"}}, {Dir: "table", Tests: []string{"TestTable"}}}}); !reflect.DeepEqual(proof, want) {
 		t.Errorf("fallback: %+v", proof)
 	}
 	// Go test files without a test function: nothing to prove. No Go test files: no proof at all.
-	if proof, goFiles := PlanGoProof([]string{"helpers_test.go"}, base, solution); !proof.Empty() || !goFiles {
+	if proof, goFiles := PlanGoProof(Spec{HiddenTests: []string{"helpers_test.go"}}, base, solution); !proof.Empty() || !goFiles {
 		t.Errorf("nothing to prove: %+v, %v", proof, goFiles)
 	}
-	if proof, goFiles := PlanGoProof([]string{"tests/value_test.sh"}, base, snapSource{"tests/value_test.sh": "true\n"}); !proof.Empty() || goFiles {
+	if proof, goFiles := PlanGoProof(Spec{HiddenTests: []string{"tests/value_test.sh"}}, base, snapSource{"tests/value_test.sh": "true\n"}); !proof.Empty() || goFiles {
 		t.Errorf("not Go: %+v, %v", proof, goFiles)
+	}
+}
+
+// An example runs only with an output comment that ends it (Go's own rule): a line that looks like one inside a raw
+// string does not make a documentation example runnable, so the proof never waits for an event Go does not emit.
+func TestGoTestFuncsTakesGosRuleForExamples(t *testing.T) {
+	src := "package a\n\nimport \"fmt\"\n\nfunc ExampleDoc() {\n\tfmt.Println(`\n// Output: shown in the docs\n`)\n}\n\n" +
+		"func ExampleRuns() {\n\tfmt.Println(1)\n\t// Output: 1\n}\n\nfunc ExampleEmpty() {\n\t// Output:\n}\n\n" +
+		"func ExampleUnordered() {\n\t// Unordered output:\n\t// 1\n}\n"
+	got, ok := goTestFuncs([]byte(src))
+	if !ok || len(got) != 3 || got["ExampleDoc"] != "" || got["ExampleRuns"] == "" || got["ExampleEmpty"] == "" || got["ExampleUnordered"] == "" {
+		t.Errorf("%v, %v", slices.Sorted(maps.Keys(got)), ok)
+	}
+}
+
+func TestChangesTestMain(t *testing.T) {
+	main := func(body string) []byte {
+		return []byte("package a\n\nimport \"testing\"\n\nfunc TestMain(m *testing.M) { " + body + " }\n")
+	}
+	plain := []byte("package a\n\nfunc helper() {}\n")
+	for name, c := range map[string]struct {
+		before, after []byte
+		want          bool
+	}{
+		"added":          {nil, main("m.Run()"), true},
+		"added to file":  {plain, main("m.Run()"), true},
+		"changed":        {main("m.Run()"), main("_ = m"), true},
+		"unchanged":      {main("m.Run()"), main("m.Run()"), false},
+		"removed":        {main("m.Run()"), plain, false},
+		"none":           {nil, plain, false},
+		"does not parse": {nil, []byte("package a\nfunc TestMain("), false},
+	} {
+		if got := ChangesTestMain(c.before, c.after); got != c.want {
+			t.Errorf("%s: %v", name, got)
+		}
 	}
 }
 
@@ -187,6 +232,16 @@ func TestProvingRunStopsAtTheFirstFolderNotProven(t *testing.T) {
 	})
 	if err != nil || !ok || !p.Result.Proven() || !strings.Contains(log.String(), "the hidden tests ran: go test -json showed each of the task's 1 hidden test(s) pass") {
 		t.Errorf("proven: %v, %v, %+v\n%s", ok, err, p.Result, log.String())
+	}
+	// A proof that ran out of time says so.
+	p = &Proving{Proof: GoProof{Packages: []ProofPackage{{Dir: "a", Tests: []string{"TestA"}}}}, Events: filepath.Join(t.TempDir(), ProofEvents)}
+	log.Reset()
+	ok, err = p.Run(context.Background(), &log, func(_ context.Context, command string, _ *os.File) (Command, error) {
+		return Command{Command: command, ExitCode: -1, TimedOut: true}, nil
+	})
+	if err != nil || ok || !p.Result.TimedOut() || p.Result.Words() != "the proof that the hidden tests ran timed out" ||
+		!strings.Contains(log.String(), "[agentium] the proof timed out\n[agentium] the proof that the hidden tests ran timed out: go test -json showed no pass for TestA in ./a (not run)") {
+		t.Errorf("timed out: %v, %v, %+v\n%s", ok, err, p.Result, log.String())
 	}
 	if (*TestProof)(nil).Proven() || (&TestProof{Tests: 1}).Proven() {
 		t.Error("a proof that never ran proves nothing")
@@ -305,5 +360,39 @@ func TestPassRules(t *testing.T) {
 	}
 	if !HasGoTestFiles([]string{"a.txt", "x/y_test.go"}) || HasGoTestFiles([]string{"tests/value_test.sh"}) {
 		t.Error("Go test files")
+	}
+}
+
+// A folder the go tool's wildcards skip still runs when a verify command names it, so its hidden tests are proven: an
+// init that exits 0 there is caught, and a correct reference passes.
+func TestValidateProvesAFolderAVerifyCommandNames(t *testing.T) {
+	pTest := "package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {\n\tif Value() != 1 {\n\t\tt.Fatal(Value())\n\t}\n}\n"
+	bare, base, ids := goModule(t, map[string]string{"testdata/p/p.go": "package p\n\nfunc Value() int { return 0 }\n"},
+		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nfunc Value() int { return 1 }\n"},
+		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nimport \"os\"\n\nfunc Value() int { return 0 }\n\nfunc init() { os.Exit(0) }\n"})
+	spec := Spec{Base: base, HiddenTests: []string{"testdata/p/p_test.go"}, Reference: []string{"testdata/p/p.go"}, Verify: []string{"go test -count=1 ./testdata/p"}}
+	spec.Solution = ids[0]
+	v, progress := validator(t, bare)
+	good, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+	if err != nil || good.Status != StatusValid || !good.Stages[1].Proof.Proven() {
+		t.Fatalf("a correct reference: %v, %v\n%s", good.Summary(), err, progress)
+	}
+	spec.Solution = ids[1]
+	v, progress = validator(t, bare)
+	exits, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+	if err != nil || exits.Status != StatusInvalid || !strings.Contains(exits.Summary(), NoteHiddenTestsNotRun) {
+		t.Errorf("an init that exits 0 in testdata/p: %v, %v\n%s", exits.Summary(), err, progress)
+	}
+}
+
+// A documentation example whose text holds a line like an output comment is not run by Go, and not looked for.
+func TestValidateTakesADocumentationExampleAsGoDoes(t *testing.T) {
+	test := hiddenGoTest + "\nfunc ExampleValue() {\n\t_ = `\n// Output: 1\n`\n}\n"
+	bare, base, ids := goModule(t, nil, map[string]string{"value_test.go": test, "value.go": "package fixture\n\nfunc Value() int { return 1 }\n"})
+	v, progress := validator(t, bare)
+	got, err := v.Validate(context.Background(), Spec{Base: base, Solution: ids[0], HiddenTests: []string{"value_test.go"}, Reference: []string{"value.go"},
+		Verify: []string{"go test -count=1 ./..."}}, []Arm{{Name: "base"}})
+	if err != nil || got.Status != StatusValid || got.Stages[1].Proof.Tests != 1 {
+		t.Errorf("%v, %+v, %v\n%s", got.Summary(), got.Stages, err, progress)
 	}
 }

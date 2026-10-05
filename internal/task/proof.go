@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"maps"
 	"os"
@@ -106,13 +109,14 @@ func (p GoProof) Tests() int {
 // PlanGoProof lists the proof tests of a task: its own Go tests (the top-level Test, Fuzz and Example functions, not
 // TestMain, that the solution adds or changes in its hidden _test.go files), by package folder. When the hidden Go files
 // hold test functions but none is new or changed (a changed table in a variable, say), the proof tests are all of them.
-// Files the go tool never builds as tests (under testdata, or a file or folder whose name starts with "_" or ".") are
-// left out. goFiles reports whether the hidden tests include Go test files at all: with goFiles and an empty proof
-// there is nothing to prove, and the exit codes alone grade the task (validation warns).
-func PlanGoProof(hiddenTests []string, base, solution source.Source) (proof GoProof, goFiles bool) {
+// A file the go tool's wildcards skip (under testdata, or a file or folder whose name starts with "_" or ".") is left
+// out unless a verify command names its folder (namedGoPackage): then `go test` runs it, and so does the proof. goFiles
+// reports whether the hidden tests include Go test files at all: with goFiles and an empty proof there is nothing to
+// prove, and the exit codes alone grade the task (validation warns).
+func PlanGoProof(spec Spec, base, solution source.Source) (proof GoProof, goFiles bool) {
 	var files []string
-	for _, p := range hiddenTests {
-		if builtGoTestFile(p) {
+	for _, p := range spec.HiddenTests {
+		if strings.HasSuffix(p, "_test.go") && (!hasSkippedElement(p) || namedGoPackage(spec.Verify, spec.Module, path.Dir(p))) {
 			files = append(files, p)
 		}
 	}
@@ -129,21 +133,7 @@ func PlanGoProof(hiddenTests []string, base, solution source.Source) (proof GoPr
 		slices.Sort(names)
 		proof.Packages = append(proof.Packages, ProofPackage{Dir: dir, Tests: slices.Compact(names)})
 	}
-	return proof, HasGoTestFiles(hiddenTests)
-}
-
-// builtGoTestFile reports whether the go tool builds p as a test file of its package: a _test.go file that is not in
-// testdata, and whose name and folders do not start with "_" or ".".
-func builtGoTestFile(p string) bool {
-	if !strings.HasSuffix(p, "_test.go") {
-		return false
-	}
-	for _, el := range strings.Split(path.Clean(p), "/") {
-		if el == "testdata" || strings.HasPrefix(el, "_") || strings.HasPrefix(el, ".") {
-			return false
-		}
-	}
-	return true
+	return proof, HasGoTestFiles(spec.HiddenTests)
 }
 
 // Target is the package's folder as `go test` names it from the module's folder (module, a slash path from the root; ""
@@ -207,6 +197,45 @@ func (p *TestProof) Proven() bool {
 	return p != nil && len(p.Commands) > 0 && len(p.Missing) == 0
 }
 
+// TimedOut reports whether one of the proof's commands ran out of time.
+func (p *TestProof) TimedOut() bool {
+	return p != nil && slices.ContainsFunc(p.Commands, func(c Command) bool { return c.TimedOut })
+}
+
+// Words says why a proof that ran did not prove the hidden tests ran, for notes and summaries: NoteHiddenTestsNotRun,
+// or that it timed out.
+func (p *TestProof) Words() string {
+	if p.TimedOut() {
+		return "the proof that the hidden tests ran timed out"
+	}
+	return NoteHiddenTestsNotRun
+}
+
+// ChangesTestMain reports whether a Go test file's after version adds a TestMain, or changes the one its before version
+// (nil: none) has. A TestMain can call the testing package with tests of its own and fake the proof's run, so a change
+// to one in a package the proof checks is worth a look. A file that does not parse has none.
+func ChangesTestMain(before, after []byte) bool {
+	now := testMainText(after)
+	return now != "" && now != testMainText(before)
+}
+
+func testMainText(src []byte) string {
+	if src == nil {
+		return ""
+	}
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "x_test.go", src, parser.SkipObjectResolution)
+	if err != nil {
+		return ""
+	}
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "TestMain" {
+			return string(src[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
+		}
+	}
+	return ""
+}
+
 // summary is the proof's line in the verification's log: what was proven, or which tests were not.
 func (p *TestProof) summary(events string) string {
 	if p.Proven() {
@@ -217,7 +246,7 @@ func (p *TestProof) summary(events string) string {
 		what := map[string]string{SawFail: "failed", SawSkip: "skipped", SawNone: "not run"}[m.Saw]
 		missing = append(missing, fmt.Sprintf("%s in %s (%s)", m.Test, m.Package, what))
 	}
-	return fmt.Sprintf("%s: go test -json showed no pass for %s (its events: %s)", NoteHiddenTestsNotRun, strings.Join(missing, ", "), events)
+	return fmt.Sprintf("%s: go test -json showed no pass for %s (its events: %s)", p.Words(), strings.Join(missing, ", "), events)
 }
 
 // Proving is a proof for a grade to run once its verification has passed: the proof tests, the module's folder its

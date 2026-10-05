@@ -320,7 +320,7 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			if err != nil {
 				return Validation{}, err
 			}
-			if proof, _ := PlanGoProof(spec.HiddenTests, base, solution); !proof.Empty() {
+			if proof, _ := PlanGoProof(spec, base, solution); !proof.Empty() {
 				v.proof = proof
 			} else {
 				w := "the hidden Go test files hold no test that go test runs, so Agentium cannot prove they ran: the verification's exit codes alone grade this task"
@@ -798,7 +798,7 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 	case !stage.OK && stage.Sandbox.FlaggedFailure(stage.Passed):
 		verdict = "NOT OK (sandbox denials: " + stage.Sandbox.FlaggedOperations() + ")"
 	case !stage.OK && stage.Proof != nil && !stage.Proof.Proven():
-		verdict = "NOT OK (" + NoteHiddenTestsNotRun + ")"
+		verdict = "NOT OK (" + stage.Proof.Words() + ")"
 	case !stage.OK:
 		verdict = "NOT OK"
 	}
@@ -887,7 +887,7 @@ func (v Validation) Summary() string {
 			failed = append(failed, fmt.Sprintf("%s/%s failed with sandbox denials the agent's sandbox does not impose (%s)", stage.Arm, stage.Stage,
 				stage.Sandbox.FlaggedOperations()))
 		case !stage.OK && stage.Proof != nil && !stage.Proof.Proven():
-			failed = append(failed, fmt.Sprintf("%s/%s: %s (see its log)", stage.Arm, stage.Stage, NoteHiddenTestsNotRun))
+			failed = append(failed, fmt.Sprintf("%s/%s: %s (see its log)", stage.Arm, stage.Stage, stage.Proof.Words()))
 		case !stage.OK:
 			failed = append(failed, fmt.Sprintf("%s/%s wanted %s", stage.Arm, stage.Stage, stage.Want))
 		}

@@ -3,6 +3,7 @@ package experiment
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -169,5 +170,64 @@ func TestRevalidationReason(t *testing.T) {
 		if NeedsRevalidation(c.cand, c.grader, c.rule) != (c.want != "") {
 			t.Errorf("%s: NeedsRevalidation disagrees", name)
 		}
+	}
+}
+
+// A design made before the proof takes up the rule when it locks, only when one of its tasks has hidden Go tests and
+// only while it is unlocked: its stored design is replaced under the rule's version. Any other design is left as it is.
+func TestTakeUpPassRule(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	proj, err := db.SaveProject(ctx, "/repo", "repo", []byte(`{}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, hidden := range map[string]string{"go": "a_test.go", "shell": "tests/a_test.sh"} {
+		if _, err := db.SaveTask(ctx, store.Task{ProjectID: proj.ID, Name: name, Instruction: "Do it.", Source: "manual", BaseCommit: "b",
+			SolutionCommit: "s", HiddenTests: []string{hidden}, Reference: []string{"x"}, Verify: []string{"true"}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out strings.Builder
+	r := Runner{Project: Project{DB: db, ID: proj.ID}, Out: &out}
+	save := func(name string, tasks ...string) (store.Experiment, Design, []byte) {
+		d := validDesign()
+		d.Tasks = tasks
+		encoded, _ := json.Marshal(d)
+		e, err := db.SaveExperiment(ctx, store.Experiment{ProjectID: proj.ID, Name: name, Template: d.Template, Design: encoded, CreatedAt: time.Now()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e, d, encoded
+	}
+	stored := func(name string) []byte {
+		e, err := db.ExperimentByName(ctx, proj.ID, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return e.Design
+	}
+
+	e, d, before := save("shell", "shell")
+	if up, err := r.takeUpPassRule(ctx, e, d, "shell"); err != nil || up.PassRule != "" || string(stored("shell")) != string(before) || out.Len() != 0 {
+		t.Errorf("no Go tests: %q, %v, %s, %q", up.PassRule, err, stored("shell"), out.String())
+	}
+	e, d, _ = save("go", "go", "shell")
+	up, err := r.takeUpPassRule(ctx, e, d, "go")
+	var again Design
+	if err != nil || up.PassRule != task.PassGoTests || up.Version != DesignVersionProof || json.Unmarshal(stored("go"), &again) != nil ||
+		again.PassRule != task.PassGoTests || again.Version != DesignVersionProof || !strings.Contains(out.String(), "Experiment go was made before") {
+		t.Errorf("Go tests: %+v, %v, %s, %q", up, err, stored("go"), out.String())
+	}
+	e, d, before = save("locked", "go")
+	if err := db.LockExperiment(ctx, e.ID, []byte(`{}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.takeUpPassRule(ctx, e, d, "locked"); !errors.Is(err, store.ErrLocked) || string(stored("locked")) != string(before) {
+		t.Errorf("locked: %v, %s", err, stored("locked"))
 	}
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,8 +20,8 @@ import (
 // The rule is the lock's (issue #160). On the experiment fixture, a Go task whose hidden test wants Value() == 1 and an
 // agent that leaves Value at 0 but adds a TestMain that exits 0: an experiment made now records the rule in its design
 // and lock, validates the task again first when it was validated before the proof, and its runs fail with the note;
-// an experiment designed before the proof (stored as it was then) locks without the rule, and its runs pass by the
-// exit codes, as they did, with nothing about the proof in them or its report.
+// an experiment made before the proof and locked now takes up the rule; one locked before the proof keeps the exit
+// codes, and its runs pass as they did, with nothing about the proof in them or its report.
 func TestTheLockDecidesHowRunsPass(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("no go on PATH")
@@ -71,14 +72,38 @@ func TestTheLockDecidesHowRunsPass(t *testing.T) {
 	}
 	expect(t, f.run(ctx, "experiment", "show", "proved"), ExitOK, "Passes: the verification's exit codes, and a pass of each hidden Go test")
 
-	expect(t, f.run(ctx, "experiment", "new", "old", "--b", "lean", "--task", "gov", "--budget", "10"), ExitOK)
-	storeAsBefore(t, f, "old", func(d *experiment.Design) { d.PassRule, d.Version = "", 0; d.Version = d.WantVersion() })
-	expect(t, f.run(ctx, "experiment", "run", "old"), ExitOK)
-	encoded := storedLock(t, f, "old")
-	if strings.Contains(string(encoded), "pass_rule") {
-		t.Errorf("an old design's lock names a rule:\n%s", encoded)
+	// An experiment made before the proof and not locked yet takes up the rule when it locks: its stored design changes
+	// (so an older Agentium refuses it), its task is validated again first, and its runs need the proof.
+	asValidatedBeforeTheProof(t, f, "gov")
+	expect(t, f.run(ctx, "experiment", "new", "before", "--b", "lean", "--task", "gov", "--budget", "10"), ExitOK)
+	storeAsBefore(t, f, "before", func(d *experiment.Design) { d.PassRule = ""; d.Version = d.WantVersion() })
+	if d := storedDesign(t, f, "before"); d.PassRule != "" || d.Version == experiment.DesignVersionProof {
+		t.Fatalf("not stored as before: %+v", d)
 	}
-	old := records(t, experimentRuns(t, f, "old"))
+	expect(t, f.run(ctx, "experiment", "run", "before"), ExitOK,
+		"Experiment before was made before Agentium proved that hidden Go tests ran: it grades by that proof from now on (design version 6)",
+		"Validating 1 task(s) again with the proof that their hidden tests ran")
+	if d := storedDesign(t, f, "before"); d.PassRule != task.PassGoTests || d.Version != experiment.DesignVersionProof {
+		t.Errorf("the stored design: rule %q, version %d", d.PassRule, d.Version)
+	}
+	if err := json.Unmarshal(storedLock(t, f, "before"), &lock); err != nil || lock.PassRule() != task.PassGoTests {
+		t.Fatalf("the lock's rule %q, %v", lock.PassRule(), err)
+	}
+	for _, r := range records(t, experimentRuns(t, f, "before")) {
+		if r.Passed == nil || *r.Passed || !hasNote(r, task.NoteHiddenTestsNotRun) {
+			t.Errorf("run %s: passed %v, notes %v", r.ID, r.Passed, r.Notes)
+		}
+	}
+
+	// A locked experiment keeps its rule: one whose design and lock are as they were before the proof resumes by the exit
+	// codes, the TestMain bypass passes as it did, and its stored design is left as it is.
+	legacyDesign, legacyLock := asBeforeTheProof(t, storedExperiment(t, f, "before").Design, storedLock(t, f, "before"))
+	saveLocked(t, f, "legacy", legacyDesign, legacyLock)
+	expect(t, f.run(ctx, "experiment", "run", "legacy"), ExitOK, "Resuming experiment legacy")
+	if got := storedExperiment(t, f, "legacy").Design; string(got) != string(legacyDesign) {
+		t.Errorf("a locked experiment's design changed:\n%s\nwas\n%s", got, legacyDesign)
+	}
+	old := records(t, experimentRuns(t, f, "legacy"))
 	if len(old) != len(proved) {
 		t.Fatalf("%d runs, want %d", len(old), len(proved))
 	}
@@ -90,10 +115,70 @@ func TestTheLockDecidesHowRunsPass(t *testing.T) {
 			t.Errorf("run %s by the exit codes left the proof's events", r.ID)
 		}
 	}
-	for _, args := range [][]string{{"experiment", "show", "old"}, {"experiment", "report", "old"}, {"experiment", "report", "old", "--markdown"}} {
+	for _, args := range [][]string{{"experiment", "show", "legacy"}, {"experiment", "report", "legacy"}, {"experiment", "report", "legacy", "--markdown"}} {
 		if out := f.run(ctx, args...); out.code != ExitOK || strings.Contains(out.stdout, "Passes:") || strings.Contains(out.stdout, "did not run") {
 			t.Errorf("%v (%d):\n%s", args, out.code, out.stdout)
 		}
+	}
+}
+
+// asBeforeTheProof is a design and its lock as an Agentium before the proof stored them: no rule, the design's
+// version as it was.
+func asBeforeTheProof(t *testing.T, design, lock []byte) ([]byte, []byte) {
+	t.Helper()
+	var d experiment.Design
+	if err := json.Unmarshal(design, &d); err != nil {
+		t.Fatal(err)
+	}
+	d.PassRule = ""
+	d.Version = d.WantVersion()
+	oldDesign, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var l map[string]any
+	if err := json.Unmarshal(lock, &l); err != nil {
+		t.Fatal(err)
+	}
+	delete(l, "pass_rule")
+	var inLock map[string]any
+	if err := json.Unmarshal(oldDesign, &inLock); err != nil {
+		t.Fatal(err)
+	}
+	l["design"] = inLock
+	oldLock, err := json.Marshal(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(oldDesign)+string(oldLock), "pass_rule") {
+		t.Fatal("the rule is still there")
+	}
+	return oldDesign, oldLock
+}
+
+// saveLocked stores an experiment with this design and lock, and no runs.
+func saveLocked(t *testing.T, f runFixture, name string, design, lock []byte) {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	e, err := db.SaveExperiment(ctx, store.Experiment{ProjectID: projects[0].ID, Name: name, Template: experiment.TemplateContextAB, Design: design,
+		CreatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.LockExperiment(ctx, e.ID, lock); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AmendDesign(ctx, e.ID, []byte(`{}`)); !errors.Is(err, store.ErrLocked) {
+		t.Errorf("a locked experiment's design was amended: %v", err)
 	}
 }
 

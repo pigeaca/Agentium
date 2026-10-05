@@ -965,6 +965,9 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		if proving, err = env.proving(ctx, spec, solution, rec); err != nil {
 			return err
 		}
+		if note := testMainNote(graded, changed, spec.Task.HiddenTests, start, proving); note != "" {
+			rec.Notes = append(rec.Notes, note)
+		}
 	}
 	if !failed && task.GraderOf(env.Grader) != task.GraderHost {
 		ok, err := env.verifyIsolated(ctx, spec, graded, rec, running, proving)
@@ -1020,11 +1023,45 @@ func (env Env) proving(ctx context.Context, spec Spec, solution source.Source, r
 	if err != nil {
 		return nil, err
 	}
-	proof, _ := task.PlanGoProof(spec.Task.HiddenTests, base, solution)
+	proof, _ := task.PlanGoProof(spec.Task, base, solution)
 	if proof.Empty() {
 		return nil, nil
 	}
 	return &task.Proving{Proof: proof, Module: env.Module, Events: filepath.Join(rec.RecordsDir, task.ProofEvents)}, nil
+}
+
+// testMainNote is a note for the owner, never a failure, when the agent's change adds or changes a TestMain in a test
+// file (not a hidden one) of a package the proof checks: a TestMain can call the testing package with tests of its own
+// and fake the proof's run. The agent's files are read from the grading copy before the grade runs (regular files
+// only, as the agent left them); their versions at the context commit from start.
+func testMainNote(graded string, changed, hidden []string, start source.Source, proving *task.Proving) string {
+	if proving == nil {
+		return ""
+	}
+	var files []string
+	for _, p := range changed {
+		if !strings.HasSuffix(p, "_test.go") || slices.Contains(hidden, p) ||
+			!slices.ContainsFunc(proving.Proof.Packages, func(pkg task.ProofPackage) bool { return pkg.Dir == path.Dir(p) }) {
+			continue
+		}
+		full := filepath.Join(graded, filepath.FromSlash(p))
+		if info, err := os.Lstat(full); err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+			continue
+		}
+		after, err := os.ReadFile(full)
+		if err != nil {
+			continue
+		}
+		before, _ := start.ReadFile(p) // nil: a file the agent added
+		if task.ChangesTestMain(before, after) {
+			files = append(files, p)
+		}
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	return "the agent's change adds or changes a TestMain in a package the proof checks (" + strings.Join(files, ", ") +
+		"): a TestMain can fake the proof's run, so look at the change"
 }
 
 // noteProof records what the proof saw, once it ran, and the note of a grade it failed.
@@ -1035,7 +1072,7 @@ func noteProof(rec *Record, proving *task.Proving) {
 	rec.Proof = proving.Result
 	if !proving.Result.Proven() {
 		rec.Notes = append(rec.Notes, fmt.Sprintf("%s: Agentium's own go test -json run saw no pass for %d of the task's %d hidden test(s) (see verify.log)",
-			task.NoteHiddenTestsNotRun, len(proving.Result.Missing), proving.Result.Tests))
+			proving.Result.Words(), len(proving.Result.Missing), proving.Result.Tests))
 	}
 }
 

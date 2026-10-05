@@ -3,6 +3,7 @@ package task
 import (
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"path"
@@ -150,6 +151,57 @@ func goTestFilters(command string) []goTestFilter {
 		out = append(out, f)
 	}
 	return out
+}
+
+// goTestTargets lists the words of a shell command's `go test` invocations that are not flags (up to -args): the
+// packages they name, and the values of flags given apart ("-run X"), which name no package and are harmless where the
+// words are matched against folders (namedGoPackage).
+func goTestTargets(command string) []string {
+	words, ok := shellWords(command)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for i := 0; i+1 < len(words); i++ {
+		if path.Base(words[i]) != "go" || words[i+1] != "test" {
+			continue
+		}
+		for j := i + 2; j < len(words) && !isShellOperator(words[j]); j++ {
+			w := words[j]
+			if w == "-args" || w == "--args" {
+				break
+			}
+			if !strings.HasPrefix(w, "-") && !strings.Contains(w, substitution) {
+				out = append(out, w)
+			}
+		}
+	}
+	return out
+}
+
+// namedGoPackage reports whether a `go test` of the verify commands names folder dir (a slash path from the repository's
+// root) by a relative path from the module's folder ("./testdata/p"): the go tool runs a folder its wildcards skip only
+// when it is named so (even "./testdata/..." matches nothing). Import paths and a `cd` in the command are not read.
+func namedGoPackage(verify []string, module, dir string) bool {
+	for _, command := range verify {
+		for _, w := range goTestTargets(command) {
+			if (w == "." || w == ".." || strings.HasPrefix(w, "./") || strings.HasPrefix(w, "../")) && path.Join(module, w) == path.Clean(dir) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasSkippedElement reports whether a slash path has a file or folder name the go tool's wildcards skip: testdata, or
+// one that starts with "_" or ".".
+func hasSkippedElement(p string) bool {
+	for _, el := range strings.Split(path.Clean(p), "/") {
+		if el == "testdata" || strings.HasPrefix(el, "_") || strings.HasPrefix(el, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 // known is a pattern, or "" when a substitution makes it unknown here (shellWords marks one with substitution).
@@ -325,16 +377,21 @@ func hiddenGoTests(hiddenTests []string, base, solution source.Source) (tests []
 	return tests, parsed
 }
 
-// outputComment matches an example's output comment, without which `go test` compiles the example but never runs it.
-var outputComment = regexp.MustCompile(`(?mi)^\s*//\s*(unordered output|output):`)
-
 // goTestFuncs maps a Go test file's top-level test functions that `go test` runs (TestMain and examples without an
-// output comment are not) to their source text.
+// output comment are not) to their source text. Whether an example runs is Go's own rule (go/doc.Examples): an output
+// comment ("// Output:", "// Unordered output:") that ends its body, never a line that only looks like one (in a string,
+// say).
 func goTestFuncs(src []byte) (map[string]string, bool) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "x_test.go", src, parser.SkipObjectResolution)
+	file, err := parser.ParseFile(fset, "x_test.go", src, parser.SkipObjectResolution|parser.ParseComments)
 	if err != nil {
 		return nil, false
+	}
+	runnable := map[string]bool{}
+	for _, ex := range doc.Examples(file) {
+		if ex.Output != "" || ex.EmptyOutput {
+			runnable["Example"+ex.Name] = true
+		}
 	}
 	out := map[string]string{}
 	for _, decl := range file.Decls {
@@ -342,11 +399,10 @@ func goTestFuncs(src []byte) (map[string]string, bool) {
 		if !ok || fn.Recv != nil || !isGoTestName(fn.Name.Name) || fn.Name.Name == "TestMain" {
 			continue
 		}
-		text := string(src[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
-		if strings.HasPrefix(fn.Name.Name, "Example") && !outputComment.MatchString(text) {
+		if strings.HasPrefix(fn.Name.Name, "Example") && !runnable[fn.Name.Name] {
 			continue // compiled, never run
 		}
-		out[fn.Name.Name] = text
+		out[fn.Name.Name] = string(src[fset.Position(fn.Pos()).Offset:fset.Position(fn.End()).Offset])
 	}
 	return out, true
 }

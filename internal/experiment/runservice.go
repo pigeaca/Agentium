@@ -168,6 +168,7 @@ func (r Runner) Run(ctx context.Context, name string, o RunOptions) (RunOutcome,
 // lockFirst checks that everything is in place, raises the budget if asked, and locks the experiment for its first run.
 func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design, name, cli, version string, o RunOptions) (Lock, error) {
 	p, out := r.Project, r.Out
+	designed := d // as stored: a raised budget is the lock's to record, never the design's
 	var raised *BudgetChange
 	if o.Budget > 0 && o.Budget != d.BudgetUSD { // the design's budget, changed before anything ran
 		if o.Budget < d.BudgetUSD {
@@ -177,6 +178,11 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		d.BudgetUSD = o.Budget
 	}
 	fmt.Fprintln(out, r.Style.Heading(fmt.Sprintf("Checking experiment %s before its first run:", name)))
+	up, err := r.takeUpPassRule(ctx, stored, designed, name)
+	if err != nil {
+		return Lock{}, err
+	}
+	d.PassRule, d.Version = up.PassRule, up.Version
 	if err := r.sandboxUsable(ctx, d.Grader); err != nil { // its runs could not be graded: stop before anything is spent
 		return Lock{}, err
 	}
@@ -236,6 +242,33 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 		fmt.Fprintf(out, "The pair judge (unvalidated): %s.\n", DescribePairJudge(*d.JudgePairs))
 	}
 	return lock, nil
+}
+
+// takeUpPassRule gives a design made before the proof that the hidden tests ran, and not locked yet, the rule when one
+// of its tasks has hidden Go tests (markPassRule): its stored design is replaced (only while it is unlocked) under
+// DesignVersionProof, so an older Agentium refuses it, and it locks, validates its tasks again and grades by the proof
+// like a design made now. Any other design is returned as it is, and nothing is stored.
+func (r Runner) takeUpPassRule(ctx context.Context, stored store.Experiment, d Design, name string) (Design, error) {
+	if d.PassRule != "" {
+		return d, nil
+	}
+	up := d
+	if err := r.Project.markPassRule(ctx, &up); err != nil {
+		return d, err
+	}
+	if up.PassRule == "" {
+		return d, nil
+	}
+	encoded, err := json.Marshal(up)
+	if err != nil {
+		return d, fmt.Errorf("encode experiment: %w", err)
+	}
+	if err := r.Project.DB.AmendDesign(ctx, stored.ID, encoded); err != nil {
+		return d, err
+	}
+	fmt.Fprintf(r.Out, "Experiment %s was made before Agentium proved that hidden Go tests ran: it grades by that proof from now on (design version %d).\n",
+		name, up.Version)
+	return up, nil
 }
 
 // revalidate validates d's tasks again, in d's mode and rule, that were validated in another mode (a sandbox

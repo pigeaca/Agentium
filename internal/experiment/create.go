@@ -298,7 +298,7 @@ func (p Project) markJudgeGraded(ctx context.Context, d *Design) error {
 }
 
 // markPassRule has d grade by the proof that the hidden tests ran (task.PassGoTests) when one of its test-graded tasks
-// has hidden Go tests, fixing d's stored version (WantVersion); a design without any is left as it was, and its runs
+// has hidden Go tests (when it is made, and when a design made before the proof locks: Runner.takeUpPassRule), fixing d's stored version (WantVersion); a design without any is left as it was, and its runs
 // are graded as before (the exit codes), as are the other tasks' runs in a design with the rule.
 func (p Project) markPassRule(ctx context.Context, d *Design) error {
 	d.PassRule = ""
@@ -307,7 +307,9 @@ func (p Project) markPassRule(ctx context.Context, d *Design) error {
 			continue
 		}
 		t, err := p.DB.TaskByName(ctx, p.ID, name)
-		if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			continue // removed since the design was made: readiness reports it
+		} else if err != nil {
 			return err
 		}
 		if task.HasGoTestFiles(t.HiddenTests) {
