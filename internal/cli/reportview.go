@@ -880,11 +880,22 @@ func ruleCheckLines(rep report.Report, sh term.Shapes, m marks, f runFacts, w in
 	for nameW > 8 && 2+nameW+2+groupW[0]+gap+groupW[1] > w-1 { // without bars it must still fit
 		nameW--
 	}
+	// Each heading is cut to its own column (the first one's includes the gap, less a space).
 	label := func(i int) string {
-		return st.Paint(armRole(i), term.Truncate(f.labels[i], groupW[i]+gap-1, sh.Ellipsis()))
+		room := groupW[i]
+		if i == 0 {
+			room += gap - 1
+		}
+		return st.Paint(armRole(i), term.Truncate(f.labels[i], room, sh.Ellipsis()))
 	}
 	spacer := strings.Repeat(" ", gap)
-	out := []string{strings.TrimRight("  "+term.Pad(st.Heading(title), nameW)+"  "+term.Pad(label(0), groupW[0]+gap)+label(1), " ")}
+	headings := term.Pad(label(0), groupW[0]+gap) + label(1)
+	var out []string
+	if nameW < term.Width(title) { // the title does not fit above the names: it gets a line, the headings the next
+		out = append(out, "  "+st.Heading(title), strings.TrimRight("  "+term.Pad("", nameW)+"  "+headings, " "))
+	} else {
+		out = append(out, strings.TrimRight("  "+term.Pad(st.Heading(title), nameW)+"  "+headings, " "))
+	}
 	for _, c := range rep.Checks {
 		line := "  " + term.Pad(sh.Fit(term.Sanitize(c.Name), nameW), nameW) + "  "
 		for i, cell := range cells(c) {

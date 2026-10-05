@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -107,6 +108,77 @@ func TestReportViewRuleCheckNames(t *testing.T) {
 	for _, line := range strings.Split(view, "\n") {
 		if term.Width(line) > 80 {
 			t.Errorf("a line of %d cells: %q", term.Width(line), line)
+		}
+	}
+}
+
+// Narrow, with unread notes in both versions and long version names: the title and the headings stay over their
+// columns, every line stays inside the terminal, and every row shows both cells whole.
+func TestReportViewRuleChecksNarrowWithUnread(t *testing.T) {
+	rep := checksReport(t)
+	rep.Lock.Design.Arms = slices.Clone(rep.Lock.Design.Arms)
+	rep.Lock.Design.Arms[0].Context = "the-first-version-with-a-long-name"
+	rep.Lock.Design.Arms[1].Context = "the-second-version-with-a-long-name"
+	for i := range rep.Checks {
+		rep.Checks[i].Arms = map[string]report.CheckCell{}
+		for _, a := range rep.Arms {
+			rep.Checks[i].Arms[a.Name] = report.CheckCell{Met: 100, Counted: 128, Unread: 27}
+		}
+	}
+	col := func(line, sub string, nth int) int { // the rune column of the nth occurrence of sub, or -1
+		at := 0
+		for ; nth > 0; nth-- {
+			i := strings.Index(line[at:], sub)
+			if i < 0 {
+				return -1
+			}
+			at += i + len(sub)
+			if nth == 1 {
+				return len([]rune(line[:at-len(sub)]))
+			}
+		}
+		return -1
+	}
+	for _, width := range []int{term.MinWidth, 66, 72, 100} {
+		view := reportView(rep, plainUnicode, width)
+		start := -1
+		for i, line := range view {
+			if w := term.Width(line); w > width {
+				t.Errorf("%d columns: a line of %d cells: %q", width, w, line)
+			}
+			if strings.Contains(line, "what the agents did") {
+				start = i
+			}
+		}
+		if start < 0 {
+			t.Fatalf("%d columns: no block:\n%s", width, strings.Join(view, "\n"))
+		}
+		block := view[start:]
+		var heading, row string
+		rows := 0
+		for _, line := range block {
+			switch {
+			case strings.Contains(line, "100 of 128"):
+				if rows == 0 {
+					row = line
+				}
+				rows++
+				if strings.Count(line, "100 of 128 (27 unread)") != 2 {
+					t.Errorf("%d columns: a row lost a cell: %q", width, line)
+				}
+			case row == "" && strings.Contains(line, "the-"):
+				heading = line
+			}
+		}
+		if rows != len(rep.Checks) || heading == "" {
+			t.Fatalf("%d columns: %d rows, heading %q:\n%s", width, rows, heading, strings.Join(block, "\n"))
+		}
+		// Without bars (the narrower widths leave no room), each heading starts exactly where its cell does; with them it
+		// starts where the bar does.
+		for n := 1; n <= 2 && width < 100; n++ {
+			if h, c := col(heading, "the-", n), col(row, "100 of", n); h != c {
+				t.Errorf("%d columns: heading %d at column %d, its cell at %d:\n%s\n%s", width, n, h, c, heading, row)
+			}
 		}
 	}
 }

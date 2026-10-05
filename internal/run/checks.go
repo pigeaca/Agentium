@@ -1,10 +1,13 @@
 package run
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -58,72 +61,149 @@ func CheckPaths(paths []string, kind, glob string) bool {
 }
 
 // ChangedPaths lists the paths a stored change (agent.diff) touches, from its file headers, each once in the order
-// they appear. A rename counts under both names, and a deleted file counts as changed.
-func ChangedPaths(diff []byte) []string {
-	var out []string
+// they appear. A rename counts under both names, and a deleted file counts as changed. Headers are read as the judge
+// reads them, whatever the diff settings were when the change was stored: "a/X b/X", no prefixes, other one-letter
+// prefixes (i/, w/, c/, o/) and quoted names; a block whose header names no file takes its names from its ---/+++ lines.
+// ok is false when the change cannot be read: a read error, or a block that gives no path at all (never "nothing
+// changed"). The change is read line by line, so a large one costs no more than its longest header.
+func ChangedPaths(r io.Reader) (paths []string, ok bool) {
 	seen := map[string]bool{}
 	add := func(p string) {
 		if p != "" && !seen[p] {
 			seen[p] = true
-			out = append(out, p)
+			paths = append(paths, p)
 		}
 	}
+	ok = true
 	var header string // the current block's "diff --git" line, less its prefix
-	var from, to string
+	var from, to, minus, plus string
+	open := false
 	flush := func() {
-		if from != "" || to != "" { // a rename or copy names its files itself
-			add(from)
-			add(to)
-		} else if header != "" {
-			for _, p := range headerPaths(header) {
+		if !open {
+			return
+		}
+		switch got := blockPaths(header, from, to, minus, plus); {
+		case len(got) == 0:
+			ok = false
+		default:
+			for _, p := range got {
 				add(p)
 			}
 		}
-		header, from, to = "", "", ""
+		open, header, from, to, minus, plus = false, "", "", "", "", ""
 	}
-	for _, line := range strings.Split(string(diff), "\n") {
-		switch {
-		case strings.HasPrefix(line, "diff --git "):
-			flush()
-			header = strings.TrimSuffix(strings.TrimPrefix(line, "diff --git "), "\r")
-		case header == "":
-		case strings.HasPrefix(line, "rename from "), strings.HasPrefix(line, "copy from "):
-			from = unquotePath(line[strings.Index(line, "from ")+len("from "):])
-		case strings.HasPrefix(line, "rename to "), strings.HasPrefix(line, "copy to "):
-			to = unquotePath(line[strings.Index(line, "to ")+len("to "):])
-		case strings.HasPrefix(line, "@@"):
-			// The hunks are not headers: a line inside them could look like one.
-			flush()
+	br := bufio.NewReaderSize(r, 64<<10)
+	for {
+		line, err := readLine(br)
+		if line != "" || err == nil {
+			switch {
+			case strings.HasPrefix(line, "diff --git "):
+				flush()
+				open, header = true, strings.TrimPrefix(line, "diff --git ")
+			case !open:
+			case strings.HasPrefix(line, "rename from "), strings.HasPrefix(line, "copy from "):
+				from = unquotePath(line[strings.Index(line, "from ")+len("from "):])
+			case strings.HasPrefix(line, "rename to "), strings.HasPrefix(line, "copy to "):
+				to = unquotePath(line[strings.Index(line, "to ")+len("to "):])
+			case strings.HasPrefix(line, "--- ") && minus == "":
+				minus = line[len("--- "):]
+			case strings.HasPrefix(line, "+++ ") && plus == "":
+				plus = line[len("+++ "):]
+			case strings.HasPrefix(line, "@@"):
+				// The hunks are not headers: a line inside them could look like one.
+				flush()
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				return nil, false
+			}
+			break
 		}
 	}
 	flush()
+	return paths, ok
+}
+
+// maxHeaderLine is how much of a line is kept: a header holds paths, so a longer line (a minified file's) is cut.
+const maxHeaderLine = 64 << 10
+
+// readLine reads one line without its newline (and carriage return), keeping at most maxHeaderLine bytes of it.
+func readLine(br *bufio.Reader) (string, error) {
+	var line []byte
+	for {
+		chunk, isPrefix, err := br.ReadLine()
+		if len(line) < maxHeaderLine {
+			line = append(line, chunk...)
+		}
+		if err != nil || !isPrefix {
+			return string(line), err
+		}
+	}
+}
+
+// blockPaths are the files one diff block touches: a rename's or copy's two names; else the header's, read as the judge
+// reads it; else the names on its ---/+++ lines (not /dev/null). Empty when none can be read.
+func blockPaths(header, from, to, minus, plus string) []string {
+	if from != "" || to != "" {
+		return nonEmpty(from, to)
+	}
+	if p, ok := headerPath(header); ok {
+		return []string{p}
+	}
+	var out []string
+	for _, l := range []string{minus, plus} {
+		l, _, _ = strings.Cut(l, "\t") // a timestamp follows a tab
+		if l = unquotePath(l); l != "" && l != "/dev/null" {
+			if len(l) > 2 && l[1] == '/' { // a one-letter prefix, which a header that gave no path may have had
+				l = l[2:]
+			}
+			if !slices.Contains(out, l) {
+				out = append(out, l)
+			}
+		}
+	}
 	return out
 }
 
-// headerPaths are the paths of a "diff --git a/OLD b/NEW" line: both when they differ, one when they are the same.
-func headerPaths(h string) []string {
-	var a, b string
+func nonEmpty(names ...string) []string {
+	var out []string
+	for _, n := range names {
+		if n != "" && !slices.Contains(out, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// headerPath reads the path a "diff --git" header names (less its "diff --git " prefix), as internal/judge's filePath
+// does: both sides must name the same file, bare or after the same one-letter prefix, which also tells where an
+// unquoted name with spaces splits. A rename in the header cannot be read here: ok is false.
+func headerPath(h string) (string, bool) {
+	same := func(src, dst string) (string, bool) {
+		if src == dst {
+			return dst, true
+		}
+		if len(src) > 2 && len(dst) > 2 && src[1] == '/' && dst[1] == '/' && src[2:] == dst[2:] {
+			return dst[2:], true
+		}
+		return "", false
+	}
 	if strings.HasPrefix(h, `"`) {
 		first, rest, ok := splitQuoted(h)
-		if !ok {
-			return nil
+		if !ok || !strings.HasPrefix(rest, " ") {
+			return "", false
 		}
-		a, b = first, unquotePath(strings.TrimSpace(rest))
-	} else if n := (len(h) - 1) / 2; len(h)%2 == 1 && h[n] == ' ' && h[:n] != "" && strings.HasPrefix(h[:n], "a/") && h[n+1:] == "b/"+h[:n][2:] {
-		return []string{h[n+3:]} // the common case, and exact for names with spaces: both sides are the same name
-	} else if i := strings.Index(h, " b/"); i > 0 {
-		a, b = h[:i], h[i+1:]
-	} else if strings.HasPrefix(h, "a/") && strings.Contains(h, ` "b/`) {
-		i := strings.Index(h, ` "b/`)
-		a, b = h[:i], unquotePath(h[i+1:])
-	} else {
-		return nil
+		return same(first, unquotePath(rest[1:]))
 	}
-	a, b = strings.TrimPrefix(a, "a/"), strings.TrimPrefix(b, "b/")
-	if a == b {
-		return []string{a}
+	for i := 0; i < len(h); i++ {
+		if h[i] == ' ' {
+			if p, ok := same(h[:i], h[i+1:]); ok {
+				return p, true
+			}
+		}
 	}
-	return []string{a, b}
+	return "", false
 }
 
 // splitQuoted splits a leading C-style quoted name off s.
@@ -195,10 +275,10 @@ func unmet(met bool) CheckResult {
 // does not know, leaves the run unread.
 func (r CheckReader) commands(rec Record) ([]string, bool) {
 	for _, dir := range r.dirs(rec) {
-		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			continue
-		}
 		m, err := parseRecords(adapterFor(rec.Agent), dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // no transcript here: the record's own folder may hold it
+		}
 		if err != nil {
 			return nil, false
 		}
@@ -213,11 +293,12 @@ func (r CheckReader) paths(rec Record) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	data, err := os.ReadFile(file)
+	f, err := os.Open(file)
 	if err != nil {
 		return nil, false
 	}
-	return ChangedPaths(data), true
+	defer f.Close()
+	return ChangedPaths(f)
 }
 
 // dirs are the run's records folders to look in: the data folder's own first, then the record's (which may name a
