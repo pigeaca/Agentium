@@ -1,0 +1,19 @@
+  tasks - 14       module    runs              what it tells you
+  fix-it-mode-...            +x++              separates
+  feat-add-nth...            2 older +x+x++x+  separates
+  evil-name                  +x+x+             separates
+  feat-add-uni...  lib/core  3 older ++++++++  always passes: too easy
+  feat-support...            xx                never passed: check the task text
+  fix-nth-reje...            ++                passed 2 of 2
+  fix-iter-tup...                              not run yet
+  fix-correct-...            +x                not reviewed
+  gaps-in-the-...                              unstated requirements
+  never-checked                                not validated
+  no-solution-...                              no solution to check with
+  flaky-clock-...                              flaky
+  feature-inte...                              invalid
+  retired-old-...            +x                retired
+  3 separate - 1 too easy - 1 to check - 1 with few runs - 1 not run yet -
+  6 not ready - 1 retired
+  agentium task show NAME: a task's text, its tests and what blocks it
+=== end

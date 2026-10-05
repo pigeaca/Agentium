@@ -12,20 +12,26 @@ import (
 
 // writeHealth prints the pool's health: on a terminal that shows the designed console, as bars (healthView); everywhere
 // else (a pipe, NO_COLOR, TERM=dumb, a narrow terminal) the lines of printHealth, byte for byte.
-func writeHealth(env Env, h pool.Health) error {
+// The designed view ends its bars with a line counting what the tasks tell (the task list's tags); tally supplies the
+// counts and runs only then.
+func writeHealth(env Env, h pool.Health, tally func() (tellCounts, error)) error {
 	caps := term.DetectCapabilities(env.Terminal, env.Getenv, envSize(env))
 	if env.JSON || env.Plain || !caps.Designed() {
 		printHealth(env, h)
 		return nil
 	}
-	_, err := io.WriteString(env.Stdout, strings.Join(healthView(h, caps.Shapes(), caps.Width, env.style().Command("agentium pool update")), "\n")+"\n")
+	counts, err := tally()
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(env.Stdout, strings.Join(healthView(h, counts, caps.Shapes(), caps.Width, env.style().Command("agentium pool update")), "\n")+"\n")
 	return err
 }
 
 // healthView draws the pool's health: one bar per state that has tasks (valid always), each against all the pool's
 // tasks, green for valid, yellow for weak or flaky ones, red for invalid and grey for the rest, then the last pass and the
-// oldest valid base in dim words. update is the command that mines, validates and retires, shown while no pass ran.
-func healthView(h pool.Health, sh term.Shapes, width int, update string) []string {
+// oldest valid base in dim words, with counts (what the tasks tell) in a line under the bars. update is the command that mines, validates and retires, shown while no pass ran.
+func healthView(h pool.Health, counts tellCounts, sh term.Shapes, width int, update string) []string {
 	st := sh.Style
 	m := marksFor(sh)
 	w := min(width, term.MaxContentWidth)
@@ -64,6 +70,9 @@ func healthView(h pool.Health, sh term.Shapes, width int, update string) []strin
 		oldest = h.OldestValidBase.UTC().Format(time.DateOnly)
 	}
 	out = append(out, wrapped(st, " ", fmt.Sprintf("last pass %s %s oldest valid base %s", last, m.sep, oldest), term.Muted, w)...)
+	if line := counts.line(m); line != "" && h.Total > 0 {
+		out = append(out, wrapped(st, " ", line, term.Muted, w)...)
+	}
 	if h.LastPass.IsZero() {
 		out = append(out, " "+update+st.Paint(term.Muted, " mines, validates and retires (no agent runs)"))
 	}
