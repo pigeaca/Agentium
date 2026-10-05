@@ -28,9 +28,11 @@ import (
 	"github.com/pigeaca/agentium/internal/checkout"
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/judge"
+	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/runner"
 	"github.com/pigeaca/agentium/internal/sandbox"
 	"github.com/pigeaca/agentium/internal/snapshot"
@@ -69,16 +71,19 @@ type Spec struct {
 
 // Env is what a run needs from Agentium and the machine.
 type Env struct {
-	ID            string // from NewID
-	Layout        home.Layout
-	Bare          string // the project's bare repository
-	ProjectRoot   string // the user's repository: the agent may not read it
-	CLI           string // the claude executable
-	Home          string
-	AccountHome   string   // the account's home folder in the user database, when known (agent.Invocation.AccountHome)
-	Environ       []string // the parent's environment; the run gets an allowlisted part
-	SignIn        string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
-	Secret        string   // for API key and token sign-in; redacted from every record
+	ID          string // from NewID
+	Layout      home.Layout
+	Bare        string // the project's bare repository
+	ProjectRoot string // the user's repository: the agent may not read it
+	CLI         string // the claude executable
+	Home        string
+	AccountHome string   // the account's home folder in the user database, when known (agent.Invocation.AccountHome)
+	Environ     []string // the parent's environment; the run gets an allowlisted part
+	SignIn      string   // claude.SignInAPIKey, SignInTokenFile or SignInLogin
+	Secret      string   // for API key and token sign-in; redacted from every record
+	// RedactAlso are more secrets redacted from the run's records: the other agent's sign-in (recovery and clean redact
+	// a dead run's records of every key, whichever agent ran).
+	RedactAlso    []string
 	TokenFile     string
 	VerifyTimeout time.Duration // each setup or verification command
 	Grace         time.Duration // between SIGINT and SIGKILL when the agent is stopped
@@ -135,6 +140,9 @@ type Env struct {
 	// checkoutEnv, set by Once once the run's tools are warmed, is what Agentium's own commands in a checkout (dir) add
 	// to CommandEnv: buildtool.CheckoutEnv, Python's venv.
 	checkoutEnv func(dir string) []string
+	// sweepGuard, when set (tests), sees the process IDs a Codex run's leftover sweep would stop, and may refuse it
+	// (sweepCodex).
+	sweepGuard func(pids []int) bool
 	// checkoutRemoved removes what checkoutEnv gave a checkout alone in the data folder (buildtool.RemoveCheckoutCaches),
 	// once the checkout is gone.
 	checkoutRemoved func(dir string)
@@ -211,6 +219,14 @@ type Record struct {
 	// CostEstimated: Claude Code reported no cost, so Metrics.CostUSD prices the transcript's requests at list prices.
 	// Read costs through Spend, which keeps the agent's and the judge's apart.
 	CostEstimated bool `json:"cost_estimated,omitempty"`
+	// CostSource says who priced Metrics.CostUSD when the agent reports no cost of its own: CostPricedByAgentium for
+	// Codex, whose requests' tokens (kept beside it in Metrics) Agentium prices at the dated table PriceTable names
+	// (pricing.OpenAIDate). Both are absent from Claude Code's records, whose cost is Claude Code's own.
+	CostSource string `json:"cost_source,omitempty"`
+	PriceTable string `json:"price_table,omitempty"`
+	// CapUSD is a Codex run's cost cap, Agentium's own (Codex has none): kept so that a run whose spend cannot be read
+	// (its session rollout lost) counts the cap, never nothing (codexSpendFallback). Absent from Claude Code's records.
+	CapUSD float64 `json:"cap_usd,omitempty"`
 	// IsolatedCostUSD is the run's cost had no other run warmed the prompt cache: Metrics.CostUSD with the first-request
 	// cache reads of Metrics.FirstReads repriced as cache writes (isolatedCost). Actual cost (Spend) stays the primary
 	// metric; this is a counterfactual beside it, not spend. Nil when it cannot be computed and in records made before
@@ -302,6 +318,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if spec.Task.JudgeGraded() {
 		rec.GradedBy = task.GradingJudge
 	}
+	if env.isCodex() {
+		rec.CapUSD = spec.BudgetUSD
+	}
 	workspace := filepath.Join(env.Layout.Workspaces, env.workspaceName())
 	tempRoot := env.Layout.RunTemp(env.workspaceName()) // Claude Code's temp root for the agent (see temp.go)
 	repo := filepath.Join(workspace, "repo")
@@ -324,15 +343,26 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			startErr = err
 		}
 	}
-	prepared := false // the workspace was begun: there is something to clean up
+	prepared := false    // the workspace was begun: there is something to clean up
+	keepPending := false // a Codex run whose lost accounting could not be marked: its pending mark stays
 	defer func() {
 		if prepared {
 			env.step(StepCleanup)
 		}
 		rec.Finished = env.Now().UTC()
+		// What is stored (the start file, the caller's database) holds no secret: the record carries the agent's output.
+		rec = redactRecord(rec, append([]string{env.Secret}, env.RedactAlso...)...)
 		if recordsReady {
-			if startErr := writeStart(true); startErr != nil && err == nil {
+			startErr := writeStart(true)
+			if startErr != nil && err == nil {
 				err = startErr
+			}
+			// The final record is saved: a recovery reads it, not the rollouts. A record that could not be marked as
+			// lost keeps its pending mark too (it is fail-closed either way).
+			if startErr == nil && !keepPending {
+				if rmErr := os.Remove(filepath.Join(rec.RecordsDir, AccountingPending)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) && err == nil {
+					err = fmt.Errorf("run records: %w", rmErr)
+				}
 			}
 		}
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
@@ -372,7 +402,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	tools, importRoot := l.tools, l.importRoot
-	if err := claude.LocalBindingRefusal(tools, env.AllowLocalBinding); err != nil {
+	if err := env.agentRefusal(tools, spec); err != nil {
 		return rec, err
 	}
 	if env.gradesInSandbox() {
@@ -386,14 +416,21 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	inv := agent.Invocation{CLI: env.CLI, Dir: repo, Prompt: prompt, Model: spec.Model, Effort: spec.Effort,
 		BudgetUSD: spec.BudgetUSD, Timeout: spec.Timeout, Grace: env.Grace, SignIn: env.SignIn, Secret: env.Secret, TokenFile: env.TokenFile,
-		Home: env.Home, AccountHome: env.AccountHome, TempRoot: tempRoot, UID: os.Getuid()}
+		Home: env.Home, AccountHome: env.AccountHome, TempRoot: tempRoot, UID: os.Getuid(), Records: rec.RecordsDir, State: filepath.Join(workspace, "agent")}
 	deny, err := env.denied(ctx, workspace)
 	if err != nil {
 		return rec, err
 	}
 	inv.Deny = append(deny, env.DenyExtra...)
-	if env.SignIn != claude.SignInLogin {
+	// The agent's configuration folder that Once makes: Claude Code's fresh one with a key or token. Codex's home is
+	// the shared login home (never made here), or the run's own, which its command makes (agent.Command.Dirs).
+	ownConfig := ""
+	switch {
+	case env.isCodex():
+		inv.ConfigDir = env.codexHome(workspace)
+	case env.SignIn != claude.SignInLogin:
 		inv.ConfigDir = filepath.Join(workspace, "config")
+		ownConfig = inv.ConfigDir
 	}
 	// The run's own build cache: nothing compiled before it, nothing after. Its name predates the build-tool profiles
 	// and stays, so a Go run's folders are unchanged.
@@ -422,7 +459,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if err := removeStaleWorkspace(env.Layout.Workspaces, workspace, tempRoot); err != nil {
 		return rec, err
 	}
-	for _, dir := range []string{workspace, inv.ConfigDir, inv.BuildCache} {
+	for _, dir := range []string{workspace, ownConfig, inv.BuildCache} {
 		if dir == "" {
 			continue
 		}
@@ -545,7 +582,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 	}
 	if spec.Probe != "" {
-		if rec.ProbeFile, err = appendProbe(ctx, repo, env.Module, spec.Probe); err != nil {
+		if rec.ProbeFile, err = env.appendProbe(ctx, repo, spec.Probe); err != nil {
 			return rec, err
 		}
 		if rec.ProbeFile == "" {
@@ -563,6 +600,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if rec.ContextHead, err = gitx.Run(ctx, "-C", repo, "rev-parse", "HEAD"); err != nil {
 		return rec, err
 	}
+	// A Codex run loads the checkout's Codex configuration (a trusted project): one that could change the run's sandbox,
+	// permissions or environment is refused now, as the arm and the setup left it, before anything is spent.
+	if env.isCodex() {
+		if err := codex.ProjectConfigRefusal(repo, env.Module); err != nil {
+			return rec, err
+		}
+	}
 	// Grading never trusts the agent's .git (its config could name filters that run outside the sandbox): the context
 	// commit is copied now, before the agent starts, into a repository of Agentium's own.
 	if err := checkout.New(ctx, repo, rec.ContextHead, graded); err != nil {
@@ -578,6 +622,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			return rec, fmt.Errorf("the agent's folder: %w", err)
 		}
 		inv.Dir, inv.Repo = dir, repo
+	}
+
+	// Until a Codex run's final record is saved, a recovery accepts the spend its rollouts show only once verified
+	// (codex Parse's rules): a run that cannot be marked so does not start (before its transcript: nothing to store).
+	if env.isCodex() {
+		if err := writeFileAtomic(filepath.Join(rec.RecordsDir, AccountingPending), []byte("Codex's spend is not settled yet\n"), 0o600); err != nil {
+			return rec, fmt.Errorf("the run's accounting mark: %w", err)
+		}
 	}
 
 	// The agent.
@@ -597,9 +649,13 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	// Claude Code keeps the run's session, with its saved large outputs, in a folder named after where it starts (the
 	// checkout, or its module's folder). Reads there are the run's own; any other session folder, even one created
-	// during the run, is someone else's.
-	ownSession := claude.SessionFolder(activeConfig, inv.Dir)
-	pastSessions := claude.SessionFolders(activeConfig)
+	// during the run, is someone else's. Codex keeps none there.
+	var ownSession string
+	var pastSessions []string
+	if !env.isCodex() {
+		ownSession = claude.SessionFolder(activeConfig, inv.Dir)
+		pastSessions = claude.SessionFolders(activeConfig)
+	}
 	agentStarted, pgid = true, 0
 	if err := writeStart(false); err != nil {
 		transcript.Close()
@@ -607,8 +663,22 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	inv.Started = running
+	// Codex: the folder only this run's sandbox may write (how processes that may be its leftovers are reported), and
+	// Agentium's own look at the agent's descendants (the only processes the sweep stops: sweepCodex).
+	var tracked *descendants
+	if env.isCodex() {
+		if inv.Marker, err = newMarker(workspace); err != nil {
+			transcript.Close()
+			stderr.Close()
+			return rec, err
+		}
+		tracked = loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses))
+		inv.Observe = tracked.observe
+		inv.BeforeStop = func() { _ = tracked.snapshot(true) } // saved too: the stop may end Agentium before the sweep
+	}
 	env.step(StepAgent)
-	env.progress("  workspace ready; Claude Code is working (up to %s)", spec.Timeout)
+	env.progress("  workspace ready; %s is working (up to %s)", env.agentLabel(), spec.Timeout)
+	agentStart := time.Now().Add(-100 * time.Millisecond) // the real clock: no process older than this is the agent's (sweepCodex)
 	result, runErr := agent.Run(ctx, env.adapter(), inv, env.Environ, transcript, stderr)
 	if runErr == nil && startErr != nil {
 		runErr = startErr
@@ -616,6 +686,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	transcript.Close()
 	stderr.Close()
 	stopTools() // before grading: a daemon would sit on its heap meanwhile
+	// What the agent left outside the records comes in (Codex's session rollouts, its spend among them); then, for
+	// Codex, the processes its commands left running go (sweepCodex).
+	if err := env.adapter().Gather(inv.ConfigDir, rec.RecordsDir); err != nil {
+		rec.Notes = append(rec.Notes, "the agent's session could not be moved into the run's records: "+err.Error())
+	}
+	if env.isCodex() {
+		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, tracked, env.sweepGuard, rec.RecordsDir)...)
+	}
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
 	unfinished := func(err error) (Record, error) {
@@ -629,11 +707,28 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	var parseErr error
-	rec.Metrics, parseErr = parseFile(env.adapter(), transcriptPath) // partial metrics are kept even when reading fails
-	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {  // stopped before Claude Code's result: still spent
+	rec.Metrics, parseErr = parseRecords(env.adapter(), rec.RecordsDir) // partial metrics are kept even when reading fails
+	if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {     // stopped before Claude Code's result: still spent
 		rec.Metrics.CostUSD = rec.Metrics.EstimatedCostUSD
 		rec.CostEstimated = true
 		rec.Notes = append(rec.Notes, "Claude Code reported no cost: estimated from the transcript's requests at list prices")
+	}
+	if env.isCodex() { // Codex reports no cost: its requests' tokens, priced here (codex.Adapter.Parse)
+		rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+		if parseErr != nil { // records that cannot be read whole verify nothing: the bound (codexSpendFallback)
+			rec.Metrics.RolloutsIncomplete = true
+		}
+		if result.Stop == agent.StopBlind { // its accounting was lost: what the rollouts hold is a part
+			rec.Metrics.RolloutsIncomplete = true
+			if err := markAccountingLost(rec.RecordsDir); err != nil {
+				keepPending = true
+				rec.Notes = append(rec.Notes, "the run's lost accounting could not be marked in its records ("+err.Error()+"): its pending mark stays, so a recovery counts its bound")
+			}
+		}
+		codexSpendFallback(&rec)
+		if rec.Metrics.UnpricedRequests > 0 {
+			rec.Notes = append(rec.Notes, fmt.Sprintf("%d request(s) could not be priced (a model without a list price, or a request above the long-context limit): they are not in the cost", rec.Metrics.UnpricedRequests))
+		}
 	}
 	// The isolated-run cost starts from the cost, so it comes after the cost is settled.
 	rec.IsolatedCostUSD = isolatedCost(rec)
@@ -655,6 +750,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec.ContextUse = &use
 	expect := env.Expect
 	expect.PersonalSkills, expect.ProjectSkills = claude.PersonalSkills(userConfig), rec.ProjectSkills
+	expect.RequestedModel, expect.Effort = spec.Model, spec.Effort
 	// A calibration holds only what Claude Code bundles: the arm's own skills and commands at its base are added here.
 	if expect.Skills != nil {
 		expect.Skills = union(expect.Skills, rec.ProjectSkills)
@@ -665,15 +761,23 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	rec.Drift = env.adapter().Check(rec.Metrics, expect)
 	watched := append([]string{env.Layout.Root, filepath.Join(env.Home, ".claude"), userConfig}, env.repositoryPaths(ctx)...)
 	rec.Behavior.OutsideReads = outsideReads(ownSessionExcluded(rec.Metrics.FilePaths, ownSession), repo, workspace, watched)
-	if _, err := os.Stat(ownSession); err != nil && len(claude.SessionFolders(activeConfig)) > len(pastSessions) {
+	if _, err := os.Stat(ownSession); !env.isCodex() && err != nil && len(claude.SessionFolders(activeConfig)) > len(pastSessions) {
 		rec.Notes = append(rec.Notes, "Claude Code kept this run's session in an unexpected folder: reads of its saved outputs count as outside reads")
 	}
 	if rec.Behavior.OutsideReads > 0 {
 		rec.Drift = append(rec.Drift, fmt.Sprintf("%d file tool call(s) reached Agentium's data, the repository or Claude's data", rec.Behavior.OutsideReads))
 	}
-	rec.Outcome = env.adapter().Classify(rec.Metrics, result.TimedOut, rec.Drift)
-	env.progress("  Claude Code: %s, $%.2f, %d turn(s)", env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
-	if rec.Overshoot = claude.CapOvershoot(rec.Metrics, rec.Spend().AgentUSD, spec.BudgetUSD, spec.Model); rec.Overshoot != nil && rec.Overshoot.Exceeded() {
+	rec.Outcome = env.adapter().Classify(rec.Metrics, result.Stop, rec.Drift)
+	env.progress("  %s: %s, $%.2f, %d turn(s)", env.agentLabel(), env.Style.Status(rec.Outcome), rec.Spend().AgentUSD, rec.Metrics.Turns)
+	if env.isCodex() {
+		// Agentium's own cap stops Codex while one more full-context request still fits under it: passing it means a
+		// request started in the watcher's poll gap (codex.Bound).
+		if spend := rec.Spend().AgentUSD; spec.BudgetUSD > 0 && spend > spec.BudgetUSD {
+			note := fmt.Sprintf("it spent $%.3f, past its $%.2f cost cap: a request started before Agentium's watcher saw the one before it", spend, spec.BudgetUSD)
+			rec.Notes = append(rec.Notes, note)
+			env.progress("  %s", env.Style.Warn("warning: "+note))
+		}
+	} else if rec.Overshoot = claude.CapOvershoot(rec.Metrics, rec.Spend().AgentUSD, spec.BudgetUSD, spec.Model); rec.Overshoot != nil && rec.Overshoot.Exceeded() {
 		note := OvershootNote(*rec.Overshoot)
 		rec.Notes = append(rec.Notes, note)
 		env.progress("  %s", env.Style.Warn("warning: "+note))
@@ -1217,7 +1321,14 @@ func (env Env) denied(ctx context.Context, workspace string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(paths, temps...), nil
+	paths = append(paths, temps...)
+	// Agentium's own Codex home holds the ChatGPT sign-in (home.Layout.CodexHome): no agent may read it, Claude Code's
+	// included. It is denied whether or not it exists yet: the user may sign Codex in while a run is going, and a deny
+	// list fixed at the start would miss it.
+	if env.Layout.Root != "" {
+		paths = append(paths, env.Layout.CodexHome())
+	}
+	return paths, nil
 }
 
 // repositoryPaths are the user's repository, all its worktrees, and its shared git data.
@@ -1290,7 +1401,7 @@ func (env Env) redactRecords(dir string) error {
 		if err != nil {
 			return fmt.Errorf("redact %s: %w", p, err)
 		}
-		if clean := Redact(data, env.Secret); len(clean) != len(data) || string(clean) != string(data) {
+		if clean := Redact(data, append([]string{env.Secret}, env.RedactAlso...)...); len(clean) != len(data) || string(clean) != string(data) {
 			if err := os.WriteFile(p, clean, 0o600); err != nil {
 				return fmt.Errorf("redact %s: %w", p, err)
 			}
@@ -1304,27 +1415,24 @@ var secretPatterns = regexp.MustCompile(`sk-ant-[A-Za-z0-9_-]{20,}|\bsk-(?:proj-
 	`\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})|\bxox[abprs]-[A-Za-z0-9-]{10,}|` +
 	`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`)
 
-// Redact replaces secret, when not empty, and credential-shaped strings with [REDACTED].
-func Redact(data []byte, secret string) []byte {
+// Redact replaces each secret, when not empty, and credential-shaped strings with [REDACTED].
+func Redact(data []byte, secrets ...string) []byte {
 	text := string(data)
-	if secret != "" {
-		text = strings.ReplaceAll(text, secret, "[REDACTED]")
+	for _, secret := range secrets {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, "[REDACTED]")
+		}
 	}
 	return []byte(secretPatterns.ReplaceAllString(text, "[REDACTED]"))
 }
 
-// parseFile reads the run's transcript at p with its agent's adapter (a, adapterFor); a nil adapter (an agent this
-// Agentium does not know) reads nothing.
-func parseFile(a agent.Adapter, p string) (agent.Metrics, error) {
+// parseRecords reads what the run in the records folder reported, with its agent's adapter (a, adapterFor); a nil
+// adapter (an agent this Agentium does not know) reads nothing.
+func parseRecords(a agent.Adapter, records string) (agent.Metrics, error) {
 	if a == nil {
 		return agent.Metrics{}, errors.New("run transcript: the run's agent is not one this Agentium knows")
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return agent.Metrics{}, fmt.Errorf("run transcript: %w", err)
-	}
-	defer f.Close()
-	return a.Parse(f)
+	return a.Parse(records)
 }
 
 // adapter is the agent the run starts (Agent): Claude Code's unless set.
@@ -1338,15 +1446,87 @@ func (env Env) adapter() agent.Adapter {
 // adapterFor is the adapter of the agent a record names (Record.Agent, read through agent.Name): Claude Code's for a
 // record that names none (every record made before the agent seam). nil for an agent this Agentium does not know.
 func adapterFor(name string) agent.Adapter {
-	if agent.Name(name) == agent.ClaudeCode {
+	switch agent.Name(name) {
+	case agent.ClaudeCode:
 		return claude.Adapter{}
+	case codex.Name:
+		return codex.Adapter{}
 	}
 	return nil
 }
 
-// appendProbe appends line to the first startup instruction file of the context in repo (as a session started in
+// CostPricedByAgentium is Record.CostSource for an agent that reports no cost (Codex): Agentium priced its requests.
+const CostPricedByAgentium = "priced by Agentium"
+
+// isCodex reports whether the run's agent is Codex: Once's Codex-only steps (its Codex home, the refusals, the sweep
+// of its commands' processes) and Claude Code's own (its session folders, personal skills, the cap's overshoot) are
+// told apart by it.
+func (env Env) isCodex() bool { return env.adapter().Name() == codex.Name }
+
+// agentLabel is the run's agent as progress lines name it.
+func (env Env) agentLabel() string {
+	if env.isCodex() {
+		return "Codex"
+	}
+	return "Claude Code"
+}
+
+// codexHome is a Codex run's CODEX_HOME: Agentium's own shared home with the ChatGPT login (which the user signed in,
+// and Once never creates), or a fresh one of the run's own, in its workspace, with an API key.
+func (env Env) codexHome(workspace string) string {
+	if env.SignIn == codex.SignInLogin {
+		return env.Layout.CodexHome()
+	}
+	return filepath.Join(workspace, "codex-home")
+}
+
+// agentRefusal is why the run's agent may not run this task, before anything is spent: Claude Code's local-binding
+// opt-in for Gradle (claude.LocalBindingRefusal); for Codex, Gradle at all (codex.ToolsRefusal), and the judge, which
+// is Claude Code and needs Claude Code's sign-in, which a Codex run does not resolve yet (the plan's step 5).
+func (env Env) agentRefusal(tools []string, spec Spec) error {
+	if !env.isCodex() {
+		return claude.LocalBindingRefusal(tools, env.AllowLocalBinding)
+	}
+	if err := codex.ToolsRefusal(tools); err != nil {
+		return err
+	}
+	if err := codex.CapRefusal(spec.Model, spec.BudgetUSD); err != nil {
+		return err
+	}
+	if _, err := codex.Effort(spec.Model, spec.Effort); err != nil {
+		return err
+	}
+	if spec.Task.JudgeGraded() || spec.Judge != nil {
+		return errors.New("a Codex run cannot be judged yet: the judge is Claude Code, and Codex runs do not resolve its sign-in (the Codex plan's step 5)")
+	}
+	return nil
+}
+
+// appendProbe appends line to the first instruction file the run's agent loads at start in repo (Codex: its AGENTS.md
+// chain's first, codex.ProbeFile; Claude Code: as the resolver finds it, appendClaudeProbe) and returns that file's
+// path, or "" when the agent loads none.
+func (env Env) appendProbe(ctx context.Context, repo, line string) (string, error) {
+	if !env.isCodex() {
+		return appendClaudeProbe(ctx, repo, env.Module, line)
+	}
+	rel := codex.ProbeFile(repo, env.Module)
+	if rel == "" {
+		return "", nil
+	}
+	f, err := os.OpenFile(filepath.Join(repo, filepath.FromSlash(rel)), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return "", fmt.Errorf("probe: %w", err)
+	}
+	defer f.Close()
+	if _, err := fmt.Fprintf(f, "\n%s\n", line); err != nil {
+		return "", fmt.Errorf("probe: %w", err)
+	}
+	return rel, nil
+}
+
+// appendClaudeProbe appends line to the first startup instruction file of the context in repo (as a session started in
 // module loads it) and returns that file's path, or "" when the context loads no instruction file at start.
-func appendProbe(ctx context.Context, repo, module, line string) (string, error) {
+func appendClaudeProbe(ctx context.Context, repo, module, line string) (string, error) {
 	src, err := source.WorkingTree(ctx, repo)
 	if err != nil {
 		return "", err

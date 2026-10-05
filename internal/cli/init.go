@@ -13,6 +13,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/codex"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/mine"
@@ -195,6 +196,7 @@ type initDoc struct {
 	Project      projectDoc      `json:"project"`
 	Head         string          `json:"head"`
 	ClaudeCode   claudeCodeDoc   `json:"claude_code"`
+	Codex        codexDoc        `json:"codex"`
 	SignIn       string          `json:"sign_in"` // api-key | token-file | login (presence only, never the secret)
 	TestCommands []string        `json:"test_commands"`
 	Context      contextSizeDoc  `json:"context"`
@@ -343,6 +345,13 @@ type projectDoc struct {
 	Name string `json:"name"`
 }
 
+// codexDoc is the optional Codex CLI: found, its version, and the sign-in a Codex run would use (presence only).
+type codexDoc struct {
+	Found   bool   `json:"found"`
+	Version string `json:"version"`
+	SignIn  string `json:"sign_in"` // api-key | login
+}
+
 type claudeCodeDoc struct {
 	Found   bool   `json:"found"`
 	Version string `json:"version"`
@@ -373,6 +382,7 @@ func contextSize(resolved claudectx.Context) contextSizeDoc {
 func initDocument(saved store.Project, info project.Info, resolved claudectx.Context) initDoc {
 	return initDoc{header: hdr("init"), Project: projectDoc{ID: saved.ID, Name: saved.Name}, Head: info.Head,
 		ClaudeCode: claudeCodeDoc{Found: info.Claude.Path != "", Version: info.Claude.Version}, SignIn: info.Claude.SignIn,
+		Codex:        codexDoc{Found: info.Codex.Path != "", Version: info.Codex.Version, SignIn: info.Codex.SignIn},
 		TestCommands: list(info.TestCommands), Context: contextSize(resolved),
 		LocalBinding: localBindingDoc{Allowed: saved.AllowLocalBinding, Gradle: slices.Contains(buildtool.DetectIn(moduleDir(info.Root, saved.Settings.Module)), "gradle")},
 		Settings:     settingsOf(saved, info).document(saved.AllowLocalBinding), Modules: moduleDocs(info.Modules), ModulesTotal: info.ModulesTotal,
@@ -389,6 +399,7 @@ func printInit(env Env, saved store.Project, info project.Info, layout home.Layo
 	}
 	fmt.Fprintf(w, "  Claude Code  %s\n", claude)
 	fmt.Fprintf(w, "  sign-in      %s\n", describeSignIn(info.Claude.SignIn))
+	fmt.Fprintf(w, "  Codex        %s\n", describeCodex(st, info.Codex, layout))
 	fmt.Fprintf(w, "  tests        %s\n", term.OrNone(strings.Join(info.TestCommands, "; ")))
 	startup := 0
 	for _, e := range resolved.Entries {
@@ -457,6 +468,18 @@ func describeSignIn(mode string) string {
 	default:
 		return "your Claude login, restricted to project settings (checked on the first run)"
 	}
+}
+
+// describeCodex says whether the optional Codex CLI was found, its version, and how a Codex run would sign in.
+func describeCodex(st term.Style, c project.CodexInfo, layout home.Layout) string {
+	if c.Path == "" {
+		return st.Note("not found (optional: runs with --agent codex need it)")
+	}
+	found := strings.TrimSpace(c.Path + " " + c.Version)
+	if c.SignIn == codex.SignInAPIKey {
+		return found + st.Note(" (optional; sign-in: the API key in CODEX_API_KEY or OPENAI_API_KEY, given to Codex alone)")
+	}
+	return found + st.Note(fmt.Sprintf(" (optional; sign-in: the ChatGPT login in %s, checked when a run starts: CODEX_HOME=%s codex login)", layout.CodexHome(), layout.CodexHome()))
 }
 
 func sizeLabel(bytes int64) string {

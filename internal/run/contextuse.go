@@ -148,7 +148,7 @@ func (r *Recovery) Recover(ctx context.Context, rec Record, base, snapshotCommit
 	if transcript == "" {
 		return nil, nil
 	}
-	m, err := parseFile(adapterFor(rec.Agent), transcript)
+	m, err := parseRecords(adapterFor(rec.Agent), filepath.Dir(transcript))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}

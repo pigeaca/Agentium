@@ -3,7 +3,7 @@ package run
 import (
 	"context"
 	"encoding/json"
-	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -22,7 +22,7 @@ type recordingAgent struct {
 
 func (r recordingAgent) Name() string { return "recording-agent" }
 
-func (r recordingAgent) Command(inv agent.Invocation, environ []string) ([]string, []string, error) {
+func (r recordingAgent) Command(inv agent.Invocation, environ []string) (agent.Command, error) {
 	*r.calls = append(*r.calls, "Command")
 	return r.Adapter.Command(inv, environ)
 }
@@ -32,14 +32,19 @@ func (r recordingAgent) DeniedPaths(inv agent.Invocation, environ []string) []st
 	return r.Adapter.DeniedPaths(inv, environ)
 }
 
-func (r recordingAgent) Parse(rd io.Reader) (agent.Metrics, error) {
-	*r.calls = append(*r.calls, "Parse")
-	return r.Adapter.Parse(rd)
+func (r recordingAgent) Gather(configDir, records string) error {
+	*r.calls = append(*r.calls, "Gather")
+	return r.Adapter.Gather(configDir, records)
 }
 
-func (r recordingAgent) Classify(m agent.Metrics, timedOut bool, drift []string) string {
+func (r recordingAgent) Parse(records string) (agent.Metrics, error) {
+	*r.calls = append(*r.calls, "Parse")
+	return r.Adapter.Parse(records)
+}
+
+func (r recordingAgent) Classify(m agent.Metrics, stop agent.Stop, drift []string) string {
 	*r.calls = append(*r.calls, "Classify")
-	return r.Adapter.Classify(m, timedOut, drift)
+	return r.Adapter.Classify(m, stop, drift)
 }
 
 func (r recordingAgent) Check(m agent.Metrics, expect agent.Expect) []string {
@@ -59,7 +64,7 @@ func TestOnceRunsTheAgentThroughTheSeam(t *testing.T) {
 	if rec.Outcome != agent.OutcomeOK || rec.Passed == nil || !*rec.Passed {
 		t.Fatalf("outcome %s, passed %v, notes %v", rec.Outcome, rec.Passed, rec.Notes)
 	}
-	if want := []string{"DeniedPaths", "Command", "Parse", "Check", "Classify"}; !slices.Equal(calls, want) {
+	if want := []string{"DeniedPaths", "Command", "Gather", "Parse", "Check", "Classify"}; !slices.Equal(calls, want) {
 		t.Errorf("calls through the seam %q, want %q", calls, want)
 	}
 	if rec.Agent != "recording-agent" || rec.AgentName() != "recording-agent" {
@@ -101,20 +106,41 @@ func TestRecordsNameTheirAgent(t *testing.T) {
 }
 
 // Recovery and context use read a stored transcript with its record's agent: Claude Code's for a record that names
-// none; one this Agentium does not know is not read as Claude Code's.
+// none, Codex's for Codex's; one this Agentium does not know is not read as Claude Code's.
 func TestTranscriptsAreReadWithTheirAgent(t *testing.T) {
-	fixture := filepath.Join("..", "claude", "testdata", "ok.jsonl")
+	records := recordsWith(t, filepath.Join("..", "claude", "testdata", "ok.jsonl"))
 	for _, name := range []string{"", agent.ClaudeCode} {
-		if m, err := parseFile(adapterFor(name), fixture); err != nil || !m.SawResult {
+		if m, err := parseRecords(adapterFor(name), records); err != nil || !m.SawResult {
 			t.Errorf("agent %q: %+v, %v", name, m, err)
 		}
 	}
 	if a := adapterFor("some-later-agent"); a != nil {
 		t.Errorf("an unknown agent has an adapter: %T", a)
 	}
-	if _, err := parseFile(adapterFor("some-later-agent"), fixture); err == nil {
+	if _, err := parseRecords(adapterFor("some-later-agent"), records); err == nil {
 		t.Error("a transcript of an unknown agent was read")
 	}
+	codexRecords := recordsWith(t, filepath.Join("..", "codex", "testdata", "exec-ok.jsonl"))
+	if m, err := parseRecords(adapterFor("codex"), codexRecords); err != nil || !m.SawResult || m.Result != "turn.completed" {
+		t.Errorf("a Codex transcript: %+v, %v", m, err)
+	}
+	// A start file too damaged to name the agent: the transcript tells.
+	if a := sniffAdapter(filepath.Join(codexRecords, agent.Transcript)); a.Name() != "codex" {
+		t.Errorf("a Codex transcript sniffed as %s", a.Name())
+	}
+	if a := sniffAdapter(filepath.Join(records, agent.Transcript)); a.Name() != agent.ClaudeCode {
+		t.Errorf("a Claude Code transcript sniffed as %s", a.Name())
+	}
+}
+
+// recordsWith is a records folder whose transcript (stream.jsonl) is a copy of fixture.
+func recordsWith(t *testing.T, fixture string) string {
+	t.Helper()
+	data, err := os.ReadFile(fixture)
+	must(t, err)
+	records := t.TempDir()
+	must(t, os.WriteFile(filepath.Join(records, agent.Transcript), data, 0o600))
+	return records
 }
 
 // The run's timeout and grace reach the agent through the seam's invocation (agent.Invocation.Timeout, Grace): an

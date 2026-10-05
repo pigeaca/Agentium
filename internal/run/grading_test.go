@@ -488,12 +488,12 @@ func TestGradingEnvIsTheAgentsRecipe(t *testing.T) {
 			inv := in.Agent
 			inv.CLI, inv.Dir, inv.Prompt, inv.Model, inv.BuildCache = "/bin/claude", g.Copy, "fix it", "claude-sonnet-5", g.Cache
 			inv.SignIn, inv.Secret, inv.ConfigDir, inv.AllowLocalBinding = claude.SignInAPIKey, "sk-secret", filepath.Join(f.dir, "config"), true
-			_, agentEnv, err := claude.Adapter{}.Command(inv, environ)
+			cmd, err := claude.Adapter{}.Command(inv, environ)
 			if err != nil {
 				t.Fatal(err)
 			}
 			want := map[string]string{}
-			for name, v := range envMapOf(agentEnv) {
+			for name, v := range envMapOf(cmd.Env) {
 				if !agentOnly(name) && !graderOnly[name] {
 					want[name] = v
 				}

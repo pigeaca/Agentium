@@ -26,11 +26,16 @@ type runInfo struct {
 	SignIn  string `json:"sign_in"`
 	Outcome string `json:"outcome"`
 	// Passed is the hidden verification's result; null when it did not run.
-	Passed             *bool       `json:"passed"`
-	CostUSD            float64     `json:"cost_usd"` // the agent's; JudgeCostUSD is the judge's, when it ran
-	JudgeCostUSD       float64     `json:"judge_cost_usd"`
-	PairJudgeCostUSD   float64     `json:"pair_judge_cost_usd"` // the pair judge's, on a pair's arm-B run
-	CostEstimated      bool        `json:"cost_estimated"`
+	Passed           *bool   `json:"passed"`
+	CostUSD          float64 `json:"cost_usd"` // the agent's; JudgeCostUSD is the judge's, when it ran
+	JudgeCostUSD     float64 `json:"judge_cost_usd"`
+	PairJudgeCostUSD float64 `json:"pair_judge_cost_usd"` // the pair judge's, on a pair's arm-B run
+	CostEstimated    bool    `json:"cost_estimated"`
+	// CostSource is "priced by Agentium" for an agent that reports no cost of its own (Codex), whose tokens Agentium
+	// prices at the dated list prices PriceTable names; both are empty for Claude Code, whose cost is its own.
+	CostSource         string      `json:"cost_source"`
+	PriceTable         string      `json:"price_table"`
+	Tokens             tokensDoc   `json:"tokens"`
 	Turns              int         `json:"turns"`
 	DurationMS         int64       `json:"duration_ms"`
 	FirstRequestTokens int64       `json:"first_request_tokens"`
@@ -51,6 +56,16 @@ type runInfo struct {
 	// judge's grading verdict, which Passed follows (unvalidated); JudgeGrade is null for every other run.
 	GradedBy   string         `json:"graded_by"`
 	JudgeGrade *judgeGradeDoc `json:"judge_grade"`
+}
+
+// tokensDoc is a run's token counts, as its agent reported them: input without the cache, cache reads and writes,
+// output (reasoning included) and, of it, reasoning. Never compared across agents: their tokenizers differ.
+type tokensDoc struct {
+	Input      int64 `json:"input"`
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Output     int64 `json:"output"`
+	Reasoning  int64 `json:"reasoning"`
 }
 
 // judgeGradeDoc is a judge-graded run's grade: the majority of the judge's answers ("yes" passes), each answer, how
@@ -91,7 +106,9 @@ func behaviorOf(b run.Behavior) behaviorDoc {
 func runInfoOf(env Env, rec run.Record) runInfo {
 	spend := rec.Spend()
 	info := runInfo{ID: rec.ID, Task: rec.Task, Arm: rec.Arm, Agent: rec.AgentName(), Model: rec.Model, Effort: rec.Effort, SignIn: rec.SignIn, Outcome: rec.Outcome,
-		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated, Turns: rec.Metrics.Turns,
+		Passed: rec.Passed, CostUSD: spend.AgentUSD, JudgeCostUSD: spend.JudgeUSD, PairJudgeCostUSD: spend.PairJudgeUSD, CostEstimated: rec.CostEstimated,
+		CostSource: rec.CostSource, PriceTable: rec.PriceTable, Tokens: tokensDoc{Input: rec.Metrics.InputTokens, CacheRead: rec.Metrics.CacheReadTokens,
+			CacheWrite: rec.Metrics.CacheWriteTokens, Output: rec.Metrics.OutputTokens, Reasoning: rec.Metrics.ReasoningTokens}, Turns: rec.Metrics.Turns,
 		DurationMS: rec.Metrics.DurationMS, FirstRequestTokens: rec.Metrics.FirstRequest, CLIVersion: rec.Metrics.CLIVersion,
 		PermissionMode: rec.Metrics.PermissionMode, Tools: len(rec.Metrics.Tools), Skills: rec.Metrics.SkillCount, Behavior: behaviorOf(rec.Behavior),
 		Drift: env.redactAll(rec.Drift), Notes: env.redactAll(rec.Notes), Grader: task.GraderOf(rec.Grader), Sandbox: report.SandboxOf(rec.Sandbox),
