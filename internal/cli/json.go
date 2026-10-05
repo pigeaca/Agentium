@@ -76,6 +76,7 @@ var jsonCommands = map[string][]string{
 	// experiment report has its own --json (the lock and every run); it is left as it is.
 	"experiment": {"new", "plan", "show", "list", "run", "rm"},
 	"pool":       {"update", "status"},
+	"check":      {"add", "list", "rm"},
 	"clean":      {""},
 }
 

@@ -8,7 +8,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 - [Versioning context](#versioning-context) and [context lint](#context-lint)
 - [Turning commits into tasks](#turning-commits-into-tasks), [drafts of a task's text](#drafts-of-a-tasks-text), [tasks from tickets](#tasks-from-tickets-graded-by-the-judge) and [the task pool](#the-task-pool)
 - [Build tools and offline dependencies](#build-tools-and-offline-dependencies) and [sandboxed grading](#sandboxed-grading)
-- [Running and comparing](#running-and-comparing)
+- [Running and comparing](#running-and-comparing) and [rule checks](#rule-checks)
 - [Experiment templates](#experiment-templates)
 - [The judge](#the-judge-second-opinion)
 - [Scripting and automation](#scripting-and-automation)
@@ -217,6 +217,7 @@ agentium experiment report lean               # the answer in plain words (--det
 - **The answer,** in a green box, worded as the dashboard words it ("lean is cheaper: 22% less", "after all 10 tasks · sure enough"; when it is not sure, "not sure yet · about 57 tasks in all could settle it"). A picture on a "cheaper ◀ │ ▶ costlier" scale shows where the true difference likely lies, said in words ("likely 6% to 35% less"), with "same" under the line of no change. Under it, the other side of the question (passes, for a cost question; cost, for a `--goal better` one) gets the same words and picture. With no verdict yet it says "too few to tell", draws its picture in grey and says what could settle it ("about 40 tasks in all could settle it", or else the metric's own floor: "20 tasks of 3 runs each could settle it", the size below which the analysis gives no verdict; for cost in a `--goal better` experiment, which no size settles, "a --goal cheaper experiment could settle it"). In an A/A, the second line is how much the same setup's cost varies from run to run, with no second picture.
 - **Each version,** side by side (one under the other below 74 columns): its passes as a bar and a count, its typical cost and time (the geometric means the verdicts use), and runs cut short at their cap, out of time or left out by the sandbox.
 - **Every task,** in groups: the tasks the two versions ended differently; the tasks both failed ("check these tasks", with the command that shows one); tasks that ended the same with a mixed result (with repeats); and the tasks both passed (6 rows, then "+ 3 more passed in both"). Each row has each version's runs as ✓ or ✗, its mean cost as a bar on one scale for the whole list, and the cost. A last line says which version was cheaper on more tasks ("lean was cheaper on 8 of 8 tasks"; none in an A/A). Below 70 columns the bars are left out. Tasks whose every run was left out stay a count.
+- **What the agents did,** only when the project has [rule checks](#rule-checks): one line per check with a bar per version (in the version's color) and "7 of 8", a muted note for runs that could not be read, and the words "counts of your rule checks, not a verdict". Below 70 columns the bars are left out.
 - **The judge's opinion,** with `--judge` or `--judge-pairs`, labelled as an AI's opinion, not a test: how many passing fixes it thinks right per version, and which version's fix the pair judge preferred, by task (below).
 - **Notes,** dim, only when they matter: runs not counted, passes that changed the test setup, an unfinished experiment, the sandbox.
 
@@ -235,6 +236,24 @@ Runs use `claude-sonnet-5-5` at the CLI's default effort unless `--model MODEL[:
 Each run stops at its cap (`--run-budget`, default $3). Claude Code checks the cap after each turn, so a run can pass it by the turn that crosses it (the `seq-v1` smoke check: $0.507 against $0.50). The budget therefore holds back an allowance beside the cap of every run in flight: 10% of the cap, at least $0.15 on a model whose output costs what Sonnet's does, a floor that scales with the model's output price ($0.30 on Opus 5.5, $0.375 on Opus 5, the dearest price in the table for a model without one). A judge other than the default model and effort holds the same allowance per call. The preview's worst case includes it, and a run's estimate is never above its cap. A capped run records how far it went past its cap; one that passed the allowance gets a warning in the run's progress and in the report.
 
 The report marks runs cut short, capped at their cost cap or turn limit or stopped at the timeout, in the per-task table (`1/1, 1 capped`, and a mean cost of `≥$0.507`) and counts them in a note: such a run counts as it ended, graded and at the cost it reached, which is a lower bound of what it would have cost. That makes an arm cut short more often look cheaper, so a cost verdict that favours it says so in its headline.
+
+### Rule checks
+
+Your context files hold rules for agents: "run the tests before you finish", "do not edit generated files". A rule check counts the runs that followed one of them, per version, in the report:
+
+```
+agentium check add ran-go-test --ran "go test"                # a shell command the agent ran contains the text (case kept)
+agentium check add touched-tests --changed "**/*_test.go"     # the agent's change touches a file that matches
+agentium check add kept-docs --not-changed "docs/**"          # it touches no file that matches
+agentium check list
+agentium check rm kept-docs
+```
+
+Names follow the rule for snapshot names; give exactly one of the three flags, with a value that is not empty. Checks belong to the project and are kept in the data folder, never in your repository. A name that exists already, or one `rm` does not find, is a failure (exit 1); a wrong call is a usage error (exit 2). The three commands take `--json` (`check add` prints `check` with `name`, `kind` (`ran`, `changed` or `not-changed`) and `pattern`; `check list` prints `checks`; `check rm` prints `removed`).
+
+Nothing is recorded while a run is made. When a report is made, each counted run is read again: the commands are the ones its stored transcript shows as run, less the denied ones; the paths are the file headers of its stored change (a rename counts under both names, a deleted file as changed; the glob is the one rule files use: `*` within a folder, `**` across, `?`, `{a,b}`). So experiments that ran before a check existed are counted too. A run whose transcript (for `--ran`) or change (for the others) is missing or unreadable is neither met nor unmet: it is counted as unread. An empty change touches nothing: `--changed` is unmet and `--not-changed` is met.
+
+The counts are over the runs the report's behavior rows count, and they are counts, never a verdict: no statistics, no good or bad. On a terminal the report shows them as "what the agents did"; `--details` and the Markdown report have a "Rule checks" table after the behavior table, one row per check with the rule in words and, per version, "met of counted" (and "n unread" when there are some). `experiment report --json` gains `checks`: `[]` without checks, else per check `name`, `kind`, `pattern` and `arms`, an object by version name of `met`, `counted` and `unread`. A project without checks gets the report it had, apart from that empty list.
 
 ### How a cost experiment decides
 
@@ -291,7 +310,7 @@ The report shows it only for experiments made with `--judge-pairs`. On a termina
 
 ## Scripting and automation
 
-For hooks, schedulers and scripts. `--json` covers `init`, `clean`, `context show|snapshot|list|diff|lint`, `task list|show|draft|validate|import|add|edit|rm`, `run once|show|list`, `pool update|status`, `start` and `experiment new|plan|show|list|run|rm`. `experiment report --json` exists already, with its own shape (the lock and every run); `run calibrate` has human output only.
+For hooks, schedulers and scripts. `--json` covers `init`, `clean`, `check add|list|rm`, `context show|snapshot|list|diff|lint`, `task list|show|draft|validate|import|add|edit|rm`, `run once|show|list`, `pool update|status`, `start` and `experiment new|plan|show|list|run|rm`. `experiment report --json` exists already, with its own shape (the lock and every run); `run calibrate` has human output only.
 
 **`--json`** prints exactly one JSON document on stdout and no other text there; progress, color and questions are off. Put it after the subcommand: `task list --json`. `task --json list` is deliberately not recognized.
 - Top level: `"schema"` (1; raised only when a field is removed, renamed or changes meaning, never for added fields) and `"command"` (for example `"task list"`). Fields are snake_case. Lists are `[]`, never `null`, and every field is always present: one that can be unknown or not asked for is `null` (`solution_commit`, `unstated_requirements`, `passed`, `diff`, `patch`, the logs of `run show`).
