@@ -105,6 +105,12 @@ func TestTheLockDecidesHowRunsPass(t *testing.T) {
 	// codes, the TestMain bypass passes as it did, and its stored design is left as it is.
 	legacyDesign, legacyLock := asBeforeTheProof(t, storedExperiment(t, f, "before").Design, storedLock(t, f, "before"))
 	saveLocked(t, f, "legacy", legacyDesign, legacyLock)
+	// Its preview reads it as locked: no rule to take up, no task to validate again for it.
+	asValidatedBeforeTheProof(t, f, "gov")
+	if plan := f.run(ctx, "experiment", "plan", "legacy"); plan.code != ExitOK || strings.Contains(plan.stdout, "takes up that proof") ||
+		strings.Contains(plan.stdout, "validated before the proof") {
+		t.Errorf("a locked legacy experiment's preview (%d):\n%s", plan.code, plan.stdout)
+	}
 	expect(t, f.run(ctx, "experiment", "run", "legacy"), ExitOK, "Resuming experiment legacy")
 	if got := storedExperiment(t, f, "legacy").Design; string(got) != string(legacyDesign) {
 		t.Errorf("a locked experiment's design changed:\n%s\nwas\n%s", got, legacyDesign)

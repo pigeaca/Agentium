@@ -43,6 +43,7 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
+	e.Locked = stored.Lock != nil
 	if stored.Lock != nil {
 		// A locked experiment keeps the tasks it locked: whatever has happened to them since (retired, revalidated,
 		// removed) does not affect resuming, so it is not a readiness problem.

@@ -370,18 +370,21 @@ func TestValidateProvesAFolderAVerifyCommandNames(t *testing.T) {
 	bare, base, ids := goModule(t, map[string]string{"testdata/p/p.go": "package p\n\nfunc Value() int { return 0 }\n"},
 		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nfunc Value() int { return 1 }\n"},
 		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nimport \"os\"\n\nfunc Value() int { return 0 }\n\nfunc init() { os.Exit(0) }\n"})
-	spec := Spec{Base: base, HiddenTests: []string{"testdata/p/p_test.go"}, Reference: []string{"testdata/p/p.go"}, Verify: []string{"go test -count=1 ./testdata/p"}}
-	spec.Solution = ids[0]
-	v, progress := validator(t, bare)
-	good, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
-	if err != nil || good.Status != StatusValid || !good.Stages[1].Proof.Proven() {
-		t.Fatalf("a correct reference: %v, %v\n%s", good.Summary(), err, progress)
-	}
-	spec.Solution = ids[1]
-	v, progress = validator(t, bare)
-	exits, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
-	if err != nil || exits.Status != StatusInvalid || !strings.Contains(exits.Summary(), NoteHiddenTestsNotRun) {
-		t.Errorf("an init that exits 0 in testdata/p: %v, %v\n%s", exits.Summary(), err, progress)
+	// Named as a package, as -C's folder (no package argument), and after a debug flag that takes a value.
+	for _, verify := range []string{"go test -count=1 ./testdata/p", "go test -C ./testdata/p -count=1", "go test -debug-trace=trace.json -count=1 ./testdata/p"} {
+		spec := Spec{Base: base, HiddenTests: []string{"testdata/p/p_test.go"}, Reference: []string{"testdata/p/p.go"}, Verify: []string{verify}}
+		spec.Solution = ids[0]
+		v, progress := validator(t, bare)
+		good, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+		if err != nil || good.Status != StatusValid || !good.Stages[1].Proof.Proven() {
+			t.Fatalf("%s: a correct reference: %v, %v\n%s", verify, good.Summary(), err, progress)
+		}
+		spec.Solution = ids[1]
+		v, progress = validator(t, bare)
+		exits, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+		if err != nil || exits.Status != StatusInvalid || !strings.Contains(exits.Summary(), NoteHiddenTestsNotRun) {
+			t.Errorf("%s: an init that exits 0 in testdata/p: %v, %v\n%s", verify, exits.Summary(), err, progress)
+		}
 	}
 }
 
@@ -398,16 +401,25 @@ func TestValidateTakesADocumentationExampleAsGoDoes(t *testing.T) {
 }
 
 // go test's arguments are read as go reads them: a flag's value is never a package, and what follows the package list
-// once a flag (or the test binary's flag, -args, --) came after it is the test binary's.
+// once a flag, -args or -- came after it is the test binary's; after a flag go test does not know, later words count.
 func TestGoTestTargets(t *testing.T) {
 	for command, want := range map[string][]goTarget{
-		"go test -outputdir ./testdata/p ./...":                        {{pkg: "./..."}},
-		"go test -outputdir=./testdata/p ./testdata/q":                 {{pkg: "./testdata/q"}},
-		"go test --coverprofile ./testdata/c.out -count=1 ./a ./b":     {{pkg: "./a"}, {pkg: "./b"}},
-		"go test -C sub -test.run X ./testdata/p -v ./other":           {{dir: "sub", pkg: "./testdata/p"}},
-		"go test -myflag ./testdata/p":                                 nil,
-		"go test ./a -args ./b":                                        {{pkg: "./a"}},
-		"go test ./a -- ./b":                                           {{pkg: "./a"}},
+		"go test -outputdir ./testdata/p ./...":                    {{pkg: "./..."}},
+		"go test -outputdir=./testdata/p ./testdata/q":             {{pkg: "./testdata/q"}},
+		"go test --coverprofile ./testdata/c.out -count=1 ./a ./b": {{pkg: "./a"}, {pkg: "./b"}},
+		"go test -C sub -test.run X ./testdata/p -v ./other":       {{dir: "sub", pkg: "./testdata/p"}},
+		"go test ./a -args ./b":                                    {{pkg: "./a"}},
+		"go test ./a -- ./b":                                       {{pkg: "./a"}},
+		// A flag go test does not know: what follows it may be a package, so it is listed (the doubt shows).
+		"go test -myflag ./testdata/p":       {{pkg: "./testdata/p"}},
+		"go test ./a -myflag x ./testdata/p": {{pkg: "./a"}, {pkg: "x"}, {pkg: "./testdata/p"}},
+		// No package: the folder go test runs in, -C's when given.
+		"go test -C ./testdata/p": {{dir: "./testdata/p", pkg: "."}},
+		"go test -v -count=1":     {{pkg: "."}},
+		// cmd/go's debug flags take a value.
+		"go test -debug-actiongraph=graph.json ./testdata/p":           {{pkg: "./testdata/p"}},
+		"go test -debug-runtime-trace rt.out ./testdata/p":             {{pkg: "./testdata/p"}},
+		"go test -debug-trace trace.json ./testdata/p":                 {{pkg: "./testdata/p"}},
 		"GOPROXY=off go test -race ./a && go test -tags it ./testdata": {{pkg: "./a"}, {pkg: "./testdata"}},
 	} {
 		if got := goTestTargets(command); !reflect.DeepEqual(got, want) {

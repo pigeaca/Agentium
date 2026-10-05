@@ -47,6 +47,9 @@ type ReadinessEnv struct {
 	// its own (Runner.Revalidate), so one that still is not keeps it from running. Otherwise (plan) such a task is
 	// one the first run validates again.
 	Locking bool
+	// Locked is set when the experiment is locked already (LoadReview): it resumes under its lock's grading rule, so a
+	// design made before the proof that the hidden tests ran is read as it is stored, never as one that takes it up.
+	Locked bool
 }
 
 // checker collects a readiness report's lines.
@@ -176,7 +179,7 @@ func (c *checker) tasks(d Design, eligible []string, reasons map[string]string) 
 // locks). A design made before the proof is read as its first run will lock it (Runner.takeUpPassRule): with the rule
 // when one of its tasks has hidden Go tests, which a line says.
 func (c *checker) graders(ctx context.Context, p Project, e ReadinessEnv, d Design) {
-	if d.PassRule == "" { // made before the proof: the first run gives it the rule when a task has hidden Go tests
+	if d.PassRule == "" && !e.Locked { // made before the proof: the first run gives it the rule when a task has hidden Go tests
 		up := d
 		if err := p.markPassRule(ctx, &up); err != nil {
 			c.line(false, "the tasks' hidden tests could not be read: %v", err)

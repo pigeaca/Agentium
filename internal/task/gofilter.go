@@ -154,7 +154,11 @@ func goTestFilters(command string) []goTestFilter {
 }
 
 // goValueFlags are the `go test` flags that take a value, from `go help testflag`, `go help build` and `go help test`
-// (go 1.27): their value is the next word unless given as -flag=value. Test flags are also known by their -test. names.
+// (go 1.27), and the build's undocumented debug flags (checked with go 1.27): their value is the next word unless given
+// as -flag=value. Test flags are also known by their -test. names. A flag in neither table is read as the test binary's;
+// where that is a doubt, it falls on the side that shows (goTestTargets): a word after it that names a folder still
+// counts as named, since a test the proof demands wrongly fails the reference at validation, before any experiment,
+// while one it drops wrongly lets a faked pass through in silence.
 var goValueFlags = map[string]bool{
 	// go help testflag
 	"bench": true, "benchtime": true, "blockprofile": true, "blockprofilerate": true, "count": true, "covermode": true, "coverpkg": true,
@@ -166,6 +170,8 @@ var goValueFlags = map[string]bool{
 	"ldflags": true, "mod": true, "modfile": true, "overlay": true, "pgo": true, "pkgdir": true, "tags": true, "toolexec": true,
 	// go help test
 	"exec": true, "o": true,
+	// cmd/go's build flags that its help leaves out
+	"debug-actiongraph": true, "debug-runtime-trace": true, "debug-trace": true,
 }
 
 // goBoolFlags are the `go test` flags that take no value, from the same pages: with goValueFlags, every flag go test
@@ -178,8 +184,10 @@ var goBoolFlags = map[string]bool{
 
 // goTestTargets lists the packages a shell command's `go test` invocations name, each as written, with the folder of
 // its -C flag ("" without one). It reads the arguments as go test does: the package list is the first run of words
-// that are not flags; the value of a flag that takes one is never a package; after an unknown flag (the test binary's),
-// -args or --, and once a flag has followed the package list, the remaining words are the test binary's.
+// that are not flags, "." when there is none; the value of a flag that takes one is never a package; after -args or --,
+// and once a flag has followed the package list, the remaining words are the test binary's. After a flag it does not
+// know (the test binary's, or one missing from goValueFlags), every later word that is not a flag is listed too: the
+// doubt falls on the side that shows (goValueFlags).
 func goTestTargets(command string) (targets []goTarget) {
 	words, ok := shellWords(command)
 	if !ok {
@@ -190,7 +198,7 @@ func goTestTargets(command string) (targets []goTarget) {
 			continue
 		}
 		var pkgs []string
-		chdir, listed, inList := "", false, false
+		chdir, listed, inList, unknown := "", false, false, false
 	args:
 		for j := i + 2; j < len(words) && !isShellOperator(words[j]); j++ {
 			w := words[j]
@@ -198,7 +206,7 @@ func goTestTargets(command string) (targets []goTarget) {
 				break
 			}
 			if !strings.HasPrefix(w, "-") || w == "-" {
-				if listed && !inList {
+				if listed && !inList && !unknown {
 					break // the test binary's
 				}
 				listed, inList = true, true
@@ -221,8 +229,11 @@ func goTestTargets(command string) (targets []goTarget) {
 				}
 			case goBoolFlags[name]:
 			default:
-				listed = true // an unknown flag: the package list, if any, is complete
+				listed, unknown = true, true // an unknown flag: the package list, if any, is complete
 			}
+		}
+		if len(pkgs) == 0 {
+			pkgs = []string{"."} // the package in the folder go test runs in (-C's, else the command's)
 		}
 		for _, p := range pkgs {
 			if !strings.Contains(p, substitution) && !strings.Contains(chdir, substitution) {
