@@ -39,10 +39,12 @@ type Invocation struct {
 	Deny []string
 	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
 	Started func(pid int)
-	// Observe, when set, runs from the agent's start (given its process ID) until it ends (ctx ends): Agentium's own
-	// look at the agent's processes (run's tracker of its descendants). BeforeStop, when set, is called right before the
-	// agent's process group is signalled to stop, while the agent still runs.
-	Observe    func(ctx context.Context, pid int)
+	// Observe, when set, is Agentium's own look at the agent's processes (run's tracker of its descendants). It is
+	// called with the agent's process ID as soon as the agent starts, before the runner waits for it (so before it can
+	// be reaped, even if it has already exited), and should return quickly; the function it returns, when not nil,
+	// then runs in a goroutine of its own until the agent ends (its context ends). BeforeStop, when set, is called
+	// right before Agentium signals the agent's process group to stop (runner.Spec.BeforeStop).
+	Observe    func(pid int) func(ctx context.Context)
 	BeforeStop func()
 	// BuildCache, when set, is a folder of the run's own for build caches: the build tools' agent caches point there
 	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied

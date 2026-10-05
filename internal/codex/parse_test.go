@@ -344,3 +344,36 @@ func TestParseTakesTheLargerCostAndNeedsAClosedTurn(t *testing.T) {
 		t.Error("a stopped run's rollout that closed its turn (turn_aborted) was taken as incomplete")
 	}
 }
+
+// A rollout that lost request records but went on to close its turn (persisting a record is never retried): its last
+// token_count's running total (total_token_usage) is more than its records add up to, so it is incomplete, and its
+// cost is that total priced whole. Kept whole, the same rollout is complete.
+func TestParseComparesTheRunningTotal(t *testing.T) {
+	full, err := os.ReadFile(filepath.Join("testdata", "rollout-interrupted.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	dropped := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(full)), "\n") {
+		if strings.Contains(line, `"token_usage_record"`) && dropped < 2 {
+			dropped++
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if dropped != 2 || !strings.Contains(strings.Join(kept, "\n"), `"turn_aborted"`) {
+		t.Fatalf("the fixture changed: %d records dropped", dropped)
+	}
+	dir := records(t, "interrupted", "")
+	if err := os.WriteFile(filepath.Join(dir, Rollout), []byte(strings.Join(kept, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parse(t, dir)
+	if want := cost(54875, 43008, 396); !m.RolloutsIncomplete || math.Abs(m.CostUSD-want) > 1e-12 {
+		t.Errorf("a rollout missing 2 records: incomplete %v, $%.7f (want incomplete, the running total's $%.7f)", m.RolloutsIncomplete, m.CostUSD, want)
+	}
+	if m := parse(t, records(t, "interrupted", "interrupted")); m.RolloutsIncomplete || math.Abs(m.CostUSD-cost(54875, 43008, 396)) > 1e-12 {
+		t.Errorf("the whole rollout: incomplete %v, $%.7f", m.RolloutsIncomplete, m.CostUSD)
+	}
+}

@@ -147,10 +147,14 @@ func Run(ctx context.Context, a Adapter, inv Invocation, environ []string, trans
 			if started != nil {
 				started(pid)
 			}
+			poll := inv.Observe(pid) // here, not in the goroutine: the runner waits for the agent only after Started
+			if poll == nil {
+				return
+			}
 			watching.Add(1)
 			go func() {
 				defer watching.Done()
-				inv.Observe(watchCtx, pid)
+				poll(watchCtx)
 			}()
 		}
 	}

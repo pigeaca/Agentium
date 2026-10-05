@@ -7,7 +7,9 @@ package run
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/proc_info.h>
+#include <sys/sysctl.h>
 #include <sys/types.h>
 extern const int SANDBOX_CHECK_NO_REPORT;
 extern int sandbox_check(pid_t pid, const char *operation, int type, ...);
@@ -15,22 +17,57 @@ static int ag_codex_sandboxed(int pid) { return sandbox_check(pid, NULL, 0 | SAN
 static int ag_codex_denies(int pid, const char *operation, const char *path) {
 	return sandbox_check(pid, operation, 1 | SANDBOX_CHECK_NO_REPORT, path);
 }
-// ag_codex_bsd gives a process's parent, start time and command name (MAXCOMLEN+1 bytes) when it belongs to uid;
-// it returns 0, or -1 for another user's process, one that is gone or cannot be inspected.
-static int ag_codex_bsd(int pid, unsigned int uid, int *ppid, uint64_t *sec, uint64_t *usec, char *comm) {
-	struct proc_bsdinfo bsd;
-	if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof(bsd)) != sizeof(bsd) || bsd.pbi_uid != uid) return -1;
-	*ppid = (int)bsd.pbi_ppid;
-	*sec = bsd.pbi_start_tvsec;
-	*usec = bsd.pbi_start_tvusec;
-	memcpy(comm, bsd.pbi_comm, MAXCOMLEN); comm[MAXCOMLEN] = 0;
+// ag_codex_proc is one process in a read of the process table (ag_codex_table, ag_codex_one).
+typedef struct { int pid, ppid, zombie; uint64_t sec, usec; char comm[MAXCOMLEN + 1]; } ag_codex_proc;
+static void ag_codex_fill(const struct kinfo_proc *p, ag_codex_proc *out) {
+	out->pid = p->kp_proc.p_pid;
+	out->ppid = p->kp_eproc.e_ppid;
+	out->zombie = p->kp_proc.p_stat == SZOMB;
+	out->sec = (uint64_t)p->kp_proc.p_starttime.tv_sec;
+	out->usec = (uint64_t)p->kp_proc.p_starttime.tv_usec;
+	memcpy(out->comm, p->kp_proc.p_comm, MAXCOMLEN); out->comm[MAXCOMLEN] = 0;
+}
+// ag_codex_table reads the whole process table in one sysctl (kern.proc.all, zombies included) and keeps uid's
+// processes in *out (malloc'd; the caller frees it). It returns their count, or -1.
+static int ag_codex_table(unsigned int uid, ag_codex_proc **out) {
+	int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+	struct kinfo_proc *procs = NULL;
+	size_t size = 0;
+	for (int tries = 0; tries < 8 && procs == NULL; tries++) {
+		if (sysctl(mib, 3, NULL, &size, NULL, 0) != 0) return -1;
+		size += size / 4 + 64 * sizeof(struct kinfo_proc); // room for the processes started meanwhile
+		if ((procs = malloc(size)) == NULL) return -1;
+		if (sysctl(mib, 3, procs, &size, NULL, 0) != 0) {
+			free(procs);
+			procs = NULL;
+			if (errno != ENOMEM) return -1;
+		}
+	}
+	if (procs == NULL) return -1;
+	int n = (int)(size / sizeof(struct kinfo_proc)), k = 0;
+	ag_codex_proc *res = malloc((n > 0 ? n : 1) * sizeof(ag_codex_proc));
+	if (res == NULL) { free(procs); return -1; }
+	for (int i = 0; i < n; i++) {
+		if (procs[i].kp_eproc.e_ucred.cr_uid == uid) ag_codex_fill(&procs[i], &res[k++]);
+	}
+	free(procs);
+	*out = res;
+	return k;
+}
+// ag_codex_one reads one process (kern.proc.pid, a zombie too) into *out when it belongs to uid; it returns 0, or -1
+// for another user's process or one that is gone.
+static int ag_codex_one(int pid, unsigned int uid, ag_codex_proc *out) {
+	int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, pid};
+	struct kinfo_proc p;
+	size_t size = sizeof(p);
+	if (sysctl(mib, 4, &p, &size, NULL, 0) != 0 || size != sizeof(p) || p.kp_proc.p_pid != pid || p.kp_eproc.e_ucred.cr_uid != uid) return -1;
+	ag_codex_fill(&p, out);
 	return 0;
 }
 */
 import "C"
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -46,104 +83,55 @@ func (p process) startedSince(since time.Time) bool {
 	return !time.Unix(int64(p.sec), int64(p.usec)*1000).Before(since)
 }
 
-// tableEntry is one process of the user's in a snapshot of the process table: its identity and its parent's ID.
-type tableEntry struct {
-	id   identity
-	ppid int
+// tracksDescendants: whether descendants can read this system's processes.
+const tracksDescendants = true
+
+// procIdentity is a process read by ag_codex_table or ag_codex_one.
+func procIdentity(p *C.ag_codex_proc) tableEntry {
+	comm := C.GoStringN(&p.comm[0], C.MAXCOMLEN)
+	name, _, _ := strings.Cut(comm, "\x00")
+	return tableEntry{id: identity{PID: int(p.pid), Sec: uint64(p.sec), Usec: uint64(p.usec), Command: name}, ppid: int(p.ppid),
+		zombie: p.zombie != 0}
 }
 
-// processTable is one snapshot of this user's processes (not Agentium's own), by process ID.
+// processTable is one read of this user's processes (not Agentium's own), by process ID: one sysctl, which lists the
+// IDs at once but reads each process after (descendants.snapshot allows for that).
 func processTable() (map[int]tableEntry, error) {
-	pids, err := allPIDs()
-	if err != nil {
-		return nil, err
+	var procs *C.ag_codex_proc
+	n := C.ag_codex_table(C.uint(os.Getuid()), &procs)
+	if n < 0 {
+		return nil, errors.New("the process table could not be read")
 	}
-	self, uid := os.Getpid(), C.uint(os.Getuid())
-	table := make(map[int]tableEntry, len(pids))
-	comm := make([]byte, C.MAXCOMLEN+1)
-	for _, pid := range pids {
-		if pid <= 1 || pid == self {
-			continue
+	defer C.free(unsafe.Pointer(procs))
+	self := os.Getpid()
+	table := make(map[int]tableEntry, int(n))
+	for _, p := range unsafe.Slice(procs, int(n)) {
+		e := procIdentity(&p)
+		if e.id.PID > 1 && e.id.PID != self {
+			table[e.id.PID] = e
 		}
-		var ppid C.int
-		var sec, usec C.uint64_t
-		if C.ag_codex_bsd(C.int(pid), uid, &ppid, &sec, &usec, (*C.char)(unsafe.Pointer(&comm[0]))) != 0 {
-			continue
-		}
-		name, _, _ := strings.Cut(string(comm), "\x00")
-		table[pid] = tableEntry{id: identity{PID: pid, Sec: uint64(sec), Usec: uint64(usec), Command: name}, ppid: int(ppid)}
 	}
 	return table, nil
 }
 
-// identityNow is the process with ID pid as it is now (ok false: gone, or another user's).
+// identityNow is the process with ID pid as it is now, a zombie too (ok false: gone, or another user's).
 func identityNow(pid int) (identity, bool) {
-	p, ok := startOf(pid)
-	if !ok {
-		return identity{}, false
-	}
-	return identity{PID: pid, Sec: p.sec, Usec: p.usec, Command: p.command}, true
+	e, ok := readOne(pid)
+	return e.id, ok
 }
 
-// snapshot looks at the process table once and adds to d every process whose parent chain leads to one it tracks
-// (the agent, or a descendant seen before), each link a parent that started no later than its child (a parent whose
-// ID was taken by a later process breaks the chain). Persisted when it grows.
-func (d *descendants) snapshot() error {
-	table, err := processTable()
-	if err != nil {
-		return err
-	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.tracked) == 0 {
-		return nil
-	}
-	added := false
-	for _, e := range table {
-		if _, ok := d.tracked[e.id.key()]; ok {
-			continue
-		}
-		chain := []identity{e.id}
-		for cur, steps := e, 0; steps < 64; steps++ {
-			parent, ok := table[cur.ppid]
-			if !ok || parent.id.started().After(cur.id.started()) {
-				break
-			}
-			if _, tracked := d.tracked[parent.id.key()]; tracked {
-				for _, id := range chain {
-					d.tracked[id.key()] = id
-				}
-				added = true
-				break
-			}
-			chain = append(chain, parent.id)
-			cur = parent
-		}
-	}
-	if added {
-		return d.persist()
-	}
-	return nil
+// runningNow is identityNow without zombies: a process that can still be stopped.
+func runningNow(pid int) (identity, bool) {
+	e, ok := readOne(pid)
+	return e.id, ok && !e.zombie
 }
 
-// observe tracks the agent started with process ID pid (its identity becomes the root) and looks every poll until ctx
-// ends (agent.Invocation.Observe).
-func (d *descendants) observe(ctx context.Context, pid int) {
-	if id, ok := identityNow(pid); ok {
-		d.mu.Lock()
-		d.tracked[id.key()] = id
-		d.mu.Unlock()
+func readOne(pid int) (tableEntry, bool) {
+	var p C.ag_codex_proc
+	if pid <= 0 || C.ag_codex_one(C.int(pid), C.uint(os.Getuid()), &p) != 0 {
+		return tableEntry{}, false
 	}
-	ticker := time.NewTicker(descendantsPoll)
-	defer ticker.Stop()
-	for {
-		_ = d.snapshot()
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	return procIdentity(&p), true
 }
 
 // stopDescendants kills every process d tracks that is still alive with exactly the identity recorded and started at
@@ -169,7 +157,7 @@ func stopDescendants(d *descendants, since time.Time, guard func(pids []int) boo
 			}
 		}
 		for _, id := range targets {
-			if now, ok := identityNow(id.PID); ok && now.key() == id.key() && syscall.Kill(id.PID, syscall.SIGKILL) == nil {
+			if now, ok := runningNow(id.PID); ok && now.key() == id.key() && syscall.Kill(id.PID, syscall.SIGKILL) == nil {
 				killed = append(killed, fmt.Sprintf("%d %q", id.PID, id.Command))
 			}
 		}
@@ -182,12 +170,12 @@ func stopDescendants(d *descendants, since time.Time, guard func(pids []int) boo
 // process d tracks that is alive with exactly the identity recorded (never one that only shares its ID) and started at
 // since or later.
 func descendantTargets(d *descendants, since time.Time) ([]identity, error) {
-	if err := d.snapshot(); err != nil {
+	if err := d.snapshot(true); err != nil {
 		return nil, err
 	}
 	var targets []identity
 	for _, id := range d.list() {
-		if now, ok := identityNow(id.PID); ok && now.key() == id.key() && !id.started().Before(since) {
+		if now, ok := runningNow(id.PID); ok && now.key() == id.key() && !id.started().Before(since) {
 			targets = append(targets, id)
 		}
 	}

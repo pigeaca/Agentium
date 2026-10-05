@@ -674,7 +674,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 		tracked = loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses))
 		inv.Observe = tracked.observe
-		inv.BeforeStop = func() { _ = tracked.snapshot() }
+		inv.BeforeStop = func() { _ = tracked.snapshot(true) } // saved too: the stop may end Agentium before the sweep
 	}
 	env.step(StepAgent)
 	env.progress("  workspace ready; %s is working (up to %s)", env.agentLabel(), spec.Timeout)
@@ -715,6 +715,9 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	}
 	if env.isCodex() { // Codex reports no cost: its requests' tokens, priced here (codex.Adapter.Parse)
 		rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+		if parseErr != nil { // records that cannot be read whole verify nothing: the bound (codexSpendFallback)
+			rec.Metrics.RolloutsIncomplete = true
+		}
 		if result.Stop == agent.StopBlind { // its accounting was lost: what the rollouts hold is a part
 			rec.Metrics.RolloutsIncomplete = true
 			if err := markAccountingLost(rec.RecordsDir); err != nil {

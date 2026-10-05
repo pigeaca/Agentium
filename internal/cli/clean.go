@@ -32,12 +32,13 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
   - the grading folders of sandboxed validations that stopped (never one a validation is grading in, or any
     process uses: nothing is stopped);
   - and it lists, as kept, processes a Codex run's commands may have left that Agentium did not see descend from the
-    run's agent (in the run's sandbox, or using its folders): it never stops a process, --yes or not; stop one that is
-    yours to stop yourself (the line says how).
+    run's agent (in the run's sandbox, or using its folders): it never stops one of those, --yes or not; stop one that
+    is yours to stop yourself (the line says how).
 Nothing used in the last hour goes, and nothing a locked, unfinished experiment uses. Your repositories, reports and
 snapshots are never touched. Without --yes it writes nothing; with --yes it first runs the recovery every run starts
-with, which stores runs a dead Agentium left as cancelled, redacts their records, and removes the records folder of
-one that stopped before its agent started.
+with, which stores runs a dead Agentium left as cancelled, redacts their records, removes the records folder of one
+that stopped before its agent started, and, for a dead Codex run, stops the processes Agentium saw descend from its
+agent that are still running (each only while it is exactly the process recorded: its ID and start time).
 
 Flags:
   --older-than DURATION  what a task uses goes too once unused this long: 30d (the default), 12h, 90m; at least 1h

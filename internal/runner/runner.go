@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -39,8 +40,11 @@ type Spec struct {
 	// Stop, when set, stops the command once it is closed, the way a timeout does (gently with Grace, then SIGKILL), and
 	// the result says so (Result.Stopped): a watcher's decision, such as Agentium's cost cap, not a timeout.
 	Stop <-chan struct{}
-	// BeforeStop, when set, is called right before the command's process group is signalled to stop (a timeout, a
-	// cancellation, Stop), while the command still runs: a caller tracking its processes looks once more.
+	// BeforeStop, when set, is called right before each signal Run sends the command's process group: the interrupt or
+	// kill of a timeout, a cancellation or Stop, the kill after Grace, and the kill of what is left of the group once
+	// the command has ended (only when something is left: never after a command that ended on its own with nothing
+	// left). A caller tracking its processes looks once more before they go. It may be called more than once, from
+	// another goroutine.
 	BeforeStop func()
 }
 
@@ -158,16 +162,31 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		cmd.Stderr = spec.Stderr
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var escalate *time.Timer
-	cmd.Cancel = func() error {
+	beforeStop := func() {
 		if spec.BeforeStop != nil {
 			spec.BeforeStop()
 		}
+	}
+	var (
+		escalate *time.Timer
+		reaped   sync.Mutex // held while the escalation kills, and to mark the command reaped (waited)
+		waited   bool
+	)
+	cmd.Cancel = func() error {
+		beforeStop()
 		if spec.Grace <= 0 {
 			return killGroup(cmd.Process.Pid)
 		}
 		pid := cmd.Process.Pid
-		escalate = time.AfterFunc(spec.Grace, func() { killGroup(pid) })
+		escalate = time.AfterFunc(spec.Grace, func() {
+			reaped.Lock()
+			defer reaped.Unlock()
+			if waited { // the command was reaped meanwhile: what is left of its group is killed after Wait
+				return
+			}
+			beforeStop()
+			killGroup(pid)
+		})
 		return interruptGroup(pid)
 	}
 	cmd.WaitDelay = spec.Grace + 5*time.Second
@@ -179,12 +198,16 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		}
 		err = cmd.Wait()
 	}
+	reaped.Lock()
+	waited = true
+	reaped.Unlock()
 	if escalate != nil {
 		escalate.Stop()
 	}
 	result := Result{Duration: time.Since(start), ExitCode: -1}
-	if cmd.Process != nil {
-		killGroup(cmd.Process.Pid) // background children of a finished command
+	if cmd.Process != nil && groupAlive(cmd.Process.Pid) { // background children of a finished command
+		beforeStop()
+		killGroup(cmd.Process.Pid)
 	}
 	name := spec.Command
 	if len(spec.Args) > 0 {
@@ -221,6 +244,12 @@ func interruptGroup(pid int) error {
 		return err
 	}
 	return nil
+}
+
+// groupAlive reports whether the process group led by pid still has a process (one of another user's included).
+func groupAlive(pid int) bool {
+	err := syscall.Kill(-pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // killGroup kills the process group led by pid; a group that is already gone is not an error.

@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -136,5 +139,34 @@ func TestRunWatchesTheAgent(t *testing.T) {
 	cmd.Args, cmd.Watch = []string{"-c", "cat >/dev/null"}, func(ctx context.Context) Stop { <-ctx.Done(); return StopNone }
 	if result, err := Run(context.Background(), watchAgent{cmd: cmd}, Invocation{CLI: "/bin/sh", Dir: work}, nil, out, errOut); err != nil || result.Stop != StopNone || !result.Passed() {
 		t.Errorf("a run its watcher let be: %+v, %v", result, err)
+	}
+}
+
+// Observe is called with the agent's process ID before the runner waits for it, so the process is still there (a
+// zombie at worst) even when it exits at once: what it reads then is the agent. The function it returns runs until the
+// run ends; a nil one is none.
+func TestRunObservesTheAgent(t *testing.T) {
+	out, errOut := files(t)
+	var observed, existed bool
+	var polled, ended atomic.Bool
+	inv := Invocation{CLI: "/bin/sh", Dir: t.TempDir(), Observe: func(pid int) func(context.Context) {
+		observed = true
+		existed = exec.Command("/bin/ps", "-p", strconv.Itoa(pid)).Run() == nil
+		return func(ctx context.Context) {
+			polled.Store(true)
+			<-ctx.Done()
+			ended.Store(true)
+		}
+	}}
+	result, err := Run(context.Background(), shellAgent{args: []string{"-c", "exit 0"}}, inv, nil, out, errOut)
+	if err != nil || !result.Passed() || !observed || !existed {
+		t.Fatalf("%+v, %v: observed %v, the agent still there %v", result, err, observed, existed)
+	}
+	if !polled.Load() || !ended.Load() {
+		t.Errorf("the poll ran %v, ended with the run %v", polled.Load(), ended.Load())
+	}
+	inv.Observe = func(int) func(context.Context) { return nil }
+	if result, err := Run(context.Background(), shellAgent{args: []string{"-c", "exit 0"}}, inv, nil, out, errOut); err != nil || !result.Passed() {
+		t.Errorf("no poll: %+v, %v", result, err)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -215,5 +217,87 @@ func TestStopEndsTheCommandGently(t *testing.T) {
 	result, err = Run(context.Background(), Spec{Command: "true", Stop: make(chan struct{})})
 	if err != nil || result.Stopped || !result.Passed() {
 		t.Errorf("a command that was never stopped: %+v, %v", result, err)
+	}
+}
+
+// hookCall is one BeforeStop call: when, and whether the command's own process and a watched one were still alive.
+type hookCall struct {
+	after               time.Duration
+	leader, watchedLive bool
+}
+
+// hooked runs spec with a BeforeStop that records each call; watched, when set, names a file holding a process ID to
+// look at too.
+func hooked(ctx context.Context, t *testing.T, spec Spec, watched string) (Result, []hookCall, error) {
+	t.Helper()
+	var (
+		mu    sync.Mutex
+		calls []hookCall
+		pid   atomic.Int64
+	)
+	start := time.Now()
+	spec.Started = func(p int) { pid.Store(int64(p)) }
+	spec.BeforeStop = func() {
+		c := hookCall{after: time.Since(start), leader: pid.Load() > 0 && syscall.Kill(int(pid.Load()), 0) == nil}
+		if data, err := os.ReadFile(watched); err == nil {
+			if w, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				c.watchedLive = syscall.Kill(w, 0) == nil
+			}
+		}
+		mu.Lock()
+		calls = append(calls, c)
+		mu.Unlock()
+	}
+	result, err := Run(ctx, spec)
+	mu.Lock()
+	defer mu.Unlock()
+	return result, slices.Clone(calls), err
+}
+
+// BeforeStop comes before every signal Run sends, while what it signals still runs: a timeout's (with and without
+// grace), the kill after the grace, a stop's, a cancellation's, and the kill of what a finished command left. A
+// command that ends on its own with nothing left is never signalled, and BeforeStop is not called.
+func TestBeforeStopPrecedesEverySignal(t *testing.T) {
+	out, _ := output(t)
+	for _, command := range []string{"true", "sleep 0.1 & wait"} {
+		if _, calls, err := hooked(context.Background(), t, Spec{Output: out, Command: command, Grace: time.Second}, ""); err != nil || len(calls) != 0 {
+			t.Errorf("%q ended on its own: %d call(s), %v", command, len(calls), err)
+		}
+	}
+	// What a finished command left: its background child is still running at the call.
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	_, calls, err := hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30 & echo $! > " + pidFile + "; exit 0"}, pidFile)
+	if err != nil || len(calls) != 1 || !calls[0].watchedLive {
+		t.Errorf("a finished command's leftover child: calls %+v, %v", calls, err)
+	}
+	if alive(t, pidFile) {
+		t.Error("the leftover child outlived its command")
+	}
+	// A timeout without grace: one kill, while the command runs.
+	result, calls, err := hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30", Timeout: 100 * time.Millisecond}, "")
+	if err != nil || !result.TimedOut || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a timeout: %+v, calls %+v, %v", result, calls, err)
+	}
+	// A timeout with grace, on a command that ignores SIGINT: the interrupt, then the kill after the grace, each while
+	// the command still runs.
+	grace := 300 * time.Millisecond
+	result, calls, err = hooked(context.Background(), t, Spec{Output: out, Timeout: 100 * time.Millisecond, Grace: grace,
+		Command: `trap '' INT; while true; do sleep 0.05; done`}, "")
+	if err != nil || !result.TimedOut || len(calls) < 2 || !calls[0].leader ||
+		!slices.ContainsFunc(calls[1:], func(c hookCall) bool { return c.leader && c.after >= 100*time.Millisecond+grace }) {
+		t.Errorf("a timeout with grace: %+v, calls %+v, %v", result, calls, err)
+	}
+	// A stop and a cancellation.
+	stop := make(chan struct{})
+	time.AfterFunc(100*time.Millisecond, func() { close(stop) })
+	result, calls, err = hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30", Stop: stop, Grace: time.Second}, "")
+	if err != nil || !result.Stopped || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a stop: %+v, calls %+v, %v", result, calls, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, calls, err = hooked(ctx, t, Spec{Output: out, Command: "sleep 30"}, "")
+	if err == nil || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a cancellation: calls %+v, %v", calls, err)
 	}
 }

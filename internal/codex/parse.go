@@ -82,15 +82,24 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 	//     the rollouts' and the stream's priced whole (at the session's model's prices), and rollouts short of it by
 	//     more than 1% (behind) missed requests: incomplete;
 	//   - without it (a run stopped at its cap or timeout, or interrupted), the main rollout must close its turn
-	//     (task_complete or turn_aborted after its last request): otherwise requests at its end may be missing.
+	//     (task_complete or turn_aborted after its last request): otherwise requests at its end may be missing;
+	//   - either way, the main rollout's requests must add up to its last token_count's total (Codex's own running
+	//     count, kept apart from the request records) within the same 1%, and the cost is never less than that total
+	//     priced whole: a rollout that lost records (persisting one is never retried) but went on is incomplete.
+	if s.mainTotal != nil {
+		if rates, ok := pricing.OpenAILookup(m.Model); ok {
+			m.CostUSD = max(m.CostUSD, pricedWhole(*s.mainTotal, rates))
+		}
+		if behind(s.mainRecorded, *s.mainTotal) {
+			m.RolloutsIncomplete = true
+		}
+	}
 	recorded := pricing.OpenAIUsage{Input: m.InputTokens + m.CacheReadTokens + m.CacheWriteTokens, Cached: m.CacheReadTokens,
 		CacheWrite: m.CacheWriteTokens, Output: m.OutputTokens}
 	switch {
 	case turn != nil:
 		if rates, ok := pricing.OpenAILookup(m.Model); ok {
-			whole := (float64(turn.Uncached())*rates.Input + float64(turn.Cached)*rates.CachedInput + float64(turn.CacheWrite)*rates.CacheWrite +
-				float64(turn.Output)*rates.Output) / 1e6
-			m.CostUSD = max(m.CostUSD, whole)
+			m.CostUSD = max(m.CostUSD, pricedWhole(*turn, rates))
 		}
 		if behind(recorded, *turn) {
 			m.RolloutsIncomplete = true
@@ -99,6 +108,13 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 		m.RolloutsIncomplete = true
 	}
 	return m, nil
+}
+
+// pricedWhole is a thread's whole usage at rates, as one sum: the long-context limit, which is per request, is not
+// checked.
+func pricedWhole(u pricing.OpenAIUsage, rates pricing.OpenAIRates) float64 {
+	return (float64(u.Uncached())*rates.Input + float64(u.Cached)*rates.CachedInput + float64(u.CacheWrite)*rates.CacheWrite +
+		float64(u.Output)*rates.Output) / 1e6
 }
 
 // streamEvent is one line of `codex exec --json`.
@@ -269,6 +285,10 @@ func (r tokenUsageRecord) usage() pricing.OpenAIUsage {
 type eventMsg struct {
 	Type       string `json:"type"`
 	DurationMS int64  `json:"duration_ms"`
+	// Info (token_count) holds the thread's usage so far (total_token_usage, cumulative) in the shape of a request's.
+	Info *struct {
+		Total *json.RawMessage `json:"total_token_usage"`
+	} `json:"info"`
 	RateLimits *struct {
 		Primary   *limitWindow `json:"primary"`
 		Secondary *limitWindow `json:"secondary"`
@@ -300,6 +320,10 @@ type spend struct {
 	// closed: the main rollout's last request is followed by its turn's closing event (task_complete or turn_aborted),
 	// so no request of the turn is missing from its end.
 	closed bool
+	// mainRecorded sums the main rollout's requests; mainTotal is its last token_count's total_token_usage (the thread's
+	// usage so far, which Codex counts apart from the records), nil when it has none.
+	mainRecorded pricing.OpenAIUsage
+	mainTotal    *pricing.OpenAIUsage
 }
 
 // add prices one request at model's rates; a request on a model without a list price, or above the long-context
@@ -361,6 +385,9 @@ func parseRollout(file string, main bool, m *agent.Metrics, s *spend) error {
 				}
 				m.Turns++ // Codex's turn is the whole run: Turns counts the main session's requests
 			}
+			if main {
+				s.mainRecorded = addUsage(s.mainRecorded, u)
+			}
 			m.InputTokens += u.Uncached()
 			m.CacheReadTokens += u.Cached
 			m.CacheWriteTokens += u.CacheWrite
@@ -375,6 +402,13 @@ func parseRollout(file string, main bool, m *agent.Metrics, s *spend) error {
 			}
 			switch e.Type {
 			case "token_count":
+				if main && e.Info != nil && e.Info.Total != nil {
+					var r tokenUsageRecord
+					if json.Unmarshal([]byte(`{"usage":`+string(*e.Info.Total)+`}`), &r) == nil {
+						total := r.usage()
+						s.mainTotal = &total
+					}
+				}
 				if main && e.RateLimits != nil {
 					if reading, ok := usageReading(e.RateLimits.Primary, e.RateLimits.Secondary, e.RateLimits.Reached); ok {
 						if m.UsageFirst == nil {

@@ -204,6 +204,7 @@ CODEX_HOME=<T>/data/codex
 -- the Codex home after the run (CODEX_HOME)
 auth.json
 -- the run's records (without the grading copy)
+agent-processes.json
 agent.diff
 last-message.txt
 rollout.jsonl
@@ -422,6 +423,7 @@ CODEX_HOME=<T>/data/workspaces/<ID>/codex-home
 CODEX_API_KEY=[REDACTED]
 -- the Codex home after the run (CODEX_HOME)
 -- the run's records (without the grading copy)
+agent-processes.json
 agent.diff
 last-message.txt
 rollout.jsonl

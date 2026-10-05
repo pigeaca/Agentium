@@ -414,3 +414,44 @@ func TestRecoveryWithAnUnmarkedLoss(t *testing.T) {
 		t.Errorf("recovered $%.4f, want the bound $%.2f (notes %q)", got, want, orphans[0].Record.Notes)
 	}
 }
+
+// A crash right after the agent started, before its stream was written (the transcript is missing): the run's
+// pending mark says its spend was never settled, so recovery counts its bound, not the $0 an unread stream shows.
+func TestRecoveryWithoutATranscriptCountsTheBound(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1")
+	must(t, os.MkdirAll(dir, 0o700))
+	must(t, os.MkdirAll(workspace, 0o700))
+	must(t, os.WriteFile(filepath.Join(dir, AccountingPending), []byte("pending\n"), 0o600))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 3, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	got := orphans[0].Record
+	if want := codex.Bound("gpt-6.1-sol", 3); got.Spend().AgentUSD != want || !got.CostEstimated {
+		t.Errorf("recovered $%.4f, want the bound $%.2f (notes %q)", got.Spend().AgentUSD, want, got.Notes)
+	}
+	if !slices.ContainsFunc(got.Notes, func(n string) bool { return strings.Contains(n, "records could not be read") }) {
+		t.Errorf("notes %q do not say why the bound is counted", got.Notes)
+	}
+}
+
+// With no rollout at all and an unverified spend, the note says the rollout is missing, not that it was read in part;
+// the spend is the bound either way.
+func TestSpendFallbackNamesAMissingRollout(t *testing.T) {
+	rec := Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3, Metrics: agent.Metrics{SawInit: true, RolloutsIncomplete: true}}
+	codexSpendFallback(&rec)
+	if want := codex.Bound("gpt-6.1-sol", 3); rec.Metrics.CostUSD != want || len(rec.Notes) != 1 ||
+		!strings.Contains(rec.Notes[0], "rollout is missing") || strings.Contains(rec.Notes[0], "in part") {
+		t.Errorf("$%.4f, notes %q", rec.Metrics.CostUSD, rec.Notes)
+	}
+	rec = Record{Agent: codex.Name, Model: "gpt-6.1-sol", CapUSD: 3}
+	codexSpendFallback(&rec)
+	if rec.Metrics.CostUSD != 0 || len(rec.Notes) != 0 {
+		t.Errorf("a run that never reached the API and whose spend was settled: $%.4f, %q", rec.Metrics.CostUSD, rec.Notes)
+	}
+}

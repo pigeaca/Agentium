@@ -2,6 +2,7 @@ package run
 
 import (
 	"cmp"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -98,12 +99,24 @@ type identity struct {
 func (i identity) key() [3]uint64     { return [3]uint64{uint64(i.PID), i.Sec, i.Usec} }
 func (i identity) started() time.Time { return time.Unix(int64(i.Sec), int64(i.Usec)*1000) }
 
-// descendantsPoll is how often Agentium looks at the agent's descendants while it runs.
-const descendantsPoll = 100 * time.Millisecond
+// descendantsPoll is how often Agentium looks at the agent's descendants while it runs; descendantsSave is how often,
+// at most, what it saw is saved meanwhile (a save is forced on the agent's start, before a stop and at the sweep).
+const (
+	descendantsPoll = 100 * time.Millisecond
+	descendantsSave = time.Second
+)
+
+// tableEntry is one process of the user's in a read of the process table: its identity, its parent's ID, and whether
+// it has exited, not yet reaped (a zombie: it cannot be stopped, and its children have been reparented).
+type tableEntry struct {
+	id     identity
+	ppid   int
+	zombie bool
+}
 
 // descendants is what Agentium saw descend from a run's agent: the agent process itself and every process whose parent
 // chain led to it (or to one seen before) in one of the snapshots taken while it ran (snapshot), by full identity.
-// Only these are ever stopped. Persisted in the run's records (AgentProcesses).
+// Only these are ever stopped. Persisted in the run's records (AgentProcesses), so that a recovery stops them too.
 //
 // Residuals: a descendant that detaches (its parent gone) between two snapshots, before any snapshot saw it, is not
 // tracked, only reported; and the window between reading a process's identity and signalling it is the same as the
@@ -112,6 +125,18 @@ type descendants struct {
 	file    string
 	mu      sync.Mutex
 	tracked map[[3]uint64]identity
+	// dirty: tracked changed since the last save that succeeded. tried is the last save's time (the rate limit);
+	// failures and lastErr are the saves that failed (descendants.note).
+	dirty    bool
+	tried    time.Time
+	failures int
+	lastErr  error
+	noRoot   bool // the agent's own process could not be read: nothing descends from it here
+	// read, identify and now are the process table, one process's identity as it is now (ok false: gone, or another
+	// user's) and the clock. nil: the system's (processTable, identityNow, time.Now); tests replace them.
+	read     func() (map[int]tableEntry, error)
+	identify func(pid int) (identity, bool)
+	now      func() time.Time
 }
 
 // loadDescendants is what a run's records say was seen (none when the file is missing or cannot be read).
@@ -128,6 +153,27 @@ func loadDescendants(file string) *descendants {
 	return d
 }
 
+func (d *descendants) table() (map[int]tableEntry, error) {
+	if d.read != nil {
+		return d.read()
+	}
+	return processTable()
+}
+
+func (d *descendants) identityOf(pid int) (identity, bool) {
+	if d.identify != nil {
+		return d.identify(pid)
+	}
+	return identityNow(pid)
+}
+
+func (d *descendants) clock() time.Time {
+	if d.now != nil {
+		return d.now()
+	}
+	return time.Now()
+}
+
 // list is what d tracks, in a fixed order.
 func (d *descendants) list() []identity {
 	d.mu.Lock()
@@ -140,21 +186,149 @@ func (d *descendants) list() []identity {
 	return out
 }
 
-// persist writes what d tracks to its file, atomically. Called with d.mu held.
-func (d *descendants) persist() error {
-	if d.file == "" {
-		return nil
+// observe makes the agent started with process ID pid the root of what d tracks, and saves it, before it returns: it
+// runs from agent.Run's Started, before the runner can reap the agent, so even an agent that has already exited is
+// read (a zombie keeps its identity). The function it returns looks every poll until its context ends
+// (agent.Invocation.Observe).
+func (d *descendants) observe(pid int) func(context.Context) {
+	if d.identify == nil && !tracksDescendants {
+		return func(context.Context) {}
 	}
+	id, ok := d.identityOf(pid)
+	d.mu.Lock()
+	if ok {
+		d.tracked[id.key()] = id
+		d.dirty = true
+		d.save(true)
+	} else {
+		d.noRoot = true
+	}
+	d.mu.Unlock()
+	return d.poll
+}
+
+// poll snapshots every descendantsPoll until ctx ends.
+func (d *descendants) poll(ctx context.Context) {
+	ticker := time.NewTicker(descendantsPoll)
+	defer ticker.Stop()
+	for {
+		_ = d.snapshot(false)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// snapshot reads the process table once and adds to d every process whose parent chain leads to one it tracks (the
+// agent, or a descendant seen before); tracked processes no longer alive (gone, or zombies) are dropped (they can
+// neither be stopped nor be anyone's parent: a process's children are reparented when it exits). What changed is saved at most every
+// descendantsSave, or now when force is set; a failed save is retried at the next snapshot (descendants.note).
+//
+// A read of the table is not one instant (the kernel lists the IDs, then reads each process), so a process that ended
+// during it can be replaced, under its ID, by a later one; a link read from such a mix could make a stranger look like
+// a descendant. So only processes born before the read began are linked (later ones wait for the next snapshot): every
+// such process alive when read was alive when the read began, as was its parent (born before it), and one ID names
+// one process at a time, so a parent ID's entry is that parent. Each link's parent must also have started no later
+// than its child, and still hold its ID now (or be gone): a clock step cannot fake a link either.
+func (d *descendants) snapshot(force bool) error {
+	began := d.clock()
+	table, err := d.table()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err != nil {
+		d.save(force)
+		return err
+	}
+	for k, id := range d.tracked {
+		if e, ok := table[id.PID]; !ok || e.id.key() != k || e.zombie {
+			delete(d.tracked, k)
+			d.dirty = true
+		}
+	}
+	bornBefore := func(e tableEntry) bool { return e.id.started().Before(began) }
+	for _, e := range table {
+		if _, ok := d.tracked[e.id.key()]; ok || !bornBefore(e) || e.zombie {
+			continue
+		}
+		chain := []identity{e.id}
+		for cur, steps := e, 0; steps < 64; steps++ {
+			parent, ok := table[cur.ppid]
+			if !ok || !bornBefore(parent) || parent.id.started().After(cur.id.started()) {
+				break
+			}
+			if _, tracked := d.tracked[parent.id.key()]; tracked {
+				if d.unchanged(append(chain[1:len(chain):len(chain)], parent.id)) {
+					for _, id := range chain {
+						d.tracked[id.key()] = id
+					}
+					d.dirty = true
+				}
+				break
+			}
+			chain = append(chain, parent.id)
+			cur = parent
+		}
+	}
+	d.save(force)
+	return nil
+}
+
+// unchanged reports whether every parent in a chain still holds its ID, or is gone: none was replaced since the read.
+func (d *descendants) unchanged(parents []identity) bool {
+	for _, p := range parents {
+		if now, ok := d.identityOf(p.PID); ok && now.key() != p.key() {
+			return false
+		}
+	}
+	return true
+}
+
+// save writes what d tracks to its file when it changed, at most every descendantsSave unless force is set. The file is
+// replaced by a rename, without waiting for the disk (an fsync takes milliseconds on macOS, and a run's agent shares the
+// machine): a crash of Agentium leaves the old file or the new one, a crash of the machine ends the processes anyway.
+// Called with d.mu held.
+func (d *descendants) save(force bool) {
+	if !d.dirty || d.file == "" {
+		return
+	}
+	now := d.clock()
+	if !force && now.Sub(d.tried) < descendantsSave {
+		return
+	}
+	d.tried = now
 	list := make([]identity, 0, len(d.tracked))
 	for _, id := range d.tracked {
 		list = append(list, id)
 	}
 	slices.SortFunc(list, func(a, b identity) int { return cmp.Compare(a.PID, b.PID) })
 	data, err := json.Marshal(list)
-	if err != nil {
-		return err
+	if err == nil {
+		err = replaceFile(d.file, data, 0o600, false)
 	}
-	return writeFileAtomic(d.file, data, 0o600)
+	if err != nil {
+		d.failures++
+		d.lastErr = err
+		return
+	}
+	d.dirty = false
+}
+
+// note is what the run's notes say about d's own trouble: the agent's process could not be read, or saves failed ("":
+// none).
+func (d *descendants) note() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	switch {
+	case d.noRoot:
+		return "the agent's own process could not be read when it started: the processes its commands left were not tracked, only looked for"
+	case d.failures == 0:
+		return ""
+	case d.dirty:
+		return fmt.Sprintf("the processes seen descending from the agent could not be saved in its records (%d failure(s), the last: %v): a recovery after a crash would not stop the latest of them", d.failures, d.lastErr)
+	}
+	return fmt.Sprintf("the processes seen descending from the agent could not be saved in its records %d time(s) (the last: %v); a later save succeeded", d.failures, d.lastErr)
 }
 
 // sweepCodex ends what a Codex run's commands left, once the agent has ended (or a dead Agentium's run is recovered):
@@ -175,6 +349,9 @@ func sweepCodex(s codexSweep, d *descendants, guard func(pids []int) bool, recor
 		}
 		if err != nil {
 			notes = append(notes, "Codex's leftover processes could not all be stopped: "+err.Error())
+		}
+		if note := d.note(); note != "" {
+			notes = append(notes, note)
 		}
 	}
 	reported, err := reportCodex(s)
@@ -258,11 +435,13 @@ func sniffAdapter(transcript string) agent.Adapter {
 //     usage at all (an interrupted run: Codex prints usage only when its turn completes), or no list price: the larger
 //     of what was read and the most a run with its cap (CapUSD) can spend: the cap and one more request (codex.Bound).
 //
-// A run whose stream shows no session (no thread.started) never reached the API and spent nothing; rollouts read whole,
-// even without requests, are the spend: nothing changes. An estimate only ever raises the cost.
+// A run whose stream shows no session (no thread.started) never reached the API and spent nothing, unless its spend is
+// marked unverified (RolloutsIncomplete: a recovered run whose records could not be read, its stream missing among
+// them, counts the bound too); rollouts read whole, even without requests, are the spend: nothing changes. An estimate
+// only ever raises the cost.
 func codexSpendFallback(rec *Record) {
 	m := &rec.Metrics
-	if agent.Name(rec.Agent) != codex.Name || !m.SawInit || m.Rollouts > 0 && !m.RolloutsIncomplete {
+	if agent.Name(rec.Agent) != codex.Name || !m.SawInit && !m.RolloutsIncomplete || m.Rollouts > 0 && !m.RolloutsIncomplete {
 		return
 	}
 	if rates, ok := pricing.OpenAILookup(rec.Model); ok && !m.RolloutsIncomplete && m.InputTokens+m.CacheReadTokens+m.CacheWriteTokens+m.OutputTokens > 0 {
@@ -274,8 +453,13 @@ func codexSpendFallback(rec *Record) {
 		return
 	}
 	what := "Codex's session rollout is missing and its stream holds no usage"
-	if m.RolloutsIncomplete {
+	switch {
+	case m.RolloutsIncomplete && m.Rollouts > 0:
 		what = fmt.Sprintf("Codex's session rollouts were collected or read only in part ($%.3f read)", m.CostUSD)
+	case m.RolloutsIncomplete && !m.SawInit:
+		what = "the run's records could not be read (its stream shows no session), and its spend was never settled"
+	case m.RolloutsIncomplete:
+		what = "Codex's session rollout is missing, and what the run spent could not be verified"
 	}
 	if rec.CapUSD <= 0 {
 		rec.Notes = append(rec.Notes, what+", and the run had no cap: what it spent is unknown beyond what was read")

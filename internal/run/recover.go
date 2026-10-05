@@ -55,7 +55,13 @@ func (env Env) writeStart(s start) error {
 
 // writeFileAtomic replaces path with data so that a reader, or a process killed mid-write, sees the old file or the
 // new one, never a truncated mix: it writes a temp file in the same folder, syncs it and renames it over path.
-func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	return replaceFile(path, data, perm, true)
+}
+
+// replaceFile is writeFileAtomic, syncing the temp file to the disk first only when sync is set: without it, a crash
+// of Agentium still leaves the old file or the new one (the rename is atomic), a crash of the machine may not.
+func replaceFile(path string, data []byte, perm os.FileMode, sync bool) (err error) {
 	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -72,8 +78,10 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) (err error) {
 	if _, err = tmp.Write(data); err != nil {
 		return err
 	}
-	if err = tmp.Sync(); err != nil {
-		return err
+	if sync {
+		if err = tmp.Sync(); err != nil {
+			return err
+		}
 	}
 	if err = tmp.Close(); err != nil {
 		return err

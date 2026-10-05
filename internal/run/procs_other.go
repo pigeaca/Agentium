@@ -2,10 +2,7 @@
 
 package run
 
-import (
-	"context"
-	"time"
-)
+import "time"
 
 // processesUnder finds nothing outside macOS: the grading sandbox is macOS's, and grades elsewhere (none yet) would
 // need their own sweep (Linux: /proc/<pid>/cwd, exe and fd).
@@ -20,11 +17,11 @@ func stopSandboxed(string, string) ([]string, error) { return nil, nil }
 // usingGrade finds nothing outside macOS (see processesUnder).
 func usingGrade(string, string, []string) ([]string, error) { return nil, nil }
 
-// snapshot sees nothing outside macOS (see processesUnder).
-func (d *descendants) snapshot() error { return nil }
+// tracksDescendants: whether descendants can read this system's processes.
+const tracksDescendants = false
 
-// observe watches nothing outside macOS (see processesUnder).
-func (d *descendants) observe(context.Context, int) {}
+// processTable lists no process outside macOS (see processesUnder): the tracker sees nothing.
+func processTable() (map[int]tableEntry, error) { return nil, nil }
 
 // stopDescendants stops nothing outside macOS (see processesUnder).
 func stopDescendants(*descendants, time.Time, func([]int) bool) ([]string, error) { return nil, nil }

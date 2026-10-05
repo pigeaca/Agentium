@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -101,7 +102,7 @@ func TestCodexSweepKillsOnlyDescendants(t *testing.T) {
 	if id, ok := identityNow(agentPID); ok {
 		d.tracked[id.key()] = id
 	}
-	must(t, d.snapshot()) // while the agent runs: its child is seen
+	must(t, d.snapshot(true)) // while the agent runs: its child is seen
 	var child int
 	for _, id := range d.list() {
 		if id.PID != agentPID {
@@ -167,5 +168,32 @@ func TestCleanNeverStopsAProcess(t *testing.T) {
 	}
 	if now, ok := identityNow(user); !ok || now.key() != id.key() {
 		t.Error("the process was stopped")
+	}
+}
+
+// The agent's own process is read and saved when it starts (descendants.observe, from agent.Run's Started), before
+// the runner reaps it: even an agent that has already exited, a zombie, is the root, with its real identity.
+func TestObserveReadsAnExitedAgent(t *testing.T) {
+	c := exec.Command("/usr/bin/true")
+	must(t, c.Start())
+	t.Cleanup(func() { c.Wait() }) // the test's own child: reaped only here
+	zombie := false
+	for i := 0; i < 200 && !zombie; i++ {
+		stat, _ := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(c.Process.Pid)).Output()
+		zombie = strings.Contains(string(stat), "Z")
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !zombie {
+		t.Fatal("the child did not become a zombie")
+	}
+	file := filepath.Join(t.TempDir(), AgentProcesses)
+	d := loadDescendants(file)
+	d.observe(c.Process.Pid)
+	list := loadDescendants(file).list()
+	if len(list) != 1 || list[0].PID != c.Process.Pid || time.Since(list[0].started()) > time.Minute || d.note() != "" {
+		t.Fatalf("saved %+v (note %q): want the exited agent as the root", list, d.note())
+	}
+	if table, err := processTable(); err != nil || table[c.Process.Pid].id.key() != list[0].key() {
+		t.Errorf("the table's read of the agent %+v differs from its own (%v)", table[c.Process.Pid], err)
 	}
 }

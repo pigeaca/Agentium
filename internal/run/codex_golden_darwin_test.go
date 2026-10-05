@@ -530,12 +530,13 @@ func TestCodexRunStopsADetachedDescendant(t *testing.T) {
 	if !codexChildEnds(pid) {
 		t.Errorf("process %d, detached from the run, outlived it (notes %q)", pid, rec.Notes)
 	}
-	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es)") {
+	// Stopped as a descendant seen while the agent ran (the sweep names it); the records then list only what is still
+	// alive, which is none of the run's.
+	if notes := strings.Join(rec.Notes, " "); !strings.Contains(notes, fmt.Sprintf("stopped 1 process(es) Codex's commands left running: %d ", pid)) {
 		t.Errorf("the notes: %q", rec.Notes)
 	}
-	seen := loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses)).list()
-	if !slices.ContainsFunc(seen, func(id identity) bool { return id.PID == pid }) {
-		t.Errorf("the records do not keep the descendant: %v", seen)
+	if seen := loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses)).list(); len(seen) != 0 {
+		t.Errorf("the records still list processes after the sweep: %v", seen)
 	}
 }
 
