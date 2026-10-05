@@ -6,8 +6,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/claudectx"
+	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/pricing"
 	"github.com/pigeaca/agentium/internal/run"
 	"github.com/pigeaca/agentium/internal/runner"
@@ -45,10 +48,17 @@ const (
 
 // draftCallMeta is what a draft call's folder says of it: enough to count a stopped call's cost against its task.
 type draftCallMeta struct {
-	TaskID  int64     `json:"task_id"`
-	Task    string    `json:"task"`
-	Model   string    `json:"model"`
-	Started time.Time `json:"started"`
+	TaskID int64  `json:"task_id"`
+	Task   string `json:"task"`
+	// TaskCreated, with the id and the name, is the task's identity (store.TaskRef): a removed task's id may be reused.
+	TaskCreated time.Time `json:"task_created"`
+	Model       string    `json:"model"`
+	Started     time.Time `json:"started"`
+}
+
+// ref is the task the call was made for.
+func (m draftCallMeta) ref() store.TaskRef {
+	return store.TaskRef{ID: m.TaskID, Name: m.Task, CreatedAt: m.TaskCreated}
 }
 
 // draftMostUSD is the most one draft call may cost: its cap, and what a call can pass it by (Claude Code checks the cap
@@ -101,8 +111,12 @@ func taskDraft(ctx context.Context, env Env, args []string) int {
 	}
 	defer release()
 	res, err := d.draft(ctx, *timeout)
-	if err != nil {
-		if res.CostReported || res.Problem != "" {
+	switch {
+	case err != nil && d.counted && env.JSON: // after the count (a check could not run): the document keeps the call's cost
+		d.doc.Outcome, d.doc.Reason, d.doc.NextCommand = "failed", env.redact(err.Error()), "agentium task draft "+d.t.Name
+		return env.emitCode(d.doc, ExitError)
+	case err != nil:
+		if d.counted {
 			fmt.Fprintln(env.Stdout, draftSpentText(res, d.doc.DraftingSpendUSD, draftMostUSD()))
 		}
 		return fail(env, err)
@@ -117,6 +131,9 @@ type drafting struct {
 	t                 store.Task
 	cli, mode, secret string
 	doc               taskDraftDoc
+	// counted: the call returned and its cost was counted; removed: the task it was made for is gone (or its id is
+	// another task's now), so no task's spend counted it and nothing may be stored.
+	counted, removed bool
 }
 
 // prepareDraft is everything before any spend: the task can be drafted, the preview names the most the call may cost,
@@ -160,12 +177,9 @@ func prepareDraft(ctx context.Context, env Env, w *workspace, name string, yes b
 // The document gets the notes, the call's cost and the task's drafting spend.
 func (d *drafting) draft(ctx context.Context, timeout time.Duration) (task.DraftResult, error) {
 	env, w := d.env, d.w
-	notes, err := w.recoverDrafts(ctx, env)
-	d.doc.Notes = append(d.doc.Notes, notes...)
-	if err != nil {
-		return task.DraftResult{}, err
-	}
+	d.doc.Notes = append(d.doc.Notes, w.draftNotes...) // what startRuns settled
 	// Read again under the lock: the task may have changed (or gone) since the preview.
+	var err error
 	if d.t, err = w.db.TaskByName(ctx, w.project.ID, d.t.Name); err != nil {
 		return task.DraftResult{}, err
 	}
@@ -183,16 +197,18 @@ func (d *drafting) draft(ctx context.Context, timeout time.Duration) (task.Draft
 	// The count runs once, as soon as the call returns, whatever it brought (task.Draft): the cost goes into the store
 	// first, then the call's folder, which until then holds the only record of it, goes.
 	count := func(cost float64, reported bool) error {
-		if _, err := w.db.CountDraftCall(context.WithoutCancel(ctx), filepath.Base(dir), d.t.ID, cost, env.Now()); err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err // the folder stays: the next task draft counts it
+		_, err := w.db.CountDraftCall(context.WithoutCancel(ctx), filepath.Base(dir), d.t.Ref(), cost, env.Now())
+		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			return err // the folder stays: the next start of paid work counts it
 		}
+		d.counted, d.removed = true, err != nil
 		if err := os.RemoveAll(dir); err != nil {
 			fmt.Fprintln(env.Stdout, warning(env.style(), fmt.Sprintf("the draft call's folder could not be removed (%v); the next task draft removes it, its cost already counted", err)))
 		}
 		return nil
 	}
 	res, err := task.Draft(ctx, task.NewFairness("--git-dir", w.bare), d.t, in, call, count)
-	if counted, _ := w.db.TaskByName(context.WithoutCancel(ctx), w.project.ID, d.t.Name); counted.ID == d.t.ID {
+	if counted, _ := w.db.TaskByName(context.WithoutCancel(ctx), w.project.ID, d.t.Name); counted.Ref() == d.t.Ref() {
 		d.doc.DraftingSpendUSD = counted.DraftSpendUSD
 	}
 	if res.CostReported {
@@ -209,6 +225,9 @@ func (d *drafting) report(ctx context.Context, res task.DraftResult) int {
 	env, t, st := d.env, d.t, d.env.style()
 	spent := draftSpentText(res, d.doc.DraftingSpendUSD, draftMostUSD())
 	redact := func(s string) string { return string(run.Redact([]byte(s), d.secret)) }
+	if d.removed {
+		res.Problem = fmt.Sprintf("task %s was removed while the call ran: its cost is listed with the draft calls, no task's spend counts it, and nothing was stored", t.Name)
+	}
 	if res.Problem != "" {
 		d.doc.Outcome, d.doc.Reason, d.doc.NextCommand = "failed", env.redact(redact(res.Problem)), "agentium task draft "+t.Name
 		if env.JSON {
@@ -234,7 +253,9 @@ func (d *drafting) report(ctx context.Context, res task.DraftResult) int {
 		printRefusedDraft(env, st, t, res, text, spent)
 		return ExitError
 	}
-	if err := d.w.db.SetTaskDraft(context.WithoutCancel(ctx), t.ID, text, task.DraftModel, env.Now()); err != nil {
+	if err := d.w.db.SetTaskDraft(context.WithoutCancel(ctx), t.Ref(), text, task.DraftModel, env.Now()); errors.Is(err, store.ErrNotFound) {
+		return fail(env, fmt.Errorf("task %s was removed while the draft was checked: nothing was stored", t.Name))
+	} else if err != nil {
 		return fail(env, err)
 	}
 	d.doc.Outcome, d.doc.NextCommand = "stored", "agentium task edit "+t.Name+" --accept-draft"
@@ -309,7 +330,7 @@ func (w *workspace) newDraftCall(env Env, t store.Task, cli, mode, secret string
 		os.RemoveAll(dir) // nothing ran yet
 		return nil, "", err
 	}
-	meta, err := json.Marshal(draftCallMeta{TaskID: t.ID, Task: t.Name, Model: task.DraftModel, Started: env.Now().UTC()})
+	meta, err := json.Marshal(draftCallMeta{TaskID: t.ID, Task: t.Name, TaskCreated: t.CreatedAt, Model: task.DraftModel, Started: env.Now().UTC()})
 	if err != nil {
 		return failed(fmt.Errorf("draft call: %w", err))
 	}
@@ -362,64 +383,83 @@ func (w *workspace) newDraftCall(env Env, t store.Task, cli, mode, secret string
 	return call, dir, nil
 }
 
-// recoverDrafts settles the draft calls of this project that a stopped Agentium left (their folders, newDraftCall), and
-// returns one line for each that it says something about, also printed. Call it holding the run lock, before a new call:
-//   - while any call's process group still exists, recoverDrafts settles nothing and fails: it may still be running;
-//   - a call whose output reports its cost has that cost counted against its task, once (store.CountDraftCall: a call
-//     counted before its folder went says nothing);
+// settleDraftCalls settles the draft calls that a stopped Agentium left in the data folder, of every project (their
+// folders, newDraftCall), and returns one line for each that it says something about, also printed to out. Every
+// command that starts paid work calls it under the run lock (startRuns), so no agent or call starts beside a call that
+// still runs:
+//   - while any call may still run (its process group exists, and its leader is not clearly another program: one that
+//     started more than draftStartSlack away from the call), it settles nothing and fails, saying where the call's
+//     folder is and what removing it means;
+//   - a call whose output reports its cost has that cost counted against the task it was made for, once
+//     (store.CountDraftCall: a call counted before its folder went says nothing; a task removed since is not charged);
 //   - a call whose output holds no cost (it never finished) is said to have an unknown spend, at most its bound.
 //
 // Then its folder goes. Its draft is never taken from a leftover reply: the owner runs task draft again.
-func (w *workspace) recoverDrafts(ctx context.Context, env Env) ([]string, error) {
-	dir := filepath.Join(w.layout.Drafts(), strconv.FormatInt(w.project.ID, 10))
-	entries, err := os.ReadDir(dir)
+func settleDraftCalls(ctx context.Context, env Env, db *store.Store, layout home.Layout, out io.Writer) ([]string, error) {
+	projects, err := os.ReadDir(layout.Drafts())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("draft calls: %w", err)
 	}
-	calls := entries[:0]
-	for _, e := range entries {
-		if e.IsDir() { // newDraftCall makes only folders here; anything else is not a call
-			calls = append(calls, e)
+	var calls []string // the call folders, newDraftCall's only (folders, never links)
+	for _, p := range projects {
+		if !p.IsDir() {
+			continue
 		}
-	}
-	// First, whether any may still run: then nothing is settled, so a refusal changes nothing.
-	for _, e := range calls {
-		if data, err := os.ReadFile(filepath.Join(dir, e.Name(), draftPGIDFile)); err == nil {
-			if pgid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && pgid > 1 && draftGroupExists(pgid) {
-				return nil, fmt.Errorf("a draft call that a stopped Agentium left (%s) may still be running (process group %d): wait for it to finish, or stop it, then try again "+
-					"(ps -o pid,command -g %d shows what it is; after a restart the number may belong to something else)", e.Name(), pgid, pgid)
+		entries, err := os.ReadDir(filepath.Join(layout.Drafts(), p.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("draft calls: %w", err)
+		}
+		for _, e := range entries {
+			if e.IsDir() {
+				calls = append(calls, filepath.Join(layout.Drafts(), p.Name(), e.Name()))
 			}
 		}
 	}
-	st := env.style()
+	metas := make([]draftCallMeta, len(calls))
+	metaOK := make([]bool, len(calls))
 	var notes []string
 	say := func(line string) {
 		notes = append(notes, env.redact(line))
-		fmt.Fprintln(env.Stdout, st.Warn(line))
+		fmt.Fprintln(out, env.style().Warn(line))
 	}
-	for _, e := range calls {
-		path := filepath.Join(dir, e.Name())
-		var meta draftCallMeta
+	// First, whether any may still run: then nothing is settled, so a refusal changes nothing.
+	for i, path := range calls {
 		data, err := os.ReadFile(filepath.Join(path, draftCallFile))
-		metaOK := err == nil && json.Unmarshal(data, &meta) == nil && meta.TaskID != 0
+		metaOK[i] = err == nil && json.Unmarshal(data, &metas[i]) == nil && metas[i].TaskID != 0
+		data, err = os.ReadFile(filepath.Join(path, draftPGIDFile))
+		pgid, convErr := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil || convErr != nil || pgid <= 1 || !draftGroupExists(pgid) {
+			continue
+		}
+		if leader, ok := processStarted(ctx, pgid); ok && metaOK[i] && !metas[i].Started.IsZero() && leader.Sub(metas[i].Started).Abs() > draftStartSlack {
+			say(fmt.Sprintf("Process group %d of a draft call left by a stopped Agentium (%s) now belongs to another program, started %s; the call is settled as ended",
+				pgid, filepath.Base(path), leader.UTC().Format(time.RFC3339)))
+			continue
+		}
+		return nil, fmt.Errorf("a draft call that a stopped Agentium left may still be running (process group %d): wait for it to finish, or stop it, then try again "+
+			"(ps -o pid,command -g %d shows what it is). If that group is another program's (after a restart the number may be reused), remove the call's folder %s: "+
+			"its spend is then unknown, at most $%.2f, and not counted", pgid, pgid, env.redact(path), draftMostUSD())
+	}
+	for i, path := range calls {
+		meta := metas[i]
 		stdout, _ := os.ReadFile(filepath.Join(path, draftOutFile))
 		a := task.ReadDraftReply(task.DraftReply{Stdout: stdout})
 		switch {
-		case metaOK && a.CostReported:
-			counted, err := w.db.CountDraftCall(ctx, e.Name(), meta.TaskID, a.CostUSD, env.Now())
+		case metaOK[i] && a.CostReported:
+			counted, err := db.CountDraftCall(ctx, filepath.Base(path), meta.ref(), a.CostUSD, env.Now())
 			switch {
 			case errors.Is(err, store.ErrNotFound):
-				say(fmt.Sprintf("A draft call of task %s, left by a stopped Agentium, spent $%.2f; the task is gone, so no task counts it", meta.Task, a.CostUSD))
+				say(fmt.Sprintf("A draft call of task %s, left by a stopped Agentium, spent $%.2f; that task was removed since, so no task's spend counts it", meta.Task, a.CostUSD))
 			case err != nil:
 				return notes, err
 			case counted:
 				say(fmt.Sprintf("Counted $%.2f that a draft call of task %s spent before Agentium stopped; its draft was not kept (run agentium task draft %s again)",
 					a.CostUSD, meta.Task, meta.Task))
 			}
-		case metaOK:
-			listed, err := w.db.DraftCallCounted(ctx, e.Name())
+		case metaOK[i]:
+			listed, err := db.DraftCallCounted(ctx, filepath.Base(path))
 			if err != nil {
 				return notes, err
 			}
@@ -427,13 +467,34 @@ func (w *workspace) recoverDrafts(ctx context.Context, env Env) ([]string, error
 				say(fmt.Sprintf("A draft call of task %s, left by a stopped Agentium, reported no cost: its spend is unknown, at most $%.2f", meta.Task, draftMostUSD()))
 			}
 		default:
-			say(fmt.Sprintf("A draft call left by a stopped Agentium (%s) cannot be read: its spend is unknown, at most $%.2f", e.Name(), draftMostUSD()))
+			say(fmt.Sprintf("A draft call left by a stopped Agentium (%s) cannot be read: its spend is unknown, at most $%.2f", filepath.Base(path), draftMostUSD()))
 		}
 		if err := os.RemoveAll(path); err != nil {
-			return notes, fmt.Errorf("remove the folder of draft call %s: %w", e.Name(), err)
+			return notes, fmt.Errorf("remove the folder of draft call %s: %w", filepath.Base(path), err)
 		}
 	}
 	return notes, nil
+}
+
+// draftStartSlack is how far apart a draft call's start (draftCallMeta.Started) and its process group leader's start
+// may be for the group to be the call's: the call starts within moments of its folder, and ps reports whole seconds.
+const draftStartSlack = 2 * time.Minute
+
+// processStarted is when process pid started, from ps; false when it cannot be told (no such process, no ps).
+func processStarted(ctx context.Context, pid int) (time.Time, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "/bin/ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
+	cmd.Env = []string{"LC_ALL=C"} // English names; the same zone as time.Local, which TZ sets for both
+	if tz, ok := os.LookupEnv("TZ"); ok {
+		cmd.Env = append(cmd.Env, "TZ="+tz)
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, false
+	}
+	at, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(strings.Fields(string(out)), " "), time.Local)
+	return at, err == nil
 }
 
 // draftGroupExists reports whether a process group exists (possibly another user's: EPERM).

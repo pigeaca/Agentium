@@ -106,7 +106,7 @@ type taskShowDoc struct {
 	header
 	taskInfo
 	Instruction string        `json:"instruction"`
-	Review      string        `json:"review"` // ticket | history: why the instruction needs a review; empty when it does not
+	Review      string        `json:"review"` // draft | ticket | history: why the instruction needs a review; empty when it does not
 	Setup       []string      `json:"setup"`
 	Verify      []string      `json:"verify"`
 	HiddenTests []string      `json:"hidden_tests"`
@@ -135,6 +135,8 @@ func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) 
 		doc.Draft, doc.DraftWrittenAt, doc.DraftModel = &t.Draft, &at, &t.DraftModel
 	}
 	switch {
+	case t.NeedsReview && t.FromDraft:
+		doc.Review = "draft"
 	case t.NeedsReview && isTicket(t):
 		doc.Review = "ticket"
 	case t.NeedsReview:

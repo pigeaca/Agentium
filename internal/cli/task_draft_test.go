@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/pigeaca/agentium/internal/home"
+	"github.com/pigeaca/agentium/internal/pool"
 	"github.com/pigeaca/agentium/internal/store"
 )
 
@@ -20,7 +21,10 @@ import (
 // holds, so a test changes the reply without a new script. It records each call's prompt and arguments in ctrl, and:
 //   - with ctrl/hang, it waits to be interrupted and then replies, as Claude Code does on SIGINT;
 //   - with ctrl/crash, it replies and then kills the Agentium process that called it (its parent) before exiting: the
-//     reply is on disk, and nothing after the call ran.
+//     reply is on disk, and nothing after the call ran;
+//   - with ctrl/wait, it marks ctrl/waiting and replies only once ctrl/go exists;
+//   - with ctrl/break, which holds a path, it moves that path aside before it replies (a bare repository: the checks
+//     after the count then fail).
 const (
 	draftStored   = `{"type":"result","subtype":"success","is_error":false,"result":"","total_cost_usd":0.031,"structured_output":{"text":"Add Clamp(v, lo, hi int) int to package lib: it returns v limited to the range from lo to hi."}}`
 	draftGap      = `{"type":"result","subtype":"success","is_error":false,"result":"","total_cost_usd":0.02,"structured_output":{"text":"Add a function that limits a value to a range."}}`
@@ -42,6 +46,11 @@ if [ -e "CTRL/hang" ]; then
   touch "CTRL/hanging"
   while :; do sleep 0.05; done
 fi
+if [ -e "CTRL/wait" ]; then
+  touch "CTRL/waiting"
+  while [ ! -e "CTRL/go" ]; do sleep 0.05; done
+fi
+if [ -e "CTRL/break" ]; then b=$(cat "CTRL/break"); mv "$b" "$b.gone"; fi
 cat "CTRL/reply.json"
 if [ -e "CTRL/crash" ]; then kill -9 $PPID; fi
 `
@@ -273,10 +282,10 @@ func TestTaskDraftCountsACrashedCallOnce(t *testing.T) {
 		waitFor(t, "the stand-in's process group to end", func() bool { return syscall.Kill(-p, 0) != nil })
 	}
 
-	// Three more folders, as a stopped Agentium could leave them.
-	projectDir := filepath.Dir(callDir)
-	leftover := func(name, meta, output, pgid string) {
-		dir := filepath.Join(projectDir, name)
+	// More folders, as a stopped Agentium could leave them.
+	drafts := filepath.Dir(filepath.Dir(callDir))
+	leftover := func(project, name, meta, output, pgid string) string {
+		dir := filepath.Join(drafts, project, name)
 		if err := os.MkdirAll(filepath.Join(dir, "start"), 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -287,35 +296,60 @@ func TestTaskDraftCountsACrashedCallOnce(t *testing.T) {
 				}
 			}
 		}
+		return dir
 	}
-	id := storedTask(t, f, "clamp").ID
-	meta := `{"task_id":` + strconv.FormatInt(id, 10) + `,"task":"clamp","model":"claude-sonnet-5-5","started":"2026-10-05T10:00:00Z"}`
-	leftover("20261005T100000Z-unknown", meta, "", "")
+	clamp := storedTask(t, f, "clamp")
+	project := filepath.Base(filepath.Dir(callDir))
+	metaAt := func(created, started time.Time) string {
+		return `{"task_id":` + strconv.FormatInt(clamp.ID, 10) + `,"task":"clamp","task_created":"` + created.Format(time.RFC3339Nano) +
+			`","model":"claude-sonnet-5-5","started":"` + started.Format(time.RFC3339Nano) + `"}`
+	}
+	meta := metaAt(clamp.CreatedAt, time.Now())
+	leftover(project, "20261005T100000Z-unknown", meta, "", "")
 	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.CountDraftCall(ctx, "20261005T100001Z-counted", id, 0.40, time.Now()); err != nil { // counted, then the process died
+	if _, err := db.CountDraftCall(ctx, "20261005T100001Z-counted", clamp.Ref(), 0.40, time.Now()); err != nil { // counted, then the process died
 		t.Fatal(err)
 	}
 	db.Close()
-	leftover("20261005T100001Z-counted", meta, draftCapped, "")
+	leftover(project, "20261005T100001Z-counted", meta, draftCapped, "")
+	// Another project's call, for a task removed since (its id now another task's): counted with the calls, charged to none.
+	leftover("999", "20261005T100003Z-removed", metaAt(clamp.CreatedAt.Add(-time.Hour), time.Now()), draftStored, "")
 
-	// One whose process group exists (this test's own) stops the next draft before anything is counted or called.
-	leftover("20261005T100002Z-alive", meta, "", strconv.Itoa(syscall.Getpgrp()))
-	expect(t, f.run(ctx, "task", "draft", "clamp", "--yes"), ExitError, "may still be running (process group "+strconv.Itoa(syscall.Getpgrp()))
+	// One whose process group exists, started with the call, stops every start of paid work (task draft, run once)
+	// before anything is settled, counted or called, and says where its folder is.
+	sleeper := exec.Command("sleep", "60")
+	sleeper.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
+	pg := strconv.Itoa(sleeper.Process.Pid)
+	alive := leftover(project, "20261005T100002Z-alive", meta, "", pg)
+	for _, args := range [][]string{{"task", "draft", "clamp", "--yes"}, {"run", "once", "clamp"}} {
+		expect(t, f.run(ctx, args...), ExitError, "a draft call that a stopped Agentium left may still be running (process group "+pg+")",
+			"remove the call's folder <data>/artifacts/drafts/"+project+"/20261005T100002Z-alive: its spend is then unknown, at most $0.65")
+	}
 	if n := draftCalls(t, ctrl); n != 1 {
 		t.Fatalf("%d call(s) while a call may still run", n)
 	}
-	if left := draftFolders(t, f); len(left) != 4 || storedTask(t, f, "clamp").DraftSpendUSD != 0.40 {
+	if left := draftFolders(t, f); len(left) != 5 || storedTask(t, f, "clamp").DraftSpendUSD != 0.40 {
 		t.Fatalf("a refusal settled something: folders %v, spend %v", left, storedTask(t, f, "clamp").DraftSpendUSD)
 	}
-	os.RemoveAll(filepath.Join(projectDir, "20261005T100002Z-alive"))
+	// The same group, but the call started an hour before its leader: a reused number, settled as ended.
+	if err := os.WriteFile(filepath.Join(alive, "call.json"), []byte(metaAt(clamp.CreatedAt, time.Now().Add(-time.Hour))), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	setReply(t, ctrl, draftGap)
 	next := f.run(ctx, "task", "draft", "clamp", "--yes")
 	expect(t, next, ExitError, "Counted $0.03 that a draft call of task clamp spent before Agentium stopped; its draft was not kept",
-		"A draft call of task clamp, left by a stopped Agentium, reported no cost: its spend is unknown, at most $0.65", "Refused the draft ($0.02; drafting this task has cost $0.45)")
+		"A draft call of task clamp, left by a stopped Agentium, reported no cost: its spend is unknown, at most $0.65",
+		"Process group "+pg+" of a draft call left by a stopped Agentium (20261005T100002Z-alive) now belongs to another program",
+		"A draft call of task clamp, left by a stopped Agentium, spent $0.03; that task was removed since, so no task's spend counts it",
+		"Refused the draft ($0.02; drafting this task has cost $0.45)")
 	if strings.Contains(next.stdout, "$0.58") || strings.Count(next.stdout, "Counted $") != 1 {
 		t.Errorf("a call counted before its folder went was counted again:\n%s", next.stdout)
 	}
@@ -330,6 +364,64 @@ func TestTaskDraftCountsACrashedCallOnce(t *testing.T) {
 	}
 	if left := draftFolders(t, f); len(left) != 0 {
 		t.Errorf("draft folders left: %v", left)
+	}
+}
+
+// A task removed while its draft call runs, and a new task given its id and name: the call is counted with the calls,
+// the new task is neither charged nor given the draft, and the command says the task was removed.
+func TestTaskDraftOfATaskRemovedMeanwhile(t *testing.T) {
+	t.Parallel()
+	f, ctrl := draftFixture(t)
+	ctx := context.Background()
+	setReply(t, ctrl, draftStored)
+	old := storedTask(t, f, "clamp")
+	if err := os.WriteFile(filepath.Join(ctrl, "wait"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan jsonResult, 1)
+	go func() {
+		res := f.run(ctx, "task", "draft", "clamp", "--yes", "--json")
+		done <- jsonResult{cliResult: res}
+	}()
+	waitFor(t, "the call", func() bool { _, err := os.Stat(filepath.Join(ctrl, "waiting")); return err == nil })
+	expect(t, f.run(ctx, "task", "rm", "clamp"), ExitOK)
+	time.Sleep(10 * time.Millisecond) // a later creation time
+	expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", "clamp", "--verify", "go test ./..."), ExitOK)
+	if again := storedTask(t, f, "clamp"); again.ID != old.ID {
+		t.Fatalf("the id was not reused: %d, then %d", old.ID, again.ID)
+	}
+	if err := os.WriteFile(filepath.Join(ctrl, "go"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := <-done
+	doc := checkJSON(t, f, res.cliResult, ExitError, []string{"task", "draft", "clamp", "--yes"})
+	if doc.get("outcome") != "failed" || doc.get("cost_usd") != 0.031 || !strings.Contains(doc.get("reason").(string), "task clamp was removed while the call ran") {
+		t.Errorf("a draft of a removed task: %s", doc.stdout)
+	}
+	if got := storedTask(t, f, "clamp"); got.DraftSpendUSD != 0 || got.Draft != "" {
+		t.Errorf("the new task was charged or given the draft: %+v", got)
+	}
+	if left := draftFolders(t, f); len(left) != 0 {
+		t.Errorf("draft folders left: %v", left)
+	}
+}
+
+// A check that cannot run after the count (here: the bare repository gone) still gives the draft document, with what the
+// call cost.
+func TestTaskDraftJSONKeepsTheCostWhenACheckFails(t *testing.T) {
+	t.Parallel()
+	f, ctrl := draftFixture(t)
+	setReply(t, ctrl, draftStored)
+	bare := filepath.Join(f.data, "projects", "1", "repo.git")
+	if err := os.WriteFile(filepath.Join(ctrl, "break"), []byte(bare), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	doc := jsonRun(t, f, ExitError, "task", "draft", "clamp", "--yes")
+	if err := os.Rename(bare+".gone", bare); err != nil {
+		t.Fatal(err)
+	}
+	if doc.get("outcome") != "failed" || doc.get("cost_usd") != 0.031 || doc.get("drafting_spend_usd") != 0.031 || doc.get("reason") == "" || doc.get("error") != nil {
+		t.Errorf("a failed check after the count: %s", doc.stdout)
 	}
 }
 
@@ -385,13 +477,17 @@ func TestTaskShowAndAcceptDraft(t *testing.T) {
 		t.Errorf("after --accept-draft: %+v", accepted)
 	}
 	expect(t, f.run(ctx, "task", "edit", "clamp", "--accept-draft"), ExitError, "no stored draft")
+	expect(t, f.run(ctx, "task", "show", "clamp"), ExitOK, "Instruction (from a draft; review it, then task edit --reviewed):")
+	if review := jsonRun(t, f, ExitOK, "task", "show", "clamp").get("review"); review != "draft" {
+		t.Errorf("task show --json review = %v, want draft", review)
+	}
 
 	// With --reviewed, a draft that leaves a requirement unstated is held by the gate unless --accept-gaps.
 	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetTaskDraft(ctx, accepted.ID, "Add a function that limits a value.", "claude-sonnet-5-5", time.Now()); err != nil {
+	if err := db.SetTaskDraft(ctx, accepted.Ref(), "Add a function that limits a value.", "claude-sonnet-5-5", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	db.Close()
@@ -431,7 +527,7 @@ func TestPoolUpdateLeavesDrafts(t *testing.T) {
 	}
 	kept, fromDraft := tasks[0], tasks[1]
 	for _, tk := range tasks {
-		if err := db.SetTaskDraft(ctx, tk.ID, "Draft of "+tk.Name+".", "claude-sonnet-5-5", time.Now()); err != nil {
+		if err := db.SetTaskDraft(ctx, tk.Ref(), "Draft of "+tk.Name+".", "claude-sonnet-5-5", time.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -445,4 +541,77 @@ func TestPoolUpdateLeavesDrafts(t *testing.T) {
 	if got := storedTask(t, f, fromDraft.Name); !got.NeedsReview || got.Instruction != "Draft of "+fromDraft.Name+"." {
 		t.Errorf("--accept-mined accepted a task whose text came from a draft: %+v", got)
 	}
+}
+
+// start --accept-mined never accepts a task start mined whose text the owner replaced with a draft: it stays waiting.
+func TestStartAcceptMinedHoldsBackADraftsText(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 9)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "start"), ExitError, "9 valid of 9")
+	name := draftOneTask(t, f)
+	got := f.run(ctx, "start", "--accept-mined")
+	expect(t, got, ExitOK, "Accepted 8 mined instruction(s) without your review (--accept-mined)")
+	if accepted, _, _ := strings.Cut(strings.SplitAfter(got.stdout, "(--accept-mined): ")[1], "\n"); strings.Contains(accepted, name) {
+		t.Errorf("start --accept-mined lists %s as accepted: %s", name, accepted)
+	}
+	if tk := storedTask(t, f, name); !tk.NeedsReview || !tk.FromDraft {
+		t.Errorf("start --accept-mined accepted a draft's text: %+v", tk)
+	}
+}
+
+// pool update --accept-mined, for a task this pass imported whose text became a draft's before the pass accepted it (the
+// pass takes no run lock): held back, still waiting.
+func TestPoolAcceptMinedHoldsBackADraftsText(t *testing.T) {
+	t.Parallel()
+	f, _ := startFixture(t, 2)
+	ctx := context.Background()
+	expect(t, f.run(ctx, "init"), ExitOK)
+	expect(t, f.run(ctx, "pool", "update"), ExitOK, "Imported 2 of 2 candidate(s) tried")
+	name := draftOneTask(t, f)
+	var stdout, stderr bytes.Buffer
+	env := Env{DefaultGrader: "host", Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Getenv: func(k string) string { return f.vars[k] }, Now: time.Now,
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	w, err := openProject(ctx, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &poolPass{env: env, w: w}
+	accepted, held, err := p.acceptMined(ctx, pool.PassResult{Imported: tasks}) // as if this pass had imported both
+	if err != nil || len(accepted) != 1 || accepted[0] == name || !strings.Contains(held[name], "came from a draft") {
+		t.Errorf("accepted %v, held %v, %v", accepted, held, err)
+	}
+	if tk := storedTask(t, f, name); !tk.NeedsReview || !tk.FromDraft {
+		t.Errorf("pool update --accept-mined accepted a draft's text: %+v", tk)
+	}
+}
+
+// draftOneTask stores a draft for the fixture's first task and puts it in place (task edit --accept-draft), returning
+// the task's name.
+func draftOneTask(t *testing.T, f runFixture) string {
+	t.Helper()
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatal(projects, err)
+	}
+	tasks, err := db.Tasks(ctx, projects[0].ID)
+	if err != nil || len(tasks) == 0 {
+		t.Fatal(tasks, err)
+	}
+	if err := db.SetTaskDraft(ctx, tasks[0].Ref(), "Draft of "+tasks[0].Name+".", "claude-sonnet-5-5", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	expect(t, f.run(ctx, "task", "edit", tasks[0].Name, "--accept-draft"), ExitOK)
+	return tasks[0].Name
 }

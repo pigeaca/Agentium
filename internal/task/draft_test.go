@@ -153,8 +153,8 @@ func TestDraftPromptQuotesItsPartsAsData(t *testing.T) {
 	}
 }
 
-// giveaways commits base then solution and lists the names text gives away.
-func giveaways(t *testing.T, base, solution map[string]string, text string) []string {
+// giveaways commits base then solution and lists the names text gives away, for a task whose stored text is instruction.
+func giveaways(t *testing.T, base, solution map[string]string, instruction, text string) []string {
 	t.Helper()
 	repo := t.TempDir()
 	git(t, repo, "init", "-q", "-b", "main")
@@ -165,7 +165,7 @@ func giveaways(t *testing.T, base, solution map[string]string, text string) []st
 	if err != nil {
 		t.Fatal(err)
 	}
-	names, err := NewFairness("-C", repo).Giveaways(ctx, FairnessInput{Base: b, Solution: s, HiddenTests: hidden, Reference: reference}, text)
+	names, err := NewFairness("-C", repo).Giveaways(ctx, FairnessInput{Base: b, Solution: s, Instruction: instruction, HiddenTests: hidden, Reference: reference}, text)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,9 +225,22 @@ func TestGiveawaysPerLanguage(t *testing.T) {
 			text: "Run fails with \"retryLoop gave up\".", want: nil},
 	} {
 		t.Run(c.lang, func(t *testing.T) {
-			if got := giveaways(t, c.base, c.solution, c.text); !slices.Equal(got, c.want) {
+			if got := giveaways(t, c.base, c.solution, "", c.text); !slices.Equal(got, c.want) {
 				t.Errorf("giveaways %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// A name the task's stored text already states is not only the reference's: the agent is told it today. A spelling in
+// another case does not state it.
+func TestGiveawaysLeaveOutWhatTheInstructionStates(t *testing.T) {
+	base := map[string]string{"go.mod": "module m\n\ngo 1.22\n", "a/a.go": "package a\n", "a/a_test.go": "package a\n"}
+	solution := map[string]string{
+		"a/a.go":      "package a\n\nfunc Public() int { return splitHelper() + joinHelper() }\n\nfunc splitHelper() int { return 1 }\n\nfunc joinHelper() int { return 1 }\n",
+		"a/a_test.go": "package a\n\nimport \"testing\"\n\nfunc TestPublic(t *testing.T) { _ = Public() }\n"}
+	got := giveaways(t, base, solution, "a: use splitHelper in Public (and a JoinHelper)", "Add Public; it uses splitHelper and joinHelper.")
+	if !slices.Equal(got, []string{"joinHelper"}) {
+		t.Errorf("giveaways %v, want [joinHelper]", got)
 	}
 }

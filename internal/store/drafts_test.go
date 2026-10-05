@@ -69,7 +69,7 @@ func TestTaskDraftRoundTrip(t *testing.T) {
 		cost    float64
 		counted bool
 	}{{"c1", 0.12, true}, {"c1", 0.12, false}, {"c2", 0.30, true}, {"c3", 0, true}} {
-		counted, err := s.CountDraftCall(ctx, c.id, saved.ID, c.cost, now)
+		counted, err := s.CountDraftCall(ctx, c.id, saved.Ref(), c.cost, now)
 		if err != nil || counted != c.counted {
 			t.Errorf("count %d (%s): counted %v, %v; want %v", i, c.id, counted, err, c.counted)
 		}
@@ -80,17 +80,19 @@ func TestTaskDraftRoundTrip(t *testing.T) {
 	if listed, err := s.DraftCallCounted(ctx, "nope"); err != nil || listed {
 		t.Errorf("an unknown call listed: %v, %v", listed, err)
 	}
-	if _, err := s.CountDraftCall(ctx, "neg", saved.ID, -1, now); err == nil {
+	if _, err := s.CountDraftCall(ctx, "neg", saved.Ref(), -1, now); err == nil {
 		t.Error("a negative cost was counted")
 	}
-	if counted, err := s.CountDraftCall(ctx, "gone", saved.ID+99, 0.05, now); !counted || !errors.Is(err, ErrNotFound) {
+	gone := saved.Ref()
+	gone.ID += 99
+	if counted, err := s.CountDraftCall(ctx, "gone", gone, 0.05, now); !counted || !errors.Is(err, ErrNotFound) {
 		t.Errorf("a removed task's call: counted %v, %v", counted, err)
 	}
 
-	if err := s.SetTaskDraft(ctx, saved.ID, "Make it new.", "claude-sonnet-5-5", now.Add(time.Minute)); err != nil {
+	if err := s.SetTaskDraft(ctx, saved.Ref(), "Make it new.", "claude-sonnet-5-5", now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.SetTaskDraft(ctx, saved.ID+99, "x", "m", now); !errors.Is(err, ErrNotFound) {
+	if err := s.SetTaskDraft(ctx, gone, "x", "m", now); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a draft for a removed task: %v", err)
 	}
 	got, err := s.TaskByName(ctx, app.ID, "t")
@@ -123,7 +125,7 @@ func TestTaskDraftRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	after, _ := s.TaskByName(ctx, app.ID, "t")
-	if after.Instruction != "Make it new." || !after.NeedsReview || after.Draft != "" || after.DraftModel != "" || !after.DraftAt.IsZero() ||
+	if after.Instruction != "Make it new." || !after.NeedsReview || !after.FromDraft || after.Draft != "" || after.DraftModel != "" || !after.DraftAt.IsZero() ||
 		math.Abs(after.DraftSpendUSD-0.42) > 1e-9 || !after.UpdatedAt.Equal(now.Add(3*time.Minute)) || string(after.Validation) != `{"status":"valid"}` {
 		t.Errorf("after accepting the draft: %+v", after)
 	}
@@ -131,5 +133,92 @@ func TestTaskDraftRoundTrip(t *testing.T) {
 	missing.Name = "nope"
 	if err := s.AcceptTaskDraft(ctx, missing, "Make it new.", now); !errors.Is(err, ErrNotFound) {
 		t.Errorf("accepting the draft of a missing task: %v", err)
+	}
+}
+
+// A draft's text is never marked reviewed by AcceptMined, nor is a task whose instruction changed since it was read; a
+// hand-written instruction clears the draft's mark.
+func TestAcceptMinedLeavesDraftsAndChangedTexts(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func(name string) Task {
+		saved, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: name, Instruction: "Fix " + name + ".", Source: "commit abc", BaseCommit: "b",
+			Verify: []string{"make test"}, NeedsReview: true, CreatedAt: now})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return saved
+	}
+	plain, drafted, edited := mk("plain"), mk("drafted"), mk("edited")
+	if err := s.SetTaskDraft(ctx, drafted.Ref(), "Draft.", "m", now); err != nil {
+		t.Fatal(err)
+	}
+	accept := drafted
+	accept.Instruction = "Draft."
+	if err := s.AcceptTaskDraft(ctx, accept, "Draft.", now); err != nil {
+		t.Fatal(err)
+	}
+	changed := edited
+	changed.Instruction = "Fix it otherwise."
+	if err := s.UpdateTask(ctx, changed, now); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		task Task
+		want bool
+	}{{plain, true}, {accept, false}, {edited, false}} {
+		if ok, err := s.AcceptMined(ctx, c.task, now); err != nil || ok != c.want {
+			t.Errorf("AcceptMined(%s) = %v, %v; want %v", c.task.Name, ok, err, c.want)
+		}
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "drafted"); !got.NeedsReview || !got.FromDraft {
+		t.Errorf("a draft's text after AcceptMined: %+v", got)
+	}
+	hand := accept
+	hand.Instruction, hand.NeedsReview = "Written by hand.", false
+	if err := s.UpdateTask(ctx, hand, now); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "drafted"); got.FromDraft {
+		t.Errorf("a hand-written instruction kept the draft's mark: %+v", got)
+	}
+}
+
+// A removed task's id given to a new task: a draft call made for the old one charges and stores nothing on the new one.
+func TestDraftWritesNeverReachAReusedID(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "old", Instruction: "x", Source: "manual", BaseCommit: "b", Verify: []string{"t"}, CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteTask(ctx, app.ID, "old"); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "old", Instruction: "y", Source: "manual", BaseCommit: "b", Verify: []string{"t"}, CreatedAt: now.Add(time.Hour)})
+	if err != nil || reused.ID != old.ID {
+		t.Fatalf("the id was not reused (%d, %d): %v", old.ID, reused.ID, err)
+	}
+	if counted, err := s.CountDraftCall(ctx, "c", old.Ref(), 0.3, now); !counted || !errors.Is(err, ErrNotFound) {
+		t.Errorf("the old task's call: %v, %v", counted, err)
+	}
+	if listed, _ := s.DraftCallCounted(ctx, "c"); !listed {
+		t.Error("the call is not listed")
+	}
+	if err := s.SetTaskDraft(ctx, old.Ref(), "Draft.", "m", now); !errors.Is(err, ErrNotFound) {
+		t.Errorf("a draft for the old task: %v", err)
+	}
+	if got, _ := s.TaskByName(ctx, app.ID, "old"); got.DraftSpendUSD != 0 || got.Draft != "" {
+		t.Errorf("the new task was charged or given the draft: %+v", got)
 	}
 }

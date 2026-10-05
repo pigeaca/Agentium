@@ -10,9 +10,10 @@ import (
 )
 
 // Giveaways lists, sorted, the names a text gives away: names the reference solution's non-test files declare, that no
-// base file of the same language family contains as a word, that no hidden test file contains as a word, and that text
-// contains as a word, case-sensitively. A task text that names them tells the agent how the reference did it, which the
-// hidden tests do not ask for. It is the drafts' second check (Draft); in.Instruction is not read.
+// base file of the same language family contains as a word, that no hidden test file contains as a word, that
+// in.Instruction (the task's stored text: what the agent is told today) does not contain as a word, and that text
+// contains as a word, all case-sensitively. A task text that names them tells the agent how the reference did it, which
+// the hidden tests do not ask for. It is the drafts' second check (Draft).
 //
 // The declarations are the fairness check's: for Go, package-level names and struct and interface members (newNames);
 // for Java, Kotlin, Rust, Python and TypeScript or JavaScript, what declaredNames finds, overrides left out
@@ -68,7 +69,7 @@ func (f *Fairness) Giveaways(ctx context.Context, in FairnessInput, text string)
 	}
 	var out []string
 	for name, exts := range declared {
-		if len(name) < minName || used[name] || !caseWordIn(text, name) {
+		if len(name) < minName || used[name] || !caseWordIn(text, name) || caseWordIn(in.Instruction, name) {
 			continue
 		}
 		var specs []string

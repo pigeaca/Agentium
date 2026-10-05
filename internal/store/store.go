@@ -526,7 +526,21 @@ type Task struct {
 	DraftAt       time.Time
 	DraftModel    string
 	DraftSpendUSD float64
+	// FromDraft: the instruction is a draft the owner put in place (AcceptTaskDraft), which only the owner may mark
+	// reviewed (AcceptMined never does). UpdateTask clears it when it changes the instruction.
+	FromDraft bool
 }
+
+// TaskRef is a task's identity: its id, name and creation time together. SQLite may give a removed task's id to a task
+// made later, so a write that must reach the task a long call started for (a draft's) matches all three.
+type TaskRef struct {
+	ID        int64
+	Name      string
+	CreatedAt time.Time
+}
+
+// Ref is t's identity.
+func (t Task) Ref() TaskRef { return TaskRef{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt} }
 
 // Retired reports whether the task is retired.
 func (t Task) Retired() bool {
@@ -563,16 +577,18 @@ func (s *Store) SaveTask(ctx context.Context, task Task) (Task, error) {
 }
 
 // UpdateTask stores a task's editable fields: instruction, setup and verification commands, review flag and validation.
-// The grading mode is fixed when the task is saved.
+// The grading mode is fixed when the task is saved. A changed instruction is no longer a draft's (FromDraft is cleared);
+// an unchanged one keeps the flag.
 func (s *Store) UpdateTask(ctx context.Context, task Task, now time.Time) error {
 	lists, err := encodeLists(task.Verify, task.Setup)
 	if err != nil {
 		return fmt.Errorf("update task %q: %w", task.Name, err)
 	}
 	result, err := s.db.ExecContext(ctx, `
-		UPDATE tasks SET instruction = ?, verify = ?, setup = ?, needs_review = ?, validation = ?, updated_at = ?
+		UPDATE tasks SET instruction_from_draft = CASE WHEN instruction = ? THEN instruction_from_draft ELSE 0 END,
+		                 instruction = ?, verify = ?, setup = ?, needs_review = ?, validation = ?, updated_at = ?
 		WHERE project_id = ? AND name = ?`,
-		task.Instruction, lists[0], lists[1], task.NeedsReview, string(task.Validation), formatTime(now), task.ProjectID, task.Name)
+		task.Instruction, task.Instruction, lists[0], lists[1], task.NeedsReview, string(task.Validation), formatTime(now), task.ProjectID, task.Name)
 	if err != nil {
 		return fmt.Errorf("update task %q: %w", task.Name, err)
 	}
@@ -762,7 +778,7 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
 		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason, module,
-		       draft, draft_at, draft_model, draft_spend_usd
+		       draft, draft_at, draft_model, draft_spend_usd, instruction_from_draft
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -774,7 +790,7 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		var hidden, reference, verify, setup, validation, created, updated, retired, drafted string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
 			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated,
-			&retired, &task.RetiredReason, &task.Module, &task.Draft, &drafted, &task.DraftModel, &task.DraftSpendUSD); err != nil {
+			&retired, &task.RetiredReason, &task.Module, &task.Draft, &drafted, &task.DraftModel, &task.DraftSpendUSD, &task.FromDraft); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {

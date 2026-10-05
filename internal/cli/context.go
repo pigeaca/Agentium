@@ -70,6 +70,8 @@ type workspace struct {
 	bare    string
 	// toolchain is the host's build-tool versions (hostToolchain), detected once per command.
 	toolchain task.Toolchain
+	// draftNotes are what startRuns said of the draft calls a stopped Agentium left (settleDraftCalls).
+	draftNotes []string
 }
 
 // openProject opens the project containing env.Dir; it must have been registered with `agentium init`.

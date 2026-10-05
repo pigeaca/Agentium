@@ -908,7 +908,9 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(out, note(st, judgeGradedNote()))
 	}
 	gaps, gapErr := task.Gaps(ctx, task.NewFairness("--git-dir", w.bare), t)
-	if t.NeedsReview && isTicket(t) {
+	if t.NeedsReview && t.FromDraft {
+		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(from a draft; review it, then task edit --reviewed)")+st.Heading(":"))
+	} else if t.NeedsReview && isTicket(t) {
 		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(converted from a ticket; review it, then task edit)")+st.Heading(":"))
 	} else if t.NeedsReview {
 		fmt.Fprintln(out, st.Heading("Instruction")+" "+st.Warn("(from history; review it for solution leaks, then task edit)")+st.Heading(":"))

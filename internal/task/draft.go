@@ -287,12 +287,14 @@ func Draft(ctx context.Context, f *Fairness, t store.Task, in DraftInput, call D
 		return res, nil
 	}
 	res.Text = a.Text
-	in2 := FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: a.Text, HiddenTests: t.HiddenTests, Reference: t.Reference}
-	gaps, err := f.Gaps(ctx, in2)
+	asText := FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: a.Text, HiddenTests: t.HiddenTests, Reference: t.Reference}
+	gaps, err := f.Gaps(ctx, asText)
 	if err != nil {
 		return res, fmt.Errorf("check the draft for unstated requirements: %w", err)
 	}
-	giveaways, err := f.Giveaways(ctx, in2, a.Text)
+	stored := asText
+	stored.Instruction = t.Instruction // a name the agent is told today is not only the reference's
+	giveaways, err := f.Giveaways(ctx, stored, a.Text)
 	if err != nil {
 		return res, fmt.Errorf("check the draft for names only the reference has: %w", err)
 	}

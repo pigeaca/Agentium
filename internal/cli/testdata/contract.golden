@@ -1695,4 +1695,4 @@ migration 0011_removed_watch.sql	683d146397d0a68b
 migration 0012_project_settings.sql	36ca254216271595
 migration 0013_project_module.sql	d2c002bd6494bb10
 migration 0014_rule_checks.sql	2b81fa3bbd438859
-migration 0015_task_drafts.sql	73494dab4052ae0b
+migration 0015_task_drafts.sql	9b98d89eb8af098b
