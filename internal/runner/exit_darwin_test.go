@@ -70,8 +70,15 @@ func TestAwaitExitWithoutTheEvent(t *testing.T) {
 	defer syscall.Close(kq)
 	pid := started(t, "/bin/sleep", "0.3")
 	start := time.Now()
-	if err := awaitExit(lostEvent{kqueueExit{kq: kq, pid: pid}}, 50*time.Millisecond); err != nil {
-		t.Fatal(err)
+	done := make(chan error, 1)
+	go func() { done <- awaitExit(lostEvent{kqueueExit{kq: kq, pid: pid}}, 50*time.Millisecond) }()
+	select { // a regression is a named failure, not a hang until go test's timeout
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wait never ended: an exit whose event is lost is never seen")
 	}
 	if took := time.Since(start); took < 250*time.Millisecond || took > 3*time.Second {
 		t.Errorf("the wait ended after %v: want soon after the process's exit at 300 ms", took)
