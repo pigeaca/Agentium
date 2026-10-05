@@ -35,7 +35,7 @@ func main() {
 			return rows
 		},
 		Dir: dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
-		AccountHome: accountHome,
+		AccountHome: accountHome, Docker: cli.SystemDocker,
 	})
 	stop()
 	os.Exit(code)

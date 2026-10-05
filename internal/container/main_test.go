@@ -71,6 +71,30 @@ type scenario struct {
 	PS               string // docker ps output
 	Volumes          string // docker volume ls output
 	Env              bool   // record the environment of each call too
+
+	// Images and pulls (images.go). Images answers image inspect per reference (nil: Image answers every one);
+	// AfterPull and AfterBuild add answers once a pull of that reference, or a build, has run.
+	Images     map[string]string
+	AfterPull  map[string]string
+	AfterBuild map[string]string
+	PullExit   int
+	BuildExit  int
+	BuildID    string // written to the build's --iidfile
+	CheckOut   string // the built image's check (docker run)
+	CheckExit  int
+	ImageLS    string // docker image ls output
+	ImageRmErr string // docker image rm fails with this message
+	// Volumes (deps.go, cleanup.go). VolumeUntilCreate: volume inspect says "no such volume" until a volume create ran.
+	VolumeUntilCreate bool
+	VolumeCreated     string            // volume inspect --format {{.Name}}\t{{.CreatedAt}} output
+	VolumeData        string            // volume inspect --format {{index .Labels "agentium.data"}} output
+	VolumeUsers       string            // ps --filter volume=... output
+	VolumeUsersBy     map[string]string // the same per volume, before VolumeUsers
+	DF                string            // system df --format {{json .Volumes}} output
+	IdleState         string            // container inspect --format {{.State.Status}}\t{{index .Config.Labels "agentium.data"}} output
+	RmRefuse          string            // docker rm (without --force) fails with this message
+	SeedExit          int               // a seed's tar (docker start --attach)
+	PullStderr        string            // what a pull prints on stderr
 }
 
 func fakeDocker() int {
@@ -127,12 +151,29 @@ func fakeDocker() int {
 	case args[0] == "info":
 		fmt.Println(sc.Info)
 	case slices.Equal(args[:2], []string{"image", "inspect"}):
+		ref := args[len(args)-1]
+		if answer, ok := imageAnswer(dir, sc, ref); ok {
+			fmt.Println(answer)
+			return 0
+		}
+		if sc.Images != nil || sc.AfterPull != nil || sc.AfterBuild != nil {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: No such image: %s\n", ref)
+			return 1
+		}
 		if sc.Image == "" {
 			fmt.Fprintf(os.Stderr, "Error response from daemon: No such image: %s\n", args[len(args)-1])
 			return 1
 		}
 		fmt.Println(sc.Image)
+	case slices.Equal(args[:2], []string{"volume", "inspect"}) && strings.Contains(strings.Join(args, " "), "CreatedAt"):
+		fmt.Print(sc.VolumeCreated)
+	case slices.Equal(args[:2], []string{"volume", "inspect"}) && strings.Contains(strings.Join(args, " "), "agentium.data"):
+		fmt.Println(sc.VolumeData)
 	case slices.Equal(args[:2], []string{"volume", "inspect"}):
+		if _, err := os.Stat(filepath.Join(dir, "volume-created")); sc.VolumeUntilCreate && err != nil {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: get %s: no such volume\n", args[len(args)-1])
+			return 1
+		}
 		if sc.Volume == "" {
 			fmt.Fprintf(os.Stderr, "Error response from daemon: get %s: no such volume\n", args[len(args)-1])
 			return 1
@@ -147,6 +188,12 @@ func fakeDocker() int {
 			return sc.CreateExit
 		}
 		fmt.Println(strings.Repeat("c", 64))
+	case slices.Equal(args[:2], []string{"container", "inspect"}) && strings.Contains(strings.Join(args, " "), "agentium.data"):
+		if sc.IdleState == "" {
+			fmt.Fprintf(os.Stderr, "Error response from daemon: No such container: %s\n", args[len(args)-1])
+			return 1
+		}
+		fmt.Println(sc.IdleState)
 	case slices.Equal(args[:2], []string{"container", "inspect"}):
 		if sc.Inspect == "" || removed() {
 			fmt.Fprintf(os.Stderr, "Error response from daemon: No such container: %s\n", args[len(args)-1])
@@ -159,6 +206,9 @@ func fakeDocker() int {
 		fmt.Println(sc.Inspect)
 	case args[0] == "cp":
 		saveStdin()
+	case args[0] == "start" && slices.Contains(args, "--attach"):
+		saveStdin() // a seed's stream, to the volume's own tar
+		return sc.SeedExit
 	case args[0] == "start":
 		fmt.Println(args[1])
 	case args[0] == "exec":
@@ -228,6 +278,9 @@ func fakeDocker() int {
 			}
 			return sc.CommandExit
 		}
+	case args[0] == "rm" && sc.RmRefuse != "" && !slices.Contains(args, "--force"):
+		fmt.Fprintln(os.Stderr, sc.RmRefuse)
+		return 1
 	case args[0] == "rm":
 		if sc.RmFail {
 			fmt.Fprintln(os.Stderr, "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?")
@@ -236,8 +289,48 @@ func fakeDocker() int {
 		fmt.Println(args[len(args)-1])
 	case args[0] == "events":
 		return fakeEvents(dir, sc)
+	case args[0] == "ps" && strings.Contains(strings.Join(args, " "), "volume="):
+		for name, users := range sc.VolumeUsersBy {
+			if slices.Contains(args, "volume="+name) {
+				fmt.Print(users)
+				return 0
+			}
+		}
+		fmt.Print(sc.VolumeUsers)
 	case args[0] == "ps":
 		fmt.Print(sc.PS)
+	case args[0] == "pull":
+		appendLine(filepath.Join(dir, "pulled"), args[len(args)-1])
+		fmt.Fprint(os.Stderr, sc.PullStderr)
+		fmt.Println("pulled", args[len(args)-1])
+		return sc.PullExit
+	case args[0] == "build":
+		saveStdin()
+		if sc.BuildExit != 0 {
+			fmt.Fprintln(os.Stderr, "E: Unable to locate package less")
+			return sc.BuildExit
+		}
+		if i := slices.Index(args, "--iidfile"); i >= 0 && sc.BuildID != "" {
+			os.WriteFile(args[i+1], []byte(sc.BuildID), 0o600)
+		}
+		os.WriteFile(filepath.Join(dir, "built"), nil, 0o600)
+		fmt.Println("Successfully built")
+	case args[0] == "run":
+		fmt.Print(sc.CheckOut)
+		return sc.CheckExit
+	case slices.Equal(args[:2], []string{"image", "ls"}):
+		fmt.Print(sc.ImageLS)
+	case slices.Equal(args[:2], []string{"image", "rm"}):
+		if sc.ImageRmErr != "" {
+			fmt.Fprintln(os.Stderr, sc.ImageRmErr)
+			return 1
+		}
+		fmt.Println("Untagged:", args[2])
+	case slices.Equal(args[:2], []string{"volume", "create"}):
+		os.WriteFile(filepath.Join(dir, "volume-created"), nil, 0o600)
+		fmt.Println(args[len(args)-1])
+	case slices.Equal(args[:2], []string{"system", "df"}):
+		fmt.Println(sc.DF)
 	case slices.Equal(args[:2], []string{"volume", "ls"}):
 		fmt.Print(sc.Volumes)
 	case slices.Equal(args[:2], []string{"volume", "rm"}):
@@ -247,6 +340,33 @@ func fakeDocker() int {
 		return 99
 	}
 	return 0
+}
+
+// imageAnswer is image inspect's answer for ref: from Images, or from AfterPull or AfterBuild once that ran.
+func imageAnswer(dir string, sc scenario, ref string) (string, bool) {
+	if answer, ok := sc.Images[ref]; ok {
+		return answer, true
+	}
+	if pulled, _ := os.ReadFile(filepath.Join(dir, "pulled")); slices.Contains(strings.Split(string(pulled), "\n"), ref) {
+		if answer, ok := sc.AfterPull[ref]; ok {
+			return answer, true
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "built")); err == nil {
+		if answer, ok := sc.AfterBuild[ref]; ok {
+			return answer, true
+		}
+	}
+	return "", false
+}
+
+func appendLine(path, line string) {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	fmt.Fprintln(f, line)
+	f.Close()
 }
 
 // event writes one of the daemon's records for the fake events stream, whole (a rename), so it is never read half

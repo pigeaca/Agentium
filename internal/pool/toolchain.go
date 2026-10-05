@@ -37,6 +37,11 @@ func versionCommands(profile string) []versionCommand {
 	case "cargo":
 		return []versionCommand{{"cargo", []string{"cargo", "--version"}, regexp.MustCompile(`^cargo \d`)},
 			{"rustc", []string{"rustc", "--version"}, regexp.MustCompile(`^rustc \d`)}}
+	case "python":
+		// The interpreter the warm-up finds first (`uv python find --system --no-project`, never downloading one), else
+		// python3 on PATH, as warmPython falls back; a project's requires-python may pick another, which is not seen.
+		return []versionCommand{{"python", []string{"uv", "python", "find", "--system", "--no-project", "--show-version"}, regexp.MustCompile(`^\d+\.\d+`)},
+			{"python", []string{"python3", "--version"}, regexp.MustCompile(`^Python \d`)}}
 	}
 	return nil
 }
@@ -88,13 +93,14 @@ const versionTimeout = 30 * time.Second
 
 // HostVersions is a VersionOutput running commands on the host as Agentium's own commands run (runner.Run: its own
 // process group, credentials dropped from environ, a timeout), in dir, which should be a folder of Agentium's (not a
-// checkout: wrappers and a go.mod there could pick or download other tools). GOTOOLCHAIN=local keeps Go, and
-// RUSTUP_AUTO_INSTALL=0 rustup, from fetching a toolchain to answer. The versions are the host's: a toolchain a
-// checkout pins (go.mod's toolchain line, rust-toolchain.toml) is not seen, which is a known limit.
+// checkout: wrappers and a go.mod there could pick or download other tools). GOTOOLCHAIN=local keeps Go,
+// RUSTUP_AUTO_INSTALL=0 rustup, and UV_PYTHON_DOWNLOADS=never uv, from fetching a toolchain to answer. The versions
+// are the host's: a toolchain a checkout pins (go.mod's toolchain line, rust-toolchain.toml) is not seen, which is a
+// known limit.
 func HostVersions(dir string, environ []string) VersionOutput {
 	return func(ctx context.Context, args []string) (string, error) {
 		var out limitedBuffer
-		res, err := runner.Run(ctx, runner.Spec{Dir: dir, Args: args, Environ: runner.Environ(environ), Env: []string{"GOTOOLCHAIN=local", "RUSTUP_AUTO_INSTALL=0"},
+		res, err := runner.Run(ctx, runner.Spec{Dir: dir, Args: args, Environ: runner.Environ(environ), Env: []string{"GOTOOLCHAIN=local", "RUSTUP_AUTO_INSTALL=0", "UV_PYTHON_DOWNLOADS=never"},
 			Timeout: versionTimeout, Output: &out})
 		if err != nil {
 			return "", err

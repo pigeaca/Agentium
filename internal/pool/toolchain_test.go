@@ -50,13 +50,44 @@ func TestDetectToolchainAsksEachToolOnce(t *testing.T) {
 	}
 }
 
+// Python's version is the interpreter uv finds first (warmPython's), and python3 on PATH only without uv.
+func TestDetectToolchainPython(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		outputs map[string]string
+		want    string
+		asked   string
+	}{
+		{"uv", map[string]string{"uv python find --system --no-project --show-version": "3.12.13\n", "python3 --version": "Python 3.9.6\n"}, "3.12.13",
+			"uv python find --system --no-project --show-version"},
+		{"no uv", map[string]string{"python3 --version": "Python 3.9.6\n"}, "Python 3.9.6",
+			"uv python find --system --no-project --show-version,python3 --version"},
+		{"neither", map[string]string{}, "", "uv python find --system --no-project --show-version,python3 --version"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var asked []string
+			got, err := DetectToolchain(context.Background(), []string{"python"}, func(_ context.Context, args []string) (string, error) {
+				key := strings.Join(args, " ")
+				asked = append(asked, key)
+				if out, ok := tt.outputs[key]; ok {
+					return out, nil
+				}
+				return "", errors.New("not found")
+			})
+			if err != nil || got["python"] != tt.want || strings.Join(asked, ",") != tt.asked {
+				t.Errorf("python %q (asked %v), %v; want %q", got["python"], asked, err, tt.want)
+			}
+		})
+	}
+}
+
 // HostVersions runs commands as Agentium's own: stdout and stderr together, no credentials, no Go toolchain download,
 // and a failure is an error.
 func TestHostVersions(t *testing.T) {
 	run := HostVersions(t.TempDir(), []string{"PATH=/usr/bin:/bin", "GITHUB_TOKEN=secret", "GOTOOLCHAIN=auto"})
 	ctx := context.Background()
-	out, err := run(ctx, []string{"sh", "-c", `echo "out $GOTOOLCHAIN $RUSTUP_AUTO_INSTALL ${GITHUB_TOKEN:-none}"; echo err >&2`})
-	if err != nil || out != "out local 0 none\nerr\n" {
+	out, err := run(ctx, []string{"sh", "-c", `echo "out $GOTOOLCHAIN $RUSTUP_AUTO_INSTALL $UV_PYTHON_DOWNLOADS ${GITHUB_TOKEN:-none}"; echo err >&2`})
+	if err != nil || out != "out local 0 never none\nerr\n" {
 		t.Errorf("output %q, %v", out, err)
 	}
 	if _, err := run(ctx, []string{"sh", "-c", "exit 3"}); err == nil {

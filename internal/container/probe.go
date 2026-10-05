@@ -78,7 +78,11 @@ func sections(out string) map[string][]string {
 // the main process (pid 1, MainUser) beyond its signals;
 // only the loopback interface and no route; namespaces of its own; no new privileges, seccomp filtering and no
 // capabilities; no /dev/log and no runtime socket; its own cgroup namespace with readable, protected counters.
-func checkProbes(out string, deps bool) error {
+func checkProbes(out string, deps bool) error { return checkProbesFor(out, deps, false) }
+
+// checkProbesFor is checkProbes; warm reads a deps warm-up's container (Warm) instead of a grade's: it has the default
+// network (any interfaces and routes) and its /deps is mounted read-write. Everything else is checked alike.
+func checkProbesFor(out string, deps, warm bool) error {
 	s := sections(out)
 	var bad []string
 	fail := func(format string, args ...any) { bad = append(bad, fmt.Sprintf(format, args...)) }
@@ -91,7 +95,7 @@ func checkProbes(out string, deps bool) error {
 	wantWrite := map[string]string{"/tmp": "writable", "/grade/work": "writable", "/grade/cache": "writable", "/grade": "denied",
 		"/deps": "missing", "/sys/fs/cgroup": "denied", "/": "denied"}
 	if deps {
-		wantWrite["/deps"] = "denied"
+		wantWrite["/deps"] = "denied" // a volume's root stays root's, even in a warm-up (its mount is read-write: below)
 	}
 	seen := map[string]bool{}
 	for _, line := range s["write"] {
@@ -106,10 +110,10 @@ func checkProbes(out string, deps bool) error {
 			fail("%s was not probed", dir)
 		}
 	}
-	if net := s["net"]; !slices.Equal(net, []string{"lo"}) {
+	if net := s["net"]; !warm && !slices.Equal(net, []string{"lo"}) {
 		fail("network interfaces are %v, want [lo]", net)
 	}
-	if route := s["route"]; len(route) != 1 {
+	if route := s["route"]; !warm && len(route) != 1 {
 		fail("the routing table has %d routes, want none", max(0, len(route)-1))
 	}
 	nsSeen := 0
@@ -144,7 +148,7 @@ func checkProbes(out string, deps bool) error {
 			fail("%s is %q, want no capabilities", c, status[c])
 		}
 	}
-	bad = append(bad, checkMountTable(s["mounts"], deps)...)
+	bad = append(bad, checkMountTable(s["mounts"], deps, warm)...)
 	if devlog := s["devlog"]; !slices.Equal(devlog, []string{"absent"}) {
 		fail("/dev/log is %v, want absent", devlog)
 	}
@@ -168,7 +172,7 @@ func checkProbes(out string, deps bool) error {
 
 // checkMountTable reads /proc/self/mounts: the root and /deps read-only, /grade read-write, /tmp a nosuid, nodev
 // tmpfs, and the cgroup files read-only.
-func checkMountTable(lines []string, deps bool) []string {
+func checkMountTable(lines []string, deps, warm bool) []string {
 	type mount struct{ fstype, opts string }
 	table := map[string]mount{}
 	for _, line := range lines {
@@ -190,10 +194,15 @@ func checkMountTable(lines []string, deps bool) []string {
 	check(GradeDir, func(m mount) bool { return opt(m, "rw") }, "read-write")
 	check(TmpDir, func(m mount) bool { return m.fstype == "tmpfs" && opt(m, "rw") && opt(m, "nosuid") && opt(m, "nodev") }, "a nosuid, nodev tmpfs")
 	check("/sys/fs/cgroup", func(m mount) bool { return opt(m, "ro") }, "read-only")
-	if deps {
+	switch {
+	case deps && warm:
+		check(DepsDir, func(m mount) bool { return opt(m, "rw") }, "read-write (a deps warm-up)")
+	case deps:
 		check(DepsDir, func(m mount) bool { return opt(m, "ro") }, "read-only")
-	} else if _, found := table[DepsDir]; found {
-		bad = append(bad, "a mount at /deps that was not asked for")
+	default:
+		if _, found := table[DepsDir]; found {
+			bad = append(bad, "a mount at /deps that was not asked for")
+		}
 	}
 	return bad
 }

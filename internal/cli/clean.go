@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/container"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/run"
@@ -30,7 +31,10 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
   - the quarantine: what a grade's cleanup could not remove;
   - what runs stopped by a dead Agentium left (workspaces, temp and grading folders), as recovery removes it;
   - the grading folders of sandboxed validations that stopped (never one a validation is grading in, or any
-    process uses: nothing is stopped).
+    process uses: nothing is stopped);
+  - in Docker, this data folder's containers that no command runs (never a running one, nor one made in the last
+    hour), the volumes of grades whose containers are gone, and dependency volumes unused for --older-than (never
+    one a container mounts). The images are only listed: agentium images remove removes them.
 Nothing used in the last hour goes, and nothing a locked, unfinished experiment uses. Your repositories, reports and
 snapshots are never touched. Without --yes it writes nothing; with --yes it first runs the recovery every run starts
 with, which stores runs a dead Agentium left as cancelled, redacts their records, and removes the records folder of
@@ -116,6 +120,9 @@ type cleanResult struct {
 	leftoversChecked bool              // false while runs are in progress (a dry run then leaves leftovers out)
 	names            map[string]string // project folder names (IDs) to project names
 	notes, warnings  []string
+	// docker is the data folder's containers and volumes in the plan (kinds run.CleanContainers and run.CleanVolumes),
+	// by kind and name, for their removal; nil when Docker was not checked.
+	docker map[string]container.Item
 }
 
 // removed counts, with --yes, the items of a kind that went and their sizes.
@@ -189,16 +196,24 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 	if res.plan, err = run.PlanClean(ctx, in); err != nil {
 		return res, err
 	}
+	d := planContainers(ctx, env, layout, age, &res)
+	if d != nil {
+		defer d.Close()
+	}
 	if !yes {
 		return res, nil
 	}
 	res.errs = make([]error, len(res.plan.Remove))
 	var others []int
 	leftovers := slices.ContainsFunc(res.plan.Keep, func(it run.CleanItem) bool { return it.Kind == run.CleanLeftovers })
+	var inDocker []int
 	for i, it := range res.plan.Remove {
-		if it.Kind == run.CleanLeftovers {
+		switch it.Kind {
+		case run.CleanLeftovers:
 			leftovers = true
-		} else {
+		case run.CleanContainers, run.CleanVolumes:
+			inDocker = append(inDocker, i)
+		default:
 			others = append(others, i)
 		}
 	}
@@ -229,7 +244,79 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 			res.freed += items[j].Bytes
 		}
 	}
+	// Containers before volumes (the plan's order): a volume a leftover container held is free once it is gone.
+	data := dataID(layout)
+	for _, i := range inDocker {
+		it := res.plan.Remove[i]
+		item := res.docker[it.Kind+"\x00"+it.Path]
+		remove := func() error { return d.RemoveIdle(ctx, data, item) }
+		var err error
+		if item.Deps != "" {
+			err = run.RemoveContainerDeps(ctx, layout, item.Name, it.LastUsed, remove)
+		} else {
+			err = remove()
+		}
+		if errors.Is(err, container.ErrInUse) {
+			err = fmt.Errorf("%w: %w", run.ErrCleanUsed, err)
+		}
+		res.errs[i] = err
+		if err == nil {
+			res.freed += it.Bytes
+		}
+	}
 	return res, nil
+}
+
+// planContainers adds the data folder's containers and volumes in Docker to the plan (container.Decide), and returns
+// the client that removes them (nil when Docker was not checked: a note says why). Docker being down never stops a
+// cleanup. The images are only listed, in a note.
+func planContainers(ctx context.Context, env Env, layout home.Layout, age time.Duration, res *cleanResult) DockerClient {
+	if env.Docker == nil {
+		return nil
+	}
+	d, err := env.docker(ctx)
+	if err != nil {
+		if !errors.Is(err, container.ErrUnavailable) || env.LookPath == nil || lookPathOK(env, "docker") {
+			res.notes = append(res.notes, "containers and volumes were not checked: "+err.Error())
+		}
+		return nil
+	}
+	items, err := d.Inventory(ctx, dataID(layout))
+	if err != nil {
+		res.notes = append(res.notes, "containers and volumes were not checked: "+err.Error())
+		d.Close()
+		return nil
+	}
+	res.docker = map[string]container.Item{}
+	lastUse := func(volume string) time.Time { return run.ContainerDepsUsed(layout, volume) }
+	for _, dec := range container.Decide(items, env.Now(), run.CleanGrace, max(age, run.CleanGrace), lastUse) {
+		kind := run.CleanContainers
+		if dec.Kind == "volume" {
+			kind = run.CleanVolumes
+		}
+		it := run.CleanItem{Kind: kind, Path: dec.Name, Project: dec.Deps, Bytes: max(dec.Size, 0), LastUsed: dec.LastUsed, Reason: dec.Reason, Detail: dec.Detail}
+		res.docker[kind+"\x00"+dec.Name] = dec.Item
+		if dec.Remove {
+			res.plan.Remove = append(res.plan.Remove, it)
+		} else {
+			res.plan.Keep = append(res.plan.Keep, it)
+		}
+	}
+	if images, err := d.LocalImages(ctx); err == nil && len(images) > 0 {
+		var total int64
+		for _, img := range images {
+			total += img.Size
+		}
+		res.notes = append(res.notes, fmt.Sprintf("Docker holds %d of the images container grading uses (%s); clean never removes them: agentium images remove --bases lists them all, and removes them with --yes",
+			len(images), formatBytes(total)))
+	}
+	return d
+}
+
+// lookPathOK reports whether a command is on PATH.
+func lookPathOK(env Env, name string) bool {
+	_, err := env.LookPath(name)
+	return err == nil
 }
 
 // openForClean opens the database: read-only for a dry run, which writes nothing, and normally with --yes, which may
@@ -307,6 +394,12 @@ func recoverForClean(ctx context.Context, env Env, layout home.Layout, db *store
 		return err
 	}
 	warn := func(msg string) { res.warnings = append(res.warnings, msg) }
+	remove, closeDocker := env.containerRemover(layout)
+	err = run.RecoverContainers(ctx, layout, remove, warn)
+	closeDocker()
+	if err != nil {
+		return err
+	}
 	orphans, recErr := run.RecoverWarn(ctx, layout, func(id string) (bool, error) { return db.HasRun(ctx, id) }, secret, env.Now(), warn)
 	w := &workspace{db: db, layout: layout}
 	for _, o := range orphans {

@@ -50,10 +50,15 @@ const (
 	CleanQuarantine  = "quarantine"
 	CleanLeftovers   = "leftovers"
 	CleanValidations = "validations"
+	// The data folder's containers and volumes in Docker (container grading). PlanClean never lists them: the command
+	// that holds a Docker client adds them (container.Decide), and removes them (container.RemoveIdle), never
+	// RemoveClean. Their Path is the container's or volume's name.
+	CleanContainers = "containers"
+	CleanVolumes    = "volumes"
 )
 
 // CleanKinds lists the kinds in report order.
-var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations}
+var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations, CleanContainers, CleanVolumes}
 
 // Why an item goes (CleanItem.Reason of a removal).
 const (
@@ -675,6 +680,9 @@ func removeItem(ctx context.Context, layout home.Layout, it CleanItem) error {
 	}
 	if it.Kind == CleanValidations {
 		return removeValidationGrade(ctx, layout, it)
+	}
+	if it.Kind == CleanContainers || it.Kind == CleanVolumes {
+		return errors.New("containers and volumes are removed through Docker")
 	}
 	if err := cleanable(layout, it.Path); err != nil {
 		return err

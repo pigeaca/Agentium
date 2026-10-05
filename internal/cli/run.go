@@ -301,6 +301,14 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	// These notices print at once, even under the dashboard: if Agentium is killed before the run ends, they are not lost.
 	out := env.noticeOut()
 	warn := func(msg string) { fmt.Fprintf(out, "%s\n", env.style().Warn("warning: "+msg)) }
+	// Containers first: recovery may remove a dead run's records, and with them the marker that says it had one.
+	remove, closeDocker := env.containerRemover(w.layout)
+	err = run.RecoverContainers(ctx, w.layout, remove, warn)
+	closeDocker()
+	if err != nil {
+		release()
+		return nil, err
+	}
 	orphans, recoverErr := run.RecoverWarn(ctx, w.layout, func(id string) (bool, error) { return w.db.HasRun(ctx, id) }, secret, env.Now(), warn)
 	for _, o := range orphans {
 		if o.Unreadable != "" { // task, arm and slot unknown: reported, not stored

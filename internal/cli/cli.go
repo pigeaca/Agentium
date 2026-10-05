@@ -50,6 +50,9 @@ type Env struct {
 	Backoff func(attempt int) time.Duration
 	// Sleep waits for d or until ctx is cancelled (experiment run --wait); nil means a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Docker opens the local Docker daemon for the images and clean commands and for recovery (SystemDocker in main);
+	// nil means Docker is not used: clean and recovery then leave containers alone and say so.
+	Docker func(ctx context.Context, environ []string) (DockerClient, error)
 	// DefaultGrader is the grader mode commands use without --grader (task.GraderHost or task.GraderSandbox); empty
 	// means the platform's (task.DefaultGrader: the sandbox on macOS). main leaves it empty.
 	DefaultGrader string
@@ -90,6 +93,7 @@ Commands:
   run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
   experiment    Design, preview and run context experiments (agentium experiment for details)
   clean         Show what caches nothing uses take, and with --yes remove them (agentium clean -h)
+  images        The images container grading runs in: list them, pull and build them with consent, remove them
   version       Print the version and build information
   help          Show this help
 
@@ -137,6 +141,8 @@ func dispatch(ctx context.Context, env Env, command string, args []string) int {
 		return runExperiment(ctx, env, args)
 	case "clean":
 		return runClean(ctx, env, args)
+	case "images":
+		return runImages(ctx, env, args)
 	default:
 		fmt.Fprintf(env.Stderr, "agentium: unknown command %q\n\n%s", command, usage)
 		return ExitUsage

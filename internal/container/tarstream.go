@@ -93,6 +93,19 @@ type tarWalk struct {
 	limits CopyLimits
 	hooks  walkHooks
 	stats  TarStats
+	// A seed's walk (seedTar): its entries' names start with prefix; skip leaves out files and links by that full name
+	// (they are in the volume already), and written collects the ones written.
+	prefix  string
+	skip    func(name string) bool
+	written *[]string
+}
+
+// tarName is an entry's name in the stream.
+func (t *tarWalk) tarName(name string) string {
+	if t.prefix == "" {
+		return name
+	}
+	return path.Join(t.prefix, name)
 }
 
 // stopped is the walk's cancellation, with its cause (CopyIn's errCopyEnded once docker has stopped reading).
@@ -170,10 +183,14 @@ func (t *tarWalk) entry(name string) error {
 	if err != nil {
 		return err
 	}
-	hdr := &tar.Header{Name: name, Mode: int64(info.Mode().Perm()), ModTime: info.ModTime(), Uid: 65534, Gid: 65534, Format: tar.FormatPAX}
+	full := t.tarName(name)
+	hdr := &tar.Header{Name: full, Mode: int64(info.Mode().Perm()), ModTime: info.ModTime(), Uid: 65534, Gid: 65534, Format: tar.FormatPAX}
+	if !info.IsDir() && t.skip != nil && t.skip(full) {
+		return nil // a seed's entry the caller leaves out (in the volume already, or not wanted)
+	}
 	switch {
 	case info.IsDir():
-		hdr.Typeflag, hdr.Name = tar.TypeDir, name+"/"
+		hdr.Typeflag, hdr.Name = tar.TypeDir, full+"/"
 		if err := t.tw.WriteHeader(hdr); err != nil {
 			return err
 		}
@@ -189,17 +206,26 @@ func (t *tarWalk) entry(name string) error {
 		}
 		hdr.Typeflag, hdr.Linkname, hdr.Mode = tar.TypeSymlink, target, 0o777
 		t.stats.Entries++
+		t.wrote(full)
 		return t.tw.WriteHeader(hdr)
 	case info.Mode().IsRegular():
 		n, err := writeFile(t.tw, t.r, name, hdr, t.limits.Bytes-t.stats.Bytes)
 		t.stats.Bytes += n
 		if err == nil {
 			t.stats.Entries++
+			t.wrote(full)
 		}
 		return err
 	default:
 		t.stats.Skipped++
 		return nil
+	}
+}
+
+// wrote notes a seed's file or link written.
+func (t *tarWalk) wrote(name string) {
+	if t.written != nil {
+		*t.written = append(*t.written, name)
 	}
 }
 
