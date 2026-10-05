@@ -6,12 +6,16 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │             no clear difference in cost              │
-  │  whether lean passes as many tasks: too few to tell  │
   │ stopped early · more tasks are unlikely to settle it │
   │                                                      │
   │  cheaper ◀ ──────━━━━━━━━●━━━━━━━━━━━─── ▶ costlier  │
   │                        same                          │
   │             likely 22% less to 31% more              │
+  │                                                      │
+  │  whether lean passes as many tasks: too few to tell  │
+  │  fewer pass ◀ ────────────●──────────── ▶ more pass  │
+  │     no difference seen  same                         │
+  │       20 tasks of 3 runs each could settle it        │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -29,7 +33,16 @@
   │ typical time  40s a task                               │
   └────────────────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline   lean
+  both passed · 8
+  task-01     ✓ $0.44    ✓ $0.36
+  task-02     ✓ $0.46    ✓ $0.55
+  task-05     ✓ $0.38    ✓ $0.42
+  task-06     ✓ $0.53    ✓ $0.48
+  task-07     ✓ $0.54    ✓ $0.48
+  task-09     ✓ $0.47    ✓ $0.42
+  + 2 more passed in both
+  neither version was cheaper on more tasks (4 of 8 each)
 
   the numbers behind this:
   agentium experiment report lean-seq-futility --details
@@ -41,12 +54,16 @@
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
           │               no clear difference in cost                │
-          │    whether lean passes as many tasks: too few to tell    │
           │   stopped early · more tasks are unlikely to settle it   │
           │                                                          │
           │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
           │                          same                            │
           │               likely 22% less to 31% more                │
+          │                                                          │
+          │    whether lean passes as many tasks: too few to tell    │
+          │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+          │       no difference seen  same                           │
+          │         20 tasks of 3 runs each could settle it          │
           └──────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
@@ -57,7 +74,16 @@
   │ typical time  40s a task          │    │ typical time  40s a task          │
   └───────────────────────────────────┘    └───────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████    $0.44   ✓ ███████▌     $0.36
+  task-02     ✓ █████████▌   $0.46   ✓ ███████████▎ $0.55
+  task-05     ✓ ███████▉     $0.38   ✓ ████████▊    $0.42
+  task-06     ✓ ███████████  $0.53   ✓ ██████████   $0.48
+  task-07     ✓ ███████████▏ $0.54   ✓ █████████▉   $0.48
+  task-09     ✓ █████████▋   $0.47   ✓ ████████▊    $0.42
+  + 2 more passed in both
+  neither version was cheaper on more tasks (4 of 8 each)
 
   the numbers behind this:
   agentium experiment report lean-seq-futility --details
@@ -69,12 +95,16 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │               no clear difference in cost                │
-                    │    whether lean passes as many tasks: too few to tell    │
                     │   stopped early · more tasks are unlikely to settle it   │
                     │                                                          │
                     │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
                     │                          same                            │
                     │               likely 22% less to 31% more                │
+                    │                                                          │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+                    │       no difference seen  same                           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -85,7 +115,16 @@
   │ typical time  40s a task                    │    │ typical time  40s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████    $0.44   ✓ ███████▌     $0.36
+  task-02     ✓ █████████▌   $0.46   ✓ ███████████▎ $0.55
+  task-05     ✓ ███████▉     $0.38   ✓ ████████▊    $0.42
+  task-06     ✓ ███████████  $0.53   ✓ ██████████   $0.48
+  task-07     ✓ ███████████▏ $0.54   ✓ █████████▉   $0.48
+  task-09     ✓ █████████▋   $0.47   ✓ ████████▊    $0.42
+  + 2 more passed in both
+  neither version was cheaper on more tasks (4 of 8 each)
 
   the numbers behind this: agentium experiment report lean-seq-futility --details
 === 120 columns
@@ -96,12 +135,16 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │               no clear difference in cost                │
-                    │    whether lean passes as many tasks: too few to tell    │
                     │   stopped early · more tasks are unlikely to settle it   │
                     │                                                          │
                     │  cheaper ◀ ───────━━━━━━━━━●━━━━━━━━━━━━━─── ▶ costlier  │
                     │                          same                            │
                     │               likely 22% less to 31% more                │
+                    │                                                          │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+                    │       no difference seen  same                           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -112,7 +155,16 @@
   │ typical time  40s a task                    │    │ typical time  40s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████    $0.44   ✓ ███████▌     $0.36
+  task-02     ✓ █████████▌   $0.46   ✓ ███████████▎ $0.55
+  task-05     ✓ ███████▉     $0.38   ✓ ████████▊    $0.42
+  task-06     ✓ ███████████  $0.53   ✓ ██████████   $0.48
+  task-07     ✓ ███████████▏ $0.54   ✓ █████████▉   $0.48
+  task-09     ✓ █████████▋   $0.47   ✓ ████████▊    $0.42
+  + 2 more passed in both
+  neither version was cheaper on more tasks (4 of 8 each)
 
   the numbers behind this: agentium experiment report lean-seq-futility --details
 === end
