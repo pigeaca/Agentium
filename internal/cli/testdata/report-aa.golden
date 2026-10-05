@@ -30,16 +30,19 @@ BASELINE 1  vs  BASELINE 2   ·   checking how much results …
   │ typical time  44s a task                               │
   └────────────────────────────────────────────────────────┘
 
-  where they differ
-            baseline 1    baseline 2
-  task-1    ✗  $0.42      ✓  $0.33
-  task-4    ✗  $0.36      ✓  $0.35
-  task-5    ✗  $0.49      ✓  $0.39
-  task-6    ✗  $0.25      ✓  $0.31
-  task-7    ✓  $0.32      ✗  $0.33
-  task-8    ✗  $0.46      ✓  $0.57
-  task-9    ✗  $0.23      ✓  $0.31
-  + 3 tasks where both ended the same: 3 passed
+  every task  baseline 1   baseline 2
+  they differ · 7
+  task-1      ✗ $0.42      ✓ $0.33
+  task-4      ✗ $0.36      ✓ $0.35
+  task-5      ✗ $0.49      ✓ $0.39
+  task-6      ✗ $0.25      ✓ $0.31
+  task-7      ✓ $0.32      ✗ $0.33
+  task-8      ✗ $0.46      ✓ $0.57
+  task-9      ✗ $0.23      ✓ $0.31
+  both passed · 3
+  task-0      ✓ $0.27      ✓ $0.35
+  task-2      ✓ $0.58      ✓ $0.44
+  task-3      ✓ $0.30      ✓ $0.26
 
   the numbers behind this:
   agentium experiment report aa-1run --details
@@ -67,16 +70,19 @@ BASELINE 1  vs  BASELINE 2   ·   checking how much results …
   │ typical time  44s a task          │    │ typical time  44s a task          │
   └───────────────────────────────────┘    └───────────────────────────────────┘
 
-  where they differ
-            baseline 1    baseline 2
-  task-1    ✗  $0.42      ✓  $0.33
-  task-4    ✗  $0.36      ✓  $0.35
-  task-5    ✗  $0.49      ✓  $0.39
-  task-6    ✗  $0.25      ✓  $0.31
-  task-7    ✓  $0.32      ✗  $0.33
-  task-8    ✗  $0.46      ✓  $0.57
-  task-9    ✗  $0.23      ✓  $0.31
-  + 3 tasks where both ended the same: 3 passed
+  every task  baseline 1             baseline 2
+  they differ · 7
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  both passed · 3
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
 
   the numbers behind this: agentium experiment report aa-1run --details
 === 100 columns
@@ -103,16 +109,19 @@ BASELINE 1  vs  BASELINE 2   ·   checking how much results …
   │ typical time  44s a task                    │    │ typical time  44s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  where they differ
-            baseline 1    baseline 2
-  task-1    ✗  $0.42      ✓  $0.33
-  task-4    ✗  $0.36      ✓  $0.35
-  task-5    ✗  $0.49      ✓  $0.39
-  task-6    ✗  $0.25      ✓  $0.31
-  task-7    ✓  $0.32      ✗  $0.33
-  task-8    ✗  $0.46      ✓  $0.57
-  task-9    ✗  $0.23      ✓  $0.31
-  + 3 tasks where both ended the same: 3 passed
+  every task  baseline 1             baseline 2
+  they differ · 7
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  both passed · 3
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
 
   the numbers behind this: agentium experiment report aa-1run --details
 === 120 columns
@@ -139,16 +148,19 @@ BASELINE 1  vs  BASELINE 2   ·   checking how much results …
   │ typical time  44s a task                    │    │ typical time  44s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  where they differ
-            baseline 1    baseline 2
-  task-1    ✗  $0.42      ✓  $0.33
-  task-4    ✗  $0.36      ✓  $0.35
-  task-5    ✗  $0.49      ✓  $0.39
-  task-6    ✗  $0.25      ✓  $0.31
-  task-7    ✓  $0.32      ✗  $0.33
-  task-8    ✗  $0.46      ✓  $0.57
-  task-9    ✗  $0.23      ✓  $0.31
-  + 3 tasks where both ended the same: 3 passed
+  every task  baseline 1             baseline 2
+  they differ · 7
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  both passed · 3
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
 
   the numbers behind this: agentium experiment report aa-1run --details
 === end

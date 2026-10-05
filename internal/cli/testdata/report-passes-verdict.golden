@@ -1,7 +1,7 @@
 === 60 columns
        BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────
-         10 tasks · 20 runs · $6.61 spent · 20 min
+  10 tasks · 20 runs · $6.61 spent · about 4% of your plan
 
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
@@ -12,11 +12,11 @@
   │                        same                          │
   │                likely 6% to 35% less                 │
   │                                                      │
-  │  whether lean passes as many tasks: too few to tell  │
+  │  lean passes no fewer tasks, within 15 points (lean  │
+  │                  90%, baseline 40%)                  │
   │  fewer pass ◀ ────────────│━━━━●━━━━━── ▶ more pass  │
   │                         same                         │
-  │        likely 1 point fewer to 100 more pass         │
-  │       20 tasks of 3 runs each could settle it        │
+  │           likely 9 to 91 points more pass            │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -54,22 +54,20 @@
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
-                   10 tasks · 20 runs · $6.61 spent · 20 min
+       10 tasks · 20 runs · $6.61 spent · about 4% of your plan · 20 min
 
-          ┌──────────────────────────────────────────────────────────┐
-          │                        the answer                        │
-          │                lean is cheaper: 22% less                 │
-          │             after all 10 tasks · sure enough             │
-          │                                                          │
-          │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-          │   likely 6% to 35% less  same                            │
-          │                                                          │
-          │    whether lean passes as many tasks: too few to tell    │
-          │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-          │                           same                           │
-          │          likely 1 point fewer to 100 more pass           │
-          │         20 tasks of 3 runs each could settle it          │
-          └──────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                                the answer                                │
+  │                        lean is cheaper: 22% less                         │
+  │                     after all 10 tasks · sure enough                     │
+  │                                                                          │
+  │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━──│──────────────────────── ▶ costlier  │
+  │           likely 6% to 35% less  same                                    │
+  │                                                                          │
+  │  lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+  │  fewer pass ◀ ──────────────────────│─━━━━━━━━●━━━━━━━━──── ▶ more pass  │
+  │                                   same  likely 9 to 91 points more pass  │
+  └──────────────────────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
   │             baseline              │    │               lean                │
@@ -98,22 +96,20 @@
 === 100 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $6.61 spent · 20 min
+                 10 tasks · 20 runs · $6.61 spent · about 4% of your plan · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
-                    │             after all 10 tasks · sure enough             │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
-                    │                                                          │
-                    │    whether lean passes as many tasks: too few to tell    │
-                    │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 1 point fewer to 100 more pass           │
-                    │         20 tasks of 3 runs each could settle it          │
-                    └──────────────────────────────────────────────────────────┘
+           ┌───────────────────────────────────────────────────────────────────────────┐
+           │                                the answer                                 │
+           │                         lean is cheaper: 22% less                         │
+           │                     after all 10 tasks · sure enough                      │
+           │                                                                           │
+           │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━───│──────────────────────── ▶ costlier  │
+           │            likely 6% to 35% less  same                                    │
+           │                                                                           │
+           │   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+           │  fewer pass ◀ ───────────────────────│━━━━━━━━●━━━━━━━━━──── ▶ more pass  │
+           │                                    same  likely 9 to 91 points more pass  │
+           └───────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
@@ -142,22 +138,20 @@
 === 120 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $6.61 spent · 20 min
+                 10 tasks · 20 runs · $6.61 spent · about 4% of your plan · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
-                    │             after all 10 tasks · sure enough             │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
-                    │                                                          │
-                    │    whether lean passes as many tasks: too few to tell    │
-                    │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 1 point fewer to 100 more pass           │
-                    │         20 tasks of 3 runs each could settle it          │
-                    └──────────────────────────────────────────────────────────┘
+           ┌───────────────────────────────────────────────────────────────────────────┐
+           │                                the answer                                 │
+           │                         lean is cheaper: 22% less                         │
+           │                     after all 10 tasks · sure enough                      │
+           │                                                                           │
+           │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━───│──────────────────────── ▶ costlier  │
+           │            likely 6% to 35% less  same                                    │
+           │                                                                           │
+           │   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+           │  fewer pass ◀ ───────────────────────│━━━━━━━━●━━━━━━━━━──── ▶ more pass  │
+           │                                    same  likely 9 to 91 points more pass  │
+           └───────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │

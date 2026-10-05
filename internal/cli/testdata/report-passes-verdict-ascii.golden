@@ -1,0 +1,180 @@
+=== 60 columns
+       BASELINE  vs  LEAN   -   does lean save money?
+ -----------------------------------------------------------
+  10 tasks - 20 runs - $6.61 spent - about 4% of your plan
+
+  +------------------------------------------------------+
+  |                      the answer                      |
+  |              lean is cheaper: 22% less               |
+  |           after all 10 tasks - sure enough           |
+  |                                                      |
+  |  cheaper < ---====o=====-|-------------- > costlier  |
+  |                        same                          |
+  |                likely 6% to 35% less                 |
+  |                                                      |
+  |  lean passes no fewer tasks, within 15 points (lean  |
+  |                  90%, baseline 40%)                  |
+  |  fewer pass < ------------|====o=====-- > more pass  |
+  |                         same                         |
+  |           likely 9 to 91 points more pass            |
+  +------------------------------------------------------+
+
+  +--------------------------------------------------------+
+  |                        baseline                        |
+  | ######################................................ |
+  | 4 of 10 passed                                         |
+  | typical cost  $0.35 a task                             |
+  | typical time  44s a task                               |
+  +--------------------------------------------------------+
+  +--------------------------------------------------------+
+  |                          lean                          |
+  | #################################################..... |
+  | 9 of 10 passed                                         |
+  | typical cost  $0.28 a task                             |
+  | typical time  44s a task                               |
+  +--------------------------------------------------------+
+
+  every task  baseline   lean
+  they differ - 7
+  task-1      x $0.42    + $0.27
+  task-4      x $0.36    + $0.32
+  task-5      x $0.49    + $0.24
+  task-6      x $0.25    + $0.18
+  task-7      + $0.32    x $0.27
+  task-8      x $0.46    + $0.60
+  task-9      x $0.23    + $0.20
+  both passed - 3
+  task-0      + $0.27    + $0.22
+  task-2      + $0.58    + $0.38
+  task-3      + $0.30    + $0.24
+  lean was cheaper on 9 of 10 tasks
+
+  the numbers behind this:
+  agentium experiment report lean-ab-1run --details
+=== 80 columns
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+       10 tasks - 20 runs - $6.61 spent - about 4% of your plan - 20 min
+
+  +--------------------------------------------------------------------------+
+  |                                the answer                                |
+  |                        lean is cheaper: 22% less                         |
+  |                     after all 10 tasks - sure enough                     |
+  |                                                                          |
+  |  cheaper < -----=======o=========--|------------------------ > costlier  |
+  |           likely 6% to 35% less  same                                    |
+  |                                                                          |
+  |  lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   |
+  |  fewer pass < ----------------------|-========o========---- > more pass  |
+  |                                   same  likely 9 to 91 points more pass  |
+  +--------------------------------------------------------------------------+
+
+  +-----------------------------------+    +-----------------------------------+
+  |             baseline              |    |               lean                |
+  | #############.................... |    | ##############################... |
+  | 4 of 10 passed                    |    | 9 of 10 passed                    |
+  | typical cost  $0.35 a task        |    | typical cost  $0.28 a task        |
+  | typical time  44s a task          |    | typical time  44s a task          |
+  +-----------------------------------+    +-----------------------------------+
+
+  every task  baseline               lean
+  they differ - 7
+  task-1      x ########     $0.42   + #####        $0.27
+  task-4      x #######      $0.36   + ######       $0.32
+  task-5      x ##########   $0.49   + #####        $0.24
+  task-6      x #####        $0.25   + ####         $0.18
+  task-7      + ######       $0.32   x #####        $0.27
+  task-8      x #########    $0.46   + ############ $0.60
+  task-9      x #####        $0.23   + ####         $0.20
+  both passed - 3
+  task-0      + #####        $0.27   + ####         $0.22
+  task-2      + ###########  $0.58   + ########     $0.38
+  task-3      + ######       $0.30   + #####        $0.24
+  lean was cheaper on 9 of 10 tasks
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== 100 columns
+                           BASELINE  vs  LEAN   -   does lean save money?
+ ---------------------------------------------------------------------------------------------------
+                 10 tasks - 20 runs - $6.61 spent - about 4% of your plan - 20 min
+
+           +---------------------------------------------------------------------------+
+           |                                the answer                                 |
+           |                         lean is cheaper: 22% less                         |
+           |                     after all 10 tasks - sure enough                      |
+           |                                                                           |
+           |  cheaper < -----=======o=========---|------------------------ > costlier  |
+           |            likely 6% to 35% less  same                                    |
+           |                                                                           |
+           |   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   |
+           |  fewer pass < -----------------------|========o=========---- > more pass  |
+           |                                    same  likely 9 to 91 points more pass  |
+           +---------------------------------------------------------------------------+
+
+  +---------------------------------------------+    +---------------------------------------------+
+  |                  baseline                   |    |                    lean                     |
+  | #################.......................... |    | #######################################.... |
+  | 4 of 10 passed                              |    | 9 of 10 passed                              |
+  | typical cost  $0.35 a task                  |    | typical cost  $0.28 a task                  |
+  | typical time  44s a task                    |    | typical time  44s a task                    |
+  +---------------------------------------------+    +---------------------------------------------+
+
+  every task  baseline               lean
+  they differ - 7
+  task-1      x ########     $0.42   + #####        $0.27
+  task-4      x #######      $0.36   + ######       $0.32
+  task-5      x ##########   $0.49   + #####        $0.24
+  task-6      x #####        $0.25   + ####         $0.18
+  task-7      + ######       $0.32   x #####        $0.27
+  task-8      x #########    $0.46   + ############ $0.60
+  task-9      x #####        $0.23   + ####         $0.20
+  both passed - 3
+  task-0      + #####        $0.27   + ####         $0.22
+  task-2      + ###########  $0.58   + ########     $0.38
+  task-3      + ######       $0.30   + #####        $0.24
+  lean was cheaper on 9 of 10 tasks
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== 120 columns
+                           BASELINE  vs  LEAN   -   does lean save money?
+ ---------------------------------------------------------------------------------------------------
+                 10 tasks - 20 runs - $6.61 spent - about 4% of your plan - 20 min
+
+           +---------------------------------------------------------------------------+
+           |                                the answer                                 |
+           |                         lean is cheaper: 22% less                         |
+           |                     after all 10 tasks - sure enough                      |
+           |                                                                           |
+           |  cheaper < -----=======o=========---|------------------------ > costlier  |
+           |            likely 6% to 35% less  same                                    |
+           |                                                                           |
+           |   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   |
+           |  fewer pass < -----------------------|========o=========---- > more pass  |
+           |                                    same  likely 9 to 91 points more pass  |
+           +---------------------------------------------------------------------------+
+
+  +---------------------------------------------+    +---------------------------------------------+
+  |                  baseline                   |    |                    lean                     |
+  | #################.......................... |    | #######################################.... |
+  | 4 of 10 passed                              |    | 9 of 10 passed                              |
+  | typical cost  $0.35 a task                  |    | typical cost  $0.28 a task                  |
+  | typical time  44s a task                    |    | typical time  44s a task                    |
+  +---------------------------------------------+    +---------------------------------------------+
+
+  every task  baseline               lean
+  they differ - 7
+  task-1      x ########     $0.42   + #####        $0.27
+  task-4      x #######      $0.36   + ######       $0.32
+  task-5      x ##########   $0.49   + #####        $0.24
+  task-6      x #####        $0.25   + ####         $0.18
+  task-7      + ######       $0.32   x #####        $0.27
+  task-8      x #########    $0.46   + ############ $0.60
+  task-9      x #####        $0.23   + ####         $0.20
+  both passed - 3
+  task-0      + #####        $0.27   + ####         $0.22
+  task-2      + ###########  $0.58   + ########     $0.38
+  task-3      + ######       $0.30   + #####        $0.24
+  lean was cheaper on 9 of 10 tasks
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== end
