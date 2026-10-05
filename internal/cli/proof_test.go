@@ -80,6 +80,12 @@ func TestTheLockDecidesHowRunsPass(t *testing.T) {
 	if d := storedDesign(t, f, "before"); d.PassRule != "" || d.Version == experiment.DesignVersionProof {
 		t.Fatalf("not stored as before: %+v", d)
 	}
+	expect(t, f.run(ctx, "experiment", "plan", "before"), ExitOK,
+		"made before Agentium proved that hidden Go tests ran: the experiment takes up that proof when it locks (design version 6)",
+		"1 task(s) validated before the proof that their hidden tests ran are validated again with it when the experiment runs, before it locks (time, no money): gov")
+	if d := storedDesign(t, f, "before"); d.PassRule != "" {
+		t.Fatalf("the preview stored the rule: %+v", d)
+	}
 	expect(t, f.run(ctx, "experiment", "run", "before"), ExitOK,
 		"Experiment before was made before Agentium proved that hidden Go tests ran: it grades by that proof from now on (design version 6)",
 		"Validating 1 task(s) again with the proof that their hidden tests ran")

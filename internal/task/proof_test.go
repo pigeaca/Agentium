@@ -396,3 +396,42 @@ func TestValidateTakesADocumentationExampleAsGoDoes(t *testing.T) {
 		t.Errorf("%v, %+v, %v\n%s", got.Summary(), got.Stages, err, progress)
 	}
 }
+
+// go test's arguments are read as go reads them: a flag's value is never a package, and what follows the package list
+// once a flag (or the test binary's flag, -args, --) came after it is the test binary's.
+func TestGoTestTargets(t *testing.T) {
+	for command, want := range map[string][]goTarget{
+		"go test -outputdir ./testdata/p ./...":                        {{pkg: "./..."}},
+		"go test -outputdir=./testdata/p ./testdata/q":                 {{pkg: "./testdata/q"}},
+		"go test --coverprofile ./testdata/c.out -count=1 ./a ./b":     {{pkg: "./a"}, {pkg: "./b"}},
+		"go test -C sub -test.run X ./testdata/p -v ./other":           {{dir: "sub", pkg: "./testdata/p"}},
+		"go test -myflag ./testdata/p":                                 nil,
+		"go test ./a -args ./b":                                        {{pkg: "./a"}},
+		"go test ./a -- ./b":                                           {{pkg: "./a"}},
+		"GOPROXY=off go test -race ./a && go test -tags it ./testdata": {{pkg: "./a"}, {pkg: "./testdata"}},
+	} {
+		if got := goTestTargets(command); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %+v, want %+v", command, got, want)
+		}
+	}
+}
+
+// A folder named only as a flag's value is not run, so its hidden tests are not proven; a file whose own name starts
+// with "_" or "." is never built, even in a package a verify command names, so it is never proven either.
+func TestPlanGoProofLeavesOutWhatGoNeverRuns(t *testing.T) {
+	test := func(pkg, name string) string {
+		return "package " + pkg + "\n\nimport \"testing\"\n\nfunc " + name + "(t *testing.T) {}\n"
+	}
+	solution := snapSource{"testdata/p/p_test.go": test("p", "TestP"), "_fixture_test.go": test("root", "TestUnderscore"),
+		".fixture_test.go": test("root", "TestDot"), "a/_x_test.go": test("a", "TestA"), "value_test.go": test("root", "TestValue")}
+	hidden := []string{"testdata/p/p_test.go", "_fixture_test.go", ".fixture_test.go", "a/_x_test.go", "value_test.go"}
+	for _, verify := range []string{"go test -outputdir ./testdata/p ./...", "go test . ./a", "go test -C a . && go test ."} {
+		proof, _ := PlanGoProof(Spec{HiddenTests: hidden, Verify: []string{verify}}, snapSource{}, solution)
+		if want := (GoProof{Packages: []ProofPackage{{Dir: ".", Tests: []string{"TestValue"}}}}); !reflect.DeepEqual(proof, want) {
+			t.Errorf("%s: %+v", verify, proof)
+		}
+	}
+	if !namedGoPackage([]string{"go test -C sub ./testdata/p"}, "svc", "svc/sub/testdata/p") || namedGoPackage([]string{"go test -C sub ./testdata/p"}, "svc", "svc/testdata/p") {
+		t.Error("-C names folders from its own")
+	}
+}

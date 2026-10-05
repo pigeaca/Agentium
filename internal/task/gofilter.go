@@ -153,39 +153,101 @@ func goTestFilters(command string) []goTestFilter {
 	return out
 }
 
-// goTestTargets lists the words of a shell command's `go test` invocations that are not flags (up to -args): the
-// packages they name, and the values of flags given apart ("-run X"), which name no package and are harmless where the
-// words are matched against folders (namedGoPackage).
-func goTestTargets(command string) []string {
+// goValueFlags are the `go test` flags that take a value, from `go help testflag`, `go help build` and `go help test`
+// (go 1.27): their value is the next word unless given as -flag=value. Test flags are also known by their -test. names.
+var goValueFlags = map[string]bool{
+	// go help testflag
+	"bench": true, "benchtime": true, "blockprofile": true, "blockprofilerate": true, "count": true, "covermode": true, "coverpkg": true,
+	"coverprofile": true, "cpu": true, "cpuprofile": true, "fuzz": true, "fuzzminimizetime": true, "fuzztime": true, "list": true,
+	"memprofile": true, "memprofilerate": true, "mutexprofile": true, "mutexprofilefraction": true, "outputdir": true, "parallel": true,
+	"run": true, "shuffle": true, "skip": true, "timeout": true, "trace": true, "vet": true,
+	// go help build
+	"C": true, "p": true, "asmflags": true, "buildmode": true, "compiler": true, "gccgoflags": true, "gcflags": true, "installsuffix": true,
+	"ldflags": true, "mod": true, "modfile": true, "overlay": true, "pgo": true, "pkgdir": true, "tags": true, "toolexec": true,
+	// go help test
+	"exec": true, "o": true,
+}
+
+// goBoolFlags are the `go test` flags that take no value, from the same pages: with goValueFlags, every flag go test
+// knows. Any other flag is the test binary's.
+var goBoolFlags = map[string]bool{
+	"a": true, "n": true, "race": true, "msan": true, "asan": true, "cover": true, "v": true, "work": true, "x": true, "buildvcs": true,
+	"json": true, "linkshared": true, "modcacherw": true, "trimpath": true, "c": true, "i": true, "failfast": true, "fullpath": true,
+	"short": true, "benchmem": true, "artifacts": true,
+}
+
+// goTestTargets lists the packages a shell command's `go test` invocations name, each as written, with the folder of
+// its -C flag ("" without one). It reads the arguments as go test does: the package list is the first run of words
+// that are not flags; the value of a flag that takes one is never a package; after an unknown flag (the test binary's),
+// -args or --, and once a flag has followed the package list, the remaining words are the test binary's.
+func goTestTargets(command string) (targets []goTarget) {
 	words, ok := shellWords(command)
 	if !ok {
 		return nil
 	}
-	var out []string
 	for i := 0; i+1 < len(words); i++ {
 		if path.Base(words[i]) != "go" || words[i+1] != "test" {
 			continue
 		}
+		var pkgs []string
+		chdir, listed, inList := "", false, false
+	args:
 		for j := i + 2; j < len(words) && !isShellOperator(words[j]); j++ {
 			w := words[j]
-			if w == "-args" || w == "--args" {
+			if w == "--" {
 				break
 			}
-			if !strings.HasPrefix(w, "-") && !strings.Contains(w, substitution) {
-				out = append(out, w)
+			if !strings.HasPrefix(w, "-") || w == "-" {
+				if listed && !inList {
+					break // the test binary's
+				}
+				listed, inList = true, true
+				pkgs = append(pkgs, w)
+				continue
+			}
+			inList = false
+			name, value, hasValue := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(w, "-"), "-"), "=")
+			name = strings.TrimPrefix(name, "test.")
+			switch {
+			case name == "args":
+				break args
+			case goValueFlags[name]:
+				if !hasValue && j+1 < len(words) && !isShellOperator(words[j+1]) {
+					j++
+					value = words[j]
+				}
+				if name == "C" {
+					chdir = value
+				}
+			case goBoolFlags[name]:
+			default:
+				listed = true // an unknown flag: the package list, if any, is complete
+			}
+		}
+		for _, p := range pkgs {
+			if !strings.Contains(p, substitution) && !strings.Contains(chdir, substitution) {
+				targets = append(targets, goTarget{dir: chdir, pkg: p})
 			}
 		}
 	}
-	return out
+	return targets
 }
 
+// goTarget is a package a `go test` names, as written, and the -C folder it is named from.
+type goTarget struct{ dir, pkg string }
+
 // namedGoPackage reports whether a `go test` of the verify commands names folder dir (a slash path from the repository's
-// root) by a relative path from the module's folder ("./testdata/p"): the go tool runs a folder its wildcards skip only
-// when it is named so (even "./testdata/..." matches nothing). Import paths and a `cd` in the command are not read.
+// root) by a relative path from the module's folder, or from the folder its -C flag names ("./testdata/p"): the go tool
+// runs a folder its wildcards skip only when it is named so (even "./testdata/..." matches nothing). Import paths and a
+// `cd` in the command are not read.
 func namedGoPackage(verify []string, module, dir string) bool {
 	for _, command := range verify {
-		for _, w := range goTestTargets(command) {
-			if (w == "." || w == ".." || strings.HasPrefix(w, "./") || strings.HasPrefix(w, "../")) && path.Join(module, w) == path.Clean(dir) {
+		for _, t := range goTestTargets(command) {
+			w := t.pkg
+			if path.IsAbs(t.dir) || !(w == "." || w == ".." || strings.HasPrefix(w, "./") || strings.HasPrefix(w, "../")) {
+				continue
+			}
+			if path.Join(module, t.dir, w) == path.Clean(dir) {
 				return true
 			}
 		}
@@ -197,7 +259,7 @@ func namedGoPackage(verify []string, module, dir string) bool {
 // one that starts with "_" or ".".
 func hasSkippedElement(p string) bool {
 	for _, el := range strings.Split(path.Clean(p), "/") {
-		if el == "testdata" || strings.HasPrefix(el, "_") || strings.HasPrefix(el, ".") {
+		if el != "." && el != ".." && (el == "testdata" || strings.HasPrefix(el, "_") || strings.HasPrefix(el, ".")) {
 			return true
 		}
 	}

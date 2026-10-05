@@ -109,14 +109,19 @@ func (p GoProof) Tests() int {
 // PlanGoProof lists the proof tests of a task: its own Go tests (the top-level Test, Fuzz and Example functions, not
 // TestMain, that the solution adds or changes in its hidden _test.go files), by package folder. When the hidden Go files
 // hold test functions but none is new or changed (a changed table in a variable, say), the proof tests are all of them.
-// A file the go tool's wildcards skip (under testdata, or a file or folder whose name starts with "_" or ".") is left
-// out unless a verify command names its folder (namedGoPackage): then `go test` runs it, and so does the proof. goFiles
+// A file whose name starts with "_" or "." is left out (the go tool never builds it); one in a folder the go tool's
+// wildcards skip (testdata, or a name that starts with "_" or ".") is left out unless a verify command names that folder
+// (namedGoPackage): then `go test` runs it, and so does the proof. goFiles
 // reports whether the hidden tests include Go test files at all: with goFiles and an empty proof there is nothing to
 // prove, and the exit codes alone grade the task (validation warns).
 func PlanGoProof(spec Spec, base, solution source.Source) (proof GoProof, goFiles bool) {
 	var files []string
 	for _, p := range spec.HiddenTests {
-		if strings.HasSuffix(p, "_test.go") && (!hasSkippedElement(p) || namedGoPackage(spec.Verify, spec.Module, path.Dir(p))) {
+		name, dir := path.Base(p), path.Dir(p)
+		if !strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+			continue // the go tool ignores such a file by its name, even in a package named outright
+		}
+		if !hasSkippedElement(dir) || namedGoPackage(spec.Verify, spec.Module, dir) {
 			files = append(files, p)
 		}
 	}

@@ -173,8 +173,20 @@ func (c *checker) tasks(d Design, eligible []string, reasons map[string]string) 
 
 // graders checks that the tasks were validated in the experiment's grader mode and, for an experiment that grades by
 // the proof that the hidden tests ran, with the proof; or says that the first run validates them again so (before it
-// locks).
+// locks). A design made before the proof is read as its first run will lock it (Runner.takeUpPassRule): with the rule
+// when one of its tasks has hidden Go tests, which a line says.
 func (c *checker) graders(ctx context.Context, p Project, e ReadinessEnv, d Design) {
+	if d.PassRule == "" { // made before the proof: the first run gives it the rule when a task has hidden Go tests
+		up := d
+		if err := p.markPassRule(ctx, &up); err != nil {
+			c.line(false, "the tasks' hidden tests could not be read: %v", err)
+			return
+		}
+		if up.PassRule != "" {
+			c.line(true, "made before Agentium proved that hidden Go tests ran: the experiment takes up that proof when it locks (design version %d)", up.Version)
+			d = up
+		}
+	}
 	why, err := p.RevalidationsWhy(ctx, d)
 	if err != nil {
 		c.line(false, "the tasks' validation modes could not be read: %v", err)
