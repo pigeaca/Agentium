@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -36,6 +37,18 @@ type Spec struct {
 	Stdin io.Reader
 	// Started, when set, is called with the process ID (also its process group's) once the command runs.
 	Started func(pid int)
+	// Stop, when set, stops the command once it is closed, the way a timeout does (gently with Grace, then SIGKILL), and
+	// the result says so (Result.Stopped): a watcher's decision, such as Agentium's cost cap, not a timeout.
+	Stop <-chan struct{}
+	// BeforeStop, when set, is called right before each signal Run sends the command's process group: the interrupt or
+	// kill of a timeout, a cancellation or Stop, the kill after Grace, and the kill of what is left of the group once
+	// the command has exited (always: the exited leader still belongs to it). A caller tracking its processes looks
+	// once more before they go. It may be called more than once, from
+	// other goroutines, but never concurrently with itself; while it runs, the command's process (its group's leader)
+	// is alive or exited but not yet reaped, so the group's ID is still the command's.
+	BeforeStop func()
+	// waitExit replaces the system's wait for the command's exit without reaping it (waitExit; tests).
+	waitExit func(pid int) error
 }
 
 // Result is how a command ended.
@@ -43,10 +56,12 @@ type Result struct {
 	ExitCode int // -1 when it timed out or was killed by a signal
 	Duration time.Duration
 	TimedOut bool
+	// Stopped: Spec.Stop was closed while the command ran, and it was stopped for that (never with TimedOut).
+	Stopped bool
 }
 
 // Passed reports whether the command exited with status 0.
-func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut }
+func (r Result) Passed() bool { return r.ExitCode == 0 && !r.TimedOut && !r.Stopped }
 
 // IsCredential reports whether an environment variable looks like it carries a credential: by name pattern (tokens,
 // keys, secrets, passwords, credentials) or by being a known one (the ssh agent socket, which allows pushes; Docker and
@@ -112,14 +127,44 @@ func Environ(environ []string) []string {
 	return out
 }
 
-// Run runs spec. A non-zero exit or a timeout is a Result, not an error; errors mean the command could not run, or ctx
-// was cancelled (then the process group has been killed).
+// Run runs spec. A non-zero exit or a timeout is a Result, not an error; errors mean the command could not run, could
+// not be supervised (its exit could not be waited for: it is stopped), or ctx was cancelled (then the process group
+// has been killed).
+//
+// What is left of the group (background children) is killed as soon as the command's own process exits, before it is
+// reaped. With *os.File outputs (agents, grading, verification) everything it wrote is in the file; with another
+// io.Writer (a bytes.Buffer), output still in the pipe from a background child at that moment can be lost.
 func Run(ctx context.Context, spec Spec) (Result, error) {
+	name := spec.Command
+	if len(spec.Args) > 0 {
+		name = spec.Args[0]
+	}
+	wait := spec.waitExit
+	if wait == nil {
+		if !canWaitWithoutReaping {
+			return Result{ExitCode: -1}, fmt.Errorf("run %q: this system cannot wait for a command without reaping it, which stopping its process group safely needs (macOS and Linux can)", name)
+		}
+		wait = waitExit
+	}
 	runCtx, cancel := ctx, context.CancelFunc(func() {})
 	if spec.Timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
 	}
 	defer cancel()
+	// A stop (Spec.Stop) cancels the command's own context with errStopped as its cause, so it ends as a timeout does
+	// but is told apart from one.
+	var stopCancel context.CancelCauseFunc
+	runCtx, stopCancel = context.WithCancelCause(runCtx)
+	defer stopCancel(nil)
+	if spec.Stop != nil {
+		go func() {
+			select {
+			case <-spec.Stop:
+				stopCancel(errStopped)
+			case <-runCtx.Done():
+			}
+		}()
+	}
 	argv := []string{"/bin/sh", "-c", spec.Command}
 	if len(spec.Args) > 0 {
 		argv = spec.Args
@@ -136,38 +181,75 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		cmd.Stderr = spec.Stderr
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	var escalate *time.Timer
+	beforeStop := func() {
+		if spec.BeforeStop != nil {
+			spec.BeforeStop()
+		}
+	}
+	// Every signal to the group goes under mu, and none once exited is set. Until then the group's leader is not reaped
+	// (alive, or an exited zombie that still holds its ID), so no other process can hold the group's ID: a signal, the
+	// grace timer's included, reaches only the command's own group. The leader is reaped (cmd.Wait) only after the
+	// group's cleanup, under mu.
+	var (
+		mu       sync.Mutex
+		escalate *time.Timer
+		exited   bool
+	)
 	cmd.Cancel = func() error {
-		if spec.Grace <= 0 {
-			return killGroup(cmd.Process.Pid)
+		mu.Lock()
+		defer mu.Unlock()
+		if exited { // the leader has exited: the cleanup below stops what is left
+			return nil
 		}
 		pid := cmd.Process.Pid
-		escalate = time.AfterFunc(spec.Grace, func() { killGroup(pid) })
+		beforeStop()
+		if spec.Grace <= 0 {
+			return killGroup(pid)
+		}
+		escalate = time.AfterFunc(spec.Grace, func() {
+			mu.Lock()
+			defer mu.Unlock()
+			if !exited {
+				beforeStop()
+				killGroup(pid)
+			}
+		})
 		return interruptGroup(pid)
 	}
 	cmd.WaitDelay = spec.Grace + 5*time.Second
 	start := time.Now()
 	err := cmd.Start()
 	if err == nil {
+		pid := cmd.Process.Pid
 		if spec.Started != nil {
-			spec.Started(cmd.Process.Pid)
+			spec.Started(pid)
 		}
+		// Once the leader has exited (not reaped yet), what is left of its group (background children) is stopped,
+		// BeforeStop first, then the leader is reaped. The zombie leader is itself a member, so the group is always
+		// signalled (harmless when nothing else is left). If the exit cannot be waited for without reaping (a kqueue
+		// that cannot be made, say), the command cannot be supervised safely: the same cleanup kills the whole group,
+		// leader included, still unreaped, and the run fails.
+		waitErr := wait(pid)
+		mu.Lock()
+		exited = true
+		if escalate != nil {
+			escalate.Stop()
+		}
+		beforeStop()
+		killGroup(pid)
+		mu.Unlock()
 		err = cmd.Wait()
-	}
-	if escalate != nil {
-		escalate.Stop()
+		if waitErr != nil {
+			return Result{Duration: time.Since(start), ExitCode: -1}, fmt.Errorf("run %q: wait for its exit: %w (it was stopped)", name, waitErr)
+		}
 	}
 	result := Result{Duration: time.Since(start), ExitCode: -1}
-	if cmd.Process != nil {
-		killGroup(cmd.Process.Pid) // background children of a finished command
-	}
-	name := spec.Command
-	if len(spec.Args) > 0 {
-		name = spec.Args[0]
-	}
 	switch {
 	case ctx.Err() != nil:
 		return result, fmt.Errorf("run %q: %w", name, ctx.Err())
+	case errors.Is(context.Cause(runCtx), errStopped):
+		result.Stopped = true
+		return result, nil
 	case runCtx.Err() != nil:
 		result.TimedOut = true
 		return result, nil
@@ -183,6 +265,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	result.ExitCode = 0
 	return result, nil
 }
+
+// errStopped is the cause of a command's context when Spec.Stop stopped it.
+var errStopped = errors.New("stopped")
 
 // interruptGroup sends SIGINT to the process group led by pid; a group that is already gone is not an error.
 func interruptGroup(pid int) error {

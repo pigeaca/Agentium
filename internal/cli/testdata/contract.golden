@@ -110,10 +110,12 @@ flag pool update --setup	list default=""
 flag pool update --since	value default=""
 flag pool update --verify	list default=""
 flag pool update --verify-timeout	value default="0s"
+flag run calibrate --agent	value default="claude"
 flag run calibrate --budget	value default="0.5"
 flag run calibrate --model	value default="claude-sonnet-5-5"
 flag run calibrate --snapshot	list default=""
 flag run calibrate --timeout	value default="5m0s"
+flag run once --agent	value default="claude"
 flag run once --budget	value default="3"
 flag run once --effort	bool default=""
 flag run once --grader	value default=""
@@ -810,11 +812,13 @@ json experiment report .runs[].judge.version	int
 json experiment report .runs[].metrics	object
 json experiment report .runs[].metrics.api_ms	int
 json experiment report .runs[].metrics.api_retries	int
+json experiment report .runs[].metrics.approval_policy	string?
 json experiment report .runs[].metrics.cache_read_tokens	int
 json experiment report .runs[].metrics.cache_write_tokens	int
 json experiment report .runs[].metrics.cli_version	string
 json experiment report .runs[].metrics.cost_usd	float
 json experiment report .runs[].metrics.duration_ms	int
+json experiment report .runs[].metrics.effort	string?
 json experiment report .runs[].metrics.estimated_cost_usd	float?
 json experiment report .runs[].metrics.first_reads	[]object?
 json experiment report .runs[].metrics.first_reads[].cache_read	int
@@ -826,12 +830,19 @@ json experiment report .runs[].metrics.first_request_tokens	int
 json experiment report .runs[].metrics.input_tokens	int
 json experiment report .runs[].metrics.mcp_tools	int
 json experiment report .runs[].metrics.model	string
+json experiment report .runs[].metrics.network_access	bool?
 json experiment report .runs[].metrics.output_tokens	int
 json experiment report .runs[].metrics.permission_denials	int
 json experiment report .runs[].metrics.permission_mode	string
+json experiment report .runs[].metrics.permission_profile	string?
+json experiment report .runs[].metrics.reasoning_tokens	int?
+json experiment report .runs[].metrics.rerouted	string?
 json experiment report .runs[].metrics.result_excerpt	string
 json experiment report .runs[].metrics.result_is_error	bool
 json experiment report .runs[].metrics.result_subtype	string
+json experiment report .runs[].metrics.rollouts	int?
+json experiment report .runs[].metrics.rollouts_incomplete	bool?
+json experiment report .runs[].metrics.sandbox_policy	string?
 json experiment report .runs[].metrics.saw_init	bool
 json experiment report .runs[].metrics.saw_result	bool
 json experiment report .runs[].metrics.skills	int
@@ -1032,6 +1043,10 @@ json experiment show .status_note	string
 json init .claude_code	object
 json init .claude_code.found	bool
 json init .claude_code.version	string
+json init .codex	object
+json init .codex.found	bool
+json init .codex.sign_in	string
+json init .codex.version	string
 json init .command	string
 json init .context	object
 json init .context.on_demand_files	int
@@ -1183,6 +1198,7 @@ json run once .run.behavior.tests_changed	bool
 json run once .run.behavior.tests_removed	int
 json run once .run.cli_version	string
 json run once .run.cost_estimated	bool
+json run once .run.cost_source	string
 json run once .run.cost_usd	float
 json run once .run.drift	[]string
 json run once .run.duration_ms	int
@@ -1207,6 +1223,7 @@ json run once .run.outcome	string
 json run once .run.pair_judge_cost_usd	float
 json run once .run.passed	bool
 json run once .run.permission_mode	string
+json run once .run.price_table	string
 json run once .run.sandbox	object
 json run once .run.sandbox.canary	string
 json run once .run.sandbox.denials	int
@@ -1217,6 +1234,12 @@ json run once .run.sign_in	string
 json run once .run.skills	int
 json run once .run.started	time
 json run once .run.task	string
+json run once .run.tokens	object
+json run once .run.tokens.cache_read	int
+json run once .run.tokens.cache_write	int
+json run once .run.tokens.input	int
+json run once .run.tokens.output	int
+json run once .run.tokens.reasoning	int
 json run once .run.tools	int
 json run once .run.turns	int
 json run once .schema	int
@@ -1247,6 +1270,7 @@ json run show .run.behavior.tests_changed	bool
 json run show .run.behavior.tests_removed	int
 json run show .run.cli_version	string
 json run show .run.cost_estimated	bool
+json run show .run.cost_source	string
 json run show .run.cost_usd	float
 json run show .run.drift	[]string
 json run show .run.duration_ms	int
@@ -1271,6 +1295,7 @@ json run show .run.outcome	string
 json run show .run.pair_judge_cost_usd	float
 json run show .run.passed	bool
 json run show .run.permission_mode	string
+json run show .run.price_table	string
 json run show .run.sandbox	object
 json run show .run.sandbox.canary	string
 json run show .run.sandbox.denials	int
@@ -1281,6 +1306,12 @@ json run show .run.sign_in	string
 json run show .run.skills	int
 json run show .run.started	time
 json run show .run.task	string
+json run show .run.tokens	object
+json run show .run.tokens.cache_read	int
+json run show .run.tokens.cache_write	int
+json run show .run.tokens.input	int
+json run show .run.tokens.output	int
+json run show .run.tokens.reasoning	int
 json run show .run.tools	int
 json run show .run.turns	int
 json run show .schema	int

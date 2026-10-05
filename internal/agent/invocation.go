@@ -1,6 +1,9 @@
 package agent
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Invocation is one headless agent run, in terms every agent shares: where it starts and what it may write, what it
 // may not read, the build tools that choose its environment allowlist and its network needs, its cap, timeout, model,
@@ -36,6 +39,13 @@ type Invocation struct {
 	Deny []string
 	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
 	Started func(pid int)
+	// Observe, when set, is Agentium's own look at the agent's processes (run's tracker of its descendants). It is
+	// called with the agent's process ID as soon as the agent starts, before the runner waits for it (so before it can
+	// be reaped, even if it has already exited), and should return quickly; the function it returns, when not nil,
+	// then runs in a goroutine of its own until the agent ends (its context ends). BeforeStop, when set, is called
+	// right before Agentium signals the agent's process group to stop (runner.Spec.BeforeStop).
+	Observe    func(pid int) func(ctx context.Context)
+	BeforeStop func()
 	// BuildCache, when set, is a folder of the run's own for build caches: the build tools' agent caches point there
 	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied
 	// (buildtool.UserCaches): they hold what earlier builds compiled, the hidden tests of validations and gradings included.
@@ -69,4 +79,14 @@ type Invocation struct {
 	// ImportRoot is where the project's Python code imports from, relative to Dir (buildtool.ImportRoot of the base
 	// commit): "src", or "" for Dir itself.
 	ImportRoot string
+	// Records is the run's records folder, which the agent may not read (it is under the data folder's records): an
+	// agent that writes its final message to a file (Codex's -o) writes it there. Claude Code does not use it.
+	Records string
+	// State is a folder of the run's own, in its workspace, for the agent's state outside its config folder (Codex: its
+	// run-local HOME, SQLite state and logs); the agent may not read it. Claude Code does not use it.
+	State string
+	// Marker is a folder of a random name in the run's workspace that only this run's sandbox may write, which tells
+	// the run's processes from any other's (Codex: listed writable in its profile; run's sweep of leftovers). Empty:
+	// none. Claude Code does not use it.
+	Marker string
 }

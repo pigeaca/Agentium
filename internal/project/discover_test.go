@@ -55,7 +55,7 @@ func testEnv(values map[string]string, claude string) Env {
 	return Env{
 		Getenv: func(key string) string { return values[key] },
 		LookPath: func(name string) (string, error) {
-			if claude == "" {
+			if claude == "" || name != "claude" {
 				return "", errors.New("not found")
 			}
 			return claude, nil
@@ -258,5 +258,37 @@ func TestDiscoverProposesPytestPerPackageManager(t *testing.T) {
 		if !slices.Equal(info.TestCommands, c.want) {
 			t.Errorf("%s: test commands %q, want %q", c.name, info.TestCommands, c.want)
 		}
+	}
+}
+
+// Codex is optional: its absence is no warning; found (AGENTIUM_CODEX, else PATH), it is reported with its version, and
+// a version Codex runs refuse is a warning. Its sign-in is told by presence only: an API key in the environment, else
+// Agentium's own ChatGPT login (checked when a run starts, never here).
+func TestDiscoverReportsCodex(t *testing.T) {
+	dir := repo(t, map[string]string{"AGENTS.md": "x\n", "go.mod": "module x\n"})
+	claude := fakeClaude(t, "2.1.281 (Claude Code)")
+	home := t.TempDir()
+	info, err := Discover(context.Background(), dir, testEnv(map[string]string{"HOME": home}, claude))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Codex != (CodexInfo{SignIn: "login"}) || len(info.Warnings) != 0 {
+		t.Errorf("without Codex: %+v, warnings %q", info.Codex, info.Warnings)
+	}
+	supported := fakeClaude(t, "codex-cli 0.160.0")
+	info, err = Discover(context.Background(), dir, testEnv(map[string]string{"HOME": home, "AGENTIUM_CODEX": supported, "CODEX_API_KEY": "sk-not-real"}, claude))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Codex != (CodexInfo{Path: supported, Version: "0.160.0", SignIn: "api-key"}) || len(info.Warnings) != 0 {
+		t.Errorf("Codex 0.160.0: %+v, warnings %q", info.Codex, info.Warnings)
+	}
+	newer := fakeClaude(t, "codex-cli 0.161.2")
+	info, err = Discover(context.Background(), dir, testEnv(map[string]string{"HOME": home, "AGENTIUM_CODEX": newer}, claude))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Codex.Version != "0.161.2" || len(info.Warnings) != 1 || !strings.Contains(info.Warnings[0], "runs Codex 0.160 only") {
+		t.Errorf("Codex 0.161.2: %+v, warnings %q", info.Codex, info.Warnings)
 	}
 }

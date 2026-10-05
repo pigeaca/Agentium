@@ -99,6 +99,7 @@ type process struct {
 	pid       int
 	sec, usec uint64
 	command   string
+	why       string // a reported leftover's reason (codexReports)
 }
 
 // startOf reads a process's start time and command name; ok is false for another user's process or one that is gone.
@@ -181,6 +182,20 @@ func underAny(p string, roots []string) bool {
 		}
 	}
 	return false
+}
+
+// allPIDs lists every process ID.
+func allPIDs() ([]int, error) {
+	buf := make([]C.int, 1<<16)
+	n := C.ag_listpids(&buf[0], C.int(len(buf)))
+	if n < 0 {
+		return nil, fmt.Errorf("list processes: %w", syscall.Errno(-n))
+	}
+	pids := make([]int, 0, int(n))
+	for _, pid := range buf[:min(int(n), len(buf))] {
+		pids = append(pids, int(pid))
+	}
+	return pids, nil
 }
 
 // sandboxedIn lists this user's processes (not Agentium's own) that run in a grade's own sandbox: sandboxed, with a
