@@ -744,7 +744,7 @@ func poolTells(ctx context.Context, w *workspace) (tellCounts, error) {
 	if err != nil {
 		return tellCounts{}, err
 	}
-	tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, task.NewFairness("--git-dir", w.bare)))
+	tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, func(store.Task) bool { return false }) // no gap check: "unstated requirements" and "not reviewed" both count as not ready
 	if err != nil {
 		return tellCounts{}, err
 	}

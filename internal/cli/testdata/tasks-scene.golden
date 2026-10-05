@@ -16,7 +16,8 @@
   retired-old…            ✓✗           retired
   3 separate · 1 too easy · 1 to check · 1 with few runs ·
   1 not run yet · 6 not ready · 1 retired
-  agentium task show NAME: a task's text, its tests and wha…
+  agentium task show NAME:
+    a task's text, its tests and what blocks it
 === 80 columns
   tasks · 14            module    runs         what it tells you
   fix-it-mode-align-b…            ✓✗✓✓         separates
@@ -37,21 +38,21 @@
   6 not ready · 1 retired
   agentium task show NAME: a task's text, its tests and what blocks it
 === 120 columns
-  tasks · 14                      module    runs         what it tells you
-  fix-it-mode-align-behavior-wi…            ✓✗✓✓         separates
-  feat-add-nthor-and-nthorempty…            +2 ✓✗✓✗✓✓✗✓  separates
-  evil-name                                 ✓✗✓✗✓        separates
-  feat-add-unionby-and-unionbye…  lib/core  +3 ✓✓✓✓✓✓✓✓  always passes: too easy
-  feat-support-for-buffer-itera…            ✗✗           never passed: check the task text
-  fix-nth-reject-indexes-that-d…            ✓✓           passed 2 of 2
-  fix-iter-tuples-support-break…                         not run yet
-  fix-correct-dropbyindex-handl…            ✓✗           not reviewed
-  gaps-in-the-text                                       unstated requirements
-  never-checked                                          not validated
-  no-solution-here                                       no solution to check with
-  flaky-clock-test                                       flaky
-  feature-intersect-by-653-43ae3                         invalid
-  retired-old-parser-task                   ✓✗           retired
+  tasks · 14                                module    runs         what it tells you
+  fix-it-mode-align-behavior-with-the-docs            ✓✗✓✓         separates
+  feat-add-nthor-and-nthorempty-for-lists             +2 ✓✗✓✗✓✓✗✓  separates
+  evil-name                                           ✓✗✓✗✓        separates
+  feat-add-unionby-and-unionbyerror-helpe…  lib/core  +3 ✓✓✓✓✓✓✓✓  always passes: too easy
+  feat-support-for-buffer-iterator-over-s…            ✗✗           never passed: check the task text
+  fix-nth-reject-indexes-that-do-not-exist            ✓✓           passed 2 of 2
+  fix-iter-tuples-support-break-for-early…                         not run yet
+  fix-correct-dropbyindex-handling-of-neg…            ✓✗           not reviewed
+  gaps-in-the-text                                                 unstated requirements
+  never-checked                                                    not validated
+  no-solution-here                                                 no solution to check with
+  flaky-clock-test                                                 flaky
+  feature-intersect-by-653-43ae3                                   invalid
+  retired-old-parser-task                             ✓✗           retired
   3 separate · 1 too easy · 1 to check · 1 with few runs · 1 not run yet · 6 not ready · 1 retired
   agentium task show NAME: a task's text, its tests and what blocks it
 === end

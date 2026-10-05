@@ -64,7 +64,7 @@ func TestPlanViewPreview(t *testing.T) {
 		}
 	}
 	for name, h := range healthScenes() {
-		text := "\x1b[36m$\x1b[39m agentium pool status\n" + strings.Join(healthView(h, healthTells["mixed"], sh, 80, sh.Style.Command("agentium pool update")), "\n") + "\n"
+		text := "\x1b[36m$\x1b[39m agentium pool status\n" + strings.Join(healthView(h, healthTells[name], sh, 80, sh.Style.Command("agentium pool update")), "\n") + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "pool-"+name+".ans"), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}

@@ -31,10 +31,11 @@ func TestTaskGrades(t *testing.T) {
 	fix, gone, foreign := save(app, "fix"), save(app, "gone"), save(other, "fix")
 	yes, no := true, false
 	n := 0
+	record := `{"secret":"record"}`
 	add := func(p Project, task Task, kind, outcome string, passed *bool, minutes int) {
 		n++
 		run := Run{ID: "20261001T1000Z-" + string(rune('a'+n)), ProjectID: p.ID, TaskID: task.ID, TaskName: task.Name, Kind: kind, Arm: "base",
-			Outcome: outcome, Passed: passed, Record: []byte(`{"secret":"record"}`), Started: now.Add(time.Duration(minutes) * time.Minute), Finished: now.Add(time.Duration(minutes+1) * time.Minute)}
+			Outcome: outcome, Passed: passed, Record: []byte(record), Started: now.Add(time.Duration(minutes) * time.Minute), Finished: now.Add(time.Duration(minutes+1) * time.Minute)}
 		if err := s.SaveRun(ctx, run); err != nil {
 			t.Fatal(err)
 		}
@@ -47,6 +48,12 @@ func TestTaskGrades(t *testing.T) {
 	add(app, fix, "task", "timeout", &no, 20)    // second
 	add(app, gone, "task", "ok", &yes, 14)       // its task is removed below
 	add(other, foreign, "task", "ok", &yes, 15)  // another project's
+	record = `{"behavior":{"config_changed":["jest.config.js"]}}`
+	add(app, fix, "task", "ok", &yes, 40) // passed, but changed the test runner's configuration
+	record = `{"behavior":{"config_changed":[]}}`
+	add(app, fix, "task", "ok", &yes, 50)
+	record = `not json`
+	add(app, fix, "task", "ok", &yes, 60)
 	if err := s.DeleteTask(ctx, app.ID, "gone"); err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +62,13 @@ func TestTaskGrades(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []TaskGrade{
-		{fix.ID, "capped", true, now.Add(10 * time.Minute)},
-		{fix.ID, "infra", true, now.Add(12 * time.Minute)},
-		{fix.ID, "timeout", false, now.Add(20 * time.Minute)},
-		{fix.ID, "ok", false, now.Add(30 * time.Minute)},
+		{fix.ID, "capped", true, now.Add(10 * time.Minute), false},
+		{fix.ID, "infra", true, now.Add(12 * time.Minute), false},
+		{fix.ID, "timeout", false, now.Add(20 * time.Minute), false},
+		{fix.ID, "ok", false, now.Add(30 * time.Minute), false},
+		{fix.ID, "ok", true, now.Add(40 * time.Minute), true},
+		{fix.ID, "ok", true, now.Add(50 * time.Minute), false},
+		{fix.ID, "ok", true, now.Add(60 * time.Minute), false},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("grades %+v, want %+v", got, want)

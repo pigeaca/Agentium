@@ -37,6 +37,7 @@ func TestTellOf(t *testing.T) {
 		{"invalid", with(func(t *store.Task) { t.Validation = validationOf("invalid"); t.NeedsReview = true }), false, 4, 2, "invalid", "invalid", true},
 		{"unreadable validation is invalid", with(func(t *store.Task) { t.Validation = []byte(`not json`) }), false, 0, 0, "invalid", "invalid", true},
 		{"flaky", with(func(t *store.Task) { t.Validation = validationOf("flaky") }), false, 0, 0, "flaky", "flaky", true},
+		{"judge-graded without the judge's check", with(func(t *store.Task) { t.Grading = "judge" }), false, 4, 2, "not-validated", "not validated", true},
 		{"unchecked", with(func(t *store.Task) { t.Validation = validationOf("unchecked") }), false, 0, 0, "unchecked", "no solution to check with", true},
 		{"never validated", with(func(t *store.Task) { t.Validation = nil; t.NeedsReview = true }), true, 3, 1, "not-validated", "not validated", true},
 		{"unstated requirements", with(func(t *store.Task) { t.NeedsReview = true }), true, 3, 1, "unstated-requirements", "unstated requirements", true},
@@ -160,7 +161,7 @@ func taskListFixture(t *testing.T) runFixture {
 	t.Helper()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	for _, name := range []string{"sep", "easy", "never", "few", "fresh", "retired"} {
+	for _, name := range []string{"sep", "easy", "never", "few", "fresh", "retired", "tampered"} {
 		expect(t, f.run(ctx, "task", "add", name, "--base", "HEAD", "--instruction", "Do "+name+".", "--verify", "true"), ExitOK)
 		expect(t, f.run(ctx, "task", "edit", name, "--reviewed"), ExitOK)
 	}
@@ -204,6 +205,11 @@ func taskListFixture(t *testing.T) runFixture {
 	for i := 0; i < 4; i++ {
 		runs = append(runs, run("easy", "ok", &yes))
 	}
+	for i := 0; i < 4; i++ { // tampered: passed, but changed the test runner's configuration, so no success
+		r := run("tampered", "ok", &yes)
+		r.Record = []byte(`{"behavior":{"config_changed":["jest.config.js"]}}`)
+		runs = append(runs, r)
+	}
 	runs = append(runs, run("never", "ok", &no), run("never", "capped", &no), run("few", "ok", &yes))
 	saveRuns(t, f, runs...)
 	return f
@@ -225,7 +231,7 @@ func TestTaskListOnATerminal(t *testing.T) {
 	plain := term.Plain(designed.stdout)
 	expect(t, cliResult{designed.code, plain, designed.stderr}, ExitOK, "what it tells you", "separates", "always passes: too easy",
 		"never passed: check the task text", "passed 1 of 1", "not run yet", "retired",
-		"1 separate", "1 too easy", "1 to check", "1 with few runs", "2 not run yet", "1 retired", "agentium task show NAME")
+		"1 separate", "1 too easy", "2 to check", "1 with few runs", "2 not run yet", "1 retired", "agentium task show NAME")
 	if !strings.Contains(plain, "✓✓✓✗✗") && !strings.Contains(plain, "+++xx") {
 		t.Errorf("the runs' marks are missing:\n%s", plain)
 	}
@@ -272,7 +278,7 @@ func TestTaskListJSONTells(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string][3]any{ // graded, passed, tells
-		"sep": {5.0, 3.0, "separates"}, "easy": {4.0, 4.0, "too-easy"}, "never": {2.0, 0.0, "never-passed"},
+		"sep": {5.0, 3.0, "separates"}, "easy": {4.0, 4.0, "too-easy"}, "never": {2.0, 0.0, "never-passed"}, "tampered": {4.0, 0.0, "never-passed"},
 		"few": {1.0, 1.0, "few-runs"}, "fresh": {0.0, 0.0, "not-run"}, "retired": {0.0, 0.0, "retired"}, "value": {0.0, 0.0, "not-run"},
 	}
 	seen := 0

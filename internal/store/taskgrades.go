@@ -14,6 +14,9 @@ type TaskGrade struct {
 	Outcome string // the stored outcome; the caller decides which outcomes count
 	Passed  bool
 	Started time.Time
+	// ConfigChanged is whether the run's record lists test-runner configuration the agent changed beyond the task's
+	// reference (behavior.config_changed): experiments do not count such a pass as a success.
+	ConfigChanged bool
 }
 
 // TaskGrades lists a project's graded task runs, oldest first (by start time, then ID): runs of kind "task" (not
@@ -21,7 +24,8 @@ type TaskGrade struct {
 // none) are together. It is read-only.
 func (s *Store) TaskGrades(ctx context.Context, projectID int64) ([]TaskGrade, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT task_id, outcome, passed, started_at
+		SELECT task_id, outcome, passed, started_at,
+		       CASE WHEN json_valid(record) THEN COALESCE(json_array_length(json_extract(record, '$.behavior.config_changed')), 0) > 0 ELSE 0 END
 		FROM runs
 		WHERE project_id = ? AND kind = 'task' AND task_id IS NOT NULL AND passed IS NOT NULL
 		ORDER BY started_at, id`, projectID)
@@ -34,7 +38,7 @@ func (s *Store) TaskGrades(ctx context.Context, projectID int64) ([]TaskGrade, e
 		var g TaskGrade
 		var passed sql.NullBool
 		var started string
-		if err := rows.Scan(&g.TaskID, &g.Outcome, &passed, &started); err != nil {
+		if err := rows.Scan(&g.TaskID, &g.Outcome, &passed, &started, &g.ConfigChanged); err != nil {
 			return nil, fmt.Errorf("read task grade: %w", err)
 		}
 		g.Passed = passed.Bool

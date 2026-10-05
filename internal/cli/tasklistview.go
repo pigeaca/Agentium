@@ -40,6 +40,8 @@ func tellOf(t store.Task, hasGaps bool, n, k int) string {
 	switch {
 	case t.Retired():
 		return tellsRetired
+	case t.Grading == task.GradingJudge && t.Validation != nil && task.ValidationOf(t).Judge == nil:
+		return tellsNotValidated // a judge-graded task needs the judge's check, as experiment.Ineligible says
 	case t.Validation != nil && !slices.Contains([]string{task.StatusValid, task.StatusFlaky, task.StatusUnchecked}, task.StatusOf(t)):
 		return tellsInvalid // invalid, or unreadable
 	case t.Validation != nil && task.StatusOf(t) == task.StatusFlaky:
@@ -134,7 +136,12 @@ func tellsOf(ctx context.Context, db *store.Store, projectID int64, tasks []stor
 	marks := map[int64][]bool{}
 	for _, g := range grades {
 		if experiment.Fair(g.Outcome) {
-			marks[g.TaskID] = append(marks[g.TaskID], g.Passed)
+			// A pass counts as experiments count it: not when the agent changed the test runner's configuration.
+			var changed []string
+			if g.ConfigChanged {
+				changed = []string{"config"}
+			}
+			marks[g.TaskID] = append(marks[g.TaskID], experiment.Success(g.Outcome, &g.Passed, changed))
 		}
 	}
 	out := make([]taskTell, len(tasks))
@@ -219,7 +226,6 @@ func writeTaskList(env Env, rows []taskTell, caps term.Capabilities) error {
 }
 
 const (
-	maxListName   = 30 // the widest a task's name is drawn
 	minListName   = 12
 	maxListModule = 16
 	minListModule = 6
@@ -253,7 +259,11 @@ func taskListView(rows []taskTell, sh term.Shapes, width int, show string) []str
 		shown := r.Marks[max(len(r.Marks)-maxRunMarks, 0):]
 		var runs strings.Builder
 		if older := len(r.Marks) - len(shown); older > 0 {
-			runs.WriteString(st.Paint(term.Muted, fmt.Sprintf("+%d ", older)))
+			count := fmt.Sprintf("+%d ", older)
+			if sh.ASCII {
+				count = fmt.Sprintf("%d older ", older) // "+" is a passed run's mark in ASCII
+			}
+			runs.WriteString(st.Paint(term.Muted, count))
 		}
 		for _, p := range shown {
 			mark := m.fail
@@ -272,7 +282,7 @@ func taskListView(rows []taskTell, sh term.Shapes, width int, show string) []str
 	if hasModule {
 		moduleCols = 1
 	}
-	nameW, moduleW = min(nameW, maxListName), min(moduleW, maxListModule)
+	moduleW = min(moduleW, maxListModule) // a name is as wide as the longest unless the width runs out: its hash tells tasks apart
 	over := func() int { return lead + nameW + gap + (moduleW+gap)*moduleCols + runsW + gap + tagW - w }
 	nameW = max(nameW-max(over(), 0), min(nameW, minListName))
 	tagW = max(tagW-max(over(), 0), min(tagW, minListTag))
@@ -300,7 +310,13 @@ func taskListView(rows []taskTell, sh term.Shapes, width int, show string) []str
 	if line := countTells(rows).line(m); line != "" {
 		out = append(out, wrapped(st, pad, line, term.Muted, w)...)
 	}
-	out = append(out, pad+show+st.Paint(term.Muted, ": a task's text, its tests and what blocks it"))
+	const what = "a task's text, its tests and what blocks it"
+	if one := pad + show + st.Paint(term.Muted, ": "+what); term.Width(one) <= w {
+		out = append(out, one)
+	} else { // a narrow terminal: the command, then its words on the next line
+		out = append(out, pad+show+st.Paint(term.Muted, ":"))
+		out = append(out, wrapped(st, pad+"  ", what, term.Muted, w)...)
+	}
 	for i, line := range out {
 		out[i] = term.Truncate(strings.TrimRight(line, " "), w, sh.Ellipsis())
 	}
