@@ -1,0 +1,58 @@
+=== 60 columns
+  tasks · 14    module    runs         what it tells you
+  fix-it-mode…            ✓✗✓✓         separates
+  feat-add-nt…            +2 ✓✗✓✗✓✓✗✓  separates
+  evil-name               ✓✗✓✗✓        separates
+  feat-add-un…  lib/core  +3 ✓✓✓✓✓✓✓✓  always passes: too e…
+  feat-suppor…            ✗✗           never passed: check …
+  fix-nth-rej…            ✓✓           passed 2 of 2
+  fix-iter-tu…                         not run yet
+  fix-correct…            ✓✗           not reviewed
+  gaps-in-the…                         unstated requirements
+  never-check…                         not validated
+  no-solution…                         no solution to check…
+  flaky-clock…                         flaky
+  feature-int…                         invalid
+  retired-old…            ✓✗           retired
+  3 separate · 1 too easy · 1 to check · 1 with few runs ·
+  1 not run yet · 6 not ready · 1 retired
+  agentium task show NAME:
+    a task's text, its tests and what blocks it
+=== 80 columns
+  tasks · 14            module    runs         what it tells you
+  fix-it-mode-align-b…            ✓✗✓✓         separates
+  feat-add-nthor-and-…            +2 ✓✗✓✗✓✓✗✓  separates
+  evil-name                       ✓✗✓✗✓        separates
+  feat-add-unionby-an…  lib/core  +3 ✓✓✓✓✓✓✓✓  always passes: too easy
+  feat-support-for-bu…            ✗✗           never passed: check the task text
+  fix-nth-reject-inde…            ✓✓           passed 2 of 2
+  fix-iter-tuples-sup…                         not run yet
+  fix-correct-dropbyi…            ✓✗           not reviewed
+  gaps-in-the-text                             unstated requirements
+  never-checked                                not validated
+  no-solution-here                             no solution to check with
+  flaky-clock-test                             flaky
+  feature-intersect-b…                         invalid
+  retired-old-parser-…            ✓✗           retired
+  3 separate · 1 too easy · 1 to check · 1 with few runs · 1 not run yet ·
+  6 not ready · 1 retired
+  agentium task show NAME: a task's text, its tests and what blocks it
+=== 120 columns
+  tasks · 14                                module    runs         what it tells you
+  fix-it-mode-align-behavior-with-the-docs            ✓✗✓✓         separates
+  feat-add-nthor-and-nthorempty-for-lists             +2 ✓✗✓✗✓✓✗✓  separates
+  evil-name                                           ✓✗✓✗✓        separates
+  feat-add-unionby-and-unionbyerror-helpe…  lib/core  +3 ✓✓✓✓✓✓✓✓  always passes: too easy
+  feat-support-for-buffer-iterator-over-s…            ✗✗           never passed: check the task text
+  fix-nth-reject-indexes-that-do-not-exist            ✓✓           passed 2 of 2
+  fix-iter-tuples-support-break-for-early…                         not run yet
+  fix-correct-dropbyindex-handling-of-neg…            ✓✗           not reviewed
+  gaps-in-the-text                                                 unstated requirements
+  never-checked                                                    not validated
+  no-solution-here                                                 no solution to check with
+  flaky-clock-test                                                 flaky
+  feature-intersect-by-653-43ae3                                   invalid
+  retired-old-parser-task                             ✓✗           retired
+  3 separate · 1 too easy · 1 to check · 1 with few runs · 1 not run yet · 6 not ready · 1 retired
+  agentium task show NAME: a task's text, its tests and what blocks it
+=== end

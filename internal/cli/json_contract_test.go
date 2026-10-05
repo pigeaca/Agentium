@@ -65,7 +65,7 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 
 	tasks := jsonRun(t, f, ExitOK, "task", "list")
 	keys(tasks, "command,schema,tasks")
-	row(tasks, "tasks", taskInfoKeys)
+	row(tasks, "tasks", "base_commit,graded_by,graded_runs,hidden_test_files,name,needs_review,passed_runs,reference_files,solution_commit,source,status,status_summary,tells,unstated_requirements,untested_hunks") // task list only
 	shown := jsonRun(t, f, ExitOK, "task", "show", "value")
 	keys(shown, "base_commit,command,graded_by,hidden_test_files,hidden_tests,instruction,instruction_names_reference_files,name,needs_review,reference,reference_files,review,"+
 		"schema,setup,solution_commit,source,status,status_summary,unstated_requirement_details,unstated_requirements,untested_hunks,verify,warnings,weak_tests")
