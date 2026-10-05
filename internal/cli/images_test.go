@@ -285,12 +285,14 @@ func TestImagesRemoveKeepsBasesByLayers(t *testing.T) {
 	t.Parallel()
 	goPin, _ := container.PinFor("go")
 	ref, _ := goPin.Ref("arm64")
-	base := container.LocalImage{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true, Layers: []string{"g1", "g2"}}
+	base := container.LocalImage{Kind: "base", Ref: ref, ID: "sha256:" + strings.Repeat("8", 64), Toolchain: "go 1.27", Size: 900e6, Current: true, Layers: []string{"g1", "g2"}}
 	for name, child := range map[string]container.LocalImage{
 		"no label":       {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "", Layers: []string{"g1", "g2", "x"}},
 		"a wrong label":  {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "jdk 21", Layers: []string{"g1", "g2", "x"}},
 		"layers unread":  {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "go 1.27"},
 		"the user's own": {Kind: "foreign", Ref: "myapp:dev", Toolchain: "go 1.27", Layers: []string{"g1", "g2", "y"}},
+		// FROM the base with only LABEL or ENV: its layers are the base's, and it is a child all the same.
+		"metadata only": {Kind: "foreign", Ref: "mylabels:dev", ID: "sha256:" + strings.Repeat("9", 64), Toolchain: "", Layers: []string{"g1", "g2"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -306,7 +308,7 @@ func TestImagesRemoveKeepsBasesByLayers(t *testing.T) {
 				t.Errorf("the base went: %v\n%s", d.imagesRm, res.stdout)
 			}
 			if child.Kind == "foreign" {
-				if slices.Contains(d.imagesRm, child.Ref) || !strings.Contains(dry.stdout, "never removed: myapp:dev") {
+				if slices.Contains(d.imagesRm, child.Ref) || !strings.Contains(dry.stdout, "never removed: "+child.Ref) {
 					t.Errorf("a foreign image: %v\n%s", d.imagesRm, dry.stdout)
 				}
 			}

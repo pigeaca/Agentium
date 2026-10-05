@@ -37,6 +37,27 @@ func TestRealPlan(t *testing.T) {
 	t.Logf("download: %d bytes of bases, about %d through apt", base, apt)
 }
 
+// LocalImages' image ls format runs on the real client against every image present (no label filter, so it has rows
+// to format): docker's image formatter has fewer fields than its container one. It only lists.
+func TestRealImageListFormat(t *testing.T) {
+	d, _ := realDocker(t)
+	out, err := d.output(context.Background(), "image", "ls", "--no-trunc", "--format", imageListFormat)
+	if err != nil {
+		t.Fatalf("docker image ls --format %q: %v", imageListFormat, err)
+	}
+	found := false
+	for _, line := range lines(out) {
+		f := strings.Split(line, "\t")
+		if len(f) != 2 || !imageID.MatchString(f[0]) {
+			t.Errorf("a row of another shape: %q", line)
+		}
+		found = found || strings.HasPrefix(f[1], "golang:")
+	}
+	if !found {
+		t.Errorf("the Go image is not listed:\n%s", out)
+	}
+}
+
 // The whole life of a deps volume on a real daemon: made with its labels, seeded through a container that never
 // starts (every folder owned by the grade's user), warmed in a container that may write it, read-only to a grade, never
 // removed while a container uses it, and removed once idle; a created, never-started container is found and removed.

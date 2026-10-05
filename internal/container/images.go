@@ -376,15 +376,23 @@ type LocalImage struct {
 	Layers []string
 }
 
-// BuiltOn reports whether img is built on base: base's layers are a prefix of img's (the same check a build's own
-// verification makes; labels are not trusted). known is false when either's layers are unknown: the caller then
-// assumes it is.
+// BuiltOn reports whether img is built on base: another image whose layers start with base's (the same check a
+// build's own verification makes; labels are not trusted). An image that only adds metadata (LABEL, ENV) has exactly
+// base's layers and is built on it all the same; base itself (its ID, or its reference) is not. known is false when either's layers are unknown:
+// the caller then assumes it is.
 func BuiltOn(base, img LocalImage) (on, known bool) {
 	if len(base.Layers) == 0 || len(img.Layers) == 0 {
 		return false, false
 	}
-	return len(img.Layers) > len(base.Layers) && slices.Equal(img.Layers[:len(base.Layers)], base.Layers), true
+	if base.ID != "" && img.ID == base.ID || base.Ref != "" && img.Ref == base.Ref {
+		return false, true // the base itself
+	}
+	return len(img.Layers) >= len(base.Layers) && slices.Equal(img.Layers[:len(base.Layers)], base.Layers), true
 }
+
+// imageListFormat is LocalImages' docker image ls format: only fields the client's image formatter has (it has no
+// .Label; the labels come from each image's own record).
+const imageListFormat = `{{.ID}}	{{.Repository}}:{{.Tag}}`
 
 // LocalImages lists the pinned bases present, and the images carrying the grading labels: a grading image is one in
 // the agentium-grade repository whose image ID the data folder's record names (built); any other such image is
@@ -414,13 +422,13 @@ func (d *Docker) LocalImages(ctx context.Context, built BuiltImages) ([]LocalIma
 		list = append(list, LocalImage{Kind: "base", Ref: img.Ref, ID: img.ID, Toolchain: p.Name(), Size: info.Size, Current: true, OtherTags: info.RepoTags,
 			Layers: info.RootFS.Layers})
 	}
-	out, err := d.output(ctx, "image", "ls", "--no-trunc", "--filter", "label="+LabelRecipe, "--format", `{{.ID}}	{{.Repository}}:{{.Tag}}	{{.Label "agentium.toolchain"}}`)
+	out, err := d.output(ctx, "image", "ls", "--no-trunc", "--filter", "label="+LabelRecipe, "--format", imageListFormat)
 	if err != nil {
 		return nil, fmt.Errorf("grading images: %w", err)
 	}
 	for _, line := range lines(out) {
 		f := strings.Split(line, "\t")
-		if len(f) != 3 || !imageID.MatchString(f[0]) {
+		if len(f) != 2 || !imageID.MatchString(f[0]) {
 			continue
 		}
 		info, err := d.inspectImage(ctx, f[0])
@@ -440,7 +448,7 @@ func (d *Docker) LocalImages(ctx context.Context, built BuiltImages) ([]LocalIma
 				others = append(others, tag)
 			}
 		}
-		list = append(list, LocalImage{Kind: kind, Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: kind == "grading" && current[f[1]],
+		list = append(list, LocalImage{Kind: kind, Ref: f[1], ID: f[0], Toolchain: info.Config.Labels[LabelToolchain], Size: info.Size, Current: kind == "grading" && current[f[1]],
 			OtherTags: others, Layers: info.RootFS.Layers})
 	}
 	return list, nil

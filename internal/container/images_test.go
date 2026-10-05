@@ -333,14 +333,15 @@ func TestLocalImagesAndRemove(t *testing.T) {
 	sc, r, builtID := imageScenario(t)
 	old := hexID("d")
 	user, other := hexID("e"), hexID("f")
-	sc.Images[builtID] = imageJSON(t, builtID, nil, []string{r.Tag}, nil, []string{"sha256:l1", "sha256:l2", "sha256:l3"})
-	sc.Images[old] = imageJSON(t, old, nil, []string{"agentium-grade:go1.27-000000000000"}, nil, nil)
+	labels := map[string]string{LabelRecipe: r.Hash, LabelBase: r.Base, LabelToolchain: "go 1.27"}
+	sc.Images[builtID] = imageJSON(t, builtID, nil, []string{r.Tag}, labels, []string{"sha256:l1", "sha256:l2", "sha256:l3"})
+	sc.Images[old] = imageJSON(t, old, nil, []string{"agentium-grade:go1.27-000000000000"}, labels, nil)
 	// The user's image built FROM a grading image inherits its labels; another data folder's grading image is not in
 	// this record: both are foreign.
-	sc.Images[user] = imageJSON(t, user, nil, []string{"myapp:dev"}, map[string]string{LabelRecipe: r.Hash}, nil)
-	sc.Images[other] = imageJSON(t, other, nil, []string{"agentium-grade:go1.27-ffffffffffff"}, nil, nil)
-	sc.ImageLS = builtID + "\t" + r.Tag + "\tgo 1.27\n" + old + "\tagentium-grade:go1.27-000000000000\tgo 1.27\n" + user + "\tmyapp:dev\tgo 1.27\n" +
-		other + "\tagentium-grade:go1.27-ffffffffffff\tgo 1.27\n"
+	sc.Images[user] = imageJSON(t, user, nil, []string{"myapp:dev"}, labels, nil)
+	sc.Images[other] = imageJSON(t, other, nil, []string{"agentium-grade:go1.27-ffffffffffff"}, labels, nil)
+	sc.ImageLS = builtID + "\t" + r.Tag + "\n" + old + "\tagentium-grade:go1.27-000000000000\n" + user + "\tmyapp:dev\n" +
+		other + "\tagentium-grade:go1.27-ffffffffffff\n"
 	f := newFake(t, sc)
 	d := openClient(t, f)
 	ctx := context.Background()
@@ -348,10 +349,10 @@ func TestLocalImagesAndRemove(t *testing.T) {
 	must(t, err)
 	var got []string
 	for _, l := range list {
-		got = append(got, l.Kind+" "+l.Ref+" "+map[bool]string{true: "current", false: "old"}[l.Current])
+		got = append(got, l.Kind+" "+l.Ref+" "+map[bool]string{true: "current", false: "old"}[l.Current]+" "+l.Toolchain)
 	}
-	want := []string{"base " + r.Base + " current", "grading " + r.Tag + " current", "grading agentium-grade:go1.27-000000000000 old",
-		"foreign myapp:dev old", "foreign agentium-grade:go1.27-ffffffffffff old"}
+	want := []string{"base " + r.Base + " current go 1.27", "grading " + r.Tag + " current go 1.27", "grading agentium-grade:go1.27-000000000000 old go 1.27",
+		"foreign myapp:dev old go 1.27", "foreign agentium-grade:go1.27-ffffffffffff old go 1.27"}
 	if !slices.Equal(got, want) {
 		t.Errorf("images:\n%q\nwant\n%q", got, want)
 	}
@@ -377,18 +378,21 @@ func TestLocalImagesAndRemove(t *testing.T) {
 
 // What an image is built on is read from its layers, never from its labels.
 func TestBuiltOn(t *testing.T) {
-	base := LocalImage{Layers: []string{"a", "b"}}
+	base := LocalImage{ID: hexID("1"), Layers: []string{"a", "b"}}
 	for _, tt := range []struct {
+		id          string
 		layers      []string
 		on, known   bool
 		description string
 	}{
-		{[]string{"a", "b", "c"}, true, true, "on it"},
-		{[]string{"a", "x", "c"}, false, true, "another base"},
-		{[]string{"a", "b"}, false, true, "the base itself"},
-		{nil, false, false, "layers unknown"},
+		{hexID("2"), []string{"a", "b", "c"}, true, true, "on it"},
+		{hexID("2"), []string{"a", "x", "c"}, false, true, "another base"},
+		{hexID("2"), []string{"a", "b"}, true, true, "metadata only (LABEL, ENV): the same layers, another image"},
+		{hexID("1"), []string{"a", "b"}, false, true, "the base itself"},
+		{hexID("2"), []string{"a"}, false, true, "fewer layers"},
+		{hexID("2"), nil, false, false, "layers unknown"},
 	} {
-		if on, known := BuiltOn(base, LocalImage{Layers: tt.layers}); on != tt.on || known != tt.known {
+		if on, known := BuiltOn(base, LocalImage{ID: tt.id, Layers: tt.layers}); on != tt.on || known != tt.known {
 			t.Errorf("%s: %v %v", tt.description, on, known)
 		}
 	}
@@ -453,5 +457,18 @@ func TestRedactingStreamsStayApart(t *testing.T) {
 				t.Errorf("output %q", got)
 			}
 		})
+	}
+}
+
+// The fake docker refuses an image ls format with a field docker's image formatter lacks, as the real client does
+// (".Label" is a container's and a volume's field, not an image's), and LocalImages' own format passes it.
+func TestImageListFormat(t *testing.T) {
+	if bad := badImageFormat(`{{.ID}}	{{.Repository}}:{{.Tag}}	{{.Label "agentium.toolchain"}}`); bad != ".Label" {
+		t.Errorf("the old format was accepted: %q", bad)
+	}
+	for _, ok := range []string{imageListFormat, "{{json .}}", "{{.Digest}} {{.Size}}"} {
+		if bad := badImageFormat(ok); bad != "" {
+			t.Errorf("%q refused: %q", ok, bad)
+		}
 	}
 }

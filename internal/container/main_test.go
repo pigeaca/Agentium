@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -322,6 +323,12 @@ func fakeDocker() int {
 		fmt.Print(sc.CheckOut)
 		return sc.CheckExit
 	case slices.Equal(args[:2], []string{"image", "ls"}):
+		if i := slices.Index(args, "--format"); i >= 0 {
+			if bad := badImageFormat(args[i+1]); bad != "" {
+				fmt.Fprintf(os.Stderr, "template parsing error: template: :1: can't evaluate field %s in type *formatter.imageContext\n", bad)
+				return 1
+			}
+		}
 		fmt.Print(sc.ImageLS)
 	case slices.Equal(args[:2], []string{"image", "rm"}):
 		if sc.ImageRmErr != "" {
@@ -343,6 +350,24 @@ func fakeDocker() int {
 		return 99
 	}
 	return 0
+}
+
+// imageFields are the fields docker's image ls formatter has (formatter.imageContext); it has no .Label.
+var imageFields = []string{"ID", "Repository", "Tag", "Digest", "CreatedSince", "CreatedAt", "Size", "Containers", "VirtualSize", "SharedSize", "UniqueSize"}
+
+// badImageFormat is the first field of an image ls format that the real formatter would refuse, "" when none.
+func badImageFormat(format string) string {
+	for _, m := range regexp.MustCompile(`\{\{\s*([^}]*?)\s*\}\}`).FindAllStringSubmatch(format, -1) {
+		action := strings.Fields(m[1])
+		if len(action) == 0 || action[0] == "json" {
+			continue
+		}
+		field, ok := strings.CutPrefix(action[0], ".")
+		if !ok || !slices.Contains(imageFields, field) {
+			return action[0]
+		}
+	}
+	return ""
 }
 
 // imageAnswer is image inspect's answer for ref: from Images, or from AfterPull or AfterBuild once that ran.
