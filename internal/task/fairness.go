@@ -72,7 +72,12 @@ type Fairness struct {
 	// repository never can be read), so an answer worked out while the count rose may lack something: it is given, as
 	// it always was, but not kept, in case the next read succeeds.
 	unread atomic.Int64
+	cache  *GapsCache // gaps kept between commands (Keep); nil keeps none
 }
+
+// Keep makes f take gaps from c, where an earlier command of the same checker put them, and put there the complete
+// ones it works out for commits named by their full IDs. Call it before f is used; the command saves c when it ends.
+func (f *Fairness) Keep(c *GapsCache) { f.cache = c }
 
 // NewFairness returns a checker for the repository located by where (for example "--git-dir", bare).
 func NewFairness(where ...string) *Fairness {
@@ -227,15 +232,37 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 		gaps, err = f.check(ctx, in)
 	} else {
 		gaps, err = f.gaps.get(ctx, in.key(), func() ([]Gap, bool, error) {
+			if gaps, ok := f.cache.lookup(in); ok {
+				return gaps, true, nil
+			}
 			unread := f.unread.Load()
 			gaps, err := f.check(ctx, in)
-			return gaps, f.unread.Load() == unread && ctx.Err() == nil, err
+			keep := f.unread.Load() == unread && ctx.Err() == nil
+			if err == nil && keep && f.cache != nil && f.pinned(ctx, in) {
+				f.cache.store(in, gaps)
+			}
+			return gaps, keep, err
 		})
 	}
 	if err == nil && ctx.Err() != nil {
 		return nil, fmt.Errorf("fairness: %w", ctx.Err())
 	}
 	return slices.Clone(gaps), err // the caller's own: it may sort or cut them
+}
+
+// pinned reports whether in names both its commits by their full IDs. Only then does in say all its gaps depend on
+// whenever it is asked, so that they may outlive f (GapsCache).
+func (f *Fairness) pinned(ctx context.Context, in FairnessInput) bool {
+	for _, commit := range []string{in.Base, in.Solution} {
+		src, err := f.source(ctx, commit) // kept by the check that just ended
+		if err != nil {
+			return false
+		}
+		if c, ok := src.(counted); !ok || !source.Pinned(c.Source) {
+			return false
+		}
+	}
+	return true
 }
 
 // key tells inputs apart exactly: every text is written with its length, so no two inputs share a key.

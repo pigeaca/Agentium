@@ -69,6 +69,13 @@ func (o *Objects) Commit(ctx context.Context, commit string) (Source, error) {
 	return src, nil
 }
 
+// Pinned reports whether src is a source of an Objects for a commit named by its full ID: what it lists and reads is
+// then the same whenever it is asked, so an answer worked out from it can be kept under that ID.
+func Pinned(src Source) bool {
+	c, ok := src.(*commitSource)
+	return ok && c.objects != nil
+}
+
 // list is commit's listing, and whether commit is pinned: named by its full ID, which only then is kept. A name that
 // has an ID's form but another length than the repository's IDs (which its blobs show) is a branch's or an
 // abbreviation's: not pinned.

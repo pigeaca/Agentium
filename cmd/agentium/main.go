@@ -20,6 +20,7 @@ import (
 var version = "dev"
 
 func main() {
+	binary := cli.RunningBinary() // first, before another build can take this one's place on disk
 	dir, err := os.Getwd()
 	if err != nil {
 		dir = "" // commands that need it say so; help and version still work
@@ -35,7 +36,7 @@ func main() {
 			return rows
 		},
 		Dir: dir, Getenv: os.Getenv, Environ: os.Environ, LookPath: exec.LookPath, Now: time.Now,
-		AccountHome: accountHome,
+		AccountHome: accountHome, BuildID: binary.ID,
 	})
 	stop()
 	os.Exit(code)

@@ -50,6 +50,10 @@ type Env struct {
 	Backoff func(attempt int) time.Duration
 	// Sleep waits for d or until ctx is cancelled (experiment run --wait); nil means a timer.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// BuildID is what tells this build of Agentium from any other (Binary.ID), for what a build keeps between commands
+	// and no other build may use: the task list's gap checks (task.GapsCache). nil, or an error, keeps nothing: tests
+	// leave it nil.
+	BuildID func() (string, error)
 	// DefaultGrader is the grader mode commands use without --grader (task.GraderHost or task.GraderSandbox); empty
 	// means the platform's (task.DefaultGrader: the sandbox on macOS). main leaves it empty.
 	DefaultGrader string

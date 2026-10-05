@@ -24,8 +24,9 @@ type Layout struct {
 	Artifacts  string
 	Workspaces string
 	Records    string
-	// Cache holds the build caches of the commands Agentium runs itself (setup, validation, grading). Agents may not
-	// read it: it holds compiled hidden tests.
+	// Cache holds the build caches of the commands Agentium runs itself (setup, validation, grading) and what it keeps
+	// of its own checks between commands (GapsCache). Agents may not read it: it holds compiled hidden tests, and text
+	// of them.
 	Cache string
 	// Deps holds each project's warmed dependencies (Maven, Gradle and Cargo caches) in a folder per project. Runs' agents
 	// read it for offline builds and cannot write it; only a run's setup does, before hidden tests exist in its
@@ -138,6 +139,12 @@ func (l Layout) Ensure() error {
 // agent may read it (run's denied paths), whichever agent runs. Agentium never creates it: the user's
 // `CODEX_HOME=<it> codex login` does.
 func (l Layout) CodexHome() string { return filepath.Join(l.Root, "codex") }
+
+// GapsCache is the file where the task list keeps a project's gap checks between commands (task.GapsCache). It is in
+// Cache, which no agent may read; nothing but a slower list is lost with it.
+func (l Layout) GapsCache(projectID int64) string {
+	return filepath.Join(l.Cache, "gaps", strconv.FormatInt(projectID, 10)+".json")
+}
 
 // Drafts holds the folders of `agentium task draft`'s calls, one per call under the project's ID, each kept until the
 // call's cost is in the store, so a crash between the call and the count loses no spend. A reply may name what only the

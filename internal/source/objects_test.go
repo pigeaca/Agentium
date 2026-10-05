@@ -353,3 +353,32 @@ func TestObjectsGiveEachCallerItsOwnCopy(t *testing.T) {
 		t.Errorf("docs/rules.md after a caller changed its copy: %q, %v", data, err)
 	}
 }
+
+// Only a source of an Objects for a commit named by its full ID is pinned: what it lists and reads never changes.
+func TestPinnedIsACommitNamedByItsIDThroughObjects(t *testing.T) {
+	root, head := fixture(t)
+	ctx := context.Background()
+	objects := NewObjects("-C", root)
+	for _, c := range []struct {
+		name   string
+		commit func() (Source, error)
+		want   bool
+	}{
+		{"an Objects source by ID", func() (Source, error) { return objects.Commit(ctx, head) }, true},
+		{"an Objects source by branch", func() (Source, error) { return objects.Commit(ctx, "main") }, false},
+		{"an Objects source by HEAD", func() (Source, error) { return objects.Commit(ctx, "HEAD") }, false},
+		{"Commit's source by ID", func() (Source, error) { return Commit(ctx, head, "-C", root) }, false},
+		{"the working tree", func() (Source, error) { return WorkingTree(ctx, root) }, false},
+	} {
+		src, err := c.commit()
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if got := Pinned(src); got != c.want {
+			t.Errorf("Pinned(%s) = %v, want %v", c.name, got, c.want)
+		}
+	}
+	if Pinned(nil) {
+		t.Error("Pinned(nil) = true")
+	}
+}

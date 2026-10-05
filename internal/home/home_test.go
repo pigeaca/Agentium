@@ -210,3 +210,16 @@ func TestDraftsAreInsideArtifactsAndOutsideRecords(t *testing.T) {
 		t.Errorf("drafts at %s; artifacts %s, records %s", l.Drafts(), l.Artifacts, l.Records)
 	}
 }
+
+// The task list's kept checks hold text of hidden tests: their file is in the cache folder, which runs deny to agents,
+// one file per project.
+func TestGapsCacheIsInsideTheCache(t *testing.T) {
+	l, err := Resolve(env(map[string]string{"AGENTIUM_HOME": t.TempDir()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, two := l.GapsCache(1), l.GapsCache(2)
+	if !strings.HasPrefix(one, l.Cache+string(filepath.Separator)) || one == two || filepath.Dir(one) != filepath.Dir(two) {
+		t.Errorf("gaps caches at %s and %s; the cache is %s", one, two, l.Cache)
+	}
+}
