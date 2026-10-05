@@ -154,6 +154,9 @@ func (it CleanItem) PID() int {
 type cleanPart struct {
 	path  string
 	bytes int64
+	// session is, for a run's session folder (leftoverSession), the folder's own identity: the sessions kind tells it by
+	// what it is, not by how its path is spelled (a config folder reached through a link, or not).
+	session fs.FileInfo
 }
 
 // Gone is how much of a leftover item is gone now: the sizes of its parts that no longer exist (after recovery).

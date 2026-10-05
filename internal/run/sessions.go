@@ -310,7 +310,7 @@ func leftoverSession(layout home.Layout, s start) (cleanPart, bool) {
 	if look.sessionFile {
 		return cleanPart{}, false
 	}
-	return cleanPart{path: filepath.Join(projects, name), bytes: look.bytes}, true
+	return cleanPart{path: filepath.Join(projects, name), bytes: look.bytes, session: look.info}, true
 }
 
 // sessionRef is a sessions item's folder: the projects folder and the folder's name in it, and how to ask the store
@@ -363,11 +363,15 @@ func (c *planner) sessions(ctx context.Context) error {
 		return nil
 	}
 	workspaces := realPath(c.in.Layout.Workspaces)
-	leftover := map[string]bool{}
+	// Dead runs' session folders, planned with their leftovers: compared by identity (os.SameFile), since a start file
+	// may spell the config folder through a link and this cleanup by its real path, or the other way round.
+	var leftover []fs.FileInfo
 	for _, it := range append(slices.Clone(c.plan.Remove), c.plan.Keep...) {
 		if it.Kind == CleanLeftovers {
 			for _, p := range it.parts {
-				leftover[p.path] = true
+				if p.session != nil {
+					leftover = append(leftover, p.session)
+				}
 			}
 		}
 	}
@@ -379,14 +383,14 @@ func (c *planner) sessions(ctx context.Context) error {
 		if !ok {
 			continue // not a run's: never looked at
 		}
-		if leftover[filepath.Join(projects, name)] {
-			continue // a dead run's: planned, and counted, with its leftovers (recovery removes it)
-		}
 		look, sub, err := lookSession(root, name)
 		if err != nil {
 			continue // a link, a file, another user's, or gone
 		}
 		sub.Close()
+		if slices.ContainsFunc(leftover, func(info fs.FileInfo) bool { return os.SameFile(info, look.info) }) {
+			continue // a dead run's: planned, and counted, with its leftovers (recovery removes it)
+		}
 		it := CleanItem{Kind: CleanSessions, Path: filepath.Join(projects, name), Bytes: look.bytes, LastUsed: look.newest,
 			session: &sessionRef{projects: projects, name: name, known: c.in.KnownWorkspace}}
 		_, wsErr := os.Lstat(filepath.Join(c.in.Layout.Workspaces, ws))

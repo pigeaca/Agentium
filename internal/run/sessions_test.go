@@ -659,3 +659,39 @@ func TestRemoveOwnSessionChecksAsCleanupDoes(t *testing.T) {
 		t.Errorf("its own folder: note %q, still there %v", note, exists(own))
 	}
 }
+
+// A dead run's session folder is planned once, with its leftovers, however its path is spelled: the run may have reached
+// the config folder through a link and cleanup by its real path, or the other way round.
+func TestCleanPlansADeadRunsSessionOnceWhateverItsSpelling(t *testing.T) {
+	for name, linkedIn := range map[string]string{"the start file": "start", "the cleanup": "cleanup"} {
+		t.Run(name, func(t *testing.T) {
+			f := newSessionsFixture(t)
+			link := filepath.Join(f.base, "config-link")
+			must(t, os.Symlink(f.config, link))
+			id := runID(t)
+			p := f.ours(t, id) // spelled with the real config folder
+			startSpelling, cleanConfig := p, link
+			if linkedIn == "start" {
+				startSpelling, cleanConfig = filepath.Join(link, "projects", filepath.Base(p)), f.config
+			}
+			dir, workspace := filepath.Join(f.layout.Records, id), filepath.Join(f.layout.Workspaces, id)
+			must(t, os.MkdirAll(filepath.Join(workspace, "repo"), 0o700))
+			must(t, os.MkdirAll(dir, 0o700))
+			data, err := json.Marshal(start{Record: Record{ID: id, RecordsDir: dir, SignIn: claude.SignInLogin}, Workspace: workspace,
+				AgentStarted: true, Session: startSpelling})
+			must(t, err)
+			must(t, os.WriteFile(filepath.Join(dir, startFile), data, 0o600))
+			in := f.input(f.layout, cleanConfig)
+			in.Stored = func(string) (bool, error) { return false, nil }
+			plan, err := PlanClean(context.Background(), in)
+			must(t, err)
+			if n := len(sessionItems(plan.Remove)) + len(sessionItems(plan.Keep)); n != 0 {
+				t.Errorf("the session folder is also a sessions item: remove %v, keep %v", sessionItems(plan.Remove), sessionItems(plan.Keep))
+			}
+			it, ok := byPath(plan.Remove, dir)
+			if !ok || it.Kind != CleanLeftovers || it.Bytes < 3000 {
+				t.Errorf("the leftover: %+v, %v", it, ok)
+			}
+		})
+	}
+}

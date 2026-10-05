@@ -352,9 +352,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if prepared {
 			env.step(StepCleanup)
 		}
-		// Claude Code's session folder goes first, after its last read (the unexpected-folder check) and with the agent and
-		// its tools stopped, so that the final start file holds the note of one that could not go; a kept workspace keeps
-		// it, for whoever looks at the run. The workspace itself goes below.
+		// Claude Code's session folder goes first, so that the final start file holds the note of one that could not go; a
+		// kept workspace keeps it, for whoever looks at the run. The workspace itself goes below. It is set only once the
+		// agent starts, and every path past the agent has ended it and stopped its tools (the stopTools call right after
+		// agent.Run; the one below repeats harmlessly), after the folder's last read (the unexpected-folder check).
 		if prepared && !spec.Keep {
 			if note := env.removeOwnSession(); note != "" {
 				rec.Notes = append(rec.Notes, note)
