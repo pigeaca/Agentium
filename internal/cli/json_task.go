@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/task"
@@ -116,12 +117,23 @@ type taskShowDoc struct {
 	InstructionNamesFiles []string `json:"instruction_names_reference_files"`
 	// Warnings are the stored validation's (task.Validation.Warnings): what the verify commands keep from grading.
 	Warnings []string `json:"warnings"`
+	// Draft is the text `task draft` stored beside the instruction, which it does not replace (`task edit
+	// --accept-draft` does); DraftWrittenAt and DraftModel say when and by which model. All three are null with no draft.
+	Draft          *string `json:"draft"`
+	DraftWrittenAt *string `json:"draft_written_at"` // RFC 3339, UTC
+	DraftModel     *string `json:"draft_model"`
+	// DraftingSpendUSD is what every draft call on the task cost, stored or refused (0 when none was made).
+	DraftingSpendUSD float64 `json:"drafting_spend_usd"`
 }
 
 func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) taskShowDoc {
 	doc := taskShowDoc{header: env.hdr(), taskInfo: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Instruction: t.Instruction,
 		Setup: list(t.Setup), Verify: list(t.Verify), HiddenTests: list(t.HiddenTests), Reference: list(t.Reference), Gaps: []gapDoc{},
-		InstructionNamesFiles: []string{}, Warnings: []string{}}
+		InstructionNamesFiles: []string{}, Warnings: []string{}, DraftingSpendUSD: t.DraftSpendUSD}
+	if t.Draft != "" {
+		at := t.DraftAt.UTC().Format(time.RFC3339)
+		doc.Draft, doc.DraftWrittenAt, doc.DraftModel = &t.Draft, &at, &t.DraftModel
+	}
 	switch {
 	case t.NeedsReview && isTicket(t):
 		doc.Review = "ticket"
@@ -142,6 +154,31 @@ func taskShowDocument(ctx context.Context, env Env, w *workspace, t store.Task) 
 		}
 	}
 	return doc
+}
+
+// taskDraftDoc is `task draft --json`'s document: how the one paid call ended, and what it cost.
+type taskDraftDoc struct {
+	header
+	Task string `json:"task"`
+	// Outcome is stored (the draft passed both checks and is stored beside the instruction), refused (refused_by says
+	// why: consent, when --yes was missing and nothing ran; fairness or giveaway, when a check refused the draft and
+	// nothing was stored) or failed (the call brought no draft: reason says why). Only stored exits 0.
+	Outcome   string   `json:"outcome"`
+	RefusedBy []string `json:"refused_by"`
+	Reason    string   `json:"reason"` // for people; empty when stored
+	// Draft is the text the call brought, stored or refused; null when it brought none (or nothing ran).
+	Draft     *string  `json:"draft"`
+	Gaps      []gapDoc `json:"unstated_requirement_details"` // what the fairness check found unstated in the draft
+	Giveaways []string `json:"giveaway_names"`               // names in the draft only the reference has
+	Model     string   `json:"model"`
+	// MaxCostUSD is the most the call may cost: its cap and the overshoot a call can pass it by.
+	MaxCostUSD float64 `json:"max_cost_usd"`
+	// CostUSD is what this call reported it cost, counted before anything else; null when it reported none or nothing ran.
+	CostUSD *float64 `json:"cost_usd"`
+	// DraftingSpendUSD is what every draft call on the task has cost, this one included.
+	DraftingSpendUSD float64  `json:"drafting_spend_usd"`
+	Notes            []string `json:"notes"` // for people: draft calls a stopped Agentium left, cut prompts
+	NextCommand      string   `json:"next_command"`
 }
 
 // gapDoc is task.Gap as the public schema has it: something a hidden test needs that nothing states.

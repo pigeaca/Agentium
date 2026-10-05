@@ -26,6 +26,7 @@ command run show
 command start
 command task
 command task add
+command task draft
 command task edit
 command task import
 command task list
@@ -143,6 +144,9 @@ flag task add --setup	list default=""
 flag task add --solution	value default=""
 flag task add --ticket-file	value default=""
 flag task add --verify	list default=""
+flag task draft --timeout	value default="10m0s"
+flag task draft --yes	bool default="false"
+flag task edit --accept-draft	bool default="false"
 flag task edit --accept-gaps	bool default="false"
 flag task edit --instruction	value default=""
 flag task edit --instruction-file	bool default=""
@@ -1454,6 +1458,24 @@ json task add .task.status_summary	string
 json task add .task.unstated_requirements	int
 json task add .task.untested_hunks	int
 json task add .verify	[]string
+json task draft .command	string
+json task draft .cost_usd	float
+json task draft .draft	string
+json task draft .drafting_spend_usd	float
+json task draft .giveaway_names	[]string
+json task draft .max_cost_usd	float
+json task draft .model	string
+json task draft .next_command	string
+json task draft .notes	[]string
+json task draft .outcome	string
+json task draft .reason	string
+json task draft .refused_by	[]string
+json task draft .schema	int
+json task draft .task	string
+json task draft .unstated_requirement_details	[]object
+json task draft .unstated_requirement_details[].file	string
+json task draft .unstated_requirement_details[].kind	string
+json task draft .unstated_requirement_details[].text	string
 json task edit .command	string
 json task edit .schema	int
 json task edit .task	object
@@ -1515,6 +1537,10 @@ json task rm .removed	string
 json task rm .schema	int
 json task show .base_commit	string
 json task show .command	string
+json task show .draft	string
+json task show .draft_model	string
+json task show .draft_written_at	string
+json task show .drafting_spend_usd	float
 json task show .graded_by	string
 json task show .hidden_test_files	int
 json task show .hidden_tests	[]string
@@ -1614,6 +1640,7 @@ json-flag run once
 json-flag run show
 json-flag start
 json-flag task add
+json-flag task draft
 json-flag task edit
 json-flag task import
 json-flag task list
@@ -1634,3 +1661,4 @@ migration 0010_task_retirement.sql	d75df0f53390468c
 migration 0011_removed_watch.sql	683d146397d0a68b
 migration 0012_project_settings.sql	36ca254216271595
 migration 0013_project_module.sql	d2c002bd6494bb10
+migration 0015_task_drafts.sql	73494dab4052ae0b

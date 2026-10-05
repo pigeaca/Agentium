@@ -67,7 +67,7 @@ func TestJSONFieldNamesAreFixed(t *testing.T) {
 	keys(tasks, "command,schema,tasks")
 	row(tasks, "tasks", "base_commit,graded_by,graded_runs,hidden_test_files,name,needs_review,passed_runs,reference_files,solution_commit,source,status,status_summary,tells,unstated_requirements,untested_hunks") // task list only
 	shown := jsonRun(t, f, ExitOK, "task", "show", "value")
-	keys(shown, "base_commit,command,graded_by,hidden_test_files,hidden_tests,instruction,instruction_names_reference_files,name,needs_review,reference,reference_files,review,"+
+	keys(shown, "base_commit,command,draft,draft_model,draft_written_at,drafting_spend_usd,graded_by,hidden_test_files,hidden_tests,instruction,instruction_names_reference_files,name,needs_review,reference,reference_files,review,"+
 		"schema,setup,solution_commit,source,status,status_summary,unstated_requirement_details,unstated_requirements,untested_hunks,verify,warnings,weak_tests")
 	if w, ok := shown.get("warnings").([]any); !ok || len(w) != 0 {
 		t.Errorf("task show: warnings %v, want an empty list", shown.get("warnings"))

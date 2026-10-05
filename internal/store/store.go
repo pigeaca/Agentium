@@ -518,6 +518,14 @@ type Task struct {
 	// Module is the monorepo folder the task runs in (slash-separated, relative to the repository root); "": the root.
 	// Setup, verification, validation, warm-up and grading all use it, whatever the project's setting is now.
 	Module string
+	// Draft is a text `agentium task draft` wrote and stored beside the instruction ("" when none), DraftAt when and
+	// DraftModel by which model. It never replaces the instruction by itself: AcceptTaskDraft does, and clears it.
+	// DraftSpendUSD is what every draft call on the task cost (CountDraftCall). SaveTask and UpdateTask never write
+	// these: SetTaskDraft, AcceptTaskDraft and CountDraftCall do.
+	Draft         string
+	DraftAt       time.Time
+	DraftModel    string
+	DraftSpendUSD float64
 }
 
 // Retired reports whether the task is retired.
@@ -753,7 +761,8 @@ func (s *Store) DeleteTask(ctx context.Context, projectID int64, name string) er
 func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]Task, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, project_id, name, instruction, source, base_commit, solution_commit, hidden_tests, reference_files,
-		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason, module
+		       verify, setup, needs_review, grading, validation, created_at, updated_at, retired_at, retired_reason, module,
+		       draft, draft_at, draft_model, draft_spend_usd
 		FROM tasks `+clause, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query tasks: %w", err)
@@ -762,10 +771,10 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 	var tasks []Task
 	for rows.Next() {
 		var task Task
-		var hidden, reference, verify, setup, validation, created, updated, retired string
+		var hidden, reference, verify, setup, validation, created, updated, retired, drafted string
 		if err := rows.Scan(&task.ID, &task.ProjectID, &task.Name, &task.Instruction, &task.Source, &task.BaseCommit,
 			&task.SolutionCommit, &hidden, &reference, &verify, &setup, &task.NeedsReview, &task.Grading, &validation, &created, &updated,
-			&retired, &task.RetiredReason, &task.Module); err != nil {
+			&retired, &task.RetiredReason, &task.Module, &task.Draft, &drafted, &task.DraftModel, &task.DraftSpendUSD); err != nil {
 			return nil, fmt.Errorf("read task: %w", err)
 		}
 		for _, field := range []struct {
@@ -787,6 +796,11 @@ func (s *Store) queryTasks(ctx context.Context, clause string, args ...any) ([]T
 		}
 		if retired != "" {
 			if task.RetiredAt, err = parseTime(retired); err != nil {
+				return nil, err
+			}
+		}
+		if drafted != "" {
+			if task.DraftAt, err = parseTime(drafted); err != nil {
 				return nil, err
 			}
 		}

@@ -47,8 +47,16 @@ const taskUsage = `Usage:
                          never passed, passed k of n, not run yet, or what blocks it); --details, or any other output,
                          is the table of sources, tests and status
   agentium task show NAME
-  agentium task edit NAME [--instruction TEXT | --instruction @FILE] [--setup CMD]...
+  agentium task draft NAME [--yes]
+                         one paid Claude call without tools (claude-sonnet-5-5, capped at $0.50) writes a task text
+                         from the commit message, the reference change and the hidden tests: the problem and every
+                         name the tests need, never the fix. It is stored beside the instruction only when the
+                         unstated-requirements check finds nothing in it and it names nothing only the reference has;
+                         task show prints both. Off a terminal, and with --json, the call needs --yes
+  agentium task edit NAME [--instruction TEXT | --instruction @FILE | --accept-draft] [--setup CMD]...
                          [--verify CMD]... [--reviewed] [--accept-gaps]
+                         --accept-draft puts the stored draft in place of the instruction; the task then awaits
+                         your review, unless --reviewed is given too
   agentium task validate (NAME [--weak-tests] | --all) [--snapshot NAME]... [--repeat N]
                          the hidden tests fail on the base and the reference passes them, in the base's own
                          context and with each snapshot applied (without a solution: the base passes);
@@ -66,7 +74,7 @@ const taskUsage = `Usage:
 
 Tasks from history come from agentium pool update (agentium pool update --dry-run previews the candidates).
 
-list, show, validate, import, add, edit and rm take --json: one JSON document instead of text (docs/guide.md,
+list, show, draft, validate, import, add, edit and rm take --json: one JSON document instead of text (docs/guide.md,
 "Scripting and automation"); nothing prompts, and exit codes are 0 success, 1 failure or an invalid task, 2 usage.
 
 Judge-graded tasks have no hidden tests: their runs are to be graded by the judge against the reference solution.
@@ -89,7 +97,7 @@ func runTask(ctx context.Context, env Env, args []string) int {
 		return ExitUsage
 	}
 	commands := map[string]func(context.Context, Env, []string) int{
-		"add": taskAdd, "import": taskImport, "list": taskList, "show": taskShow, "edit": taskEdit,
+		"add": taskAdd, "import": taskImport, "list": taskList, "show": taskShow, "edit": taskEdit, "draft": taskDraft,
 		"validate": taskValidate, "rm": taskRemove, "mine": taskMineRemoved,
 	}
 	if run, ok := commands[args[0]]; ok {
@@ -919,7 +927,23 @@ func taskShow(ctx context.Context, env Env, args []string) int {
 		fmt.Fprintln(out, note(st, fmt.Sprintf("unstated requirements could not be checked: %v", gapErr)))
 	}
 	printGaps(out, st, gaps)
+	printDraft(out, st, t)
 	return ExitOK
+}
+
+// printDraft shows the draft stored beside the instruction, if any, with the command that puts it in place, and what
+// drafting the task has cost, if anything.
+func printDraft(out io.Writer, st term.Style, t store.Task) {
+	if t.Draft != "" {
+		fmt.Fprintln(out, st.Heading(fmt.Sprintf("Draft (by %s, %s; not in use):", t.DraftModel, t.DraftAt.UTC().Format("2006-01-02 15:04 UTC"))))
+		for _, line := range strings.Split(t.Draft, "\n") {
+			fmt.Fprintf(out, "  %s\n", line)
+		}
+		fmt.Fprintf(out, "Put it in place of the instruction: %s (the task then awaits your review)\n", st.Command("agentium task edit "+t.Name+" --accept-draft"))
+	}
+	if t.DraftSpendUSD > 0 {
+		fmt.Fprintf(out, "Drafting this task has cost $%.2f.\n", t.DraftSpendUSD)
+	}
 }
 
 func taskEdit(ctx context.Context, env Env, args []string) int {
@@ -931,14 +955,19 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	noSetup := fs.Bool("no-setup", false, "remove the setup commands")
 	reviewed := fs.Bool("reviewed", false, "mark the instruction as reviewed for solution leaks")
 	acceptGaps := fs.Bool("accept-gaps", false, "with --reviewed: accept the requirements the hidden tests have that nothing states")
+	acceptDraft := fs.Bool("accept-draft", false, "put the stored draft (task draft) in place of the instruction; the task then awaits review unless --reviewed is given")
 	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
 	}
 	text, err := instruction.value(env)
+	if err == nil && text != "" && *acceptDraft {
+		fmt.Fprintln(env.Stderr, "agentium task edit: give --instruction or --accept-draft, not both")
+		return ExitUsage
+	}
 	if err != nil || len(rest) != 1 || (len(setup) > 0 && *noSetup) ||
-		(text == "" && len(verify) == 0 && len(setup) == 0 && !*noSetup && !*reviewed) {
-		fmt.Fprintf(env.Stderr, "agentium task edit: give NAME and at least one of --instruction, --setup, --no-setup, --verify or --reviewed%s\n", errSuffix(err))
+		(text == "" && len(verify) == 0 && len(setup) == 0 && !*noSetup && !*reviewed && !*acceptDraft) {
+		fmt.Fprintf(env.Stderr, "agentium task edit: give NAME and at least one of --instruction, --accept-draft, --setup, --no-setup, --verify or --reviewed%s\n", errSuffix(err))
 		return ExitUsage
 	}
 	w, err := openProject(ctx, env)
@@ -949,6 +978,15 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	t, err := w.db.TaskByName(ctx, w.project.ID, rest[0])
 	if err != nil {
 		return fail(env, err)
+	}
+	draft := t.Draft // the draft read now, which AcceptTaskDraft replaces only while it is still the stored one
+	if *acceptDraft {
+		if draft == "" {
+			return fail(env, fmt.Errorf("task %s has no stored draft: write one with agentium task draft %s", t.Name, t.Name))
+		}
+		// A draft is a model's text: it awaits the owner's review like a mined one, whatever the task's flag was, until
+		// --reviewed says it was read (decision 3 of the quiet-console plan).
+		t.Instruction, t.NeedsReview = draft, true
 	}
 	if text != "" {
 		t.Instruction = text
@@ -967,6 +1005,9 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 	if len(setup) > 0 || *noSetup {
 		t.Setup, t.Validation = setup, nil
 	}
+	if *acceptDraft {
+		return acceptDraftEdit(ctx, env, w, t, draft)
+	}
 	if err := w.db.UpdateTask(ctx, t, env.Now()); err != nil {
 		return fail(env, err)
 	}
@@ -974,6 +1015,27 @@ func taskEdit(ctx context.Context, env Env, args []string) int {
 		return env.emit(taskEditDoc{header: env.hdr(), Task: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Updated: true})
 	}
 	fmt.Fprintf(env.Stdout, "Updated task %s\n", t.Name)
+	return ExitOK
+}
+
+// acceptDraftEdit stores task edit --accept-draft's edit of t (its instruction the draft), clearing the stored draft
+// only while it is still draft, and reports it: the task then awaits review unless the edit marked it reviewed.
+func acceptDraftEdit(ctx context.Context, env Env, w *workspace, t store.Task, draft string) int {
+	err := w.db.AcceptTaskDraft(ctx, t, draft, env.Now())
+	if errors.Is(err, store.ErrDraftChanged) {
+		return fail(env, fmt.Errorf("task %s: its draft changed while this edit ran; read it again with agentium task show %s", t.Name, t.Name))
+	} else if err != nil {
+		return fail(env, err)
+	}
+	if env.JSON {
+		return env.emit(taskEditDoc{header: env.hdr(), Task: taskInfoOf(ctx, task.NewFairness("--git-dir", w.bare), t), Updated: true})
+	}
+	fmt.Fprintf(env.Stdout, "Updated task %s: its draft is now its instruction\n", t.Name)
+	if t.NeedsReview {
+		st := env.style()
+		fmt.Fprintf(env.Stdout, "%s: %s, then %s\n", st.Warn("Review it before experiments take the task"), st.Command("agentium task show "+t.Name),
+			st.Command("agentium task edit "+t.Name+" --reviewed"))
+	}
 	return ExitOK
 }
 
