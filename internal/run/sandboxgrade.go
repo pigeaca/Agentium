@@ -204,12 +204,16 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 			}
 		}
 		if ok && in.Proving != nil {
-			if ok, err = in.Proving.Run(ctx, in.Log, func(ctx context.Context, command string, events *os.File) (task.Command, error) {
+			if ok, err = in.Proving.Run(ctx, in.Log, func(ctx context.Context, command, chdir string, events *os.File) (task.Command, error) {
 				if err := sandbox.CheckFile(file, digest); err != nil {
 					return task.Command{Command: command, ExitCode: -1}, err
 				}
 				dir, there := env.gradeDir(g.Copy, in)
 				if !there {
+					return task.Command{Command: command, ExitCode: -1}, nil
+				}
+				if err := task.CheckChdir(g.Copy, env.Module, chdir); err != nil { // as gradeDir: the agent's tree failing
+					fmt.Fprintf(in.Log, "[agentium] the nested module's folder left the agent's tree during the grade: %v\n", err)
 					return task.Command{Command: command, ExitCode: -1}, nil
 				}
 				spec, err := sandbox.Wrap(runner.Spec{Dir: dir, Command: command, Timeout: in.Timeout, Output: events, Stderr: in.Log,

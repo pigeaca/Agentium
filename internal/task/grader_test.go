@@ -120,7 +120,7 @@ func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, comm
 	}
 	if ok && proving != nil { // in the copy, as the real sandbox runs it before the copy goes
 		var err error
-		ok, err = proving.Run(ctx, log, func(ctx context.Context, command string, events *os.File) (Command, error) {
+		ok, err = proving.Run(ctx, log, func(ctx context.Context, command, _ string, events *os.File) (Command, error) {
 			r, err := runner.Run(ctx, runner.Spec{Dir: copy, Command: command, Timeout: timeout, Output: events, Stderr: log})
 			return Command{Command: command, ExitCode: r.ExitCode, TimedOut: r.TimedOut}, err
 		})

@@ -1085,8 +1085,11 @@ func (env Env) proveOnHost(ctx context.Context, graded, logPath string, proving 
 		return false, fmt.Errorf("log: %w", err)
 	}
 	defer log.Close()
-	return proving.Run(ctx, log, func(ctx context.Context, command string, events *os.File) (task.Command, error) {
+	return proving.Run(ctx, log, func(ctx context.Context, command, chdir string, events *os.File) (task.Command, error) {
 		dir, err := env.moduleDir(graded)
+		if err == nil {
+			err = task.CheckChdir(graded, env.Module, chdir)
+		}
 		if err != nil { // the agent's code removed or linked the module's folder while the tests ran: nothing proven
 			fmt.Fprintf(log, "[agentium] the module's folder left the agent's tree during the grade: %v\n", err)
 			return task.Command{Command: command, ExitCode: -1}, nil

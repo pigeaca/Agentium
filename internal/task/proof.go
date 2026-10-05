@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/pigeaca/agentium/internal/buildtool"
 	"github.com/pigeaca/agentium/internal/source"
 )
 
@@ -92,6 +93,10 @@ type GoProof struct {
 type ProofPackage struct {
 	Dir   string
 	Tests []string
+	// Root is the folder of the Go module the package belongs to (its nearest go.mod in the solution), as a slash path
+	// from the root, when that module is nested below the task's module folder: go test only runs a package from its
+	// own module, so the proof enters Root (go test -C), as a verify command that tests it must. "" otherwise.
+	Root string
 }
 
 // Empty reports whether there is nothing to prove.
@@ -136,17 +141,40 @@ func PlanGoProof(spec Spec, base, solution source.Source) (proof GoProof, goFile
 	for _, dir := range slices.Sorted(maps.Keys(byDir)) {
 		names := byDir[dir]
 		slices.Sort(names)
-		proof.Packages = append(proof.Packages, ProofPackage{Dir: dir, Tests: slices.Compact(names)})
+		proof.Packages = append(proof.Packages, ProofPackage{Dir: dir, Tests: slices.Compact(names), Root: nestedModule(dir, spec.Module, solution)})
 	}
 	return proof, HasGoTestFiles(spec.HiddenTests)
 }
 
-// Target is the package's folder as `go test` names it from the module's folder (module, a slash path from the root; ""
-// for the root): "." or "./pkg", or "../pkg" for a folder outside the module's.
-func (pkg ProofPackage) Target(module string) string {
-	rel := path.Clean(pkg.Dir)
-	if module != "" {
-		if r, err := filepath.Rel(filepath.FromSlash(path.Clean(module)), filepath.FromSlash(rel)); err == nil {
+// nestedModule is the folder of the nearest go.mod in solution above folder dir and strictly below the task's module
+// folder (module; "" for the root), or "" when there is none.
+func nestedModule(dir, module string, solution source.Source) string {
+	if solution == nil {
+		return ""
+	}
+	top := path.Clean(module)
+	if module == "" {
+		top = "."
+	}
+	for d := path.Clean(dir); d != top && d != "." && d != "/" && within(d, top); d = path.Dir(d) {
+		if source.Has(solution, path.Join(d, "go.mod")) {
+			return d
+		}
+	}
+	return ""
+}
+
+// within reports whether slash path p is in folder top ("." is the root).
+func within(p, top string) bool {
+	return top == "." || strings.HasPrefix(p, top+"/")
+}
+
+// relative is the folder to as go test names it from folder from (slash paths from the root): "." or "./pkg", or
+// "../pkg" outside it.
+func relative(from, to string) string {
+	rel := path.Clean(to)
+	if from != "" && from != "." {
+		if r, err := filepath.Rel(filepath.FromSlash(path.Clean(from)), filepath.FromSlash(rel)); err == nil {
 			rel = filepath.ToSlash(r)
 		}
 	}
@@ -156,14 +184,31 @@ func (pkg ProofPackage) Target(module string) string {
 	return "./" + rel
 }
 
+// Target is the package's folder as the proof's results name it, from the module's folder (module, a slash path from
+// the root; "" for the root): "." or "./pkg", or "../pkg" for a folder outside the module's.
+func (pkg ProofPackage) Target(module string) string { return relative(module, pkg.Dir) }
+
+// Chdir is the folder the proof's command enters (go test -C), from the module's folder: Root's, or "" without one.
+func (pkg ProofPackage) Chdir(module string) string {
+	if pkg.Root == "" {
+		return ""
+	}
+	return relative(module, pkg.Root)
+}
+
 // Command is the shell command that runs the package's proof tests from the module's folder: `go test -json -count=1
-// -run '^(NAMES)$' ./DIR`. -count=1 makes a cached result impossible; the names are Go identifiers, quoted all the same.
+// -run '^(NAMES)$' ./DIR`, or with -C first for a nested module (`go test -C ./sub -json ... ./DIR`, DIR from sub).
+// -count=1 makes a cached result impossible; the names are Go identifiers, quoted all the same.
 func (pkg ProofPackage) Command(module string) string {
 	names := make([]string, len(pkg.Tests))
 	for i, n := range pkg.Tests {
 		names[i] = regexp.QuoteMeta(n)
 	}
-	return "go test -json -count=1 -run " + shellQuote("^("+strings.Join(names, "|")+")$") + " " + shellQuote(pkg.Target(module))
+	enter, target := "", pkg.Target(module)
+	if pkg.Root != "" {
+		enter, target = "-C "+shellQuote(pkg.Chdir(module))+" ", relative(pkg.Root, pkg.Dir)
+	}
+	return "go test " + enter + "-json -count=1 -run " + shellQuote("^("+strings.Join(names, "|")+")$") + " " + shellQuote(target)
 }
 
 // shellQuote quotes s for a POSIX shell, unless it holds only characters no shell treats specially.
@@ -263,10 +308,22 @@ type Proving struct {
 	Result *TestProof
 }
 
+// CheckChdir checks, as buildtool.ModuleDir does for the module's folder, the folder a proof command enters with -C
+// (chdir, from the module's folder; "" for none) in checkout: every component a real folder, none a link.
+func CheckChdir(checkout, module, chdir string) error {
+	if chdir == "" {
+		return nil
+	}
+	_, err := buildtool.ModuleDir(checkout, path.Join(module, chdir))
+	return err
+}
+
 // ProofCommand runs one of the proof's shell commands in the grade's module folder and mode, its standard output to
 // events (a file, so a process the command leaves cannot hold the run open) and its errors to the verification's log.
-// It returns the command's result; an error is Agentium's own (or cancellation), never the tests'.
-type ProofCommand func(ctx context.Context, command string, events *os.File) (Command, error)
+// chdir is the folder the command enters with -C, from the module's folder ("" for none): the runner checks it as it
+// checks the module's folder (a folder the agent's code turned into a link fails the proof). It returns the command's
+// result; an error is Agentium's own (or cancellation), never the tests'.
+type ProofCommand func(ctx context.Context, command, chdir string, events *os.File) (Command, error)
 
 // Run runs the proof, one package folder at a time through run, until a folder is not proven, and reports whether it
 // saw every proof test pass. Each command's line goes to log before it runs, and one line after them says what was
@@ -298,7 +355,7 @@ func (p *Proving) Run(ctx context.Context, log io.Writer, run ProofCommand) (boo
 		if err != nil {
 			return false, fmt.Errorf("the proof's events: %w", err)
 		}
-		c, err := run(ctx, command, events)
+		c, err := run(ctx, command, pkg.Chdir(p.Module), events)
 		result.Commands = append(result.Commands, c)
 		if err != nil {
 			return false, err

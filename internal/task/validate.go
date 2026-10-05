@@ -767,8 +767,11 @@ func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string,
 // proofCommand runs the proof's commands on the host as run runs the verification's: in the module's folder of the
 // checkout dir (checked again: the tests just ran there), with the same environment and time limit.
 func (v Validator) proofCommand(dir string, log io.Writer) ProofCommand {
-	return func(ctx context.Context, command string, events *os.File) (Command, error) {
+	return func(ctx context.Context, command, chdir string, events *os.File) (Command, error) {
 		workDir, err := buildtool.ModuleDir(dir, v.Module)
+		if err == nil {
+			err = CheckChdir(dir, v.Module, chdir)
+		}
 		if err != nil { // the verification's code removed or linked the module's folder: nothing proven
 			fmt.Fprintf(log, "[agentium] the module's folder left the checkout during the verification: %v\n", err)
 			return Command{Command: command, ExitCode: -1}, nil

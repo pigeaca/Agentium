@@ -206,7 +206,7 @@ func TestProvingRunStopsAtTheFirstFolderNotProven(t *testing.T) {
 	p := &Proving{Proof: GoProof{Packages: []ProofPackage{{Dir: "a", Tests: []string{"TestA"}}, {Dir: "b", Tests: []string{"TestB"}},
 		{Dir: "c", Tests: []string{"TestC"}}}}, Events: filepath.Join(t.TempDir(), ProofEvents)}
 	var log strings.Builder
-	ok, err := p.Run(context.Background(), &log, func(_ context.Context, command string, f *os.File) (Command, error) {
+	ok, err := p.Run(context.Background(), &log, func(_ context.Context, command, _ string, f *os.File) (Command, error) {
 		target := command[strings.LastIndex(command, " ")+1:]
 		ran = append(ran, target)
 		_, err := f.WriteString(events[target])
@@ -226,7 +226,7 @@ func TestProvingRunStopsAtTheFirstFolderNotProven(t *testing.T) {
 	// All proven.
 	p = &Proving{Proof: GoProof{Packages: []ProofPackage{{Dir: "a", Tests: []string{"TestA"}}}}, Events: filepath.Join(t.TempDir(), ProofEvents)}
 	log.Reset()
-	ok, err = p.Run(context.Background(), &log, func(_ context.Context, command string, f *os.File) (Command, error) {
+	ok, err = p.Run(context.Background(), &log, func(_ context.Context, command, _ string, f *os.File) (Command, error) {
 		_, err := f.WriteString(events["./a"])
 		return Command{Command: command}, err
 	})
@@ -236,7 +236,7 @@ func TestProvingRunStopsAtTheFirstFolderNotProven(t *testing.T) {
 	// A proof that ran out of time says so.
 	p = &Proving{Proof: GoProof{Packages: []ProofPackage{{Dir: "a", Tests: []string{"TestA"}}}}, Events: filepath.Join(t.TempDir(), ProofEvents)}
 	log.Reset()
-	ok, err = p.Run(context.Background(), &log, func(_ context.Context, command string, _ *os.File) (Command, error) {
+	ok, err = p.Run(context.Background(), &log, func(_ context.Context, command, _ string, _ *os.File) (Command, error) {
 		return Command{Command: command, ExitCode: -1, TimedOut: true}, nil
 	})
 	if err != nil || ok || !p.Result.TimedOut() || p.Result.Words() != "the proof that the hidden tests ran timed out" ||
@@ -445,5 +445,58 @@ func TestPlanGoProofLeavesOutWhatGoNeverRuns(t *testing.T) {
 	}
 	if !namedGoPackage([]string{"go test -C sub ./testdata/p"}, "svc", "svc/sub/testdata/p") || namedGoPackage([]string{"go test -C sub ./testdata/p"}, "svc", "svc/testdata/p") {
 		t.Error("-C names folders from its own")
+	}
+}
+
+// A package in a Go module nested below the task's module folder is proven from its own module (go test -C), as a
+// verify command that enters it with -C tests it: a correct reference is valid and proven, on the host and in the
+// sandbox, and an init that exits 0 there still fails.
+func TestValidateProvesANestedModule(t *testing.T) {
+	pTest := "package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {\n\tif Value() != 1 {\n\t\tt.Fatal(Value())\n\t}\n}\n"
+	bare, base, ids := goModule(t, map[string]string{"testdata/p/go.mod": "module example.com/p\n\ngo 1.22\n", "testdata/p/p.go": "package p\n\nfunc Value() int { return 0 }\n"},
+		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nfunc Value() int { return 1 }\n"},
+		map[string]string{"testdata/p/p_test.go": pTest, "testdata/p/p.go": "package p\n\nimport \"os\"\n\nfunc Value() int { return 0 }\n\nfunc init() { os.Exit(0) }\n"})
+	for _, mode := range []string{GraderHost, GraderSandbox} {
+		spec := Spec{Base: base, HiddenTests: []string{"testdata/p/p_test.go"}, Reference: []string{"testdata/p/p.go"}, Verify: []string{"go test -C ./testdata/p -count=1"}}
+		validate := func(solution string) (Validation, string) {
+			v, progress := validator(t, bare)
+			v.Grader = mode
+			if mode == GraderSandbox {
+				fake := &fakeSandbox{}
+				v.Checkout = func(context.Context, string, string, []string, string) (CheckoutCommands, error) {
+					return CheckoutCommands{Isolated: fake.run}, nil
+				}
+			}
+			spec.Solution = solution
+			got, err := v.Validate(context.Background(), spec, []Arm{{Name: "base"}})
+			if err != nil {
+				t.Fatalf("%s: %v\n%s", mode, err, progress)
+			}
+			log, _ := os.ReadFile(got.Stages[len(got.Stages)-1].Log)
+			return got, string(log)
+		}
+		good, log := validate(ids[0])
+		if good.Status != StatusValid || !good.Stages[1].Proof.Proven() || !strings.Contains(log, "$ go test -C ./testdata/p -json -count=1 -run '^(TestP)$' .\n") {
+			t.Errorf("%s: a correct reference: %v\n%s", mode, good.Summary(), log)
+		}
+		if exits, log := validate(ids[1]); exits.Status != StatusInvalid || !strings.Contains(exits.Summary(), NoteHiddenTestsNotRun) {
+			t.Errorf("%s: an init that exits 0 in the nested module: %v\n%s", mode, exits.Summary(), log)
+		}
+	}
+}
+
+func TestProofCommandInANestedModule(t *testing.T) {
+	solution := snapSource{"svc/go.mod": "", "svc/sub/go.mod": "", "svc/sub/a/a_test.go": "", "svc/b/b_test.go": "", "go.mod": ""}
+	for _, c := range []struct{ dir, module, root, command string }{
+		{"svc/sub/a", "svc", "svc/sub", "go test -C ./sub -json -count=1 -run '^(TestA)$' ./a"},
+		{"svc/sub/a", "", "svc/sub", "go test -C ./svc/sub -json -count=1 -run '^(TestA)$' ./a"},
+		{"svc/sub/a", "svc/sub", "", "go test -json -count=1 -run '^(TestA)$' ./a"},
+		{"svc/b", "", "svc", "go test -C ./svc -json -count=1 -run '^(TestA)$' ./b"},
+		{"svc/b", "svc", "", "go test -json -count=1 -run '^(TestA)$' ./b"},
+	} {
+		pkg := ProofPackage{Dir: c.dir, Tests: []string{"TestA"}, Root: nestedModule(c.dir, c.module, solution)}
+		if pkg.Root != c.root || pkg.Command(c.module) != c.command {
+			t.Errorf("%s from %q: root %q, %s", c.dir, c.module, pkg.Root, pkg.Command(c.module))
+		}
 	}
 }
