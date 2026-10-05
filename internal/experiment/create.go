@@ -198,6 +198,9 @@ func Create(ctx context.Context, p Project, name string, o NewOptions, now time.
 	if err := p.markJudgeGraded(ctx, &d); err != nil {
 		return Created{}, err
 	}
+	if err := p.markPassRule(ctx, &d); err != nil {
+		return Created{}, err
+	}
 	ests, err := p.EstimatesFor(ctx, d)
 	if err != nil {
 		return Created{}, err
@@ -289,6 +292,28 @@ func (p Project) markJudgeGraded(ctx context.Context, d *Design) error {
 	if len(d.JudgeGraded) > 0 {
 		s := llmjudge.GradingSettings()
 		d.JudgeGrading = &s
+	}
+	d.Version = d.WantVersion()
+	return nil
+}
+
+// markPassRule has d grade by the proof that the hidden tests ran (task.PassGoTests) when one of its test-graded tasks
+// has hidden Go tests, fixing d's stored version (WantVersion); a design without any is left as it was, and its runs
+// are graded as before (the exit codes), as are the other tasks' runs in a design with the rule.
+func (p Project) markPassRule(ctx context.Context, d *Design) error {
+	d.PassRule = ""
+	for _, name := range d.Tasks {
+		if d.IsJudgeGraded(name) {
+			continue
+		}
+		t, err := p.DB.TaskByName(ctx, p.ID, name)
+		if err != nil {
+			return err
+		}
+		if task.HasGoTestFiles(t.HiddenTests) {
+			d.PassRule = task.PassGoTests
+			break
+		}
 	}
 	d.Version = d.WantVersion()
 	return nil

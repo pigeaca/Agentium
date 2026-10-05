@@ -98,6 +98,7 @@ if grep -qx "$key" "$CTRL/hang" 2>/dev/null; then touch "$CTRL/hanging-$ws"; sle
 pace=0.2; [ -f "$CTRL/agent-sleep" ] && pace=$(cat "$CTRL/agent-sleep") # a slower stand-in, for recordings
 sleep "$pace"
 [ -f "$CTRL/no-change" ] || printf 'new\n' > value.txt
+[ -f "$CTRL/agent-script" ] && sh "$CTRL/agent-script"
 if [ -f "$CTRL/fix-lib" ] && [ -f lib.sh ]; then i=1; while [ $i -le 16 ]; do echo "f$i() { echo v$i; }" >> lib.sh; i=$((i+1)); done; fi
 if [ -f "$CTRL/usage" ]; then
   used=$(awk "BEGIN{print $used + $step}"); echo "$used $step $resets" > "$CTRL/usage"; limit "$used"

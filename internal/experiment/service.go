@@ -140,25 +140,39 @@ func (p Project) EligibleTasks(ctx context.Context, arms []Arm, grader string) (
 	return eligible, reasons, nil
 }
 
-// Revalidations lists the tasks of d that were validated in another mode than d's and that d validates again when it
-// locks (NeedsRevalidation), in d's order.
+// Revalidations lists the tasks of d that d validates again when it locks (NeedsRevalidation), in d's order.
 func (p Project) Revalidations(ctx context.Context, d Design) ([]string, error) {
-	var names []string
+	why, err := p.RevalidationsWhy(ctx, d)
+	return why.Names, err
+}
+
+// Revalidations are the tasks an experiment validates again when it locks: all of them (Names), and those validated in
+// another mode (Mode) or before the proof that the hidden tests ran (Proof), each in the design's order.
+type Revalidations struct {
+	Names, Mode, Proof []string
+}
+
+// RevalidationsWhy lists the tasks of d that d validates again when it locks, and why (RevalidationReason).
+func (p Project) RevalidationsWhy(ctx context.Context, d Design) (Revalidations, error) {
+	var out Revalidations
 	for _, name := range d.Tasks {
 		t, err := p.DB.TaskByName(ctx, p.ID, name)
 		if err != nil {
 			continue // removed: readiness reports it
 		}
-		c := Candidate{Name: t.Name, Grading: t.Grading}
+		c := Candidate{Name: t.Name, Grading: t.Grading, GoTests: task.HasGoTestFiles(t.HiddenTests)}
 		if t.Validation != nil {
 			v := task.ValidationOf(t)
 			c.Validation = &v
 		}
-		if NeedsRevalidation(c, d.Grader) {
-			names = append(names, name)
+		switch RevalidationReason(c, d.Grader, d.PassRule) {
+		case RevalidateMode:
+			out.Names, out.Mode = append(out.Names, name), append(out.Mode, name)
+		case RevalidateProof:
+			out.Names, out.Proof = append(out.Names, name), append(out.Proof, name)
 		}
 	}
-	return names, nil
+	return out, nil
 }
 
 // judgeGradedTasks is the set of the project's judge-graded tasks, by name.

@@ -39,6 +39,7 @@ exit ExitUsage	2
 experiment DesignVersion	1
 experiment DesignVersionJudge	5
 experiment DesignVersionModelAB	2
+experiment DesignVersionProof	6
 experiment DesignVersionSandbox	4
 experiment DesignVersionSeq	3
 experiment MethodSeq	"seq-v1"
@@ -668,6 +669,7 @@ json experiment report .lock.design.judge_pairs.repeats	int
 json experiment report .lock.design.method	string?
 json experiment report .lock.design.model	string
 json experiment report .lock.design.no_futility	bool?
+json experiment report .lock.design.pass_rule	string?
 json experiment report .lock.design.repeats	int
 json experiment report .lock.design.run_budget_usd	float
 json experiment report .lock.design.seed	int
@@ -686,6 +688,7 @@ json experiment report .lock.local_binding	bool?
 json experiment report .lock.locked_at	time
 json experiment report .lock.max_attempts	int
 json experiment report .lock.method	string
+json experiment report .lock.pass_rule	string?
 json experiment report .lock.price_table	string
 json experiment report .lock.schedule	[]object
 json experiment report .lock.schedule[].arm	string

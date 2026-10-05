@@ -64,11 +64,11 @@ func TestContainerModeIsNotKnownYet(t *testing.T) {
 	}
 	for _, mode := range []string{GraderContainer, "sandbox-v0"} {
 		ran := false
-		v := Validator{Grader: mode, checkout: CheckoutCommands{Isolated: func(context.Context, string, string, bool, []string, time.Duration, io.Writer) ([]Command, bool, *SandboxGrade, error) {
+		v := Validator{Grader: mode, checkout: CheckoutCommands{Isolated: func(context.Context, string, string, bool, []string, time.Duration, io.Writer, *Proving) ([]Command, bool, *SandboxGrade, error) {
 			ran = true
 			return nil, true, nil, nil
 		}}}
-		if _, _, _, err := v.verify(context.Background(), io.Discard, t.TempDir(), "x", []string{"true"}); err == nil || ran {
+		if _, _, _, err := v.verify(context.Background(), io.Discard, t.TempDir(), "x", []string{"true"}, nil); err == nil || ran {
 			t.Errorf("verify in %s: %v, isolated ran %v", mode, err, ran)
 		}
 	}
@@ -87,7 +87,7 @@ type fakeSandbox struct {
 	roots []string
 }
 
-func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error) {
+func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer, proving *Proving) ([]Command, bool, *SandboxGrade, error) {
 	f.roots = append(f.roots, root)
 	if f.down {
 		return nil, false, &SandboxGrade{Canary: "the grading sandbox is unavailable: nested"}, fmt.Errorf("%w: nested", sandbox.ErrUnavailable)
@@ -116,6 +116,16 @@ func (f *fakeSandbox) run(ctx context.Context, dir, root string, keep bool, comm
 		if !r.Passed() {
 			ok = false
 			break
+		}
+	}
+	if ok && proving != nil { // in the copy, as the real sandbox runs it before the copy goes
+		var err error
+		ok, err = proving.Run(ctx, log, func(ctx context.Context, command string, events *os.File) (Command, error) {
+			r, err := runner.Run(ctx, runner.Spec{Dir: copy, Command: command, Timeout: timeout, Output: events, Stderr: log})
+			return Command{Command: command, ExitCode: r.ExitCode, TimedOut: r.TimedOut}, err
+		})
+		if err != nil {
+			return results, false, nil, err
 		}
 	}
 	g := &SandboxGrade{Canary: CanaryPassed, Profile: "digest"}

@@ -273,6 +273,31 @@ func operatorAt(s string) string {
 // the solution adds, or changes from the base's version. A file that does not parse is skipped.
 func ownGoTests(hiddenTests []string, base, solution source.Source) []string {
 	var names []string
+	tests, _ := hiddenGoTests(hiddenTests, base, solution)
+	for _, t := range tests {
+		if t.own {
+			names = append(names, t.name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// goTest is a top-level test function of a hidden _test.go file: its name, the file's folder (a slash path from the
+// repository's root, "." for the root), and whether it is the task's own (the solution adds it or changes it from the
+// base's version).
+type goTest struct {
+	dir, name string
+	own       bool
+}
+
+// hiddenGoTests lists the top-level test functions `go test` runs (goTestFuncs) of the hidden _test.go files as the
+// solution has them, each with its folder. A file the solution removes, or that does not parse, is skipped; parsed
+// counts the files read.
+func hiddenGoTests(hiddenTests []string, base, solution source.Source) (tests []goTest, parsed int) {
+	if solution == nil {
+		return nil, 0
+	}
 	for _, p := range hiddenTests {
 		if !strings.HasSuffix(p, "_test.go") {
 			continue
@@ -285,6 +310,7 @@ func ownGoTests(hiddenTests []string, base, solution source.Source) []string {
 		if !ok {
 			continue
 		}
+		parsed++
 		var before map[string]string
 		if base != nil {
 			if src, err := base.ReadFile(p); err == nil {
@@ -292,13 +318,11 @@ func ownGoTests(hiddenTests []string, base, solution source.Source) []string {
 			}
 		}
 		for name, body := range now {
-			if old, had := before[name]; !had || old != body {
-				names = append(names, name)
-			}
+			old, had := before[name]
+			tests = append(tests, goTest{dir: path.Dir(p), name: name, own: !had || old != body})
 		}
 	}
-	slices.Sort(names)
-	return slices.Compact(names)
+	return tests, parsed
 }
 
 // outputComment matches an example's output comment, without which `go test` compiles the example but never runs it.

@@ -83,6 +83,9 @@ type Stage struct {
 	SetupFailed bool      `json:"setup_failed,omitempty"`
 	Commands    []Command `json:"commands"`
 	Log         string    `json:"log"`
+	// Proof is what the proof that the hidden tests ran saw (PassGoTests), in a stage that wants a pass with hidden Go
+	// tests to prove, once its verification passed: Passed needs it proven. Absent elsewhere, and in older validations.
+	Proof *TestProof `json:"proof,omitempty"`
 	// Sandbox is what the grading sandbox reported for the verification (sandbox mode only): its profile, and the
 	// denials it logged. A run that failed with Flagged denials is not OK (FlaggedFailure).
 	Sandbox *SandboxGrade `json:"sandbox,omitempty"`
@@ -134,6 +137,10 @@ type Validation struct {
 	// task and toolchain, a later grade's denial among them is not flagged. Absent in host validations and those made
 	// before it was kept: then every flagged denial counts.
 	Harmless []DenialKey `json:"harmless_denials,omitempty"`
+	// PassRule is the rule the stages' passes were decided by (PassGoTests); empty in validations made before the proof,
+	// whose passes were the exit codes alone (PassRuleOf). An experiment that grades by the proof validates such a task
+	// again when it locks, if its hidden tests include Go tests.
+	PassRule string `json:"pass_rule,omitempty"`
 }
 
 // SandboxGrade is what a sandboxed grade reports beside its commands' results (a run's record, a validation stage).
@@ -211,9 +218,10 @@ type CheckoutCommands struct {
 	// Isolated, when set, runs commands in the mode's isolation (today the grading sandbox), as a run's grade does (run.CheckoutCommands sets it in
 	// sandbox mode): the checkout dir is moved into root, a grading folder of its own that must not exist yet, and is
 	// removed with it afterwards, unless keep, when the checkout is moved back to dir first. Output goes to log; each
-	// command has timeout. An error wrapping sandbox.ErrUnavailable means the sandbox could not be shown to hold, and
-	// nothing ran.
-	Isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]Command, bool, *SandboxGrade, error)
+	// command has timeout. When proving is set and the commands pass, it runs the proof in the same sandbox before the
+	// checkout goes (Proving.Run), and passing needs it proven. An error wrapping sandbox.ErrUnavailable means the
+	// sandbox could not be shown to hold, and nothing ran.
+	Isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer, proving *Proving) ([]Command, bool, *SandboxGrade, error)
 }
 
 // Toolchain maps a build tool ("go", "java", "cargo", ...) to its version as the tool reports it on the host.
@@ -259,12 +267,16 @@ type Validator struct {
 	Grader string
 	// checkout is what Checkout returned, for this validation's commands.
 	checkout CheckoutCommands
+	// proof is what the stages that want a pass with the hidden tests prove (PlanGoProof): empty when the task has no
+	// hidden Go tests, or nothing to prove in them.
+	proof GoProof
 }
 
 // Validate checks spec in each arm, stopping an arm at its first stage that does not behave as required.
 func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validation, error) {
 	v.Module = spec.Module // the task's module, whatever the project's setting is now
-	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC(), Toolchain: maps.Clone(v.Toolchain), Grader: GraderOf(v.Grader)}
+	result := Validation{Status: StatusValid, Arms: arms, At: v.Now().UTC(), Toolchain: maps.Clone(v.Toolchain), Grader: GraderOf(v.Grader),
+		PassRule: PassGoTests}
 	if !KnownGrader(v.Grader) {
 		return Validation{}, UnknownGrader(v.Grader)
 	}
@@ -302,6 +314,21 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 		}
 		if result.Warnings, err = v.filteredHiddenTests(ctx, spec, solution); err != nil {
 			return Validation{}, err
+		}
+		if HasGoTestFiles(spec.HiddenTests) {
+			base, err := source.Commit(ctx, spec.Base, "--git-dir", v.Bare)
+			if err != nil {
+				return Validation{}, err
+			}
+			if proof, _ := PlanGoProof(spec.HiddenTests, base, solution); !proof.Empty() {
+				v.proof = proof
+			} else {
+				w := "the hidden Go test files hold no test that go test runs, so Agentium cannot prove they ran: the verification's exit codes alone grade this task"
+				result.Warnings = append(result.Warnings, w)
+				if v.Progress != nil {
+					fmt.Fprintln(v.Progress, v.Style.Warn("  warning: "+w))
+				}
+			}
 		}
 	}
 	for _, arm := range arms {
@@ -677,7 +704,17 @@ func (v Validator) runStage(ctx context.Context, spec Spec, arm Arm, name string
 			return stage, fmt.Errorf("arm %s, %s: %w", arm.Name, name, err)
 		}
 	}
-	if stage.Commands, stage.Passed, stage.Sandbox, err = v.verify(ctx, log, dir, label, spec.Verify); err != nil {
+	// A stage that wants a pass with the hidden tests in place passes only with the proof that they ran; a stage that
+	// must fail is satisfied by any failure, so it runs no proof.
+	var proving *Proving
+	if want && name == StageReference && !v.proof.Empty() {
+		proving = &Proving{Proof: v.proof, Module: spec.Module, Events: filepath.Join(v.LogDir, label+".proof.jsonl")}
+	}
+	stage.Commands, stage.Passed, stage.Sandbox, err = v.verify(ctx, log, dir, label, spec.Verify, proving)
+	if proving != nil {
+		stage.Proof = proving.Result
+	}
+	if err != nil {
 		return stage, err
 	}
 	stage.OK = stage.Passed == want
@@ -698,11 +735,15 @@ func (v Validator) inSandbox() bool { return GraderOf(v.Grader) == GraderSandbox
 // verify runs the verification commands in the checkout dir: on the host (run), or in the sandbox, in a grading folder
 // of the stage's own (label) beside the checkouts, which Isolated moves the checkout into and removes with it (the
 // checkout comes back to dir when Keep is set). The grade holds its folder's lock (GradeLock) from before the folder
-// exists until it is gone, so `agentium clean` never removes the folder of a grade in progress.
-func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string, commands []string) ([]Command, bool, *SandboxGrade, error) {
+// exists until it is gone, so `agentium clean` never removes the folder of a grade in progress. With proving, passing
+// commands are followed by the proof in the same mode, and passing needs it proven (proving.Result says what it saw).
+func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string, commands []string, proving *Proving) ([]Command, bool, *SandboxGrade, error) {
 	switch GraderOf(v.Grader) {
 	case GraderHost:
 		results, ok, err := v.run(ctx, log, dir, commands)
+		if err == nil && ok && proving != nil {
+			ok, err = proving.Run(ctx, log, v.proofCommand(dir, log))
+		}
 		return results, ok, nil, err
 	case GraderSandbox:
 	default:
@@ -720,7 +761,22 @@ func (v Validator) verify(ctx context.Context, log io.Writer, dir, label string,
 		os.Remove(GradeLock(root)) // before the unlock: no later grade uses this path (each validation has its own folder)
 		unlock()
 	}()
-	return v.checkout.Isolated(ctx, dir, root, v.Keep, commands, v.Timeout, log)
+	return v.checkout.Isolated(ctx, dir, root, v.Keep, commands, v.Timeout, log, proving)
+}
+
+// proofCommand runs the proof's commands on the host as run runs the verification's: in the module's folder of the
+// checkout dir (checked again: the tests just ran there), with the same environment and time limit.
+func (v Validator) proofCommand(dir string, log io.Writer) ProofCommand {
+	return func(ctx context.Context, command string, events *os.File) (Command, error) {
+		workDir, err := buildtool.ModuleDir(dir, v.Module)
+		if err != nil { // the verification's code removed or linked the module's folder: nothing proven
+			fmt.Fprintf(log, "[agentium] the module's folder left the checkout during the verification: %v\n", err)
+			return Command{Command: command, ExitCode: -1}, nil
+		}
+		result, err := runner.Run(ctx, runner.Spec{Dir: workDir, Command: command, Timeout: v.Timeout, Output: events, Stderr: log, Env: v.envFor(dir),
+			Environ: v.checkout.Environ})
+		return Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut, Seconds: result.Duration.Round(time.Millisecond).Seconds()}, err
+	}
 }
 
 // GradeLock is the lock file beside a validation's grade folder root (<artifacts>/tasks/<id>/<time>/grading/<label>),
@@ -741,6 +797,8 @@ func (v Validator) report(stage Stage, repeat, repeats int) {
 		verdict = "NOT OK (timed out)"
 	case !stage.OK && stage.Sandbox.FlaggedFailure(stage.Passed):
 		verdict = "NOT OK (sandbox denials: " + stage.Sandbox.FlaggedOperations() + ")"
+	case !stage.OK && stage.Proof != nil && !stage.Proof.Proven():
+		verdict = "NOT OK (" + NoteHiddenTestsNotRun + ")"
 	case !stage.OK:
 		verdict = "NOT OK"
 	}
@@ -828,6 +886,8 @@ func (v Validation) Summary() string {
 		case !stage.OK && stage.Sandbox.FlaggedFailure(stage.Passed):
 			failed = append(failed, fmt.Sprintf("%s/%s failed with sandbox denials the agent's sandbox does not impose (%s)", stage.Arm, stage.Stage,
 				stage.Sandbox.FlaggedOperations()))
+		case !stage.OK && stage.Proof != nil && !stage.Proof.Proven():
+			failed = append(failed, fmt.Sprintf("%s/%s: %s (see its log)", stage.Arm, stage.Stage, NoteHiddenTestsNotRun))
 		case !stage.OK:
 			failed = append(failed, fmt.Sprintf("%s/%s wanted %s", stage.Arm, stage.Stage, stage.Want))
 		}

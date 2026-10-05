@@ -59,13 +59,16 @@ type Arm struct {
 // 95%, refuses it. A design that grades in the sandbox, of any template and method, is stored as DesignVersionSandbox:
 // an older Agentium, which would grade its runs on the host, refuses it. A design with judge-graded tasks, of any
 // template, method and grader, is stored as DesignVersionJudge: an older Agentium, which would grade those tasks' runs
-// by their verification commands as if they were tests, refuses it.
+// by their verification commands as if they were tests, refuses it. A design that grades by the proof that the hidden
+// tests ran (PassRule), of any template, method, grader and tasks, is stored as DesignVersionProof: an older Agentium,
+// which would pass a run whose hidden Go tests never ran, refuses it (Project.Load), to run, resume or report.
 const (
 	DesignVersion        = 1
 	DesignVersionModelAB = 2
 	DesignVersionSeq     = 3
 	DesignVersionSandbox = 4
 	DesignVersionJudge   = 5
+	DesignVersionProof   = 6
 )
 
 // WantVersion is the stored version a design of its template, method, grader and tasks carries. Only the sandbox
@@ -73,6 +76,8 @@ const (
 // gives it one) is never stored: Validate refuses its grader.
 func (d Design) WantVersion() int {
 	switch {
+	case d.PassRule != "":
+		return DesignVersionProof
 	case len(d.JudgeGraded) > 0:
 		return DesignVersionJudge
 	case task.GraderOf(d.Grader) == task.GraderSandbox:
@@ -150,6 +155,11 @@ type Design struct {
 	// no task is judge-graded, so other designs read and encode as before (WantVersion).
 	JudgeGraded  []string        `json:"judge_graded,omitempty"`
 	JudgeGrading *judge.Settings `json:"judge_grading,omitempty"`
+	// PassRule is how the runs' passes are decided, which the lock fixes (Lock.PassRule): task.PassGoTests for a design
+	// made with a task whose hidden tests include Go tests, so a pass needs the proof that they ran; empty otherwise, and
+	// in designs made before the proof, which grade by the exit codes (task.PassRuleOf). An existing experiment keeps
+	// its rule. It is omitted when empty, so other designs read and encode as before (WantVersion).
+	PassRule string `json:"pass_rule,omitempty"`
 }
 
 // Default margins (the study's §5.6).
@@ -512,6 +522,9 @@ func (d Design) Validate() error {
 	if !task.KnownGrader(d.Grader) {
 		errs = append(errs, task.UnknownGrader(d.Grader))
 	}
+	if d.PassRule != "" && d.PassRule != task.PassGoTests { // a design stores the proof's rule or none
+		errs = append(errs, fmt.Errorf("pass rule %q (this Agentium records %s or none)", d.PassRule, task.PassGoTests))
+	}
 	if j := d.Judge; j != nil {
 		if j.Repeats < 1 || j.Repeats > MaxJudgeRepeats {
 			errs = append(errs, fmt.Errorf("the judge's repeats must be 1 to %d", MaxJudgeRepeats))
@@ -615,6 +628,8 @@ type Candidate struct {
 	NeedsReview bool
 	Grading     string           // task.GradingTests (or "") or task.GradingJudge
 	Validation  *task.Validation // nil when never validated
+	// GoTests: its hidden tests include Go test files (task.HasGoTestFiles), whose passes the proof checks.
+	GoTests bool
 }
 
 // Ineligible says why a task cannot be in an experiment with these arms and grader mode, or returns "" when it can: it
@@ -662,12 +677,40 @@ func Ineligible(c Candidate, arms []Arm, grader string) string {
 	return ""
 }
 
-// NeedsRevalidation reports whether a task an experiment in mode grader may take was validated in another mode, so the
-// experiment validates it again in its own when it locks (the isolation plan's decision 5: time, no money). Only a
-// sandbox experiment does that; a host one refuses such a task (Ineligible).
-func NeedsRevalidation(c Candidate, grader string) bool {
-	mode := task.GraderOf(grader)
-	return c.Grading != task.GradingJudge && c.Validation != nil && mode == task.GraderSandbox && task.GraderOf(c.Validation.Grader) != mode
+// NeedsRevalidation reports whether an experiment in mode grader that decides passes by rule validates a task again
+// when it locks, in its own mode and rule (time, no money): RevalidationReason is not "".
+func NeedsRevalidation(c Candidate, grader, rule string) bool {
+	return RevalidationReason(c, grader, rule) != ""
+}
+
+// Why a task is validated again when an experiment locks (RevalidationReason).
+const (
+	// RevalidateMode: it was validated in another mode, and the experiment grades in the sandbox (the isolation plan's
+	// decision 5). A host experiment refuses such a task instead (Ineligible).
+	RevalidateMode = "mode"
+	// RevalidateProof: it has hidden Go tests and was validated before the proof that they ran, and the experiment
+	// decides passes by the proof (task.PassGoTests): its reference must pass with the proof too. Only a task validated in
+	// the experiment's own mode is (another mode is RevalidateMode's, or Ineligible's).
+	RevalidateProof = "proof"
+)
+
+// RevalidationReason says why an experiment in mode grader that decides passes by rule validates a task again when it
+// locks (RevalidateMode, RevalidateProof), or "" when it does not. A judge-graded task and one never validated never
+// are.
+func RevalidationReason(c Candidate, grader, rule string) string {
+	if c.Grading == task.GradingJudge || c.Validation == nil {
+		return ""
+	}
+	mode, validated := task.GraderOf(grader), task.GraderOf(c.Validation.Grader)
+	switch {
+	case validated != mode && mode == task.GraderSandbox:
+		return RevalidateMode
+	case validated != mode: // a host experiment refuses it (Ineligible)
+		return ""
+	case task.PassRuleOf(rule) == task.PassGoTests && c.GoTests && task.PassRuleOf(c.Validation.PassRule) != task.PassGoTests:
+		return RevalidateProof
+	}
+	return ""
 }
 
 func validateHint(name string, arms []Arm) string {

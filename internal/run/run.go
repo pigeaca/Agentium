@@ -129,6 +129,10 @@ type Env struct {
 	// Grader is the mode the verification runs in (task.GraderHost or task.GraderSandbox; empty: host): an
 	// experiment's lock decides it, run once its --grader. The record names it.
 	Grader string
+	// ExitCodeOnly grades by the exit codes alone (task.PassExitCode): the rule of an experiment locked before the
+	// proof that the hidden tests ran, which keeps it. Otherwise (run once, every new experiment) a task with hidden Go
+	// tests passes only with the proof (task.PassGoTests).
+	ExitCodeOnly bool
 	// gradeAgent and gradeBase are what a sandboxed grade needs of the run, set by Once once the run's tools are known:
 	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
 	gradeAgent *agent.Invocation
@@ -245,6 +249,9 @@ type Record struct {
 	// Sandbox is what the grading sandbox reported (sandbox mode, once grading began): the canary's outcome, the
 	// profile's digest and the denials, flagged ones apart.
 	Sandbox *task.SandboxGrade `json:"sandbox,omitempty"`
+	// Proof is what the proof that the hidden tests ran saw (task.PassGoTests), when the verification passed and the
+	// task has hidden Go tests to prove: Passed needs it proven. Absent otherwise, and in runs graded by the exit codes.
+	Proof *task.TestProof `json:"proof,omitempty"`
 	// HarnessChanged lists what the arm's context changes that runs (hooks, settings, MCP), not only what the agent reads.
 	HarnessChanged []string `json:"harness_changed,omitempty"`
 	// ProjectSkills and ProjectCommands are the arm's own skill and command names at the context commit; calibration
@@ -844,7 +851,8 @@ func OvershootNote(o claude.Overshoot) string {
 
 // grade brings the agent's work tree (never its .git) into the grading repository, measures the changes from the
 // context commit, restores the verification scripts the task never needed changed, adds the hidden tests and runs the
-// verification commands.
+// verification commands. Unless env.ExitCodeOnly, passing commands are followed by the proof that the task's hidden Go
+// tests ran (task.Proving), in the same place and mode, and a pass needs it proven.
 func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *Record, running func(pid int)) error {
 	env.step(StepGrading)
 	unreadable, err := syncWorkTree(repo, graded)
@@ -942,6 +950,7 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			rec.Notes = append(rec.Notes, "the agent changed the verification's own scripts; graded with the starting version: "+strings.Join(restore, ", "))
 		}
 	}
+	var proving *task.Proving
 	if !failed && spec.Task.Solution != "" && len(spec.Task.HiddenTests) > 0 {
 		solution, err := source.Commit(ctx, spec.Task.Solution, "--git-dir", env.Bare)
 		if err != nil {
@@ -952,13 +961,18 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 			rec.Notes = append(rec.Notes, "the hidden tests could not be added: "+err.Error())
 			failed = true
 		}
+		// The proof tests come from the task's own commits in Agentium's repository, never from the agent's tree.
+		if proving, err = env.proving(ctx, spec, solution, rec); err != nil {
+			return err
+		}
 	}
 	if !failed && task.GraderOf(env.Grader) != task.GraderHost {
-		ok, err := env.verifyIsolated(ctx, spec, graded, rec, running)
+		ok, err := env.verifyIsolated(ctx, spec, graded, rec, running, proving)
 		if err != nil {
 			return err
 		}
 		failed = !ok
+		noteProof(rec, proving)
 		if rec.Sandbox.FlaggedFailure(ok) { // decision 3: a failure the sandbox may have caused is not counted, nor tried again
 			rec.Outcome, rec.Passed = OutcomeSandboxFlagged, nil
 			note := gradeInfraNote(rec.Sandbox, nil)
@@ -980,12 +994,71 @@ func (env Env) grade(ctx context.Context, spec Spec, repo, graded string, rec *R
 		if err != nil {
 			return err
 		}
+		if ok && proving != nil {
+			ok, err = verify.proveOnHost(ctx, graded, filepath.Join(rec.RecordsDir, "verify.log"), proving, running)
+			noteProof(rec, proving)
+			if err != nil {
+				return err
+			}
+		}
 		failed = !ok
 	}
 	passed := !failed
 	rec.Passed = &passed
 	env.progress("  verification: %s", env.Style.Status(map[bool]string{true: "passed", false: "failed"}[passed]))
 	return nil
+}
+
+// proving is the proof a grade of spec runs once its verification passes (task.PlanGoProof, from the task's base and
+// solution commits), its events in the run's records folder; nil under the exit-code rule (ExitCodeOnly), and for a
+// task without hidden Go tests or with nothing to prove in them (the exit codes grade it).
+func (env Env) proving(ctx context.Context, spec Spec, solution source.Source, rec *Record) (*task.Proving, error) {
+	if env.ExitCodeOnly || !task.HasGoTestFiles(spec.Task.HiddenTests) {
+		return nil, nil
+	}
+	base, err := source.Commit(ctx, spec.Task.Base, "--git-dir", env.Bare)
+	if err != nil {
+		return nil, err
+	}
+	proof, _ := task.PlanGoProof(spec.Task.HiddenTests, base, solution)
+	if proof.Empty() {
+		return nil, nil
+	}
+	return &task.Proving{Proof: proof, Module: env.Module, Events: filepath.Join(rec.RecordsDir, task.ProofEvents)}, nil
+}
+
+// noteProof records what the proof saw, once it ran, and the note of a grade it failed.
+func noteProof(rec *Record, proving *task.Proving) {
+	if proving == nil || proving.Result == nil {
+		return
+	}
+	rec.Proof = proving.Result
+	if !proving.Result.Proven() {
+		rec.Notes = append(rec.Notes, fmt.Sprintf("%s: Agentium's own go test -json run saw no pass for %d of the task's %d hidden test(s) (see verify.log)",
+			task.NoteHiddenTestsNotRun, len(proving.Result.Missing), proving.Result.Tests))
+	}
+}
+
+// proveOnHost runs the proof on the host, as commands runs the verification: in the module's folder of graded (checked
+// again before each command: the agent's code just ran there), with the same environment and time limit, logging to
+// logPath.
+func (env Env) proveOnHost(ctx context.Context, graded, logPath string, proving *task.Proving, running func(pid int)) (bool, error) {
+	log, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return false, fmt.Errorf("log: %w", err)
+	}
+	defer log.Close()
+	return proving.Run(ctx, log, func(ctx context.Context, command string, events *os.File) (task.Command, error) {
+		dir, err := env.moduleDir(graded)
+		if err != nil { // the agent's code removed or linked the module's folder while the tests ran: nothing proven
+			fmt.Fprintf(log, "[agentium] the module's folder left the agent's tree during the grade: %v\n", err)
+			return task.Command{Command: command, ExitCode: -1}, nil
+		}
+		result, err := runner.Run(ctx, runner.Spec{Dir: dir, Command: command, Timeout: env.VerifyTimeout, Output: events, Stderr: log, Started: running,
+			Env: env.CommandEnv, Environ: env.commandBase})
+		return task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
+			Seconds: result.Duration.Round(time.Millisecond).Seconds()}, err
+	})
 }
 
 // moduleDir is the folder commands run in for a checkout dir: the module's folder inside it, or dir itself without a
@@ -997,9 +1070,9 @@ func (env Env) moduleDir(dir string) (string, error) { return buildtool.ModuleDi
 // for every mode but host; container-v1 is wired by the containers plan's step 4). The sandbox grade (gradeInSandbox)
 // runs in the run's grade folder (<records>/<id>/grading), which the copy is moved into and removed with, unless the run is kept
 // (the copy then comes back to graded). It records the commands and what the sandbox reported, and adds a note for
-// denials it could not read and for what the grade left behind. An error wrapping sandbox.ErrUnavailable means
-// nothing was graded.
-func (env Env) verifyIsolated(ctx context.Context, spec Spec, graded string, rec *Record, running func(pid int)) (bool, error) {
+// denials it could not read and for what the grade left behind. With proving, passing commands are followed by the
+// proof in the same sandbox (sandboxGrade.Proving). An error wrapping sandbox.ErrUnavailable means nothing was graded.
+func (env Env) verifyIsolated(ctx context.Context, spec Spec, graded string, rec *Record, running func(pid int), proving *task.Proving) (bool, error) {
 	if mode := task.GraderOf(env.Grader); mode != task.GraderSandbox {
 		return false, unknownGrader(mode)
 	}
@@ -1023,7 +1096,7 @@ func (env Env) verifyIsolated(ctx context.Context, spec Spec, graded string, rec
 		},
 		Note:    func(n string) { rec.Notes = append(rec.Notes, n) }, // Agentium's own words and the module's path, not the grade's output
 		Testing: func() { env.step(StepTests) }, Cleaning: func() { env.step(StepCleanup) },
-		Quarantined: func() { env.step(StepQuarantined) }}
+		Quarantined: func() { env.step(StepQuarantined) }, Proving: proving}
 	if spec.Keep {
 		in.Keep = graded
 	}

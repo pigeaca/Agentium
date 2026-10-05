@@ -416,7 +416,7 @@ func CheckoutCommands(ctx context.Context, c CommandsEnv, base string, verify []
 		}
 		notes = append(notes, buildtool.MissingRunners(ctx, warmed.Venv, verify, env.environ())...)
 	}
-	var isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error)
+	var isolated func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer, proving *task.Proving) ([]task.Command, bool, *task.SandboxGrade, error)
 	switch mode := task.GraderOf(c.Grader); mode {
 	case task.GraderHost:
 	case task.GraderSandbox:

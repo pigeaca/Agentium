@@ -6,7 +6,7 @@ The full manual flow. For a first run, use `agentium start` from the [README](..
 
 - [Registering a repository](#registering-a-repository) and [project settings](#project-settings)
 - [Versioning context](#versioning-context) and [context lint](#context-lint)
-- [Turning commits into tasks](#turning-commits-into-tasks), [tasks from tickets](#tasks-from-tickets-graded-by-the-judge) and [the task pool](#the-task-pool)
+- [Turning commits into tasks](#turning-commits-into-tasks), [what a pass means](#what-a-pass-means), [tasks from tickets](#tasks-from-tickets-graded-by-the-judge) and [the task pool](#the-task-pool)
 - [Build tools and offline dependencies](#build-tools-and-offline-dependencies) and [sandboxed grading](#sandboxed-grading)
 - [Running and comparing](#running-and-comparing)
 - [Experiment templates](#experiment-templates)
@@ -95,6 +95,17 @@ agentium task validate <name> --weak-tests          # which parts of the referen
 `start` mines on its own for a first experiment; `pool update` ([the task pool](#the-task-pool)) keeps tasks fresh after that.
 
 Validation also warns when a verify command's `go test` filter keeps one of the task's own hidden tests from running: a `-skip` pattern that matches a test function the solution adds or changes in a hidden `_test.go` file, or a `-run` pattern that does not. Grading would never run that test. It is a warning, not a gate: the status stays as the stages found it, and `task show` repeats it.
+
+### What a pass means
+
+A run passes when the task's verification commands exit 0. For a task whose hidden tests include Go test files that is not enough, since the agent's code runs inside those commands: a `TestMain` or an `init` that exits 0 before any test runs would pass every task. So, once the verification has passed, Agentium runs `go test -json -count=1 -run '^(NAMES)$' ./DIR` itself, once per package folder, in the same copy, folder (the task's module) and mode (the host or the grading sandbox), with the same environment and time limit. It must see a pass for each of the task's own hidden tests: the `Test`, `Fuzz` and `Example` functions the solution adds or changes in its hidden `_test.go` files, or, when none is new or changed, all of those files' tests. A skipped test is not a pass. Without the proof the run fails, with the note "the hidden tests did not run"; its `verify.log` has the proof's command and a line naming each test it saw no pass for, and the events are in `proof.jsonl` beside it.
+
+Validation decides the reference's passes the same way, in every arm and repeat, and so does `--weak-tests`; a stage that must fail is satisfied by any failure. Experiments record the rule in their lock when one of their tasks has hidden Go tests (`experiment show` says "Passes: ..."), and validate again, before they lock, a task validated before the proof (time, no money; `experiment plan` says so). An experiment locked before the proof keeps the exit codes: it resumes and reports as it did, and its verdicts do not change. An older Agentium refuses to run, resume or report an experiment made with the rule.
+
+Limits:
+- **Build tags, `make`-only setups and generated code.** The proof runs plain `go test` on the hidden tests' folders, with the environment the verification gets but not what a verify command sets itself (`GOPROXY=off go test ...`, `-tags`, `cd` into another folder): when it cannot build or find the tests (a test behind a build tag the verification sets, code that `make` generates first), the reference fails validation with "the hidden tests did not run", and you see it before any experiment. Hidden Go test files without a test function cannot be proven: validation warns, and the exit codes grade the task.
+- **Forged output passes.** Code that prints a test's framing lines can fake a pass; the proof stops tests that never ran, not forged results.
+- **Go only.** Other languages are graded by the exit codes, as before.
 
 ### Tasks from tickets, graded by the judge
 

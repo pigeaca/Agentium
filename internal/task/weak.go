@@ -216,8 +216,13 @@ func (v Validator) tryWithout(ctx context.Context, spec Spec, h Hunk, n int, bas
 		return false, false, err
 	}
 	// In sandbox mode a try that fails because of the sandbox (a flagged denial) counts as a failure, so its hunk reads
-	// as tested: the weak-tests check is a warning, and a hunk wrongly called tested only hides one.
-	commands, passed, _, err := v.verify(ctx, log, dir, label, spec.Verify)
+	// as tested: the weak-tests check is a warning, and a hunk wrongly called tested only hides one. A try passes as the
+	// reference stage does: with the proof that the hidden tests ran, when there is one.
+	var proving *Proving
+	if !v.proof.Empty() {
+		proving = &Proving{Proof: v.proof, Module: spec.Module, Events: filepath.Join(v.LogDir, label+".proof.jsonl")}
+	}
+	commands, passed, _, err := v.verify(ctx, log, dir, label, spec.Verify, proving)
 	if err != nil {
 		return false, false, err
 	}

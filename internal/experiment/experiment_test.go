@@ -255,7 +255,7 @@ func TestIneligible(t *testing.T) {
 		if why := Ineligible(c, arms, mode); why != "" {
 			t.Errorf("a valid judge-graded task, grader %q: %s", mode, why)
 		}
-		if NeedsRevalidation(c, mode) {
+		if NeedsRevalidation(c, mode, "") {
 			t.Errorf("a judge-graded task is validated again in grader %q", mode)
 		}
 	}
