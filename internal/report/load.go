@@ -45,9 +45,15 @@ func Load(ctx context.Context, p experiment.Project, name, home string, warn io.
 	if in.Runs, err = loadRuns(ctx, p, lock, runs, warn); err != nil {
 		return Report{}, err
 	}
+	if in.Checks, in.CheckResults, err = loadChecks(ctx, p, in.Runs); err != nil {
+		return Report{}, err
+	}
 	rep, err := Build(in)
 	if err != nil {
 		return Report{}, err
+	}
+	if rep.Checks == nil {
+		rep.Checks = []CheckRow{} // a loaded report says so: [] in JSON, where Build alone leaves the key out
 	}
 	if rep.CalibrationUSD, err = p.CalibrationSpend(ctx, stored.ID); err != nil {
 		return Report{}, err
@@ -62,6 +68,34 @@ func Load(ctx context.Context, p experiment.Project, name, home string, warn io.
 		rep.NorthStar = &star
 	}
 	return rep, nil
+}
+
+// loadChecks reads the project's rule checks and, when there are some, what each counted run's stored transcript and
+// change say of them. With none it reads no file. rep.Checks is then `[]`, not omitted.
+func loadChecks(ctx context.Context, p experiment.Project, runs []Run) ([]run.Check, map[string][]run.CheckResult, error) {
+	stored, err := p.DB.RuleChecks(ctx, p.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	checks := make([]run.Check, len(stored))
+	for i, c := range stored {
+		checks[i] = run.Check{Name: c.Name, Kind: c.Kind, Pattern: c.Pattern}
+	}
+	results := map[string][]run.CheckResult{}
+	reader := run.CheckReader{Records: p.Layout.Records}
+	for _, r := range runs {
+		if len(checks) == 0 {
+			break
+		}
+		if !counted(r.Record) {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+		results[r.ID] = reader.Results(r.Record, checks)
+	}
+	return checks, results, nil
 }
 
 // loadRuns decodes the stored runs. Runs recorded before Agentium kept their context use get it from their
