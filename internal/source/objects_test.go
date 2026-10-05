@@ -92,45 +92,107 @@ func mapsEqual(a, b map[string]string) bool {
 	return true
 }
 
-// A branch can move, so a commit named by one is listed every time, and sees the move; its blobs are still read once.
-func TestObjectsListAMovingNameEachTime(t *testing.T) {
-	root, _ := fixture(t)
+// A branch can move between a listing and a read, so a commit named by one gets Commit's own source: listed every
+// time, every read asked of git, nothing of it kept and nothing kept given to it. Kept under the listed blob's ID, a
+// file read after the move would be handed to every source of the commit that really holds that blob.
+func TestObjectsKeepNothingOfAMovingName(t *testing.T) {
+	root, first := fixture(t)
+	ctx := context.Background()
+	objects := NewObjects("-C", root)
+	moving, err := objects.Commit(ctx, "main") // listed while main is the first commit
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, root, "CLAUDE.md", "moved\n", 0o644)
+	write(t, root, "docs/new.md", "new\n", 0o644)
+	git(t, root, "add", "-A")
+	git(t, root, "commit", "-q", "-m", "move main")
+	// As a source of Commit does: the read names the branch, which is the second commit by now.
+	if data, err := moving.ReadFile("CLAUDE.md"); err != nil || string(data) != "moved\n" {
+		t.Errorf("the moved branch's file: %q, %v; want what Commit's source reads", data, err)
+	}
+	// The first commit, named by its ID, still has its own file: the read above was kept under no blob's ID.
+	pinned, err := objects.Commit(ctx, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := pinned.ReadFile("CLAUDE.md"); err != nil || string(data) != "@docs/rules.md\n" {
+		t.Errorf("the first commit's file after a moving name read another: %q, %v", data, err)
+	}
+	if data, err := pinned.ReadFile("docs/rules.md"); err != nil || string(data) != "rules\n" {
+		t.Fatalf("docs/rules.md: %q, %v", data, err)
+	}
+	// The name is listed again each time (it sees the new file), and reads even a kept blob through git.
+	calls := gitxtest.Calls(t)
+	for range 2 {
+		src, err := objects.Commit(ctx, "main")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !Has(src, "docs/new.md") {
+			t.Errorf("main after the move lacks docs/new.md: %v", src.Paths())
+		}
+		if data, err := src.ReadFile("docs/rules.md"); err != nil || string(data) != "rules\n" {
+			t.Errorf("docs/rules.md by the branch's name: %q, %v", data, err)
+		}
+	}
+	if made := calls(); gitxtest.Count(made, "ls-tree") != 2 || gitxtest.Count(made, "cat-file") != 2 {
+		t.Errorf("a moving name: %d listings and %d reads, want 2 and 2:\n%v", gitxtest.Count(made, "ls-tree"), gitxtest.Count(made, "cat-file"), made)
+	}
+	for _, name := range []string{"main", "HEAD", strings.Repeat("A", 40), strings.Repeat("a", 39), strings.Repeat("a", 41), strings.Repeat("g", 40)} {
+		if hexID(name) {
+			t.Errorf("hexID(%q) = true", name)
+		}
+	}
+	if !hexID(strings.Repeat("0a", 20)) || !hexID(strings.Repeat("f9", 32)) {
+		t.Error("hexID refuses the form of a SHA-1 or SHA-256 ID")
+	}
+}
+
+// A name with an ID's form but another length than the repository's IDs is a branch (as here) or an abbreviation:
+// it can move, so nothing of it is kept either.
+func TestObjectsTreatAHexNameOfAnotherLengthAsMoving(t *testing.T) {
+	root, first := fixture(t)
+	name := strings.Repeat("ab", (104-len(first))/2) // SHA-256's length in a SHA-1 repository, and the other way round
+	git(t, root, "checkout", "-q", "-b", name)
 	ctx := context.Background()
 	calls := gitxtest.Calls(t)
 	objects := NewObjects("-C", root)
-	before, err := objects.Commit(ctx, "main")
+	before, err := objects.Commit(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data, err := before.ReadFile("CLAUDE.md"); err != nil || string(data) != "@docs/rules.md\n" {
-		t.Fatalf("before: %q, %v", data, err)
-	}
-	if _, err := before.ReadFile("docs/rules.md"); err != nil {
-		t.Fatal(err)
+		t.Fatalf("before the move: %q, %v", data, err)
 	}
 	write(t, root, "CLAUDE.md", "moved\n", 0o644)
-	git(t, root, "commit", "-q", "-am", "move main")
+	write(t, root, "docs/new.md", "new\n", 0o644)
+	git(t, root, "add", "-A")
+	git(t, root, "commit", "-q", "-m", "move the branch")
 	calls() // the test's own git calls
-	after, err := objects.Commit(ctx, "main")
+	after, err := objects.Commit(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !Has(after, "docs/new.md") {
+		t.Errorf("the branch's listing was kept: %v", after.Paths())
+	}
 	if data, err := after.ReadFile("CLAUDE.md"); err != nil || string(data) != "moved\n" {
-		t.Errorf("after the branch moved: %q, %v; want the new content", data, err)
+		t.Errorf("after the move: %q, %v", data, err)
 	}
-	if data, err := after.ReadFile("docs/rules.md"); err != nil || string(data) != "rules\n" {
-		t.Errorf("unchanged file: %q, %v", data, err)
+	if data, err := after.ReadFile("CLAUDE.md"); err != nil || string(data) != "moved\n" {
+		t.Errorf("read again: %q, %v", data, err)
 	}
-	if made := calls(); gitxtest.Count(made, "ls-tree") != 1 || gitxtest.Count(made, "cat-file") != 1 {
-		t.Errorf("after the move: %v, want one listing and one read (the changed file)", made)
+	if made := calls(); gitxtest.Count(made, "ls-tree") != 1 || gitxtest.Count(made, "cat-file") != 2 {
+		t.Errorf("after the move: %d listings and %d reads, want 1 and 2:\n%v", gitxtest.Count(made, "ls-tree"), gitxtest.Count(made, "cat-file"), made)
 	}
-	for _, name := range []string{"main", "HEAD", strings.Repeat("A", 40), strings.Repeat("a", 39), strings.Repeat("a", 41), strings.Repeat("g", 40)} {
-		if fullID(name) {
-			t.Errorf("fullID(%q) = true", name)
-		}
+	// The first commit by its ID is pinned as ever, and has its own file.
+	pinned, err := objects.Commit(ctx, first)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !fullID(strings.Repeat("0a", 20)) || !fullID(strings.Repeat("f9", 32)) {
-		t.Error("fullID refuses a SHA-1 or SHA-256 ID")
+	if data, err := pinned.ReadFile("CLAUDE.md"); err != nil || string(data) != "@docs/rules.md\n" {
+		t.Errorf("the first commit's file: %q, %v", data, err)
 	}
 }
 

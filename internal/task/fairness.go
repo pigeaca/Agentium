@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 
 	"github.com/pigeaca/agentium/internal/gitx"
@@ -67,6 +68,10 @@ type Fairness struct {
 	found   kept[bool]
 	stmts   kept[map[string]map[string]bool] // baseFields by commit and directories
 	gaps    kept[[]Gap]                      // Gaps by input
+	// unread counts the reads of f's sources that failed. A check skips a file it cannot read (a link that leaves the
+	// repository never can be read), so an answer worked out while the count rose may lack something: it is given, as
+	// it always was, but not kept, in case the next read succeeds.
+	unread atomic.Int64
 }
 
 // NewFairness returns a checker for the repository located by where (for example "--git-dir", bare).
@@ -75,41 +80,86 @@ func NewFairness(where ...string) *Fairness {
 }
 
 // kept holds values worked out once per key, for several goroutines: the first to ask for a key works its value out
-// and the others wait for it. A failure keeps nothing, so each caller that follows tries again and gets its own error.
-// Working a value out may ask another kept for a value, never its own: Fairness's four are asked in one order (gaps,
-// then stmts, then srcs or found), so no two goroutines wait for each other.
+// and the others wait for it, each for as long as its own context lives. A value is kept only when its work says so;
+// a failure, or an answer that is not to be kept, leaves the key free, and each caller that waited then works the
+// value out itself and gets its own answer or error. Working a value out may ask another kept for a value, never its
+// own: Fairness's four are asked in one order (gaps, then stmts, then srcs or found), so no two goroutines wait for
+// each other.
 type kept[V any] struct {
-	mu sync.Mutex // guards m; never held while a value is worked out
+	mu sync.Mutex // guards m and its values; never held while a value is worked out
 	m  map[string]*keptValue[V]
 }
 
 type keptValue[V any] struct {
-	mu sync.Mutex // held while the value is worked out
-	v  V
-	ok bool
+	v       V
+	ok      bool          // v is kept
+	working chan struct{} // closed when the attempt under way ends; nil when none is
 }
 
-func (k *kept[V]) get(key string, work func() (V, error)) (V, error) {
-	k.mu.Lock()
-	if k.m == nil {
-		k.m = map[string]*keptValue[V]{}
+// get returns key's kept value, or else what work returns, which is kept when work says so and fails with no error.
+// A caller whose ctx ends while it waits for another's work gets ctx's error.
+func (k *kept[V]) get(ctx context.Context, key string, work func() (v V, keep bool, err error)) (V, error) {
+	for {
+		k.mu.Lock()
+		if k.m == nil {
+			k.m = map[string]*keptValue[V]{}
+		}
+		e := k.m[key]
+		if e == nil {
+			e = &keptValue[V]{}
+			k.m[key] = e
+		}
+		if e.ok {
+			v := e.v
+			k.mu.Unlock()
+			return v, nil
+		}
+		if under := e.working; under != nil {
+			k.mu.Unlock()
+			select {
+			case <-under: // kept by now, or free to work out
+				continue
+			case <-ctx.Done():
+				var none V
+				return none, fmt.Errorf("fairness: %w", ctx.Err())
+			}
+		}
+		done := make(chan struct{})
+		e.working = done
+		k.mu.Unlock()
+		var (
+			v    V
+			keep bool
+			err  error
+		)
+		func() {
+			defer func() { // also when work panics: those who wait must not wait for ever
+				k.mu.Lock()
+				if err == nil && keep {
+					e.v, e.ok = v, true
+				}
+				e.working = nil
+				k.mu.Unlock()
+				close(done)
+			}()
+			v, keep, err = work()
+		}()
+		return v, err
 	}
-	e := k.m[key]
-	if e == nil {
-		e = &keptValue[V]{}
-		k.m[key] = e
+}
+
+// counted is one of f's sources: it counts the reads that fail (Fairness.unread).
+type counted struct {
+	source.Source
+	unread *atomic.Int64
+}
+
+func (c counted) ReadFile(p string) ([]byte, error) {
+	data, err := c.Source.ReadFile(p)
+	if err != nil {
+		c.unread.Add(1)
 	}
-	k.mu.Unlock()
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if e.ok {
-		return e.v, nil
-	}
-	v, err := work()
-	if err == nil {
-		e.v, e.ok = v, true
-	}
-	return v, err
+	return data, err
 }
 
 // FairnessInput describes a task: commits in the repository, the instruction, and the solution's split.
@@ -163,20 +213,28 @@ type FairnessInput struct {
 //     go/types, so they use the word search: a new name equal to any old word in its directory is missed there.
 //
 // The gaps of an input are worked out once and kept: the input says all they depend on (f takes a commit's name to
-// mean one commit for as long as it lives, as its kept sources and searches always have). A cancelled ctx is given
-// nothing kept: its check runs, and fails at its first read, as it always did. A check that a cancel overtakes is an
-// error too, like a cancelled search, and keeps nothing: a read it skipped can make a task look fairer than it is.
+// mean one commit for as long as it lives, as its kept sources and searches always have). They are not kept when a
+// read failed while they were worked out, or when ctx ended on the way: something may be missing from them.
+//
+// A caller whose ctx has ended gets an error, never an answer. Its check still runs, so an interrupted command fails
+// as it always did, at its first git call; what the kept sources and searches of another context would still answer
+// is refused when the check returns. A caller whose ctx ends while it waits for another goroutine's check of the same
+// input gets the error then.
 func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
+	var gaps []Gap
+	var err error
 	if ctx.Err() != nil {
-		return f.check(ctx, in)
+		gaps, err = f.check(ctx, in)
+	} else {
+		gaps, err = f.gaps.get(ctx, in.key(), func() ([]Gap, bool, error) {
+			unread := f.unread.Load()
+			gaps, err := f.check(ctx, in)
+			return gaps, f.unread.Load() == unread && ctx.Err() == nil, err
+		})
 	}
-	gaps, err := f.gaps.get(in.key(), func() ([]Gap, error) {
-		gaps, err := f.check(ctx, in)
-		if err == nil && ctx.Err() != nil {
-			return nil, fmt.Errorf("fairness: %w", ctx.Err())
-		}
-		return gaps, err
-	})
+	if err == nil && ctx.Err() != nil {
+		return nil, fmt.Errorf("fairness: %w", ctx.Err())
+	}
 	return slices.Clone(gaps), err // the caller's own: it may sort or cut them
 }
 
@@ -338,12 +396,12 @@ func (f *Fairness) check(ctx context.Context, in FairnessInput) ([]Gap, error) {
 }
 
 func (f *Fairness) source(ctx context.Context, commit string) (source.Source, error) {
-	return f.srcs.get(commit, func() (source.Source, error) {
+	return f.srcs.get(ctx, commit, func() (source.Source, bool, error) {
 		s, err := f.objects.Commit(ctx, commit)
 		if err != nil {
-			return nil, fmt.Errorf("fairness: %w", err)
+			return nil, false, fmt.Errorf("fairness: %w", err)
 		}
-		return s, nil
+		return counted{Source: s, unread: &f.unread}, true, nil
 	})
 }
 
@@ -373,7 +431,7 @@ func (f *Fairness) versions(ctx context.Context, in FairnessInput, file string) 
 // reports as an error with an empty message.
 func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, pathspecs []string) (bool, error) {
 	key := fmt.Sprintf("%s\x00%s\x00%t\x00%s", commit, pattern, word, strings.Join(pathspecs, "\x00"))
-	return f.found.get(key, func() (bool, error) {
+	return f.found.get(ctx, key, func() (bool, bool, error) {
 		args := append([]string{}, f.where...)
 		args = append(args, "grep", "-F", "-l")
 		if word { // Go names are case-sensitive: Wait does not state Timeout
@@ -385,12 +443,12 @@ func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, 
 		args = append(args, pathspecs...)
 		out, err := gitx.Output(ctx, nil, args...)
 		if ctx.Err() != nil { // a cancelled git also exits without a message: never keep that as "no match"
-			return false, fmt.Errorf("fairness: %w", ctx.Err())
+			return false, false, fmt.Errorf("fairness: %w", ctx.Err())
 		}
 		if err != nil && !strings.HasSuffix(err.Error(), ": ") {
-			return false, fmt.Errorf("fairness: %w", err)
+			return false, false, fmt.Errorf("fairness: %w", err)
 		}
-		return err == nil && len(out) > 0, nil
+		return err == nil && len(out) > 0, true, nil
 	})
 }
 
@@ -519,11 +577,12 @@ func (f *Fairness) typeDir(ctx context.Context, in FairnessInput, file *ast.File
 // baseFields returns the fields of the struct types the base's Go files in dirs declare, by type name.
 func (f *Fairness) baseFields(ctx context.Context, commit string, dirs []string) (map[string]map[string]bool, error) {
 	key := commit + "\x00" + strings.Join(dirs, "\x00")
-	return f.stmts.get(key, func() (map[string]map[string]bool, error) {
+	return f.stmts.get(ctx, key, func() (map[string]map[string]bool, bool, error) {
 		src, err := f.source(ctx, commit)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		unread := f.unread.Load()
 		out := map[string]map[string]bool{} // kept only once filled: its readers never change it
 		for _, p := range src.Paths() {
 			if path.Ext(p) != ".go" || !slices.Contains(dirs, path.Dir(p)) {
@@ -553,10 +612,10 @@ func (f *Fairness) baseFields(ctx context.Context, commit string, dirs []string)
 				return true
 			})
 		}
-		if ctx.Err() != nil { // a cancelled read skips its file: never keep the fields of the files that were left
-			return nil, fmt.Errorf("fairness: %w", ctx.Err())
+		if ctx.Err() != nil { // a cancelled read skips its file: the fields of the files that were left are no answer
+			return nil, false, fmt.Errorf("fairness: %w", ctx.Err())
 		}
-		return out, nil
+		return out, f.unread.Load() == unread, nil // a file that could not be read may be readable next time
 	})
 }
 

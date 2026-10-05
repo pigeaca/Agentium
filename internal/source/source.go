@@ -98,6 +98,14 @@ type listing struct {
 	ids   map[string]string
 }
 
+// idLength is the length of the repository's object IDs, as the listing's blobs show it: 0 for a commit without files.
+func (l listing) idLength() int {
+	for _, id := range l.ids {
+		return len(id)
+	}
+	return 0
+}
+
 // list reads commit's files through git.
 func list(ctx context.Context, env []string, commit string, where []string) (listing, error) {
 	out, err := gitx.OutputEnv(ctx, env, nil, append(where, "ls-tree", "-r", "-z", commit)...)
@@ -124,7 +132,7 @@ type commitSource struct {
 	where  []string
 	commit string
 	listing
-	objects *Objects // keeps the blobs read, for the sources it made; nil for a source of Commit or CommitEnv
+	objects *Objects // keeps the blobs read, for its sources of commits named by their IDs; nil for every other source
 }
 
 func (c *commitSource) Paths() []string { return c.paths }

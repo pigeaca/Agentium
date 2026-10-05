@@ -3,6 +3,8 @@ package task
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -172,11 +174,69 @@ func TestPrepareGapsCancelled(t *testing.T) {
 			t.Errorf("%s after the cancelled preparation: %v, %v; want %v", tk.Name, got, err, want[i])
 		}
 	}
+	// Kept gaps are given to no context that has ended: not to another one than the check's (whose sources and
+	// searches would still answer), and not to the check's own once it is interrupted.
+	for _, tk := range tasks {
+		if gaps, err := Gaps(cancelled, f, tk); !errors.Is(err, context.Canceled) {
+			t.Errorf("%s: a cancelled context was given %v, %v", tk.Name, gaps, err)
+		}
+	}
 	interrupt()
 	for _, tk := range tasks {
 		if _, err := Gaps(ctx, f, tk); err == nil {
 			t.Errorf("%s: an interrupted command was given kept gaps", tk.Name)
 		}
+	}
+}
+
+// A check skips a file it cannot read, so an answer worked out while a read failed may lack something: it is given,
+// as it always was, but not kept, and the next check reads the file again. The same goes for the base's fields.
+func TestFairnessKeepsNoGapsWorkedOutFromAFailedRead(t *testing.T) {
+	repo, tasks := gapTasks(t)
+	want := gapsAlone(t, repo, tasks)
+	field := tasks[2] // its one gap, the field Timeout, is known from the reference file p/p.go alone
+	if texts := gapTexts(want[2]); !slices.Equal(texts, []string{"identifier:Timeout"}) {
+		t.Fatalf("the fixture's field task: %q", texts)
+	}
+	ctx := context.Background()
+	away := func(spec string) (back func()) {
+		t.Helper()
+		blob := git(t, repo, "rev-parse", spec)
+		object := filepath.Join(repo, ".git", "objects", blob[:2], blob[2:])
+		if err := os.Rename(object, object+".away"); err != nil {
+			t.Fatal(err)
+		}
+		return func() {
+			t.Helper()
+			if err := os.Rename(object+".away", object); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	f := NewFairness("-C", repo)
+	back := away(field.SolutionCommit + ":p/p.go")
+	if gaps, err := Gaps(ctx, f, field); err != nil || len(gaps) != 0 {
+		t.Fatalf("with the reference file unreadable: %v, %v; the check skips it and finds nothing", gaps, err)
+	}
+	back()
+	if gaps, err := Gaps(ctx, f, field); err != nil || !reflect.DeepEqual(gaps, want[2]) {
+		t.Errorf("once the file can be read: %v, %v; want %v (the incomplete answer was kept)", gaps, err, want[2])
+	}
+	calls := gitxtest.Calls(t)
+	if gaps, err := Gaps(ctx, f, field); err != nil || !reflect.DeepEqual(gaps, want[2]) || len(calls()) != 0 {
+		t.Errorf("the complete answer is kept: %v, %v", gaps, err)
+	}
+
+	f = NewFairness("-C", repo)
+	back = away(field.BaseCommit + ":p/p.go")
+	if fields, err := f.baseFields(ctx, field.BaseCommit, []string{"p"}); err != nil || len(fields) != 0 {
+		t.Fatalf("the base's fields with its file unreadable: %v, %v", fields, err)
+	}
+	back()
+	fields, err := f.baseFields(ctx, field.BaseCommit, []string{"p"})
+	if _, ok := fields["Config"]; err != nil || !ok {
+		t.Errorf("the base's fields once the file can be read: %v, %v; want Config's (the incomplete ones were kept)", fields, err)
 	}
 }
 
@@ -214,9 +274,10 @@ func TestFairnessInputKeysTellInputsApart(t *testing.T) {
 	}
 }
 
-// kept works a key's value out once, however many goroutines ask at the same time; a failure is not kept, and each
-// caller that meets one gets the error of its own attempt.
+// kept works a key's value out once, however many goroutines ask at the same time; a failure is not kept, nor is an
+// answer whose work says it must not be, and each caller that meets one gets the result of its own attempt.
 func TestKeptWorksEachKeyOutOnce(t *testing.T) {
+	ctx := context.Background()
 	var k kept[int]
 	var worked atomic.Int32
 	var wg sync.WaitGroup
@@ -225,9 +286,9 @@ func TestKeptWorksEachKeyOutOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			key := []string{"a", "b"}[i%2]
-			v, err := k.get(key, func() (int, error) {
+			v, err := k.get(ctx, key, func() (int, bool, error) {
 				worked.Add(1)
-				return len(key) + i%2, nil
+				return len(key) + i%2, true, nil
 			})
 			if err != nil || v != 1+i%2 {
 				t.Errorf("%s: %d, %v", key, v, err)
@@ -240,15 +301,69 @@ func TestKeptWorksEachKeyOutOnce(t *testing.T) {
 	}
 	fail := errors.New("no")
 	for attempt := range 2 {
-		if _, err := k.get("c", func() (int, error) { return 0, fail }); !errors.Is(err, fail) {
+		if _, err := k.get(ctx, "c", func() (int, bool, error) { return 0, true, fail }); !errors.Is(err, fail) {
 			t.Errorf("attempt %d: %v, want the failure", attempt, err)
 		}
 	}
-	if v, err := k.get("c", func() (int, error) { return 7, nil }); err != nil || v != 7 {
+	for attempt := range 2 { // an answer that is not to be kept is given, and worked out again the next time
+		if v, err := k.get(ctx, "c", func() (int, bool, error) { return 5 + attempt, false, nil }); err != nil || v != 5+attempt {
+			t.Errorf("attempt %d, not to be kept: %d, %v", attempt, v, err)
+		}
+	}
+	if v, err := k.get(ctx, "c", func() (int, bool, error) { return 7, true, nil }); err != nil || v != 7 {
 		t.Errorf("after the failures: %d, %v", v, err)
 	}
-	if v, err := k.get("c", func() (int, error) { return 0, fail }); err != nil || v != 7 {
+	if v, err := k.get(ctx, "c", func() (int, bool, error) { return 0, true, fail }); err != nil || v != 7 {
 		t.Errorf("kept value: %d, %v", v, err)
+	}
+}
+
+// Who waits for another goroutine's work waits only as long as its own context lives; when that work fails, is not
+// to be kept, or panics, those who waited work the value out themselves.
+func TestKeptWaitsNoLongerThanTheCallersContext(t *testing.T) {
+	var k kept[string]
+	started, release := make(chan struct{}), make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		_, err := k.get(context.Background(), "key", func() (string, bool, error) {
+			close(started)
+			<-release
+			return "not to be kept", false, nil
+		})
+		first <- err
+	}()
+	<-started
+	waiting, stop := context.WithCancel(context.Background())
+	waited := make(chan error, 1)
+	go func() {
+		_, err := k.get(waiting, "key", func() (string, bool, error) { return "", true, errors.New("the waiter worked while another did") })
+		waited <- err
+	}()
+	stop()
+	if err := <-waited; !errors.Is(err, context.Canceled) {
+		t.Errorf("a waiter whose context ended: %v, want its context's error", err)
+	}
+	// A second waiter stays, and works the value out itself once the first attempt ends with nothing kept.
+	second := make(chan string, 1)
+	go func() {
+		v, _ := k.get(context.Background(), "key", func() (string, bool, error) { return "the waiter's own", true, nil })
+		second <- v
+	}()
+	close(release)
+	if err := <-first; err != nil {
+		t.Errorf("the first attempt: %v", err)
+	}
+	if v := <-second; v != "the waiter's own" {
+		t.Errorf("the waiter got %q, want its own value: the first was not to be kept", v)
+	}
+
+	// A panic in the work frees the key: the next caller is not left waiting.
+	func() {
+		defer func() { _ = recover() }()
+		_, _ = k.get(context.Background(), "panics", func() (string, bool, error) { panic("boom") })
+	}()
+	if v, err := k.get(context.Background(), "panics", func() (string, bool, error) { return "after", true, nil }); err != nil || v != "after" {
+		t.Errorf("after a panic: %q, %v", v, err)
 	}
 }
 
