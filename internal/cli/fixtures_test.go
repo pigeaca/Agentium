@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -51,13 +52,37 @@ func removeStaleTemplates() {
 	stale, _ := filepath.Glob(filepath.Join(os.TempDir(), templatePrefix+"*"))
 	for _, dir := range stale {
 		pid, err := strconv.Atoi(strings.SplitN(strings.TrimPrefix(filepath.Base(dir), templatePrefix), "-", 2)[0])
-		if err != nil || pid == os.Getpid() {
+		if err != nil || pid == os.Getpid() || !processGone(pid) {
 			continue
 		}
-		if proc, _ := os.FindProcess(pid); proc != nil && proc.Signal(syscall.Signal(0)) == nil {
-			continue // its run is still going
-		}
 		os.RemoveAll(dir)
+	}
+}
+
+// processGone reports whether no process pid exists. Only "no such process" counts: a sandboxed test run (one allowed
+// to signal only its own sandbox) gets EPERM for a live run outside it, and must not delete that run's templates.
+func processGone(pid int) bool {
+	proc, err := os.FindProcess(pid)
+	if err == nil {
+		err = proc.Signal(syscall.Signal(0))
+	}
+	return errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH)
+}
+
+func TestProcessGone(t *testing.T) {
+	if processGone(os.Getpid()) {
+		t.Error("this test's own process counts as gone")
+	}
+	// pid 1 is root's: signalling it is refused (EPERM) unless the test runs as root, and it is alive either way.
+	if processGone(1) {
+		t.Error("a live process that may not be signalled counts as gone")
+	}
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if !processGone(cmd.Process.Pid) {
+		t.Error("an exited, reaped child does not count as gone")
 	}
 }
 
