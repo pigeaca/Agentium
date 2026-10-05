@@ -1,7 +1,7 @@
 # A fast report and task list
 
 - Date: 2026-10-05
-- Status: In Progress
+- Status: Done (2026-10-05): #173. Both reviews clean after one round of fixes. The cache the handoff asks about was approved the same day and is its own plan (`2026-10-05-task-gaps-cache.md`).
 - Scope/approval: the user, 2026-10-05: "two everyday read-only commands are slow on real data. Find out why with a profile, then make them fast without changing any output." A cache must be keyed so it can never serve a stale answer and live in the data folder; a design choice (such as storing recovered context use back on the run) needs the user's answer first.
 
 ## Outcome and boundaries
@@ -50,36 +50,40 @@
 - [x] `task list` prepares gaps; call-count test
 - [x] Before and after timings and the byte comparison on the copy
 - [x] Docs: the code map and the architecture's conventions
-- [ ] The full `check changed` run, CI, the two reviews, the listing for criterion 5
+- [x] Checks, CI, the two reviews and their fixes, the listing for criterion 5
 
 ## Verification and handoff
-State on 2026-10-05, when the session ran out of usage: implemented and committed; not yet reviewed.
+- **Same bytes (criterion 1): met.** 74 of 74 outputs identical between a binary of `origin/main` and this branch on the copy (794,011 bytes of stdout, with stderr and exit codes): all 8 experiments' reports as `--json`, Markdown, `--markdown`, `--details` and on a pseudo-terminal (120 and 80 columns, `--details`, `NO_COLOR`), and `task list` as `--json`, the table, `--details` and the designed list. Compared again after the review fixes.
+- **Goldens (criterion 2): met.** No file under `testdata` is in the diff; CI passed.
+- **Git processes (criterion 3): met.** On the copy: `experiment report ab16 --json` 1,297 to 34 (10 listings, 23 blobs, 1 `rev-parse`); `experiment report aa --json` 157 to 20; `task list --json` 620 to 461 and `task list` 534 to 461, none repeated, 8 tasks at a time. Tests count the same through a `git` wrapper on `PATH` (`internal/gitx/gitxtest`).
+- **Timings (criterion 4): met.** Medians of 5 rounds, the two binaries alternating on one copy, 12 cores.
 
-- **Same bytes (criterion 1): met.** 74 of 74 outputs identical between a binary of `origin/main` and this branch on the copy (794,011 bytes of stdout, with stderr and exit codes): all 8 experiments' reports as `--json`, Markdown, `--markdown`, `--details` and on a pseudo-terminal (120 and 80 columns, `--details`, `NO_COLOR`), and `task list` as `--json`, the table, `--details` and the designed list.
-- **Git processes (criterion 3): met on the copy.** `experiment report ab16 --json`: 1,297 to 34 (10 listings, 23 blobs, 1 `rev-parse`). `task list --json`: 620 to 461, none repeated, 8 tasks at a time.
-- **Timings (criterion 4): met.** Medians of 5 rounds, the two binaries alternating on one copy, 12 cores, load average 28 to 70 (other test runs), so upper bounds:
+  | Command | Quiet (load 5 to 7): before | after | faster | Busy (load 28 to 70): before | after | faster |
+  |---|---|---|---|---|---|---|
+  | `experiment report ab16 --json` | 7.98 s | 0.32 s | 24.9x | 32.08 s | 1.41 s | 22.8x |
+  | `experiment report aa --json` | 0.98 s | 0.18 s | 5.4x | 3.25 s | 0.54 s | 6.1x |
+  | `experiment report ab16` | 7.59 s | 0.31 s | 24.2x | 34.55 s | 1.78 s | 19.4x |
+  | `task list --json` | 4.18 s | 0.78 s | 5.3x | 9.16 s | 1.75 s | 5.2x |
+  | `task list` | 3.61 s | 0.74 s | 4.9x | 7.27 s | 1.58 s | 4.6x |
+  | `task list --details` | 4.04 s | 0.84 s | 4.8x | 7.20 s | 1.61 s | 4.5x |
+  | `experiment show ab16` | 0.01 s | 0.01 s | same | 0.03 s | 0.04 s | same |
 
-  | Command | Before | After | Faster |
-  |---|---|---|---|
-  | `experiment report ab16 --json` | 32.08 s | 1.41 s | 22.8x |
-  | `experiment report aa --json` | 3.25 s | 0.54 s | 6.1x |
-  | `experiment report ab16` | 34.55 s | 1.78 s | 19.4x |
-  | `task list --json` | 9.16 s | 1.75 s | 5.2x |
-  | `task list` | 7.27 s | 1.58 s | 4.6x |
-  | `task list --details` | 7.20 s | 1.61 s | 4.5x |
-  | `experiment show ab16` | 0.03 s | 0.04 s | unchanged |
-
-  In a quieter minute (load about 9) the fixed report took 0.35 s (`ab16`) and 0.20 s (`aa`).
-- **Tests (criterion 6):** `go test -race` passes for `internal/source`, the recovery tests of `internal/run`, the gap tests of `internal/task` and the task list tests of `internal/cli`. The new recovery and task list tests fail against the old code (checked with a build overlay of `origin/main`'s files).
-- **Not done yet:** the full `check changed` run (started, not read), CI, both reviews, and the before and after listing of the data folder for criterion 5 (the change writes no file; the listing is the evidence still owed).
-- **A cancelled command:** a gap check that a cancel overtakes is now an error and keeps nothing, like a cancelled search; before, it could answer from the reads that were left.
+- **Nothing stored (criterion 5): met.** A listing of a copy before and after the seven read-only commands: the old and the new binary both add only the two empty folders `artifacts` and `workspaces` (every command makes them), and the two listings after are identical in names and sizes. The repository's checkout is unchanged.
+- **Tests (criterion 6): met.** `go test -race` passes for `internal/source` and the gap tests of `internal/task` (3 times each), the recovery tests of `internal/run` and the task list tests of `internal/cli`. The new recovery and task list tests fail against the old code (a build overlay of `origin/main`'s files).
+- **Checks:** `harness.py check changed` ended `[harness] exit=1`: 14 of 15 packages passed and `internal/cli` failed on `TestCleanRemovesAStoppedValidationsGradeFolder`, which found a process still using a validation's grade folder while the machine's load was 28 to 70. Run alone 3 times with the race detector it passed; the change touches no `clean` code, and the reviewer agreed it is unrelated. CI passed on both heads that had code changes.
+- **Reviews.** The Claude reviewer asked for changes (2 findings) and Codex raised 3; all 5 were fixed in one round (`49a4e9d`), then the reviewer approved and Codex reported them fixed with no regression:
+  - a blob was kept under the ID its listing named while the read named the commit, so a branch that moved in between put a later commit's file under the old blob's ID (both reviewers). Only a commit named by its full ID, of the repository's ID length, now shares what is kept;
+  - gaps worked out while a read failed were kept (a check skips a file it cannot read). They are given as before and no longer kept; the same for the base's fields;
+  - a caller whose context had ended could get kept gaps with no error, from another context's sources or after waiting for another goroutine's check. It gets its context's error, and waits no longer than its context lives;
+  - a comment promised more than the code did about cancelled callers; the code now does what it says.
+- **A cancelled command:** a gap check that a cancel overtakes is an error and keeps nothing, like a cancelled search; before, it could answer from the reads that were left.
 - **Limits:** `task list` still starts about 460 git processes on this data, each a different search or read. Considered and left out: searching in process instead of `git grep` (git's case folding depends on its build and the locale, so the answers could differ); one `git grep` for several texts (it cannot say which text matched).
-- **For the user to decide:** a cache of each task's gaps in the data folder would make `task list` start one git process (about 0.05 s). Its key would be the task's base and solution IDs, instruction and file lists, plus what identifies the code that checked: Agentium's build, git's version and the locale. It is stored state with its own rules, so it waits for an answer.
+- **Decided by the user (2026-10-05):** a cache of each task's gaps in the data folder, keyed by the task and by the build of Agentium, git and the locale. It is the next plan.
 - **Follow-ups, not started:** `experiment plan`'s readiness, `pool update --json` and `task validate --all --json` ask for gaps task by task and could call `PrepareGaps`; `LoadNorthStar` analyses every finished experiment (0.04 s today, about 30 ms more for each).
 
 ## Metrics
 - Agent: Claude Code / claude-fable-5-1 / max
-- Elapsed: <minutes>m
-- Check-fix loops: <n>
-- User corrections: <n>
-- Review: <verdict>
+- Elapsed: 160m
+- Check-fix loops: 1
+- User corrections: 0
+- Review: changes requested, 5 fixed
