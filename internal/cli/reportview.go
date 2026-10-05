@@ -729,7 +729,7 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 	summed := false
 	for _, r := range scale {
 		for _, c := range []report.TaskCell{r.ca, r.cb} {
-			summed = summed || len([]rune(c.Marks)) > markCap
+			summed = summed || (c.Counted > 0 && len([]rune(c.Marks)) > markCap)
 			costW = max(costW, term.Width(taskCost(m, c)))
 			if c.CostUSD != nil {
 				maxCost = max(maxCost, *c.CostUSD)
@@ -737,6 +737,9 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		}
 	}
 	marksOf := func(c report.TaskCell) string { // what a version's marks column shows
+		if c.Counted == 0 && len([]rune(c.Marks)) > markCap {
+			return m.none // many left-out runs and none counted: one marker, not a mark per run
+		}
 		if summed && c.Counted > 0 {
 			return fmt.Sprintf("%d/%d", c.Successes, c.Counted)
 		}
@@ -777,6 +780,8 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		marks := taskMarks(st, m, c.Marks)
 		if summed && c.Counted > 0 {
 			marks = marksOf(c)
+		} else if marksOf(c) == m.none && c.Marks != "" {
+			marks = st.Paint(term.Muted, m.none)
 		}
 		out := term.Pad(marks, markW)
 		if barW > 0 {

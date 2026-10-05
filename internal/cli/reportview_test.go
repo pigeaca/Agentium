@@ -342,7 +342,7 @@ func TestReportViewManyMarksKeepBothCosts(t *testing.T) {
 		return report.TaskCell{Marks: marks, Successes: 8, Counted: 15, CostUSD: c}
 	}
 	rep.Tasks = []report.TaskRow{{Task: "feat-support-for-buffer-iteration-with-a-very-long-name", Arms: map[string]report.TaskCell{"A": cell(&a), "B": cell(&b)}},
-		{Task: "left-out-in-b", Arms: map[string]report.TaskCell{"A": cell(&a), "B": {Marks: "×"}}}}
+		{Task: "left-out-in-b", Arms: map[string]report.TaskCell{"A": cell(&a), "B": {Marks: strings.Repeat("×", 15)}}}}
 	for _, width := range []int{term.MinWidth, 80} {
 		text := strings.Join(reportView(rep, plainUnicode, width), "\n")
 		var row string
@@ -350,6 +350,14 @@ func TestReportViewManyMarksKeepBothCosts(t *testing.T) {
 			if strings.Contains(line, "$0.52") {
 				row = line
 			}
+		}
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "$0.…") || term.Width(line) > width {
+				t.Errorf("at %d columns a cost is cut or a line is too wide: %q", width, line)
+			}
+		}
+		if strings.Contains(text, "–––") {
+			t.Errorf("at %d columns left-out runs are drawn one by one:\n%s", width, text)
 		}
 		if strings.Contains(text, "0/0") || !strings.Contains(text, "–") {
 			t.Errorf("at %d columns a version with no counted run must keep its mark, not 0/0:\n%s", width, text)
