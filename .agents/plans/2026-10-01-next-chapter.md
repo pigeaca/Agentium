@@ -1,7 +1,7 @@
 # The next chapter: decisive verdicts, fast and affordable
 
 - Date: 2026-10-01
-- Status: In Progress (2026-10-02): waves 1–3 done, each exit gate passed (see [Wave 3 results](#wave-3-results) and [Wave 2 results](#wave-2-results)). Wave 4 is in progress.
+- Status: In Progress (2026-10-02): waves 1–3 done, each exit gate passed (see [Wave 3 results](#wave-3-results) and [Wave 2 results](#wave-2-results)). Wave 4 is in progress. **2026-10-05:** the user approved [a quieter console and tasks that can answer](2026-10-05-quiet-console-useful-tasks.md), which runs next. Its decision 6 parks container mode, the pull-request cost screen and the judge's next steps; Codex goes on.
   - **Approvals:** the user approved this plan and, with it, these paid checks: the temp-folder probes (done, $0.14) and the judge's small real check. The wave-2 external verdict (about $60) and the Java and Rust pilot get their own approval, with an estimate.
   - **Revised the same day** after an independent review, which the user accepted in full ("apply all"). The review found:
     - a north-star unit that counted "inconclusive";

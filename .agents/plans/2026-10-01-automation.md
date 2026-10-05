@@ -1,7 +1,7 @@
 # Automation: Agentium without anyone running it
 
 - Date: 2026-10-01
-- Status: Planned (2026-10-01).
+- Status: Planned (2026-10-01). **The pull-request cost screen (loop 2) is parked by the user (2026-10-05;** [plan](2026-10-05-quiet-console-useful-tasks.md), decision 6**).**
   - **Design:** on the user's Mac, driven by hooks with no daemon (the user's decisions).
   - **Revised the same day** after an independent review: the $5 check could not start, time and tokens get no verdict, the smoke check was dishonest, and teammates' settings changes are a security gap.
   - **Phases** follow the [next chapter](2026-10-01-next-chapter.md): the free context-lint hook in wave 2, headless mode in wave 3, the rest in wave 4.

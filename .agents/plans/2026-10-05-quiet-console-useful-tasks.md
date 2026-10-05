@@ -1,7 +1,7 @@
 # A quieter console and tasks that can answer
 
 - Date: 2026-10-05
-- Status: Planned (2026-10-05). It waits for the user's approval of this plan and of the [open decisions](#open-decisions-for-the-user). Nothing is built yet. The one paid step (T1's real check) needs its own approval, with a preview.
+- Status: Approved (2026-10-05). The user approved the plan and answered its seven [decisions](#decisions-the-user-2026-10-05) "as recommended". S1 and S4 start. The one paid step (T1's real check) still needs its own approval, with a preview.
 - Scope: the user, 2026-10-05, after a review of the project and console mock-ups shown in the session: "I'd like first 3 variants Report Preview Tasks + last `$ agentium experiment run opus-vs-sonnet`. Plan UI changes, README update and suggested tool improvements." Agentium is its owner's personal tool ([decision](../decisions/2026-10-05-personal-tool.md)), so each step is judged by whether it helps the owner decide something about their own setup.
 
 ## Why
@@ -61,7 +61,7 @@ Fixed before implementation. Steps S1–S5 and T1–T5 are in [Work](#work).
    - the last 3 results.
 
    It redraws when something changes, and at most once a second for the clock. It covers every state the dashboard covers: getting ready, calibration, a pause at the plan's limit, a budget stop, each check of the answer, a blocked or left-out grade, the host grader's warning, judge-graded runs, retries and the end. *Evidence:* goldens of the dashboard's scenes (start, mid, moments, host, judged, final) in the quiet view, in color and ASCII; a recording with the test stand-in.
-10. **Views (S4).** `--view dashboard` (and `AGENTIUM_VIEW=dashboard`) gives the quiet view. `--view flow` gives today's step boxes ([decision 1](#open-decisions-for-the-user)). `--view log` is unchanged. Off a terminal, with `--json` or with `NO_COLOR`, the output is today's, byte for byte. *Evidence:* the plain and log goldens do not change; a CLI test per view name.
+10. **Views (S4).** `--view dashboard` (and `AGENTIUM_VIEW=dashboard`) gives the quiet view. `--view flow` gives today's step boxes ([decision 1](#decisions-the-user-2026-10-05)). `--view log` is unchanged. Off a terminal, with `--json` or with `NO_COLOR`, the output is today's, byte for byte. *Evidence:* the plain and log goldens do not change; a CLI test per view name.
 11. **README, gallery and guide (S5).**
     - The README leads with the questions the tool answers well, shows the new report first, lists what the tool has answered so far (with links to the stored reports) and says it is a personal tool, shared as is.
     - The gallery and the guide show the four screens.
@@ -99,13 +99,13 @@ Each step is one PR with green CI and the usual two reviews; S5 and T5 are docs-
 - [ ] **S1. Report.** `internal/cli` (`reportview.go`), `internal/report` (the plan's share), goldens. Contract: none. Risk: low; an implementer.
 - [ ] **S2. Preview.** `internal/experiment` (the size estimate, a pure function beside `Detect`; a hotspot, so nothing else touches the package meanwhile), `internal/cli` (`planview.go`, `json_experiment.go`). Contract: new JSON keys. Risk: medium; an implementer.
 - [ ] **S3. Task list.** `internal/cli` (`task.go`, `json_task.go`, `pool.go`). Contract: a new flag and JSON keys. Risk: low; an implementer.
-- [ ] **S4. Quiet run view.** `internal/cli` (`rundash.go`, `runview.go`, `runscreen.go`, the recorder). It starts from the dashboard's one-line layout (`armText`, today's fallback for small terminals) and names the step by the run's agent, so it lands after the Codex adapter (#156). Contract: a new `--view` value; the guide's list of renamed flags says what `dashboard` now shows. Risk: medium (the live region); an implementer.
+- [ ] **S4. Quiet run view.** `internal/cli` (`rundash.go`, `runview.go`, `runscreen.go`, the recorder). It starts from the dashboard's one-line layout (`armText`, today's fallback for small terminals) and names the step by the run's agent, as `main` has it. The Codex adapter's PR (#156) touches none of these files (checked 2026-10-05), so S4 does not wait for it. Contract: a new `--view` value; the guide's list of renamed flags says what `dashboard` now shows. Risk: medium (the live region); an implementer.
 - [ ] **S5. README, gallery, guide.** New pictures of the four screens; the README as criterion 11 says. Later steps add their own commands to the README and the guide.
 - [ ] **T1. Drafts.** `internal/task` (the draft and its two checks), `internal/store` (a forward migration), `internal/claude` (the call the judge already makes), `internal/cli`. Then the real check (criterion 13). Risk: high (money, consent, persistence); implementer-critical.
 - [ ] **T2. Proof that the hidden tests ran.** `internal/run` (grading), `internal/task` (it already lists a task's own Go tests, in `gofilter.go`), `internal/experiment` (the lock). Closes #160. Not at the same time as the Codex plan's step 5: both change the lock. Risk: high; implementer-critical.
 - [ ] **T3. Rule checks.** `internal/run` (reading stored transcripts again, through `claude.Parse`), `internal/report`, `internal/cli`, `internal/store` (settings). Contract: new commands, report rows and keys. Risk: medium; an implementer.
 - [ ] **T4. Cleanup.** `internal/run` (`run.go`, `clean.go`), `internal/claude` (`SessionFolder`). Risk: high (it deletes in the owner's Claude Code folder); implementer-critical.
-- [ ] **T5. A skill for agents.** `.agents/skills/` and its adapter. Where else it is installed is [decision 5](#open-decisions-for-the-user).
+- [ ] **T5. A skill for agents.** `.agents/skills/` and its adapter. The owner copies it into their own Claude Code skills folder ([decision 5](#decisions-the-user-2026-10-05)).
 
 ## Boundaries
 - **Console only.** No web UI, no new module, no background process ([console decision](../decisions/2026-09-30-console-instead-of-web-ui.md)).
@@ -130,18 +130,18 @@ Each step is one PR with green CI and the usual two reviews; S5 and T5 are docs-
 - Paid: only criterion 13, after its own approval.
 - This plan's PR: `check docs`.
 
-## Open decisions (for the user)
-Each has a recommendation; an answer of "as recommended" approves them all.
-1. **The step boxes.** Keep them as `--view flow`, frozen, and delete them the first time they need a fix (recommended); or delete them in S4.
-2. **Today's `task list` columns** (source, graded by, tests, files). Move them to `task list --details` (recommended), or keep every column.
-3. **Drafts and `--accept-mined`.** A draft always needs the owner's review; `--accept-mined` never accepts one (recommended).
-4. **The drafter's model.** `claude-sonnet-5-5` at its default effort, capped at $0.50 a call (recommended).
-5. **The agents' skill.** Keep it in this repository, and the owner copies it into their own Claude Code skills folder (recommended); or the step installs it there after a yes.
-6. **Plans in progress, now that the tool is personal.** Recommended:
-   - park container mode: leave #161 unmerged;
-   - park the pull-request cost screen and the judge's next steps;
-   - keep Codex;
-   - keep TypeScript and monorepo modules only if the owner will use Agentium on such a repository.
+## Decisions (the user, 2026-10-05)
+The user answered all seven "as recommended":
+1. **The step boxes** stay as `--view flow`, frozen. They are deleted the first time they need a fix.
+2. **Today's `task list` columns** (source, graded by, tests, files) move to `task list --details`.
+3. **Drafts and `--accept-mined`.** A draft always needs the owner's review; `--accept-mined` never accepts one.
+4. **The drafter's model** is `claude-sonnet-5-5` at its default effort, capped at $0.50 a call.
+5. **The agents' skill** is kept in this repository, and the owner copies it into their own Claude Code skills folder.
+6. **Plans in progress, now that the tool is personal:**
+   - container mode is parked: #161 stays unmerged ([plan](2026-10-04-containers.md));
+   - the pull-request cost screen ([plan](2026-10-02-watch-and-screen.md)) and the judge's next steps ([plan](2026-10-01-ticket-tasks.md)) are parked;
+   - Codex goes on ([plan](2026-10-04-codex.md));
+   - TypeScript and monorepo modules: no new step starts until the owner names a repository to use them on.
 7. **The README's words** for "a personal tool, shared as is" and its new first questions: the owner approves them in S5's PR.
 
 ## Risks
