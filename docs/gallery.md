@@ -22,7 +22,7 @@ This is real output, printed by today's `agentium` (built from `main` at b6df097
 
 <img src="images/console-plan.svg" alt="agentium experiment plan: the question in plain words, a box of checks, bars for the likely spend, the most and the budget, and a bar for each check of the answer">
 
-**4. Run it:** the live screen. Each version's current task moves through fresh copy, Claude works and hidden tests (both in a sandbox) to the result, and the answer updates as results come in. Recorded from a real `experiment run` with a stand-in agent (Agentium's test double for Claude Code), at its real pace:
+**4. Run it:** the live screen (the picture shows the step-box view, `--view flow`; the default dashboard is quieter: progress, spend, a line for each run in flight, the answer so far and the last 3 results). Each version's current task moves through fresh copy, Claude works and hidden tests (both in a sandbox) to the result, and the answer updates as results come in. Recorded from a real `experiment run` with a stand-in agent (Agentium's test double for Claude Code), at its real pace:
 
 <img src="images/console-run-dashboard.svg" alt="agentium experiment run: for each version, the current task moving through the steps with a dot travelling between them; the answer so far in a green box; the last four results below">
 

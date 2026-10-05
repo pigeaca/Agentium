@@ -83,10 +83,11 @@ type boxState struct {
 	lineMark string
 }
 
-// dashboardFrame draws the dashboard from a copy of the state: the header, each arm's current run as a row of step
+// flowFrame draws the flow view (--view flow; frozen, the earlier default dashboard) from a copy of the state: the header,
+// each arm's current run as a row of step
 // boxes joined by dotted lines, the answer so far and the latest log lines. It fits height by dropping the legend,
 // then drawing each box on one line, then each arm on one line.
-func dashboardFrame(v stateView, sh term.Shapes, now time.Time, width, height, tick int) []string {
+func flowFrame(v stateView, sh term.Shapes, now time.Time, width, height, tick int) []string {
 	var lines []string
 	for level := range 4 {
 		lay := layoutFor(width)

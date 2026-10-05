@@ -35,4 +35,4 @@ For high-risk changes (sandbox and denied paths, money and consent, persistence 
 - **Credentials and network:** neither ever reaches the agent; its environment, sandbox and denied paths keep them out.
 - **Hidden tests:** the agent can neither read the hidden tests or reference solution nor write to the copy that grades it.
 
-No findings is a valid result. For engine/concurrency, persistence, security or public-contract changes, recommend a second review from the other agent client (Codex or Claude).
+No findings is a valid result. Every non-trivial change gets this review from both Codex and Claude, independently; report your own findings only.

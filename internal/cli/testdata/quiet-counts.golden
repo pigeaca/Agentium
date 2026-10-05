@@ -1,0 +1,139 @@
+=== 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11 · next check after 12 tasks
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
+=== 99 columns, 40 rows
+                       BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           baseline passed 10 of 11 · trimmed passed 10 of 11 · next check after 12 tasks
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
+=== 119 columns, 40 rows
+                        BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           baseline passed 10 of 11 · trimmed passed 10 of 11 · next check after 12 tasks
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
+=== 64 columns, 40 rows
+      BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────
+  runs     ███████████████████████▍░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works         0s
+           trimmed   group-by      fresh copy           2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
+=== 79 columns, 14 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11 · next check after 12 tasks
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+=== 79 columns, 11 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11 · next check after 12 tasks
+=== 79 columns, 9 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     █████████████████████████▌░░░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11 · next check after 12 tasks
+=== 60 columns, 40 rows
+    BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────
+  runs     ████████████████████▋░░░░░░░░░   22 of 32 · 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works       0s
+           trimmed   group-by      fresh copy         2s
+
+  so far   trimmed may be cheaper (16% less) · not sure yet
+           passed: baseline 10/11 · trimmed 10/11
+
+  last     ✓ trimmed   merge-with     $0.09  2m55s
+           ✓ baseline  merge-with     $0.09  2m55s
+           ✓ trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
+=== ASCII, 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   -   does trimmed save money?
+ ------------------------------------------------------------------------------
+  runs     #########################............   22 of 32 - 1h04m
+  spent    $1.98 of $5
+
+  now      baseline  group-by      Claude works           0s
+           trimmed   group-by      fresh copy             2s
+
+  so far   trimmed may be cheaper (16% less) - not sure yet
+           passed: baseline 10/11 - trimmed 10/11 - next check after 12 tasks
+
+  last     + trimmed   merge-with     $0.09  2m55s
+           + baseline  merge-with     $0.09  2m55s
+           + trimmed   omit           $0.09  2m55s
+
+           Ctrl-C stops - run it again to go on
+=== end

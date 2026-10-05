@@ -12,7 +12,7 @@ Does a shorter `CLAUDE.md` save money? Is a cheaper model good enough for your p
 
 <img src="docs/images/console-run-dashboard-still.svg" alt="agentium experiment run: the question at the top; for each version, the current task moving through fresh copy, Claude works and hidden tests (both in a sandbox) to the result, a dot travelling between the steps; the answer so far in a green box; the last four results below">
 
-*A running experiment: each task gets a fresh copy, Claude works on it in a sandbox, hidden tests check the result in a sandbox, and the answer updates as results come in. [See it running](docs/images/console-run-dashboard.svg).*
+*A running experiment (shown in the step-box view, `--view flow`; the default dashboard is quieter, with progress, spend, what runs now, the answer so far and the last results): each task gets a fresh copy, Claude works on it in a sandbox, hidden tests check the result in a sandbox, and the answer updates as results come in. [See it running](docs/images/console-run-dashboard.svg).*
 
 ## How it works
 
@@ -60,7 +60,7 @@ Releases and what each version means are on the [releases page](https://github.c
 | `agentium start` | From a repository to a ready experiment, with its cost shown first |
 | `agentium experiment new NAME --b trimmed` | Compare your context with a saved version called `trimmed` |
 | `agentium experiment new NAME --b claude-opus-5-5` | Compare two models on the same tasks |
-| `agentium experiment run NAME` | Run it, with the live screen above (`--view log` for a plain log) |
+| `agentium experiment run NAME` | Run it, with the live screen above (`--view flow` for step boxes, `--view log` for a plain log) |
 | `agentium experiment report NAME` | The answer and the details per task |
 | `agentium context snapshot NAME` | Save the current context as a version to compare |
 | `agentium task add NAME --ticket-file FILE --base REF --solution REF` | A task from a ticket; when its fix has no tests, the judge grades it (unvalidated, reported apart) |

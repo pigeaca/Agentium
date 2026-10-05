@@ -6,12 +6,16 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │              lean is cheaper: 50% less               │
-  │  whether lean passes as many tasks: too few to tell  │
   │              stopped early: sure enough              │
   │                                                      │
   │  cheaper ◀ ───━━●━━━─────│────────────── ▶ costlier  │
   │                        same                          │
   │                likely 34% to 61% less                │
+  │                                                      │
+  │  whether lean passes as many tasks: too few to tell  │
+  │  fewer pass ◀ ────────────●──────────── ▶ more pass  │
+  │     no difference seen  same                         │
+  │       20 tasks of 3 runs each could settle it        │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -29,7 +33,16 @@
   │ typical time  40s a task                               │
   └────────────────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline   lean
+  both passed · 8
+  task-01     ✓ $0.44    ✓ $0.18
+  task-02     ✓ $0.46    ✓ $0.27
+  task-05     ✓ $0.38    ✓ $0.21
+  task-06     ✓ $0.53    ✓ $0.24
+  task-07     ✓ $0.54    ✓ $0.24
+  task-09     ✓ $0.47    ✓ $0.21
+  + 2 more passed in both
+  lean was cheaper on 8 of 8 tasks
 
   it stopped early: the true saving is likely smaller than
   50%
@@ -43,11 +56,15 @@
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
           │                lean is cheaper: 50% less                 │
-          │    whether lean passes as many tasks: too few to tell    │
           │                stopped early: sure enough                │
           │                                                          │
           │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
           │  likely 34% to 61% less  same                            │
+          │                                                          │
+          │    whether lean passes as many tasks: too few to tell    │
+          │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+          │       no difference seen  same                           │
+          │         20 tasks of 3 runs each could settle it          │
           └──────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
@@ -58,7 +75,16 @@
   │ typical time  40s a task          │    │ typical time  40s a task          │
   └───────────────────────────────────┘    └───────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████▊   $0.44   ✓ ████         $0.18
+  task-02     ✓ ██████████▎  $0.46   ✓ ██████▏      $0.27
+  task-05     ✓ ████████▌    $0.38   ✓ ████▊        $0.21
+  task-06     ✓ ███████████▉ $0.53   ✓ █████▍       $0.24
+  task-07     ✓ ████████████ $0.54   ✓ █████▍       $0.24
+  task-09     ✓ ██████████▌  $0.47   ✓ ████▊        $0.21
+  + 2 more passed in both
+  lean was cheaper on 8 of 8 tasks
 
   it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details
@@ -70,11 +96,15 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 50% less                 │
-                    │    whether lean passes as many tasks: too few to tell    │
                     │                stopped early: sure enough                │
                     │                                                          │
                     │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
                     │  likely 34% to 61% less  same                            │
+                    │                                                          │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+                    │       no difference seen  same                           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -85,7 +115,16 @@
   │ typical time  40s a task                    │    │ typical time  40s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████▊   $0.44   ✓ ████         $0.18
+  task-02     ✓ ██████████▎  $0.46   ✓ ██████▏      $0.27
+  task-05     ✓ ████████▌    $0.38   ✓ ████▊        $0.21
+  task-06     ✓ ███████████▉ $0.53   ✓ █████▍       $0.24
+  task-07     ✓ ████████████ $0.54   ✓ █████▍       $0.24
+  task-09     ✓ ██████████▌  $0.47   ✓ ████▊        $0.21
+  + 2 more passed in both
+  lean was cheaper on 8 of 8 tasks
 
   it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details
@@ -97,11 +136,15 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │                lean is cheaper: 50% less                 │
-                    │    whether lean passes as many tasks: too few to tell    │
                     │                stopped early: sure enough                │
                     │                                                          │
                     │  cheaper ◀ ───━━━●━━━──────│──────────────── ▶ costlier  │
                     │  likely 34% to 61% less  same                            │
+                    │                                                          │
+                    │    whether lean passes as many tasks: too few to tell    │
+                    │  fewer pass ◀ ──────────────●────────────── ▶ more pass  │
+                    │       no difference seen  same                           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -112,7 +155,16 @@
   │ typical time  40s a task                    │    │ typical time  40s a task                    │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  every task ended the same in both: 8 passed
+  every task  baseline               lean
+  both passed · 8
+  task-01     ✓ █████████▊   $0.44   ✓ ████         $0.18
+  task-02     ✓ ██████████▎  $0.46   ✓ ██████▏      $0.27
+  task-05     ✓ ████████▌    $0.38   ✓ ████▊        $0.21
+  task-06     ✓ ███████████▉ $0.53   ✓ █████▍       $0.24
+  task-07     ✓ ████████████ $0.54   ✓ █████▍       $0.24
+  task-09     ✓ ██████████▌  $0.47   ✓ ████▊        $0.21
+  + 2 more passed in both
+  lean was cheaper on 8 of 8 tasks
 
   it stopped early: the true saving is likely smaller than 50%
   the numbers behind this: agentium experiment report lean-seq --details

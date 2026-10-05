@@ -1,0 +1,223 @@
+=== copying
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 2s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      copying                2s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== fetching dependencies
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 1m14s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      fetching dependencies  1m12s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== running the setup
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 1m18s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      running setup          4s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== starting the sandbox
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 3m20s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      hidden tests           2s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== running the tests
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 3m58s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      hidden tests           40s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== cleaning up
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 3m59s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      cleaning up            2s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== a folder quarantined
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 3m59s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      cleaning up            2s
+           \e[38;5;220mcleanup quarantined a folder it could not remove\e[39m
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== passed
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     █▏\e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   1 of 32 · 3m59s
+  \e[38;5;243mspent\e[39m    $0.09\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;220mcleanup quarantined a folder it could not remove\e[39m
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;75mbaseline\e[39m\e[38;5;243m passed 1 of 1\e[39m\e[38;5;243m · \e[39m\e[38;5;215mtrimmed\e[39m\e[38;5;243m –\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+  \e[38;5;243mlast\e[39m     \e[38;5;114m✓\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m       $0.09  \e[38;5;243m3m59s\e[39m
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== running the tests on the host
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 9s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+           \e[38;5;220m! hidden tests run on your machine, outside the sandbox\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      hidden tests           9s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== the sandbox unavailable, running
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 0s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      \e[38;5;220msandbox unavailable\e[39m    0s
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== the sandbox unavailable, a retry
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 0s
+  \e[38;5;243mspent\e[39m    $0.08\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;220mretrying map-keys for baseline in 30s: it failed, not by Claude's\e[39m
+           \e[38;5;220mdoing\e[39m
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+  \e[38;5;243mlast\e[39m     \e[38;5;245m–\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-k…\e[39m   $0.08     \e[38;5;243m0s\e[39m  \e[38;5;220msandbox unavailable · not counted\e[39m
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== the sandbox unavailable, no retry
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 0s
+  \e[38;5;243mspent\e[39m    $0.08\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;243mstarting the next run\e[39m
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+  \e[38;5;243mlast\e[39m     \e[38;5;245m–\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-k…\e[39m   $0.08     \e[38;5;243m0s\e[39m  \e[38;5;220msandbox unavailable · not counted\e[39m
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== flagged denials
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     █▏\e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   1 of 32 · 0s
+  \e[38;5;243mspent\e[39m    $0.10\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;243mstarting the next run\e[39m
+
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+  \e[38;5;243mlast\e[39m     \e[38;5;245m–\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-k…\e[39m   $0.10     \e[38;5;243m0s\e[39m  \e[38;5;220mblocked: a system service lookup…\e[39m
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== end

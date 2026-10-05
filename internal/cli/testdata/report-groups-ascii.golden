@@ -1,0 +1,206 @@
+=== 60 columns
+       BASELINE  vs  LEAN   -   does lean save money?
+ -----------------------------------------------------------
+         10 tasks - 20 runs - $6.61 spent - 20 min
+
+  +------------------------------------------------------+
+  |                      the answer                      |
+  |              lean is cheaper: 22% less               |
+  |           after all 10 tasks - sure enough           |
+  |                                                      |
+  |  cheaper < ---====o=====-|-------------- > costlier  |
+  |                        same                          |
+  |                likely 6% to 35% less                 |
+  |                                                      |
+  |  whether lean passes as many tasks: too few to tell  |
+  |  fewer pass < ------------|====o=====-- > more pass  |
+  |                         same                         |
+  |        likely 1 point fewer to 100 more pass         |
+  |       20 tasks of 3 runs each could settle it        |
+  +------------------------------------------------------+
+
+  +--------------------------------------------------------+
+  |                        baseline                        |
+  | ####################################.................. |
+  | 10 of 15 passed                                        |
+  | typical cost  $0.35 a task                             |
+  | typical time  44s a task                               |
+  +--------------------------------------------------------+
+  +--------------------------------------------------------+
+  |                          lean                          |
+  | ###########################################........... |
+  | 12 of 15 passed                                        |
+  | typical cost  $0.28 a task                             |
+  | typical time  44s a task                               |
+  +--------------------------------------------------------+
+
+  every task          baseline   lean
+  they differ - 2
+  fix-it-mode-ali...  x  $0.16   +  $0.07
+  feat-add-nthor-...  x  $0.23   +  $0.10
+  both failed - 2 - check: agentium task show NAME
+  feat-support-fo...  x  $0.46   x  $0.11
+  feature-interse...  x  $0.31   x  $0.11
+  ended the same, mixed - 1
+  flaky-both-ways     +x $0.52   x+ $0.40
+  both passed - 9
+  passes-in-both-1    +  $0.22   +  $0.11
+  passes-in-both-2    +  $0.24   +  $0.12
+  passes-in-both-3    +  $0.26   +  $0.13
+  passes-in-both-4    +  $0.28   +  $0.14
+  passes-in-both-5    +  $0.30   +  $0.15
+  passes-in-both-6    +  $0.32   +  $0.16
+  + 3 more passed in both
+  lean was cheaper on 14 of 14 tasks
+  1 task not counted: every run was left out
+
+  the numbers behind this:
+  agentium experiment report lean-ab-1run --details
+=== 80 columns
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+                   10 tasks - 20 runs - $6.61 spent - 20 min
+
+          +----------------------------------------------------------+
+          |                        the answer                        |
+          |                lean is cheaper: 22% less                 |
+          |             after all 10 tasks - sure enough             |
+          |                                                          |
+          |  cheaper < ---=====o======-|---------------- > costlier  |
+          |   likely 6% to 35% less  same                            |
+          |                                                          |
+          |    whether lean passes as many tasks: too few to tell    |
+          |  fewer pass < --------------|=====o=====--- > more pass  |
+          |                           same                           |
+          |          likely 1 point fewer to 100 more pass           |
+          |         20 tasks of 3 runs each could settle it          |
+          +----------------------------------------------------------+
+
+  +-----------------------------------+    +-----------------------------------+
+  |             baseline              |    |               lean                |
+  | ######################........... |    | ##########################....... |
+  | 10 of 15 passed                   |    | 12 of 15 passed                   |
+  | typical cost  $0.35 a task        |    | typical cost  $0.28 a task        |
+  | typical time  44s a task          |    | typical time  44s a task          |
+  +-----------------------------------+    +-----------------------------------+
+
+  every task                      baseline                lean
+  they differ - 2
+  fix-it-mode-align-behavior-...  x  ####         $0.16   +  ##           $0.07
+  feat-add-nthor-and-nthorempty   x  #####        $0.23   +  ##           $0.10
+  both failed - 2 - check these tasks: agentium task show NAME
+  feat-support-for-buffer-ite...  x  ###########  $0.46   x  ###          $0.11
+  feature-intersect-by            x  #######      $0.31   x  ###          $0.11
+  ended the same, mixed - 1
+  flaky-both-ways                 +x ############ $0.52   x+ #########    $0.40
+  both passed - 9
+  passes-in-both-1                +  #####        $0.22   +  ###          $0.11
+  passes-in-both-2                +  ######       $0.24   +  ###          $0.12
+  passes-in-both-3                +  ######       $0.26   +  ###          $0.13
+  passes-in-both-4                +  ######       $0.28   +  ###          $0.14
+  passes-in-both-5                +  #######      $0.30   +  ###          $0.15
+  passes-in-both-6                +  #######      $0.32   +  ####         $0.16
+  + 3 more passed in both
+  lean was cheaper on 14 of 14 tasks
+  1 task not counted: every run was left out
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== 100 columns
+                           BASELINE  vs  LEAN   -   does lean save money?
+ ---------------------------------------------------------------------------------------------------
+                             10 tasks - 20 runs - $6.61 spent - 20 min
+
+                    +----------------------------------------------------------+
+                    |                        the answer                        |
+                    |                lean is cheaper: 22% less                 |
+                    |             after all 10 tasks - sure enough             |
+                    |                                                          |
+                    |  cheaper < ---=====o======-|---------------- > costlier  |
+                    |   likely 6% to 35% less  same                            |
+                    |                                                          |
+                    |    whether lean passes as many tasks: too few to tell    |
+                    |  fewer pass < --------------|=====o=====--- > more pass  |
+                    |                           same                           |
+                    |          likely 1 point fewer to 100 more pass           |
+                    |         20 tasks of 3 runs each could settle it          |
+                    +----------------------------------------------------------+
+
+  +---------------------------------------------+    +---------------------------------------------+
+  |                  baseline                   |    |                    lean                     |
+  | #############################.............. |    | ##################################......... |
+  | 10 of 15 passed                             |    | 12 of 15 passed                             |
+  | typical cost  $0.35 a task                  |    | typical cost  $0.28 a task                  |
+  | typical time  44s a task                    |    | typical time  44s a task                    |
+  +---------------------------------------------+    +---------------------------------------------+
+
+  every task                      baseline                lean
+  they differ - 2
+  fix-it-mode-align-behavior-...  x  ####         $0.16   +  ##           $0.07
+  feat-add-nthor-and-nthorempty   x  #####        $0.23   +  ##           $0.10
+  both failed - 2 - check these tasks: agentium task show NAME
+  feat-support-for-buffer-ite...  x  ###########  $0.46   x  ###          $0.11
+  feature-intersect-by            x  #######      $0.31   x  ###          $0.11
+  ended the same, mixed - 1
+  flaky-both-ways                 +x ############ $0.52   x+ #########    $0.40
+  both passed - 9
+  passes-in-both-1                +  #####        $0.22   +  ###          $0.11
+  passes-in-both-2                +  ######       $0.24   +  ###          $0.12
+  passes-in-both-3                +  ######       $0.26   +  ###          $0.13
+  passes-in-both-4                +  ######       $0.28   +  ###          $0.14
+  passes-in-both-5                +  #######      $0.30   +  ###          $0.15
+  passes-in-both-6                +  #######      $0.32   +  ####         $0.16
+  + 3 more passed in both
+  lean was cheaper on 14 of 14 tasks
+  1 task not counted: every run was left out
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== 120 columns
+                           BASELINE  vs  LEAN   -   does lean save money?
+ ---------------------------------------------------------------------------------------------------
+                             10 tasks - 20 runs - $6.61 spent - 20 min
+
+                    +----------------------------------------------------------+
+                    |                        the answer                        |
+                    |                lean is cheaper: 22% less                 |
+                    |             after all 10 tasks - sure enough             |
+                    |                                                          |
+                    |  cheaper < ---=====o======-|---------------- > costlier  |
+                    |   likely 6% to 35% less  same                            |
+                    |                                                          |
+                    |    whether lean passes as many tasks: too few to tell    |
+                    |  fewer pass < --------------|=====o=====--- > more pass  |
+                    |                           same                           |
+                    |          likely 1 point fewer to 100 more pass           |
+                    |         20 tasks of 3 runs each could settle it          |
+                    +----------------------------------------------------------+
+
+  +---------------------------------------------+    +---------------------------------------------+
+  |                  baseline                   |    |                    lean                     |
+  | #############################.............. |    | ##################################......... |
+  | 10 of 15 passed                             |    | 12 of 15 passed                             |
+  | typical cost  $0.35 a task                  |    | typical cost  $0.28 a task                  |
+  | typical time  44s a task                    |    | typical time  44s a task                    |
+  +---------------------------------------------+    +---------------------------------------------+
+
+  every task                      baseline                lean
+  they differ - 2
+  fix-it-mode-align-behavior-...  x  ####         $0.16   +  ##           $0.07
+  feat-add-nthor-and-nthorempty   x  #####        $0.23   +  ##           $0.10
+  both failed - 2 - check these tasks: agentium task show NAME
+  feat-support-for-buffer-ite...  x  ###########  $0.46   x  ###          $0.11
+  feature-intersect-by            x  #######      $0.31   x  ###          $0.11
+  ended the same, mixed - 1
+  flaky-both-ways                 +x ############ $0.52   x+ #########    $0.40
+  both passed - 9
+  passes-in-both-1                +  #####        $0.22   +  ###          $0.11
+  passes-in-both-2                +  ######       $0.24   +  ###          $0.12
+  passes-in-both-3                +  ######       $0.26   +  ###          $0.13
+  passes-in-both-4                +  ######       $0.28   +  ###          $0.14
+  passes-in-both-5                +  #######      $0.30   +  ###          $0.15
+  passes-in-both-6                +  #######      $0.32   +  ####         $0.16
+  + 3 more passed in both
+  lean was cheaper on 14 of 14 tasks
+  1 task not counted: every run was left out
+
+  the numbers behind this: agentium experiment report lean-ab-1run --details
+=== end

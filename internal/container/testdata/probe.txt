@@ -1,0 +1,66 @@
+== id
+65534
+65534
+== write
+/tmp writable
+/grade/work writable
+/grade/cache writable
+/grade denied
+/deps missing
+/sys/fs/cgroup denied
+/ denied
+== net
+lo
+== route
+Iface	Destination	Gateway 	Flags	RefCnt	Use	Metric	Mask		MTU	Window	IRTT
+== ns
+ipc ipc:[4026532327]
+pid pid:[4026532328]
+cgroup cgroup:[4026532329]
+uts uts:[4026532326]
+== status
+CapInh:	0000000000000000
+CapPrm:	0000000000000000
+CapEff:	0000000000000000
+CapBnd:	0000000000000000
+CapAmb:	0000000000000000
+NoNewPrivs:	1
+Seccomp:	2
+== mounts
+overlay / overlay ro,relatime,lowerdir=/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>:/var/lib/docker/overlay2/<layer>,upperdir=/var/lib/docker/overlay2/<layer>,workdir=/var/lib/docker/overlay2/<layer>,nouserxattr 0 0
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+tmpfs /dev tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0
+sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0
+cgroup /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot 0 0
+mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+shm /dev/shm tmpfs rw,nosuid,nodev,noexec,relatime,size=262144k,inode64 0 0
+/dev/root /usr/sbin/docker-init ext4 ro,relatime,discard,errors=remount-ro,commit=30 0 0
+tmpfs /tmp tmpfs rw,nosuid,nodev,relatime,size=1048576k,inode64 0 0
+/dev/root /grade ext4 rw,relatime,discard,errors=remount-ro,commit=30 0 0
+/dev/root /etc/resolv.conf ext4 ro,relatime,discard,errors=remount-ro,commit=30 0 0
+/dev/root /etc/hostname ext4 ro,relatime,discard,errors=remount-ro,commit=30 0 0
+/dev/root /etc/hosts ext4 ro,relatime,discard,errors=remount-ro,commit=30 0 0
+proc /proc/bus proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/fs proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/irq proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/sys proc ro,nosuid,nodev,noexec,relatime 0 0
+proc /proc/sysrq-trigger proc ro,nosuid,nodev,noexec,relatime 0 0
+tmpfs /proc/acpi tmpfs ro,relatime,inode64 0 0
+tmpfs /proc/kcore tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/keys tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/latency_stats tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/timer_list tmpfs rw,nosuid,size=65536k,mode=755,inode64 0 0
+tmpfs /proc/scsi tmpfs ro,relatime,inode64 0 0
+tmpfs /sys/firmware tmpfs ro,relatime,inode64 0 0
+== devlog
+absent
+== signal
+denied
+== sockets
+== cgroup
+0::/
+== counters
+readable
+protected
+== end

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +78,12 @@ type runState struct {
 	noteRole term.Role
 	notePos  int
 	noteAt   time.Time
+	// began is when the state was made, the quiet view's clock; passed and graded count each arm's settled graded runs
+	// of the test-graded runs (a judge's grades are kept apart, as in the report); seed fills them from the stored runs of
+	// a resumed execution.
+	began          time.Time
+	passed, graded [2]int
+	judgeGraded    int // settled runs the judge graded: beside "no test grades yet"
 }
 
 // noteTime is how long a note that nothing else ends (a comparison, a warning) stays in the status line.
@@ -83,7 +91,7 @@ const noteTime = 10 * time.Second
 
 func newRunState(f runFacts, s experiment.Standing, now func() time.Time) *runState {
 	st := &runState{facts: f, now: now, runs: map[int]*stateRun{}, settled: map[int]bool{}, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage,
-		notePos: -1}
+		notePos: -1, began: now()}
 	for pos := range s.Settled {
 		st.settled[pos] = true
 	}
@@ -161,6 +169,17 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		s.last[arm] = r
 		s.spent = e.SpentUSD
 		if experiment.Settles(e.Result.Outcome) {
+			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil {
+				switch {
+				case e.Result.JudgeGraded:
+					s.judgeGraded++
+				default:
+					s.graded[arm]++
+					if *e.Result.Passed {
+						s.passed[arm]++
+					}
+				}
+			}
 			s.settled[e.Slot.Position] = true
 		}
 		if u := e.Result.Usage; u != nil {
@@ -259,6 +278,27 @@ func (s *runState) end(sum experiment.Summary, final *answerState) answerState {
 	return s.answer
 }
 
+// seed counts the passes of the runs an earlier execution settled, from their stored data: the test-graded ones whose
+// slot is in settled, fair and graded. Called before the first frame, so a resumed run does not read "0 passed".
+func (s *runState) seed(data []experiment.RunData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range data {
+		arm, ok := s.facts.arms[d.Arm]
+		if !ok || !s.settled[d.Slot] || !experiment.Fair(d.Outcome) || d.Passed == nil {
+			continue
+		}
+		if d.Judged {
+			s.judgeGraded++
+			continue
+		}
+		s.graded[arm]++
+		if *d.Passed {
+			s.passed[arm]++
+		}
+	}
+}
+
 // entries is every log line so far.
 func (s *runState) entries() []logEntry {
 	s.mu.Lock()
@@ -290,7 +330,11 @@ func (s *runState) view() stateView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer,
-		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt}
+		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt, began: s.began, passed: s.passed, graded: s.graded, judgeGraded: s.judgeGraded}
+	for _, r := range s.runs { // every run in flight, by schedule position: the quiet view's "now"
+		v.running = append(v.running, *r)
+	}
+	slices.SortFunc(v.running, func(a, b stateRun) int { return cmp.Compare(a.pos, b.pos) })
 	for pos := range s.settled {
 		if pos >= 0 && pos < len(s.facts.slotArm) {
 			v.settled[s.facts.slotArm[pos]]++
@@ -320,20 +364,25 @@ func (s *runState) view() stateView {
 
 // stateView is a copy of the state for one frame.
 type stateView struct {
-	facts     runFacts
-	shown     [2]stateRun
-	have      [2]bool
-	settled   [2]int
-	spent     float64
-	usage     agent.UsageReading
-	hasUsage  bool
-	until     time.Time
-	answer    answerState
-	log       []logEntry // the last logRows runs' results
-	note      string
-	noteRole  term.Role
-	noteFades bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
-	noteAt    time.Time
+	facts       runFacts
+	shown       [2]stateRun
+	have        [2]bool
+	settled     [2]int
+	spent       float64
+	usage       agent.UsageReading
+	hasUsage    bool
+	until       time.Time
+	answer      answerState
+	log         []logEntry // the last logRows runs' results
+	note        string
+	noteRole    term.Role
+	noteFades   bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
+	noteAt      time.Time
+	running     []stateRun // every run in flight, by schedule position
+	began       time.Time
+	passed      [2]int // each arm's settled runs that passed, of graded
+	graded      [2]int
+	judgeGraded int
 }
 
 // noteNow is the status line's note at now: empty once it has faded.
