@@ -174,6 +174,8 @@ func (r Report) Markdown(w io.Writer) error {
 		fmt.Fprintf(&b, "| %s | %s | %s |\n", row.label, row.value(r.Arms[0].Behavior), row.value(r.Arms[1].Behavior))
 	}
 
+	r.markdownChecks(&b)
+
 	fmt.Fprintf(&b, "\n## Per task\n\n%s\n\n| Task | %s | %s | Cost A → B |\n|---|---|---|---|\n", r.perTaskLegend(), r.Arms[0].label(), r.Arms[1].label())
 	for _, t := range r.Tasks {
 		ca, cb := t.Arms[r.Arms[0].Name], t.Arms[r.Arms[1].Name]

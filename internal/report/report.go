@@ -43,6 +43,10 @@ type Input struct {
 	// DataDir and Home are replaced in any text the report shows, so it names no local paths.
 	DataDir string
 	Home    string
+	// Checks are the project's rule checks, and CheckResults each counted run's results for them by run ID, in the
+	// order of Checks (Load reads them from the stored runs; Build reads no files). Without Checks the report has none.
+	Checks       []run.Check
+	CheckResults map[string][]run.CheckResult
 
 	paths []pathPattern // Build resolves DataDir and Home once (see scrub); empty, scrub resolves them per call
 }
@@ -74,8 +78,11 @@ type Report struct {
 	// NorthStar is the project's time and spend to its first decisive verdict; Load sets it (Build does not: it needs the
 	// project's other experiments).
 	NorthStar *NorthStar `json:"north_star,omitempty"`
-	Notes     []string   `json:"notes"`
-	Runs      []RunRow   `json:"runs"`
+	// Checks counts the project's rule checks per arm (agentium check add): omitted when the report was made without
+	// them (Build), `[]` when the project has none (Load). Counts, never a verdict.
+	Checks []CheckRow `json:"checks,omitzero"`
+	Notes  []string   `json:"notes"`
+	Runs   []RunRow   `json:"runs"`
 }
 
 // Arm summarizes one arm's counted runs. Means are nil when there is nothing to average.
@@ -272,6 +279,7 @@ func Build(in Input) (Report, error) {
 			}
 		}
 	}
+	rep.Checks = checkRows(in, rep.Arms)
 	rep.Judge = judgeSummary(in)
 	rep.JudgeGrading = judgeGradingSummary(in)
 	if rep.PairJudge, err = pairJudgeSummary(in); err != nil {

@@ -1,3 +1,7 @@
+command check
+command check add
+command check list
+command check rm
 command clean
 command context
 command context diff
@@ -45,6 +49,9 @@ experiment MethodSeq	"seq-v1"
 experiment MethodV1	"phase1-v1"
 experiment MethodV2	"phase1-v2"
 experiment MethodVersion	MethodSeq
+flag check add --changed	value default=""
+flag check add --not-changed	value default=""
+flag check add --ran	value default=""
 flag clean --older-than	value default="30d"
 flag clean --yes	bool default="false"
 flag context diff --patch	bool default="false"
@@ -173,6 +180,21 @@ json (any failed command) .error.code	int
 json (any failed command) .error.message	string
 json (any failed command) .schema	int
 json JSONSchema	1
+json check add .check	object
+json check add .check.kind	string
+json check add .check.name	string
+json check add .check.pattern	string
+json check add .command	string
+json check add .schema	int
+json check list .checks	[]object
+json check list .checks[].kind	string
+json check list .checks[].name	string
+json check list .checks[].pattern	string
+json check list .command	string
+json check list .schema	int
+json check rm .command	string
+json check rm .removed	string
+json check rm .schema	int
 json clean .command	string
 json clean .dry_run	bool
 json clean .freed_bytes	int
@@ -541,6 +563,14 @@ json experiment report .arms[].profile	string?
 json experiment report .arms[].snapshot	string?
 json experiment report .arms[].timed_out	int
 json experiment report .calibration_usd	float?
+json experiment report .checks	[]object
+json experiment report .checks[].arms	map
+json experiment report .checks[].arms{}.counted	int
+json experiment report .checks[].arms{}.met	int
+json experiment report .checks[].arms{}.unread	int
+json experiment report .checks[].kind	string
+json experiment report .checks[].name	string
+json experiment report .checks[].pattern	string
 json experiment report .experiment	string
 json experiment report .judge	object?
 json experiment report .judge.agreement	object
@@ -1610,6 +1640,9 @@ json task validate .weak_tests.reason	string
 json task validate .weak_tests.skipped	int
 json task validate .weak_tests.timed_out	int
 json task validate .weak_tests.untested	[]string
+json-flag check add
+json-flag check list
+json-flag check rm
 json-flag clean
 json-flag context diff
 json-flag context lint
@@ -1650,3 +1683,4 @@ migration 0010_task_retirement.sql	d75df0f53390468c
 migration 0011_removed_watch.sql	683d146397d0a68b
 migration 0012_project_settings.sql	36ca254216271595
 migration 0013_project_module.sql	d2c002bd6494bb10
+migration 0014_rule_checks.sql	2b81fa3bbd438859
