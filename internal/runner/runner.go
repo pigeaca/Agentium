@@ -42,9 +42,10 @@ type Spec struct {
 	Stop <-chan struct{}
 	// BeforeStop, when set, is called right before each signal Run sends the command's process group: the interrupt or
 	// kill of a timeout, a cancellation or Stop, the kill after Grace, and the kill of what is left of the group once
-	// the command has ended (only when something is left: never after a command that ended on its own with nothing
-	// left). A caller tracking its processes looks once more before they go. It may be called more than once, from
-	// another goroutine.
+	// the command has exited (always: the exited leader still belongs to it). A caller tracking its processes looks
+	// once more before they go. It may be called more than once, from
+	// other goroutines, but never concurrently with itself; while it runs, the command's process (its group's leader)
+	// is alive or exited but not yet reaped, so the group's ID is still the command's.
 	BeforeStop func()
 }
 
@@ -167,25 +168,33 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 			spec.BeforeStop()
 		}
 	}
+	// Every signal to the group goes under mu, and none once exited is set. Until then the group's leader is not reaped
+	// (alive, or an exited zombie that still holds its ID), so no other process can hold the group's ID: a signal, the
+	// grace timer's included, reaches only the command's own group. The leader is reaped (cmd.Wait) only after the
+	// group's cleanup, under mu.
 	var (
+		mu       sync.Mutex
 		escalate *time.Timer
-		reaped   sync.Mutex // held while the escalation kills, and to mark the command reaped (waited)
-		waited   bool
+		exited   bool
 	)
 	cmd.Cancel = func() error {
-		beforeStop()
-		if spec.Grace <= 0 {
-			return killGroup(cmd.Process.Pid)
+		mu.Lock()
+		defer mu.Unlock()
+		if exited { // the leader has exited: the cleanup below stops what is left
+			return nil
 		}
 		pid := cmd.Process.Pid
+		beforeStop()
+		if spec.Grace <= 0 {
+			return killGroup(pid)
+		}
 		escalate = time.AfterFunc(spec.Grace, func() {
-			reaped.Lock()
-			defer reaped.Unlock()
-			if waited { // the command was reaped meanwhile: what is left of its group is killed after Wait
-				return
+			mu.Lock()
+			defer mu.Unlock()
+			if !exited {
+				beforeStop()
+				killGroup(pid)
 			}
-			beforeStop()
-			killGroup(pid)
 		})
 		return interruptGroup(pid)
 	}
@@ -193,22 +202,37 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	start := time.Now()
 	err := cmd.Start()
 	if err == nil {
+		pid := cmd.Process.Pid
 		if spec.Started != nil {
-			spec.Started(cmd.Process.Pid)
+			spec.Started(pid)
 		}
-		err = cmd.Wait()
-	}
-	reaped.Lock()
-	waited = true
-	reaped.Unlock()
-	if escalate != nil {
-		escalate.Stop()
+		if waitErr := waitExit(pid); waitErr == nil {
+			// The leader has exited and is not reaped yet: what is left of its group (background children) is stopped,
+			// BeforeStop first, then the leader is reaped. The zombie leader is itself a member, so the group is always
+			// signalled (harmless when nothing else is left).
+			mu.Lock()
+			exited = true
+			if escalate != nil {
+				escalate.Stop()
+			}
+			beforeStop()
+			killGroup(pid)
+			mu.Unlock()
+			err = cmd.Wait()
+		} else {
+			// The exit could not be waited for without reaping (not expected): reap, then stop the group's rest by its
+			// ID, as Agentium did before it waited this way.
+			err = cmd.Wait()
+			mu.Lock()
+			exited = true
+			if escalate != nil {
+				escalate.Stop()
+			}
+			mu.Unlock()
+			killGroup(pid)
+		}
 	}
 	result := Result{Duration: time.Since(start), ExitCode: -1}
-	if cmd.Process != nil && groupAlive(cmd.Process.Pid) { // background children of a finished command
-		beforeStop()
-		killGroup(cmd.Process.Pid)
-	}
 	name := spec.Command
 	if len(spec.Args) > 0 {
 		name = spec.Args[0]
@@ -244,12 +268,6 @@ func interruptGroup(pid int) error {
 		return err
 	}
 	return nil
-}
-
-// groupAlive reports whether the process group led by pid still has a process (one of another user's included).
-func groupAlive(pid int) bool {
-	err := syscall.Kill(-pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // killGroup kills the process group led by pid; a group that is already gone is not an error.

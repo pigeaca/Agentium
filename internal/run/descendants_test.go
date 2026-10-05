@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -43,52 +45,38 @@ func pids(ids []identity) []int {
 	return out
 }
 
-// A read of the process table is not one instant: it read the tracked parent P (started at 10), then P ended, a
-// stranger took its ID (P', at 20) and started C (at 21), and the read reached C after. Joined by IDs alone, C would
-// look like P's child. It is not linked: C was born after the read began; and when a clock step makes it look older,
-// its parent's ID is held by another process now, so the link is not trusted either. A real child born before the
-// read, whose parent still holds its ID (or is gone), is linked, with the chain between them.
+// A read of the process table is not one instant: it read the tracked parent P (started at 10); then P ended, a
+// stranger took its ID, started C (at 21) and ended too, before the read was checked; the read reached C after. Joined
+// by IDs alone, C would look like P's child, whatever the clock says. It is not linked: its parent's ID, checked after
+// the read, no longer holds P (gone, or held by the stranger). A child whose parent was tracked before the read and
+// still holds its ID after it is linked.
 func TestSnapshotLinksOnlyProvenDescendants(t *testing.T) {
 	root, p := at(100, 1, "codex"), at(200, 10, "sh")
 	stranger, c := at(200, 20, "sh"), at(300, 21, "sleep")
-	// By the time the read is checked, the stranger has ended too: P's ID is free, which proves nothing either way.
-	f := &fakeProcs{clock: time.Unix(1_800_000_015, 0), alive: map[int]identity{300: c, 100: root}}
+	f := &fakeProcs{clock: time.Unix(1_800_000_025, 0), alive: map[int]identity{100: root, 300: c}} // P's ID free again
 	f.table = map[int]tableEntry{100: entry(root, 1), 200: entry(p, 100), 300: entry(c, 200)}
 	d := f.tracker("")
 	d.tracked[root.key()] = root
+	d.tracked[p.key()] = p
 	must(t, d.snapshot(false))
-	if got := pids(d.list()); !slices.Equal(got, []int{100, 200}) {
-		t.Fatalf("tracked %v after a mixed read that began at 15: want the root and P only", got)
+	if got := pids(d.list()); slices.Contains(got, 300) {
+		t.Fatalf("tracked %v: a child joined to a parent that was gone when the read was checked", got)
 	}
-	// A clock stepped back: the read seems to begin at 25, after C's start. P's ID is the stranger's now.
-	f.clock = time.Unix(1_800_000_025, 0)
-	f.alive[200] = stranger
+	f.alive[200] = stranger // the stranger still runs when the read is checked
 	must(t, d.snapshot(false))
 	if got := pids(d.list()); slices.Contains(got, 300) {
 		t.Fatalf("tracked %v: a child joined to a parent whose ID another process holds now", got)
 	}
-	// The next read sees the stranger under P's ID: P is gone (dropped), and C's parent is the stranger.
-	f.table = map[int]tableEntry{100: entry(root, 1), 200: entry(stranger, 1), 300: entry(c, 200)}
-	f.clock = time.Unix(1_800_000_030, 0)
+	f.alive[200] = p // P runs throughout: C is its child
 	must(t, d.snapshot(false))
-	if got := pids(d.list()); !slices.Equal(got, []int{100}) {
-		t.Fatalf("tracked %v: want only the root (P ended; the stranger and its child are not the agent's)", got)
-	}
-
-	// The real case: a grandchild (born before the read), its parent alive and still holding its ID, or gone.
-	child, grandchild := at(400, 3, "bash"), at(500, 4, "node")
-	f.table = map[int]tableEntry{100: entry(root, 1), 400: entry(child, 100), 500: entry(grandchild, 400)}
-	f.alive = map[int]identity{100: root, 500: grandchild} // the child ended after the read: gone, not replaced
-	must(t, d.snapshot(false))
-	if got := pids(d.list()); !slices.Equal(got, []int{100, 400, 500}) {
-		t.Fatalf("tracked %v: want the root, its child and its grandchild", got)
+	if got := pids(d.list()); !slices.Equal(got, []int{100, 200, 300}) {
+		t.Fatalf("tracked %v: want the root, P and its child C", got)
 	}
 	// A parent that started after its child is not its parent (an ID reused while the child was reparented).
 	late := at(600, 50, "late")
+	f.table[600], f.alive[600] = entry(late, 100), late
 	f.table[700] = entry(at(700, 40, "orphan"), 600)
-	f.table[600] = entry(late, 100)
-	f.clock = time.Unix(1_800_000_060, 0)
-	f.alive[600] = late
+	must(t, d.snapshot(false))
 	must(t, d.snapshot(false))
 	if got := pids(d.list()); slices.Contains(got, 700) || !slices.Contains(got, 600) {
 		t.Fatalf("tracked %v: the root's late child is, the older process under it is not", got)
@@ -99,6 +87,54 @@ func TestSnapshotLinksOnlyProvenDescendants(t *testing.T) {
 	must(t, d.snapshot(false))
 	if got := pids(d.list()); slices.Contains(got, 600) || slices.Contains(got, 800) {
 		t.Fatalf("tracked %v: zombies kept", got)
+	}
+}
+
+// Each snapshot links one generation (a parent must be tracked before its read began): a three-level chain under the
+// agent is linked over three snapshots, a level each.
+func TestSnapshotLinksAGenerationAtATime(t *testing.T) {
+	root, a, b, c := at(100, 1, "codex"), at(200, 2, "bash"), at(300, 3, "make"), at(400, 4, "cc")
+	f := &fakeProcs{alive: map[int]identity{100: root, 200: a, 300: b, 400: c}}
+	f.table = map[int]tableEntry{100: entry(root, 1), 200: entry(a, 100), 300: entry(b, 200), 400: entry(c, 300)}
+	d := f.tracker("")
+	d.observe(100)
+	for i, want := range [][]int{{100, 200}, {100, 200, 300}, {100, 200, 300, 400}} {
+		must(t, d.snapshot(false))
+		if got := pids(d.list()); !slices.Equal(got, want) {
+			t.Fatalf("after snapshot %d: tracked %v, want %v", i+1, got, want)
+		}
+	}
+}
+
+// Two snapshots that overlap (the poll's, whose read is slow, and BeforeStop's) run one after the other: the poll's
+// older read, without C, never drops C, which the later read found.
+func TestSnapshotsDoNotInterleave(t *testing.T) {
+	root, c := at(100, 1, "codex"), at(300, 3, "sleep")
+	old := map[int]tableEntry{100: entry(root, 1)}
+	fresh := map[int]tableEntry{100: entry(root, 1), 300: entry(c, 100)}
+	reading, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	f := &fakeProcs{alive: map[int]identity{100: root, 300: c}}
+	d := f.tracker("")
+	d.tracked[root.key()] = root
+	d.read = func() (map[int]tableEntry, error) {
+		if calls.Add(1) == 1 { // the poll's read: taken before C started, returned late
+			close(reading)
+			<-release
+			return old, nil
+		}
+		return fresh, nil
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); _ = d.snapshot(false) }()
+	<-reading
+	go func() { defer wg.Done(); _ = d.snapshot(true) }()
+	time.Sleep(50 * time.Millisecond) // were they not serialized, BeforeStop's snapshot would be done by now
+	close(release)
+	wg.Wait()
+	if got := pids(d.list()); !slices.Equal(got, []int{100, 300}) {
+		t.Fatalf("tracked %v: the older read dropped what the newer one found", got)
 	}
 }
 

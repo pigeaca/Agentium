@@ -115,12 +115,12 @@ type tableEntry struct {
 }
 
 // descendants is what Agentium saw descend from a run's agent: the agent process itself and every process whose parent
-// chain led to it (or to one seen before) in one of the snapshots taken while it ran (snapshot), by full identity.
+// was one seen before, in one of the snapshots taken while it ran (snapshot: a generation each), by full identity.
 // Only these are ever stopped. Persisted in the run's records (AgentProcesses), so that a recovery stops them too.
 //
-// Residuals: a descendant that detaches (its parent gone) between two snapshots, before any snapshot saw it, is not
-// tracked, only reported; and the window between reading a process's identity and signalling it is the same as the
-// runner's own group kill (macOS has no process handle that pins an ID).
+// Residuals: a descendant whose parent ends (it detaches) before a snapshot links it, including one whose parent ends
+// during the snapshot's read, is not tracked, only reported; and the window between reading a process's identity and
+// signalling it is the same as for any kill by ID (macOS has no process handle that pins an ID).
 type descendants struct {
 	file    string
 	mu      sync.Mutex
@@ -221,22 +221,29 @@ func (d *descendants) poll(ctx context.Context) {
 	}
 }
 
-// snapshot reads the process table once and adds to d every process whose parent chain leads to one it tracks (the
-// agent, or a descendant seen before); tracked processes no longer alive (gone, or zombies) are dropped (they can
-// neither be stopped nor be anyone's parent: a process's children are reparented when it exits). What changed is saved at most every
-// descendantsSave, or now when force is set; a failed save is retried at the next snapshot (descendants.note).
+// snapshot reads the process table once and adds to d every process whose parent is one d already tracked before
+// this read began and still holds, after it, exactly the identity tracked; tracked processes no longer alive (gone,
+// or zombies) are dropped (they can neither be stopped nor be anyone's parent: a process's children are reparented
+// when it exits). What changed is saved at most every descendantsSave, or now when force is set; a failed save is
+// retried at the next snapshot (descendants.note).
 //
-// A read of the table is not one instant (the kernel lists the IDs, then reads each process), so a process that ended
-// during it can be replaced, under its ID, by a later one; a link read from such a mix could make a stranger look like
-// a descendant. So only processes born before the read began are linked (later ones wait for the next snapshot): every
-// such process alive when read was alive when the read began, as was its parent (born before it), and one ID names
-// one process at a time, so a parent ID's entry is that parent. Each link's parent must also have started no later
-// than its child, and still hold its ID now (or be gone): a clock step cannot fake a link either.
+// Why that proves descent without trusting the clock or the read's timing: the kernel lists the IDs at once but reads
+// each process after, so a parent ID read during the read could name a process that took it meanwhile. A parent alive
+// before the read began (tracked then) and still alive after it (the same identity: an ID and a start time no later
+// process can have) held its ID throughout, so any parent ID read meanwhile names it. A parent that ended during the
+// read, or cannot be read, proves nothing: its children are not linked (they are reported if they were the run's). So
+// each snapshot adds one generation: a grandchild is linked by the next one, a poll later.
+//
+// The whole snapshot (read, link, drop, save) holds d.mu, so two (the poll and BeforeStop) never interleave: a
+// stale read cannot drop what a newer one added.
 func (d *descendants) snapshot(force bool) error {
-	began := d.clock()
-	table, err := d.table()
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	before := make(map[int]identity, len(d.tracked)) // by ID: what was tracked before this read began
+	for _, id := range d.tracked {
+		before[id.PID] = id
+	}
+	table, err := d.table()
 	if err != nil {
 		d.save(force)
 		return err
@@ -247,42 +254,25 @@ func (d *descendants) snapshot(force bool) error {
 			d.dirty = true
 		}
 	}
-	bornBefore := func(e tableEntry) bool { return e.id.started().Before(began) }
+	verdict := map[int]bool{} // a parent's ID: whether it still holds exactly the identity tracked
 	for _, e := range table {
-		if _, ok := d.tracked[e.id.key()]; ok || !bornBefore(e) || e.zombie {
+		parent, ok := before[e.ppid]
+		if _, tracked := d.tracked[e.id.key()]; tracked || e.zombie || !ok || parent.started().After(e.id.started()) {
 			continue
 		}
-		chain := []identity{e.id}
-		for cur, steps := e, 0; steps < 64; steps++ {
-			parent, ok := table[cur.ppid]
-			if !ok || !bornBefore(parent) || parent.id.started().After(cur.id.started()) {
-				break
-			}
-			if _, tracked := d.tracked[parent.id.key()]; tracked {
-				if d.unchanged(append(chain[1:len(chain):len(chain)], parent.id)) {
-					for _, id := range chain {
-						d.tracked[id.key()] = id
-					}
-					d.dirty = true
-				}
-				break
-			}
-			chain = append(chain, parent.id)
-			cur = parent
+		holds, checked := verdict[parent.PID]
+		if !checked {
+			now, alive := d.identityOf(parent.PID)
+			holds = alive && now.key() == parent.key()
+			verdict[parent.PID] = holds
+		}
+		if holds {
+			d.tracked[e.id.key()] = e.id
+			d.dirty = true
 		}
 	}
 	d.save(force)
 	return nil
-}
-
-// unchanged reports whether every parent in a chain still holds its ID, or is gone: none was replaced since the read.
-func (d *descendants) unchanged(parents []identity) bool {
-	for _, p := range parents {
-		if now, ok := d.identityOf(p.PID); ok && now.key() != p.key() {
-			return false
-		}
-	}
-	return true
 }
 
 // save writes what d tracks to its file when it changed, at most every descendantsSave unless force is set. The file is

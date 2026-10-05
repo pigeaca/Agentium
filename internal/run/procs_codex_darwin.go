@@ -95,7 +95,7 @@ func procIdentity(p *C.ag_codex_proc) tableEntry {
 }
 
 // processTable is one read of this user's processes (not Agentium's own), by process ID: one sysctl, which lists the
-// IDs at once but reads each process after (descendants.snapshot allows for that).
+// IDs at once but reads each process after (descendants.snapshot proves descent despite that).
 func processTable() (map[int]tableEntry, error) {
 	var procs *C.ag_codex_proc
 	n := C.ag_codex_table(C.uint(os.Getuid()), &procs)
