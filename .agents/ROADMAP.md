@@ -14,6 +14,6 @@ Time and dollars to the first decisive verdict (inconclusive doesn't count): rea
 4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen (parked by the user, 2026-10-05), as commands that you, hooks or an AI call (the scheduled watch was cancelled by the user; nothing runs in the background).
 5. [Codex](plans/2026-10-04-codex.md) (approved; step 2 in review): Codex runs and experiments, then Claude Code against Codex; Codex in containers after the container track.
 6. [Container mode](plans/2026-10-04-containers.md) (parked by the user, 2026-10-05; steps 1–2 merged): grading in Docker, beside the macOS sandbox.
-7. [A quieter console and tasks that can answer](plans/2026-10-05-quiet-console-useful-tasks.md) (approved 2026-10-05; the report and the quiet run view first): the report, preview, task list and a quiet run view; drafted task text; proof that the hidden tests ran.
+7. [A quieter console and tasks that can answer](plans/2026-10-05-quiet-console-useful-tasks.md) (approved 2026-10-05; the report and the quiet run view are merged, the task list is next): the report, preview, task list and a quiet run view; drafted task text; proof that the hidden tests ran.
 
 [Judge](plans/archive/2026-10-01-llm-judge.md) (a second opinion): done, with a real check; pairs and ticket grading are merged, labelled unvalidated; the next steps are parked (the user, 2026-10-05).
