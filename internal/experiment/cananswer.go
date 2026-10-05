@@ -238,8 +238,10 @@ func (r Review) CanAnswer() CanAnswer {
 		c.NotSure = math.Abs(math.Log(1-e.Share)) < -math.Log(1-smallest)
 		// A verdict on cost needs the floor's runs at any effect: seeing a large change never takes fewer.
 		// Only a real estimate is clamped: no number of runs sees a zero change, which stays zero.
-		if runs := RunsToSeeCostChange(e.Share); runs > 0 {
-			c.RunsToSee = max(runs, 2*c.FloorTasks*c.FloorRepeats)
+		// The effect tells the cases apart, not the rounded count: a large change may round to zero runs and still has
+		// an estimate, the floor's.
+		if e.Share != 0 && !math.IsNaN(e.Share) && e.Share < 1 {
+			c.RunsToSee = max(RunsToSeeCostChange(e.Share), 2*c.FloorTasks*c.FloorRepeats)
 		}
 	}
 	return c

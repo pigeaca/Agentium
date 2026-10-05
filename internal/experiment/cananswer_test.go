@@ -351,3 +351,15 @@ func TestCanAnswerEqualSizesHaveNoRunsToSee(t *testing.T) {
 		t.Errorf("%+v runs to see %d", c.Expected, c.RunsToSee)
 	}
 }
+
+// A large change needs so few runs that its count rounds to zero: it still has an estimate, the floor's 16 runs. Codex's
+// numbers: 100,000 and 10,000 tokens, 38 requests and $1.23 a run predict an 83.4% reduction.
+func TestCanAnswerLargeChangeKeepsTheFloorsRuns(t *testing.T) {
+	c := contextReview([2]int64{100000, 10000}, 38, 6).CanAnswer()
+	if c.Expected == nil || c.Expected.Share < 0.83 || c.Expected.Share > 0.84 {
+		t.Fatalf("%+v", c.Expected)
+	}
+	if c.RunsToSee != 16 {
+		t.Errorf("runs to see %d, want the floor's 16", c.RunsToSee)
+	}
+}
