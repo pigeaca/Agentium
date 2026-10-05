@@ -320,10 +320,17 @@ func (v Validator) Validate(ctx context.Context, spec Spec, arms []Arm) (Validat
 			if err != nil {
 				return Validation{}, err
 			}
+			var warnings []string
+			left := UnprovenGoTests(spec)
+			if left != "" {
+				warnings = append(warnings, left)
+			}
 			if proof, _ := PlanGoProof(spec, base, solution); !proof.Empty() {
 				v.proof = proof
-			} else {
-				w := "the hidden Go test files hold no test that go test runs, so Agentium cannot prove they ran: the verification's exit codes alone grade this task"
+			} else if left == "" {
+				warnings = append(warnings, "the hidden Go test files hold no test that go test runs, so Agentium cannot prove they ran: the verification's exit codes alone grade this task")
+			}
+			for _, w := range warnings {
 				result.Warnings = append(result.Warnings, w)
 				if v.Progress != nil {
 					fmt.Fprintln(v.Progress, v.Style.Warn("  warning: "+w))

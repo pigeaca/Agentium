@@ -500,3 +500,59 @@ func TestProofCommandInANestedModule(t *testing.T) {
 		}
 	}
 }
+
+// Validation names every hidden Go test the proof leaves out, and why: a folder Go's wildcards skip that no verify
+// command names plainly, or a file whose name Go ignores. The task stays valid, and what can be proven is.
+func TestValidateWarnsOfHiddenTestsTheProofLeavesOut(t *testing.T) {
+	pTest := "package p\n\nimport \"testing\"\n\nfunc TestP(t *testing.T) {}\n"
+	bare, base, ids := goModule(t, map[string]string{"testdata/p/p.go": "package p\n"},
+		map[string]string{"value_test.go": hiddenGoTest, "value.go": "package fixture\n\nfunc Value() int { return 1 }\n", "testdata/p/p_test.go": pTest,
+			"_x_test.go": "package fixture\n\nimport \"testing\"\n\nfunc TestX(t *testing.T) {}\n"})
+	hidden := []string{"value_test.go", "testdata/p/p_test.go", "_x_test.go"}
+	for verify, want := range map[string]string{
+		"go test -count=1 ./...": "these hidden Go tests are not proven to have run, so the verification's exit codes alone grade them: " +
+			"testdata/p/p_test.go (Go's wildcards skip its folder), _x_test.go (Go ignores its name). " +
+			"To have a skipped folder proven, name it plainly in a verification command: `go test ./testdata/p` or `go test -C ./testdata/p`",
+		"go test -count=1 ./... ./testdata/p": "these hidden Go tests are not proven to have run, so the verification's exit codes alone grade them: " +
+			"_x_test.go (Go ignores its name)",
+	} {
+		v, progress := validator(t, bare)
+		got, err := v.Validate(context.Background(), Spec{Base: base, Solution: ids[0], HiddenTests: hidden, Reference: []string{"value.go"},
+			Verify: []string{verify}}, []Arm{{Name: "base"}})
+		if err != nil || got.Status != StatusValid || !slices.Equal(got.Warnings, []string{want}) || !strings.Contains(progress.String(), want) {
+			t.Errorf("%s: %v, %q, %v\n%s", verify, got.Summary(), got.Warnings, err, progress)
+			continue
+		}
+		proven := []string{"TestHidden"}
+		if strings.Contains(verify, "./testdata/p") {
+			proven = append(proven, "TestP")
+		}
+		if tests := provenTests(t, got); !slices.Equal(tests, proven) {
+			t.Errorf("%s: proven %v, want %v", verify, tests, proven)
+		}
+	}
+	// Named plainly, a skipped folder needs no warning; a task without Go tests gets none.
+	if w := UnprovenGoTests(Spec{HiddenTests: []string{"testdata/p/p_test.go"}, Verify: []string{"go test -C ./testdata/p"}}); w != "" {
+		t.Errorf("named with -C: %q", w)
+	}
+	if w := UnprovenGoTests(Spec{HiddenTests: []string{"tests/_value_test.sh", "testdata/x.txt"}, Verify: []string{"sh run_tests.sh"}}); w != "" {
+		t.Errorf("not Go: %q", w)
+	}
+}
+
+// provenTests are the tests the reference stage's proof looked for, from its commands' -run patterns; it must have
+// proven them.
+func provenTests(t *testing.T, v Validation) []string {
+	t.Helper()
+	ref := v.Stages[len(v.Stages)-1]
+	if ref.Proof == nil || !ref.Proof.Proven() {
+		t.Fatalf("the reference stage's proof: %+v", ref.Proof)
+	}
+	var tests []string
+	for _, c := range ref.Proof.Commands {
+		if i := strings.Index(c.Command, "'^("); i >= 0 {
+			tests = append(tests, strings.Split(c.Command[i+3:strings.Index(c.Command, ")$'")], "|")...)
+		}
+	}
+	return tests
+}

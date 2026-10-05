@@ -122,11 +122,7 @@ func (p GoProof) Tests() int {
 func PlanGoProof(spec Spec, base, solution source.Source) (proof GoProof, goFiles bool) {
 	var files []string
 	for _, p := range spec.HiddenTests {
-		name, dir := path.Base(p), path.Dir(p)
-		if !strings.HasSuffix(name, "_test.go") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
-			continue // the go tool ignores such a file by its name, even in a package named outright
-		}
-		if !hasSkippedElement(dir) || namedGoPackage(spec.Verify, spec.Module, dir) {
+		if strings.HasSuffix(p, "_test.go") && unproven(spec, p) == "" {
 			files = append(files, p)
 		}
 	}
@@ -144,6 +140,59 @@ func PlanGoProof(spec Spec, base, solution source.Source) (proof GoProof, goFile
 		proof.Packages = append(proof.Packages, ProofPackage{Dir: dir, Tests: slices.Compact(names), Root: nestedModule(dir, spec.Module, solution)})
 	}
 	return proof, HasGoTestFiles(spec.HiddenTests)
+}
+
+// Why a hidden Go test file is not proven (unproven).
+const (
+	unprovenName   = "Go ignores its name"
+	unprovenFolder = "Go's wildcards skip its folder"
+)
+
+// unproven says why the proof leaves out hidden Go test file p, or "" when it does not: a file whose name starts with
+// "_" or "." (the go tool never builds it, even in a package named outright), or one in a folder the go tool's
+// wildcards skip (testdata, or a name that starts with "_" or ".") that no verify command names in a way
+// namedGoPackage reads.
+func unproven(spec Spec, p string) string {
+	name, dir := path.Base(p), path.Dir(p)
+	switch {
+	case strings.HasPrefix(name, "_") || strings.HasPrefix(name, "."):
+		return unprovenName
+	case hasSkippedElement(dir) && !namedGoPackage(spec.Verify, spec.Module, dir):
+		return unprovenFolder
+	}
+	return ""
+}
+
+// UnprovenGoTests is validation's warning about the hidden Go test files the proof leaves out (unproven), naming each
+// and why, and how to have a skipped folder proven; "" when it leaves out none. The verify commands are arbitrary
+// shell, which namedGoPackage reads only in part (not a cd before go test, import paths, shell variables and
+// substitutions, make or scripts): nothing may depend on that reading in silence.
+func UnprovenGoTests(spec Spec) string {
+	var files []string
+	folder := ""
+	for _, p := range spec.HiddenTests {
+		if !strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		switch why := unproven(spec, p); why {
+		case "":
+		case unprovenFolder:
+			if folder == "" {
+				folder = relative(spec.Module, path.Dir(p))
+			}
+			files = append(files, p+" ("+why+")")
+		default:
+			files = append(files, p+" ("+why+")")
+		}
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	w := "these hidden Go tests are not proven to have run, so the verification's exit codes alone grade them: " + strings.Join(files, ", ")
+	if folder != "" {
+		w += fmt.Sprintf(". To have a skipped folder proven, name it plainly in a verification command: `go test %s` or `go test -C %s`", folder, folder)
+	}
+	return w
 }
 
 // nestedModule is the folder of the nearest go.mod in solution above folder dir and strictly below the task's module
