@@ -348,6 +348,10 @@ func TestLocalImagesAndRemove(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Errorf("images:\n%q\nwant\n%q", got, want)
 	}
+	// The base is also the user's golang:1.27: removing Agentium's reference frees nothing.
+	if !slices.Equal(list[0].OtherTags, []string{"golang:1.27"}) || len(list[1].OtherTags) != 0 {
+		t.Errorf("other tags: %v, %v", list[0].OtherTags, list[1].OtherTags)
+	}
 	must(t, d.RemoveImage(ctx, r.Tag))
 	if rm := f.commands(t, "image"); !slices.ContainsFunc(rm, func(a []string) bool { return slices.Equal(a, []string{"image", "rm", r.Tag}) }) {
 		t.Errorf("no plain image rm: %v", rm)
@@ -369,5 +373,32 @@ func TestHumanSize(t *testing.T) {
 		if got := HumanSize(in); got != want {
 			t.Errorf("HumanSize(%q) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+// What a pull or a build prints reaches the terminal with the home folder as ~ and the endpoint hidden, partial lines
+// included.
+func TestStreamRedactsTheHome(t *testing.T) {
+	t.Parallel()
+	sc, r, _ := imageScenario(t)
+	sc.Images = map[string]string{}
+	sc.PullExit = 1
+	sc.PullStderr = "error during connect: Get \"http://%2Fhome%2Fagentium%2F.colima%2Fdefault%2Fdocker.sock/v1.47/images\": dial unix /home/agentium/.colima/default/docker.sock: connect\n" +
+		"config in /home/agentium/.docker and /home/agentiumx stays; last line /home/agentium"
+	f := newFake(t, sc)
+	d := openClient(t, f)
+	var out bytes.Buffer
+	err := d.pull(context.Background(), r.Base, &out)
+	if err == nil || strings.Contains(err.Error(), "/home/agentium/") {
+		t.Errorf("error %v", err)
+	}
+	got := out.String()
+	for _, leak := range []string{"/home/agentium/", "%2Fhome%2Fagentium", "/home/agentium\n"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("output names the home folder (%q):\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, "~/.docker and /home/agentiumx stays; last line ~") || !strings.Contains(got, "pulled "+r.Base) {
+		t.Errorf("output:\n%s", got)
 	}
 }

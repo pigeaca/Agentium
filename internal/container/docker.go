@@ -69,6 +69,7 @@ type Docker struct {
 	bin       string
 	environ   []string // ClientEnv for the endpoint lookup; then PATH only
 	host      string   // the endpoint, unix://...; never recorded or printed (it holds a home path)
+	home      string   // the user's home folder, shown as ~ in docker's messages (redact)
 	config    string   // the empty configuration folder of every call after the lookup
 	ownConfig bool     // Open made config, and Close removes it
 	engine    Engine
@@ -105,6 +106,11 @@ func Open(ctx context.Context, opts Options) (_ *Docker, err error) {
 		bin = "docker"
 	}
 	d := &Docker{bin: bin, environ: ClientEnv(opts.Environ), config: opts.ConfigDir, statusWait: statusTimeout}
+	for _, kv := range opts.Environ {
+		if v, ok := strings.CutPrefix(kv, "HOME="); ok && filepath.IsAbs(v) && filepath.Clean(v) != "/" {
+			d.home = filepath.Clean(v)
+		}
+	}
 	if d.config == "" {
 		if d.config, err = os.MkdirTemp("", "agentium-docker-config-"); err != nil {
 			return nil, fmt.Errorf("docker configuration folder: %w", err)
@@ -424,7 +430,18 @@ func (d *Docker) redact(s string) string {
 		// The client's connection errors name the socket as a URL's host, escaped: http://%2Fhome%2F...%2Fdocker.sock.
 		s = strings.ReplaceAll(s, strings.ReplaceAll(path, "/", "%2F"), "<docker endpoint>")
 	}
-	return socketURL.ReplaceAllString(s, "<docker endpoint>")
+	s = socketURL.ReplaceAllString(s, "<docker endpoint>")
+	if d.home != "" {
+		s = homePath(d.home).ReplaceAllString(s, "~$1")
+	}
+	return s
+}
+
+// homePath matches the home folder as a whole path name (followed by a separator, the end, or a character that ends
+// a path in a message), also URL-escaped as the client's connection errors name a socket.
+func homePath(home string) *regexp.Regexp {
+	alt := regexp.QuoteMeta(home) + "|" + regexp.QuoteMeta(strings.ReplaceAll(home, "/", "%2F"))
+	return regexp.MustCompile(`(?:` + alt + `)((?:/|%2F)|$|[\s"':;,)])`)
 }
 
 func firstLine(s string) string {

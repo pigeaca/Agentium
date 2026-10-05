@@ -104,8 +104,8 @@ func ForgetContainerDeps(layout home.Layout, volume string) error {
 // RemoveContainerDeps removes a deps volume for clean, holding its warm-up lock (a warm-up never finds its volume gone
 // between its steps): a volume used since lastUsed stays (ErrCleanUsed), one whose lock a warm-up holds too
 // (ErrCleanBusy). remove is the Docker removal (container.RemoveIdle), which refuses a volume a container mounts; its
-// state goes only after it, so a volume that stays keeps its record of what it holds (a seed never rewrites a file a
-// grade may read). A crash in between leaves stamps of a volume that is gone, which the next warm-up ignores: they name
+// state goes only after it, so a volume that stays keeps its record of what it holds (which spares its seeds sending
+// it again). A crash in between leaves stamps of a volume that is gone, which the next warm-up ignores: they name
 // the old volume's creation time.
 func RemoveContainerDeps(ctx context.Context, layout home.Layout, volume string, lastUsed time.Time, remove func() error) error {
 	state := containerDepsState(layout, volume)
@@ -133,7 +133,8 @@ func RemoveContainerDeps(ctx context.Context, layout home.Layout, volume string,
 
 // WarmContainerDeps warms a project's deps volume for one base and one grading image, once (a stamp per base, under a
 // lock per volume): the volume is made when missing; seeded with what the host's platform-independent caches hold that
-// it lacks (never rewriting a file grades may be reading); then the base's checkout, a trusted commit, runs the
+// it lacks (the volume's own tar never replaces a file it holds, which a grade may be reading or a warm-up wrote:
+// container.SeedDeps); then the base's checkout, a trusted commit, runs the
 // container warm-up's steps in the grading image, with the network and the volume writable (buildtool.ContainerWarmSteps:
 // Python's venv always, Gradle when the host's warm-up failed). A step that fails is a note, and the base is not
 // stamped, so the next use tries again. Grades mount the volume read-only.
@@ -195,8 +196,8 @@ func (env Env) WarmContainerDeps(ctx context.Context, in ContainerDepsInput) (Co
 		return ContainerDepsState{}, fmt.Errorf("container warm-up checkout: %w", err)
 	}
 	moduleDir := filepath.Join(repo, filepath.FromSlash(env.Module))
-	// Seeds: only what the volume lacks. The record is the daemon's volume's: one made since (the old one removed) is
-	// seeded whole.
+	// Seeds: what the record says the volume holds is not sent again (what it holds anyway is never replaced). The
+	// record is the daemon's volume's: one made since (the old one removed) is seeded whole.
 	seededPath := filepath.Join(state, "seeded")
 	seeded := readSeeded(seededPath, created)
 	seeds, entries := buildtool.ContainerSeeds(in.Profiles, deps, moduleDir, env.Environ, env.Home)

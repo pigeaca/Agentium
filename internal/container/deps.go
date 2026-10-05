@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"regexp"
@@ -136,12 +137,17 @@ func mapKeys(m map[string]string) func(func(string) bool) {
 	}
 }
 
-// Seed is a host folder copied into a deps volume, at To (slash-separated, relative to /deps). Its entries go in owned
-// by the grade's user, links as links (never followed), as WriteTar writes a tree. Skip leaves out files and links that
-// are in the volume already, by their name under /deps: a seed only adds, since rewriting a file a grade reads would
-// tear it. A From that does not exist is no seed.
+// Seed is a host folder copied into a deps volume, at To (slash-separated, relative to /deps): the folder Path
+// (slash-separated, relative) under Root, a trusted cache folder (the project's deps folder, the user's Go module
+// cache). Root is opened as it is; Path is resolved through it one folder at a time without following any link, so a
+// link anywhere on the way (to an unrelated folder of the host, which grades could then read) refuses the whole seed
+// stream before a byte is written. Its entries go in owned by the grade's user, links as links (never followed), as
+// WriteTar writes a tree. Skip leaves out files and links by their name under /deps (those the caller knows the volume
+// holds, or does not want): the volume's own tar never replaces a file there anyway (SeedDeps). A Root or Path that
+// does not exist is no seed.
 type Seed struct {
-	From string
+	Root string
+	Path string
 	To   string
 	Skip func(name string) bool
 }
@@ -169,15 +175,125 @@ func cleanRel(name string) (string, error) {
 	return clean, nil
 }
 
-// SeedTar writes the seed stream: every folder on the way to each entry and seed, listed before it (docker cp would
-// make a missing one as root, which the grade's user then cannot write: step 0), then the entries, then each seed's
-// tree. Every entry is owned by the grade's user. It returns the files and links it wrote, by name under /deps.
+// SeedTar writes the seed stream: every folder on the way to each entry and seed, listed before it, then the entries,
+// then each seed's tree. Every entry is owned by the grade's user. It returns the files and links it wrote, by name
+// under /deps. Every seed's folder is opened first (openSeeds): a link on its way refuses the stream, empty.
 func SeedTar(ctx context.Context, w io.Writer, seeds []Seed, entries []SeedEntry, limits CopyLimits) (TarStats, []string, error) {
+	opened, err := openSeeds(seeds)
+	if err != nil {
+		return TarStats{}, nil, err
+	}
+	defer closeSeeds(opened)
+	return seedTar(ctx, w, opened, entries, limits)
+}
+
+// openSeed is a seed whose folder is open (nil: it does not exist).
+type openSeed struct {
+	Seed
+	to string
+	r  *os.Root
+}
+
+// openSeeds opens every seed's folder through its trusted root, never following a link (openUnder), and checks every
+// To; any refusal closes them all.
+func openSeeds(seeds []Seed) ([]openSeed, error) {
+	var out []openSeed
+	for _, s := range seeds {
+		to, err := cleanRel(s.To)
+		if err != nil {
+			closeSeeds(out)
+			return nil, err
+		}
+		r, err := openSeedRoot(s)
+		if err != nil {
+			closeSeeds(out)
+			return nil, err
+		}
+		out = append(out, openSeed{Seed: s, to: to, r: r})
+	}
+	return out, nil
+}
+
+func closeSeeds(seeds []openSeed) {
+	for _, s := range seeds {
+		if s.r != nil {
+			s.r.Close()
+		}
+	}
+}
+
+// openSeedRoot opens a seed's folder; nil, nil when it (or its root) does not exist.
+func openSeedRoot(s Seed) (*os.Root, error) {
+	base, err := os.OpenRoot(s.Root)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deps seed %s: %w", s.Root, err)
+	}
+	defer base.Close()
+	r, err := openUnder(base, s.Path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deps seed %s in %s: %w", s.Path, s.Root, err)
+	}
+	return r, nil
+}
+
+// errSeedLink: a seed's folder, or one on its way, is not a real folder (a link, say): it could lead anywhere on the
+// host.
+var errSeedLink = errors.New("not a real folder (a link is never followed)")
+
+// openUnder opens the folder rel under base one component at a time without following a link: each component must
+// be a real folder by Lstat (a link is refused, even one that stays inside base, which os.Root would follow), and the
+// os.Root then opened for it must be that same folder (a swap between the two is refused). The caller closes the
+// result; base stays open.
+func openUnder(base *os.Root, rel string) (*os.Root, error) {
+	clean := path.Clean(rel)
+	if rel == "" || path.IsAbs(rel) || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsRune(rel, 0) {
+		return nil, fmt.Errorf("%q: not a folder under the root", rel)
+	}
+	cur, err := base.OpenRoot(".")
+	if err != nil {
+		return nil, err
+	}
+	if clean == "." {
+		return cur, nil
+	}
+	for _, c := range strings.Split(clean, "/") {
+		want, err := cur.Lstat(c)
+		if err != nil {
+			cur.Close()
+			return nil, err
+		}
+		if !want.IsDir() {
+			cur.Close()
+			return nil, fmt.Errorf("%s: %w (%s)", c, errSeedLink, want.Mode().Type())
+		}
+		next, err := cur.OpenRoot(c)
+		cur.Close()
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", c, err)
+		}
+		got, err := next.Stat(".")
+		if err != nil || !os.SameFile(want, got) {
+			next.Close()
+			return nil, fmt.Errorf("%s: %w: it changed while it was opened", c, errSeedLink)
+		}
+		cur = next
+	}
+	return cur, nil
+}
+
+// seedTar is SeedTar for opened seeds.
+func seedTar(ctx context.Context, w io.Writer, seeds []openSeed, entries []SeedEntry, limits CopyLimits) (TarStats, []string, error) {
 	tw := tar.NewWriter(w)
 	var stats TarStats
 	var written []string
 	listed := map[string]bool{}
-	dir := func(name string, mode int64) error {
+	dir := func(name string) error {
 		var parents []string
 		for p := name; p != "."; p = path.Dir(p) {
 			parents = append(parents, p)
@@ -188,11 +304,7 @@ func SeedTar(ctx context.Context, w io.Writer, seeds []Seed, entries []SeedEntry
 				continue
 			}
 			listed[p] = true
-			m := int64(0o755)
-			if p == name && mode != 0 {
-				m = mode
-			}
-			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: p + "/", Mode: m, Uid: 65534, Gid: 65534, ModTime: time.Unix(0, 0), Format: tar.FormatPAX}); err != nil {
+			if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: p + "/", Mode: 0o755, Uid: 65534, Gid: 65534, ModTime: time.Unix(0, 0), Format: tar.FormatPAX}); err != nil {
 				return err
 			}
 			stats.Entries++
@@ -208,12 +320,12 @@ func SeedTar(ctx context.Context, w io.Writer, seeds []Seed, entries []SeedEntry
 			return stats, nil, err
 		}
 		if e.Dir {
-			if err := dir(name, 0); err != nil {
+			if err := dir(name); err != nil {
 				return stats, nil, err
 			}
 			continue
 		}
-		if err := dir(path.Dir(name), 0); err != nil {
+		if err := dir(path.Dir(name)); err != nil {
 			return stats, nil, err
 		}
 		hdr := &tar.Header{Name: name, Uid: 65534, Gid: 65534, ModTime: time.Unix(0, 0), Format: tar.FormatPAX}
@@ -233,32 +345,22 @@ func SeedTar(ctx context.Context, w io.Writer, seeds []Seed, entries []SeedEntry
 		written = append(written, name)
 	}
 	for _, s := range seeds {
-		to, err := cleanRel(s.To)
-		if err != nil {
-			return stats, nil, err
-		}
-		r, err := os.OpenRoot(s.From)
-		if errors.Is(err, os.ErrNotExist) {
+		if s.r == nil {
 			continue
 		}
-		if err != nil {
-			return stats, nil, fmt.Errorf("deps seed %s: %w", s.From, err)
-		}
-		if err := dir(to, 0); err != nil {
-			r.Close()
+		if err := dir(s.to); err != nil {
 			return stats, nil, err
 		}
 		left := limits
 		left.Bytes -= stats.Bytes
 		left.Entries -= stats.Entries + stats.Skipped
-		t := &tarWalk{ctx: ctx, r: r, tw: tw, limits: left, prefix: to, skip: s.Skip, written: &written}
-		err = t.dir(".")
-		r.Close()
+		t := &tarWalk{ctx: ctx, r: s.r, tw: tw, limits: left, prefix: s.to, skip: s.Skip, written: &written}
+		err := t.dir(".")
 		stats.Entries += t.stats.Entries
 		stats.Bytes += t.stats.Bytes
 		stats.Skipped += t.stats.Skipped
 		if err != nil {
-			return stats, nil, fmt.Errorf("deps seed %s: %w", s.From, err)
+			return stats, nil, fmt.Errorf("deps seed %s in %s: %w", s.Path, s.Root, err)
 		}
 	}
 	if err := tw.Close(); err != nil {
@@ -267,17 +369,70 @@ func SeedTar(ctx context.Context, w io.Writer, seeds []Seed, entries []SeedEntry
 	return stats, written, nil
 }
 
-// SeedDeps copies the seed stream (SeedTar) into the volume through a container of the image that is created and
-// never started (docker cp writes into its volume; no code runs), then removes the container. The volume must be
-// Agentium's (EnsureDepsVolume). It returns the files and links written, for the caller's record of what the volume
-// holds (Seed.Skip). The container is labelled like every container of the data folder, so recovery and clean find it
-// if Agentium dies before removing it.
+// seedTops are the volume's top folders the seed stream writes into: the grade's user cannot make them, since the
+// volume's root is root's, so the daemon makes them first (docker cp).
+func seedTops(seeds []openSeed, entries []SeedEntry) []string {
+	var tops []string
+	add := func(name string) {
+		if clean, err := cleanRel(name); err == nil {
+			top, _, _ := strings.Cut(clean, "/")
+			if !slices.Contains(tops, top) {
+				tops = append(tops, top)
+			}
+		}
+	}
+	for _, e := range entries {
+		add(e.Name)
+	}
+	for _, s := range seeds {
+		add(s.To)
+	}
+	return tops
+}
+
+// topsTar is the trusted tar of the volume's top folders, owned by the grade's user.
+func topsTar(tops []string) ([]byte, error) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, t := range tops {
+		if err := tw.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: t + "/", Mode: 0o755, Uid: 65534, Gid: 65534, ModTime: time.Unix(0, 0), Format: tar.FormatUSTAR}); err != nil {
+			return nil, err
+		}
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// SeedDeps copies the seed stream (SeedTar) into the volume, never replacing what it holds: a file there may be one a
+// grade is reading, or one a warm-up wrote. Every seed's folder is opened first, so a refused seed makes nothing. A
+// container of the image is created (no network, no capabilities, a read-only root, as the grade's user), the daemon
+// makes the volume's top folders in it (docker cp of a trusted tar: the volume's root is root's), and then it runs the
+// image's own tar on the stream with --skip-old-files, which leaves every existing file as it is. The container is
+// removed after, and is labelled like every container of the data folder, so recovery and clean find it if Agentium
+// dies first. The volume must be Agentium's (EnsureDepsVolume). It returns the files and links sent (written, or kept
+// as the volume had them), for the caller's record of what the volume holds (Seed.Skip).
 func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []Seed, entries []SeedEntry, limits CopyLimits) (written []string, err error) {
 	if _, ok, err := d.depsVolumeIs(ctx, v); err != nil || !ok {
 		return nil, errors.Join(fmt.Errorf("deps volume %s: make it first (EnsureDepsVolume)", v.Name()), err)
 	}
 	if !imageID.MatchString(img.ID) || !digestRef.MatchString(img.Ref) && !imageID.MatchString(img.Ref) {
 		return nil, fmt.Errorf("deps seed: image not found by digest (%q)", img.Ref)
+	}
+	opened, err := openSeeds(seeds)
+	if err != nil {
+		return nil, err
+	}
+	defer closeSeeds(opened)
+	for _, e := range entries {
+		if _, err := cleanRel(e.Name); err != nil {
+			return nil, err
+		}
+	}
+	tops, err := topsTar(seedTops(opened, entries))
+	if err != nil {
+		return nil, err
 	}
 	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
@@ -287,8 +442,9 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	name := "agentium-" + v.Data + "-" + run + "-seed"
 	create := []string{"create", "--pull", "never", "--name", name,
 		"--label", LabelData + "=" + v.Data, "--label", LabelRun + "=" + run, "--label", LabelMode + "=" + Mode,
-		"--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", MainUser,
-		"--log-driver", "none", "--mount", "type=volume,src=" + v.Name() + ",dst=" + DepsDir, "--entrypoint", "true", img.Ref}
+		"--interactive", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", User,
+		"--log-driver", "none", "--mount", "type=volume,src=" + v.Name() + ",dst=" + DepsDir, "--workdir", DepsDir,
+		"--entrypoint", "tar", img.Ref, "--extract", "--file", "-", "--skip-old-files", "--no-same-owner"}
 	_, stderr, res, err := d.call(ctx, create, nil, controlTimeout)
 	if err == nil && res.ExitCode != 0 {
 		return nil, fmt.Errorf("deps seed: create %s: exit %d: %s", name, res.ExitCode, firstLine(stderr))
@@ -301,6 +457,9 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	if err != nil {
 		return nil, fmt.Errorf("deps seed: create %s: %w", name, err)
 	}
+	if _, stderr, res, err := d.call(ctx, []string{"cp", "-", name + ":" + DepsDir}, bytes.NewReader(tops), controlTimeout); err != nil || res.ExitCode != 0 {
+		return nil, errors.Join(fmt.Errorf("deps seed: the volume's top folders: %s", firstLine(stderr)), err)
+	}
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -312,15 +471,15 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, written, writeErr = SeedTar(walkCtx, pw, seeds, entries, limits)
+		_, written, writeErr = seedTar(walkCtx, pw, opened, entries, limits)
 		pw.Close()
 	}()
 	timeout := limits.Timeout
 	if timeout <= 0 {
 		timeout = SeedLimits().Timeout
 	}
-	_, stderr, res, err = d.call(ctx, []string{"cp", "-", name + ":" + DepsDir}, pr, timeout)
-	// docker has stopped reading: the walk stops at its next entry, and its next write fails.
+	_, stderr, res, err = d.call(ctx, []string{"start", "--attach", "--interactive", name}, pr, timeout)
+	// The volume's tar has stopped reading: the walk stops at its next entry, and its next write fails.
 	stop()
 	pr.Close()
 	<-done
@@ -330,7 +489,7 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	case err != nil:
 		return nil, fmt.Errorf("deps seed into %s: %w", v.Name(), err)
 	case res.ExitCode != 0:
-		return nil, fmt.Errorf("deps seed into %s: exit %d: %s", v.Name(), res.ExitCode, firstLine(stderr))
+		return nil, fmt.Errorf("deps seed into %s: tar exited %d: %s", v.Name(), res.ExitCode, firstLine(stderr))
 	case writeErr != nil:
 		return nil, fmt.Errorf("deps seed into %s: %w", v.Name(), writeErr)
 	}

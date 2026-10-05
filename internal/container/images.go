@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/runner"
@@ -340,8 +341,11 @@ func (d *Docker) stream(ctx context.Context, args []string, stdin io.Reader, out
 		out = io.Discard
 	}
 	stderr := &capped{max: 64 << 10}
+	// What docker prints reaches the terminal redacted (its endpoint, the home folder as ~), a whole line at a time.
+	shown := &redactingWriter{w: out, redact: d.redact}
+	defer shown.Flush()
 	res, err := runner.Run(ctx, runner.Spec{Args: append([]string{d.bin}, d.args(args)...), Environ: d.environ, Timeout: timeout,
-		Output: out, Stderr: io.MultiWriter(out, stderr), Stdin: stdin})
+		Output: shown, Stderr: io.MultiWriter(shown, stderr), Stdin: stdin})
 	if err != nil {
 		return d.redact(stderr.String()), res, err
 	}
@@ -359,6 +363,9 @@ type LocalImage struct {
 	Toolchain string // the pin's name
 	Size      int64  // bytes, unpacked, as the daemon reports it
 	Current   bool   // a grading image of the current recipe, or a base of a current pin
+	// OtherTags are the image's tags that are not Agentium's (a base pulled by you as golang:1.27, say): removing the
+	// image by Agentium's reference then only drops that reference, and the image stays.
+	OtherTags []string
 }
 
 // LocalImages lists the grading images on the daemon (any recipe, current or not) and the pinned bases present.
@@ -380,7 +387,7 @@ func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, LocalImage{Kind: "base", Ref: img.Ref, ID: img.ID, Toolchain: p.Name(), Size: info.Size, Current: true})
+		list = append(list, LocalImage{Kind: "base", Ref: img.Ref, ID: img.ID, Toolchain: p.Name(), Size: info.Size, Current: true, OtherTags: info.RepoTags})
 	}
 	out, err := d.output(ctx, "image", "ls", "--no-trunc", "--filter", "label="+LabelRecipe, "--format", `{{.ID}}	{{.Repository}}:{{.Tag}}	{{.Label "agentium.toolchain"}}`)
 	if err != nil {
@@ -398,7 +405,13 @@ func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
 			}
 			return nil, err
 		}
-		list = append(list, LocalImage{Kind: "grading", Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: current[f[1]]})
+		var others []string
+		for _, tag := range info.RepoTags {
+			if !strings.HasPrefix(tag, GradingRepository+":") {
+				others = append(others, tag)
+			}
+		}
+		list = append(list, LocalImage{Kind: "grading", Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: current[f[1]], OtherTags: others})
 	}
 	return list, nil
 }
@@ -433,4 +446,43 @@ func HumanSize(s string) int64 {
 		}
 	}
 	return -1
+}
+
+// redactingWriter passes whole lines through redact (a partial line waits for its end, or Flush; a line longer than
+// 64 KiB goes as it is cut). It is safe for concurrent writes, as stdout and stderr share it.
+type redactingWriter struct {
+	mu     sync.Mutex
+	w      io.Writer
+	redact func(string) string
+	buf    []byte
+}
+
+func (r *redactingWriter) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.buf = append(r.buf, p...)
+	for {
+		i := bytes.IndexAny(r.buf, "\n\r")
+		if i < 0 {
+			if len(r.buf) > 64<<10 {
+				i = len(r.buf) - 1
+			} else {
+				return len(p), nil
+			}
+		}
+		if _, err := io.WriteString(r.w, r.redact(string(r.buf[:i+1]))); err != nil {
+			return len(p), err
+		}
+		r.buf = r.buf[i+1:]
+	}
+}
+
+// Flush writes what is left of a partial line.
+func (r *redactingWriter) Flush() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.buf) > 0 {
+		io.WriteString(r.w, r.redact(string(r.buf)))
+		r.buf = nil
+	}
 }

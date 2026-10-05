@@ -20,6 +20,7 @@ import (
 // of what was fetched and removed.
 type fakeDocker struct {
 	mu        sync.Mutex
+	rmHook    func()          // runs in RemoveImage, outside the lock
 	present   map[string]bool // bases present, by toolchain
 	later     map[string]bool // present from the second Plan on, when set
 	fetched   []string
@@ -82,6 +83,9 @@ func (f *fakeDocker) LocalImages(context.Context) ([]container.LocalImage, error
 }
 
 func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
+	if f.rmHook != nil {
+		f.rmHook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.imagesRm = append(f.imagesRm, ref)
@@ -197,6 +201,73 @@ func TestImagesPullStaysWithinConsent(t *testing.T) {
 	}
 }
 
+// A removal and a pull at once: the pull waits for the removal's lock, so the image it builds stays in the record.
+func TestImagesRemoveKeepsAConcurrentPull(t *testing.T) {
+	t.Parallel()
+	d := &fakeDocker{present: map[string]bool{"rust": true},
+		local: []container.LocalImage{{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true}}}
+	run, data := imagesEnv(t, d, "", false)
+	must(t, os.MkdirAll(data, 0o700))
+	must(t, container.BuiltImages{"agentium-grade:go1.27-aaaaaaaaaaaa": {Tag: "agentium-grade:go1.27-aaaaaaaaaaaa"}}.Save(builtImagesPathFor(data)))
+	removing, release := make(chan struct{}), make(chan struct{})
+	d.rmHook = func() { close(removing); <-release }
+	removed := make(chan cliResult, 1)
+	go func() { removed <- run("images", "remove", "--yes", "go") }()
+	<-removing // the removal has read the record and is removing
+	pulled := make(chan cliResult, 1)
+	go func() { pulled <- run("images", "pull", "--yes", "rust") }()
+	select {
+	case res := <-pulled:
+		t.Fatalf("the pull finished while the removal held the record: %+v", res)
+	case <-time.After(300 * time.Millisecond):
+	}
+	close(release)
+	expect(t, <-removed, ExitOK, "removed grading agentium-grade:go1.27-aaaaaaaaaaaa")
+	expect(t, <-pulled, ExitOK, "The grading images are ready: rust 1.95.")
+	built, err := container.LoadBuilt(builtImagesPathFor(data))
+	must(t, err)
+	rust, _ := container.PinFor("rust")
+	r, _ := container.NewRecipe(rust, "arm64")
+	if _, ok := built[r.Tag]; !ok || len(built) != 1 {
+		t.Errorf("record %v: the pull's image is lost", built)
+	}
+}
+
+// Without a toolchain named, images looks up the project in the current folder and writes nothing: no data folder
+// for an unregistered repository, and none of a registered project's files.
+func TestImagesProjectLookupWritesNothing(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	gitIn(t, repo, "init", "-q", "-b", "main")
+	data := filepath.Join(t.TempDir(), "data")
+	d := &fakeDocker{}
+	run := func(dir string, args ...string) cliResult {
+		var stdout, stderr bytes.Buffer
+		code := Run(context.Background(), Env{Args: args, Stdout: &stdout, Stderr: &stderr, Dir: dir, DefaultGrader: "host",
+			Getenv:  func(k string) string { return map[string]string{"AGENTIUM_HOME": data, "HOME": repo}[k] },
+			Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH")} }, Now: time.Now,
+			Docker: func(context.Context, []string) (DockerClient, error) { return d, nil }})
+		return cliResult{code, stdout.String(), stderr.String()}
+	}
+	expect(t, run(repo, "images", "pull"), ExitUsage)
+	expect(t, run(repo, "images"), ExitOK)
+	if _, err := os.Stat(data); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the data folder was made: %v", err)
+	}
+	// A registered project: its needs are read, and its data folder stays as it was.
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	*f.docker = func(context.Context, []string) (DockerClient, error) { return d, nil }
+	writeFile(t, f.repo, "go.mod", "module m\n\ngo 1.27\n")
+	before := tree(t, f.data)
+	expect(t, f.run(context.Background(), "images"), ExitOK, "this project")
+	if after := tree(t, f.data); after != before {
+		t.Errorf("images wrote to the data folder:\nbefore\n%s\nafter\n%s", before, after)
+	}
+	if len(d.fetched) > 0 {
+		t.Error("fetched")
+	}
+}
+
 func builtImagesPathFor(data string) string { return filepath.Join(data, "container-images.json") }
 
 func TestImagesUsage(t *testing.T) {
@@ -245,7 +316,7 @@ func TestImagesRemove(t *testing.T) {
 	t.Parallel()
 	goPin, _ := container.PinFor("go")
 	ref, _ := goPin.Ref("arm64")
-	d := &fakeDocker{local: []container.LocalImage{{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true},
+	d := &fakeDocker{local: []container.LocalImage{{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true, OtherTags: []string{"golang:1.27"}},
 		{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true},
 		{Kind: "grading", Ref: "agentium-grade:jdk21-bbbbbbbbbbbb", Toolchain: "jdk 21", Size: 600e6, Current: true}}}
 	run, data := imagesEnv(t, d, "", false)
@@ -265,7 +336,10 @@ func TestImagesRemove(t *testing.T) {
 		t.Errorf("record %v", built)
 	}
 	d.imagesRm = nil
-	expect(t, run("images", "remove", "--yes", "--bases"), ExitOK)
+	// A base that is also the user's own tag frees nothing, and says so.
+	expect(t, run("images", "remove", "--bases"), ExitOK, "would free up to 1.52 GB",
+		"base     go 1.27      "+ref+" (stays as golang:1.27, your own tag: frees nothing)")
+	expect(t, run("images", "remove", "--yes", "--bases"), ExitOK, "untagged base "+ref+": it stays as golang:1.27, your own tag")
 	if !slices.Contains(d.imagesRm, ref) || len(d.imagesRm) != 3 {
 		t.Errorf("with --bases: %v", d.imagesRm)
 	}

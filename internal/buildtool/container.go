@@ -31,8 +31,9 @@ func ContainerTop() []string {
 	return []string{containerGoMod, "m2", "mvnw-home", gradleRO, "gradle", "cargo", containerPyRoot}
 }
 
-// ContainerSeeds are what seeds a project's deps volume from the host: only the platform-independent caches that step 0
-// proved (Go's module downloads, Maven's repository and wrapper, Gradle's modules-2, wrapper distributions and
+// ContainerSeeds are what seeds a project's deps volume from the host, each a folder under a trusted root (the deps
+// folder, the user's module cache) that no link may lead out of (container.Seed): only the platform-independent caches
+// that step 0 proved (Go's module downloads, Maven's repository and wrapper, Gradle's modules-2, wrapper distributions and
 // Spotless's p2-data, Cargo's registry), never what a build compiled, and never a Python venv (macOS builds). deps is
 // the project's deps folder on the host; repo the checkout of the base (its go.sum names the Go modules); environ and
 // home find the user's Go module cache. The entries are folders and Agentium's own Gradle settings.
@@ -47,20 +48,20 @@ func ContainerSeeds(selected []Profile, deps, repo string, environ []string, hom
 		case "go":
 			seeds = append(seeds, goModuleSeeds(repo, goModCache(environ, home))...)
 		case "maven":
-			seeds = append(seeds, container.Seed{From: filepath.Join(deps, "m2"), To: "m2"},
-				container.Seed{From: filepath.Join(deps, "mvnw-home"), To: "mvnw-home"})
+			seeds = append(seeds, container.Seed{Root: deps, Path: "m2", To: "m2"},
+				container.Seed{Root: deps, Path: "mvnw-home", To: "mvnw-home"})
 		case "gradle":
-			seeds = append(seeds, container.Seed{From: filepath.Join(deps, gradleRO, "modules-2"), To: gradleRO + "/modules-2"},
-				container.Seed{From: filepath.Join(deps, "gradle", "wrapper", "dists"), To: "gradle/wrapper/dists"},
-				container.Seed{From: filepath.Join(deps, "gradle", "caches", "p2-data"), To: "gradle/caches/p2-data"})
+			seeds = append(seeds, container.Seed{Root: deps, Path: gradleRO + "/modules-2", To: gradleRO + "/modules-2"},
+				container.Seed{Root: deps, Path: "gradle/wrapper/dists", To: "gradle/wrapper/dists"},
+				container.Seed{Root: deps, Path: "gradle/caches/p2-data", To: "gradle/caches/p2-data"})
 			entries = append(entries,
 				container.SeedEntry{Name: "gradle/caches/modules-2", Link: "../../" + gradleRO + "/modules-2"},
 				container.SeedEntry{Name: "gradle/gradle.properties", Body: []byte(gradleHomeProps + "org.gradle.cache.cleanup=false\n")},
 				container.SeedEntry{Name: "gradle/init.d/agentium-no-cleanup.gradle", Body: []byte(noCleanupScript)},
 				container.SeedEntry{Name: "gradle/" + resolveAllScriptName, Body: []byte(resolveAllScript)})
 		case "cargo":
-			seeds = append(seeds, container.Seed{From: filepath.Join(deps, "cargo", "registry"), To: "cargo/registry"},
-				container.Seed{From: filepath.Join(deps, "cargo", "git"), To: "cargo/git"})
+			seeds = append(seeds, container.Seed{Root: deps, Path: "cargo/registry", To: "cargo/registry"},
+				container.Seed{Root: deps, Path: "cargo/git", To: "cargo/git"})
 		}
 	}
 	return seeds, entries
@@ -124,7 +125,7 @@ func goModuleSeeds(repo, modcache string) []container.Seed {
 				want[to+"/"+ver+ext] = true
 			}
 		}
-		seeds = append(seeds, container.Seed{From: filepath.Join(modcache, "cache", "download", filepath.FromSlash(mod), "@v"), To: to,
+		seeds = append(seeds, container.Seed{Root: modcache, Path: "cache/download/" + mod + "/@v", To: to,
 			Skip: func(name string) bool { return !want[name] }})
 	}
 	return seeds

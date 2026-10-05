@@ -40,7 +40,7 @@ func TestCleanContainersAndVolumes(t *testing.T) {
 	dry := f.run(context.Background(), "clean")
 	expect(t, dry, ExitOK, "containers", "volumes", "agentium-x-r1-grade", "a created container that no command runs",
 		"agentium-x-r2-grade", "its own deadline removes it", "made within the last hour", strings.Repeat("a", 64), stale, "unused for",
-		deps, "in use by a container", "Docker holds 1 of the images container grading uses (920.0 MB); clean never removes them")
+		deps, "in use by a container", "Docker holds 1 of the images container grading uses (920.0 MB); clean never removes them: agentium images remove --bases lists them all")
 	if len(d.removed) > 0 {
 		t.Fatalf("a dry run removed %v", d.removed)
 	}

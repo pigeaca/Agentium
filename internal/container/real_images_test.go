@@ -53,14 +53,14 @@ func TestRealDepsVolume(t *testing.T) {
 	}
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"registry/index/config.json": "{}", "registry/cache/a.crate": "crate"})
-	written, err := d.SeedDeps(ctx, v, img, []Seed{{From: src, To: "cargo"}}, []SeedEntry{{Name: "py", Dir: true}}, SeedLimits())
+	written, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, []SeedEntry{{Name: "py", Dir: true}}, SeedLimits())
 	must(t, err)
 	if !slices.Equal(written, []string{"cargo/registry/cache/a.crate", "cargo/registry/index/config.json"}) {
 		t.Errorf("written %q", written)
 	}
 	// A second seed adds only what is new: what the volume holds is never rewritten.
 	writeTree(t, src, map[string]string{"registry/cache/b.crate": "b"})
-	again, err := d.SeedDeps(ctx, v, img, []Seed{{From: src, To: "cargo", Skip: func(name string) bool { return slices.Contains(written, name) }}}, nil, SeedLimits())
+	again, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo", Skip: func(name string) bool { return slices.Contains(written, name) }}}, nil, SeedLimits())
 	must(t, err)
 	if !slices.Equal(again, []string{"cargo/registry/cache/b.crate"}) {
 		t.Errorf("second seed wrote %q", again)
@@ -74,13 +74,19 @@ func TestRealDepsVolume(t *testing.T) {
 		if _, err := c.CopyIn(ctx, tree, DefaultCopyLimits()); err != nil {
 			return err
 		}
-		res, err := c.Exec(ctx, Command{Command: "id -u; stat -c '%u %a %n' /deps/py /deps/cargo /deps/cargo/registry; echo warmed > /deps/py/stamp; ls /sys/class/net", Timeout: time.Minute, Output: &out})
+		res, err := c.Exec(ctx, Command{Command: "id -u; stat -c '%u %a %n' /deps/py /deps/cargo /deps/cargo/registry; echo warmed > /deps/py/stamp; echo warm > /deps/cargo/registry/cache/c.crate; ls /sys/class/net", Timeout: time.Minute, Output: &out})
 		if err == nil && res.ExitCode != 0 {
 			err = errors.New("warm command failed: " + out.String())
 		}
 		return err
 	})
 	must(t, err)
+	// A seed never replaces a file the volume holds, even one no record names (the warm-up wrote it), nor one a seed
+	// wrote: the volume's own tar skips them.
+	writeTree(t, src, map[string]string{"registry/cache/c.crate": "host", "registry/cache/a.crate": "changed"})
+	if _, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err != nil {
+		t.Fatal(err)
+	}
 	// WarmRun stops at the first command that fails, and says which.
 	tree := t.TempDir()
 	writeTree(t, tree, map[string]string{"sub/x": "x"})
@@ -101,7 +107,7 @@ func TestRealDepsVolume(t *testing.T) {
 	spec.Deps = v.Name()
 	out.Reset()
 	err = d.Run(ctx, spec, func(ctx context.Context, c *Container) error {
-		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
+		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log /deps/cargo/registry/cache/c.crate /deps/cargo/registry/cache/a.crate; echo; stat -c '%u' /deps/cargo/registry/cache/c.crate; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
 		if err == nil && res.ExitCode != 0 {
 			err = errors.New("grade command failed: " + out.String())
 		}
@@ -126,7 +132,7 @@ func TestRealDepsVolume(t *testing.T) {
 		return nil
 	})
 	must(t, err)
-	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\n") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
+	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\nwarm\ncrate\n65534\n") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
 		t.Errorf("grade output: %q", got)
 	}
 	// A seed's container left behind (Agentium died between create and removal): created, never started.

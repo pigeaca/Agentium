@@ -186,7 +186,7 @@ func (t *tarWalk) entry(name string) error {
 	full := t.tarName(name)
 	hdr := &tar.Header{Name: full, Mode: int64(info.Mode().Perm()), ModTime: info.ModTime(), Uid: 65534, Gid: 65534, Format: tar.FormatPAX}
 	if !info.IsDir() && t.skip != nil && t.skip(full) {
-		return nil // a seed's entry already in the volume: rewriting it would tear what grades read
+		return nil // a seed's entry the caller leaves out (in the volume already, or not wanted)
 	}
 	switch {
 	case info.IsDir():

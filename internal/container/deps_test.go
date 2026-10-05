@@ -87,8 +87,9 @@ func TestSeedTar(t *testing.T) {
 	writeTree(t, m2, map[string]string{"org/x/1.0/x-1.0.jar": "jar", "org/x/1.0/x-1.0.pom": "pom", "org/y/2.0/y-2.0.jar": "y"})
 	must(t, os.Symlink("x-1.0.jar", filepath.Join(m2, "org/x/1.0/link.jar")))
 	seeds := []Seed{
-		{From: m2, To: "m2", Skip: func(name string) bool { return name == "m2/org/y/2.0/y-2.0.jar" }},
-		{From: filepath.Join(t.TempDir(), "missing"), To: "cargo"},
+		{Root: m2, Path: ".", To: "m2", Skip: func(name string) bool { return name == "m2/org/y/2.0/y-2.0.jar" }},
+		{Root: filepath.Join(t.TempDir(), "missing"), Path: ".", To: "cargo"},
+		{Root: m2, Path: "no/such/folder", To: "gradle-ro"},
 	}
 	entries := []SeedEntry{{Name: "py", Dir: true}, {Name: "gradle/caches/modules-2", Link: "../../gradle-ro/modules-2"}, {Name: "gradle/gradle.properties", Body: []byte("org.gradle.daemon=false\n")}}
 	var buf bytes.Buffer
@@ -130,16 +131,16 @@ func TestSeedTar(t *testing.T) {
 			t.Errorf("%q accepted", bad.Name)
 		}
 	}
-	if _, _, err := SeedTar(context.Background(), io.Discard, []Seed{{From: m2, To: "../up"}}, nil, SeedLimits()); err == nil {
+	if _, _, err := SeedTar(context.Background(), io.Discard, []Seed{{Root: m2, Path: ".", To: "../up"}}, nil, SeedLimits()); err == nil {
 		t.Error("a seed outside /deps accepted")
 	}
-	if _, _, err := SeedTar(context.Background(), io.Discard, []Seed{{From: m2, To: "m2"}}, nil, CopyLimits{Bytes: 4, Entries: 100}); !errors.Is(err, ErrTooLarge) {
+	if _, _, err := SeedTar(context.Background(), io.Discard, []Seed{{Root: m2, Path: ".", To: "m2"}}, nil, CopyLimits{Bytes: 4, Entries: 100}); !errors.Is(err, ErrTooLarge) {
 		t.Errorf("past the limit: %v", err)
 	}
 }
 
-// A seed goes in through a container that is created and never started, by docker cp into the volume, and the
-// container is removed after.
+// A seed goes in through a container whose top folders the daemon makes first, and whose own tar then unpacks the
+// stream as the grade's user without replacing anything the volume holds; the container is removed after.
 func TestSeedDeps(t *testing.T) {
 	t.Parallel()
 	v := testVolume()
@@ -149,46 +150,108 @@ func TestSeedDeps(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, map[string]string{"registry/index/a": "a"})
 	img := Image{Ref: goImage, ID: fixtureImageID}
-	written, err := d.SeedDeps(context.Background(), v, img, []Seed{{From: src, To: "cargo"}}, []SeedEntry{{Name: "py", Dir: true}}, SeedLimits())
+	written, err := d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, []SeedEntry{{Name: "py", Dir: true}}, SeedLimits())
 	must(t, err)
 	if !slices.Equal(written, []string{"cargo/registry/index/a"}) {
 		t.Errorf("written %q", written)
 	}
-	var create, cp, rm []string
-	var cpAt int
+	var create, cp, start, rm []string
+	var cpAt, startAt int
 	for n, argv := range f.calls(t) {
 		switch a := argvAfter(argv); {
 		case a[0] == "create":
 			create = a
 		case a[0] == "cp":
 			cp, cpAt = a, n+1
+		case a[0] == "start":
+			start, startAt = a, n+1
 		case a[0] == "rm":
 			rm = a
-		case a[0] == "start" || a[0] == "exec" || a[0] == "run":
-			t.Errorf("a seed ran something: %v", a)
+		case a[0] == "exec" || a[0] == "run":
+			t.Errorf("a seed ran something else: %v", a)
 		}
 	}
 	name := create[slices.Index(create, "--name")+1]
 	joined := strings.Join(create, " ")
-	for _, w := range []string{"--pull never", "--label agentium.data=test", "--network none", "--read-only", "--cap-drop ALL", "--user 65533:65533",
-		"--mount type=volume,src=" + v.Name() + ",dst=/deps --entrypoint true " + goImage} {
+	for _, w := range []string{"--pull never", "--label agentium.data=test", "--interactive", "--network none", "--read-only", "--cap-drop ALL",
+		"--security-opt no-new-privileges", "--user 65534:65534", "--mount type=volume,src=" + v.Name() + ",dst=/deps --workdir /deps",
+		"--entrypoint tar " + goImage + " --extract --file - --skip-old-files --no-same-owner"} {
 		if !strings.Contains(joined, w) {
 			t.Errorf("create %q lacks %q", joined, w)
 		}
 	}
 	if !strings.HasPrefix(name, "agentium-test-seed-") || !slices.Equal(cp, []string{"cp", "-", name + ":/deps"}) ||
-		!slices.Equal(rm, []string{"rm", "--force", "--volumes", name}) {
-		t.Errorf("name %s, cp %v, rm %v", name, cp, rm)
+		!slices.Equal(start, []string{"start", "--attach", "--interactive", name}) || !slices.Equal(rm, []string{"rm", "--force", "--volumes", name}) {
+		t.Errorf("name %s, cp %v, start %v, rm %v", name, cp, start, rm)
 	}
-	if got := tarNames(t, f.stdin(t, cpAt)); !slices.Equal(got, []string{"py/ 5 65534 0755 ", "cargo/ 5 65534 0755 ", "cargo/registry/ 5 65534 0755 ",
+	if cpAt > startAt {
+		t.Error("the top folders were made after the stream")
+	}
+	if got := tarNames(t, f.stdin(t, cpAt)); !slices.Equal(got, []string{"py/ 5 65534 0755 ", "cargo/ 5 65534 0755 "}) {
+		t.Errorf("top folders %q", got)
+	}
+	if got := tarNames(t, f.stdin(t, startAt)); !slices.Equal(got, []string{"py/ 5 65534 0755 ", "cargo/ 5 65534 0755 ", "cargo/registry/ 5 65534 0755 ",
 		"cargo/registry/index/ 5 65534 0755 ", "cargo/registry/index/a 0 65534 0644 "}) {
 		t.Errorf("stream %q", got)
 	}
+	// The volume's tar failing is the seed's failure, and the container still goes.
+	sc.SeedExit = 2
+	f.set(t, sc)
+	if _, err := d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err == nil || !strings.Contains(err.Error(), "tar exited 2") {
+		t.Errorf("a failing tar: %v", err)
+	}
+	if rms := f.commands(t, "rm"); len(rms) != 2 {
+		t.Errorf("removals %v", rms)
+	}
 	// A volume that is not Agentium's is never seeded.
+	sc.SeedExit = 0
 	sc.Volume = depsVolumeJSON(t, v, map[string]string{"owner": "x"}, nil)
 	f2, d2 := openFake(t, sc)
 	if _, err := d2.SeedDeps(context.Background(), v, img, nil, nil, SeedLimits()); err == nil || f2.called(t, "cp") {
 		t.Errorf("seeded someone else's volume: %v", err)
+	}
+}
+
+// A seed's folder, or a folder on its way, that is a link out of its trusted root is refused before anything is
+// made or sent: nothing of the folder it points to reaches the volume.
+func TestSeedRefusesLinks(t *testing.T) {
+	t.Parallel()
+	deps, outside := t.TempDir(), t.TempDir()
+	writeTree(t, outside, map[string]string{"secret/id_ed25519": "PRIVATE", "registry/cache/x": "x"})
+	writeTree(t, deps, map[string]string{"gradle-ro/modules-2/ok.jar": "ok"})
+	must(t, os.Symlink(filepath.Join(outside, "secret"), filepath.Join(deps, "m2"))) // the seed's own folder
+	must(t, os.Symlink(outside, filepath.Join(deps, "cargo")))                       // a folder on its way
+	must(t, os.Symlink("gradle-ro", filepath.Join(deps, "inner")))                   // even one that stays inside
+	for name, seed := range map[string]Seed{
+		"the folder":         {Root: deps, Path: "m2", To: "m2"},
+		"an ancestor":        {Root: deps, Path: "cargo/registry", To: "cargo/registry"},
+		"a link inside":      {Root: deps, Path: "inner/modules-2", To: "gradle-ro/modules-2"},
+		"a path that climbs": {Root: deps, Path: "../" + filepath.Base(outside), To: "x"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			good := Seed{Root: deps, Path: "gradle-ro/modules-2", To: "gradle-ro/modules-2"}
+			_, written, err := SeedTar(context.Background(), &buf, []Seed{good, seed}, []SeedEntry{{Name: "py", Dir: true}}, SeedLimits())
+			if err == nil || buf.Len() != 0 || written != nil {
+				t.Fatalf("SeedTar = %v, %d bytes, %v", err, buf.Len(), written)
+			}
+			sc := goodScenario(t)
+			v := testVolume()
+			sc.Volume = depsVolumeJSON(t, v, v.labels(), nil)
+			f, d := openFake(t, sc)
+			if _, err := d.SeedDeps(context.Background(), v, Image{Ref: goImage, ID: fixtureImageID}, []Seed{good, seed}, nil, SeedLimits()); err == nil {
+				t.Fatal("SeedDeps accepted it")
+			}
+			if f.called(t, "create") || f.called(t, "cp") {
+				t.Errorf("a container was made for a refused seed: %v", f.calls(t))
+			}
+		})
+	}
+	// The real folders under the root still seed.
+	var buf bytes.Buffer
+	_, written, err := SeedTar(context.Background(), &buf, []Seed{{Root: deps, Path: "gradle-ro/modules-2", To: "gradle-ro/modules-2"}}, nil, SeedLimits())
+	if err != nil || !slices.Equal(written, []string{"gradle-ro/modules-2/ok.jar"}) {
+		t.Errorf("a real folder: %v, %v", written, err)
 	}
 }
 

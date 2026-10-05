@@ -93,6 +93,8 @@ type scenario struct {
 	DF                string            // system df --format {{json .Volumes}} output
 	IdleState         string            // container inspect --format {{.State.Status}}\t{{index .Config.Labels "agentium.data"}} output
 	RmRefuse          string            // docker rm (without --force) fails with this message
+	SeedExit          int               // a seed's tar (docker start --attach)
+	PullStderr        string            // what a pull prints on stderr
 }
 
 func fakeDocker() int {
@@ -204,6 +206,9 @@ func fakeDocker() int {
 		fmt.Println(sc.Inspect)
 	case args[0] == "cp":
 		saveStdin()
+	case args[0] == "start" && slices.Contains(args, "--attach"):
+		saveStdin() // a seed's stream, to the volume's own tar
+		return sc.SeedExit
 	case args[0] == "start":
 		fmt.Println(args[1])
 	case args[0] == "exec":
@@ -296,6 +301,7 @@ func fakeDocker() int {
 		fmt.Print(sc.PS)
 	case args[0] == "pull":
 		appendLine(filepath.Join(dir, "pulled"), args[len(args)-1])
+		fmt.Fprint(os.Stderr, sc.PullStderr)
 		fmt.Println("pulled", args[len(args)-1])
 		return sc.PullExit
 	case args[0] == "build":

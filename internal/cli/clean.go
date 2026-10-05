@@ -307,7 +307,7 @@ func planContainers(ctx context.Context, env Env, layout home.Layout, age time.D
 		for _, img := range images {
 			total += img.Size
 		}
-		res.notes = append(res.notes, fmt.Sprintf("Docker holds %d of the images container grading uses (%s); clean never removes them: agentium images remove lists them, and removes them with --yes",
+		res.notes = append(res.notes, fmt.Sprintf("Docker holds %d of the images container grading uses (%s); clean never removes them: agentium images remove --bases lists them all, and removes them with --yes",
 			len(images), formatBytes(total)))
 	}
 	return d
