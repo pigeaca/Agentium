@@ -711,6 +711,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	if env.JSON {
 		fair := task.NewFairness("--git-dir", w.bare)
+		task.PrepareGaps(ctx, fair, tasks)
 		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
 		if err != nil {
 			return fail(env, err)
@@ -729,6 +730,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	fair := task.NewFairness("--git-dir", w.bare)
 	if caps, designed := designedList(env, *details); designed {
+		task.PrepareGaps(ctx, fair, slices.DeleteFunc(slices.Clone(tasks), func(t store.Task) bool { return !gapsTold(t) }))
 		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
 		if err != nil {
 			return fail(env, err)
@@ -738,6 +740,7 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		}
 		return ExitOK
 	}
+	task.PrepareGaps(ctx, fair, tasks)
 	st := env.style()
 	// A MODULE column appears only when some task is in a module.
 	inModules := slices.ContainsFunc(tasks, func(t store.Task) bool { return t.Module != "" })

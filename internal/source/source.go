@@ -84,22 +84,38 @@ func Commit(ctx context.Context, commit string, where ...string) (Source, error)
 // CommitEnv is Commit with extra environment variables on every git call it makes, listing and reads alike (for
 // example GIT_NO_LAZY_FETCH=1, so a read never fetches a missing object from a promisor remote).
 func CommitEnv(ctx context.Context, env []string, commit string, where ...string) (Source, error) {
-	out, err := gitx.OutputEnv(ctx, env, nil, append(where, "ls-tree", "-r", "-z", commit)...)
+	files, err := list(ctx, env, commit, where)
 	if err != nil {
 		return nil, err
 	}
-	c := &commitSource{ctx: ctx, env: env, where: where, commit: commit, modes: map[string]string{}}
+	return &commitSource{ctx: ctx, env: env, where: where, commit: commit, listing: files}, nil
+}
+
+// listing is a commit's files: their sorted paths, and each one's mode and blob ID. Nothing changes it once made.
+type listing struct {
+	paths []string
+	modes map[string]string
+	ids   map[string]string
+}
+
+// list reads commit's files through git.
+func list(ctx context.Context, env []string, commit string, where []string) (listing, error) {
+	out, err := gitx.OutputEnv(ctx, env, nil, append(where, "ls-tree", "-r", "-z", commit)...)
+	if err != nil {
+		return listing{}, err
+	}
+	files := listing{modes: map[string]string{}, ids: map[string]string{}}
 	for _, entry := range splitNUL(string(out)) { // "<mode> <type> <object>\t<path>"
 		meta, p, ok := strings.Cut(entry, "\t")
 		fields := strings.Fields(meta)
 		if !ok || len(fields) != 3 || fields[1] != "blob" { // submodules ("commit") are not files
 			continue
 		}
-		c.modes[p] = fields[0]
-		c.paths = append(c.paths, p)
+		files.modes[p], files.ids[p] = fields[0], fields[2]
+		files.paths = append(files.paths, p)
 	}
-	c.paths = dedupe(c.paths)
-	return c, nil
+	files.paths = dedupe(files.paths)
+	return files, nil
 }
 
 type commitSource struct {
@@ -107,8 +123,8 @@ type commitSource struct {
 	env    []string
 	where  []string
 	commit string
-	paths  []string
-	modes  map[string]string
+	listing
+	objects *Objects // keeps the blobs read, for the sources it made; nil for a source of Commit or CommitEnv
 }
 
 func (c *commitSource) Paths() []string { return c.paths }
@@ -122,7 +138,7 @@ func (c *commitSource) ReadFile(p string) ([]byte, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s: %w", p, os.ErrNotExist)
 		}
-		data, err := gitx.OutputEnv(c.ctx, c.env, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+		data, err := c.blob(p)
 		if err != nil || mode != "120000" {
 			return data, err
 		}
@@ -133,6 +149,13 @@ func (c *commitSource) ReadFile(p string) ([]byte, error) {
 		p = target
 	}
 	return nil, fmt.Errorf("%s: too many symbolic links", p)
+}
+
+// blob reads the blob the listing has at p: through git, or once per blob for a source of an Objects.
+func (c *commitSource) blob(p string) ([]byte, error) {
+	return c.objects.blob(c.ctx, c.ids[p], func() ([]byte, error) {
+		return gitx.OutputEnv(c.ctx, c.env, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+	})
 }
 
 // Link reports whether p is a symbolic link in src and, if it is, the target as stored: not cleaned, not followed and
@@ -154,7 +177,7 @@ func (c *commitSource) link(p string) (string, bool, error) {
 	if c.modes[p] != "120000" {
 		return "", false, nil
 	}
-	data, err := gitx.OutputEnv(c.ctx, c.env, nil, append(c.where, "cat-file", "blob", c.commit+":"+p)...)
+	data, err := c.blob(p)
 	if err != nil {
 		return "", true, fmt.Errorf("read the symbolic link %s: %w", p, err)
 	}

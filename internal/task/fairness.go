@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/pigeaca/agentium/internal/gitx"
@@ -55,18 +56,60 @@ var (
 )
 
 // Fairness finds what hidden tests require that the agent cannot learn from the instruction or the base code. One
-// value serves one command: it caches sources and searches per commit, so repeated checks against a base are cheap.
+// value serves one command: it keeps each task's gaps once worked out, each search's answer, and each object it read
+// of the repository (source.Objects), so a check asked again starts no git process. It is safe for concurrent use
+// (PrepareGaps checks several tasks at a time): whoever asks for what another goroutine is working out waits for it.
 // All git access is local and goes through internal/gitx.
 type Fairness struct {
-	where []string // git location, e.g. "--git-dir", bare
-	srcs  map[string]source.Source
-	found map[string]bool
-	stmts map[string]map[string]map[string]bool // baseFields by commit and directories
+	where   []string        // git location, e.g. "--git-dir", bare
+	objects *source.Objects // the repository's commits, each object read once
+	srcs    kept[source.Source]
+	found   kept[bool]
+	stmts   kept[map[string]map[string]bool] // baseFields by commit and directories
+	gaps    kept[[]Gap]                      // Gaps by input
 }
 
 // NewFairness returns a checker for the repository located by where (for example "--git-dir", bare).
 func NewFairness(where ...string) *Fairness {
-	return &Fairness{where: where, srcs: map[string]source.Source{}, found: map[string]bool{}, stmts: map[string]map[string]map[string]bool{}}
+	return &Fairness{where: slices.Clip(slices.Clone(where)), objects: source.NewObjects(where...)}
+}
+
+// kept holds values worked out once per key, for several goroutines: the first to ask for a key works its value out
+// and the others wait for it. A failure keeps nothing, so each caller that follows tries again and gets its own error.
+// Working a value out may ask another kept for a value, never its own: Fairness's four are asked in one order (gaps,
+// then stmts, then srcs or found), so no two goroutines wait for each other.
+type kept[V any] struct {
+	mu sync.Mutex // guards m; never held while a value is worked out
+	m  map[string]*keptValue[V]
+}
+
+type keptValue[V any] struct {
+	mu sync.Mutex // held while the value is worked out
+	v  V
+	ok bool
+}
+
+func (k *kept[V]) get(key string, work func() (V, error)) (V, error) {
+	k.mu.Lock()
+	if k.m == nil {
+		k.m = map[string]*keptValue[V]{}
+	}
+	e := k.m[key]
+	if e == nil {
+		e = &keptValue[V]{}
+		k.m[key] = e
+	}
+	k.mu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ok {
+		return e.v, nil
+	}
+	v, err := work()
+	if err == nil {
+		e.v, e.ok = v, true
+	}
+	return v, err
 }
 
 // FairnessInput describes a task: commits in the repository, the instruction, and the solution's split.
@@ -118,7 +161,39 @@ type FairnessInput struct {
 //     module path in go.mod; a type that cannot be resolved falls back to the word search), so a field Name that another base type has is
 //     still flagged, and a key the base's test already sets on that type is not. Selectors (x.Name) and keys of literals with an elided type have no known receiver without
 //     go/types, so they use the word search: a new name equal to any old word in its directory is missed there.
+//
+// The gaps of an input are worked out once and kept: the input says all they depend on (f takes a commit's name to
+// mean one commit for as long as it lives, as its kept sources and searches always have). A cancelled ctx is given
+// nothing kept: its check runs, and fails at its first read, as it always did. A check that a cancel overtakes is an
+// error too, like a cancelled search, and keeps nothing: a read it skipped can make a task look fairer than it is.
 func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
+	if ctx.Err() != nil {
+		return f.check(ctx, in)
+	}
+	gaps, err := f.gaps.get(in.key(), func() ([]Gap, error) {
+		gaps, err := f.check(ctx, in)
+		if err == nil && ctx.Err() != nil {
+			return nil, fmt.Errorf("fairness: %w", ctx.Err())
+		}
+		return gaps, err
+	})
+	return slices.Clone(gaps), err // the caller's own: it may sort or cut them
+}
+
+// key tells inputs apart exactly: every text is written with its length, so no two inputs share a key.
+func (in FairnessInput) key() string {
+	var b strings.Builder
+	for _, texts := range [][]string{{in.Base, in.Solution, in.Instruction}, in.HiddenTests, in.Reference} {
+		fmt.Fprintf(&b, "%d\x00", len(texts))
+		for _, text := range texts {
+			fmt.Fprintf(&b, "%d\x00%s", len(text), text)
+		}
+	}
+	return b.String()
+}
+
+// check works out Gaps' answer.
+func (f *Fairness) check(ctx context.Context, in FairnessInput) ([]Gap, error) {
 	var gaps []Gap
 	stated := normalize(in.Instruction)
 	newNames, newTypes, err := f.newNames(ctx, in) // name (type) -> directories of the reference files declaring it
@@ -263,15 +338,13 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 }
 
 func (f *Fairness) source(ctx context.Context, commit string) (source.Source, error) {
-	if s, ok := f.srcs[commit]; ok {
+	return f.srcs.get(commit, func() (source.Source, error) {
+		s, err := f.objects.Commit(ctx, commit)
+		if err != nil {
+			return nil, fmt.Errorf("fairness: %w", err)
+		}
 		return s, nil
-	}
-	s, err := source.Commit(ctx, commit, f.where...)
-	if err != nil {
-		return nil, fmt.Errorf("fairness: %w", err)
-	}
-	f.srcs[commit] = s
-	return s, nil
+	})
 }
 
 // versions reads a hidden test file as the solution has it and as the base had it (nil if new).
@@ -300,28 +373,25 @@ func (f *Fairness) versions(ctx context.Context, in FairnessInput, file string) 
 // reports as an error with an empty message.
 func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, pathspecs []string) (bool, error) {
 	key := fmt.Sprintf("%s\x00%s\x00%t\x00%s", commit, pattern, word, strings.Join(pathspecs, "\x00"))
-	if v, ok := f.found[key]; ok {
-		return v, nil
-	}
-	args := append([]string{}, f.where...)
-	args = append(args, "grep", "-F", "-l")
-	if word { // Go names are case-sensitive: Wait does not state Timeout
-		args = append(args, "-w")
-	} else {
-		args = append(args, "-i")
-	}
-	args = append(args, "-e", pattern, commit, "--")
-	args = append(args, pathspecs...)
-	out, err := gitx.Output(ctx, nil, args...)
-	if ctx.Err() != nil { // a cancelled git also exits without a message: never cache that as "no match"
-		return false, fmt.Errorf("fairness: %w", ctx.Err())
-	}
-	if err != nil && !strings.HasSuffix(err.Error(), ": ") {
-		return false, fmt.Errorf("fairness: %w", err)
-	}
-	found := err == nil && len(out) > 0
-	f.found[key] = found
-	return found, nil
+	return f.found.get(key, func() (bool, error) {
+		args := append([]string{}, f.where...)
+		args = append(args, "grep", "-F", "-l")
+		if word { // Go names are case-sensitive: Wait does not state Timeout
+			args = append(args, "-w")
+		} else {
+			args = append(args, "-i")
+		}
+		args = append(args, "-e", pattern, commit, "--")
+		args = append(args, pathspecs...)
+		out, err := gitx.Output(ctx, nil, args...)
+		if ctx.Err() != nil { // a cancelled git also exits without a message: never keep that as "no match"
+			return false, fmt.Errorf("fairness: %w", ctx.Err())
+		}
+		if err != nil && !strings.HasSuffix(err.Error(), ": ") {
+			return false, fmt.Errorf("fairness: %w", err)
+		}
+		return err == nil && len(out) > 0, nil
+	})
 }
 
 // allFound reports whether every piece is in the given files of commit (any file when files is empty).
@@ -449,44 +519,45 @@ func (f *Fairness) typeDir(ctx context.Context, in FairnessInput, file *ast.File
 // baseFields returns the fields of the struct types the base's Go files in dirs declare, by type name.
 func (f *Fairness) baseFields(ctx context.Context, commit string, dirs []string) (map[string]map[string]bool, error) {
 	key := commit + "\x00" + strings.Join(dirs, "\x00")
-	if out, ok := f.stmts[key]; ok {
-		return out, nil
-	}
-	src, err := f.source(ctx, commit)
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]map[string]bool{}
-	f.stmts[key] = out
-	for _, p := range src.Paths() {
-		if path.Ext(p) != ".go" || !slices.Contains(dirs, path.Dir(p)) {
-			continue
-		}
-		data, err := src.ReadFile(p)
+	return f.stmts.get(key, func() (map[string]map[string]bool, error) {
+		src, err := f.source(ctx, commit)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), p, data, parser.SkipObjectResolution)
-		if err != nil {
-			continue
-		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			if ts, ok := n.(*ast.TypeSpec); ok {
-				if st, ok := ts.Type.(*ast.StructType); ok {
-					if out[ts.Name.Name] == nil {
-						out[ts.Name.Name] = map[string]bool{}
-					}
-					for _, fl := range st.Fields.List {
-						for _, id := range fl.Names {
-							out[ts.Name.Name][id.Name] = true
+		out := map[string]map[string]bool{} // kept only once filled: its readers never change it
+		for _, p := range src.Paths() {
+			if path.Ext(p) != ".go" || !slices.Contains(dirs, path.Dir(p)) {
+				continue
+			}
+			data, err := src.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			file, err := parser.ParseFile(token.NewFileSet(), p, data, parser.SkipObjectResolution)
+			if err != nil {
+				continue
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				if ts, ok := n.(*ast.TypeSpec); ok {
+					if st, ok := ts.Type.(*ast.StructType); ok {
+						if out[ts.Name.Name] == nil {
+							out[ts.Name.Name] = map[string]bool{}
+						}
+						for _, fl := range st.Fields.List {
+							for _, id := range fl.Names {
+								out[ts.Name.Name][id.Name] = true
+							}
 						}
 					}
 				}
-			}
-			return true
-		})
-	}
-	return out, nil
+				return true
+			})
+		}
+		if ctx.Err() != nil { // a cancelled read skips its file: never keep the fields of the files that were left
+			return nil, fmt.Errorf("fairness: %w", ctx.Err())
+		}
+		return out, nil
+	})
 }
 
 // baseHasName reports whether the base's Go files in dirs mention name as a word.

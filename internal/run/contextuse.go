@@ -113,10 +113,13 @@ func UseOfIn(resolved claudectx.Context, src source.Source, m agent.Metrics, mod
 // starting context: the task's base commit, with the arm's snapshot applied when it has one, both in the bare
 // repository Bare. Records is the data folder's records folder, where transcripts are looked for first (a record's own
 // folder may name a data folder that has since moved). One value serves one command: it keeps each base and snapshot's
-// resolved context, or why it could not be resolved, which every run of a task in that arm shares.
+// resolved context, or why it could not be resolved, which every run of a task in that arm shares; and it reads Bare
+// through one source.Objects, since the bases and snapshots of an experiment share most of their context files, and
+// resolving one context reads a file several times. Without it, a report of 16 such runs started 1,300 git processes.
 type Recovery struct {
 	Bare, Records string
 	contexts      map[[3]string]armStart // by base, snapshot and module
+	objects       *source.Objects        // Bare's commits, each object read once
 }
 
 type armStart struct {
@@ -188,12 +191,15 @@ func (r *Recovery) start(ctx context.Context, base, snapshotCommit, module strin
 }
 
 func (r *Recovery) resolve(ctx context.Context, base, snapshotCommit, module string) armStart {
-	src, err := source.Commit(ctx, base, "--git-dir", r.Bare)
+	if r.objects == nil {
+		r.objects = source.NewObjects("--git-dir", r.Bare)
+	}
+	src, err := r.objects.Commit(ctx, base)
 	if err != nil {
 		return armStart{err: err}
 	}
 	if snapshotCommit != "" {
-		snap, err := source.Commit(ctx, snapshotCommit, "--git-dir", r.Bare)
+		snap, err := r.objects.Commit(ctx, snapshotCommit)
 		if err != nil {
 			return armStart{err: err}
 		}
