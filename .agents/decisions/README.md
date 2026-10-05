@@ -12,3 +12,4 @@ Format: `# ADR: <Title>`, then `## Status` (Accepted | Superseded by <file> | De
 - [2026-09-30-console-instead-of-web-ui.md](2026-09-30-console-instead-of-web-ui.md) — no web UI; Phase 2 makes the console output clearer instead
 - [2026-10-01-llm-judge-alongside-tests.md](2026-10-01-llm-judge-alongside-tests.md) — an opt-in, per-run LLM judge shown alongside tests, never deciding; built despite the pilot's no GO
 - [2026-10-02-containers-direct-docker.md](2026-10-02-containers-direct-docker.md) — containers driven directly through the Docker CLI with per-toolchain images; supersedes the hybrid strategy's Harbor clause
+- [2026-10-05-personal-tool.md](2026-10-05-personal-tool.md) — Agentium is its owner's personal tool, not a commercial product; work is judged by what it helps the owner decide

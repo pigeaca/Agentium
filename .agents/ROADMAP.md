@@ -1,6 +1,6 @@
 # Roadmap
 
-Product direction: an AI development lab for coding agents. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) is accepted as a hybrid strategy ([decision](decisions/2026-09-27-hybrid-strategy.md)). Vision: a clear answer on what your AI setup changes, within a day, for tens of dollars.
+Product direction: an AI development lab for coding agents. The [feasibility study](../docs/research/2026-09-27-ai-development-lab.md) is accepted as a hybrid strategy ([decision](decisions/2026-09-27-hybrid-strategy.md)). Vision: a clear answer on what your AI setup changes, within a day, for tens of dollars. Since 2026-10-05 it is its owner's personal tool, not a commercial product ([decision](decisions/2026-10-05-personal-tool.md)).
 
 History: [completed plans](plans/archive/INDEX.md) and [decisions](decisions/README.md).
 
@@ -11,8 +11,9 @@ Time and dollars to the first decisive verdict (inconclusive doesn't count): rea
 1. Done: task mining, judge reports, temp isolation, [refactor](plans/archive/2026-10-01-refactor-round.md).
 2. First decisive verdict: [quick start](plans/archive/2026-10-02-quick-start.md), [model A/B](plans/archive/2026-10-01-model-ab.md); [Java and Rust](plans/archive/2026-09-30-java-rust.md).
 3. Done: [cheaper verdicts](plans/archive/2026-10-02-cheaper-verdicts.md): the [statistics note](../docs/research/2026-10-02-wave3-statistics-note.md), then sequential stopping (`seq-v1`); run reuse deferred.
-4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen, as commands that you, hooks or an AI call (the scheduled watch was cancelled by the user; nothing runs in the background).
+4. [Automation](plans/2026-10-01-automation.md): task pool, PR cost screen (parked by the user, 2026-10-05), as commands that you, hooks or an AI call (the scheduled watch was cancelled by the user; nothing runs in the background).
 5. [Codex](plans/2026-10-04-codex.md) (approved; step 2 in review): Codex runs and experiments, then Claude Code against Codex; Codex in containers after the container track.
-6. [Container mode](plans/2026-10-04-containers.md) (approved; step 0 done): grading in Docker first, the Linux default, beside the macOS sandbox.
+6. [Container mode](plans/2026-10-04-containers.md) (parked by the user, 2026-10-05; steps 1–2 merged): grading in Docker, beside the macOS sandbox.
+7. [A quieter console and tasks that can answer](plans/2026-10-05-quiet-console-useful-tasks.md) (approved 2026-10-05; the report and the quiet run view first): the report, preview, task list and a quiet run view; drafted task text; proof that the hidden tests ran.
 
-[Judge](plans/archive/2026-10-01-llm-judge.md) (a second opinion): done, with a real check; pairs and tickets next, ungated (unvalidated, exploratory).
+[Judge](plans/archive/2026-10-01-llm-judge.md) (a second opinion): done, with a real check; pairs and ticket grading are merged, labelled unvalidated; the next steps are parked (the user, 2026-10-05).
