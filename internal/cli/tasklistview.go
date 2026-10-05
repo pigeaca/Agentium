@@ -152,12 +152,16 @@ func tellsOf(ctx context.Context, db *store.Store, projectID int64, tasks []stor
 				tt.K++
 			}
 		}
-		hasGaps := t.NeedsReview && !t.Retired() && gaps(t)
+		hasGaps := gapsTold(t) && gaps(t)
 		tt.Tell = tellOf(t, hasGaps, tt.N, tt.K)
 		out[i] = tt
 	}
 	return out, nil
 }
+
+// gapsTold reports whether t's tag depends on its unstated requirements: only while it awaits a review, and is not
+// retired. The designed list checks the gaps of these tasks alone.
+func gapsTold(t store.Task) bool { return t.NeedsReview && !t.Retired() }
 
 // gapsFunc answers whether a task has unstated requirements; a check that fails counts as no gaps.
 func gapsFunc(ctx context.Context, fair *task.Fairness) func(store.Task) bool {

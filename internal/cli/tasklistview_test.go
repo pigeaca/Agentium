@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/gitx/gitxtest"
 	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
@@ -300,5 +301,101 @@ func TestTaskListJSONTells(t *testing.T) {
 	shown := f.run(ctx, "task", "show", "sep", "--json")
 	if strings.Contains(shown.stdout, "graded_runs") || strings.Contains(shown.stdout, `"tells"`) {
 		t.Errorf("task show has the list's keys:\n%s", shown.stdout)
+	}
+}
+
+// task list works a task's gaps out once, whichever of its forms asks and however often (the JSON form asks twice
+// for a task that awaits a review), several tasks at a time, and asks git nothing twice. Its answers are the ones
+// the checks give one by one: the unstated requirements the fixture's tasks have.
+func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a counting git on PATH
+	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+	ctx := context.Background()
+	// Two tasks from history whose hidden tests are Go tests, so their gaps need searches and reads; the second
+	// follows the first, so its base is the first's solution.
+	for i, name := range []string{"alpha", "beta"} {
+		pkg := string(rune('a' + i))
+		writeFile(t, f.repo, pkg+"/"+pkg+".go", "package "+pkg+"\n\nfunc Note() string { return \"graded with the base version\" }\n")
+		gitIn(t, f.repo, "add", "-A")
+		gitIn(t, f.repo, "commit", "-q", "-m", "Add "+name)
+		writeFile(t, f.repo, pkg+"/"+pkg+".go", "package "+pkg+"\n\ntype Options struct{ Verbose bool }\n\nfunc Note() string { return \"graded with the "+name+" version\" }\n")
+		writeFile(t, f.repo, pkg+"/"+pkg+"_test.go", "package "+pkg+"\n\nimport \"testing\"\n\nfunc TestNote(t *testing.T) {\n\t_ = Options{Verbose: true}\n"+
+			"\tif Note() != \"graded with the "+name+" version\" {\n\t\tt.Fatal(Note())\n\t}\n}\n")
+		gitIn(t, f.repo, "add", "-A")
+		gitIn(t, f.repo, "commit", "-q", "-m", "Change the note of "+name)
+		expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", name, "--verify", "true"), ExitOK)
+	}
+	// Valid, and awaiting a review: the designed list's tag for them is then their unstated requirements.
+	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projects, err := db.Projects(ctx)
+	if err != nil || len(projects) != 1 {
+		t.Fatalf("projects %v, %v", projects, err)
+	}
+	tasks, err := db.Tasks(ctx, projects[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range tasks {
+		if _, err := db.SetTaskValidation(ctx, tk.ID, tk.Verify, tk.Setup, validationOf("valid"), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	calls := gitxtest.Calls(t)
+	run := func(terminal bool, args ...string) (cliResult, [][]string) {
+		t.Helper()
+		*f.terminal = terminal
+		res := f.run(ctx, args...)
+		expect(t, res, ExitOK)
+		made := calls()
+		if repeated := gitxtest.Repeated(made); len(repeated) != 0 {
+			t.Errorf("%v asked git twice for: %v", args, repeated)
+		}
+		return res, made
+	}
+	table, tableCalls := run(false, "task", "list")
+	if got := strings.Count(table.stdout, "(2 unstated requirement(s))"); got != 2 {
+		t.Errorf("the table names %d tasks with 2 unstated requirements, want alpha and beta:\n%s", got, table.stdout)
+	}
+	if gitxtest.Count(tableCalls, "grep") == 0 || gitxtest.Count(tableCalls, "cat-file") == 0 {
+		t.Errorf("the fixture's gaps need no searches or reads: %v", tableCalls)
+	}
+	doc, jsonCalls := run(false, "task", "list", "--json")
+	var listed struct {
+		Tasks []struct {
+			Name     string `json:"name"`
+			Unstated *int   `json:"unstated_requirements"`
+			Tells    string `json:"tells"`
+		} `json:"tasks"`
+	}
+	if err := json.Unmarshal([]byte(doc.stdout), &listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, tk := range listed.Tasks {
+		want := map[string]int{"alpha": 2, "beta": 2, "value": 0}[tk.Name]
+		if tk.Unstated == nil || *tk.Unstated != want {
+			t.Errorf("%s: unstated_requirements %v, want %d", tk.Name, tk.Unstated, want)
+		}
+	}
+	// The JSON form asks for an unreviewed task's gaps twice (its tag, then its count): the second answer is kept.
+	if len(jsonCalls) != len(tableCalls) {
+		t.Errorf("--json made %d git calls, the table %d: the same checks, each once", len(jsonCalls), len(tableCalls))
+	}
+	// The designed list checks only the tasks that await a review: here all of them.
+	designed, designedCalls := run(true, "task", "list")
+	if plain := term.Plain(designed.stdout); !strings.Contains(plain, "what it tells you") || strings.Count(plain, "unstated requirements") != 2 {
+		t.Errorf("the designed list:\n%s", plain)
+	}
+	if len(designedCalls) != len(tableCalls) {
+		t.Errorf("the designed list made %d git calls, the table %d", len(designedCalls), len(tableCalls))
+	}
+	// A reviewed task's tag does not depend on its gaps: the designed list no longer checks it.
+	*f.terminal = false
+	expect(t, f.run(ctx, "task", "edit", "alpha", "--reviewed", "--accept-gaps"), ExitOK)
+	calls()
+	if _, after := run(true, "task", "list"); gitxtest.Count(after, "grep") >= gitxtest.Count(designedCalls, "grep") {
+		t.Errorf("the designed list still checks a reviewed task: %d searches, %d before", gitxtest.Count(after, "grep"), gitxtest.Count(designedCalls, "grep"))
 	}
 }

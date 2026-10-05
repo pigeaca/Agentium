@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -89,14 +90,43 @@ func SpecOf(t store.Task) Spec {
 		Setup: t.Setup, Verify: t.Verify, Module: t.Module}
 }
 
-// Gaps lists what the task's hidden tests require that the instruction and the base do not state. f caches searches, so
-// give one to every command.
+// Gaps lists what the task's hidden tests require that the instruction and the base do not state. f keeps what it
+// worked out and read, so give one to every command.
 func Gaps(ctx context.Context, f *Fairness, t store.Task) ([]Gap, error) {
 	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
 		return nil, nil
 	}
 	return f.Gaps(ctx, FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: t.Instruction,
 		HiddenTests: t.HiddenTests, Reference: t.Reference})
+}
+
+// maxGapChecks is how many tasks PrepareGaps checks at a time. A check is a chain of small local git searches that
+// mostly wait for git to start, so more of them at once than this gains little.
+const maxGapChecks = 8
+
+// PrepareGaps works out the gaps of tasks, several tasks at a time, and keeps them in f: the Gaps calls that follow
+// (a list asks task by task, as it prints) answer from what is kept. Each task's check is the one Gaps makes, so the
+// answers are the same in any order. It reports nothing: a task whose check fails keeps nothing, and its Gaps call
+// then fails as it would have. It returns when every check has ended; a cancelled ctx starts no more of them.
+func PrepareGaps(ctx context.Context, f *Fairness, tasks []store.Task) {
+	next := make(chan store.Task)
+	var wg sync.WaitGroup
+	for range min(maxGapChecks, runtime.GOMAXPROCS(0), len(tasks)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range next {
+				if ctx.Err() == nil {
+					_, _ = Gaps(ctx, f, t) // kept in f, or failed: Gaps says which when it is asked
+				}
+			}
+		}()
+	}
+	for _, t := range tasks {
+		next <- t
+	}
+	close(next)
+	wg.Wait()
 }
 
 // Arms is the base's own context followed by the named snapshots (validated as distinct and not "base").
