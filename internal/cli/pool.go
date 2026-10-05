@@ -473,9 +473,12 @@ func (p *poolPass) acceptMined(ctx context.Context, res pool.PassResult) (accept
 			held[t.Name] = reason
 			continue
 		}
-		t.NeedsReview = false
-		if err := w.db.UpdateTask(ctx, t, p.env.Now()); err != nil {
+		// The pass takes no run lock: the owner may have accepted a draft for this task meanwhile (store.AcceptMined).
+		if ok, err := w.db.AcceptMined(ctx, t, p.env.Now()); err != nil {
 			return accepted, held, err
+		} else if !ok {
+			held[t.Name] = changedHeldReason
+			continue
 		}
 		accepted = append(accepted, t.Name)
 	}

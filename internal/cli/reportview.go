@@ -38,6 +38,10 @@ func reportView(rep report.Report, sh term.Shapes, width int) []string {
 		out = append(out, "")
 		out = append(out, grid...)
 	}
+	if did := ruleCheckLines(rep, sh, m, f, w); len(did) > 0 {
+		out = append(out, "")
+		out = append(out, did...)
+	}
 	if judged := judgeLines(rep, sh, m, f, w); len(judged) > 0 {
 		out = append(out, "")
 		out = append(out, judged...)
@@ -822,6 +826,96 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		out = append(out, "  "+st.Paint(term.Muted, fmt.Sprintf("+ %d more passed in both", morePassed)))
 	}
 	return out
+}
+
+// ruleCheckLines is the block "what the agents did": the project's rule checks (agentium check add), one line each, with
+// for each version a bar of the runs that met it and "7 of 8". Under 70 columns the bars are left out, as the task
+// block's are. Counts only: no verdict and no color that says good or bad. Runs that could not be read are a muted note
+// beside the count. Nothing without checks.
+func ruleCheckLines(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []string {
+	if len(rep.Checks) == 0 || len(rep.Arms) < 2 {
+		return nil
+	}
+	st := sh.Style
+	const title, nameMax, barMax, gap = "what the agents did", 30, 12, 3
+	cells := func(c report.CheckRow) [2]report.CheckCell {
+		return [2]report.CheckCell{c.Arms[rep.Arms[0].Name], c.Arms[rep.Arms[1].Name]}
+	}
+	// A cell is "8 of 8" and, when some runs could not be read, "6 of 8 (2 unread)": the note is muted.
+	words := func(c report.CheckCell) (counts, note string) {
+		counts = "no runs"
+		if c.Counted > 0 {
+			counts = fmt.Sprintf("%d of %d", c.Met, c.Counted)
+		}
+		if c.Unread > 0 {
+			note = fmt.Sprintf(" (%d unread)", c.Unread)
+		}
+		return counts, note
+	}
+	nameW, cellW := term.Width(title), [2]int{}
+	for _, c := range rep.Checks {
+		nameW = max(nameW, min(term.Width(term.Sanitize(c.Name)), nameMax))
+		for i, cell := range cells(c) {
+			counts, note := words(cell)
+			cellW[i] = max(cellW[i], term.Width(counts+note))
+		}
+	}
+	// Bars need room: the name column gives way (to 19 cells) before they are left out, and under 70 columns they are.
+	barRoom := func(name int) int { return w - 1 - (2 + name + 2) - cellW[0] - cellW[1] - 2*2 - gap }
+	for nameW > term.Width(title) && barRoom(nameW)/2 < 6 {
+		nameW--
+	}
+	barW := min(barRoom(nameW)/2, barMax)
+	if w < 70 || barW < 6 {
+		barW = 0
+	}
+	var groupW [2]int // each version's column: its widest cell, after the bar
+	for i := range groupW {
+		groupW[i] = cellW[i]
+		if barW > 0 {
+			groupW[i] += barW + 2
+		}
+		groupW[i] = max(groupW[i], min(term.Width(f.labels[i]), 14))
+	}
+	for nameW > 8 && 2+nameW+2+groupW[0]+gap+groupW[1] > w-1 { // without bars it must still fit
+		nameW--
+	}
+	// Each heading is cut to its own column (the first one's includes the gap, less a space).
+	label := func(i int) string {
+		room := groupW[i]
+		if i == 0 {
+			room += gap - 1
+		}
+		return st.Paint(armRole(i), term.Truncate(f.labels[i], room, sh.Ellipsis()))
+	}
+	spacer := strings.Repeat(" ", gap)
+	headings := term.Pad(label(0), groupW[0]+gap) + label(1)
+	var out []string
+	if nameW < term.Width(title) { // the title does not fit above the names: it gets a line, the headings the next
+		out = append(out, "  "+st.Heading(title), strings.TrimRight("  "+term.Pad("", nameW)+"  "+headings, " "))
+	} else {
+		out = append(out, strings.TrimRight("  "+term.Pad(st.Heading(title), nameW)+"  "+headings, " "))
+	}
+	for _, c := range rep.Checks {
+		line := "  " + term.Pad(sh.Fit(term.Sanitize(c.Name), nameW), nameW) + "  "
+		for i, cell := range cells(c) {
+			counts, note := words(cell)
+			text := counts + st.Paint(term.Muted, note)
+			if barW > 0 {
+				frac := 0.0
+				if cell.Counted > 0 {
+					frac = float64(cell.Met) / float64(cell.Counted)
+				}
+				text = sh.Bar(term.Bar{Fraction: frac, Role: armRole(i)}, barW) + "  " + text
+			}
+			line += term.Pad(text, groupW[i])
+			if i == 0 {
+				line += spacer
+			}
+		}
+		out = append(out, strings.TrimRight(line, " "))
+	}
+	return append(out, wrapped(st, "  ", m.words("counts of your rule checks, not a verdict · agentium check list"), term.Muted, w-1)...)
 }
 
 // judgeW is the width a judge-graded task's mark adds to its name.

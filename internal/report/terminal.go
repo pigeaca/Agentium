@@ -185,6 +185,10 @@ func (r Report) Terminal(w io.Writer, st term.Style) error {
 		return err
 	}
 
+	if err := r.terminalChecks(&b, st, section, table); err != nil {
+		return err
+	}
+
 	section("Per task", r.perTaskLegend())
 	// Marks and counts are separate columns, so the counts line up whatever the number of marks.
 	t = table(term.Left("Task"), term.Left(r.Arms[0].label()), term.Right(""), term.Left(r.Arms[1].label()), term.Right(""), term.Right("Cost A → B"))

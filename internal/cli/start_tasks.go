@@ -323,17 +323,32 @@ func (s *starter) acceptMined(ctx context.Context) ([]string, error) {
 			s.held[t.Name] = reason
 			continue
 		}
-		t.NeedsReview = false
-		if err := s.w.db.UpdateTask(ctx, t, s.env.Now()); err != nil {
+		// Only while it still waits with this text and the text is not a draft's (store.AcceptMined): a draft the owner
+		// put in place meanwhile waits for the owner.
+		if ok, err := s.w.db.AcceptMined(ctx, t, s.env.Now()); err != nil {
 			return accepted, err
+		} else if !ok {
+			s.held[t.Name] = changedHeldReason
+			continue
 		}
 		accepted = append(accepted, t.Name)
 	}
 	return accepted, nil
 }
 
-// heldBack is why a mined task's instruction is not accepted without a person: "" when the checks find nothing.
+// draftHeldReason is why --accept-mined leaves a task whose instruction is a draft.
+const draftHeldReason = "its instruction came from a draft (task edit --accept-draft), which only you can mark reviewed: agentium task edit NAME --reviewed"
+
+// changedHeldReason is why --accept-mined leaves a task that changed while it looked: an edit, a review, or a draft
+// put in place.
+const changedHeldReason = "it changed while --accept-mined looked (an edit, or a draft put in place): review it yourself"
+
+// heldBack is why a mined task's instruction is not accepted without a person: "" when the checks find nothing. A
+// draft's text is always held back (decision 3 of the quiet-console plan).
 func heldBack(ctx context.Context, fair *task.Fairness, t store.Task) (string, error) {
+	if t.FromDraft {
+		return draftHeldReason, nil
+	}
 	if sections := task.SolutionSections(t.Instruction); len(sections) > 0 {
 		return "the instruction has sections that may give the solution away: " + strings.Join(sections, ", "), nil
 	}

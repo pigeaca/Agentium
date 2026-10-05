@@ -1,0 +1,78 @@
+=== 60 columns
+    BASELINE  vs  LEAN   ·   does lean pass more tasks?
+ ───────────────────────────────────────────────────────────
+   lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                      │
+│ ! 3 tasks passed every time, may not separate:           │
+│   parse-dates, retry-http, rename-flag                   │
+│ ! 2 tasks never passed, check their text: cache-race,    │
+│   tz-shift                                               │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────╮
+│ this size can see    a pass-rate change of 24 points or  │
+│ more                                                     │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────╮
+│ likely        ████████████▎░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████     $396 │
+│ budget        ██▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                       │
+╰──────────────────────────────────────────────────────────╯
+
+ on your plan: 120 runs need about 8.5 windows of the
+ five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 80 columns
+              BASELINE  vs  LEAN   ·   does lean pass more tasks?
+ ───────────────────────────────────────────────────────────────────────────────
+             lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                          │
+│ ! 3 tasks passed every time, may not separate: parse-dates, retry-http,      │
+│   rename-flag                                                                │
+│ ! 2 tasks never passed, check their text: cache-race, tz-shift               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────╮
+│ this size can see    a pass-rate change of 24 points or more                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────╮
+│ likely        ███████████████████▊░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████████████████████████     $396 │
+│ budget        ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 120 columns
+                        BASELINE  vs  LEAN   ·   does lean pass more tasks?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                       lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                                              │
+│ ! 3 tasks passed every time, may not separate: parse-dates, retry-http, rename-flag              │
+│ ! 2 tasks never passed, check their text: cache-race, tz-shift                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
+│ this size can see    a pass-rate change of 24 points or more                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
+│ likely        ███████████████████████████▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████████████████████████████████████████████     $396 │
+│ budget        █████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== end

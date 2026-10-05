@@ -1,0 +1,82 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+    lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                      │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────╮
+│ this size can see    25% less cost, or 33% more          │
+│ expected from size   under 0.1% less: the context is 4   │
+│ tokens smaller                                           │
+│ likely result        not sure                            │
+│ seeing under 0.1% would take more than 10,000 runs ·     │
+│ size is not everything: a context that changes what the  │
+│ agent does can move cost more                            │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────╮
+│ likely        ████████████▎░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████   $52.80 │
+│ budget        ██████████████████▊░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                       │
+╰──────────────────────────────────────────────────────────╯
+
+ on your plan: 16 runs need about 1.1 windows of the
+ five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+              lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────╮
+│ this size can see    25% less cost, or 33% more                              │
+│ expected from size   under 0.1% less: the context is 4 tokens smaller        │
+│ likely result        not sure                                                │
+│ seeing under 0.1% would take more than 10,000 runs · size is not everything: │
+│ a context that changes what the agent does can move cost more                │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────╮
+│ likely        ███████████████████▊░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████████████████████████   $52.80 │
+│ budget        ██████████████████████████████▏░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                        lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
+│ this size can see    25% less cost, or 33% more                                                  │
+│ expected from size   under 0.1% less: the context is 4 tokens smaller                            │
+│ likely result        not sure                                                                    │
+│ seeing under 0.1% would take more than 10,000 runs · size is not everything: a context that      │
+│ changes what the agent does can move cost more                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
+│ likely        ███████████████████████████▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████████████████████████████████████████████   $52.80 │
+│ budget        █████████████████████████████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ worst case: every run hits its cap                                                               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== end

@@ -1,0 +1,107 @@
+=== 60 columns
+       BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────
+   lean-ab · 16 tasks · 32 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                      │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────╮
+│ this size can see    19% less cost, or 24% more          │
+│ expected from size   about 4% less: the context is 4,575 │
+│ tokens smaller                                           │
+│ likely result        not sure                            │
+│ seeing 4% would take about 690 runs · size is not        │
+│ everything: a context that changes what the agent does   │
+│ can move cost more                                       │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────╮
+│ likely        █████████████████████▎░░░░░░░░░░░   $25.35 │
+│ all tasks run █████████████████████████████████   $39.36 │
+│ budget        █████████████████████████▏░░░░░░░      $30 │
+│ likely: if nothing changes, about 10.3 of 16 tasks are   │
+│ used                                                     │
+│ if every run hit its cap: $105.60                        │
+╰──────────────────────────────────────────────────────────╯
+
+╭─ when it checks the answer ──────────────────────────────╮
+│ check 1: 8 tasks   ██████████████░░░░░░░░░░░░░░   $19.68 │
+│ check 2: 12 tasks  █████████████████████░░░░░░░   $29.52 │
+│ check 3: 16 tasks  ████████████████████████████   $39.36 │
+│ it stops at the first check with a clear answer          │
+╰──────────────────────────────────────────────────────────╯
+
+ on your plan: 32 runs need about 2.3 windows of the
+ five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 80 columns
+                 BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────
+             lean-ab · 16 tasks · 32 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────╮
+│ this size can see    19% less cost, or 24% more                              │
+│ expected from size   about 4% less: the context is 4,575 tokens smaller      │
+│ likely result        not sure                                                │
+│ seeing 4% would take about 690 runs · size is not everything: a context that │
+│ changes what the agent does can move cost more                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────╮
+│ likely        ██████████████████████████████████▏░░░░░░░░░░░░░░░░░░   $25.35 │
+│ all tasks run █████████████████████████████████████████████████████   $39.36 │
+│ budget        ████████████████████████████████████████▍░░░░░░░░░░░░      $30 │
+│ likely: if nothing changes, about 10.3 of 16 tasks are used                  │
+│ if every run hit its cap: $105.60                                            │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ when it checks the answer ──────────────────────────────────────────────────╮
+│ check 1: 8 tasks   ████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ check 2: 12 tasks  ████████████████████████████████████░░░░░░░░░░░░   $29.52 │
+│ check 3: 16 tasks  ████████████████████████████████████████████████   $39.36 │
+│ it stops at the first check with a clear answer                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 32 runs need about 2.3 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== 120 columns
+                           BASELINE  vs  LEAN   ·   does lean save money?
+ ───────────────────────────────────────────────────────────────────────────────────────────────────
+                       lean-ab · 16 tasks · 32 runs · sonnet-5 · 2 at a time
+
+╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
+│ ✓ everything is in place (2 checks)                                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
+│ this size can see    19% less cost, or 24% more                                                  │
+│ expected from size   about 4% less: the context is 4,575 tokens smaller                          │
+│ likely result        not sure                                                                    │
+│ seeing 4% would take about 690 runs · size is not everything: a context that changes what the    │
+│ agent does can move cost more                                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
+│ likely        ███████████████████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░   $25.35 │
+│ all tasks run █████████████████████████████████████████████████████████████████████████   $39.36 │
+│ budget        ███████████████████████████████████████████████████████▋░░░░░░░░░░░░░░░░░      $30 │
+│ likely: if nothing changes, about 10.3 of 16 tasks are used                                      │
+│ if every run hit its cap: $105.60                                                                │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+╭─ when it checks the answer ──────────────────────────────────────────────────────────────────────╮
+│ check 1: 8 tasks   ██████████████████████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ check 2: 12 tasks  ███████████████████████████████████████████████████░░░░░░░░░░░░░░░░░   $29.52 │
+│ check 3: 16 tasks  ████████████████████████████████████████████████████████████████████   $39.36 │
+│ it stops at the first check with a clear answer                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ on your plan: 32 runs need about 2.3 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== end

@@ -1,0 +1,31 @@
+diff --git a/docs/old name.md b/docs/new name.md
+similarity index 90%
+rename from docs/old name.md
+rename to docs/new name.md
+index 1111111..2222222 100644
+--- a/docs/old name.md
++++ b/docs/new name.md
+@@ -1 +1 @@
+-diff --git a/fake.txt b/fake.txt
++text
+diff --git a/internal/gone.go b/internal/gone.go
+deleted file mode 100644
+index 3333333..0000000
+--- a/internal/gone.go
++++ /dev/null
+@@ -1 +0,0 @@
+-package gone
+diff --git a/src/my file.go b/src/my file.go
+index 4444444..5555555 100644
+--- a/src/my file.go
++++ b/src/my file.go
+@@ -1 +1 @@
+-a
++b
+diff --git "a/src/caf\303\251.go" "b/src/caf\303\251.go"
+new file mode 100644
+index 0000000..6666666
+--- /dev/null
++++ "b/src/caf\303\251.go"
+@@ -0,0 +1 @@
++x

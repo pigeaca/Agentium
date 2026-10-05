@@ -198,3 +198,15 @@ func TestRunTemp(t *testing.T) {
 		}
 	}
 }
+
+// Draft calls' folders hold replies that may name what only a reference solution has: they are inside the artifacts
+// folder, which runs deny their agents, and outside the records folder, whose folders recovery reads as runs.
+func TestDraftsAreInsideArtifactsAndOutsideRecords(t *testing.T) {
+	l, err := Resolve(env(map[string]string{"AGENTIUM_HOME": t.TempDir()}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(l.Drafts(), l.Artifacts+string(filepath.Separator)) || strings.HasPrefix(l.Drafts(), l.Records+string(filepath.Separator)) {
+		t.Errorf("drafts at %s; artifacts %s, records %s", l.Drafts(), l.Artifacts, l.Records)
+	}
+}
