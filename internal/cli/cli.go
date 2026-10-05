@@ -89,6 +89,7 @@ Commands:
   pool          Keep the task pool fresh: mine new commits, re-validate and retire tasks; no agent runs (agentium pool for details)
   run           Run Claude Code on a task and grade it; list and show runs (agentium run for details)
   experiment    Design, preview and run context experiments (agentium experiment for details)
+  check         Rule checks: count the runs that followed a rule of yours, in reports (agentium check for details)
   clean         Show what caches nothing uses take, and with --yes remove them (agentium clean -h)
   version       Print the version and build information
   help          Show this help
@@ -135,6 +136,8 @@ func dispatch(ctx context.Context, env Env, command string, args []string) int {
 		return runRun(ctx, env, args)
 	case "experiment":
 		return runExperiment(ctx, env, args)
+	case "check":
+		return runCheck(ctx, env, args)
 	case "clean":
 		return runClean(ctx, env, args)
 	default:
