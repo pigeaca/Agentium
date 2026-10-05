@@ -133,6 +133,9 @@ type Env struct {
 	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
 	gradeAgent *agent.Invocation
 	gradeBase  string
+	// ownSession is the session folder Claude Code keeps for the run with the user's login, set by Once before the agent
+	// starts: the start file carries it (start.Session), and the run removes it with its workspace (removeOwnSession).
+	ownSession string
 	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold), and readDenials
 	// sandbox.ReadDenials (tests make the log lag).
 	canary      func(ctx context.Context, file, digest string, p sandbox.Profile) ([]int, error)
@@ -348,6 +351,15 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	defer func() {
 		if prepared {
 			env.step(StepCleanup)
+		}
+		// Claude Code's session folder goes first, so that the final start file holds the note of one that could not go; a
+		// kept workspace keeps it, for whoever looks at the run. The workspace itself goes below. It is set only once the
+		// agent starts, and every path past the agent has ended it and stopped its tools (the stopTools call right after
+		// agent.Run; the one below repeats harmlessly), after the folder's last read (the unexpected-folder check).
+		if prepared && !spec.Keep {
+			if note := env.removeOwnSession(); note != "" {
+				rec.Notes = append(rec.Notes, note)
+			}
 		}
 		rec.Finished = env.Now().UTC()
 		// What is stored (the start file, the caller's database) holds no secret: the record carries the agent's output.
@@ -655,6 +667,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if !env.isCodex() {
 		ownSession = claude.SessionFolder(activeConfig, inv.Dir)
 		pastSessions = claude.SessionFolders(activeConfig)
+		// Only the login's is outside the workspace (the other sign-ins' config folder is in it): from the next start
+		// file on, a recovery finds it there, and the run removes it at the end.
+		if env.SignIn == claude.SignInLogin {
+			env.ownSession = ownSession
+		}
 	}
 	agentStarted, pgid = true, 0
 	if err := writeStart(false); err != nil {

@@ -16,8 +16,8 @@ import (
 //   - A run without a start file: its records folder (nothing was prepared yet), unless an earlier recovery set its
 //     unreadable start file aside.
 //   - A run with a start file: kept while its process group exists (it may still be running); otherwise its workspace,
-//     temp root, grading copy and grade folder, and the judges' folders of a finished run, or its whole records folder
-//     when its agent never started. A run whose agent started keeps its records: recovery stores it as cancelled.
+//     temp root, grading copy and grade folder, its session folder in Claude Code's projects folder (leftoverSession),
+//     and the judges' folders of a finished run, or its whole records folder when its agent never started. A run whose agent started keeps its records: recovery stores it as cancelled.
 //   - A run whose start file cannot be read is kept: recovery decides when it is safe (recoverUnreadable), and the
 //     caller's --yes runs it, so the item says so.
 //
@@ -88,6 +88,11 @@ func (c *planner) leftovers(ctx context.Context) error {
 			gone.detail = "a run that stopped: recovery stores it as cancelled"
 		}
 		it.parts = existingParts(paths...)
+		// Recovery removes the run's session folder in Claude Code's projects folder too (recoverSession): planned and
+		// counted here, so the sessions kind leaves it out.
+		if part, ok := leftoverSession(layout, s); ok {
+			it.parts = append(it.parts, part)
+		}
 		c.addLeftover(it, gone)
 	}
 	return nil
