@@ -19,7 +19,7 @@ import (
 	"github.com/pigeaca/agentium/internal/home"
 )
 
-// Cleanup (agentium clean) frees what the data folder keeps for reuse and no longer needs. It looks in five places:
+// Cleanup (agentium clean) frees what the data folder keeps for reuse and no longer needs. It looks in six places:
 //   - seeds: the grading seeds, <cache>/grading-seed/<project>/<key>-<base> (gradingSeed), and what a dead maker left
 //     (<seed>.tmp);
 //   - dependencies: a project's deps folder (<deps>/<project>, depsFolder), whole, or else its Python venvs and
@@ -29,7 +29,9 @@ import (
 //     (RecoverWarn) removes; PlanClean only lists them (planLeftovers), and the caller runs the recovery;
 //   - validations: the grade folders of sandboxed validations that stopped (<artifacts>/tasks/<id>/<time>/grading/
 //     <label>), which recovery does not know: never one whose validation still holds its lock (task.GradeLock), and
-//     removed as a grade's own cleanup removes its folder (clean_validations.go).
+//     removed as a grade's own cleanup removes its folder (clean_validations.go);
+//   - sessions: with the user's login, the session folders runs of this data folder left in Claude Code's projects
+//     folder (CleanInput.ClaudeConfig), looked at and removed only under the rules of sessions.go.
 //
 // A seed, and a base's dependencies, stay while a locked, unfinished experiment uses the base, and while a task in the
 // pool does unless they have not been used for CleanInput.OlderThan (CleanInput.InUse, judge); they are made again on
@@ -38,8 +40,8 @@ import (
 // for", not "created". Nothing used within CleanGrace goes, in use or not: validation does not take the run lock, so
 // one may be using it right now.
 //
-// Only folders inside the data folder's cache and deps folders are ever removed, reached through real folders only
-// (cleanable); each is first moved into the quarantine, whole (an atomic rename: a crash never leaves half a seed or
+// Only folders inside the data folder's cache and deps folders are ever removed (the sessions kind apart, under its
+// own rules), reached through real folders only (cleanable); each is first moved into the quarantine, whole (an atomic rename: a crash never leaves half a seed or
 // half a venv where the next run would take it for a whole one), then removed there by removeTree, which never follows
 // a link. What resists removal stays in the quarantine, which the next recovery or cleanup empties.
 
@@ -53,10 +55,13 @@ const (
 	// CleanProcesses are processes a Codex run's sweep reported and did not stop (LeftoverProcesses): listed as kept,
 	// never signalled, and sized 0.
 	CleanProcesses = "processes"
+	// CleanSessions are the session folders runs of this data folder left in Claude Code's projects folder, with the
+	// user's login (sessions.go): the only kind outside the data folder.
+	CleanSessions = "sessions"
 )
 
 // CleanKinds lists the kinds in report order.
-var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations, CleanProcesses}
+var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations, CleanProcesses, CleanSessions}
 
 // Why an item goes (CleanItem.Reason of a removal).
 const (
@@ -103,6 +108,12 @@ type CleanInput struct {
 	// OlderThan is how long an item a task uses may go unused before it goes all the same (never one a locked,
 	// unfinished experiment uses); below CleanGrace counts as it.
 	OlderThan time.Duration
+	// ClaudeConfig is the user's own Claude Code config folder (claude.UserConfigDir), set only when runs sign in with
+	// the login, which keeps their sessions there; empty: no sessions kind.
+	ClaudeConfig string
+	// KnownWorkspace reports whether the store knows the run that used the named workspace (a run's ID, or an experiment
+	// slot's try, e<experiment>-s<slot>-t<try>): a session folder goes only then. nil knows none.
+	KnownWorkspace func(name string) (bool, error)
 }
 
 // CleanItem is one thing cleanup removes, or keeps and says why.
@@ -128,6 +139,8 @@ type CleanItem struct {
 	recheck func() time.Time
 	// process is a processes item's process, as its run recorded it (its ID and start time tell it from a later one).
 	process *leftProcess
+	// session is a sessions item's folder.
+	session *sessionRef
 }
 
 // PID is a processes item's process ID (0 for any other item).
@@ -141,6 +154,9 @@ func (it CleanItem) PID() int {
 type cleanPart struct {
 	path  string
 	bytes int64
+	// session is, for a run's session folder (leftoverSession), the folder's own identity: the sessions kind tells it by
+	// what it is, not by how its path is spelled (a config folder reached through a link, or not).
+	session fs.FileInfo
 }
 
 // Gone is how much of a leftover item is gone now: the sizes of its parts that no longer exist (after recovery).
@@ -158,6 +174,8 @@ func (it CleanItem) Gone() int64 {
 type CleanPlan struct {
 	Remove []CleanItem
 	Keep   []CleanItem
+	// Notes say what could not be looked at, for people (a projects folder that is a link).
+	Notes []string
 }
 
 // Names in the cache that cleanup reads.
@@ -183,6 +201,9 @@ func PlanClean(ctx context.Context, in CleanInput) (CleanPlan, error) {
 		if err := c.leftovers(ctx); err != nil {
 			return CleanPlan{}, err
 		}
+	}
+	if err := c.sessions(ctx); err != nil { // after the leftovers: a dead run's session folder is planned with them
+		return CleanPlan{}, err
 	}
 	order := func(a, b CleanItem) int {
 		return cmp.Or(cmp.Compare(slices.Index(CleanKinds, a.Kind), slices.Index(CleanKinds, b.Kind)), strings.Compare(a.Path, b.Path))
@@ -694,6 +715,9 @@ func removeItem(ctx context.Context, layout home.Layout, it CleanItem) error {
 	}
 	if it.Kind == CleanValidations {
 		return removeValidationGrade(ctx, layout, it)
+	}
+	if it.Kind == CleanSessions {
+		return removeSessionItem(layout, it) // outside the data folder: never cleanable, never quarantined
 	}
 	if err := cleanable(layout, it.Path); err != nil {
 		return err

@@ -553,9 +553,28 @@ var sessionUnsafe = regexp.MustCompile(`[^A-Za-z0-9]`)
 // real path with every character but letters and digits replaced by "-" (as observed on 2.1.281). Large tool outputs
 // are saved there.
 func SessionFolder(configDir, dir string) string {
+	return filepath.Join(configDir, "projects", sessionName(dir))
+}
+
+// sessionName is the name SessionFolder gives the session folder of dir: its real path (dir as given when it cannot be
+// resolved), encoded.
+func sessionName(dir string) string {
 	real := dir
 	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
 		real = resolved
 	}
-	return filepath.Join(configDir, "projects", sessionUnsafe.ReplaceAllString(real, "-"))
+	return sessionUnsafe.ReplaceAllString(real, "-")
 }
+
+// SessionFolderUnder recognises a session folder's name (a name in projects/, as SessionFolder makes it) of a session
+// started below root, resolved as SessionFolder resolves dir: rest is what follows root's encoded path and "-". For
+// SessionFolder(c, root+"/a/b.c") it returns "a-b-c". A name never leads back to one path: every path that differs from
+// root only in characters other than letters and digits (/x/a.b and /x/a_b, or /x-a/b) encodes the same, so a match
+// says that the name fits root, not that the session started there.
+func SessionFolderUnder(root, name string) (rest string, ok bool) {
+	rest, ok = strings.CutPrefix(name, sessionName(root)+"-")
+	return rest, ok && sessionNamePart.MatchString(rest)
+}
+
+// sessionNamePart is what an encoded path can hold.
+var sessionNamePart = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
