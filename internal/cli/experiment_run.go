@@ -27,7 +27,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	fs.Float64Var(&o.UsageLimit, "usage-limit", experiment.DefaultUsageLimit, "with a subscription, start no pair past this share of the five-hour window (percent)")
 	fs.BoolVar(&o.Wait, "wait", false, "at the usage limit, wait for the window to reset instead of pausing")
 	fs.BoolVar(&yes, "yes", false, "consent to the paid run, which --json needs (it never asks); a run you start yourself needs none")
-	fs.Var(&view, "view", "on a terminal: dashboard (the default, redrawn in place) or log (styled lines, nothing redrawn)")
+	fs.Var(&view, "view", "on a terminal: dashboard (the default: quiet, redrawn in place), flow (step boxes, redrawn in place) or log (styled lines, nothing redrawn)")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
@@ -75,6 +75,7 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 		defer live.Stop() // covers early returns and interrupts; the summary below stops it first
 	} else {
 		env, screen = newRunScreen(ctx, env, view, caps, o.UsageLimit)
+		screen.name = name
 		// Close clears the live region on every return, an interrupt or a panic included. Revalidation's status line is
 		// not live here: the screen shows the progress.
 		defer screen.Close()

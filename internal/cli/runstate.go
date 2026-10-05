@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +78,10 @@ type runState struct {
 	noteRole term.Role
 	notePos  int
 	noteAt   time.Time
+	// began is when the state was made, the quiet view's clock; passed and graded count each arm's settled graded runs
+	// of this execution (a resumed one does not know the earlier runs' passes).
+	began          time.Time
+	passed, graded [2]int
 }
 
 // noteTime is how long a note that nothing else ends (a comparison, a warning) stays in the status line.
@@ -83,7 +89,7 @@ const noteTime = 10 * time.Second
 
 func newRunState(f runFacts, s experiment.Standing, now func() time.Time) *runState {
 	st := &runState{facts: f, now: now, runs: map[int]*stateRun{}, settled: map[int]bool{}, spent: s.Spent, usage: s.Usage, hasUsage: s.HasUsage,
-		notePos: -1}
+		notePos: -1, began: now()}
 	for pos := range s.Settled {
 		st.settled[pos] = true
 	}
@@ -161,6 +167,12 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		s.last[arm] = r
 		s.spent = e.SpentUSD
 		if experiment.Settles(e.Result.Outcome) {
+			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil {
+				s.graded[arm]++
+				if *e.Result.Passed {
+					s.passed[arm]++
+				}
+			}
 			s.settled[e.Slot.Position] = true
 		}
 		if u := e.Result.Usage; u != nil {
@@ -290,7 +302,11 @@ func (s *runState) view() stateView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer,
-		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt}
+		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt, began: s.began, passed: s.passed, graded: s.graded}
+	for _, r := range s.runs { // every run in flight, by schedule position: the quiet view's "now"
+		v.running = append(v.running, *r)
+	}
+	slices.SortFunc(v.running, func(a, b stateRun) int { return cmp.Compare(a.pos, b.pos) })
 	for pos := range s.settled {
 		if pos >= 0 && pos < len(s.facts.slotArm) {
 			v.settled[s.facts.slotArm[pos]]++
@@ -334,6 +350,10 @@ type stateView struct {
 	noteRole  term.Role
 	noteFades bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
 	noteAt    time.Time
+	running   []stateRun // every run in flight, by schedule position
+	began     time.Time
+	passed    [2]int // each arm's settled runs that passed, of graded
+	graded    [2]int
 }
 
 // noteNow is the status line's note at now: empty once it has faded.

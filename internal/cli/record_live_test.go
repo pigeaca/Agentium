@@ -35,12 +35,13 @@ func (w *timedWriter) Write(p []byte) (int, error) {
 
 // TestRecordLiveRun is the recorder behind the console's animations, not a check: it runs only when
 // AGENTIUM_RECORD_LIVE names an output file. It runs "experiment run" as on a terminal, and writes the output as JSON
-// [[seconds, text], ...], the input of scripts/readme_images/frames2svg.py (the dashboard) and cast2svg.py (lines
+// [[seconds, text], ...], the input of scripts/readme_images/frames2svg.py (the live views) and cast2svg.py (lines
 // only). The test stand-in answers for Claude Code at its real speed (AGENTIUM_RECORD_PACE seconds a run, default
 // 0.2), so nothing is paid; AGENTIUM_RECORD_COST is what its runs in the second context cost (default $0.27, the first's
 // about $0.30). AGENTIUM_RECORD_VIEW picks the view:
-//   - dashboard (the default): a seq-v1 experiment on 16 tasks where the second context is cheaper, on an 80 by 34
-//     terminal, with the plan's usage shown;
+//   - dashboard (the default): the quiet view of a seq-v1 experiment on 16 tasks where the second context is cheaper,
+//     on an 80 by 34 terminal, with the plan's usage shown;
+//   - flow: the same, as the step boxes with a moving dot (--view flow);
 //   - log: the same, in the log view;
 //   - plain: the status line and plain lines (NO_COLOR, as a terminal without the designed views), on the one-task
 //     experiment fixture.
@@ -76,8 +77,8 @@ func TestRecordLiveRun(t *testing.T) {
 		expect(t, f.run(ctx, "experiment", "new", "lean-vs-base", "--b", "lean", "--seed", "5", "--grader", "sandbox"), ExitOK)
 		f.vars["LANG"], f.vars["COLUMNS"], f.vars["LINES"] = "en_US.UTF-8", "80", "34"
 		args = []string{"experiment", "run", "lean-vs-base"}
-		if view == "log" {
-			args = append(args, "--view", "log")
+		if view == "log" || view == "flow" {
+			args = append(args, "--view", view)
 		}
 	}
 	f.vars["TERM"] = "xterm-256color"

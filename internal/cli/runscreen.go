@@ -24,6 +24,7 @@ type runScreen struct {
 	now   func() time.Time
 	width func() int
 	limit float64 // the usage limit, in percent
+	name  string  // the experiment's name, for the quiet view's report command; "" draws none
 
 	state   *runState // from Begin on
 	lock    experiment.Lock
@@ -90,10 +91,15 @@ func newRunScreen(ctx context.Context, env Env, view string, caps term.Capabilit
 			return min(max(cols-1, 1), term.MaxContentWidth)
 		}}
 	s.m = marksFor(s.sh)
-	if view == viewDashboard {
-		// Force: chooseView picked the dashboard for a terminal wide enough; NO_COLOR only takes its color away. Errors
-		// (standard error) print above the region at once.
-		s.disp = term.NewDisplay(ctx, env.Stdout, caps, term.DisplayOptions{Force: true, Size: size})
+	if view == viewDashboard || view == viewFlow {
+		// Force: chooseView picked the view for a terminal wide enough; NO_COLOR only takes its color away. Errors
+		// (standard error) print above the region at once. The quiet view (the dashboard) has nothing that moves: it
+		// redraws when the state changes (coalesced to 4 a second) and for its clock once a second, never to spin.
+		o := term.DisplayOptions{Force: true, Size: size}
+		if view == viewDashboard {
+			o.MinInterval, o.Spin = 250*time.Millisecond, time.Second
+		}
+		s.disp = term.NewDisplay(ctx, env.Stdout, caps, o)
 		env.Stdout, env.Stderr, env.notice = heldWriter{s}, s.disp.Over(env.Stderr), s.disp.Writer()
 		s.redrawWaiting()
 	}
@@ -108,6 +114,10 @@ func (s *runScreen) redrawWaiting() {
 	latest := s.latest
 	s.mu.Unlock()
 	sh, m := s.sh, s.m
+	if s.view == viewDashboard {
+		s.disp.Update(func(width, _, _ int) []string { return quietWaiting(sh, m, latest, width) })
+		return
+	}
 	s.disp.Update(func(width, _, tick int) []string {
 		text := "getting ready"
 		if latest != "" {
@@ -225,7 +235,11 @@ func (s *runScreen) observer(answer func(experiment.Lock) *answerState) experime
 func (s *runScreen) redraw() {
 	v := s.state.view()
 	sh, now := s.sh, s.now
-	s.disp.Update(func(width, height, tick int) []string { return dashboardFrame(v, sh, now(), width, height, tick) })
+	if s.view == viewDashboard {
+		s.disp.Update(func(width, height, _ int) []string { return quietFrame(v, sh, now(), width, height) })
+		return
+	}
+	s.disp.Update(func(width, height, tick int) []string { return flowFrame(v, sh, now(), width, height, tick) })
 }
 
 // header is the log view's first lines: a blank line, the question, the budget, the tasks and the sandbox's legend, and
