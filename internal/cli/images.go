@@ -77,20 +77,21 @@ func imagePins(env Env, cmd string, names []string) ([]container.Pin, bool) {
 }
 
 // projectNeeds says, per toolchain, whether the project in the current folder needs its image: "yes", or why its
-// image cannot grade it (the version match, open decision 6). ok is false outside a registered project.
-func projectNeeds(ctx context.Context, env Env) (needs map[string]string, pins []container.Pin, matchErr error, ok bool) {
+// image cannot grade it (the version match, open decision 6). ok is false outside a registered project, and lookupErr
+// says why the project could not be looked up (errDatabaseUnclean, say).
+func projectNeeds(ctx context.Context, env Env) (needs map[string]string, pins []container.Pin, matchErr error, ok bool, lookupErr error) {
 	w, err := findProjectReadOnly(ctx, env)
 	if err != nil || w == nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, false, err
 	}
 	defer w.Close()
 	tools, err := w.buildTools(ctx)
 	if err != nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, false, err
 	}
 	host, err := w.hostToolchain(ctx, env)
 	if err != nil {
-		return nil, nil, nil, false
+		return nil, nil, nil, false, err
 	}
 	needs = map[string]string{}
 	for _, tool := range tools {
@@ -105,8 +106,11 @@ func projectNeeds(ctx context.Context, env Env) (needs map[string]string, pins [
 		}
 	}
 	pins, matchErr = container.Match(tools, host)
-	return needs, pins, matchErr, true
+	return needs, pins, matchErr, true, nil
 }
+
+// errDatabaseUnclean: the database has a WAL file and no shared-memory file, so even reading it would write.
+var errDatabaseUnclean = errors.New("Agentium's database is in use or wasn't closed cleanly, so it is not read here: name the toolchains (go, jdk, rust, python)")
 
 // findProjectReadOnly finds the registered project of the current folder and writes nothing: no data folder is made,
 // and the database is only read (store.OpenReadOnly: no migration, no side files). A folder outside a repository, a
@@ -131,6 +135,13 @@ func findProjectReadOnly(ctx context.Context, env Env) (*workspace, error) {
 	}
 	if info, err := os.Stat(layout.Database); err != nil || !info.Mode().IsRegular() {
 		return nil, nil
+	}
+	// A WAL file without its shared-memory file (missing or empty: another process is starting, or one died) would
+	// have SQLite create or rebuild that file even read-only, before any consent: refuse instead.
+	if _, err := os.Lstat(layout.Database + "-wal"); err == nil {
+		if info, err := os.Lstat(layout.Database + "-shm"); err != nil || info.Size() == 0 {
+			return nil, errDatabaseUnclean
+		}
 	}
 	db, err := store.OpenReadOnly(ctx, layout.Database)
 	if err != nil {
@@ -179,8 +190,11 @@ func imagesList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	needs, _, _, inProject := projectNeeds(ctx, env)
+	needs, _, _, inProject, lookupErr := projectNeeds(ctx, env)
 	printImages(env, plan, local, needs, inProject)
+	if lookupErr != nil {
+		fmt.Fprintln(env.Stdout, warning(env.style(), "which images this project needs is not shown: "+lookupErr.Error()))
+	}
 	return ExitOK
 }
 
@@ -346,8 +360,10 @@ func pullPins(ctx context.Context, env Env, names []string) (pins []container.Pi
 	if len(names) > 0 {
 		return pins, ExitOK, true
 	}
-	_, needed, matchErr, inProject := projectNeeds(ctx, env)
+	_, needed, matchErr, inProject, lookupErr := projectNeeds(ctx, env)
 	switch {
+	case lookupErr != nil:
+		return nil, fail(env, lookupErr), false
 	case !inProject:
 		fmt.Fprintf(env.Stderr, "agentium images pull: name the toolchains (go, jdk, rust, python), or run it in your registered repository\n\n%s", imagesUsage)
 		return nil, ExitUsage, false
@@ -470,8 +486,12 @@ func imagesRemove(ctx context.Context, env Env, args []string) int {
 	}
 	defer d.Close()
 	// With --yes, the inventory, the record, the removals and the record's save happen under the lock images pull
-	// holds, so a pull meanwhile is never lost from the record. A dry run writes nothing, not even the lock.
-	if *yes && layoutExists(layout) {
+	// holds, so a pull meanwhile is never lost from the record, even a first pull that makes the data folder. A dry
+	// run writes nothing, not even the lock.
+	if *yes {
+		if err := layout.Ensure(); err != nil {
+			return fail(env, err)
+		}
 		unlock, err := home.LockFile(ctx, builtImagesPath(layout)+".lock", func() {
 			fmt.Fprintln(env.Stdout, "waiting for agentium images pull to finish")
 		})
@@ -480,7 +500,7 @@ func imagesRemove(ctx context.Context, env Env, args []string) int {
 		}
 		defer unlock()
 	}
-	targets, err := removalTargets(ctx, d, pins, *bases)
+	targets, local, err := removalTargets(ctx, d, pins, *bases)
 	if err != nil {
 		return fail(env, err)
 	}
@@ -489,29 +509,45 @@ func imagesRemove(ctx context.Context, env Env, args []string) int {
 		return ExitOK
 	}
 	if !*yes {
-		printRemoval(env, targets, *bases)
+		printRemoval(env, targets, local, *bases)
 		return ExitOK
 	}
-	return removeImages(ctx, env, d, layout, targets)
+	return removeImages(ctx, env, d, layout, targets, local)
 }
 
-// removalTargets are the images of the named pins on the daemon: the grading images, and with bases the pinned bases.
-func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, bases bool) ([]container.LocalImage, error) {
-	local, err := d.LocalImages(ctx)
-	if err != nil {
-		return nil, err
+// removalTargets are the images of the named pins on the daemon (the grading images, and with bases the pinned bases),
+// grading images first: a base cannot go while an image built on it stays. local is every image of Agentium's there.
+func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, bases bool) (targets, local []container.LocalImage, err error) {
+	if local, err = d.LocalImages(ctx); err != nil {
+		return nil, nil, err
 	}
 	var names []string
 	for _, p := range pins {
 		names = append(names, p.Name())
 	}
-	var targets []container.LocalImage
 	for _, l := range local {
 		if slices.Contains(names, l.Toolchain) && (l.Kind == "grading" || bases) {
 			targets = append(targets, l)
 		}
 	}
-	return targets, nil
+	gradingFirst := func(l container.LocalImage) int {
+		if l.Kind == "grading" {
+			return 0
+		}
+		return 1
+	}
+	slices.SortStableFunc(targets, func(a, b container.LocalImage) int { return gradingFirst(a) - gradingFirst(b) })
+	return targets, local, nil
+}
+
+// builtOn is a grading image built on base that is not among the targets ("" when none): the base then stays.
+func builtOn(base container.LocalImage, targets, local []container.LocalImage) string {
+	for _, g := range local {
+		if g.Kind == "grading" && g.Base == base.Ref && !slices.ContainsFunc(targets, func(t container.LocalImage) bool { return t.Ref == g.Ref }) {
+			return g.Ref
+		}
+	}
+	return ""
 }
 
 // freed is what removing an image frees: nothing when it stays under a tag of yours (its name goes, not the image).
@@ -530,52 +566,65 @@ func imageLine(l container.LocalImage) string {
 	return fmt.Sprintf("%-8s %-12s %s (%s)", l.Kind, l.Toolchain, l.Ref, formatBytes(l.Size))
 }
 
-func printRemoval(env Env, targets []container.LocalImage, bases bool) {
+func printRemoval(env Env, targets, local []container.LocalImage, bases bool) {
 	st := env.style()
 	var total int64
 	for _, l := range targets {
-		total += freed(l)
+		if l.Kind != "base" || builtOn(l, targets, local) == "" {
+			total += freed(l)
+		}
 	}
 	fmt.Fprintln(env.Stdout, st.Heading(fmt.Sprintf("Removing these would free up to %s (a dry run: nothing was removed):", formatBytes(total))))
 	for _, l := range targets {
+		if child := builtOn(l, targets, local); l.Kind == "base" && child != "" {
+			fmt.Fprintf(env.Stdout, "  %-8s %-12s %s (stays: the grading image %s is built on it)\n", l.Kind, l.Toolchain, l.Ref, child)
+			continue
+		}
 		fmt.Fprintln(env.Stdout, "  "+imageLine(l))
 	}
 	fmt.Fprintf(env.Stdout, "\nRun %s to remove them; a later container grade then needs agentium images pull again.\n", st.Command("agentium images remove --yes"+map[bool]string{true: " --bases", false: ""}[bases]))
 }
 
-// removeImages removes the targets (the caller holds the record's lock) and drops them from the record.
-func removeImages(ctx context.Context, env Env, d DockerClient, layout home.Layout, targets []container.LocalImage) int {
+// removeImages removes the targets in their order, grading images first (the caller holds the record's lock), and
+// drops them from the record. A base stays while a grading image built on it stays (one that was not a target, or
+// whose removal failed): with the classic image store, removing it would only untag it and leave it unreachable.
+func removeImages(ctx context.Context, env Env, d DockerClient, layout home.Layout, targets, local []container.LocalImage) int {
 	built, err := container.LoadBuilt(builtImagesPath(layout))
 	if err != nil {
 		return fail(env, err)
 	}
+	remaining := map[string]bool{} // grading images still there, by tag
+	for _, l := range local {
+		if l.Kind == "grading" {
+			remaining[l.Ref] = true
+		}
+	}
 	failed := 0
 	for _, l := range targets {
+		if l.Kind == "base" {
+			if child := slices.IndexFunc(local, func(g container.LocalImage) bool { return g.Kind == "grading" && g.Base == l.Ref && remaining[g.Ref] }); child >= 0 {
+				fmt.Fprintf(env.Stdout, "kept base %s: the grading image %s is built on it\n", l.Ref, local[child].Ref)
+				continue
+			}
+		}
 		if err := d.RemoveImage(ctx, l.Ref); err != nil {
 			fmt.Fprintln(env.Stdout, warning(env.style(), err.Error()))
 			failed++
 			continue
 		}
 		delete(built, l.Ref)
+		delete(remaining, l.Ref)
 		if len(l.OtherTags) > 0 {
 			fmt.Fprintf(env.Stdout, "untagged %s %s: it stays as %s, your own tag\n", l.Kind, l.Ref, strings.Join(l.OtherTags, ", "))
 		} else {
 			fmt.Fprintf(env.Stdout, "removed %s %s (%s)\n", l.Kind, l.Ref, formatBytes(l.Size))
 		}
 	}
-	if layoutExists(layout) {
-		if err := built.Save(builtImagesPath(layout)); err != nil {
-			return fail(env, err)
-		}
+	if err := built.Save(builtImagesPath(layout)); err != nil {
+		return fail(env, err)
 	}
 	if failed > 0 {
 		return ExitError
 	}
 	return ExitOK
-}
-
-// layoutExists reports whether the data folder exists (remove writes its record only then).
-func layoutExists(layout home.Layout) bool {
-	info, err := os.Stat(layout.Root)
-	return err == nil && info.IsDir()
 }

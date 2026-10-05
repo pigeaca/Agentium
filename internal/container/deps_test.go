@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func testVolume() DepsVolume { return DepsVolume{Data: "test", Project: "3", Image: fixtureImageID} }
@@ -175,7 +177,7 @@ func TestSeedDeps(t *testing.T) {
 	joined := strings.Join(create, " ")
 	for _, w := range []string{"--pull never", "--label agentium.data=test", "--interactive", "--network none", "--read-only", "--cap-drop ALL",
 		"--security-opt no-new-privileges", "--user 65534:65534", "--mount type=volume,src=" + v.Name() + ",dst=/deps --workdir /deps",
-		"--entrypoint tar " + goImage + " --extract --file - --skip-old-files --no-same-owner"} {
+		"--entrypoint sh " + goImage + " -c " + seedScript + " sh "} {
 		if !strings.Contains(joined, w) {
 			t.Errorf("create %q lacks %q", joined, w)
 		}
@@ -187,7 +189,7 @@ func TestSeedDeps(t *testing.T) {
 	if cpAt > startAt {
 		t.Error("the top folders were made after the stream")
 	}
-	if got := tarNames(t, f.stdin(t, cpAt)); !slices.Equal(got, []string{"py/ 5 65534 0755 ", "cargo/ 5 65534 0755 "}) {
+	if got := tarNames(t, f.stdin(t, cpAt)); !slices.Equal(got, []string{".seed/ 5 65534 0755 ", "py/ 5 65534 0755 ", "cargo/ 5 65534 0755 "}) {
 		t.Errorf("top folders %q", got)
 	}
 	if got := tarNames(t, f.stdin(t, startAt)); !slices.Equal(got, []string{"py/ 5 65534 0755 ", "cargo/ 5 65534 0755 ", "cargo/registry/ 5 65534 0755 ",
@@ -197,14 +199,23 @@ func TestSeedDeps(t *testing.T) {
 	// The volume's tar failing is the seed's failure, and the container still goes.
 	sc.SeedExit = 2
 	f.set(t, sc)
-	if _, err := d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err == nil || !strings.Contains(err.Error(), "tar exited 2") {
+	if _, err := d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err == nil || !strings.Contains(err.Error(), "exit 2") {
 		t.Errorf("a failing tar: %v", err)
 	}
 	if rms := f.commands(t, "rm"); len(rms) != 2 {
 		t.Errorf("removals %v", rms)
 	}
-	// A volume that is not Agentium's is never seeded.
+	// A stream cut mid-file is the seed's failure, and records nothing: the volume's script places nothing of it.
 	sc.SeedExit = 0
+	f.set(t, sc)
+	writeTree(t, src, map[string]string{"registry/cache/big.crate": strings.Repeat("x", 64<<10)})
+	d.hooks.seedStream = func(w io.Writer) io.Writer { return &cutWriter{w: w, left: 2048} }
+	written, err = d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits())
+	d.hooks.seedStream = nil
+	if err == nil || written != nil {
+		t.Errorf("a cut stream: %v, %v", written, err)
+	}
+	// A volume that is not Agentium's is never seeded.
 	sc.Volume = depsVolumeJSON(t, v, map[string]string{"owner": "x"}, nil)
 	f2, d2 := openFake(t, sc)
 	if _, err := d2.SeedDeps(context.Background(), v, img, nil, nil, SeedLimits()); err == nil || f2.called(t, "cp") {
@@ -342,4 +353,87 @@ func TestWarmRefuses(t *testing.T) {
 	if f.called(t, "create") {
 		t.Error("a container was made")
 	}
+}
+
+// A pipe in place of a seed's folder, there from the start or swapped in between its Lstat and its open, is refused at
+// once: nothing on the way may block.
+func TestSeedRefusesPipes(t *testing.T) {
+	t.Parallel()
+	deps := t.TempDir()
+	writeTree(t, deps, map[string]string{"cargo/registry/x": "x", "m2/a": "a"})
+	must(t, os.RemoveAll(filepath.Join(deps, "m2")))
+	must(t, syscall.Mkfifo(filepath.Join(deps, "m2"), 0o644))
+	bounded := func(name string, f func() error) {
+		t.Helper()
+		done := make(chan error, 1)
+		go func() { done <- f() }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Errorf("%s: accepted", name)
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s: hung", name)
+		}
+	}
+	bounded("a pipe", func() error {
+		_, _, err := SeedTar(context.Background(), io.Discard, []Seed{{Root: deps, Path: "m2", To: "m2"}}, nil, SeedLimits())
+		return err
+	})
+	base, err := os.OpenRoot(deps)
+	must(t, err)
+	defer base.Close()
+	for _, swapAt := range []string{"cargo", "registry"} {
+		bounded("a pipe swapped in for "+swapAt, func() error {
+			r, err := openUnder(base, "cargo/registry", func(c string) {
+				if c != swapAt {
+					return
+				}
+				dir := filepath.Join(deps, "cargo")
+				if c == "registry" {
+					dir = filepath.Join(deps, "cargo", "registry")
+				}
+				must(t, os.Rename(dir, dir+".moved"))
+				must(t, syscall.Mkfifo(dir, 0o644))
+			})
+			if r != nil {
+				r.Close()
+			}
+			return err
+		})
+		// Restore for the next case.
+		for _, dir := range []string{filepath.Join(deps, "cargo", "registry"), filepath.Join(deps, "cargo")} {
+			if info, err := os.Lstat(dir); err == nil && info.Mode()&os.ModeNamedPipe != 0 {
+				must(t, os.Remove(dir))
+				must(t, os.Rename(dir+".moved", dir))
+			}
+		}
+	}
+	// A folder swapped for another folder between the Lstat and the open is refused too.
+	_, err = openUnder(base, "cargo/registry", func(c string) {
+		if c == "registry" {
+			dir := filepath.Join(deps, "cargo", "registry")
+			must(t, os.Rename(dir, dir+".old"))
+			must(t, os.Mkdir(dir, 0o755))
+		}
+	})
+	if err == nil || !errors.Is(err, errSeedLink) {
+		t.Errorf("a folder swapped for another: %v", err)
+	}
+}
+
+// cutWriter passes left bytes, then fails: a stream cut mid-file.
+type cutWriter struct {
+	w    io.Writer
+	left int
+}
+
+func (c *cutWriter) Write(p []byte) (int, error) {
+	if len(p) > c.left {
+		n, _ := c.w.Write(p[:c.left])
+		c.left = 0
+		return n, errors.New("cut")
+	}
+	c.left -= len(p)
+	return c.w.Write(p)
 }

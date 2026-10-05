@@ -15,6 +15,7 @@ import (
 	"path"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -232,7 +233,7 @@ func openSeedRoot(s Seed) (*os.Root, error) {
 		return nil, fmt.Errorf("deps seed %s: %w", s.Root, err)
 	}
 	defer base.Close()
-	r, err := openUnder(base, s.Path)
+	r, err := openUnder(base, s.Path, nil)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -246,11 +247,17 @@ func openSeedRoot(s Seed) (*os.Root, error) {
 // host.
 var errSeedLink = errors.New("not a real folder (a link is never followed)")
 
-// openUnder opens the folder rel under base one component at a time without following a link: each component must
-// be a real folder by Lstat (a link is refused, even one that stays inside base, which os.Root would follow), and the
-// os.Root then opened for it must be that same folder (a swap between the two is refused). The caller closes the
-// result; base stays open.
-func openUnder(base *os.Root, rel string) (*os.Root, error) {
+// openUnder opens the folder rel under base one component at a time, without following a link and without
+// blocking. For each component:
+//   - it must be a real folder by Lstat (a link is refused, even one that stays inside base, which os.Root follows);
+//   - it is opened as a folder only and without blocking (openDir, the copy-in's own open: a pipe swapped in fails at
+//     once), and the open folder must be the one Lstat saw (a link or another folder swapped in is refused);
+//   - its os.Root is made from that open folder itself (/dev/fd/N names the open file, not a path), so nothing can be
+//     swapped in between, and it is checked to be the same folder again.
+//
+// hook, when set (tests), runs between a component's Lstat and its open. The caller closes the result; base stays
+// open.
+func openUnder(base *os.Root, rel string, hook func(component string)) (*os.Root, error) {
 	clean := path.Clean(rel)
 	if rel == "" || path.IsAbs(rel) || clean == ".." || strings.HasPrefix(clean, "../") || strings.ContainsRune(rel, 0) {
 		return nil, fmt.Errorf("%q: not a folder under the root", rel)
@@ -263,28 +270,46 @@ func openUnder(base *os.Root, rel string) (*os.Root, error) {
 		return cur, nil
 	}
 	for _, c := range strings.Split(clean, "/") {
-		want, err := cur.Lstat(c)
-		if err != nil {
-			cur.Close()
-			return nil, err
-		}
-		if !want.IsDir() {
-			cur.Close()
-			return nil, fmt.Errorf("%s: %w (%s)", c, errSeedLink, want.Mode().Type())
-		}
-		next, err := cur.OpenRoot(c)
+		next, err := openComponent(cur, c, hook)
 		cur.Close()
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", c, err)
-		}
-		got, err := next.Stat(".")
-		if err != nil || !os.SameFile(want, got) {
-			next.Close()
-			return nil, fmt.Errorf("%s: %w: it changed while it was opened", c, errSeedLink)
+			return nil, err
 		}
 		cur = next
 	}
 	return cur, nil
+}
+
+// openComponent is one step of openUnder.
+func openComponent(cur *os.Root, c string, hook func(string)) (*os.Root, error) {
+	want, err := cur.Lstat(c)
+	if err != nil {
+		return nil, err
+	}
+	if !want.IsDir() {
+		return nil, fmt.Errorf("%s: %w (%s)", c, errSeedLink, want.Mode().Type())
+	}
+	if hook != nil {
+		hook(c)
+	}
+	f, err := openDir(cur, c)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w: %w", c, errSeedLink, err)
+	}
+	defer f.Close()
+	got, err := f.Stat()
+	if err != nil || !os.SameFile(want, got) {
+		return nil, fmt.Errorf("%s: %w: it changed while it was opened", c, errSeedLink)
+	}
+	next, err := os.OpenRoot("/dev/fd/" + strconv.FormatUint(uint64(f.Fd()), 10))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", c, err)
+	}
+	if again, err := next.Stat("."); err != nil || !os.SameFile(got, again) {
+		next.Close()
+		return nil, fmt.Errorf("%s: %w: it changed while it was opened", c, errSeedLink)
+	}
+	return next, nil
 }
 
 // seedTar is SeedTar for opened seeds.
@@ -405,14 +430,47 @@ func topsTar(tops []string) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// SeedDeps copies the seed stream (SeedTar) into the volume, never replacing what it holds: a file there may be one a
-// grade is reading, or one a warm-up wrote. Every seed's folder is opened first, so a refused seed makes nothing. A
-// container of the image is created (no network, no capabilities, a read-only root, as the grade's user), the daemon
-// makes the volume's top folders in it (docker cp of a trusted tar: the volume's root is root's), and then it runs the
-// image's own tar on the stream with --skip-old-files, which leaves every existing file as it is. The container is
-// removed after, and is labelled like every container of the data folder, so recovery and clean find it if Agentium
-// dies first. The volume must be Agentium's (EnsureDepsVolume). It returns the files and links sent (written, or kept
-// as the volume had them), for the caller's record of what the volume holds (Seed.Skip).
+// seedStage is the volume's top folder where a seed's stream is unpacked before any of it is moved into place.
+const seedStage = ".seed"
+
+// seedScript runs in the seed's container, as the grade's user, with the stream on stdin and a fresh folder name as
+// $1. It first removes what earlier seeds that were cut short left in the staging folder (the caller holds the
+// volume's lock, so no other seed runs). It unpacks the whole stream there, and only once tar has read all of it does
+// it put each file and link into place: a hard link to its final name (link(2) never replaces an existing name, and the
+// file is whole by then), then the staging name goes. A name the volume holds already, whoever wrote it, stays as it
+// is. A stream cut mid-file makes tar fail, and nothing of it reaches a final name; its staging folder goes with the
+// next seed. Folders on the way are made as needed.
+const seedScript = `set -eu
+umask 022
+stage=/deps/` + seedStage + `
+find "$stage" -mindepth 1 -maxdepth 1 -exec chmod -R u+w {} + -exec rm -rf {} +
+mkdir "$stage/$1"
+tar --extract --file - --directory "$stage/$1" --no-same-owner
+cd "$stage/$1"
+find . ! -type d -exec sh -c '
+  for f do
+    dest=/deps/${f#./}
+    mkdir -p "${dest%/*}"
+    if ! ln -P "$f" "$dest" 2>/dev/null && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      echo "seed: cannot place ${f#./}" >&2
+      exit 1
+    fi
+  done' sh {} +
+cd /
+chmod -R u+w "$stage/$1"
+rm -rf "$stage/$1"
+`
+
+// SeedDeps copies the seed stream (SeedTar) into the volume, never replacing what it holds (a file there may be one a
+// grade is reading, or one a warm-up wrote) and never leaving a part of a file under its final name. Every seed's
+// folder is opened first, so a refused seed makes nothing. A container of the image is created (no network, no
+// capabilities, a read-only root, as the grade's user), the daemon makes the volume's top folders in it (docker cp of a
+// trusted tar: the volume's root is root's), and then it runs seedScript: the stream is unpacked into a staging folder
+// in the volume, and each file is put into place only once all of it arrived. The container is removed after, and is
+// labelled like every container of the data folder, so recovery and clean find it if Agentium dies first. The caller
+// holds the volume's lock (run's warm-up lock): seedScript removes earlier seeds' staging folders. The volume must be
+// Agentium's (EnsureDepsVolume). It returns the files and links sent (placed, or kept as the volume had them), for the
+// caller's record of what the volume holds (Seed.Skip).
 func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []Seed, entries []SeedEntry, limits CopyLimits) (written []string, err error) {
 	if _, ok, err := d.depsVolumeIs(ctx, v); err != nil || !ok {
 		return nil, errors.Join(fmt.Errorf("deps volume %s: make it first (EnsureDepsVolume)", v.Name()), err)
@@ -430,7 +488,7 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 			return nil, err
 		}
 	}
-	tops, err := topsTar(seedTops(opened, entries))
+	tops, err := topsTar(append([]string{seedStage}, seedTops(opened, entries)...))
 	if err != nil {
 		return nil, err
 	}
@@ -444,7 +502,7 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 		"--label", LabelData + "=" + v.Data, "--label", LabelRun + "=" + run, "--label", LabelMode + "=" + Mode,
 		"--interactive", "--network", "none", "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", User,
 		"--log-driver", "none", "--mount", "type=volume,src=" + v.Name() + ",dst=" + DepsDir, "--workdir", DepsDir,
-		"--entrypoint", "tar", img.Ref, "--extract", "--file", "-", "--skip-old-files", "--no-same-owner"}
+		"--entrypoint", "sh", img.Ref, "-c", seedScript, "sh", hex.EncodeToString(b)}
 	_, stderr, res, err := d.call(ctx, create, nil, controlTimeout)
 	if err == nil && res.ExitCode != 0 {
 		return nil, fmt.Errorf("deps seed: create %s: exit %d: %s", name, res.ExitCode, firstLine(stderr))
@@ -471,7 +529,11 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, written, writeErr = seedTar(walkCtx, pw, opened, entries, limits)
+		var w io.Writer = pw
+		if d.hooks.seedStream != nil {
+			w = d.hooks.seedStream(pw)
+		}
+		_, written, writeErr = seedTar(walkCtx, w, opened, entries, limits)
 		pw.Close()
 	}()
 	timeout := limits.Timeout
@@ -489,7 +551,7 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	case err != nil:
 		return nil, fmt.Errorf("deps seed into %s: %w", v.Name(), err)
 	case res.ExitCode != 0:
-		return nil, fmt.Errorf("deps seed into %s: tar exited %d: %s", v.Name(), res.ExitCode, firstLine(stderr))
+		return nil, fmt.Errorf("deps seed into %s: exit %d (nothing of a file cut short is in place): %s", v.Name(), res.ExitCode, firstLine(stderr))
 	case writeErr != nil:
 		return nil, fmt.Errorf("deps seed into %s: %w", v.Name(), writeErr)
 	}

@@ -402,3 +402,27 @@ func TestStreamRedactsTheHome(t *testing.T) {
 		t.Errorf("output:\n%s", got)
 	}
 }
+
+// Each stream is redacted on its own: a partial line of stderr ending in the home folder is never joined to stdout's
+// next line (which would hide the path's end), in either order of delivery.
+func TestRedactingStreamsStayApart(t *testing.T) {
+	d := &Docker{home: "/home/agentium"}
+	for name, order := range map[string][]int{"stderr first": {1, 0, 2}, "stdout first": {0, 1, 2}} {
+		t.Run(name, func(t *testing.T) {
+			var buf bytes.Buffer
+			out, errw := shownStreams(&buf, d.redact)
+			steps := []func(){
+				func() { io.WriteString(out, "pulled golang@sha256:x\n") },
+				func() { io.WriteString(errw, "last line /home/agentium") },
+				func() { out.Flush(); errw.Flush() },
+			}
+			for _, i := range order {
+				steps[i]()
+			}
+			got := buf.String()
+			if strings.Contains(got, "/home/agentium") || !strings.Contains(got, "last line ~") || !strings.Contains(got, "pulled golang@sha256:x\n") {
+				t.Errorf("output %q", got)
+			}
+		})
+	}
+}

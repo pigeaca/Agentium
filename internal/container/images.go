@@ -341,11 +341,15 @@ func (d *Docker) stream(ctx context.Context, args []string, stdin io.Reader, out
 		out = io.Discard
 	}
 	stderr := &capped{max: 64 << 10}
-	// What docker prints reaches the terminal redacted (its endpoint, the home folder as ~), a whole line at a time.
-	shown := &redactingWriter{w: out, redact: d.redact}
-	defer shown.Flush()
+	// What docker prints reaches the terminal redacted (its endpoint, the home folder as ~), a whole line at a time,
+	// each stream buffered on its own (a partial line of one never joins a line of the other), into one destination.
+	shownOut, shownErr := shownStreams(out, d.redact)
+	defer func() {
+		shownOut.Flush()
+		shownErr.Flush()
+	}()
 	res, err := runner.Run(ctx, runner.Spec{Args: append([]string{d.bin}, d.args(args)...), Environ: d.environ, Timeout: timeout,
-		Output: shown, Stderr: io.MultiWriter(shown, stderr), Stdin: stdin})
+		Output: shownOut, Stderr: io.MultiWriter(shownErr, stderr), Stdin: stdin})
 	if err != nil {
 		return d.redact(stderr.String()), res, err
 	}
@@ -366,6 +370,7 @@ type LocalImage struct {
 	// OtherTags are the image's tags that are not Agentium's (a base pulled by you as golang:1.27, say): removing the
 	// image by Agentium's reference then only drops that reference, and the image stays.
 	OtherTags []string
+	Base      string // a grading image's base (its agentium.base label): that base cannot go while the image stays
 }
 
 // LocalImages lists the grading images on the daemon (any recipe, current or not) and the pinned bases present.
@@ -411,7 +416,8 @@ func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
 				others = append(others, tag)
 			}
 		}
-		list = append(list, LocalImage{Kind: "grading", Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: current[f[1]], OtherTags: others})
+		list = append(list, LocalImage{Kind: "grading", Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: current[f[1]], OtherTags: others,
+			Base: info.Config.Labels[LabelBase]})
 	}
 	return list, nil
 }
@@ -448,8 +454,28 @@ func HumanSize(s string) int64 {
 	return -1
 }
 
-// redactingWriter passes whole lines through redact (a partial line waits for its end, or Flush; a line longer than
-// 64 KiB goes as it is cut). It is safe for concurrent writes, as stdout and stderr share it.
+// shownStreams are the writers of a command's stdout and stderr to out: each buffers and redacts its own lines, and
+// out is written by one at a time.
+func shownStreams(out io.Writer, redact func(string) string) (stdout, stderr *redactingWriter) {
+	dst := &lockedWriter{w: out}
+	return &redactingWriter{w: dst, redact: redact}, &redactingWriter{w: dst, redact: redact}
+}
+
+// lockedWriter serializes writes to one destination from several writers.
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
+}
+
+// redactingWriter passes one stream's whole lines through redact (a partial line waits for its end, or Flush; a line
+// longer than 64 KiB goes as it is cut). Each stream has its own, so that a partial line is never joined to another
+// stream's text, which could hide a path's end from redact; their destination serializes them (lockedWriter).
 type redactingWriter struct {
 	mu     sync.Mutex
 	w      io.Writer

@@ -3,6 +3,8 @@ package container
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -87,6 +89,27 @@ func TestRealDepsVolume(t *testing.T) {
 	if _, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err != nil {
 		t.Fatal(err)
 	}
+	// A seed cut mid-file places nothing of that file, and the next seed delivers it whole and clears what the cut one
+	// left in the staging folder.
+	big := strings.Repeat("0123456789abcdef", 8<<10) // 128 KiB
+	writeTree(t, src, map[string]string{"registry/cache/big.crate": big})
+	d.hooks.seedStream = func(w io.Writer) io.Writer { return &cutWriter{w: w, left: 32 << 10} }
+	if written, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err == nil || written != nil {
+		t.Fatalf("a seed cut mid-file: %v, %v", written, err)
+	}
+	d.hooks.seedStream = nil
+	var probe bytes.Buffer
+	err = d.Warm(ctx, WarmSpec{Volume: v, Image: img, Limits: limits, Deadline: 5 * time.Minute}, func(ctx context.Context, c *Container) error {
+		_, err := c.Exec(ctx, Command{Command: "test -e /deps/cargo/registry/cache/big.crate && echo PLACED; ls /deps/.seed | wc -l", Timeout: time.Minute, Output: &probe})
+		return err
+	})
+	must(t, err)
+	if got := probe.String(); strings.Contains(got, "PLACED") || strings.TrimSpace(got) != "1" {
+		t.Errorf("after a cut seed: %q (want nothing placed, one staging folder left)", got)
+	}
+	if _, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err != nil {
+		t.Fatal(err)
+	}
 	// WarmRun stops at the first command that fails, and says which.
 	tree := t.TempDir()
 	writeTree(t, tree, map[string]string{"sub/x": "x"})
@@ -107,7 +130,7 @@ func TestRealDepsVolume(t *testing.T) {
 	spec.Deps = v.Name()
 	out.Reset()
 	err = d.Run(ctx, spec, func(ctx context.Context, c *Container) error {
-		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log /deps/cargo/registry/cache/c.crate /deps/cargo/registry/cache/a.crate; echo; stat -c '%u' /deps/cargo/registry/cache/c.crate; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
+		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log /deps/cargo/registry/cache/c.crate /deps/cargo/registry/cache/a.crate; echo; stat -c '%u' /deps/cargo/registry/cache/c.crate; sha256sum < /deps/cargo/registry/cache/big.crate; ls -A /deps/.seed | wc -l; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
 		if err == nil && res.ExitCode != 0 {
 			err = errors.New("grade command failed: " + out.String())
 		}
@@ -132,7 +155,8 @@ func TestRealDepsVolume(t *testing.T) {
 		return nil
 	})
 	must(t, err)
-	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\nwarm\ncrate\n65534\n") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
+	sum := sha256.Sum256([]byte(big))
+	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\nwarm\ncrate\n65534\n"+hex.EncodeToString(sum[:])+"  -\n0\n") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
 		t.Errorf("grade output: %q", got)
 	}
 	// A seed's container left behind (Agentium died between create and removal): created, never started.

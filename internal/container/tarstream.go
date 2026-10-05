@@ -46,6 +46,8 @@ type TarStats struct {
 type walkHooks struct {
 	entry   func(name string) // before an entry is looked at
 	openDir func(name string) // after a folder's header is written, before the folder is opened to be listed
+	// seedStream wraps a seed's stream on its way to the volume's tar (a stream cut mid-file, say).
+	seedStream func(w io.Writer) io.Writer
 }
 
 // WriteTar writes the tree at root to w as a tar stream for the container: folders, regular files and symbolic links,
@@ -137,7 +139,7 @@ func (t *tarWalk) dir(name string) error {
 // it would otherwise hang the open beyond any cancel), checks that the open file is still a folder, and returns its
 // entries' names, sorted. More names than the entries left is ErrTooLarge, before they are all held in memory.
 func (t *tarWalk) list(name string) ([]string, error) {
-	f, err := t.r.OpenFile(name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := openDir(t.r, name)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +171,13 @@ func (t *tarWalk) list(name string) ([]string, error) {
 	}
 	sort.Strings(names)
 	return names, nil
+}
+
+// openDir opens name under r as a folder only and without blocking: a pipe or socket in its place fails at once
+// (ENOTDIR) instead of hanging the open beyond any cancel. os.Root follows a link that stays inside r even with
+// O_NOFOLLOW, so a caller that must refuse links checks the opened folder's identity (openUnder).
+func openDir(r *os.Root, name string) (*os.File, error) {
+	return r.OpenFile(name, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 }
 
 // entry writes one listed entry, and a folder's own entries after it.

@@ -21,6 +21,7 @@ import (
 type fakeDocker struct {
 	mu        sync.Mutex
 	rmHook    func()          // runs in RemoveImage, outside the lock
+	rmFail    map[string]bool // RemoveImage fails for these
 	present   map[string]bool // bases present, by toolchain
 	later     map[string]bool // present from the second Plan on, when set
 	fetched   []string
@@ -89,6 +90,9 @@ func (f *fakeDocker) RemoveImage(_ context.Context, ref string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.imagesRm = append(f.imagesRm, ref)
+	if f.rmFail[ref] {
+		return errors.New("remove image " + ref + ": in use")
+	}
 	return nil
 }
 
@@ -201,14 +205,22 @@ func TestImagesPullStaysWithinConsent(t *testing.T) {
 	}
 }
 
-// A removal and a pull at once: the pull waits for the removal's lock, so the image it builds stays in the record.
+// A removal and a pull at once: the pull waits for the removal's lock, so the image it builds stays in the record,
+// also when the pull is the first and makes the data folder.
 func TestImagesRemoveKeepsAConcurrentPull(t *testing.T) {
 	t.Parallel()
+	t.Run("a data folder", func(t *testing.T) { t.Parallel(); removeDuringPull(t, true) })
+	t.Run("no data folder yet", func(t *testing.T) { t.Parallel(); removeDuringPull(t, false) })
+}
+
+func removeDuringPull(t *testing.T, exists bool) {
 	d := &fakeDocker{present: map[string]bool{"rust": true},
 		local: []container.LocalImage{{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true}}}
 	run, data := imagesEnv(t, d, "", false)
-	must(t, os.MkdirAll(data, 0o700))
-	must(t, container.BuiltImages{"agentium-grade:go1.27-aaaaaaaaaaaa": {Tag: "agentium-grade:go1.27-aaaaaaaaaaaa"}}.Save(builtImagesPathFor(data)))
+	if exists {
+		must(t, os.MkdirAll(data, 0o700))
+		must(t, container.BuiltImages{"agentium-grade:go1.27-aaaaaaaaaaaa": {Tag: "agentium-grade:go1.27-aaaaaaaaaaaa"}}.Save(builtImagesPathFor(data)))
+	}
 	removing, release := make(chan struct{}), make(chan struct{})
 	d.rmHook = func() { close(removing); <-release }
 	removed := make(chan cliResult, 1)
@@ -231,6 +243,39 @@ func TestImagesRemoveKeepsAConcurrentPull(t *testing.T) {
 	if _, ok := built[r.Tag]; !ok || len(built) != 1 {
 		t.Errorf("record %v: the pull's image is lost", built)
 	}
+}
+
+// Grading images go before their bases, and a base stays while a grading image built on it stays: removing it first
+// would only untag it (the classic store refuses a base with child images) and leave it out of reach.
+func TestImagesRemoveOrder(t *testing.T) {
+	t.Parallel()
+	goPin, _ := container.PinFor("go")
+	ref, _ := goPin.Ref("arm64")
+	jdk, _ := container.PinFor("jdk")
+	jdkRef, _ := jdk.Ref("arm64")
+	d := &fakeDocker{local: []container.LocalImage{
+		{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true},
+		{Kind: "base", Ref: jdkRef, Toolchain: "jdk 21", Size: 500e6, Current: true},
+		{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true, Base: ref},
+		{Kind: "grading", Ref: "agentium-grade:jdk21-bbbbbbbbbbbb", Toolchain: "jdk 21", Size: 520e6, Current: true, Base: jdkRef}}}
+	run, _ := imagesEnv(t, d, "", false)
+	expect(t, run("images", "remove", "--bases", "go"), ExitOK, "base     go 1.27      "+ref+" (900.0 MB)")
+	expect(t, run("images", "remove", "--yes", "--bases", "go"), ExitOK)
+	if !slices.Equal(d.imagesRm, []string{"agentium-grade:go1.27-aaaaaaaaaaaa", ref}) {
+		t.Errorf("order %v", d.imagesRm)
+	}
+	// A base whose grading image stays (not named, or its removal failed) is kept.
+	d.imagesRm = nil
+	d.rmFail = map[string]bool{"agentium-grade:jdk21-bbbbbbbbbbbb": true}
+	res := run("images", "remove", "--yes", "--bases", "jdk")
+	expect(t, res, ExitError, "kept base "+jdkRef+": the grading image agentium-grade:jdk21-bbbbbbbbbbbb is built on it")
+	if slices.Contains(d.imagesRm, jdkRef) {
+		t.Errorf("removed a base with a child: %v", d.imagesRm)
+	}
+	d.rmFail = nil
+	d.local = d.local[1:] // the go base, its image gone; jdk's still there
+	expect(t, run("images", "remove", "--bases", "jdk"), ExitOK)
+	expect(t, run("images", "remove", "--yes", "--bases"), ExitOK)
 }
 
 // Without a toolchain named, images looks up the project in the current folder and writes nothing: no data folder
@@ -265,6 +310,35 @@ func TestImagesProjectLookupWritesNothing(t *testing.T) {
 	}
 	if len(d.fetched) > 0 {
 		t.Error("fetched")
+	}
+}
+
+// A database with a WAL file whose shared-memory file is missing or empty is not read (SQLite would make or rebuild
+// that file even read-only): pull without toolchains refuses, list says so, and neither writes a file.
+func TestImagesLookupRefusesAnUncleanDatabase(t *testing.T) {
+	t.Parallel()
+	for name, shm := range map[string]*string{"no shm": nil, "an empty shm": new(string)} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
+			d := &fakeDocker{}
+			*f.docker = func(context.Context, []string) (DockerClient, error) { return d, nil }
+			db := filepath.Join(f.data, "agentium.db")
+			writeFile(t, f.data, "agentium.db-wal", "not empty")
+			os.Remove(db + "-shm")
+			if shm != nil {
+				writeFile(t, f.data, "agentium.db-shm", *shm)
+			}
+			before := tree(t, f.data)
+			expect(t, f.run(context.Background(), "images", "pull"), ExitError, "in use or wasn't closed cleanly", "name the toolchains")
+			expect(t, f.run(context.Background(), "images"), ExitOK, "which images this project needs is not shown")
+			if after := tree(t, f.data); after != before {
+				t.Errorf("the data folder changed:\nbefore\n%s\nafter\n%s", before, after)
+			}
+			if info, err := os.Stat(db + "-shm"); (shm == nil) != os.IsNotExist(err) || err == nil && info.Size() != 0 {
+				t.Errorf("shm: %v, %v", info, err)
+			}
+		})
 	}
 }
 
