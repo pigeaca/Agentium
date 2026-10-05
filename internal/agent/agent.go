@@ -140,6 +140,20 @@ func Run(ctx context.Context, a Adapter, inv Invocation, environ []string, trans
 	var stop Stop
 	var watching sync.WaitGroup
 	watchCtx, endWatch := context.WithCancel(ctx)
+	spec.BeforeStop = inv.BeforeStop
+	if inv.Observe != nil {
+		started := spec.Started
+		spec.Started = func(pid int) {
+			if started != nil {
+				started(pid)
+			}
+			watching.Add(1)
+			go func() {
+				defer watching.Done()
+				inv.Observe(watchCtx, pid)
+			}()
+		}
+	}
 	if cmd.Watch != nil {
 		stopNow := make(chan struct{})
 		spec.Stop = stopNow

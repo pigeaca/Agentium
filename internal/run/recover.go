@@ -297,12 +297,18 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		if info, err := os.Stat(transcript); err == nil {
 			rec.Finished = info.ModTime().UTC()
 		}
-		rec.Metrics, _ = parseRecords(adapterFor(rec.Agent), dir) // what can be read is kept; a missing transcript spent nothing visible
+		var parseErr error
+		rec.Metrics, parseErr = parseRecords(adapterFor(rec.Agent), dir) // what can be read is kept; a missing transcript spent nothing visible
 		rec.Recovered = RecoveredStopped
 		rec.Notes = append(rec.Notes, fmt.Sprintf("Agentium stopped during this run; recovered on %s", now.UTC().Format("2006-01-02 15:04")))
 		rec.Notes = append(rec.Notes, codexNotes...)
 		if agent.Name(rec.Agent) == codex.Name {
 			rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
+			// Its spend was not settled when Agentium died: what the rollouts show counts only when verified (Parse's
+			// rules, no lost accounting); records that cannot be read whole are no verification.
+			if _, err := os.Stat(filepath.Join(dir, AccountingPending)); err == nil && parseErr != nil {
+				rec.Metrics.RolloutsIncomplete = true
+			}
 			codexSpendFallback(&rec)
 		}
 		if !rec.Metrics.SawResult && rec.Metrics.EstimatedCostUSD > 0 {

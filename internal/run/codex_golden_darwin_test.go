@@ -286,6 +286,9 @@ func captureCodex(t *testing.T, c codexGoldenCase) string {
 		t.Fatalf("%s: outcome %s, record %+v, notes %v", c.name, rec.Outcome, rec.Metrics, rec.Notes)
 	}
 	f.checkSentinels(t)
+	if _, err := os.Stat(filepath.Join(rec.RecordsDir, AccountingPending)); err == nil {
+		t.Errorf("%s: the run's pending mark outlived its final record", c.name)
+	}
 	var given struct {
 		Args  []string `json:"args"`
 		Env   []string `json:"env"`
@@ -469,26 +472,11 @@ func TestCodexRunSweepsLeftoverProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stream, err := os.ReadFile(filepath.Join(rec.RecordsDir, "stream.jsonl"))
-	must(t, err)
-	match := regexp.MustCompile(`# pid (\d+)`).FindSubmatch(stream)
-	if match == nil {
-		t.Fatalf("the fake left no child: %s", stream)
-	}
-	pid, _ := strconv.Atoi(string(match[1]))
-	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+	pid := childOf(t, rec)
 	if refused := guarded(pid); refused != "" {
 		t.Skip(refused)
 	}
-	gone := false
-	for range 40 {
-		if err := syscall.Kill(pid, 0); err != nil {
-			gone = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !gone {
+	if !codexChildEnds(pid) {
 		t.Errorf("process %d, which Codex's command left in the checkout, outlived the run (notes %q)", pid, rec.Notes)
 	}
 	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es) Codex's commands left running") {
@@ -521,10 +509,10 @@ func TestCodexRunRefusesAProjectConfig(t *testing.T) {
 	}
 }
 
-// A child that holds nothing of the run (its own session, started in /, no descriptor of the run's) is in the run's
-// sandbox, but holds none of its folders: reported, never killed. The run's notes and records name it, and
-// `agentium clean` lists it and stops it with --yes (here the test's own child, the only item: checked first).
-func TestCodexRunReportsADetachedChild(t *testing.T) {
+// A child that holds nothing of the run (its own session, started in /, no descriptor of the run's) was seen descending
+// from the agent while it ran: Agentium stops it once the agent ends, and the records keep what it saw
+// (AgentProcesses). Its stop goes through the guard: only the test's own child.
+func TestCodexRunStopsADetachedDescendant(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
 		t.Skip("no sandbox-exec")
 	}
@@ -535,6 +523,26 @@ func TestCodexRunReportsADetachedChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pid := childOf(t, rec)
+	if refused := guarded(pid); refused != "" {
+		t.Skip(refused)
+	}
+	if !codexChildEnds(pid) {
+		t.Errorf("process %d, detached from the run, outlived it (notes %q)", pid, rec.Notes)
+	}
+	if !strings.Contains(strings.Join(rec.Notes, " "), "stopped 1 process(es)") {
+		t.Errorf("the notes: %q", rec.Notes)
+	}
+	seen := loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses)).list()
+	if !slices.ContainsFunc(seen, func(id identity) bool { return id.PID == pid }) {
+		t.Errorf("the records do not keep the descendant: %v", seen)
+	}
+}
+
+// childOf is the ID of the child the fake Codex left (its stream names it); the test stops it at its end only while it
+// is still that process (killOwn).
+func childOf(t *testing.T, rec Record) int {
+	t.Helper()
 	stream, err := os.ReadFile(filepath.Join(rec.RecordsDir, "stream.jsonl"))
 	must(t, err)
 	match := regexp.MustCompile(`# pid (\d+)`).FindSubmatch(stream)
@@ -542,41 +550,34 @@ func TestCodexRunReportsADetachedChild(t *testing.T) {
 		t.Fatalf("the fake left no child: %s", stream)
 	}
 	pid, _ := strconv.Atoi(string(match[1]))
-	t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
-	if refused := guarded(pid); refused != "" {
-		t.Skip(refused)
-	}
-	if err := syscall.Kill(pid, 0); err != nil {
-		t.Fatalf("the detached child was stopped: %v (notes %q)", err, rec.Notes)
-	}
-	if notes := strings.Join(rec.Notes, " "); !strings.Contains(notes, "not stopped") || !strings.Contains(notes, strconv.Itoa(pid)) {
-		t.Errorf("the notes do not report it: %q", rec.Notes)
-	}
-	plan, err := PlanClean(context.Background(), CleanInput{Layout: f.env.Layout, Now: time.Now()})
-	must(t, err)
-	var items []CleanItem
-	for _, it := range plan.Remove {
-		if it.Kind == CleanProcesses {
-			items = append(items, it)
-		}
-	}
-	if len(items) != 1 || items[0].PID() != pid || !strings.Contains(items[0].Detail, "left by run "+rec.ID) {
-		t.Skipf("clean would stop %+v, not only the test's own child %d: not stopping anything", items, pid)
-	}
-	if errs := RemoveClean(context.Background(), f.env.Layout, items); errs[0] != nil {
-		t.Fatal(errs[0])
-	}
-	gone := false
+	killOwn(t, pid)
+	return pid
+}
+
+// codexChildEnds reports whether process pid ends within 2 s.
+func codexChildEnds(pid int) bool {
 	for range 40 {
 		if err := syscall.Kill(pid, 0); err != nil {
-			gone = true
-			break
+			return true
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !gone {
-		t.Errorf("clean --yes did not stop process %d", pid)
+	return false
+}
+
+// killOwn stops, at the test's end, the process with ID pid only while it is still the one alive now (ID and start
+// time): never a process that took its ID since.
+func killOwn(t *testing.T, pid int) {
+	t.Helper()
+	id, ok := identityNow(pid)
+	if !ok {
+		return
 	}
+	t.Cleanup(func() {
+		if now, ok := identityNow(pid); ok && now.key() == id.key() {
+			syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
 }
 
 // guardSweep makes a run's leftover sweep (sweepCodex) show its targets to the test first, and refuse to stop anything
@@ -622,5 +623,19 @@ func TestCodexRunWithLostAccounting(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rec.RecordsDir, codex.AccountingLost)); err != nil {
 		t.Errorf("the records do not say the accounting was lost: %v", err)
+	}
+}
+
+// A Codex run whose pending mark cannot be written does not start: nothing is spent.
+func TestCodexRunNeedsItsPendingMark(t *testing.T) {
+	f := newCodexOnce(t, "", "decoy", codex.SignInLogin)
+	in := filepath.Join(f.env.Layout.Records, f.env.ID, AccountingPending, "in-the-way")
+	must(t, os.MkdirAll(in, 0o700))
+	rec, err := Once(context.Background(), f.env, f.spec)
+	if err == nil || !strings.Contains(err.Error(), "accounting mark") {
+		t.Fatalf("a run without its pending mark: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(rec.RecordsDir, "stream.jsonl")); err == nil || rec.Spend().AgentUSD != 0 {
+		t.Errorf("Codex started (a transcript exists: %v)", err == nil)
 	}
 }

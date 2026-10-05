@@ -99,7 +99,7 @@ type process struct {
 	pid       int
 	sec, usec uint64
 	command   string
-	why       string // a reported leftover's reason (codexLeftovers)
+	why       string // a reported leftover's reason (codexReports)
 }
 
 // startOf reads a process's start time and command name; ok is false for another user's process or one that is gone.

@@ -304,3 +304,43 @@ func TestParseChecksTheTurnsAgainstTheRollouts(t *testing.T) {
 		t.Error("the watcher's mark of lost accounting was ignored")
 	}
 }
+
+// When the stream's usage is known, the cost is the larger of the rollouts' and the stream's, even within the 1%
+// that decides incompleteness. Without it, the main rollout must close its turn: a rollout cut before its
+// turn_aborted (a stopped run whose last requests never reached it) is incomplete.
+func TestParseTakesTheLargerCostAndNeedsAClosedTurn(t *testing.T) {
+	dir := records(t, "ok", "ok")
+	stream, err := os.ReadFile(filepath.Join(dir, agent.Transcript))
+	if err != nil {
+		t.Fatal(err)
+	}
+	slightly := strings.Replace(string(stream), `"input_tokens":44416`, `"input_tokens":44600`, 1) // 0.4% more than the rollout
+	if err := os.WriteFile(filepath.Join(dir, agent.Transcript), []byte(slightly), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m := parse(t, dir)
+	if want := cost(44600, 21248, 316); m.RolloutsIncomplete || math.Abs(m.CostUSD-want) > 1e-12 {
+		t.Errorf("a stream 0.4%% above the rollout: incomplete %v, $%.7f (want the stream's $%.7f)", m.RolloutsIncomplete, m.CostUSD, want)
+	}
+
+	cut := records(t, "interrupted", "")
+	full, err := os.ReadFile(filepath.Join("testdata", "rollout-interrupted.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(full)), "\n") {
+		if !strings.Contains(line, `"turn_aborted"`) {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cut, Rollout), []byte(strings.Join(kept, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if m := parse(t, cut); !m.RolloutsIncomplete {
+		t.Error("a stopped run's rollout that never closed its turn was taken as whole")
+	}
+	if m := parse(t, records(t, "interrupted", "interrupted")); m.RolloutsIncomplete {
+		t.Error("a stopped run's rollout that closed its turn (turn_aborted) was taken as incomplete")
+	}
+}

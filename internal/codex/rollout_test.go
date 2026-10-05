@@ -275,10 +275,9 @@ func TestWatcherBlindAndEnd(t *testing.T) {
 }
 
 // Lost accounting stops the run as blind, deterministically, and marks the records at once (AccountingLost): a rollout
-// that goes after it was found, or a turn whose end (the stream's turn.completed, with the turn's usage) the rollouts
-// do not match. A healthy run is never stopped for timing: a turn's message landing in the stream a poll after its
-// request's rollout lines, then a long silent tool call; several turns that match; and a stale open tool call in the
-// rollout does not keep a later turn from being checked.
+// that goes after it was found. Nothing about timing or a turn's end ever stops a run: a message landing in the stream
+// a poll after its request's rollout lines and a long silent tool call; a turn whose stream usage the rollouts fall short
+// of (checked once Codex has ended, by Parse, where it makes the spend the bound).
 func TestWatcherFailsClosedOnLostAccounting(t *testing.T) {
 	run := func(w watcher, rollout string, feed func(w watcher, rollout string)) (agent.Stop, bool) {
 		t.Helper()
@@ -301,16 +300,14 @@ func TestWatcherFailsClosedOnLostAccounting(t *testing.T) {
 		}
 	}
 	message := `{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"working"}}`
-	turnEnd := func(input int64) string {
-		return fmt.Sprintf(`{"type":"turn.completed","usage":{"input_tokens":%d,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}`, input)
-	}
+	turnEnd := `{"type":"turn.completed","usage":{"input_tokens":50000,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0}}`
 	lost := func(w watcher) bool {
 		_, err := os.Stat(filepath.Join(filepath.Dir(w.transcript), AccountingLost))
 		return err == nil
 	}
 	setup := func() (watcher, string) {
 		w, rollout := watchFixture(t)
-		w.capUSD, w.settle = 100, 100*time.Millisecond
+		w.capUSD = 100
 		writeFile(t, rollout, []byte(rolloutLines(mainThread, "/run/checkout")+request(1000)))
 		return w, rollout
 	}
@@ -333,30 +330,8 @@ func TestWatcherFailsClosedOnLostAccounting(t *testing.T) {
 	w, rollout = setup()
 	if s, ok := run(w, rollout, func(w watcher, _ string) {
 		time.Sleep(100 * time.Millisecond)
-		appendLine(w.transcript, turnEnd(50_000)) // the turn used far more than the rollouts recorded
-	}); !ok || s != agent.StopBlind || !lost(w) {
-		t.Errorf("a turn the rollouts fall short of: %q (stopped %v, marked %v)", s, ok, lost(w))
-	}
-
-	w, rollout = setup()
-	if s, ok := run(w, rollout, func(w watcher, rollout string) {
-		time.Sleep(100 * time.Millisecond)
-		appendLine(w.transcript, turnEnd(1000))
-		appendLine(rollout, strings.TrimSuffix(request(3000), "\n"))
-		time.Sleep(60 * time.Millisecond)
-		appendLine(w.transcript, turnEnd(3000)) // a second turn, matched as well
-	}); ok {
-		t.Errorf("a healthy run of two turns was stopped: %q", s)
-	}
-
-	w, rollout = setup()
-	appendTo(t, rollout, `{"type":"response_item","payload":{"type":"custom_tool_call","call_id":"call_1","name":"exec"}}`+"\n")
-	if s, ok := run(w, rollout, func(w watcher, rollout string) {
-		time.Sleep(100 * time.Millisecond)
-		appendLine(w.transcript, turnEnd(1000))
-		time.Sleep(60 * time.Millisecond)
-		appendLine(w.transcript, turnEnd(40_000)) // a later turn, with a tool call still open in the rollout
-	}); !ok || s != agent.StopBlind {
-		t.Errorf("a later turn after a stale open call was not checked: %q (stopped %v)", s, ok)
+		appendLine(w.transcript, turnEnd) // more than the rollouts recorded: Parse's to judge, after the run
+	}); ok || lost(w) {
+		t.Errorf("a turn's end stopped the run: %q (marked %v)", s, lost(w))
 	}
 }

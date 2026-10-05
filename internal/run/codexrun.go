@@ -1,6 +1,7 @@
 package run
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pigeaca/agentium/internal/agent"
@@ -20,7 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/pricing"
 )
 
-// codexSweep is what tells a Codex run's leftover processes (codexLeftovers): its workspace and temp root, its marker
+// codexSweep is what tells the processes a Codex run may have left (codexReports): its workspace and temp root, its marker
 // (a folder of a random name in its workspace that only its sandbox profile lets a process write; "": none known) and
 // when its agent started (no process older than that is its).
 type codexSweep struct {
@@ -62,8 +64,9 @@ func markerIn(workspace string) string {
 	return dirs[0]
 }
 
-// leftProcess is a process a Codex run's commands may have left, which the sweep only reported (codexLeftovers): kept
-// in the run's records (LeftoverProcesses) so that `agentium clean` can list it and, with --yes, stop it.
+// leftProcess is a process a Codex run's commands may have left that Agentium did not see descend from its agent
+// (codexReports): reported, never stopped. Kept in the run's records (LeftoverProcesses), which `agentium clean` lists
+// (it never signals a process: the user stops one that is theirs to stop).
 type leftProcess struct {
 	PID       int    `json:"pid"`
 	Command   string `json:"command"`
@@ -80,28 +83,110 @@ func (p leftProcess) Started() time.Time {
 // LeftoverProcesses, in a run's records, lists the processes its sweep reported but did not stop (leftProcess).
 const LeftoverProcesses = "leftover-processes.json"
 
-// sweepCodex stops the processes a Codex run's commands left that are shown to be its own on every count, and reports
-// the ones shown on one count only (codexLeftovers): in the run's notes, with their IDs, names and start times, and in
-// its records (LeftoverProcesses), which `agentium clean` reads. Codex's unified exec starts each command in a session
-// of its own, outside the process group the runner kills. guard, when set (tests), sees every round's targets before
-// any is stopped, and may refuse them: a test then never stops a process it did not start.
+// AgentProcesses, in a run's records, lists every process Agentium saw descend from the run's agent (descendants), so
+// that recovery stops them too after a crash.
+const AgentProcesses = "agent-processes.json"
+
+// identity tells a process from any later one that takes its ID: its ID and start time (seconds and microseconds).
+type identity struct {
+	PID     int    `json:"pid"`
+	Sec     uint64 `json:"start_sec"`
+	Usec    uint64 `json:"start_usec"`
+	Command string `json:"command,omitempty"`
+}
+
+func (i identity) key() [3]uint64     { return [3]uint64{uint64(i.PID), i.Sec, i.Usec} }
+func (i identity) started() time.Time { return time.Unix(int64(i.Sec), int64(i.Usec)*1000) }
+
+// descendantsPoll is how often Agentium looks at the agent's descendants while it runs.
+const descendantsPoll = 100 * time.Millisecond
+
+// descendants is what Agentium saw descend from a run's agent: the agent process itself and every process whose parent
+// chain led to it (or to one seen before) in one of the snapshots taken while it ran (snapshot), by full identity.
+// Only these are ever stopped. Persisted in the run's records (AgentProcesses).
 //
-// In the spike none was left, even after SIGINT.
-func sweepCodex(s codexSweep, guard func(pids []int) bool, records string) []string {
-	var notes []string
-	killed, reported, err := stopCodexLeftovers(s, guard)
-	if len(killed) > 0 {
-		notes = append(notes, fmt.Sprintf("stopped %d process(es) Codex's commands left running: %s", len(killed), strings.Join(killed, ", ")))
+// Residuals: a descendant that detaches (its parent gone) between two snapshots, before any snapshot saw it, is not
+// tracked, only reported; and the window between reading a process's identity and signalling it is the same as the
+// runner's own group kill (macOS has no process handle that pins an ID).
+type descendants struct {
+	file    string
+	mu      sync.Mutex
+	tracked map[[3]uint64]identity
+}
+
+// loadDescendants is what a run's records say was seen (none when the file is missing or cannot be read).
+func loadDescendants(file string) *descendants {
+	d := &descendants{file: file, tracked: map[[3]uint64]identity{}}
+	if data, err := os.ReadFile(file); err == nil {
+		var list []identity
+		if json.Unmarshal(data, &list) == nil {
+			for _, id := range list {
+				d.tracked[id.key()] = id
+			}
+		}
 	}
+	return d
+}
+
+// list is what d tracks, in a fixed order.
+func (d *descendants) list() []identity {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]identity, 0, len(d.tracked))
+	for _, id := range d.tracked {
+		out = append(out, id)
+	}
+	slices.SortFunc(out, func(a, b identity) int { return cmp.Compare(a.PID, b.PID) })
+	return out
+}
+
+// persist writes what d tracks to its file, atomically. Called with d.mu held.
+func (d *descendants) persist() error {
+	if d.file == "" {
+		return nil
+	}
+	list := make([]identity, 0, len(d.tracked))
+	for _, id := range d.tracked {
+		list = append(list, id)
+	}
+	slices.SortFunc(list, func(a, b identity) int { return cmp.Compare(a.PID, b.PID) })
+	data, err := json.Marshal(list)
 	if err != nil {
-		notes = append(notes, "Codex's leftover processes could not all be stopped: "+err.Error())
+		return err
+	}
+	return writeFileAtomic(d.file, data, 0o600)
+}
+
+// sweepCodex ends what a Codex run's commands left, once the agent has ended (or a dead Agentium's run is recovered):
+//   - stopped: every process Agentium saw descend from the agent (d), still alive with exactly the identity recorded
+//     and started after it (stopDescendants). Codex's unified exec starts each command in a session of its own, outside
+//     the process group the runner kills; such a session is still the agent's child, and the snapshots see it.
+//   - reported, never stopped: processes that may be the run's but were not seen descending from it (codexReports: in
+//     its sandbox, or using its folders), in the run's notes and its records (LeftoverProcesses).
+//
+// guard, when set (tests), sees every round's kill targets first and may refuse them: a test then never stops a
+// process it did not start.
+func sweepCodex(s codexSweep, d *descendants, guard func(pids []int) bool, records string) []string {
+	var notes []string
+	if d != nil {
+		killed, err := stopDescendants(d, s.since, guard)
+		if len(killed) > 0 {
+			notes = append(notes, fmt.Sprintf("stopped %d process(es) Codex's commands left running: %s", len(killed), strings.Join(killed, ", ")))
+		}
+		if err != nil {
+			notes = append(notes, "Codex's leftover processes could not all be stopped: "+err.Error())
+		}
+	}
+	reported, err := reportCodex(s)
+	if err != nil {
+		notes = append(notes, "Codex's leftover processes could not all be looked for: "+err.Error())
 	}
 	if len(reported) > 0 {
 		var shown []string
 		for _, p := range reported {
 			shown = append(shown, fmt.Sprintf("%d %q started %s (%s)", p.PID, p.Command, p.Started().UTC().Format(time.RFC3339), p.Why))
 		}
-		notes = append(notes, fmt.Sprintf("%d process(es) that may be what Codex's commands left are still running, not stopped (not shown to be the run's on every count): %s; `agentium clean` lists them, and stops them with --yes",
+		notes = append(notes, fmt.Sprintf("%d process(es) that may be what Codex's commands left are still running, not stopped (Agentium did not see them descend from the agent): %s; stop any that is yours to stop yourself (`agentium clean` lists them)",
 			len(reported), strings.Join(shown, ", ")))
 		if err := recordLeftovers(records, reported); err != nil {
 			notes = append(notes, "the processes left could not be recorded for `agentium clean`: "+err.Error())
@@ -147,7 +232,7 @@ func gatherOrphan(layout home.Layout, rec Record, workspace, records string) []s
 		return nil
 	}
 	notes := sweepCodex(codexSweep{workspace: workspace, tempRoot: layout.RunTemp(filepath.Base(workspace)), marker: markerIn(workspace),
-		since: rec.Started}, nil, records)
+		since: rec.Started}, loadDescendants(filepath.Join(records, AgentProcesses)), nil, records)
 	if err := (codex.Adapter{}).Gather(codexHomeOf(layout, rec.SignIn, workspace), records); err != nil {
 		notes = append(notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}
@@ -275,4 +360,20 @@ func mergeValues(a, b reflect.Value) reflect.Value {
 		return a
 	}
 	return out
+}
+
+// AccountingPending, in a Codex run's records, says that its spend is not settled yet: written before Codex starts,
+// removed once the run's final record is saved. A recovery that finds it accepts the spend the rollouts show only when
+// it is verified (codex Parse: the stream's usage matched, or the turn closed, and no lost accounting); otherwise the
+// run counts its bound.
+const AccountingPending = "accounting-pending"
+
+// markAccountingLost makes sure the records say the run's accounting was lost (codex.AccountingLost): the watcher
+// writes it the moment it stops a run as blind; this writes it again if that failed.
+func markAccountingLost(records string) error {
+	path := filepath.Join(records, codex.AccountingLost)
+	if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+		return nil
+	}
+	return writeFileAtomic(path, []byte("Agentium lost track of what the run spent\n"), 0o600)
 }

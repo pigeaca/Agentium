@@ -30,7 +30,10 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
   - the quarantine: what a grade's cleanup could not remove;
   - what runs stopped by a dead Agentium left (workspaces, temp and grading folders), as recovery removes it;
   - the grading folders of sandboxed validations that stopped (never one a validation is grading in, or any
-    process uses: nothing is stopped).
+    process uses: nothing is stopped);
+  - and it lists, as kept, processes a Codex run's commands may have left that Agentium did not see descend from the
+    run's agent (in the run's sandbox, or using its folders): it never stops a process, --yes or not; stop one that is
+    yours to stop yourself (the line says how).
 Nothing used in the last hour goes, and nothing a locked, unfinished experiment uses. Your repositories, reports and
 snapshots are never touched. Without --yes it writes nothing; with --yes it first runs the recovery every run starts
 with, which stores runs a dead Agentium left as cancelled, redacts their records, and removes the records folder of

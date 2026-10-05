@@ -39,6 +39,9 @@ type Spec struct {
 	// Stop, when set, stops the command once it is closed, the way a timeout does (gently with Grace, then SIGKILL), and
 	// the result says so (Result.Stopped): a watcher's decision, such as Agentium's cost cap, not a timeout.
 	Stop <-chan struct{}
+	// BeforeStop, when set, is called right before the command's process group is signalled to stop (a timeout, a
+	// cancellation, Stop), while the command still runs: a caller tracking its processes looks once more.
+	BeforeStop func()
 }
 
 // Result is how a command ended.
@@ -157,6 +160,9 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var escalate *time.Timer
 	cmd.Cancel = func() error {
+		if spec.BeforeStop != nil {
+			spec.BeforeStop()
+		}
 		if spec.Grace <= 0 {
 			return killGroup(cmd.Process.Pid)
 		}

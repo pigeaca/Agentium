@@ -377,3 +377,40 @@ func TestAnEmptyMissingListIsKept(t *testing.T) {
 		t.Errorf("temp files left: %v", strays)
 	}
 }
+
+// A crash after the watcher lost a run's accounting and could not mark it (a folder sits where the mark goes): the
+// run's pending mark is still there, and recovery accepts the spend its rollout shows only when verified. Here the
+// rollout stops before its turn closes (its last requests never reached it): the run counts its bound.
+func TestRecoveryWithAnUnmarkedLoss(t *testing.T) {
+	data := t.TempDir()
+	layout := home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
+		Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache")}
+	dir, workspace := filepath.Join(layout.Records, "r1"), filepath.Join(layout.Workspaces, "r1")
+	must(t, os.MkdirAll(filepath.Join(dir, codex.AccountingLost, "in-the-way"), 0o700))
+	if err := markAccountingLost(dir); err == nil {
+		t.Fatal("the mark was written over a folder")
+	}
+	must(t, os.WriteFile(filepath.Join(dir, AccountingPending), []byte("pending\n"), 0o600))
+	stream, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "exec-interrupted.jsonl"))
+	must(t, err)
+	must(t, os.WriteFile(filepath.Join(dir, "stream.jsonl"), stream, 0o600))
+	rollout, err := os.ReadFile(filepath.Join("..", "codex", "testdata", "rollout-interrupted.jsonl"))
+	must(t, err)
+	var kept []string
+	for _, line := range strings.Split(strings.TrimSpace(string(rollout)), "\n") {
+		if !strings.Contains(line, `"turn_aborted"`) {
+			kept = append(kept, line)
+		}
+	}
+	must(t, os.WriteFile(filepath.Join(dir, codex.Rollout), []byte(strings.Join(kept, "\n")+"\n"), 0o600))
+	must(t, os.MkdirAll(workspace, 0o700))
+	rec := Record{ID: "r1", Task: "fix", Arm: "A", Agent: codex.Name, SignIn: codex.SignInAPIKey, Model: "gpt-6.1-sol", CapUSD: 3, RecordsDir: dir}
+	must(t, (Env{}).writeStart(start{Record: rec, Workspace: workspace, AgentStarted: true}))
+	orphans, err := Recover(context.Background(), layout, func(string) (bool, error) { return false, nil }, "", time.Now())
+	if err != nil || len(orphans) != 1 {
+		t.Fatalf("Recover = %+v, %v", orphans, err)
+	}
+	if got, want := orphans[0].Record.Spend().AgentUSD, codex.Bound("gpt-6.1-sol", 3); got != want || !orphans[0].Record.CostEstimated {
+		t.Errorf("recovered $%.4f, want the bound $%.2f (notes %q)", got, want, orphans[0].Record.Notes)
+	}
+}

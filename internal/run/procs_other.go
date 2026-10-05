@@ -2,6 +2,11 @@
 
 package run
 
+import (
+	"context"
+	"time"
+)
+
 // processesUnder finds nothing outside macOS: the grading sandbox is macOS's, and grades elsewhere (none yet) would
 // need their own sweep (Linux: /proc/<pid>/cwd, exe and fd).
 func processesUnder([]string) ([]int, error) { return nil, nil }
@@ -15,16 +20,20 @@ func stopSandboxed(string, string) ([]string, error) { return nil, nil }
 // usingGrade finds nothing outside macOS (see processesUnder).
 func usingGrade(string, string, []string) ([]string, error) { return nil, nil }
 
-// codexLeftoverPIDs finds nothing outside macOS (see processesUnder).
-func codexLeftoverPIDs(codexSweep) (kill, report []int, err error) { return nil, nil, nil }
+// snapshot sees nothing outside macOS (see processesUnder).
+func (d *descendants) snapshot() error { return nil }
 
-// stopCodexLeftovers stops nothing outside macOS (see processesUnder).
-func stopCodexLeftovers(codexSweep, func([]int) bool) ([]string, []leftProcess, error) {
-	return nil, nil, nil
-}
+// observe watches nothing outside macOS (see processesUnder).
+func (d *descendants) observe(context.Context, int) {}
 
-// leftAlive finds no process outside macOS (see processesUnder).
-func leftAlive(leftProcess) bool { return false }
+// stopDescendants stops nothing outside macOS (see processesUnder).
+func stopDescendants(*descendants, time.Time, func([]int) bool) ([]string, error) { return nil, nil }
 
-// stopLeft stops nothing outside macOS (see processesUnder).
-func stopLeft(leftProcess) error { return nil }
+// reportCodex finds nothing outside macOS (see processesUnder).
+func reportCodex(codexSweep) ([]leftProcess, error) { return nil, nil }
+
+// codexReportPIDs finds nothing outside macOS (see processesUnder).
+func codexReportPIDs(codexSweep) ([]int, error) { return nil, nil }
+
+// identityNow finds no process outside macOS (see processesUnder).
+func identityNow(int) (identity, bool) { return identity{}, false }

@@ -9,15 +9,15 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// The sweep's matcher (codexLeftovers, which stops nothing) on this machine, with a fresh run's workspace, marker and
-// temp root, in the user's temp folder, /tmp and the home folder: nothing matches, even with no start-time limit (the
-// system's own sandboxed agents, which may write /tmp and the user's folders, among them). A first sweep, keyed on the
-// temp root alone, matched cfprefsd and sharingd.
+// The reports' matcher (codexReports, which stops nothing) on this machine, for a fresh run's workspace, marker and
+// temp root in the user's temp folder, /tmp and the home folder: nothing matches, even with no start-time limit. A
+// first sweep, keyed on the temp root alone, matched cfprefsd and sharingd.
 func TestCodexSweepMatchesNothingElse(t *testing.T) {
 	home, err := os.UserHomeDir()
 	must(t, err)
@@ -29,9 +29,8 @@ func TestCodexSweepMatchesNothingElse(t *testing.T) {
 	for _, base := range []string{t.TempDir(), short, probe} {
 		s := fakeRun(t, base, "ws")
 		s.since = time.Time{}
-		kill, report, err := codexLeftovers(s)
-		if err != nil || len(kill) != 0 || len(report) != 0 {
-			t.Errorf("a run in %s: the sweep would stop %v and report %v (%v)", base, kill, report, err)
+		if found, err := codexReportPIDs(s); err != nil || len(found) != 0 {
+			t.Errorf("a run in %s: the sweep would report %v (%v)", base, found, err)
 		}
 	}
 }
@@ -48,19 +47,25 @@ func fakeRun(t *testing.T, base, name string) codexSweep {
 	return codexSweep{workspace: ws, tempRoot: tempRoot, marker: marker, since: time.Now().Add(-time.Second)}
 }
 
-// sandboxed starts /bin/sleep in its own session under a Seatbelt profile (the test's own process: cleaned up here),
-// in dir (/: holding nothing of any run), and waits until its sandbox applies. An empty profile: no sandbox.
-func sandboxed(t *testing.T, profile, dir string) int {
+// started runs argv in its own session in dir under a Seatbelt profile ("": none), as the test's own process, waits
+// until its sandbox applies, and stops it at the end only while it is still that process (identity checked: killOwn).
+func started(t *testing.T, profile, dir string, argv ...string) int {
 	t.Helper()
-	c := exec.Command("/usr/bin/sandbox-exec", "-p", profile, "/bin/sleep", "60")
-	if profile == "" {
-		c = exec.Command("/bin/sleep", "60")
+	return startedCmd(t, profile, dir, argv...).Process.Pid
+}
+
+// startedCmd is started's command.
+func startedCmd(t *testing.T, profile, dir string, argv ...string) *exec.Cmd {
+	t.Helper()
+	if profile != "" {
+		argv = append([]string{"/usr/bin/sandbox-exec", "-p", profile}, argv...)
 	}
+	c := exec.Command(argv[0], argv[1:]...)
 	c.Dir, c.SysProcAttr = dir, &syscall.SysProcAttr{Setsid: true}
 	must(t, c.Start())
-	t.Cleanup(func() { c.Process.Kill(); c.Wait() })
+	t.Cleanup(func() { c.Process.Kill(); c.Wait() }) // the test's own child, not yet reaped: its ID is not reused
 	time.Sleep(300 * time.Millisecond)
-	return c.Process.Pid
+	return c
 }
 
 // grants is a profile that lets a process write each folder and nothing else under root.
@@ -72,41 +77,95 @@ func grants(root string, writable ...string) string {
 	return profile
 }
 
-// The matcher kills only on combined proof, and reports the rest (codexLeftovers; nothing is stopped here, every
-// process is the test's own). Killed: the run's own child, in its sandbox and holding its cwd in the checkout. Reported,
-// never killed: a sandbox that grants by pattern (workspaces/[^/]+/[^/]+, which covers the marker without knowing it)
-// and denies the workspaces, started from /; a user's unsandboxed process holding its cwd in the workspace; the run's
-// own detached child (in its sandbox, holding nothing). Neither: a concurrent run's child, and a process in the run's
-// own profile that started before its agent.
-func TestCodexSweepNeedsCombinedProof(t *testing.T) {
+// Only what Agentium saw descend from the agent is ever a kill target (descendantTargets; nothing is stopped here, and
+// every process is the test's own). Targets: the agent's child, and the child it left when it ended (reparented: the
+// detached case), both seen while the agent ran. Never targets, only reported: a sandbox that grants by pattern
+// (workspaces/[^/]+/[^/]+) with its cwd in the checkout, which passes both the old sandbox and path rules; a user's
+// unsandboxed process in the checkout. Not a target either: a recorded identity whose ID a different process holds now.
+func TestCodexSweepKillsOnlyDescendants(t *testing.T) {
 	if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
 		t.Skip("no sandbox-exec")
 	}
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	must(t, err)
-	runA, runB := fakeRun(t, base, "a"), fakeRun(t, base, "b")
+	run := fakeRun(t, base, "a")
 	root := filepath.Join(base, "workspaces")
-	ownA := grants(root, filepath.Join(runA.workspace, "repo"), runA.marker)
-	early := sandboxed(t, ownA, filepath.Join(runA.workspace, "repo"))
-	runA.since, runB.since = time.Now(), time.Now()
-	time.Sleep(10 * time.Millisecond)
-	pattern := sandboxed(t, fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath %q))(allow file-write* (regex #"^%s/[^/]+/[^/]+(/.*)?$"))`,
-		root, regexp.QuoteMeta(root)), "/")
-	user := sandboxed(t, "", filepath.Join(runA.workspace, "repo"))
-	child := sandboxed(t, ownA, filepath.Join(runA.workspace, "repo"))
-	detached := sandboxed(t, ownA, "/")
-	other := sandboxed(t, grants(root, filepath.Join(runB.workspace, "repo"), runB.marker), filepath.Join(runB.workspace, "repo"))
-
-	kill, report, err := codexLeftoverPIDs(runA)
-	must(t, err)
-	slices.Sort(report)
-	wantReport := []int{pattern, user, detached}
-	slices.Sort(wantReport)
-	if !slices.Equal(kill, []int{child}) || !slices.Equal(report, wantReport) {
-		t.Errorf("run A's sweep would stop %v (want only its child %d) and report %v (want %v: pattern %d, user %d, detached %d); early %d, run B's %d",
-			kill, child, report, wantReport, pattern, user, detached, early, other)
+	checkout := filepath.Join(run.workspace, "repo")
+	pattern := started(t, fmt.Sprintf(`(version 1)(allow default)(deny file-write* (subpath %q))(allow file-write* (regex #"^%s/[^/]+/[^/]+(/.*)?$"))`,
+		root, regexp.QuoteMeta(root)), checkout, "/bin/sleep", "60")
+	user := started(t, "", checkout, "/bin/sleep", "60")
+	// The "agent": a shell with a child that will outlive it, in its own session, in /.
+	agent := startedCmd(t, grants(root, checkout, run.marker), "/", "/bin/sh", "-c", "/bin/sleep 61 & exec /bin/sleep 60")
+	agentPID := agent.Process.Pid
+	d := loadDescendants(filepath.Join(t.TempDir(), AgentProcesses))
+	if id, ok := identityNow(agentPID); ok {
+		d.tracked[id.key()] = id
 	}
-	if kill, _, err := codexLeftoverPIDs(runB); err != nil || !slices.Equal(kill, []int{other}) {
-		t.Errorf("run B's sweep would stop %v (want only %d), %v", kill, other, err)
+	must(t, d.snapshot()) // while the agent runs: its child is seen
+	var child int
+	for _, id := range d.list() {
+		if id.PID != agentPID {
+			child = id.PID
+		}
+	}
+	if child == 0 {
+		t.Fatalf("the agent's child was not seen: %v", d.list())
+	}
+	killOwn(t, child)
+	agent.Process.Kill() // the agent ends (and is reaped, as the runner reaps it); its child is reparented
+	agent.Wait()
+	targets, err := descendantTargets(d, run.since)
+	must(t, err)
+	pids := []int{}
+	for _, id := range targets {
+		pids = append(pids, id.PID)
+	}
+	if !slices.Equal(pids, []int{child}) {
+		t.Errorf("targets %v, want only the agent's detached child %d (pattern %d, user %d)", pids, child, pattern, user)
+	}
+	reports, err := codexReportPIDs(run)
+	must(t, err)
+	if !slices.Contains(reports, pattern) || !slices.Contains(reports, user) {
+		t.Errorf("reported %v: want the pattern sandbox %d and the user's process %d", reports, pattern, user)
+	}
+	// A recorded identity whose ID is held by another process (here: the user's, recorded with another start time).
+	mixed := loadDescendants(filepath.Join(t.TempDir(), AgentProcesses))
+	if id, ok := identityNow(user); ok {
+		id.Usec++
+		mixed.tracked[id.key()] = id
+	}
+	if targets, err := descendantTargets(mixed, run.since); err != nil || len(targets) != 0 {
+		t.Errorf("a recorded identity matched by ID alone: %v, %v", targets, err)
+	}
+}
+
+// Cleanup never stops a process: a reported one (in the run's sandbox, or using its folders) is listed as kept, with
+// how to stop it if it is the user's to stop, --yes or not.
+func TestCleanNeverStopsAProcess(t *testing.T) {
+	layout := cleanLayout(t)
+	must(t, os.MkdirAll(layout.Records, 0o700))
+	run := fakeRun(t, t.TempDir(), "r1")
+	user := started(t, "", filepath.Join(run.workspace, "repo"), "/bin/sleep", "60")
+	id, ok := identityNow(user)
+	if !ok {
+		t.Fatal("the test's process is gone")
+	}
+	records := filepath.Join(layout.Records, "r1")
+	must(t, os.MkdirAll(records, 0o700))
+	must(t, recordLeftovers(records, []leftProcess{{PID: user, Command: id.Command, StartSec: id.Sec, StartUsec: id.Usec, Why: "using the run's folders"}}))
+	plan, err := PlanClean(t.Context(), CleanInput{Layout: layout, Now: time.Now()})
+	must(t, err)
+	if slices.ContainsFunc(plan.Remove, func(it CleanItem) bool { return it.Kind == CleanProcesses }) {
+		t.Fatalf("cleanup would stop a process: %+v", plan.Remove)
+	}
+	i := slices.IndexFunc(plan.Keep, func(it CleanItem) bool { return it.Kind == CleanProcesses && it.PID() == user })
+	if i < 0 || plan.Keep[i].Reason != CleanLeftByRun || !strings.Contains(plan.Keep[i].Detail, fmt.Sprintf("kill %d", user)) {
+		t.Fatalf("the reported process is not listed as kept: %+v", plan.Keep)
+	}
+	if errs := RemoveClean(t.Context(), layout, []CleanItem{plan.Keep[i]}); errs[0] == nil {
+		t.Error("cleanup agreed to remove a process")
+	}
+	if now, ok := identityNow(user); !ok || now.key() != id.key() {
+		t.Error("the process was stopped")
 	}
 }

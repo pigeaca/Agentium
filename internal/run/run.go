@@ -343,7 +343,8 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 			startErr = err
 		}
 	}
-	prepared := false // the workspace was begun: there is something to clean up
+	prepared := false    // the workspace was begun: there is something to clean up
+	keepPending := false // a Codex run whose lost accounting could not be marked: its pending mark stays
 	defer func() {
 		if prepared {
 			env.step(StepCleanup)
@@ -352,8 +353,16 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		// What is stored (the start file, the caller's database) holds no secret: the record carries the agent's output.
 		rec = redactRecord(rec, append([]string{env.Secret}, env.RedactAlso...)...)
 		if recordsReady {
-			if startErr := writeStart(true); startErr != nil && err == nil {
+			startErr := writeStart(true)
+			if startErr != nil && err == nil {
 				err = startErr
+			}
+			// The final record is saved: a recovery reads it, not the rollouts. A record that could not be marked as
+			// lost keeps its pending mark too (it is fail-closed either way).
+			if startErr == nil && !keepPending {
+				if rmErr := os.Remove(filepath.Join(rec.RecordsDir, AccountingPending)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) && err == nil {
+					err = fmt.Errorf("run records: %w", rmErr)
+				}
 			}
 		}
 		if redactErr := env.redactRecords(rec.RecordsDir); redactErr != nil && err == nil {
@@ -615,6 +624,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		inv.Dir, inv.Repo = dir, repo
 	}
 
+	// Until a Codex run's final record is saved, a recovery accepts the spend its rollouts show only once verified
+	// (codex Parse's rules): a run that cannot be marked so does not start (before its transcript: nothing to store).
+	if env.isCodex() {
+		if err := writeFileAtomic(filepath.Join(rec.RecordsDir, AccountingPending), []byte("Codex's spend is not settled yet\n"), 0o600); err != nil {
+			return rec, fmt.Errorf("the run's accounting mark: %w", err)
+		}
+	}
+
 	// The agent.
 	transcriptPath := filepath.Join(rec.RecordsDir, "stream.jsonl")
 	transcript, err := os.Create(transcriptPath)
@@ -646,12 +663,18 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		return rec, err
 	}
 	inv.Started = running
-	if env.isCodex() { // the folder only this run's sandbox may write: how its leftover processes are told (sweepCodex)
+	// Codex: the folder only this run's sandbox may write (how processes that may be its leftovers are reported), and
+	// Agentium's own look at the agent's descendants (the only processes the sweep stops: sweepCodex).
+	var tracked *descendants
+	if env.isCodex() {
 		if inv.Marker, err = newMarker(workspace); err != nil {
 			transcript.Close()
 			stderr.Close()
 			return rec, err
 		}
+		tracked = loadDescendants(filepath.Join(rec.RecordsDir, AgentProcesses))
+		inv.Observe = tracked.observe
+		inv.BeforeStop = func() { _ = tracked.snapshot() }
 	}
 	env.step(StepAgent)
 	env.progress("  workspace ready; %s is working (up to %s)", env.agentLabel(), spec.Timeout)
@@ -669,7 +692,7 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.Notes = append(rec.Notes, "the agent's session could not be moved into the run's records: "+err.Error())
 	}
 	if env.isCodex() {
-		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, env.sweepGuard, rec.RecordsDir)...)
+		rec.Notes = append(rec.Notes, sweepCodex(codexSweep{workspace: workspace, tempRoot: tempRoot, marker: inv.Marker, since: agentStart}, tracked, env.sweepGuard, rec.RecordsDir)...)
 	}
 	rec.ExitCode = result.ExitCode
 	// From here on the agent has run and may have spent money: any error still leaves a record with an outcome.
@@ -694,6 +717,10 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		rec.CostSource, rec.PriceTable = CostPricedByAgentium, pricing.OpenAIDate
 		if result.Stop == agent.StopBlind { // its accounting was lost: what the rollouts hold is a part
 			rec.Metrics.RolloutsIncomplete = true
+			if err := markAccountingLost(rec.RecordsDir); err != nil {
+				keepPending = true
+				rec.Notes = append(rec.Notes, "the run's lost accounting could not be marked in its records ("+err.Error()+"): its pending mark stays, so a recovery counts its bound")
+			}
 		}
 		codexSpendFallback(&rec)
 		if rec.Metrics.UnpricedRequests > 0 {

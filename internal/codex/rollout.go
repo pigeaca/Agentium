@@ -296,20 +296,17 @@ func scrub(v any) any {
 // to price stops the run as capped.
 //
 // Lost accounting stops the run as agent.StopBlind (and marks its records, AccountingLost, so it counts its bound
-// whatever happens next), in deterministic cases only: a thread whose rollout it cannot find within blindAfter; a
-// rollout, once found, that goes, cannot be opened or read, or holds a line too long to ever end; and a turn whose end
-// (the stream's turn.completed, with the turn's usage) the rollouts do not match (checkTurns). Codex 0.160 carries on
-// when it cannot write its rollout (persist_rollout_items' failure is ignored), so a turn's end is where a gap shows.
-// The residual: usage that silently stops being written in the middle of a turn is seen only when the turn ends; until
-// then the cap is not enforced, and the run's timeout is the backstop.
+// whatever happens next), in deterministic cases only: a thread whose rollout it cannot find within blindAfter; and a
+// rollout, once found, that goes, cannot be opened or read, or holds a line too long to ever end. Whether the rollout
+// holds every request is checked once Codex has ended, against the stream (Parse): a gap found there protects no more
+// spend, so it never stops a run; it makes the run's spend its bound.
 type watcher struct {
 	transcript, codexHome string
 	rates                 pricing.OpenAIRates
 	capUSD, allowanceUSD  float64
 	// poll is how often it looks (zero: 50 ms); blindAfter how long a started thread may go without a rollout (zero: a
-	// minute); settle how long the rollouts may trail a turn's end before the gap counts (zero: 2 s): the stream and
-	// the rollout are written by separate writers, and a turn's last request can land in the rollout just after.
-	poll, blindAfter, settle time.Duration
+	// minute).
+	poll, blindAfter time.Duration
 }
 
 // tail is one rollout the watcher reads: how far, and whether it is the run's.
@@ -334,15 +331,12 @@ type readResult struct {
 const AccountingLost = "accounting-lost"
 
 func (w watcher) watch(ctx context.Context) agent.Stop {
-	poll, blindAfter, settle := w.poll, w.blindAfter, w.settle
+	poll, blindAfter := w.poll, w.blindAfter
 	if poll <= 0 {
 		poll = 50 * time.Millisecond
 	}
 	if blindAfter <= 0 {
 		blindAfter = time.Minute
-	}
-	if settle <= 0 {
-		settle = 2 * time.Second
 	}
 	blind := func(why string) agent.Stop {
 		_ = writeAtomic(filepath.Join(filepath.Dir(w.transcript), AccountingLost), []byte(why+"\n"))
@@ -355,9 +349,6 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 	mainFound := false
 	tails := map[string]*tail{}
 	spent := 0.0
-	var recorded, turns pricing.OpenAIUsage // the rollouts' requests and the stream's ended turns, summed
-	stream := &streamTail{}
-	var turnEnded time.Time // a turn ended that the rollouts do not match yet
 	for {
 		select {
 		case <-ctx.Done():
@@ -397,7 +388,6 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 				return blind("the run's rollout " + filepath.Base(f) + " could not be read on")
 			}
 			spent += r.usd
-			recorded = addUsage(recorded, r.tokens)
 			if !r.priced {
 				return agent.StopCap // a request Agentium cannot price: the cap cannot be kept
 			}
@@ -411,25 +401,13 @@ func (w watcher) watch(ctx context.Context) agent.Stop {
 		if !mainFound && time.Since(threadSeen) > blindAfter {
 			return blind("no rollout of the run's thread appeared")
 		}
-		for _, u := range stream.read(w.transcript) {
-			turns = addUsage(turns, u)
-			if turnEnded.IsZero() {
-				turnEnded = time.Now()
-			}
-		}
-		switch {
-		case turnEnded.IsZero():
-		case !behind(recorded, turns):
-			turnEnded = time.Time{}
-		case time.Since(turnEnded) > settle:
-			return blind(fmt.Sprintf("the stream's ended turns used %d input and %d output tokens, the rollouts recorded %d and %d",
-				turns.Input, turns.Output, recorded.Input, recorded.Output))
-		}
 	}
 }
 
-// behind reports whether the rollouts' recorded tokens fall short of the stream's ended turns' by more than 1% (of
-// input, or of output): the rollouts missed requests. Equal counts are the spike's finding; 1% absorbs rounding only.
+// behind reports whether the rollouts' recorded tokens fall short of the stream's usage by more than 1% (of input, or
+// of output): the rollouts missed requests. Equal counts are the spike's finding (3 short sessions, without compaction
+// or retries: the plan's step 7 checks a long one); 1% absorbs rounding only, and decides incompleteness, never the
+// cost (Parse takes the larger).
 func behind(recorded, turns pricing.OpenAIUsage) bool {
 	return float64(recorded.Input) < 0.99*float64(turns.Input) || float64(recorded.Output) < 0.99*float64(turns.Output)
 }
@@ -449,36 +427,6 @@ func mainRolloutOf(tails map[string]*tail, thread string) string {
 		}
 	}
 	return ""
-}
-
-// streamTail reads the exec stream's new whole lines as they come.
-type streamTail struct{ offset int64 }
-
-// read returns the usage of each turn the stream's new lines end (turn.completed).
-func (s *streamTail) read(file string) []pricing.OpenAIUsage {
-	f, err := os.Open(file)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	if _, err := f.Seek(s.offset, io.SeekStart); err != nil {
-		return nil
-	}
-	data, _ := io.ReadAll(io.LimitReader(f, maxLine))
-	end := bytes.LastIndexByte(data, '\n')
-	if end < 0 {
-		return nil
-	}
-	s.offset += int64(end) + 1
-	var turns []pricing.OpenAIUsage
-	for _, line := range bytes.Split(data[:end], []byte("\n")) {
-		var e streamEvent
-		if json.Unmarshal(line, &e) == nil && e.Type == "turn.completed" && e.Usage != nil {
-			turns = append(turns, pricing.OpenAIUsage{Input: e.Usage.Input, Cached: e.Usage.Cached, CacheWrite: e.Usage.CacheWrite,
-				Output: e.Usage.Output, Reasoning: e.Usage.Reasoning})
-		}
-	}
-	return turns
 }
 
 // read prices the requests written to the rollout since the last read (whole lines only).

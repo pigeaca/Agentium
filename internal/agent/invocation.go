@@ -1,6 +1,9 @@
 package agent
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // Invocation is one headless agent run, in terms every agent shares: where it starts and what it may write, what it
 // may not read, the build tools that choose its environment allowlist and its network needs, its cap, timeout, model,
@@ -36,6 +39,11 @@ type Invocation struct {
 	Deny []string
 	// Started, when set, is called with the agent's process ID, which is also its process group, once it runs.
 	Started func(pid int)
+	// Observe, when set, runs from the agent's start (given its process ID) until it ends (ctx ends): Agentium's own
+	// look at the agent's processes (run's tracker of its descendants). BeforeStop, when set, is called right before the
+	// agent's process group is signalled to stop, while the agent still runs.
+	Observe    func(ctx context.Context, pid int)
+	BeforeStop func()
 	// BuildCache, when set, is a folder of the run's own for build caches: the build tools' agent caches point there
 	// (buildtool.AgentCacheEnv: Go's GOCACHE), and the sandbox lets the agent write it. The user's own caches are denied
 	// (buildtool.UserCaches): they hold what earlier builds compiled, the hidden tests of validations and gradings included.

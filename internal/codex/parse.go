@@ -77,18 +77,26 @@ func (Adapter) Parse(records string) (agent.Metrics, error) {
 		return m, nil
 	}
 	m.CostUSD, m.UnpricedRequests = s.usd, s.unpriced
-	// The stream's ended turns against the rollouts (as the watcher checks while the run goes): rollouts that fall
-	// short missed requests. The cost is then the larger of the two (the stream's totals priced whole, at the session's
-	// model's prices), and the run is incomplete: it counts its bound.
+	// Verified, or the bound (run's codexSpendFallback), once Codex has ended and its rollouts are gathered:
+	//   - with the stream's usage (the last turn.completed: the thread's whole, cumulative), the cost is the larger of
+	//     the rollouts' and the stream's priced whole (at the session's model's prices), and rollouts short of it by
+	//     more than 1% (behind) missed requests: incomplete;
+	//   - without it (a run stopped at its cap or timeout, or interrupted), the main rollout must close its turn
+	//     (task_complete or turn_aborted after its last request): otherwise requests at its end may be missing.
 	recorded := pricing.OpenAIUsage{Input: m.InputTokens + m.CacheReadTokens + m.CacheWriteTokens, Cached: m.CacheReadTokens,
 		CacheWrite: m.CacheWriteTokens, Output: m.OutputTokens}
-	if turn != nil && behind(recorded, *turn) {
-		m.RolloutsIncomplete = true
+	switch {
+	case turn != nil:
 		if rates, ok := pricing.OpenAILookup(m.Model); ok {
 			whole := (float64(turn.Uncached())*rates.Input + float64(turn.Cached)*rates.CachedInput + float64(turn.CacheWrite)*rates.CacheWrite +
 				float64(turn.Output)*rates.Output) / 1e6
 			m.CostUSD = max(m.CostUSD, whole)
 		}
+		if behind(recorded, *turn) {
+			m.RolloutsIncomplete = true
+		}
+	case !s.closed:
+		m.RolloutsIncomplete = true
 	}
 	return m, nil
 }
@@ -159,11 +167,9 @@ func parseStream(file string, m *agent.Metrics) (turn *pricing.OpenAIUsage, err 
 		case "turn.completed":
 			m.SawResult, m.Result, m.ResultIsError = true, ResultCompleted, false
 			if u := e.Usage; u != nil { // the whole turn's: used only when there is no rollout (Parse)
-				ended := pricing.OpenAIUsage{Input: u.Input, Cached: u.Cached, CacheWrite: u.CacheWrite, Output: u.Output, Reasoning: u.Reasoning}
-				if turn == nil {
-					turn = &pricing.OpenAIUsage{}
-				}
-				*turn = addUsage(*turn, ended) // every turn's, summed
+				// The thread's usage so far: Codex 0.160's turn.completed is cumulative per thread
+				// (exec/src/event_processor_with_jsonl_output.rs), so the last one is the whole; exec runs one turn.
+				turn = &pricing.OpenAIUsage{Input: u.Input, Cached: u.Cached, CacheWrite: u.CacheWrite, Output: u.Output, Reasoning: u.Reasoning}
 			}
 		case "turn.failed":
 			m.Result, m.ResultIsError = ResultFailed, true
@@ -291,6 +297,9 @@ var deniedText = regexp.MustCompile(`Operation not permitted|patch rejected|reje
 type spend struct {
 	usd      float64
 	unpriced int
+	// closed: the main rollout's last request is followed by its turn's closing event (task_complete or turn_aborted),
+	// so no request of the turn is missing from its end.
+	closed bool
 }
 
 // add prices one request at model's rates; a request on a model without a list price, or above the long-context
@@ -346,6 +355,7 @@ func parseRollout(file string, main bool, m *agent.Metrics, s *spend) error {
 			}
 			u := r.usage()
 			if main {
+				s.closed = false // a request after the turn's closing event: not closed again yet
 				if m.Turns == 0 {
 					m.FirstRequest = u.Input
 				}
@@ -376,7 +386,7 @@ func parseRollout(file string, main bool, m *agent.Metrics, s *spend) error {
 				}
 			case "task_complete", "turn_aborted":
 				if main {
-					m.DurationMS = e.DurationMS
+					m.DurationMS, s.closed = e.DurationMS, true
 				}
 			}
 		case "response_item":
