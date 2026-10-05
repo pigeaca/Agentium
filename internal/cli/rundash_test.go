@@ -115,7 +115,7 @@ func (s *scene) whole(pos int, passed bool) {
 }
 
 func (s *scene) frame(sh term.Shapes, width, height, tick int) string {
-	return strings.Join(dashboardFrame(s.state.view(), sh, s.clock.Now(), width, height, tick), "\n")
+	return strings.Join(flowFrame(s.state.view(), sh, s.clock.Now(), width, height, tick), "\n")
 }
 
 var (
@@ -211,8 +211,8 @@ func TestDashboardGoldens(t *testing.T) {
 		}
 		fmt.Fprintf(&b, "=== ASCII, 79 columns, 40 rows\n%s\n", tc.scene.frame(plainASCII, 79, 40, 3))
 		checkWords(t, tc.name, b.String())
-		checkGolden(t, "dashboard-"+tc.name+".golden", b.String())
-		checkGolden(t, "dashboard-"+tc.name+"-color.golden", tc.scene.frame(color256, 79, 40, 3)+"\n")
+		checkGolden(t, "flow-"+tc.name+".golden", b.String())
+		checkGolden(t, "flow-"+tc.name+"-color.golden", tc.scene.frame(color256, 79, 40, 3)+"\n")
 		for _, size := range [][2]int{{79, 40}, {79, 23}, {79, 12}, {59, 40}, {119, 40}} {
 			for _, line := range strings.Split(tc.scene.frame(plainUnicode, size[0], size[1], 3), "\n") {
 				if w := term.Width(line); w > size[0] {
@@ -530,7 +530,7 @@ func TestNotesFade(t *testing.T) {
 	}
 	v := s.state.view() // a frame drawn from this copy fades it by its own clock
 	s.clock.add(noteTime)
-	if f := strings.Join(dashboardFrame(v, plainUnicode, s.clock.Now(), 79, 40, 0), "\n"); strings.Contains(f, "compared") || !strings.Contains(f, "2 at a time") {
+	if f := strings.Join(flowFrame(v, plainUnicode, s.clock.Now(), 79, 40, 0), "\n"); strings.Contains(f, "compared") || !strings.Contains(f, "2 at a time") {
 		t.Errorf("the note stayed:\n%s", f)
 	}
 	s.event(experiment.Event{Kind: "retry", Slot: s.lock.Schedule[2], Attempt: 1, RetryIn: 2 * time.Minute})
@@ -652,8 +652,8 @@ func TestDashboardMomentsGoldens(t *testing.T) {
 		}
 	}
 	checkWords(t, "the moments", plain.String())
-	checkGolden(t, "dashboard-moments.golden", plain.String())
-	checkGolden(t, "dashboard-moments-color.golden", color.String())
+	checkGolden(t, "flow-moments.golden", plain.String())
+	checkGolden(t, "flow-moments-color.golden", color.String())
 	if !strings.Contains(plain.String(), "sandbox unavailable · not counted") || !strings.Contains(plain.String(), "sandbox unavailable · retrying") {
 		t.Error("the unavailable sandbox's row notes")
 	}
@@ -737,7 +737,7 @@ func TestDashboardJudgeGraded(t *testing.T) {
 		fmt.Fprintf(&b, "=== judging, %d columns, %d rows\n%s\n", size[0], size[1], s.frame(plainUnicode, size[0], size[1], 3))
 	}
 	checkWords(t, "judged", b.String())
-	checkGolden(t, "dashboard-judged.golden", b.String())
+	checkGolden(t, "flow-judged.golden", b.String())
 	if frame := s.frame(plainUnicode, 79, 40, 3); !strings.Contains(frame, "judging") || !strings.Contains(frame, "hidden tests") {
 		t.Errorf("the judging frame:\n%s", frame)
 	}

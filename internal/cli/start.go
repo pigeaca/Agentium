@@ -22,7 +22,7 @@ import (
 	"github.com/pigeaca/agentium/internal/store"
 )
 
-const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--view dashboard|log] [--json]
+const startUsage = `Usage: agentium start [--yes] [--budget USD] [--b SNAPSHOT] [--accept-mined] [--view dashboard|flow|log] [--json]
 
 Goes from a repository to a previewed experiment, skipping every stage that is already done, so running it again resumes:
   1. registers the repository (as init);
@@ -43,8 +43,8 @@ your review, the tasks start itself mined: it checks only solution headings, ref
 requirements, so a message that explains the fix passes. Tasks from pull requests, tickets or task import are never
 accepted. --json prints one JSON document (status preview, not_ready, awaiting_review, too_few_tasks, finished, or ran with --yes) and
 never asks: only --yes runs the experiment, and then the document holds the run's result too. Without a terminal on stdin,
-start never asks either. On a terminal the run shows as a live dashboard; --view log (or AGENTIUM_VIEW=log) gives styled
-lines instead, and piped or with NO_COLOR it prints plain lines. --b must name a snapshot; --budget can only raise an experiment's budget. Mining, validation
+start never asks either. On a terminal the run shows as a quiet live dashboard; --view flow draws step boxes, and --view log (or
+AGENTIUM_VIEW=log) gives styled lines instead, and piped or with NO_COLOR it prints plain lines. --b must name a snapshot; --budget can only raise an experiment's budget. Mining, validation
 and the experiment's verification follow the project's settings (agentium init: verify and setup commands, require
 lock, jobs, verify timeout).
 `
@@ -69,7 +69,7 @@ func runStart(ctx context.Context, env Env, args []string) int {
 	a.set = addSettingFlags(fs, settingVerifyTimeout, settingRequireLock)
 	fs.Float64Var(&a.budget, "budget", 0, "stop the experiment at this total in USD (default: a quarter above the estimate)")
 	fs.StringVar(&a.b, "b", "", "compare the context with this snapshot (default: an A/A calibration)")
-	fs.Var(&a.view, "view", "how the run shows on a terminal: dashboard (the default) or log")
+	fs.Var(&a.view, "view", "how the run shows on a terminal: dashboard (the default, quiet), flow (step boxes) or log")
 	rest, code, ok := parseArgs(env, fs, args, startUsage)
 	if !ok {
 		return code

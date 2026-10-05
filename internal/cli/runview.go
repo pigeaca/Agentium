@@ -17,7 +17,8 @@ import (
 
 // The views of a running experiment (experiment run, start --yes).
 const (
-	viewDashboard = "dashboard" // a live dashboard redrawn in place: the default on a terminal
+	viewDashboard = "dashboard" // the quiet live view redrawn in place: the default on a terminal
+	viewFlow      = "flow"      // the step boxes with a moving dot, redrawn in place: the earlier default, kept as it was
 	viewLog       = "log"       // a styled, append-only log: nothing is redrawn
 	viewPlain     = ""          // the plain lines, with the status line on a terminal: off a terminal, --json, NO_COLOR
 )
@@ -25,14 +26,14 @@ const (
 // viewEnv is the environment variable that sets the view once, as --view does for one command.
 const viewEnv = "AGENTIUM_VIEW"
 
-// viewFlag is --view: empty, "dashboard" or "log".
+// viewFlag is --view: empty, "dashboard", "flow" or "log".
 type viewFlag string
 
 func (v *viewFlag) String() string { return string(*v) }
 
 func (v *viewFlag) Set(s string) error {
-	if s != viewDashboard && s != viewLog {
-		return fmt.Errorf("--view is %s or %s, not %q", viewDashboard, viewLog, s)
+	if !knownView(s) {
+		return fmt.Errorf("--view is %s, %s or %s, not %q", viewDashboard, viewFlow, viewLog, s)
 	}
 	*v = viewFlag(s)
 	return nil
@@ -45,16 +46,19 @@ func askedView(flagValue viewFlag, getenv func(string) string) (string, error) {
 		return string(flagValue), nil
 	}
 	switch v := strings.TrimSpace(getenv(viewEnv)); v {
-	case "", viewDashboard, viewLog:
+	case "", viewDashboard, viewFlow, viewLog:
 		return v, nil
 	default:
-		return "", fmt.Errorf("%s is %s or %s, not %q", viewEnv, viewDashboard, viewLog, v)
+		return "", fmt.Errorf("%s is %s, %s or %s, not %q", viewEnv, viewDashboard, viewFlow, viewLog, v)
 	}
 }
 
+// knownView reports whether s names a view that --view and AGENTIUM_VIEW take.
+func knownView(s string) bool { return s == viewDashboard || s == viewFlow || s == viewLog }
+
 // chooseView decides how a run is shown, and what the terminal can show. The plain view (today's lines, byte for
 // byte) is for everything that is not a terminal at least term.MinWidth wide: a pipe, a file, TERM=dumb, a JSON
-// document, and a command run inside another's JSON output. On such a terminal the dashboard is the default, unless
+// document, and a command run inside another's JSON output. On such a terminal the dashboard (the quiet view) is the default, unless
 // NO_COLOR is set; asking for a view (--view or AGENTIUM_VIEW) gets it even with NO_COLOR, without color.
 func chooseView(env Env, asked string, asJSON bool) (string, term.Capabilities) {
 	caps := term.DetectCapabilities(env.Terminal, env.Getenv, envSize(env))
@@ -138,6 +142,8 @@ type runFacts struct {
 	taskWidth int     // the widest task name shown, in cells
 	margin    float64 // the primary metric's margin
 	terms     string  // how the runs are run, in words (termsOf)
+	// concurrency is how many runs go at once: the quiet view keeps that many rows for them.
+	concurrency int
 }
 
 // maxNameWidth caps the arms' and tasks' names on the screen.
@@ -167,6 +173,7 @@ func factsOf(lock experiment.Lock, usageLimit float64) runFacts {
 	for _, t := range lock.Tasks {
 		f.taskWidth = max(f.taskWidth, min(term.Width(term.Sanitize(t.Name)), maxNameWidth))
 	}
+	f.concurrency = max(d.Concurrency, 1)
 	f.margin = d.CostMargin
 	if d.Goal == experiment.GoalBetter {
 		f.margin = d.SuccessMargin
