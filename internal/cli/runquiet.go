@@ -337,7 +337,11 @@ func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 		for arm := range 2 {
 			label := st.Paint(armRole(arm), v.facts.labels[arm])
 			if v.graded[arm] == 0 { // no test grade for this version yet, while the other has some
-				passes = append(passes, label+st.Paint(term.Muted, " "+m.none))
+				none := m.none // a dash beside the separator's own dash reads as two: ASCII says the word
+				if sh.ASCII {
+					none = "none"
+				}
+				passes = append(passes, label+st.Paint(term.Muted, " "+none))
 				continue
 			}
 			if form.compact {

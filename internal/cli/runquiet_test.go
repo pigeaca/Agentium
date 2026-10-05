@@ -430,6 +430,15 @@ func TestQuietCountsPassesOfAResume(t *testing.T) {
 	if strings.Contains(f, "no grades yet") {
 		t.Errorf("a resume says nothing was graded:\n%s", f)
 	}
+	// Only judge-graded runs settled before the resume: no test grade yet, said so.
+	judgedOnly := []experiment.RunData{{Slot: 0, Arm: "A", Outcome: agent.OutcomeOK, Passed: &yes, Judged: true}, {Slot: 1, Arm: "B", Outcome: agent.OutcomeOK, Passed: &no, Judged: true}}
+	screen.stored = func(experiment.Lock) []experiment.RunData { return judgedOnly }
+	screen.observer(nil).Begin(lock, experiment.Standing{Settled: map[int]bool{0: true, 1: true}})
+	j := newScene(t, lock, experiment.Standing{})
+	j.state = screen.state
+	if f := term.Plain(j.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "no test grades yet") || strings.Contains(f, "passed") {
+		t.Errorf("a resume after judge grades only:\n%s", f)
+	}
 	// Counted once: the settled slot finishing again (a run graded again) does not add.
 	s.start(0)
 	s.finish(0, agent.OutcomeOK, &yes, 0.1)

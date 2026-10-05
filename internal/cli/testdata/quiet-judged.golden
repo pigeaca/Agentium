@@ -128,7 +128,7 @@
 
 
   so far   too early to tell
-           baseline passed 1 of 1 - trimmed - - first check after 8 tasks
+           baseline passed 1 of 1 - trimmed none - first check after 8 tasks
 
   last     + baseline  chunk          $0.09  2m55s
            x trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
