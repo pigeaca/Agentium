@@ -710,7 +710,7 @@ func poolStatus(ctx context.Context, env Env, args []string) int {
 	if env.JSON {
 		return env.emit(poolStatusDoc{header: env.hdr(), Health: healthDocOf(health)})
 	}
-	if err := writeHealth(env, health); err != nil {
+	if err := writeHealth(env, health, func() (tellCounts, error) { return poolTells(ctx, w) }); err != nil {
 		return fail(env, err)
 	}
 	return ExitOK
@@ -736,6 +736,19 @@ func poolHealth(ctx context.Context, w *workspace) (pool.Health, error) {
 		return pool.Health{}, err
 	}
 	return pool.HealthOf(tasks, func(commit string) time.Time { return times[commit] }, st.LastPass), nil
+}
+
+// poolTells counts the project's tasks by what they tell (the task list's tags), for the line under the pool's bars.
+func poolTells(ctx context.Context, w *workspace) (tellCounts, error) {
+	tasks, err := w.db.Tasks(ctx, w.project.ID)
+	if err != nil {
+		return tellCounts{}, err
+	}
+	tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, task.NewFairness("--git-dir", w.bare)))
+	if err != nil {
+		return tellCounts{}, err
+	}
+	return countTells(tells), nil
 }
 
 // printHealth prints the pool's counts, its last pass and its oldest valid base.

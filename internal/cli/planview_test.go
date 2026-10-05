@@ -64,7 +64,7 @@ func TestPlanViewPreview(t *testing.T) {
 		}
 	}
 	for name, h := range healthScenes() {
-		text := "\x1b[36m$\x1b[39m agentium pool status\n" + strings.Join(healthView(h, sh, 80, sh.Style.Command("agentium pool update")), "\n") + "\n"
+		text := "\x1b[36m$\x1b[39m agentium pool status\n" + strings.Join(healthView(h, healthTells["mixed"], sh, 80, sh.Style.Command("agentium pool update")), "\n") + "\n"
 		if err := os.WriteFile(filepath.Join(dir, "pool-"+name+".ans"), []byte(text), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -135,13 +135,20 @@ func healthScenes() map[string]pool.Health {
 	}
 }
 
+// healthTells are the scenes' counts of what the tasks tell, as poolStatus gathers them.
+var healthTells = map[string]tellCounts{
+	"mixed": {Separate: 6, TooEasy: 2, ToCheck: 1, FewRuns: 3, NotRun: 2, NotReady: 3, Retired: 3},
+	"fresh": {NotReady: 4},
+	"empty": {},
+}
+
 func TestHealthViewGoldens(t *testing.T) {
 	scenes := healthScenes()
 	for _, name := range []string{"mixed", "fresh", "empty"} {
 		var b strings.Builder
 		for _, width := range []int{term.MinWidth, 80, 120} {
 			fmt.Fprintf(&b, "=== %d columns\n", width)
-			for _, line := range healthView(scenes[name], plainUnicode, width, "agentium pool update") {
+			for _, line := range healthView(scenes[name], healthTells[name], plainUnicode, width, "agentium pool update") {
 				if w := term.Width(line); w > width {
 					t.Errorf("%s at %d columns: a line of %d cells: %q", name, width, w, line)
 				}
@@ -150,10 +157,10 @@ func TestHealthViewGoldens(t *testing.T) {
 		}
 		checkGolden(t, "pool-"+name+".golden", b.String())
 	}
-	checkGolden(t, "pool-mixed-color.golden", strings.Join(healthView(scenes["mixed"], color256, 80, "agentium pool update"), "\n")+"\n")
-	checkGolden(t, "pool-mixed-ascii.golden", strings.Join(healthView(scenes["mixed"], plainASCII, 80, "agentium pool update"), "\n")+"\n")
+	checkGolden(t, "pool-mixed-color.golden", strings.Join(healthView(scenes["mixed"], healthTells["mixed"], color256, 80, "agentium pool update"), "\n")+"\n")
+	checkGolden(t, "pool-mixed-ascii.golden", strings.Join(healthView(scenes["mixed"], healthTells["mixed"], plainASCII, 80, "agentium pool update"), "\n")+"\n")
 	// Only states with tasks have a bar, valid always; the others are in --json and the plain lines.
-	v := strings.Join(healthView(scenes["fresh"], plainUnicode, 80, "agentium pool update"), "\n")
+	v := strings.Join(healthView(scenes["fresh"], healthTells["fresh"], plainUnicode, 80, "agentium pool update"), "\n")
 	for _, absent := range []string{"flaky", "invalid", "retired", "awaiting review"} {
 		if strings.Contains(v, absent) {
 			t.Errorf("a state with no tasks has a bar (%s):\n%s", absent, v)

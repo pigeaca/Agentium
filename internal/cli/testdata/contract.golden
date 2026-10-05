@@ -154,6 +154,7 @@ flag task import --name	value default=""
 flag task import --pr	value default="0"
 flag task import --setup	list default=""
 flag task import --verify	list default=""
+flag task list --details	bool default="false"
 flag task validate --all	bool default="false"
 flag task validate --grader	value default=""
 flag task validate --jobs	value default="0"
@@ -1464,15 +1465,18 @@ json task list .schema	int
 json task list .tasks	[]object
 json task list .tasks[].base_commit	string
 json task list .tasks[].graded_by	string
+json task list .tasks[].graded_runs	int
 json task list .tasks[].hidden_test_files	int
 json task list .tasks[].module	string?
 json task list .tasks[].name	string
 json task list .tasks[].needs_review	bool
+json task list .tasks[].passed_runs	int
 json task list .tasks[].reference_files	int
 json task list .tasks[].solution_commit	string
 json task list .tasks[].source	string
 json task list .tasks[].status	string
 json task list .tasks[].status_summary	string
+json task list .tasks[].tells	string
 json task list .tasks[].unstated_requirements	int
 json task list .tasks[].untested_hunks	int
 json task rm .command	string

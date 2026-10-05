@@ -45,9 +45,21 @@ func taskInfoOf(ctx context.Context, fair *task.Fairness, t store.Task) taskInfo
 	return info
 }
 
+// taskListInfo is a task as task list shows it: taskInfo and what the task's graded runs tell. Only task list has
+// these keys; the other task documents share taskInfo and do not change.
+type taskListInfo struct {
+	taskInfo
+	GradedRuns int `json:"graded_runs"` // the task's fair runs with a recorded grade, of every version together
+	PassedRuns int `json:"passed_runs"` // how many of them passed
+	// Tells is the first that fits: retired, invalid, flaky, unchecked, not-validated, unstated-requirements, not-reviewed
+	// (these block the task from an experiment), not-run, never-passed (0 of 2 or more), few-runs (under 4 runs),
+	// too-easy (all passed), separates.
+	Tells string `json:"tells"`
+}
+
 type taskListDoc struct {
 	header
-	Tasks []taskInfo `json:"tasks"`
+	Tasks []taskListInfo `json:"tasks"`
 }
 
 type taskSavedDoc struct {

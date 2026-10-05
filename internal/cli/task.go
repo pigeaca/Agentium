@@ -42,7 +42,10 @@ const taskUsage = `Usage:
                          a task from history: the base is the parent, test-file changes are the hidden tests,
                          the rest is the reference solution (a PR must be merged; read through gh); a commit's
                          instruction is its subject and body, without trailers such as Co-Authored-By
-  agentium task list
+  agentium task list [--details]
+                         on a terminal: each task's last graded runs and what it tells you (separates, always passes,
+                         never passed, passed k of n, not run yet, or what blocks it); --details, or any other output,
+                         is the table of sources, tests and status
   agentium task show NAME
   agentium task edit NAME [--instruction TEXT | --instruction @FILE] [--setup CMD]...
                          [--verify CMD]... [--reviewed] [--accept-gaps]
@@ -687,7 +690,9 @@ func parseNumstat(out string) (map[string]lineCounts, error) {
 }
 
 func taskList(ctx context.Context, env Env, args []string) int {
-	rest, code, ok := parseArgs(env, flag.NewFlagSet("task list", flag.ContinueOnError), args, taskUsage)
+	fs := flag.NewFlagSet("task list", flag.ContinueOnError)
+	details := fs.Bool("details", false, "on a terminal, print the table of sources, tests and status instead of the list")
+	rest, code, ok := parseArgs(env, fs, args, taskUsage)
 	if !ok {
 		return code
 	}
@@ -706,9 +711,13 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	}
 	if env.JSON {
 		fair := task.NewFairness("--git-dir", w.bare)
-		doc := taskListDoc{header: env.hdr(), Tasks: []taskInfo{}}
-		for _, t := range tasks {
-			doc.Tasks = append(doc.Tasks, taskInfoOf(ctx, fair, t))
+		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
+		if err != nil {
+			return fail(env, err)
+		}
+		doc := taskListDoc{header: env.hdr(), Tasks: []taskListInfo{}}
+		for _, tt := range tells {
+			doc.Tasks = append(doc.Tasks, taskListInfo{taskInfo: taskInfoOf(ctx, fair, tt.Task), GradedRuns: tt.N, PassedRuns: tt.K, Tells: tt.Tell})
 		}
 		return env.emit(doc)
 	}
@@ -719,6 +728,16 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		return ExitOK
 	}
 	fair := task.NewFairness("--git-dir", w.bare)
+	if caps, designed := designedList(env, *details); designed {
+		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
+		if err != nil {
+			return fail(env, err)
+		}
+		if err := writeTaskList(env, tells, caps); err != nil {
+			return fail(env, err)
+		}
+		return ExitOK
+	}
 	st := env.style()
 	// A MODULE column appears only when some task is in a module.
 	inModules := slices.ContainsFunc(tasks, func(t store.Task) bool { return t.Module != "" })

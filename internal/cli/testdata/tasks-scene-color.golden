@@ -1,0 +1,19 @@
+  tasks · 14            \e[38;5;243mmodule    \e[39m\e[38;5;243mruns         what it tells you\e[39m
+  fix-it-mode-align-b…  \e[38;5;243m          \e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m         \e[38;5;114mseparates\e[39m
+  feat-add-nthor-and-…  \e[38;5;243m          \e[39m\e[38;5;243m+2 \e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m  \e[38;5;114mseparates\e[39m
+  evil-name             \e[38;5;243m          \e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m\e[38;5;203m✗\e[39m\e[38;5;114m✓\e[39m        \e[38;5;114mseparates\e[39m
+  feat-add-unionby-an…  \e[38;5;243mlib/core  \e[39m\e[38;5;243m+3 \e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m  \e[38;5;243malways passes: too easy\e[39m
+  feat-support-for-bu…  \e[38;5;243m          \e[39m\e[38;5;203m✗\e[39m\e[38;5;203m✗\e[39m           \e[38;5;220mnever passed: check the task text\e[39m
+  fix-nth-reject-inde…  \e[38;5;243m          \e[39m\e[38;5;114m✓\e[39m\e[38;5;114m✓\e[39m           \e[38;5;243mpassed 2 of 2\e[39m
+  fix-iter-tuples-sup…  \e[38;5;243m          \e[39m             \e[38;5;243mnot run yet\e[39m
+  fix-correct-dropbyi…  \e[38;5;243m          \e[39m\e[38;5;243m✓\e[39m\e[38;5;243m✗\e[39m           \e[38;5;220mnot reviewed\e[39m
+  gaps-in-the-text      \e[38;5;243m          \e[39m             \e[38;5;220munstated requirements\e[39m
+  never-checked         \e[38;5;243m          \e[39m             \e[38;5;220mnot validated\e[39m
+  no-solution-here      \e[38;5;243m          \e[39m             \e[38;5;220mno solution to check with\e[39m
+  flaky-clock-test      \e[38;5;243m          \e[39m             \e[38;5;220mflaky\e[39m
+  feature-intersect-b…  \e[38;5;243m          \e[39m             \e[38;5;203minvalid\e[39m
+  retired-old-parser-…  \e[38;5;243m          \e[39m\e[38;5;243m✓\e[39m\e[38;5;243m✗\e[39m           \e[38;5;243mretired\e[39m
+  \e[38;5;243m3 separate · 1 too easy · 1 to check · 1 with few runs · 1 not run yet ·\e[39m
+  \e[38;5;243m6 not ready · 1 retired\e[39m
+  \e[36magentium task show NAME\e[39m\e[38;5;243m: a task's text, its tests and what blocks it\e[39m
+=== end

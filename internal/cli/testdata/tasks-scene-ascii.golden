@@ -1,0 +1,19 @@
+  tasks - 14            module    runs         what it tells you
+  fix-it-mode-align...            +x++         separates
+  feat-add-nthor-an...            +2 +x+x++x+  separates
+  evil-name                       +x+x+        separates
+  feat-add-unionby-...  lib/core  +3 ++++++++  always passes: too easy
+  feat-support-for-...            xx           never passed: check the task text
+  fix-nth-reject-in...            ++           passed 2 of 2
+  fix-iter-tuples-s...                         not run yet
+  fix-correct-dropb...            +x           not reviewed
+  gaps-in-the-text                             unstated requirements
+  never-checked                                not validated
+  no-solution-here                             no solution to check with
+  flaky-clock-test                             flaky
+  feature-intersect...                         invalid
+  retired-old-parse...            +x           retired
+  3 separate - 1 too easy - 1 to check - 1 with few runs - 1 not run yet -
+  6 not ready - 1 retired
+  agentium task show NAME: a task's text, its tests and what blocks it
+=== end
