@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/store"
 )
@@ -306,4 +307,92 @@ func TestCleanUsageErrors(t *testing.T) {
 		}
 	}
 	expect(t, f.run(context.Background(), "clean", "-h"), ExitOK, "Usage: agentium clean")
+}
+
+// With the login, clean lists the session folders this data folder's runs left in Claude Code's projects folder (a
+// stand-in under the test's home) by count and size, never by name, and --yes removes them; the user's own projects and
+// a folder that holds a session file stay. With another sign-in it lists none.
+func TestCleanSessions(t *testing.T) {
+	t.Parallel()
+	f := newCleanFixture(t)
+	workspaces, err := filepath.EvalSymlinks(f.layout.Workspaces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(f.home, ".claude")
+	old := time.Now().Add(-48 * time.Hour)
+	session := func(id string, files ...string) string {
+		p := claude.SessionFolder(config, filepath.Join(workspaces, id, "repo"))
+		writeFile(t, filepath.Join(p, "tool-results"), "t1.txt", strings.Repeat("o", 5000))
+		for _, name := range files {
+			writeFile(t, p, name, "{}\n")
+		}
+		for _, q := range []string{filepath.Join(p, "tool-results", "t1.txt"), filepath.Join(p, "tool-results"), p} {
+			if err := os.Chtimes(q, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return p
+	}
+	gone, withSession := session("20261004T101500Z-0a1b2c"), session("e4-s2-t1", "5e6f.jsonl")
+	own := filepath.Join(config, "projects", "-Users-someone-code-app")
+	writeFile(t, own, "9a8b.jsonl", "{}\n")
+	hidden := []string{filepath.Base(gone), filepath.Base(withSession), filepath.Base(workspaces), "-Users-someone"}
+	unnamed := func(text string) {
+		t.Helper()
+		for _, h := range hidden {
+			if strings.Contains(text, h) {
+				t.Errorf("the output names a folder in Claude Code's projects folder (%s):\n%s", h, text)
+			}
+		}
+	}
+
+	dry := f.run(context.Background(), "clean")
+	expect(t, dry, ExitOK, "sessions", "in Claude Code's projects folder", "1 folder that runs of this data folder left",
+		"1 folder named like this data folder's runs' that holds a session file of its own, which no run leaves: left alone")
+	unnamed(dry.stdout)
+	doc := jsonRun(t, f.runFixture, ExitOK, "clean")
+	var kind map[string]any
+	for _, k := range doc.get("kinds").([]any) {
+		if k.(map[string]any)["kind"] == "sessions" {
+			kind = k.(map[string]any)
+		}
+	}
+	if kind == nil || kind["remove"] != float64(1) || kind["keep"] != float64(1) || kind["remove_bytes"].(float64) < 5000 {
+		t.Errorf("sessions kind: %v", kind)
+	}
+	var item map[string]any
+	for _, it := range doc.get("remove").([]any) {
+		if it.(map[string]any)["kind"] == "sessions" {
+			item = it.(map[string]any)
+		}
+	}
+	if item == nil || item["path"] != "in Claude Code's projects folder" || item["why"] != "left_by_run_session" ||
+		!strings.Contains(item["note"].(string), "20261004T101500Z-0a1b2c") {
+		t.Errorf("sessions item: %v", item)
+	}
+	raw, _ := json.Marshal(doc.doc)
+	unnamed(string(raw))
+	if _, err := os.Lstat(gone); err != nil {
+		t.Fatal("the dry run removed it")
+	}
+
+	// Another sign-in keeps its sessions in its own workspace: none are listed.
+	f.vars["ANTHROPIC_API_KEY"] = "sk-ant-api03-clean-test" // secret-scan: allow
+	if res := f.run(context.Background(), "clean"); strings.Contains(res.stdout, "in Claude Code's projects folder") {
+		t.Errorf("listed with an API key:\n%s", res.stdout)
+	}
+	delete(f.vars, "ANTHROPIC_API_KEY")
+
+	yes := f.run(context.Background(), "clean", "--yes")
+	expect(t, yes, ExitOK, "What went:", "1 folder that runs of this data folder left")
+	unnamed(yes.stdout)
+	if _, err := os.Lstat(gone); err == nil {
+		t.Error("the run's folder is still there")
+	}
+	for _, kept := range []string{filepath.Join(withSession, "5e6f.jsonl"), filepath.Join(own, "9a8b.jsonl")} {
+		if _, err := os.Lstat(kept); err != nil {
+			t.Errorf("%s: %v", filepath.Base(kept), err)
+		}
+	}
 }

@@ -40,9 +40,16 @@ type start struct {
 	PGID         int             `json:"pgid,omitempty"` // of the command running now: setup, the agent or verification
 	Finished     bool            `json:"finished,omitempty"`
 	Meta         json.RawMessage `json:"meta,omitempty"`
+	// Session is the session folder Claude Code keeps for the run with the user's login (Env.ownSession), from the write
+	// before its agent starts: recovery removes it with the workspace (recoverSession). Older start files have none.
+	Session string `json:"session,omitempty"`
 }
 
+// writeStart writes s as the run's start file, with the run's session folder (Env.ownSession) once Once knows it.
 func (env Env) writeStart(s start) error {
+	if s.Session == "" {
+		s.Session = env.ownSession
+	}
 	data, err := json.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("run start file: %w", err)
@@ -158,8 +165,10 @@ func (e *AliveError) runsText() string {
 //
 // The workspaces, temp roots, grading copies and grade folders (gradingFolder: a grade's cache clone) of recovered runs
 // are removed, and a stored run's leftover grade folder too, after what their grades left running is stopped; what
-// resists removal is moved into the quarantine with a warning (cleanGrade, RecoverWarn). A run's temp root is found from its
-// workspace's name (home.Layout.RunTemp), so start files written before runs had one are read as they were.
+// resists removal is moved into the quarantine with a warning (cleanGrade, RecoverWarn). With the user's login, the
+// session folder Claude Code kept for the run, which the start file names, goes too (recoverSession); one that cannot go
+// is a warning. A run's temp root is found from its workspace's name (home.Layout.RunTemp), so start files written
+// before runs had one are read as they were.
 //
 // A stored run's records keep nothing to recover, but a judgement, a grading attempt (Env.Regrade) or a pair's
 // comparison (Env.JudgePair) that Agentium died in leaves its folder there, with a config folder that may hold the
@@ -272,6 +281,10 @@ func RecoverWarn(ctx context.Context, layout home.Layout, stored func(id string)
 		}
 		if err := removeRunTemp(layout.RunTemp(filepath.Base(s.Workspace))); err != nil {
 			return orphans, fmt.Errorf("run %s: %w", e.Name(), err)
+		}
+		// Claude Code's session folder, outside the data folder, as the run would have removed it: a failure is a warning.
+		if err := recoverSession(layout, s); err != nil {
+			warn(fmt.Sprintf("run %s: Claude Code's session folder of the run was left in its projects folder: %v", e.Name(), err))
 		}
 		// The grading copy and the grade's own folder (its cache clone, temp root and profile).
 		cleanGrade(layout, dir, warn)

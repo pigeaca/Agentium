@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/home"
 	"github.com/pigeaca/agentium/internal/run"
@@ -31,6 +32,9 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
   - what runs stopped by a dead Agentium left (workspaces, temp and grading folders), as recovery removes it;
   - the grading folders of sandboxed validations that stopped (never one a validation is grading in, or any
     process uses: nothing is stopped);
+  - with your Claude Code login, the session folders runs of this data folder left in Claude Code's projects folder
+    (~/.claude/projects, or under CLAUDE_CONFIG_DIR); nothing else there is touched: not your own projects, not a
+    folder that holds a session file, not one whose run's workspace is still here;
   - and it lists, as kept, processes a Codex run's commands may have left that Agentium did not see descend from the
     run's agent (in the run's sandbox, or using its folders): it never stops one of those, --yes or not; stop one that
     is yours to stop yourself (the line says how).
@@ -178,7 +182,7 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 	if err != nil {
 		return res, err
 	}
-	in := run.CleanInput{Layout: layout, InUse: inUse, Now: env.Now(), OlderThan: age}
+	in := run.CleanInput{Layout: layout, InUse: inUse, Now: env.Now(), OlderThan: age, ClaudeConfig: loginConfig(env)}
 	if busy {
 		res.notes = append(res.notes, "runs are in progress: what stopped runs left is not listed")
 	} else {
@@ -193,6 +197,7 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 	if res.plan, err = run.PlanClean(ctx, in); err != nil {
 		return res, err
 	}
+	res.notes = append(res.notes, res.plan.Notes...)
 	if !yes {
 		return res, nil
 	}
@@ -234,6 +239,23 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 		}
 	}
 	return res, nil
+}
+
+// loginConfig is the user's own Claude Code config folder, where runs keep their sessions, when runs sign in with the
+// login (signInMode), as runs find it (runEnvWith: CLAUDE_CONFIG_DIR, else ~/.claude); "" with another sign-in, or
+// when it is not an absolute path.
+func loginConfig(env Env) string {
+	if mode, _ := signInMode(env); mode != claude.SignInLogin {
+		return ""
+	}
+	var environ []string
+	if env.Environ != nil {
+		environ = env.Environ()
+	}
+	if config := claude.UserConfigDir(environ, env.Getenv("HOME")); filepath.IsAbs(config) {
+		return config
+	}
+	return ""
 }
 
 // openForClean opens the database: read-only for a dry run, which writes nothing, and normally with --yes, which may
@@ -341,12 +363,89 @@ func recoverForClean(ctx context.Context, env Env, layout home.Layout, db *store
 	return recErr
 }
 
+// sessionsWhere is where a sessions item is, as cleanup reports it: never the folder's name, which holds the user's
+// home path.
+const sessionsWhere = "in Claude Code's projects folder"
+
 // cleanRel is path as cleanup reports it: relative to the data folder (a leftover is its run's records folder).
 func cleanRel(layout home.Layout, path string) string {
 	if rel, err := filepath.Rel(layout.Root, path); err == nil && !strings.HasPrefix(rel, "..") {
 		return filepath.ToSlash(rel)
 	}
 	return filepath.Base(path)
+}
+
+// itemPath is an item's path as cleanup reports it (cleanRel), and for a sessions item where it is, in words.
+func itemPath(layout home.Layout, it run.CleanItem) string {
+	if it.Kind == run.CleanSessions {
+		return sessionsWhere
+	}
+	return cleanRel(layout, it.Path)
+}
+
+// itemRow is one row of the lists of what goes and what stays.
+type itemRow struct {
+	kind, path string
+	bytes      int64
+	why        string
+	problem    bool // why is why it was not removed
+}
+
+// itemRows are the rows of items, one each, but sessions items: those are counted in one row per reason (or per
+// problem, under --yes), so that no folder's name is printed (sessionsWhere). problem is item i's error under --yes ("":
+// removed, or a dry run).
+func itemRows(layout home.Layout, items []run.CleanItem, problem func(i int) string) []itemRow {
+	var rows []itemRow
+	type group struct{ row, n int }
+	groups := map[[2]string]*group{}
+	var order [][2]string
+	for i, it := range items {
+		p := problem(i)
+		if it.Kind != run.CleanSessions {
+			row := itemRow{kind: kindLabel(it.Kind), path: itemPath(layout, it), bytes: it.Bytes, why: it.Detail}
+			if p != "" {
+				row.why, row.problem = "not removed: "+p, true
+			}
+			rows = append(rows, row)
+			continue
+		}
+		key := [2]string{it.Reason, p}
+		g, ok := groups[key]
+		if !ok {
+			g = &group{row: len(rows)}
+			groups[key] = g
+			order = append(order, key)
+			rows = append(rows, itemRow{kind: kindLabel(it.Kind), path: sessionsWhere, problem: p != ""})
+		}
+		g.n++
+		rows[g.row].bytes += it.Bytes
+	}
+	for _, key := range order {
+		g := groups[key]
+		rows[g.row].why = sessionsWhy(key[0], key[1], g.n)
+	}
+	return rows
+}
+
+// sessionsWhy says what a row of n sessions items, of one reason or one problem, holds.
+func sessionsWhy(reason, problem string, n int) string {
+	folders, hold := fmt.Sprintf("%d folders", n), "hold a session file of their own"
+	if n == 1 {
+		folders, hold = "1 folder", "holds a session file of its own"
+	}
+	switch {
+	case problem != "":
+		return folders + " not removed: " + problem
+	case reason == run.CleanRunSession:
+		return folders + " that runs of this data folder left"
+	case reason == run.CleanKeptWorkspace:
+		return folders + " whose run's workspace is still here (a run in progress, one kept with --keep, or a stopped run's leftovers)"
+	case reason == run.CleanKeptSessionFile:
+		return folders + " named like this data folder's runs' that " + hold + ", which no run leaves: left alone"
+	case reason == run.CleanKeptRecent:
+		return folders + " used in the last hour"
+	}
+	return folders
 }
 
 // kindLabel names a kind in a row of items.
@@ -433,12 +532,18 @@ func printClean(env Env, layout home.Layout, res cleanResult) {
 		fmt.Fprintln(out, st.Heading(map[bool]string{true: "What would go:", false: "What went:"}[res.dryRun]))
 		items := term.NewTable(st, term.Left(""), term.Left(""), term.Right(""), term.Left(""))
 		items.Indent = "  "
-		for i, it := range res.plan.Remove {
-			why := it.Detail
+		problem := func(i int) string {
 			if !res.dryRun && res.errs[i] != nil {
-				why = st.Warn("not removed: " + res.errs[i].Error())
+				return res.errs[i].Error()
 			}
-			items.Row(kindLabel(it.Kind), cleanRel(layout, it.Path), formatBytes(it.Bytes), why)
+			return ""
+		}
+		for _, r := range itemRows(layout, res.plan.Remove, problem) {
+			why := r.why
+			if r.problem {
+				why = st.Warn(why)
+			}
+			items.Row(r.kind, r.path, formatBytes(r.bytes), why)
 		}
 		_ = items.Write(out)
 	}
@@ -447,8 +552,8 @@ func printClean(env Env, layout home.Layout, res cleanResult) {
 		fmt.Fprintln(out, st.Heading("Kept:"))
 		items := term.NewTable(st, term.Left(""), term.Left(""), term.Right(""), term.Left(""))
 		items.Indent = "  "
-		for _, it := range res.plan.Keep {
-			items.Row(kindLabel(it.Kind), cleanRel(layout, it.Path), formatBytes(it.Bytes), it.Detail)
+		for _, r := range itemRows(layout, res.plan.Keep, func(int) string { return "" }) {
+			items.Row(r.kind, r.path, formatBytes(r.bytes), r.why)
 		}
 		_ = items.Write(out)
 	}
@@ -499,7 +604,7 @@ type cleanKindDoc struct {
 
 type cleanItemDoc struct {
 	Kind     string     `json:"kind"`
-	Path     string     `json:"path"`    // relative to the data folder
+	Path     string     `json:"path"`    // relative to the data folder; for sessions, where they are in words (sessionsWhere)
 	Project  *string    `json:"project"` // the project's name; null for the quarantine and leftovers
 	Base     *string    `json:"base"`
 	Bytes    int64      `json:"bytes"`
@@ -523,7 +628,7 @@ func cleanDocument(env Env, layout home.Layout, res cleanResult) cleanDoc {
 		doc.RemoveBytes += k.removeBytes
 	}
 	item := func(it run.CleanItem) cleanItemDoc {
-		d := cleanItemDoc{Kind: it.Kind, Path: cleanRel(layout, it.Path), Bytes: it.Bytes, Why: it.Reason, Note: env.redact(it.Detail)}
+		d := cleanItemDoc{Kind: it.Kind, Path: itemPath(layout, it), Bytes: it.Bytes, Why: it.Reason, Note: env.redact(it.Detail)}
 		if name, ok := res.names[it.Project]; ok {
 			d.Project = &name
 		}

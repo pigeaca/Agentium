@@ -133,6 +133,9 @@ type Env struct {
 	// the agent's invocation (its recipe and denied paths) and the base commit's full ID (the seed's).
 	gradeAgent *agent.Invocation
 	gradeBase  string
+	// ownSession is the session folder Claude Code keeps for the run with the user's login, set by Once before the agent
+	// starts: the start file carries it (start.Session), and the run removes it with its workspace (removeOwnSession).
+	ownSession string
 	// canary, when set, replaces sandbox.CanaryProbes (tests make the sandbox fail to hold), and readDenials
 	// sandbox.ReadDenials (tests make the log lag).
 	canary      func(ctx context.Context, file, digest string, p sandbox.Profile) ([]int, error)
@@ -373,6 +376,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 		if !spec.Keep {
 			env.removeCheckouts(workspace, repo, graded)
+			// After its last read (the unexpected-folder check), with the agent and its tools stopped; a kept workspace
+			// keeps it, for whoever looks at the run.
+			if note := env.removeOwnSession(); note != "" {
+				rec.Notes = append(rec.Notes, note)
+			}
 		}
 		// Even a kept run's temp root goes: it holds only Claude Code's own temp files, in a folder shared with other users.
 		if tempRoot != "" {
@@ -655,6 +663,11 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 	if !env.isCodex() {
 		ownSession = claude.SessionFolder(activeConfig, inv.Dir)
 		pastSessions = claude.SessionFolders(activeConfig)
+		// Only the login's is outside the workspace (the other sign-ins' config folder is in it): from the next start
+		// file on, a recovery finds it there, and the run removes it at the end.
+		if env.SignIn == claude.SignInLogin {
+			env.ownSession = ownSession
+		}
 	}
 	agentStarted, pgid = true, 0
 	if err := writeStart(false); err != nil {
