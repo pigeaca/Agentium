@@ -202,8 +202,8 @@ func canAnswerPanel(a experiment.CanAnswer, sh term.Shapes, m marks) term.Panel 
 	return p
 }
 
-// usagePanel is the plan's five-hour limit: the share used as a bar, then in words where runs pause (the mark; the bar
-// carries none), how many runs fit now and how many limits the experiment needs. The caller draws it only for a current
+// usagePanel is the plan's five-hour limit: the share used as a bar, then in words where runs pause (also marked on the
+// bar, see limitBar), how many runs fit now and how many limits the experiment needs. The caller draws it only for a current
 // reading of a subscription's window.
 func usagePanel(u experiment.UsagePreview, now time.Time, sh term.Shapes, m marks, width int) term.Panel {
 	st := sh.Style
@@ -272,7 +272,7 @@ func limitBar(sh term.Shapes, label, value string, used, pause float64, role ter
 	return b.String() + " " + term.PadLeft(value, valueWidth)
 }
 
-// ageWords is how long ago a reading was taken: "just now" under a minute, "12 min", "2h", "2h 05m".
+// ageWords is how long ago a reading was taken: "under a minute", "12 min", "2h", "2h 05m".
 func ageWords(d time.Duration) string {
 	d = d.Round(time.Minute)
 	switch {

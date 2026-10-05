@@ -343,3 +343,11 @@ func TestCanAnswerRunsToSeeNeverBelowTheFloor(t *testing.T) {
 		t.Errorf("%+v runs to see %d, want 16", c.Expected, c.RunsToSee)
 	}
 }
+
+// No number of runs sees a zero change: equal context sizes give no run count, whatever the floor.
+func TestCanAnswerEqualSizesHaveNoRunsToSee(t *testing.T) {
+	c := contextReview([2]int64{20000, 20000}, 38, 6).CanAnswer()
+	if c.Expected == nil || c.Expected.Share != 0 || c.RunsToSee != 0 {
+		t.Errorf("%+v runs to see %d", c.Expected, c.RunsToSee)
+	}
+}

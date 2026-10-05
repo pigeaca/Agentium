@@ -237,7 +237,10 @@ func (r Review) CanAnswer() CanAnswer {
 		// from exp(mde)-1, not from the smallest reduction.
 		c.NotSure = math.Abs(math.Log(1-e.Share)) < -math.Log(1-smallest)
 		// A verdict on cost needs the floor's runs at any effect: seeing a large change never takes fewer.
-		c.RunsToSee = max(RunsToSeeCostChange(e.Share), 2*c.FloorTasks*c.FloorRepeats)
+		// Only a real estimate is clamped: no number of runs sees a zero change, which stays zero.
+		if runs := RunsToSeeCostChange(e.Share); runs > 0 {
+			c.RunsToSee = max(runs, 2*c.FloorTasks*c.FloorRepeats)
+		}
 	}
 	return c
 }
