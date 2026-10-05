@@ -6,8 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/agent"
+	"github.com/pigeaca/agentium/internal/claude"
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/judge"
 	"github.com/pigeaca/agentium/internal/report"
@@ -150,9 +153,9 @@ func TestReportViewJudgeLines(t *testing.T) {
 	}
 }
 
-// The grid lists only the tasks where the versions ended differently and counts the rest in one line; tasks a seq-v1
-// experiment never ran are left out.
-func TestReportViewCollapsedGrid(t *testing.T) {
+// The task block lists every counted task, in groups: they differ, both failed, both passed. Tasks a seq-v1 experiment
+// never ran are left out.
+func TestReportViewTaskBlock(t *testing.T) {
 	scenes := reportScenes(t)
 	rep := buildReport(t, scenes["decisive"])
 	differ := 0
@@ -161,20 +164,152 @@ func TestReportViewCollapsedGrid(t *testing.T) {
 			differ++
 		}
 	}
-	view := reportView(rep, plainUnicode, 80)
+	text := strings.Join(reportView(rep, plainUnicode, 80), "\n")
 	rows := 0
-	for _, line := range view {
+	for _, line := range strings.Split(text, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "task-") {
 			rows++
 		}
 	}
-	text := strings.Join(view, "\n")
-	if rows != differ || !strings.Contains(text, fmt.Sprintf("+ %d tasks where both ended the same: 3 passed", len(rep.Tasks)-differ)) {
-		t.Errorf("%d rows for %d differing tasks:\n%s", rows, differ, text)
+	for _, want := range []string{fmt.Sprintf("they differ · %d\n", differ), fmt.Sprintf("both passed · %d\n", len(rep.Tasks)-differ), "lean was cheaper on 9 of 10 tasks\n"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the block lacks %q:\n%s", want, text)
+		}
+	}
+	if rows != len(rep.Tasks) {
+		t.Errorf("%d rows for %d counted tasks:\n%s", rows, len(rep.Tasks), text)
 	}
 	seq := strings.Join(reportView(buildReport(t, scenes["seq-stopped"]), plainUnicode, 80), "\n")
-	if !strings.Contains(seq, "every task ended the same in both: 8 passed\n") || !strings.Contains(seq, "8 of 16 tasks") {
-		t.Errorf("a stopped seq-v1 experiment's unrun tasks must stay out of the grid:\n%s", seq)
+	if !strings.Contains(seq, "both passed · 8\n") || !strings.Contains(seq, "+ 2 more passed in both\n") || !strings.Contains(seq, "8 of 16 tasks") ||
+		strings.Contains(seq, "task-15") {
+		t.Errorf("a stopped seq-v1 experiment's unrun tasks must stay out of the block, and the passed rows stop at 6:\n%s", seq)
+	}
+	if aa := strings.Join(reportView(buildReport(t, scenes["aa"]), plainUnicode, 80), "\n"); strings.Contains(aa, "was cheaper") ||
+		strings.Contains(aa, "fewer pass ◀") {
+		t.Errorf("an A/A names a cheaper version or draws a second picture:\n%s", aa)
+	}
+}
+
+// groupedReport is the decisive scene with its tasks changed to show every group: two where the versions differ, two
+// both failed, one mixed in both (repeats), nine both passed (the block cuts them at six), and one every run left out.
+func groupedReport(t *testing.T) report.Report {
+	t.Helper()
+	rep := buildReport(t, reportScenes(t)["decisive"])
+	cost := func(x float64) *float64 { return &x }
+	cell := func(marks string, c float64) report.TaskCell {
+		ok := strings.Count(marks, "●")
+		return report.TaskCell{Marks: marks, Successes: ok, Counted: utf8.RuneCountInString(marks), CostUSD: cost(c)}
+	}
+	row := func(name string, a, b report.TaskCell) report.TaskRow {
+		return report.TaskRow{Task: name, Arms: map[string]report.TaskCell{"A": a, "B": b}}
+	}
+	rep.Tasks = []report.TaskRow{
+		row("fix-it-mode-align-behavior-with-the-other-modes", cell("○", 0.16), cell("●", 0.07)),
+		row("feat-support-for-buffer-iteration", cell("○", 0.46), cell("○", 0.11)),
+		row("feature-intersect-by", cell("○", 0.31), cell("○", 0.11)),
+		row("flaky-both-ways", cell("●○", 0.52), cell("○●", 0.40)),
+		row("feat-add-nthor-and-nthorempty", cell("○", 0.23), cell("●", 0.10)),
+	}
+	for i := 1; i <= 9; i++ {
+		rep.Tasks = append(rep.Tasks, row(fmt.Sprintf("passes-in-both-%d", i), cell("●", 0.2+0.02*float64(i)), cell("●", 0.1+0.01*float64(i))))
+	}
+	rep.Tasks = append(rep.Tasks, report.TaskRow{Task: "left-out", Arms: map[string]report.TaskCell{"A": {Marks: "×"}, "B": {Marks: "×"}}})
+	return rep
+}
+
+// A guard with a verdict is drawn and worded as the primary is; the plan's share shows with a subscription sign-in.
+func passesVerdictReport(t *testing.T) report.Report {
+	t.Helper()
+	rep := buildReport(t, reportScenes(t)["decisive"])
+	for i, r := range rep.Analysis.Results {
+		if r.Role == experiment.RoleGuard {
+			rep.Analysis.Results[i].Verdict = stats.NoLoss
+		}
+	}
+	rep.Lock.SignIn = claude.SignInLogin
+	start := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	for i := range rep.Runs {
+		at := start.Add(time.Duration(i) * time.Minute)
+		rep.Runs[i].Started, rep.Runs[i].Finished = at.Format(time.RFC3339), at.Add(50*time.Second).Format(time.RFC3339)
+		resets := start.Add(4 * time.Hour)
+		rep.Runs[i].Metrics.UsageFirst = &agent.UsageReading{FiveHour: 0.18 + 0.002*float64(i), FiveHourResets: resets}
+		rep.Runs[i].Metrics.UsageLast = &agent.UsageReading{FiveHour: 0.18 + 0.002*float64(i+1), FiveHourResets: resets}
+	}
+	return rep
+}
+
+// The task groups and a guard with a verdict, at the pinned widths: plain Unicode, and the widest also in color and
+// ASCII. The bars are left out under 70 columns. No line is wider than the terminal.
+func TestReportViewTaskGroupsGoldens(t *testing.T) {
+	for name, rep := range map[string]report.Report{"groups": groupedReport(t), "passes-verdict": passesVerdictReport(t)} {
+		var b strings.Builder
+		for _, width := range reportWidths {
+			fmt.Fprintf(&b, "=== %d columns\n", width)
+			for _, line := range reportView(rep, plainUnicode, width) {
+				if w := term.Width(line); w > width {
+					t.Errorf("%s at %d columns: a line of %d cells: %q", name, width, w, line)
+				}
+				b.WriteString(line + "\n")
+			}
+		}
+		checkGolden(t, "report-"+name+".golden", b.String())
+		checkGolden(t, "report-"+name+"-color.golden", strings.Join(reportView(rep, color256, 100), "\n")+"\n")
+		checkGolden(t, "report-"+name+"-ascii.golden", strings.Join(reportView(rep, plainASCII, 100), "\n")+"\n")
+	}
+	narrow := strings.Join(reportView(groupedReport(t), plainUnicode, term.MinWidth), "\n")
+	for _, line := range strings.Split(narrow, "\n") {
+		if strings.Contains(line, "$0.") && strings.ContainsAny(line, "█▏▎▍▌▋▊▉") && !strings.Contains(line, "│") {
+			t.Errorf("a bar under 70 columns: %q", line)
+		}
+	}
+	for _, want := range []string{"both failed · 2 · check: agentium task show NAME", "ended the same, mixed · 1", "+ 3 more passed in both",
+		"1 task not counted: every run was left out", "lean was cheaper on 14 of 14 tasks"} {
+		if !strings.Contains(narrow, want) {
+			t.Errorf("the narrow block lacks %q:\n%s", want, narrow)
+		}
+	}
+}
+
+// The facts line states the plan's share only with a subscription sign-in and readings.
+func TestReportViewPlanShare(t *testing.T) {
+	rep := passesVerdictReport(t)
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); !strings.Contains(view, "$6.61 spent · about 4% of your plan's limit · 20 min") {
+		t.Errorf("no plan share:\n%s", view)
+	}
+	rep.Lock.SignIn = claude.SignInAPIKey
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); strings.Contains(view, "plan's limit") {
+		t.Errorf("an API key shows a plan share:\n%s", view)
+	}
+	if got := planShareWords(0.003); got != "under 1% of your plan's limit" {
+		t.Errorf("a tiny share: %q", got)
+	}
+}
+
+// The other side of the question without a verdict is drawn in grey with what would settle it; with one it is drawn as
+// the primary is, and says nothing of settling.
+func TestReportViewSecondPicture(t *testing.T) {
+	scenes := reportScenes(t)
+	none := strings.Join(reportView(buildReport(t, scenes["decisive"]), plainUnicode, 100), "\n")
+	for _, want := range []string{"whether lean passes as many tasks: too few to tell", "fewer pass ◀", "--goal better with 12 tasks of 3 runs would settle it"} {
+		if !strings.Contains(none, want) {
+			t.Errorf("no verdict: the box lacks %q:\n%s", want, none)
+		}
+	}
+	rep := passesVerdictReport(t)
+	f := factsOf(rep.Lock, 0)
+	words, _ := guardWords(rep, f)
+	with := strings.Join(reportView(rep, plainUnicode, 100), "\n")
+	if !strings.Contains(with, words) || !strings.Contains(with, "fewer pass ◀") || strings.Contains(with, "would settle it") {
+		t.Errorf("a verdict: %q\n%s", words, with)
+	}
+	// A figure from the analysis wins over the experiment's size.
+	for i, r := range rep.Analysis.Results {
+		if r.Role == experiment.RoleGuard {
+			rep.Analysis.Results[i].Verdict, rep.Analysis.Results[i].TasksToResolve = stats.Inconclusive, 40
+		}
+	}
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); !strings.Contains(view, "about 40 tasks in all could settle it") {
+		t.Errorf("the analysis' figure:\n%s", view)
 	}
 }
 

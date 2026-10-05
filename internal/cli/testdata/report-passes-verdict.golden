@@ -1,7 +1,7 @@
 === 60 columns
        BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────
-         10 tasks · 20 runs · $7.15 spent · 20 min
+10 tasks · 20 runs · $6.61 spent · about 4% of your plan's …
 
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
@@ -12,12 +12,11 @@
   │                        same                          │
   │                likely 6% to 35% less                 │
   │                                                      │
-  │  whether lean passes as many tasks: too few to tell  │
+  │  lean passes no fewer tasks, within 15 points (lean  │
+  │                  90%, baseline 40%)                  │
   │  fewer pass ◀ ────────────│━━━━●━━━━━── ▶ more pass  │
   │                         same                         │
-  │        likely 1 point fewer to 101 more pass         │
-  │  --goal better with 12 tasks of 3 runs would settle  │
-  │                          it                          │
+  │           likely 9 to 91 points more pass            │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -50,31 +49,25 @@
   task-3    ✓ $0.30    ✓ $0.24
   lean was cheaper on 9 of 10 tasks
 
-  the judge's opinion  an AI reading the fixes, not a test
-  which fix is better: too few to say (3 tasks with a
-  preference; it takes 5)
-
   the numbers behind this:
-  agentium experiment report lean-ab-few-pairs --details
+  agentium experiment report lean-ab-1run --details
 === 80 columns
                  BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
-                   10 tasks · 20 runs · $7.15 spent · 20 min
+   10 tasks · 20 runs · $6.61 spent · about 4% of your plan's limit · 20 min
 
-          ┌──────────────────────────────────────────────────────────┐
-          │                        the answer                        │
-          │                lean is cheaper: 22% less                 │
-          │             after all 10 tasks · sure enough             │
-          │                                                          │
-          │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-          │   likely 6% to 35% less  same                            │
-          │                                                          │
-          │    whether lean passes as many tasks: too few to tell    │
-          │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-          │                           same                           │
-          │          likely 1 point fewer to 101 more pass           │
-          │  --goal better with 12 tasks of 3 runs would settle it   │
-          └──────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │                                the answer                                │
+  │                        lean is cheaper: 22% less                         │
+  │                     after all 10 tasks · sure enough                     │
+  │                                                                          │
+  │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━──│──────────────────────── ▶ costlier  │
+  │           likely 6% to 35% less  same                                    │
+  │                                                                          │
+  │  lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+  │  fewer pass ◀ ──────────────────────│─━━━━━━━━●━━━━━━━━──── ▶ more pass  │
+  │                                   same  likely 9 to 91 points more pass  │
+  └──────────────────────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
   │             baseline              │    │               lean                │
@@ -99,30 +92,24 @@
   task-3    ✓ ██████       $0.30   ✓ ████▊        $0.24
   lean was cheaper on 9 of 10 tasks
 
-  the judge's opinion  an AI reading the fixes, not a test
-  which fix is better: too few to say (3 tasks with a preference; it takes 5)
-
-  the numbers behind this:
-  agentium experiment report lean-ab-few-pairs --details
+  the numbers behind this: agentium experiment report lean-ab-1run --details
 === 100 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $7.15 spent · 20 min
+             10 tasks · 20 runs · $6.61 spent · about 4% of your plan's limit · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
-                    │             after all 10 tasks · sure enough             │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
-                    │                                                          │
-                    │    whether lean passes as many tasks: too few to tell    │
-                    │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 1 point fewer to 101 more pass           │
-                    │  --goal better with 12 tasks of 3 runs would settle it   │
-                    └──────────────────────────────────────────────────────────┘
+           ┌───────────────────────────────────────────────────────────────────────────┐
+           │                                the answer                                 │
+           │                         lean is cheaper: 22% less                         │
+           │                     after all 10 tasks · sure enough                      │
+           │                                                                           │
+           │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━───│──────────────────────── ▶ costlier  │
+           │            likely 6% to 35% less  same                                    │
+           │                                                                           │
+           │   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+           │  fewer pass ◀ ───────────────────────│━━━━━━━━●━━━━━━━━━──── ▶ more pass  │
+           │                                    same  likely 9 to 91 points more pass  │
+           └───────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
@@ -147,29 +134,24 @@
   task-3    ✓ ██████       $0.30   ✓ ████▊        $0.24
   lean was cheaper on 9 of 10 tasks
 
-  the judge's opinion  an AI reading the fixes, not a test
-  which fix is better: too few to say (3 tasks with a preference; it takes 5)
-
-  the numbers behind this: agentium experiment report lean-ab-few-pairs --details
+  the numbers behind this: agentium experiment report lean-ab-1run --details
 === 120 columns
                            BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                             10 tasks · 20 runs · $7.15 spent · 20 min
+             10 tasks · 20 runs · $6.61 spent · about 4% of your plan's limit · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │                lean is cheaper: 22% less                 │
-                    │             after all 10 tasks · sure enough             │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━━●━━━━━━─│──────────────── ▶ costlier  │
-                    │   likely 6% to 35% less  same                            │
-                    │                                                          │
-                    │    whether lean passes as many tasks: too few to tell    │
-                    │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 1 point fewer to 101 more pass           │
-                    │  --goal better with 12 tasks of 3 runs would settle it   │
-                    └──────────────────────────────────────────────────────────┘
+           ┌───────────────────────────────────────────────────────────────────────────┐
+           │                                the answer                                 │
+           │                         lean is cheaper: 22% less                         │
+           │                     after all 10 tasks · sure enough                      │
+           │                                                                           │
+           │  cheaper ◀ ─────━━━━━━━●━━━━━━━━━───│──────────────────────── ▶ costlier  │
+           │            likely 6% to 35% less  same                                    │
+           │                                                                           │
+           │   lean passes no fewer tasks, within 15 points (lean 90%, baseline 40%)   │
+           │  fewer pass ◀ ───────────────────────│━━━━━━━━●━━━━━━━━━──── ▶ more pass  │
+           │                                    same  likely 9 to 91 points more pass  │
+           └───────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
@@ -194,8 +176,5 @@
   task-3    ✓ ██████       $0.30   ✓ ████▊        $0.24
   lean was cheaper on 9 of 10 tasks
 
-  the judge's opinion  an AI reading the fixes, not a test
-  which fix is better: too few to say (3 tasks with a preference; it takes 5)
-
-  the numbers behind this: agentium experiment report lean-ab-few-pairs --details
+  the numbers behind this: agentium experiment report lean-ab-1run --details
 === end

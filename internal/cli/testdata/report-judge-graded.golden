@@ -6,8 +6,6 @@
   ┌──────────────────────────────────────────────────────┐
   │                      the answer                      │
   │             no clear difference in cost              │
-  │ by the tests: whether lean passes as many tasks: too │
-  │                     few to tell                      │
   │  by the judge (unvalidated): baseline 4 of 4 fixed,  │
   │                     lean 2 of 3                      │
   │            after all 10 tasks · not sure             │
@@ -15,6 +13,14 @@
   │  cheaper ◀ ───━━━●━━━━───│────────────── ▶ costlier  │
   │                        same                          │
   │                likely 14% to 36% less                │
+  │                                                      │
+  │ by the tests: whether lean passes as many tasks: too │
+  │                     few to tell                      │
+  │  fewer pass ◀ ───────────━│━━━●━━━━━━── ▶ more pass  │
+  │                         same                         │
+  │        likely 7 points fewer to 107 more pass        │
+  │  --goal better with 12 tasks of 3 runs would settle  │
+  │                          it                          │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -36,14 +42,20 @@
   │ ! 1 without the judge's grade                          │
   └────────────────────────────────────────────────────────┘
 
-  where they differ
-                  baseline      lean
-  task-1          ✗  $0.42      ✓  $0.27
-  task-4          ✗  $0.36      ✓  $0.32
-  task-5          ✗  $0.49      ✓  $0.24
-  task-7 (judge)  ✓  $0.32      ✗  $0.27
-  task-8 (judge)  ✓  $0.46      –
-  + 5 tasks where both ended the same: 5 passed · 2 of them…
+  every task      baseline   lean
+  they differ · 5
+  task-1          ✗ $0.42    ✓ $0.27
+  task-4          ✗ $0.36    ✓ $0.32
+  task-5          ✗ $0.49    ✓ $0.24
+  task-7 (judge)  ✓ $0.32    ✗ $0.27
+  task-8 (judge)  ✓ $0.46    –
+  both passed · 5
+  task-0          ✓ $0.27    ✓ $0.22
+  task-2          ✓ $0.58    ✓ $0.38
+  task-3          ✓ $0.30    ✓ $0.24
+  task-6 (judge)  ✓ $0.25    ✓ $0.18
+  task-9 (judge)  ✓ $0.23    ✓ $0.20
+  lean was cheaper on 9 of 9 tasks
 
   1 run not counted (1 ungraded by the judge); their cost
   is in the total
@@ -59,14 +71,19 @@
           ┌──────────────────────────────────────────────────────────┐
           │                        the answer                        │
           │               no clear difference in cost                │
-          │ by the tests: whether lean passes as many tasks: too few │
-          │                         to tell                          │
           │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
           │                          2 of 3                          │
           │              after all 10 tasks · not sure               │
           │                                                          │
           │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
           │  likely 14% to 36% less  same                            │
+          │                                                          │
+          │ by the tests: whether lean passes as many tasks: too few │
+          │                         to tell                          │
+          │  fewer pass ◀ ─────────────━│━━━━●━━━━━━─── ▶ more pass  │
+          │                           same                           │
+          │          likely 7 points fewer to 107 more pass          │
+          │  --goal better with 12 tasks of 3 runs would settle it   │
           └──────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
@@ -79,14 +96,20 @@
   │                                   │    │ ! 1 without the judge's grade     │
   └───────────────────────────────────┘    └───────────────────────────────────┘
 
-  where they differ
-                  baseline      lean
-  task-1          ✗  $0.42      ✓  $0.27
-  task-4          ✗  $0.36      ✓  $0.32
-  task-5          ✗  $0.49      ✓  $0.24
-  task-7 (judge)  ✓  $0.32      ✗  $0.27
-  task-8 (judge)  ✓  $0.46      –
-  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
+  every task      baseline               lean
+  they differ · 5
+  task-1          ✗ ████████▋    $0.42   ✓ █████▌       $0.27
+  task-4          ✗ ███████▍     $0.36   ✓ ██████▌      $0.32
+  task-5          ✗ ██████████▏  $0.49   ✓ █████        $0.24
+  task-7 (judge)  ✓ ██████▌      $0.32   ✗ █████▋       $0.27
+  task-8 (judge)  ✓ █████████▍   $0.46   –
+  both passed · 5
+  task-0          ✓ █████▌       $0.27   ✓ ████▋        $0.22
+  task-2          ✓ ████████████ $0.58   ✓ ███████▊     $0.38
+  task-3          ✓ ██████▏      $0.30   ✓ ████▉        $0.24
+  task-6 (judge)  ✓ █████▏       $0.25   ✓ ███▊         $0.18
+  task-9 (judge)  ✓ ████▊        $0.23   ✓ ████▏        $0.20
+  lean was cheaper on 9 of 9 tasks
 
   1 run not counted (1 ungraded by the judge); their cost is in the total
   the judge left more runs without a grade on one side, so the answer is not
@@ -101,14 +124,19 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │               no clear difference in cost                │
-                    │ by the tests: whether lean passes as many tasks: too few │
-                    │                         to tell                          │
                     │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
                     │                          2 of 3                          │
                     │              after all 10 tasks · not sure               │
                     │                                                          │
                     │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
                     │  likely 14% to 36% less  same                            │
+                    │                                                          │
+                    │ by the tests: whether lean passes as many tasks: too few │
+                    │                         to tell                          │
+                    │  fewer pass ◀ ─────────────━│━━━━●━━━━━━─── ▶ more pass  │
+                    │                           same                           │
+                    │          likely 7 points fewer to 107 more pass          │
+                    │  --goal better with 12 tasks of 3 runs would settle it   │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -121,14 +149,20 @@
   │                                             │    │ ! 1 without the judge's grade               │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  where they differ
-                  baseline      lean
-  task-1          ✗  $0.42      ✓  $0.27
-  task-4          ✗  $0.36      ✓  $0.32
-  task-5          ✗  $0.49      ✓  $0.24
-  task-7 (judge)  ✓  $0.32      ✗  $0.27
-  task-8 (judge)  ✓  $0.46      –
-  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
+  every task      baseline               lean
+  they differ · 5
+  task-1          ✗ ████████▋    $0.42   ✓ █████▌       $0.27
+  task-4          ✗ ███████▍     $0.36   ✓ ██████▌      $0.32
+  task-5          ✗ ██████████▏  $0.49   ✓ █████        $0.24
+  task-7 (judge)  ✓ ██████▌      $0.32   ✗ █████▋       $0.27
+  task-8 (judge)  ✓ █████████▍   $0.46   –
+  both passed · 5
+  task-0          ✓ █████▌       $0.27   ✓ ████▋        $0.22
+  task-2          ✓ ████████████ $0.58   ✓ ███████▊     $0.38
+  task-3          ✓ ██████▏      $0.30   ✓ ████▉        $0.24
+  task-6 (judge)  ✓ █████▏       $0.25   ✓ ███▊         $0.18
+  task-9 (judge)  ✓ ████▊        $0.23   ✓ ████▏        $0.20
+  lean was cheaper on 9 of 9 tasks
 
   1 run not counted (1 ungraded by the judge); their cost is in the total
   the judge left more runs without a grade on one side, so the answer is not sure
@@ -141,14 +175,19 @@
                     ┌──────────────────────────────────────────────────────────┐
                     │                        the answer                        │
                     │               no clear difference in cost                │
-                    │ by the tests: whether lean passes as many tasks: too few │
-                    │                         to tell                          │
                     │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
                     │                          2 of 3                          │
                     │              after all 10 tasks · not sure               │
                     │                                                          │
                     │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
                     │  likely 14% to 36% less  same                            │
+                    │                                                          │
+                    │ by the tests: whether lean passes as many tasks: too few │
+                    │                         to tell                          │
+                    │  fewer pass ◀ ─────────────━│━━━━●━━━━━━─── ▶ more pass  │
+                    │                           same                           │
+                    │          likely 7 points fewer to 107 more pass          │
+                    │  --goal better with 12 tasks of 3 runs would settle it   │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -161,14 +200,20 @@
   │                                             │    │ ! 1 without the judge's grade               │
   └─────────────────────────────────────────────┘    └─────────────────────────────────────────────┘
 
-  where they differ
-                  baseline      lean
-  task-1          ✗  $0.42      ✓  $0.27
-  task-4          ✗  $0.36      ✓  $0.32
-  task-5          ✗  $0.49      ✓  $0.24
-  task-7 (judge)  ✓  $0.32      ✗  $0.27
-  task-8 (judge)  ✓  $0.46      –
-  + 5 tasks where both ended the same: 5 passed · 2 of them graded by the judge
+  every task      baseline               lean
+  they differ · 5
+  task-1          ✗ ████████▋    $0.42   ✓ █████▌       $0.27
+  task-4          ✗ ███████▍     $0.36   ✓ ██████▌      $0.32
+  task-5          ✗ ██████████▏  $0.49   ✓ █████        $0.24
+  task-7 (judge)  ✓ ██████▌      $0.32   ✗ █████▋       $0.27
+  task-8 (judge)  ✓ █████████▍   $0.46   –
+  both passed · 5
+  task-0          ✓ █████▌       $0.27   ✓ ████▋        $0.22
+  task-2          ✓ ████████████ $0.58   ✓ ███████▊     $0.38
+  task-3          ✓ ██████▏      $0.30   ✓ ████▉        $0.24
+  task-6 (judge)  ✓ █████▏       $0.25   ✓ ███▊         $0.18
+  task-9 (judge)  ✓ ████▊        $0.23   ✓ ████▏        $0.20
+  lean was cheaper on 9 of 9 tasks
 
   1 run not counted (1 ungraded by the judge); their cost is in the total
   the judge left more runs without a grade on one side, so the answer is not sure
