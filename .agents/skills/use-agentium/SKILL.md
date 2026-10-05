@@ -24,7 +24,7 @@ Exit codes: 0 success, 1 failure or a bad result (read the document), 2 usage er
 Before you propose any run, run `agentium experiment plan NAME --json`. Tell the owner, in plain words:
 - the question it asks;
 - what this size can answer: `can_answer.floor_met`, `can_answer.smallest_change` and, for contexts, `can_answer.expected_change`;
-- what it will likely cost (`spend.expected_usd`), the most it can cost (`spend.max_usd`; `spend.worst_case_usd` is every run at its cap, what the budget reserves); null when `spend.known` is false: say the estimate is missing;
+- what it will likely cost: `spend.expected_usd`, or `spend.max_usd` when that is null (only cost experiments can stop early); `spend.max_usd` is every planned run at its estimate, `spend.worst_case_usd` every run at its cap, which the budget must cover. When `spend.known` is false the estimates are null: say the estimate is missing;
 - what it takes of the plan's five-hour limit (`usage`, null with an API key): `usage.windows` windows, each filled to `usage.limit`;
 - what is not ready (`ready`, `readiness`).
 
