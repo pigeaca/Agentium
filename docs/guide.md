@@ -380,6 +380,10 @@ For `clean`, `"dry_run"` is true unless `--yes` was given; `"kinds"` counts what
 
 Planned (part 2): a committed `agentium.toml` that Agentium reads and never writes, for budgets and consent to spend. Per-project task settings are `agentium init`'s already ([project settings](#project-settings)), kept in the data folder rather than in a file a commit could change. See the [plan](../.agents/plans/2026-10-02-headless.md).
 
+### Let an agent run it
+
+`.agents/skills/use-agentium/SKILL.md` is a short skill for coding agents that use Agentium for you: it tells them which commands are free, to show you the preview first, to start a paid run only after your yes in the conversation, and to explain the report in plain words. It is self-contained. To install it, copy the folder `.agents/skills/use-agentium` into your own Claude Code skills folder, `~/.claude/skills/`.
+
 ## Data folder and environment
 
 Data lives in `~/.agentium`; set `AGENTIUM_HOME` to use another folder. Output is styled only on a terminal: `NO_COLOR=1` turns color off (and gives a running experiment its plain lines), and `FORCE_COLOR=1` keeps color through a pipe (for `less -R`).
