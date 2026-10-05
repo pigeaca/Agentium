@@ -321,7 +321,7 @@ func TestAccessListsAreCleared(t *testing.T) {
 	}
 	aclDeny(t, "delete,delete_child", filepath.Join(dir, gradingFolder))
 	must(t, (Env{}).writeStart(start{Record: Record{ID: "r9", RecordsDir: dir}, Workspace: filepath.Join(f.env.Layout.Workspaces, "r9"), AgentStarted: true}))
-	orphans, err := RecoverWarn(context.Background(), f.env.Layout, func(string) (bool, error) { return false, nil }, "", time.Now(),
+	orphans, err := RecoverWarn(context.Background(), f.env.Layout, func(string) (bool, error) { return false, nil }, nil, time.Now(),
 		func(w string) { warnings = append(warnings, w) })
 	if err != nil || len(orphans) != 1 || len(warnings) > 0 {
 		t.Fatalf("RecoverWarn = %v, %v, warnings %q", orphans, err, warnings)

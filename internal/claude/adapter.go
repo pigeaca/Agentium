@@ -2,7 +2,9 @@ package claude
 
 import (
 	"context"
-	"io"
+	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/pigeaca/agentium/internal/agent"
 	"github.com/pigeaca/agentium/internal/project"
@@ -17,9 +19,13 @@ var _ agent.Adapter = Adapter{}
 // Name is Claude Code's name in records.
 func (Adapter) Name() string { return agent.ClaudeCode }
 
-// Command is Invocation.Command.
-func (Adapter) Command(inv agent.Invocation, environ []string) (args, env []string, err error) {
-	return Invocation(inv).Command(environ)
+// Command is Invocation.Command: arguments and environment only (the prompt is an argument).
+func (Adapter) Command(inv agent.Invocation, environ []string) (agent.Command, error) {
+	args, env, err := Invocation(inv).Command(environ)
+	if err != nil {
+		return agent.Command{}, err
+	}
+	return agent.Command{Args: args, Env: env}, nil
 }
 
 // DeniedPaths is Invocation.DeniedPaths.
@@ -27,12 +33,22 @@ func (Adapter) DeniedPaths(inv agent.Invocation, environ []string) []string {
 	return Invocation(inv).DeniedPaths(environ)
 }
 
-// Parse reads a stream-json transcript (Parse).
-func (Adapter) Parse(r io.Reader) (agent.Metrics, error) { return Parse(r) }
+// Gather does nothing: Claude Code's whole transcript is its standard output, already in the records.
+func (Adapter) Gather(string, string) error { return nil }
 
-// Classify is Classify.
-func (Adapter) Classify(m agent.Metrics, timedOut bool, drift []string) string {
-	return Classify(m, timedOut, drift)
+// Parse reads the records' stream-json transcript (Parse).
+func (Adapter) Parse(records string) (agent.Metrics, error) {
+	f, err := os.Open(filepath.Join(records, agent.Transcript))
+	if err != nil {
+		return agent.Metrics{}, fmt.Errorf("run transcript: %w", err)
+	}
+	defer f.Close()
+	return Parse(f)
+}
+
+// Classify is Classify: Agentium stops Claude Code only at its timeout (Claude Code keeps its own cost cap).
+func (Adapter) Classify(m agent.Metrics, stop agent.Stop, drift []string) string {
+	return Classify(m, stop == agent.StopTimeout, drift)
 }
 
 // Check is Check.

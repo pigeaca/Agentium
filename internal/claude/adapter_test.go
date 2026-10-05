@@ -28,8 +28,8 @@ func TestAdapterIsInvocationsOwn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		gotArgs, gotEnv, err := a.Command(agent.Invocation(inv), parentEnv)
-		if err != nil || !slices.Equal(gotArgs, args) || !slices.Equal(gotEnv, env) {
+		got, err := a.Command(agent.Invocation(inv), parentEnv)
+		if err != nil || !slices.Equal(got.Args, args) || !slices.Equal(got.Env, env) || got.Stdin != "" || got.Dirs != nil || got.Exclusive != "" || got.Watch != nil {
 			t.Errorf("%s: the adapter's command differs: %v", name, err)
 		}
 		if !slices.Equal(a.DeniedPaths(agent.Invocation(inv), parentEnv), inv.DeniedPaths(parentEnv)) {
@@ -38,28 +38,38 @@ func TestAdapterIsInvocationsOwn(t *testing.T) {
 	}
 	// A refusal comes through too.
 	bad := invocation(t, SignInAPIKey, "")
-	if _, _, err := a.Command(agent.Invocation(bad), parentEnv); err == nil {
+	if _, err := a.Command(agent.Invocation(bad), parentEnv); err == nil {
 		t.Error("an API key sign-in without a key was not refused")
 	}
 }
 
-// Parse, Classify and Check through the adapter are the package's own.
+// Parse (of the records' stream.jsonl), Classify and Check through the adapter are the package's own, and Gather has
+// nothing to gather.
 func TestAdapterReadsTranscripts(t *testing.T) {
-	f, err := os.Open(filepath.Join("testdata", "ok.jsonl"))
+	data, err := os.ReadFile(filepath.Join("testdata", "ok.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	records := t.TempDir()
+	if err := os.WriteFile(filepath.Join(records, agent.Transcript), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	a := Adapter{}
-	m, err := a.Parse(f)
+	if err := a.Gather(t.TempDir(), records); err != nil {
+		t.Fatal(err)
+	}
+	m, err := a.Parse(records)
 	if err != nil || !m.SawResult {
 		t.Fatalf("parsed %+v, %v", m, err)
 	}
-	if drift := a.Check(m, agent.Expect{}); a.Classify(m, false, drift) != agent.OutcomeOK || len(drift) != 0 {
-		t.Errorf("drift %q, outcome %s", drift, a.Classify(m, false, drift))
+	if drift := a.Check(m, agent.Expect{}); a.Classify(m, agent.StopNone, drift) != agent.OutcomeOK || len(drift) != 0 {
+		t.Errorf("drift %q, outcome %s", drift, a.Classify(m, agent.StopNone, drift))
 	}
-	if a.Classify(m, true, nil) != agent.OutcomeTimeout || a.Classify(m, false, []string{"x"}) != agent.OutcomeUnfair {
+	if a.Classify(m, agent.StopTimeout, nil) != agent.OutcomeTimeout || a.Classify(m, agent.StopNone, []string{"x"}) != agent.OutcomeUnfair {
 		t.Error("the outcome rules differ from Classify's")
+	}
+	if _, err := a.Parse(t.TempDir()); err == nil {
+		t.Error("records without a transcript were read")
 	}
 }
 

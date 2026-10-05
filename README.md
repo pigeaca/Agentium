@@ -43,12 +43,12 @@ agentium start
 
 Before tasks are used, read them once for hints that give the answer away: `agentium task show NAME`, then `agentium task edit NAME --reviewed`.
 
-While the repository is private, `go install` needs `GOPRIVATE=github.com/pigeaca/*` and git credentials (for example `gh auth setup-git`). Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
+Releases and what each version means are on the [releases page](https://github.com/pigeaca/Agentium/releases); the [policy](.agents/rules/releases.md) is SemVer for the commands, flags, `--json` keys and data folder. From a clone, `go install ./cmd/agentium` builds the working tree.
 
 ## Known limits
 
 - macOS first: sandboxed grading needs `sandbox-exec`; Linux has no sandbox yet and containers are planned.
-- Claude Code only; Codex comes later.
+- Experiments run Claude Code only. Codex runs one at a time (`run once --agent codex`, a preview; [guide](docs/guide.md#advanced-flags)); Codex experiments come later.
 - The judge features (judge reports, pairs, graded tasks without tests) are experimental and unvalidated.
 - No TypeScript yet: Go, Maven, Gradle, Cargo and Python.
 - A grade can leave data for later grades through `/mp-` POSIX semaphores and the macOS unified log. This is accepted for the first sandbox version; containers will close it.

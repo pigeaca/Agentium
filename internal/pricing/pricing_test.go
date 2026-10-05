@@ -51,3 +51,26 @@ func TestLookup(t *testing.T) {
 		}
 	}
 }
+
+// The Codex spike's spend (23 requests: 261,103 input tokens, 195,200 cached, 3,917 output) at the table's rates is
+// the $0.21 notional the spike reported; reasoning is part of output, and a request above the long-context limit is
+// not priced.
+func TestOpenAICostReproducesTheSpike(t *testing.T) {
+	rates, ok := OpenAILookup("gpt-6.1-sol")
+	if !ok {
+		t.Fatal("gpt-6.1-sol is not priced")
+	}
+	got, ok := rates.Cost(OpenAIUsage{Input: 261_103, Cached: 195_200, Output: 3_917, Reasoning: 81})
+	if !ok || math.Abs(got-0.210016) > 1e-6 {
+		t.Errorf("cost = %.6f, %v; want 0.210016", got, ok)
+	}
+	if _, ok := rates.Cost(OpenAIUsage{Input: OpenAILongContext + 1}); ok {
+		t.Error("a long-context request was priced")
+	}
+	if got, _ := rates.Cost(OpenAIUsage{Input: 100, Cached: 80, CacheWrite: 40}); math.Abs(got-(80*0.2+40*2)/1e6) > 1e-15 {
+		t.Errorf("inconsistent counts: uncached input must not go below zero: %.9f", got)
+	}
+	if _, ok := OpenAILookup("claude-sonnet-5"); ok {
+		t.Error("a Claude model has an OpenAI price")
+	}
+}

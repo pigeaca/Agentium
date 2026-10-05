@@ -133,6 +133,12 @@ func (l Layout) Ensure() error {
 	return nil
 }
 
+// CodexHome is Agentium's own Codex home (CODEX_HOME), where the user signs Codex in to ChatGPT once and every
+// login-mode Codex run keeps its session until Agentium moves it into the run's records. It holds the sign-in, so no
+// agent may read it (run's denied paths), whichever agent runs. Agentium never creates it: the user's
+// `CODEX_HOME=<it> codex login` does.
+func (l Layout) CodexHome() string { return filepath.Join(l.Root, "codex") }
+
 // ProjectRepo is the bare repository holding a project's snapshots and fetched commits.
 func (l Layout) ProjectRepo(projectID int64) string {
 	return filepath.Join(l.Root, "projects", strconv.FormatInt(projectID, 10), "repo.git")

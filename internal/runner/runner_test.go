@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -194,5 +197,182 @@ func TestEnvironPinned(t *testing.T) {
 	}
 	if got := Environ(nil); got == nil || len(got) != 0 {
 		t.Errorf("Environ(nil) = %#v, want an empty non-nil slice", got)
+	}
+}
+
+// A stop (Spec.Stop) ends the command as a timeout does, gently first (the command's trap runs), and says so apart
+// from a timeout; a command that ends by itself first is not stopped.
+func TestStopEndsTheCommandGently(t *testing.T) {
+	out, read := output(t)
+	stop := make(chan struct{})
+	time.AfterFunc(200*time.Millisecond, func() { close(stop) })
+	start := time.Now()
+	result, err := Run(context.Background(), Spec{Command: "trap 'echo interrupted; exit 1' INT; while :; do sleep 0.05; done", Output: out,
+		Grace: 5 * time.Second, Timeout: time.Minute, Stop: stop})
+	if err != nil || !result.Stopped || result.TimedOut || result.Passed() || time.Since(start) > 10*time.Second {
+		t.Fatalf("result %+v, %v after %v", result, err, time.Since(start))
+	}
+	if !strings.Contains(read(), "interrupted") {
+		t.Error("the command was not interrupted first")
+	}
+	result, err = Run(context.Background(), Spec{Command: "true", Stop: make(chan struct{})})
+	if err != nil || result.Stopped || !result.Passed() {
+		t.Errorf("a command that was never stopped: %+v, %v", result, err)
+	}
+}
+
+// hookCall is one BeforeStop call: when, whether the command's own process (the group's leader) was still running and
+// whether a watched one was alive at its start, and the leader's state when it returned ("Z": exited, not yet reaped;
+// "": reaped).
+type hookCall struct {
+	after               time.Duration
+	leader, watchedLive bool
+	leaderAtReturn      string
+}
+
+// leaderState is process pid's state as ps shows it: "" once it is reaped (or gone).
+func leaderState(pid int) string {
+	out, _ := exec.Command("/bin/ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	return strings.TrimSpace(string(out))
+}
+
+// running reports whether process pid exists and has not exited (a zombie has).
+func running(pid int) bool {
+	return syscall.Kill(pid, 0) == nil && !strings.HasPrefix(leaderState(pid), "Z")
+}
+
+// hooked runs spec with a BeforeStop that records each call; watched, when set, names a file holding a process ID to
+// look at too; hold, when set, is how long the call numbered n (from 1) blocks before it returns.
+func hooked(ctx context.Context, t *testing.T, spec Spec, watched string, hold func(n int) time.Duration) (Result, []hookCall, int, error) {
+	t.Helper()
+	var (
+		mu    sync.Mutex
+		calls []hookCall
+		pid   atomic.Int64
+	)
+	start := time.Now()
+	spec.Started = func(p int) { pid.Store(int64(p)) }
+	spec.BeforeStop = func() {
+		leader := int(pid.Load())
+		c := hookCall{after: time.Since(start), leader: leader > 0 && running(leader)}
+		if data, err := os.ReadFile(watched); err == nil {
+			if w, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				c.watchedLive = syscall.Kill(w, 0) == nil
+			}
+		}
+		mu.Lock()
+		n := len(calls) + 1
+		mu.Unlock()
+		if hold != nil {
+			time.Sleep(hold(n))
+		}
+		c.leaderAtReturn = leaderState(leader)
+		mu.Lock()
+		calls = append(calls, c)
+		mu.Unlock()
+	}
+	result, err := Run(ctx, spec)
+	mu.Lock()
+	defer mu.Unlock()
+	return result, slices.Clone(calls), int(pid.Load()), err
+}
+
+// BeforeStop comes before every signal Run sends the command's group, while the group's leader is not yet reaped: a
+// timeout's (with and without grace), the kill after the grace, a stop's, a cancellation's, and, once the command has
+// exited, the kill of what is left of its group, which comes before the leader is reaped (a zombie then).
+func TestBeforeStopPrecedesEverySignal(t *testing.T) {
+	out, _ := output(t)
+	for _, command := range []string{"true", "sleep 0.1 & wait"} {
+		_, calls, leader, err := hooked(context.Background(), t, Spec{Output: out, Command: command, Grace: time.Second}, "", nil)
+		if err != nil || len(calls) != 1 || calls[0].leader || !strings.HasPrefix(calls[0].leaderAtReturn, "Z") || leaderState(leader) != "" {
+			t.Errorf("%q ended on its own: calls %+v, %v: want one, the group's cleanup, with the leader exited and not reaped", command, calls, err)
+		}
+	}
+	// What a finished command left: its background child is still running at the call, the leader not yet reaped; the
+	// child is killed, and the leader reaped after.
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	_, calls, leader, err := hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30 & echo $! > " + pidFile + "; exit 0"}, pidFile, nil)
+	if err != nil || len(calls) != 1 || !calls[0].watchedLive || !strings.HasPrefix(calls[0].leaderAtReturn, "Z") {
+		t.Errorf("a finished command's leftover child: calls %+v, %v", calls, err)
+	}
+	if alive(t, pidFile) {
+		t.Error("the leftover child outlived its command")
+	}
+	if state := leaderState(leader); state != "" {
+		t.Errorf("the leader was not reaped: %q", state)
+	}
+	// A timeout without grace: one kill, while the command runs.
+	result, calls, _, err := hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30", Timeout: 100 * time.Millisecond}, "", nil)
+	if err != nil || !result.TimedOut || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a timeout: %+v, calls %+v, %v", result, calls, err)
+	}
+	// A timeout with grace, on a command that ignores SIGINT: the interrupt, then the kill after the grace, each while
+	// the command still runs.
+	grace := 300 * time.Millisecond
+	result, calls, _, err = hooked(context.Background(), t, Spec{Output: out, Timeout: 100 * time.Millisecond, Grace: grace,
+		Command: `trap '' INT; while true; do sleep 0.05; done`}, "", nil)
+	if err != nil || !result.TimedOut || len(calls) < 2 || !calls[0].leader ||
+		!slices.ContainsFunc(calls[1:], func(c hookCall) bool { return c.leader && c.after >= 100*time.Millisecond+grace }) {
+		t.Errorf("a timeout with grace: %+v, calls %+v, %v", result, calls, err)
+	}
+	// A stop and a cancellation.
+	stop := make(chan struct{})
+	time.AfterFunc(100*time.Millisecond, func() { close(stop) })
+	result, calls, _, err = hooked(context.Background(), t, Spec{Output: out, Command: "sleep 30", Stop: stop, Grace: time.Second}, "", nil)
+	if err != nil || !result.Stopped || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a stop: %+v, calls %+v, %v", result, calls, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, calls, _, err = hooked(ctx, t, Spec{Output: out, Command: "sleep 30"}, "", nil)
+	if err == nil || len(calls) == 0 || !calls[0].leader {
+		t.Errorf("a cancellation: calls %+v, %v", calls, err)
+	}
+}
+
+// The grace kill's BeforeStop blocks (600 ms) while the command exits on its own (at about 400 ms): the leader is not
+// reaped meanwhile, so the kill that follows still reaches only the command's group, never an ID reused since.
+func TestGraceKillNeverFollowsTheReap(t *testing.T) {
+	out, _ := output(t)
+	hold := func(n int) time.Duration {
+		if n == 2 { // the grace timer's call
+			return 600 * time.Millisecond
+		}
+		return 0
+	}
+	result, calls, leader, err := hooked(context.Background(), t, Spec{Output: out, Timeout: 100 * time.Millisecond, Grace: 100 * time.Millisecond,
+		Command: `trap '' INT; sleep 0.4`}, "", hold)
+	if err != nil || !result.TimedOut || len(calls) < 2 {
+		t.Fatalf("%+v, calls %+v, %v", result, calls, err)
+	}
+	if !calls[1].leader || !strings.HasPrefix(calls[1].leaderAtReturn, "Z") {
+		t.Errorf("the grace kill's call %+v: want the leader running at its start, exited but not reaped at its kill", calls[1])
+	}
+	if state := leaderState(leader); state != "" {
+		t.Errorf("the leader was not reaped: %q", state)
+	}
+}
+
+// A command whose exit cannot be waited for without reaping it cannot be supervised safely: its whole group, leader
+// included, is killed while the leader is not yet reaped (BeforeStop first), and Run fails with the reason.
+func TestRunStopsWhatItCannotWaitFor(t *testing.T) {
+	out, _ := output(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	refused := errors.New("no kqueue")
+	spec := Spec{Output: out, Timeout: time.Minute, Command: "sleep 30 & echo $! > " + pidFile + "; exec sleep 30",
+		waitExit: func(int) error { time.Sleep(200 * time.Millisecond); return refused }}
+	start := time.Now()
+	_, calls, leader, err := hooked(context.Background(), t, spec, pidFile, nil)
+	if !errors.Is(err, refused) || time.Since(start) > 10*time.Second {
+		t.Fatalf("Run = %v after %v: want the wait's failure, at once", err, time.Since(start))
+	}
+	if len(calls) != 1 || !calls[0].leader || !calls[0].watchedLive {
+		t.Errorf("calls %+v: want one BeforeStop, the leader and its child still running", calls)
+	}
+	if alive(t, pidFile) {
+		t.Error("the background child outlived the run")
+	}
+	if state := leaderState(leader); state != "" {
+		t.Errorf("the leader was not reaped: %q", state)
 	}
 }

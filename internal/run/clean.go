@@ -50,10 +50,13 @@ const (
 	CleanQuarantine  = "quarantine"
 	CleanLeftovers   = "leftovers"
 	CleanValidations = "validations"
+	// CleanProcesses are processes a Codex run's sweep reported and did not stop (LeftoverProcesses): listed as kept,
+	// never signalled, and sized 0.
+	CleanProcesses = "processes"
 )
 
 // CleanKinds lists the kinds in report order.
-var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations}
+var CleanKinds = []string{CleanSeeds, CleanDeps, CleanQuarantine, CleanLeftovers, CleanValidations, CleanProcesses}
 
 // Why an item goes (CleanItem.Reason of a removal).
 const (
@@ -72,6 +75,9 @@ const (
 	CleanKeptRecent     = "recently_used" // used within CleanGrace
 	CleanKeptRunning    = "running"       // a run whose process group still exists, or a validation grading in the folder
 	CleanKeptUnreadable = "unreadable"    // a run whose start file cannot be read: recovery decides when it is safe
+	// CleanLeftByRun: a process a run's sweep reported (it may be what the run's agent left), still running; never
+	// stopped by cleanup.
+	CleanLeftByRun = "left_by_run"
 )
 
 // CleanGrace is how recently used an item must be to stay whatever else holds: validations run without the run lock.
@@ -120,6 +126,16 @@ type CleanItem struct {
 	stamps string
 	// recheck reads the item's last use again, under its lock: an item used since the plan stays.
 	recheck func() time.Time
+	// process is a processes item's process, as its run recorded it (its ID and start time tell it from a later one).
+	process *leftProcess
+}
+
+// PID is a processes item's process ID (0 for any other item).
+func (it CleanItem) PID() int {
+	if it.process == nil {
+		return 0
+	}
+	return it.process.PID
 }
 
 type cleanPart struct {
@@ -158,7 +174,7 @@ var commitSuffix = regexp.MustCompile(`-([0-9a-f]{40}|[0-9a-f]{64})$`)
 func PlanClean(ctx context.Context, in CleanInput) (CleanPlan, error) {
 	in.OlderThan = max(in.OlderThan, CleanGrace)
 	c := planner{in: in}
-	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine, c.validations} {
+	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine, c.validations, c.processes} {
 		if err := step(ctx); err != nil {
 			return CleanPlan{}, err
 		}
@@ -673,6 +689,9 @@ func removeItem(ctx context.Context, layout home.Layout, it CleanItem) error {
 	if it.Kind == CleanLeftovers {
 		return errors.New("a run's leftovers are removed by recovery")
 	}
+	if it.Kind == CleanProcesses {
+		return errors.New("cleanup never stops a process") // listed for the user, who stops one that is theirs
+	}
 	if it.Kind == CleanValidations {
 		return removeValidationGrade(ctx, layout, it)
 	}
@@ -791,4 +810,39 @@ func cleanable(layout home.Layout, path string) error {
 		return nil
 	}
 	return fmt.Errorf("refused: %s is not inside the data folder's cache or deps folder", path)
+}
+
+// processes lists the processes runs' sweeps reported and did not stop (LeftoverProcesses in their records), while each
+// is still the process recorded (its ID and start time). They are kept, never signalled, --yes or not: Agentium did not
+// see them descend from the run's agent, so they may be the user's (a shell or an editor in the checkout); the detail
+// says how to stop one that is theirs.
+func (c *planner) processes(ctx context.Context) error {
+	entries, err := realDirs(c.in.Layout.Records)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dir := filepath.Join(c.in.Layout.Records, e.Name())
+		data, err := os.ReadFile(filepath.Join(dir, LeftoverProcesses))
+		if err != nil {
+			continue
+		}
+		var left []leftProcess
+		if json.Unmarshal(data, &left) != nil {
+			continue
+		}
+		for _, p := range left {
+			if now, ok := identityNow(p.PID); !ok || now.Sec != p.StartSec || now.Usec != p.StartUsec {
+				continue // gone, or another process now
+			}
+			p := p
+			c.add(CleanItem{Kind: CleanProcesses, Path: dir, LastUsed: p.Started(), process: &p}, verdict{reason: CleanLeftByRun,
+				detail: fmt.Sprintf("process %d %q, started %s, may be what run %s left (%s); nothing is stopped: if it is yours to stop, kill %d",
+					p.PID, p.Command, p.Started().UTC().Format(time.RFC3339), e.Name(), p.Why, p.PID)})
+		}
+	}
+	return nil
 }

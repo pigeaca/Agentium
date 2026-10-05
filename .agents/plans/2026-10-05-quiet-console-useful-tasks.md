@@ -1,7 +1,7 @@
 # A quieter console and tasks that can answer
 
 - Date: 2026-10-05
-- Status: Approved (2026-10-05). The user approved the plan and answered its seven [decisions](#decisions-the-user-2026-10-05) "as recommended". S1 and S4 start. The one paid step (T1's real check) still needs its own approval, with a preview.
+- Status: Approved (2026-10-05). The user approved the plan and answered its seven [decisions](#decisions-the-user-2026-10-05) "as recommended". S1 and S4 are merged and released (v0.4.0); S3 and T3 are in progress ([results](#results-so-far)). The one paid step (T1's real check) still needs its own approval, with a preview.
 - Scope: the user, 2026-10-05, after a review of the project and console mock-ups shown in the session: "I'd like first 3 variants Report Preview Tasks + last `$ agentium experiment run opus-vs-sonnet`. Plan UI changes, README update and suggested tool improvements." Agentium is its owner's personal tool ([decision](../decisions/2026-10-05-personal-tool.md)), so each step is judged by whether it helps the owner decide something about their own setup.
 
 ## Why
@@ -96,10 +96,15 @@ Fixed before implementation. Steps S1–S5 and T1–T5 are in [Work](#work).
 ## Work
 Each step is one PR with green CI and the usual two reviews; S5 and T5 are docs-only. Order: S1 and S4 together; then S3, then S2 (both change the contract golden); then S5; then T1 and T2 together; then T3 and T4 together; T5 last. At most two implementers at a time: they share the owner's plan.
 
-- [ ] **S1. Report.** `internal/cli` (`reportview.go`), `internal/report` (the plan's share), goldens. Contract: none. Risk: low; an implementer.
+Order changed by the coordinator, 2026-10-05:
+- **T3 runs now**, beside S3 and S2: it shares no file with them. Its migration is `0014`.
+- **T1 starts after S3**, because both edit `internal/cli/task.go`. Its migration is `0015`, after T3's.
+- **T2 and T4 wait for the Codex adapter's PR (#156)**, which changes `internal/run/run.go` and `clean.go`, the files they need.
+
+- [x] **S1. Report.** `internal/cli` (`reportview.go`), `internal/report` (the plan's share), goldens. Contract: none. Risk: low; an implementer. Merged: [#164](https://github.com/pigeaca/Agentium/pull/164).
 - [ ] **S2. Preview.** `internal/experiment` (the size estimate, a pure function beside `Detect`; a hotspot, so nothing else touches the package meanwhile), `internal/cli` (`planview.go`, `json_experiment.go`). Contract: new JSON keys. Risk: medium; an implementer.
 - [ ] **S3. Task list.** `internal/cli` (`task.go`, `json_task.go`, `pool.go`). Contract: a new flag and JSON keys. Risk: low; an implementer.
-- [ ] **S4. Quiet run view.** `internal/cli` (`rundash.go`, `runview.go`, `runscreen.go`, the recorder). It starts from the dashboard's one-line layout (`armText`, today's fallback for small terminals) and names the step by the run's agent, as `main` has it. The Codex adapter's PR (#156) touches none of these files (checked 2026-10-05), so S4 does not wait for it. Contract: a new `--view` value; the guide's list of renamed flags says what `dashboard` now shows. Risk: medium (the live region); an implementer.
+- [x] **S4. Quiet run view.** `internal/cli` (`rundash.go`, `runview.go`, `runscreen.go`, the recorder). It starts from the dashboard's one-line layout (`armText`, today's fallback for small terminals) and names the step by the run's agent, as `main` has it. The Codex adapter's PR (#156) touches none of these files (checked 2026-10-05), so S4 does not wait for it. Contract: a new `--view` value; the guide's list of renamed flags says what `dashboard` now shows. Risk: medium (the live region); an implementer. Merged: [#165](https://github.com/pigeaca/Agentium/pull/165).
 - [ ] **S5. README, gallery, guide.** New pictures of the four screens; the README as criterion 11 says. Later steps add their own commands to the README and the guide.
 - [ ] **T1. Drafts.** `internal/task` (the draft and its two checks), `internal/store` (a forward migration), `internal/claude` (the call the judge already makes), `internal/cli`. Then the real check (criterion 13). Risk: high (money, consent, persistence); implementer-critical.
 - [ ] **T2. Proof that the hidden tests ran.** `internal/run` (grading), `internal/task` (it already lists a task's own Go tests, in `gofilter.go`), `internal/experiment` (the lock). Closes #160. Not at the same time as the Codex plan's step 5: both change the lock. Risk: high; implementer-critical.
@@ -124,11 +129,42 @@ Each step is one PR with green CI and the usual two reviews; S5 and T5 are docs-
 - `experiment list` with each answer in words; a board of setups against tasks.
 - A mining score that prefers larger commits (today: `pool update --max-lines` and `--max-files`).
 
+Found while building S1 and S4 (2026-10-05):
+- **The default size of a `--goal better` experiment cannot answer its own question.** Without `--tier` it takes 12 tasks of 3 runs each, and a verdict on passes needs 20 tasks of 3 runs each (`MinTasksSuccess`). S2's "can it answer?" panel will say so. Changing the default is the owner's decision.
+- **A metric that is not the experiment's question says "too few to tell"** in the report, whatever its size. The report now adds what would settle it; better words for the first line are still open.
+- **Right after a resume**, the run views say "too early to tell" until the next run ends, though the stored runs already hold an answer. It can be fixed inside `internal/cli`: read the standing answer when the screen begins.
+- **During a budget stop** the quiet view says "finishing" while the last runs end. The screen learns of the stop only from the spend; saying it earlier needs a new event from `internal/experiment`.
+- **A task's history ignores edits.** The task list (S3) counts every graded run of a task, also those from before its text changed. T1 makes such edits common: count from the last edit then.
+
 ## Verification
 - Per PR: `python3 scripts/harness.py check changed`, the goldens named in its criteria, and a real console sample in the PR (from the recorders, with the test stand-in: nothing paid).
 - Contract changes are declared in the PR; `pr land` reads the contract golden.
 - Paid: only criterion 13, after its own approval.
 - This plan's PR: `check docs`.
+
+### Results so far
+- **S1, the report ([#164](https://github.com/pigeaca/Agentium/pull/164), merged 2026-10-05).** Criteria 1 to 4 are met.
+  - Evidence: the report goldens redone, new scenes for groups and for a verdict on passes, at 60, 80, 100 and 120 columns in plain text, color and ASCII; a unit test for the plan's share; the `--details`, `--markdown` and `--json` goldens unchanged.
+  - A real sample of `opus-vs-sonnet` from a copy of its data folder: both bars, every task in groups, "sonnet-5-5 was cheaper on 8 of 8 tasks" and "about 4% of your plan".
+  - Review: the Claude reviewer approved; Codex found no new defects after three rounds of fixes.
+  - A correction: the coordinator's brief asked for the wrong size in "what would settle it" (the 12 × 3 tier). Both reviewers caught it, and the line now names the floor, 20 tasks of 3 runs each.
+- **S4, the quiet run view ([#165](https://github.com/pigeaca/Agentium/pull/165), merged 2026-10-05).** Criteria 9 and 10 are met.
+  - Evidence: quiet goldens for the start, mid, moments, host, judged and final scenes, plus two-digit pass counts and a stopped run, in color and ASCII; a CLI test per view name; the step boxes' goldens renamed to `flow-*` with no change in content; the plain and log goldens unchanged; a recording with the test stand-in in the PR.
+  - Review: Codex raised three findings (pass counts after a resume, the step's time at 60 columns, eight runs at once on a short terminal). The Claude reviewer raised the next check lost at 80 columns, two missing goldens and five low notes on wording and tests. All are fixed but one low note, which is the budget-stop item in Later. Both reviewers ended clean, after three rounds.
+  - Limitations: the two run-view items in [Later](#later-not-in-this-plan). The pictures in the README, the gallery and the guide still show the step boxes until S5.
+- **Release:** both screens are in [v0.4.0](https://github.com/pigeaca/Agentium/releases/tag/v0.4.0).
+
+## Parallel ownership
+The coordinator is the session that owns this plan. It writes each assignment, runs both reviews, opens the PRs and lands them. Each implementer works in its own task worktree, `<worktrees>/<the branch, with dashes>`, made from `origin/main`.
+
+| Step | Owner | Branch | Base | Editable scope | State |
+|---|---|---|---|---|---|
+| S1 | implementer | `claude/feat/report-every-task` | `593a20f` | `internal/cli/reportview.go` and its test, `internal/report` (the plan's share), `report-*.golden`, the guide's text on the report | merged, #164 |
+| S4 | implementer | `claude/feat/quiet-run-view` | `593a20f` | `internal/cli/rundash.go`, `runview.go`, `runscreen.go`, `runstate.go`, a new `runquiet.go`, the recorder, `flow-*.golden` and `quiet-*.golden`, the help text, the guide's text on the views | merged, #165 |
+| S3 | implementer | `claude/feat/task-list-tells` | `8061906` | `internal/cli/task.go`, a new list view, `json_task.go`, `poolview.go`, one read-only query in `internal/store`, `tasks-*.golden`, the contract golden, the guide's text on the task list | in progress |
+| T3 | implementer | `claude/feat/rule-checks` | `daa8756` | migration `0014` and its queries in `internal/store`, new files in `internal/run`, `internal/report`, a new `check` command file, the dispatch line in `cli.go`, one new block in `reportview.go`, `report-checks*.golden`, the contract golden, a guide section | in progress |
+
+Shared files: `docs/guide.md` (each step edits its own section) and `internal/cli/testdata/contract.golden` (S3, then S2: one at a time; T3 adds lines elsewhere in it, and whoever lands second regenerates it after merging `main`).
 
 ## Decisions (the user, 2026-10-05)
 The user answered all seven "as recommended":
