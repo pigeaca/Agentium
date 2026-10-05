@@ -190,17 +190,21 @@ func unmet(met bool) CheckResult {
 	return CheckUnmet
 }
 
-// commands reads the shell commands the run's agent ran from its stored transcript, with the run's own adapter.
+// commands reads the shell commands the run's agent ran from its records folder, with the run's own adapter, which
+// knows its transcript's files. A folder or transcript that is missing or cannot be parsed, or an agent this Agentium
+// does not know, leaves the run unread.
 func (r CheckReader) commands(rec Record) ([]string, bool) {
-	file, ok := r.find(rec, "stream.jsonl")
-	if !ok {
-		return nil, false
+	for _, dir := range r.dirs(rec) {
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			continue
+		}
+		m, err := parseRecords(adapterFor(rec.Agent), dir)
+		if err != nil {
+			return nil, false
+		}
+		return m.RanCommands, true
 	}
-	m, err := parseFile(adapterFor(rec.Agent), file)
-	if err != nil {
-		return nil, false
-	}
-	return m.RanCommands, true
+	return nil, false
 }
 
 // paths reads the paths the run's stored change touches.
@@ -216,8 +220,9 @@ func (r CheckReader) paths(rec Record) ([]string, bool) {
 	return ChangedPaths(data), true
 }
 
-// find is the run's file name in its records folder.
-func (r CheckReader) find(rec Record, name string) (string, bool) {
+// dirs are the run's records folders to look in: the data folder's own first, then the record's (which may name a
+// data folder that has since moved).
+func (r CheckReader) dirs(rec Record) []string {
 	var dirs []string
 	if r.Records != "" && rec.ID != "" {
 		dirs = append(dirs, filepath.Join(r.Records, rec.ID))
@@ -225,7 +230,12 @@ func (r CheckReader) find(rec Record, name string) (string, bool) {
 	if rec.RecordsDir != "" {
 		dirs = append(dirs, rec.RecordsDir)
 	}
-	for _, dir := range dirs {
+	return dirs
+}
+
+// find is the run's file name in its records folder.
+func (r CheckReader) find(rec Record, name string) (string, bool) {
+	for _, dir := range r.dirs(rec) {
 		file := filepath.Join(dir, name)
 		if _, err := os.Stat(file); err == nil || !errors.Is(err, fs.ErrNotExist) {
 			return file, true // one that exists but cannot be read is found, then unread

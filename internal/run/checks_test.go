@@ -1,6 +1,8 @@
 package run
 
 import (
+	"github.com/pigeaca/agentium/internal/agent"
+	"github.com/pigeaca/agentium/internal/codex"
 	"os"
 	"path/filepath"
 	"slices"
@@ -109,5 +111,29 @@ func TestCheckReaderResults(t *testing.T) {
 	// No checks read nothing.
 	if got := r.Results(Record{ID: "full"}, nil); len(got) != 0 {
 		t.Errorf("no checks: %v", got)
+	}
+}
+
+// A Codex run's commands are read through its own adapter, from the files Codex names, in its records folder.
+func TestCheckReaderReadsCodexRuns(t *testing.T) {
+	records := t.TempDir()
+	dir := filepath.Join(records, "codex-run")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for src, dst := range map[string]string{"exec-ok.jsonl": agent.Transcript, "rollout-ok.jsonl": codex.Rollout} {
+		data, err := os.ReadFile(filepath.Join("..", "codex", "testdata", src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, dst), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checks := []Check{{"rg", CheckRan, "rg --files"}, {"heredoc", CheckRan, "cat > notes.txt"}, {"none", CheckRan, "no such command"}}
+	r := CheckReader{Records: records}
+	got := r.Results(Record{ID: "codex-run", Agent: codex.Name}, checks)
+	if want := []CheckResult{CheckMet, CheckMet, CheckUnmet}; !slices.Equal(got, want) {
+		t.Errorf("a Codex run = %v, want %v", got, want)
 	}
 }
