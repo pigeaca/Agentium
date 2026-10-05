@@ -93,11 +93,20 @@ func SpecOf(t store.Task) Spec {
 // Gaps lists what the task's hidden tests require that the instruction and the base do not state. f keeps what it
 // worked out and read, so give one to every command.
 func Gaps(ctx context.Context, f *Fairness, t store.Task) ([]Gap, error) {
-	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
+	in, ok := inputOf(t)
+	if !ok {
 		return nil, nil
 	}
-	return f.Gaps(ctx, FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: t.Instruction,
-		HiddenTests: t.HiddenTests, Reference: t.Reference})
+	return f.Gaps(ctx, in)
+}
+
+// inputOf is what t's gap check reads of it; false for a task with nothing to check (no solution, or no hidden tests).
+func inputOf(t store.Task) (FairnessInput, bool) {
+	if t.SolutionCommit == "" || len(t.HiddenTests) == 0 {
+		return FairnessInput{}, false
+	}
+	return FairnessInput{Base: t.BaseCommit, Solution: t.SolutionCommit, Instruction: t.Instruction,
+		HiddenTests: t.HiddenTests, Reference: t.Reference}, true
 }
 
 // maxGapChecks is how many tasks PrepareGaps checks at a time. A check is a chain of small local git searches that

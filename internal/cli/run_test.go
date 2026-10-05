@@ -203,6 +203,8 @@ type runFixture struct {
 	account *string
 	// grader is Env.DefaultGrader: host, so tests grade on the host unless they test the sandbox.
 	grader *string
+	// build is Env.BuildID: nil, so nothing is kept between commands unless a test gives the build an identity.
+	build *func() (string, error)
 }
 
 // newRunFixture is a project with one commit that adds a hidden test and the task "value" imported from it, initialized
@@ -243,6 +245,7 @@ func runFixtureAt(repo, data, home string) runFixture {
 	f.account = new(string)
 	f.grader = new(string)
 	*f.grader = "host"
+	f.build = new(func() (string, error))
 	f.run = func(ctx context.Context, args ...string) cliResult {
 		var stdout, stderr bytes.Buffer
 		code := Run(ctx, Env{DefaultGrader: *f.grader, Args: args, Stdout: &stdout, Stderr: &stderr, Dir: f.repo, Terminal: *f.terminal,
@@ -256,6 +259,7 @@ func runFixtureAt(repo, data, home string) runFixture {
 			},
 			LookPath: func(string) (string, error) { return "", os.ErrNotExist }, Now: time.Now,
 			AccountHome: func() string { return *f.account },
+			BuildID:     *f.build,
 			Backoff:     func(int) time.Duration { return 10 * time.Millisecond },
 			Sleep: func(ctx context.Context, d time.Duration) error {
 				if *f.sleep != nil {

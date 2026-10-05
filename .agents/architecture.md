@@ -19,7 +19,7 @@ Shape:
 - Every blocking call takes a `context.Context`, and cancellation stops agent processes.
 - Errors are wrapped with `%w` and context; there is no package-level mutable state.
 - I/O goes through parameters (`io.Writer`, `Env`) so commands can be tested.
-- Every git call starts a process (5 to 15 ms), so count them: a command that reads several commits reads them through one `source.Objects` (each object once). Budget: `experiment report` and `task list` answer in about a second on 100 runs and 20 tasks.
+- Every git call starts a process (5 to 15 ms), so count them: a command that reads several commits reads them through one `source.Objects` (each object once). Budget on 100 runs and 20 tasks: `experiment report` under a second; `task list` about a second the first time a build runs it, then 0.05 s (its checks are kept in the data folder, [keyed by the build](decisions/2026-10-05-gaps-cache-keyed-by-build.md)).
 - Exit codes: 0 success, 1 runtime failure, 2 usage error.
 
 ## Code map

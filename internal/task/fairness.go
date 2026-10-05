@@ -2,6 +2,7 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -15,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/gitx"
 	"github.com/pigeaca/agentium/internal/source"
@@ -72,7 +74,12 @@ type Fairness struct {
 	// repository never can be read), so an answer worked out while the count rose may lack something: it is given, as
 	// it always was, but not kept, in case the next read succeeds.
 	unread atomic.Int64
+	cache  *GapsCache // gaps kept between commands (Keep); nil keeps none
 }
+
+// Keep makes f take gaps from c, where an earlier command of the same checker put them, and put there the complete
+// ones it works out for commits named by their full IDs. Call it before f is used; the command saves c when it ends.
+func (f *Fairness) Keep(c *GapsCache) { f.cache = c }
 
 // NewFairness returns a checker for the repository located by where (for example "--git-dir", bare).
 func NewFairness(where ...string) *Fairness {
@@ -224,18 +231,41 @@ func (f *Fairness) Gaps(ctx context.Context, in FairnessInput) ([]Gap, error) {
 	var gaps []Gap
 	var err error
 	if ctx.Err() != nil {
-		gaps, err = f.check(ctx, in)
+		gaps, err = f.check(ctx, in, new(bool))
 	} else {
 		gaps, err = f.gaps.get(ctx, in.key(), func() ([]Gap, bool, error) {
+			if gaps, ok := f.cache.lookup(in); ok {
+				return gaps, true, nil
+			}
 			unread := f.unread.Load()
-			gaps, err := f.check(ctx, in)
-			return gaps, f.unread.Load() == unread && ctx.Err() == nil, err
+			lasting := true
+			gaps, err := f.check(ctx, in, &lasting)
+			keep := f.unread.Load() == unread && ctx.Err() == nil
+			if err == nil && keep && lasting && f.cache != nil && f.pinned(ctx, in) {
+				f.cache.store(in, gaps)
+			}
+			return gaps, keep, err
 		})
 	}
 	if err == nil && ctx.Err() != nil {
 		return nil, fmt.Errorf("fairness: %w", ctx.Err())
 	}
 	return slices.Clone(gaps), err // the caller's own: it may sort or cut them
+}
+
+// pinned reports whether in names both its commits by their full IDs. Only then does in say all its gaps depend on
+// whenever it is asked, so that they may outlive f (GapsCache).
+func (f *Fairness) pinned(ctx context.Context, in FairnessInput) bool {
+	for _, commit := range []string{in.Base, in.Solution} {
+		src, err := f.source(ctx, commit) // kept by the check that just ended
+		if err != nil {
+			return false
+		}
+		if c, ok := src.(counted); !ok || !source.Pinned(c.Source) {
+			return false
+		}
+	}
+	return true
 }
 
 // key tells inputs apart exactly: every text is written with its length, so no two inputs share a key.
@@ -250,8 +280,11 @@ func (in FairnessInput) key() string {
 	return b.String()
 }
 
-// check works out Gaps' answer.
-func (f *Fairness) check(ctx context.Context, in FairnessInput) ([]Gap, error) {
+// check works out Gaps' answer. It sets *lasting to false when the answer is good for this command only: the check
+// asked git, ignoring case, for text outside ASCII. How such text matches depends on what git loads to match it (PCRE2
+// and its Unicode tables, or the C library's), which nothing Agentium can read names, so another command may be told
+// otherwise by the same git. ASCII matches the same in all of them.
+func (f *Fairness) check(ctx context.Context, in FairnessInput, lasting *bool) ([]Gap, error) {
 	var gaps []Gap
 	stated := normalize(in.Instruction)
 	newNames, newTypes, err := f.newNames(ctx, in) // name (type) -> directories of the reference files declaring it
@@ -291,6 +324,9 @@ func (f *Fairness) check(ctx context.Context, in FairnessInput) ([]Gap, error) {
 				continue
 			}
 			seen[key] = true
+			if !isASCII(pieces) {
+				*lasting = false
+			}
 			if produced {
 				// nothing to look up in the reference: the format is what it has
 			} else if ok, err := f.allFound(ctx, in.Solution, pieces, in.Reference); err != nil {
@@ -428,7 +464,8 @@ func (f *Fairness) versions(ctx context.Context, in FairnessInput, file string) 
 
 // grep reports whether commit has pattern (fixed string; case-insensitive text, or a case-sensitive whole word when word is set) in the files
 // matching pathspecs (all files when none). git grep exits 1 with no output when nothing matches, which gitx
-// reports as an error with an empty message.
+// reports as an *ExitError with that status and an empty message. A git that a signal ended (killed, or crashed) has
+// an empty message too, and found out nothing: that is an error, never "no match".
 func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, pathspecs []string) (bool, error) {
 	key := fmt.Sprintf("%s\x00%s\x00%t\x00%s", commit, pattern, word, strings.Join(pathspecs, "\x00"))
 	return f.found.get(ctx, key, func() (bool, bool, error) {
@@ -445,7 +482,8 @@ func (f *Fairness) grep(ctx context.Context, commit, pattern string, word bool, 
 		if ctx.Err() != nil { // a cancelled git also exits without a message: never keep that as "no match"
 			return false, false, fmt.Errorf("fairness: %w", ctx.Err())
 		}
-		if err != nil && !strings.HasSuffix(err.Error(), ": ") {
+		var exit *gitx.ExitError
+		if noMatch := errors.As(err, &exit) && exit.Code == 1 && exit.Stderr == ""; err != nil && !noMatch {
 			return false, false, fmt.Errorf("fairness: %w", err)
 		}
 		return err == nil && len(out) > 0, true, nil
@@ -714,6 +752,18 @@ func piecesOf(lit string) []string {
 		}
 	}
 	return out
+}
+
+// isASCII reports whether no piece has a byte outside ASCII.
+func isASCII(pieces []string) bool {
+	for _, piece := range pieces {
+		for i := 0; i < len(piece); i++ {
+			if piece[i] >= utf8.RuneSelf {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // allIn reports whether every piece is in the (normalized) text.

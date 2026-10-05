@@ -717,8 +717,13 @@ func taskList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	fair := task.NewFairness("--git-dir", w.bare)
+	if len(tasks) > 0 {
+		kept := gapsCache(ctx, env, w)
+		fair.Keep(kept)
+		defer saveGaps(env, kept, tasks)
+	}
 	if env.JSON {
-		fair := task.NewFairness("--git-dir", w.bare)
 		task.PrepareGaps(ctx, fair, tasks)
 		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
 		if err != nil {
@@ -736,7 +741,6 @@ func taskList(ctx context.Context, env Env, args []string) int {
 			st.Command("agentium task add NAME ..."))
 		return ExitOK
 	}
-	fair := task.NewFairness("--git-dir", w.bare)
 	if caps, designed := designedList(env, *details); designed {
 		task.PrepareGaps(ctx, fair, slices.DeleteFunc(slices.Clone(tasks), func(t store.Task) bool { return !gapsTold(t) }))
 		tells, err := tellsOf(ctx, w.db, w.project.ID, tasks, gapsFunc(ctx, fair))
@@ -768,6 +772,44 @@ func taskList(ctx context.Context, env Env, args []string) int {
 		return fail(env, err)
 	}
 	return ExitOK
+}
+
+// gapsCache opens what this build kept of the project's gap checks (task.GapsCache), for the task list: under this
+// build of Agentium, this git and its locale. It is nil, which keeps nothing, without a build identity (tests), and
+// for a repository with replacement refs, where a commit's ID does not say what git reads (gitx.Replaced). When the
+// build or git cannot be told from another one (a binary replaced since the program started, say), nothing is kept
+// either, and stderr says why: the list is right, but slow for a reason nothing else would show.
+func gapsCache(ctx context.Context, env Env, w *workspace) *task.GapsCache {
+	if env.BuildID == nil {
+		return nil
+	}
+	build, err := env.BuildID()
+	var git string
+	if err == nil {
+		git, err = gitx.Identity(ctx)
+	}
+	replaced := false
+	if err == nil {
+		replaced, err = gitx.Replaced(ctx, w.bare)
+	}
+	if err != nil {
+		if ctx.Err() == nil { // an interrupted list has more to say than this
+			fmt.Fprintf(env.Stderr, "agentium: the tasks' checks are not kept this time, so this list works them all out: %v\n", err)
+		}
+		return nil
+	}
+	if replaced {
+		return nil
+	}
+	return task.OpenGapsCache(w.layout.GapsCache(w.project.ID), build, git)
+}
+
+// saveGaps keeps the list's checks for the next one. A failure changes nothing this list printed: it is said on
+// stderr, since the next list will be slow for no reason the user can see.
+func saveGaps(env Env, kept *task.GapsCache, tasks []store.Task) {
+	if err := kept.Save(tasks); err != nil {
+		fmt.Fprintf(env.Stderr, "agentium: the tasks' checks were not kept, so the next list works them out again: %v\n", err)
+	}
 }
 
 // taskStatus is a task's status as task list shows it: the validation's summary, then what still needs attention

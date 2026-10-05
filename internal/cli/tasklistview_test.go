@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -304,14 +305,13 @@ func TestTaskListJSONTells(t *testing.T) {
 	}
 }
 
-// task list works a task's gaps out once, whichever of its forms asks and however often (the JSON form asks twice
-// for a task that awaits a review), several tasks at a time, and asks git nothing twice. Its answers are the ones
-// the checks give one by one: the unstated requirements the fixture's tasks have.
-func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a counting git on PATH
+// gapsListFixture is the run fixture's project with two more tasks from history, alpha and beta, whose hidden tests
+// are Go tests, so their gaps need searches and reads (beta follows alpha: its base is alpha's solution). Every task
+// is valid and awaits a review, so the designed list's tag for alpha and beta is their unstated requirements.
+func gapsListFixture(t *testing.T) runFixture {
+	t.Helper()
 	f := newRunFixture(t, filepath.Join(t.TempDir(), "data"))
 	ctx := context.Background()
-	// Two tasks from history whose hidden tests are Go tests, so their gaps need searches and reads; the second
-	// follows the first, so its base is the first's solution.
 	for i, name := range []string{"alpha", "beta"} {
 		pkg := string(rune('a' + i))
 		writeFile(t, f.repo, pkg+"/"+pkg+".go", "package "+pkg+"\n\nfunc Note() string { return \"graded with the base version\" }\n")
@@ -324,11 +324,11 @@ func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a 
 		gitIn(t, f.repo, "commit", "-q", "-m", "Change the note of "+name)
 		expect(t, f.run(ctx, "task", "import", "--commit", "HEAD", "--name", name, "--verify", "true"), ExitOK)
 	}
-	// Valid, and awaiting a review: the designed list's tag for them is then their unstated requirements.
 	db, err := store.Open(ctx, filepath.Join(f.data, "agentium.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer db.Close()
 	projects, err := db.Projects(ctx)
 	if err != nil || len(projects) != 1 {
 		t.Fatalf("projects %v, %v", projects, err)
@@ -342,7 +342,15 @@ func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a 
 			t.Fatal(err)
 		}
 	}
-	db.Close()
+	return f
+}
+
+// task list works a task's gaps out once, whichever of its forms asks and however often (the JSON form asks twice
+// for a task that awaits a review), several tasks at a time, and asks git nothing twice. Its answers are the ones
+// the checks give one by one: the unstated requirements the fixture's tasks have.
+func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a counting git on PATH
+	f := gapsListFixture(t)
+	ctx := context.Background()
 	calls := gitxtest.Calls(t)
 	run := func(terminal bool, args ...string) (cliResult, [][]string) {
 		t.Helper()
@@ -397,5 +405,151 @@ func TestTaskListAsksGitNothingTwice(t *testing.T) { // not parallel: it puts a 
 	calls()
 	if _, after := run(true, "task", "list"); gitxtest.Count(after, "grep") >= gitxtest.Count(designedCalls, "grep") {
 		t.Errorf("the designed list still checks a reviewed task: %d searches, %d before", gitxtest.Count(after, "grep"), gitxtest.Count(designedCalls, "grep"))
+	}
+}
+
+// With a build that can be told from any other, task list keeps its checks in the data folder: the next list prints
+// the same in every form and starts no git process for them. Another build, an unknown one or an edited task checks
+// afresh; a file that cannot be written is said on stderr and changes nothing else.
+func TestTaskListKeepsItsChecksBetweenCommands(t *testing.T) { // not parallel: it puts a counting git on PATH
+	f := gapsListFixture(t)
+	ctx := context.Background()
+	type form struct {
+		terminal bool
+		args     []string
+	}
+	forms := []form{{false, []string{"task", "list", "--json"}}, {false, []string{"task", "list"}}, {false, []string{"task", "list", "--details"}},
+		{true, []string{"task", "list"}}}
+	list := func(fm form) cliResult {
+		t.Helper()
+		*f.terminal = fm.terminal
+		res := f.run(ctx, fm.args...)
+		expect(t, res, ExitOK)
+		return res
+	}
+	// Without a build identity nothing is kept: what each form prints then is what it must always print.
+	var want []string
+	for _, fm := range forms {
+		want = append(want, list(fm).stdout)
+	}
+	kept := filepath.Join(f.data, "cache", "gaps", "1.json")
+	if _, err := os.Stat(filepath.Dir(kept)); !os.IsNotExist(err) {
+		t.Fatalf("a list without a build identity made %s (%v)", filepath.Dir(kept), err)
+	}
+	if !strings.Contains(want[1], "(2 unstated requirement(s))") {
+		t.Fatalf("the fixture's tasks have no gaps:\n%s", want[1])
+	}
+
+	build := "build 1"
+	*f.build = func() (string, error) { return build, nil }
+	calls := gitxtest.Calls(t)
+	// searches is how many git processes the commands since the last count started for the tasks' checks.
+	searches := func() int {
+		made := calls()
+		return gitxtest.Count(made, "grep") + gitxtest.Count(made, "cat-file") + gitxtest.Count(made, "ls-tree")
+	}
+	if got := list(forms[0]); got.stdout != want[0] || got.stderr != "" {
+		t.Errorf("the first list with a build identity:\n%s\nstderr %s", got.stdout, got.stderr)
+	}
+	cold := searches()
+	if cold == 0 {
+		t.Fatal("the first list checked nothing")
+	}
+	info, err := os.Stat(kept)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("the kept checks: %v, mode %v; want a file of mode 0600", err, info)
+	}
+	saved, err := os.ReadFile(kept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, fm := range forms {
+		got := list(fm)
+		if got.stdout != want[i] || got.stderr != "" {
+			t.Errorf("%v with its checks kept prints something else:\n%s\nstderr %s", fm.args, got.stdout, got.stderr)
+		}
+		// The repository's root, and git's identity: nothing for the tasks.
+		if made := calls(); len(made) > 2 || gitxtest.Count(made, "grep")+gitxtest.Count(made, "cat-file")+gitxtest.Count(made, "ls-tree") != 0 {
+			t.Errorf("%v with its checks kept started %d git processes: %v", fm.args, len(made), made)
+		}
+	}
+	if again, err := os.ReadFile(kept); err != nil || string(again) != string(saved) {
+		t.Errorf("lists that found everything kept rewrote the file (%v)", err)
+	}
+
+	// A build that cannot be told from another keeps and takes nothing, and says why the list is slow.
+	*f.build = func() (string, error) { return "", os.ErrNotExist }
+	if got := list(forms[0]); got.stdout != want[0] || !strings.Contains(got.stderr, "the tasks' checks are not kept this time") || searches() != cold {
+		t.Errorf("a list of an unknown build: it must check everything, print the same and say so:\n%s\nstderr %s", got.stdout, got.stderr)
+	}
+	if again, err := os.ReadFile(kept); err != nil || string(again) != string(saved) {
+		t.Errorf("a list of an unknown build touched the file (%v)", err)
+	}
+
+	// With a replacement ref, a commit's ID does not say what git reads: nothing is taken or kept, list after list,
+	// until the ref is gone.
+	*f.build = func() (string, error) { return build, nil }
+	bare := filepath.Join(f.data, "projects", "1", "repo.git")
+	commits := strings.Fields(gitIn(t, bare, "for-each-ref", "--format=%(objectname)", "refs/agentium/sources/"))
+	if len(commits) < 2 {
+		t.Fatalf("the project's repository has %d source commits", len(commits))
+	}
+	gitIn(t, bare, "replace", commits[0], commits[1])
+	calls()
+	for range 2 {
+		if got := list(forms[1]); got.stderr != "" || searches() == 0 {
+			t.Errorf("a list of a repository with a replacement ref must check its tasks itself, quietly:\nstderr %s", got.stderr)
+		}
+	}
+	if again, err := os.ReadFile(kept); err != nil || string(again) != string(saved) {
+		t.Errorf("a list of a repository with a replacement ref touched the file (%v)", err)
+	}
+	gitIn(t, bare, "replace", "-d", commits[0])
+	calls()
+	if got := list(forms[1]); got.stdout != want[1] || searches() != 0 {
+		t.Errorf("with the replacement ref gone the kept checks must serve again:\n%s", got.stdout)
+	}
+
+	// Another build checks everything itself, once.
+	build = "build 2"
+	*f.build = func() (string, error) { return build, nil }
+	if got := list(forms[0]); got.stdout != want[0] || searches() != cold {
+		t.Errorf("another build's first list must check everything and print the same:\n%s", got.stdout)
+	}
+	if got := list(forms[1]); got.stdout != want[1] || searches() != 0 {
+		t.Errorf("another build's next list must check nothing and print the same:\n%s", got.stdout)
+	}
+	// The first build's checks are still kept beside the second's: two builds in turn do not undo each other.
+	build = "build 1"
+	if got := list(forms[0]); got.stdout != want[0] || searches() != 0 {
+		t.Errorf("back on the first build the list must check nothing and print the same:\n%s", got.stdout)
+	}
+	build = "build 2"
+
+	// An edited task is checked afresh, and it alone: its instruction now states what its tests need.
+	*f.terminal = false
+	expect(t, f.run(ctx, "task", "edit", "alpha", "--instruction", "Options gets a Verbose field. Note returns \"graded with the alpha version\"."), ExitOK)
+	calls()
+	edited := list(forms[1])
+	if strings.Count(edited.stdout, "(2 unstated requirement(s))") != 1 {
+		t.Errorf("after the edit, alpha should have no unstated requirements and beta two:\n%s", edited.stdout)
+	}
+	if n := searches(); n == 0 || n >= cold {
+		t.Errorf("after the edit the list started %d git processes for its checks; want some for alpha, fewer than the %d for every task", n, cold)
+	}
+	if got := list(forms[1]); got.stdout != edited.stdout || searches() != 0 {
+		t.Errorf("the list after that must check nothing and print the same:\n%s", got.stdout)
+	}
+
+	// The checks cannot be kept (a file is where their folder should be): said on stderr, and nothing else changes.
+	if err := os.RemoveAll(filepath.Dir(kept)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Dir(kept), []byte("in the way"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failed := list(forms[1])
+	if failed.stdout != edited.stdout || !strings.Contains(failed.stderr, "the tasks' checks were not kept") || !strings.Contains(failed.stderr, "gaps") {
+		t.Errorf("a list whose checks cannot be kept:\nstdout %s\nstderr %s", failed.stdout, failed.stderr)
 	}
 }
