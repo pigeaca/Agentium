@@ -26,6 +26,7 @@ type sessionsFixture struct {
 	config   string // the stand-in config folder
 	projects string
 	now      time.Time
+	known    map[string]bool // the workspaces whose runs the fixture's store knows (CleanInput.KnownWorkspace)
 }
 
 func newSessionsFixture(t *testing.T) sessionsFixture {
@@ -33,7 +34,7 @@ func newSessionsFixture(t *testing.T) sessionsFixture {
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	must(t, err)
 	data := filepath.Join(base, "my.data")
-	f := sessionsFixture{base: base, config: filepath.Join(base, "claude-config"), now: time.Now(),
+	f := sessionsFixture{base: base, config: filepath.Join(base, "claude-config"), now: time.Now(), known: map[string]bool{},
 		layout: home.Layout{Root: data, Database: filepath.Join(data, "agentium.db"), Artifacts: filepath.Join(data, "artifacts"),
 			Workspaces: filepath.Join(data, "workspaces"), Records: filepath.Join(data, "records"), Cache: filepath.Join(data, "cache"),
 			Deps: filepath.Join(data, "deps")}}
@@ -75,17 +76,24 @@ func (f sessionsFixture) age(t *testing.T, p string, ago time.Duration) {
 	}))
 }
 
-// ours is the session folder of a finished run of the fixture's data folder, in the named workspace.
+// ours is the session folder of a finished, stored run of the fixture's data folder, in the named workspace.
 func (f sessionsFixture) ours(t *testing.T, workspace string, module ...string) string {
 	t.Helper()
+	f.known[workspace] = true
 	return f.session(t, filepath.Join(append([]string{f.layout.Workspaces, workspace, "repo"}, module...)...), 48*time.Hour)
 }
 
 func (f sessionsFixture) plan(t *testing.T) CleanPlan {
 	t.Helper()
-	plan, err := PlanClean(context.Background(), CleanInput{Layout: f.layout, Now: f.now, OlderThan: CleanDefaultAge, ClaudeConfig: f.config})
+	plan, err := PlanClean(context.Background(), f.input(f.layout, f.config))
 	must(t, err)
 	return plan
+}
+
+// input is the fixture's cleanup input for a layout and a config folder.
+func (f sessionsFixture) input(layout home.Layout, config string) CleanInput {
+	return CleanInput{Layout: layout, Now: f.now, OlderThan: CleanDefaultAge, ClaudeConfig: config,
+		KnownWorkspace: func(name string) (bool, error) { return f.known[name], nil }}
 }
 
 // sessionItems are a list's sessions items, by path.
@@ -191,7 +199,26 @@ func TestCleanSessionsRemovesOnlyThisDataFoldersFolders(t *testing.T) {
 			return p, ""
 		},
 		"a folder used in the last hour": func(t *testing.T, f sessionsFixture) (string, string) {
-			return f.session(t, filepath.Join(f.layout.Workspaces, runID(t), "repo"), 10*time.Minute), CleanKeptRecent
+			id := runID(t)
+			f.known[id] = true
+			return f.session(t, filepath.Join(f.layout.Workspaces, id, "repo"), 10*time.Minute), CleanKeptRecent
+		},
+		"a run the store does not know": func(t *testing.T, f sessionsFixture) (string, string) {
+			return f.session(t, filepath.Join(f.layout.Workspaces, runID(t), "repo"), 48*time.Hour), CleanKeptUnknownRun
+		},
+		"an experiment slot the store does not know": func(t *testing.T, f sessionsFixture) (string, string) {
+			return f.session(t, filepath.Join(f.layout.Workspaces, "e3-s1-t3", "repo"), 48*time.Hour), CleanKeptUnknownRun
+		},
+		// The review's probe: a kept run of a data folder whose path differs only in punctuation (my_data), its workspace
+		// there, its folder unused for two hours. The name is this data folder's too; its store does not know the run.
+		"a colliding data folder's kept run": func(t *testing.T, f sessionsFixture) (string, string) {
+			id := runID(t)
+			must(t, os.MkdirAll(filepath.Join(f.base, "my_data", "workspaces", id, "repo"), 0o700))
+			p := f.session(t, filepath.Join(f.base, "my_data", "workspaces", id, "repo"), 2*time.Hour)
+			if p != claude.SessionFolder(f.config, filepath.Join(f.layout.Workspaces, id, "repo")) {
+				t.Fatal("the probe's names do not collide")
+			}
+			return p, CleanKeptUnknownRun
 		},
 		"a folder of a workspace name Agentium does not make": func(t *testing.T, f sessionsFixture) (string, string) {
 			return f.session(t, filepath.Join(f.layout.Workspaces, "r1", "repo"), 48*time.Hour), ""
@@ -312,6 +339,9 @@ func TestCleanSessionsChecksEachFolderAgainAtRemoval(t *testing.T) {
 			must(t, os.RemoveAll(p))
 			must(t, os.WriteFile(p, []byte("x"), 0o600))
 		}, errSessionNotReal},
+		"the store no longer knows its run": {func(t *testing.T, f sessionsFixture, _, workspace string) {
+			delete(f.known, filepath.Base(workspace))
+		}, nil},
 		"the projects folder swapped for a link": {func(t *testing.T, f sessionsFixture, _, _ string) {
 			moved := filepath.Join(f.base, "moved-projects")
 			must(t, os.Rename(f.projects, moved))
@@ -377,7 +407,7 @@ func TestCleanSessionsWithoutAProjectsFolder(t *testing.T) {
 	p := f.ours(t, runID(t))
 	for name, config := range map[string]string{"another sign-in": "", "no config folder": filepath.Join(f.base, "none"),
 		"no projects folder": filepath.Join(f.base, "my.data")} {
-		plan, err := PlanClean(context.Background(), CleanInput{Layout: f.layout, Now: f.now, OlderThan: CleanDefaultAge, ClaudeConfig: config})
+		plan, err := PlanClean(context.Background(), f.input(f.layout, config))
 		if err != nil || len(plan.Remove)+len(plan.Keep)+len(plan.Notes) != 0 {
 			t.Errorf("%s: %+v, %v", name, plan, err)
 		}
@@ -385,7 +415,7 @@ func TestCleanSessionsWithoutAProjectsFolder(t *testing.T) {
 	linked := filepath.Join(f.base, "linked-config")
 	must(t, os.MkdirAll(linked, 0o700))
 	must(t, os.Symlink(f.projects, filepath.Join(linked, "projects")))
-	plan, err := PlanClean(context.Background(), CleanInput{Layout: f.layout, Now: f.now, OlderThan: CleanDefaultAge, ClaudeConfig: linked})
+	plan, err := PlanClean(context.Background(), f.input(f.layout, linked))
 	if err != nil || len(plan.Remove)+len(plan.Keep) != 0 || len(plan.Notes) != 1 || !strings.Contains(plan.Notes[0], "is not listed") {
 		t.Errorf("linked projects folder: %+v, %v", plan, err)
 	}
@@ -394,7 +424,7 @@ func TestCleanSessionsWithoutAProjectsFolder(t *testing.T) {
 	}
 	// A config folder that is a link is the user's own setup: it is followed to a real projects folder.
 	must(t, os.Symlink(f.config, filepath.Join(f.base, "config-link")))
-	plan, err = PlanClean(context.Background(), CleanInput{Layout: f.layout, Now: f.now, OlderThan: CleanDefaultAge, ClaudeConfig: filepath.Join(f.base, "config-link")})
+	plan, err = PlanClean(context.Background(), f.input(f.layout, filepath.Join(f.base, "config-link")))
 	if err != nil || len(plan.Remove) != 1 {
 		t.Errorf("linked config folder: %+v, %v", plan, err)
 	}
@@ -481,6 +511,14 @@ func TestOnceLeavesASessionFolderItCannotProve(t *testing.T) {
 			if !strings.Contains(notes, "Claude Code's session folder of this run was left in its projects folder") || strings.Contains(notes, filepath.Base(p)) {
 				t.Errorf("notes: %v", rec.Notes)
 			}
+			// The final start file holds the note too: a recovery after a crash stores it.
+			data, err := os.ReadFile(filepath.Join(f.env.Layout.Records, f.env.ID, startFile))
+			must(t, err)
+			var s start
+			must(t, json.Unmarshal(data, &s))
+			if !s.Finished || !strings.Contains(strings.Join(s.Record.Notes, "\n"), "session folder of this run was left") {
+				t.Errorf("the final start file's notes: %v", s.Record.Notes)
+			}
 		})
 	}
 }
@@ -532,5 +570,92 @@ func TestRecoverRemovesADeadRunsSessionFolder(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], stray) || strings.Contains(warnings[0], f.base) {
 		t.Errorf("warnings: %v", warnings)
+	}
+}
+
+// Without a store to ask (KnownWorkspace nil), no folder goes: each is kept as an unknown run's.
+func TestCleanSessionsWithoutAStoreRemovesNothing(t *testing.T) {
+	f := newSessionsFixture(t)
+	p := f.ours(t, runID(t))
+	in := f.input(f.layout, f.config)
+	in.KnownWorkspace = nil
+	plan, err := PlanClean(context.Background(), in)
+	must(t, err)
+	if it, ok := sessionItems(plan.Keep)[p]; len(plan.Remove) != 0 || !ok || it.Reason != CleanKeptUnknownRun {
+		t.Errorf("plan %+v", plan)
+	}
+}
+
+// A data folder named in another letter case (one folder on macOS) matches none of the names its runs left: Claude Code
+// names a folder by the path as the agent's process saw it, and Agentium compares names exactly.
+func TestCleanSessionsMatchNothingForAnotherLetterCase(t *testing.T) {
+	f := newSessionsFixture(t)
+	f.ours(t, runID(t))
+	f.ours(t, "e1-s1-t1")
+	other := f.layout
+	other.Workspaces = filepath.Join(f.base, "My.Data", "workspaces")
+	plan, err := PlanClean(context.Background(), f.input(other, f.config))
+	must(t, err)
+	if len(plan.Remove)+len(plan.Keep) != 0 {
+		t.Errorf("another letter case matched: %+v", plan)
+	}
+}
+
+// A start file written before runs recorded their session folder (no "session" key): recovery removes the workspace
+// and leaves Claude Code's folder, without a warning; cleanup lists it later.
+func TestRecoverLeavesTheSessionFolderOfAnOlderStartFile(t *testing.T) {
+	f := newSessionsFixture(t)
+	id := runID(t)
+	p := f.ours(t, id)
+	dir := filepath.Join(f.layout.Records, id)
+	workspace := filepath.Join(f.layout.Workspaces, id)
+	must(t, os.MkdirAll(filepath.Join(workspace, "repo"), 0o700))
+	must(t, os.MkdirAll(dir, 0o700))
+	data := `{"record":{"id":"` + id + `","records":"` + dir + `","sign_in":"login"},"workspace":"` + workspace + `","agent_started":true}`
+	must(t, os.WriteFile(filepath.Join(dir, startFile), []byte(data), 0o600))
+	var warnings []string
+	orphans, err := RecoverWarn(context.Background(), f.layout, func(string) (bool, error) { return false, nil }, nil, f.now,
+		func(w string) { warnings = append(warnings, w) })
+	if err != nil || len(orphans) != 1 || len(warnings) != 0 {
+		t.Fatalf("recover: %v, %v, warnings %v", orphans, err, warnings)
+	}
+	if exists(workspace) || !exists(filepath.Join(p, "tool-results", "data")) {
+		t.Errorf("workspace there %v, session folder there %v", exists(workspace), exists(p))
+	}
+	if plan := f.plan(t); len(plan.Remove) != 1 || plan.Remove[0].Path != p {
+		t.Errorf("cleanup does not list it: %+v", plan.Remove)
+	}
+}
+
+// A run removes its own folder only under cleanup's checks: an absolute path whose name fits this data folder's runs
+// and is its own workspace's; otherwise the folder stays, with a note (none when nothing is there).
+func TestRemoveOwnSessionChecksAsCleanupDoes(t *testing.T) {
+	f := newSessionsFixture(t)
+	id, other := runID(t), runID(t)
+	own := f.ours(t, id)
+	otherRun := f.ours(t, other)
+	env := Env{ID: id, Layout: f.layout}
+	for name, session := range map[string]string{
+		"another run's folder": otherRun,
+		"a relative path":      filepath.Join("claude-config", "projects", filepath.Base(own)),
+		"a name of no run":     filepath.Join(f.projects, "-Users-someone-code-app"),
+	} {
+		fill(t, filepath.Join(f.projects, "-Users-someone-code-app"), 10)
+		env.ownSession = session
+		note := env.removeOwnSession()
+		if !strings.Contains(note, "its path is not one Agentium's runs make") {
+			t.Errorf("%s: note %q", name, note)
+		}
+	}
+	if !exists(otherRun) || !exists(own) || !exists(filepath.Join(f.projects, "-Users-someone-code-app", "data")) {
+		t.Error("a folder went")
+	}
+	env.ownSession = filepath.Join(f.projects, "missing")
+	if note := env.removeOwnSession(); note != "" {
+		t.Errorf("nothing there: note %q", note)
+	}
+	env.ownSession = own
+	if note := env.removeOwnSession(); note != "" || exists(own) {
+		t.Errorf("its own folder: note %q, still there %v", note, exists(own))
 	}
 }

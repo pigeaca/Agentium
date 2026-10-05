@@ -111,6 +111,9 @@ type CleanInput struct {
 	// ClaudeConfig is the user's own Claude Code config folder (claude.UserConfigDir), set only when runs sign in with
 	// the login, which keeps their sessions there; empty: no sessions kind.
 	ClaudeConfig string
+	// KnownWorkspace reports whether the store knows the run that used the named workspace (a run's ID, or an experiment
+	// slot's try, e<experiment>-s<slot>-t<try>): a session folder goes only then. nil knows none.
+	KnownWorkspace func(name string) (bool, error)
 }
 
 // CleanItem is one thing cleanup removes, or keeps and says why.
@@ -186,7 +189,7 @@ var commitSuffix = regexp.MustCompile(`-([0-9a-f]{40}|[0-9a-f]{64})$`)
 func PlanClean(ctx context.Context, in CleanInput) (CleanPlan, error) {
 	in.OlderThan = max(in.OlderThan, CleanGrace)
 	c := planner{in: in}
-	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine, c.validations, c.processes, c.sessions} {
+	for _, step := range []func(context.Context) error{c.seeds, c.deps, c.quarantine, c.validations, c.processes} {
 		if err := step(ctx); err != nil {
 			return CleanPlan{}, err
 		}
@@ -195,6 +198,9 @@ func PlanClean(ctx context.Context, in CleanInput) (CleanPlan, error) {
 		if err := c.leftovers(ctx); err != nil {
 			return CleanPlan{}, err
 		}
+	}
+	if err := c.sessions(ctx); err != nil { // after the leftovers: a dead run's session folder is planned with them
+		return CleanPlan{}, err
 	}
 	order := func(a, b CleanItem) int {
 		return cmp.Or(cmp.Compare(slices.Index(CleanKinds, a.Kind), slices.Index(CleanKinds, b.Kind)), strings.Compare(a.Path, b.Path))

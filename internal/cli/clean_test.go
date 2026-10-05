@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -334,10 +335,32 @@ func TestCleanSessions(t *testing.T) {
 		}
 		return p
 	}
-	gone, withSession := session("20261004T101500Z-0a1b2c"), session("e4-s2-t1", "5e6f.jsonl")
+	// The store knows a run and an experiment slot's first try: only their folders go. A name it does not know (another
+	// run ID, the slot's second try, another slot) may be another data folder's whose path encodes the same: it stays.
+	ctx := context.Background()
+	db, err := store.Open(ctx, f.layout.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, _ := strconv.ParseInt(f.project, 10, 64)
+	e, err := db.SaveExperiment(ctx, store.Experiment{ProjectID: pid, Name: "ab", Template: "context-ab", Design: []byte(`{}`), CreatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range []store.Run{{ID: "20261004T101500Z-0a1b2c", ProjectID: pid, TaskName: "value", Arm: "A", Outcome: "ok"},
+		{ID: "20261004T101600Z-0d0e0f", ProjectID: pid, TaskName: "value", Arm: "A", Outcome: "ok", ExperimentID: e.ID, Slot: 2, Attempt: 1}} {
+		if err := db.SaveRun(ctx, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+	slot := func(s, try int) string { return fmt.Sprintf("e%d-s%d-t%d", e.ID, s, try) }
+	gone, slotGone := session("20261004T101500Z-0a1b2c"), session(slot(2, 1))
+	withSession := session(slot(7, 1), "5e6f.jsonl")
+	unknown := []string{session("20261004T101500Z-ffffff"), session(slot(2, 2)), session(slot(5, 1))}
 	own := filepath.Join(config, "projects", "-Users-someone-code-app")
 	writeFile(t, own, "9a8b.jsonl", "{}\n")
-	hidden := []string{filepath.Base(gone), filepath.Base(withSession), filepath.Base(workspaces), "-Users-someone"}
+	hidden := []string{filepath.Base(gone), filepath.Base(slotGone), filepath.Base(withSession), filepath.Base(workspaces), "-Users-someone"}
 	unnamed := func(text string) {
 		t.Helper()
 		for _, h := range hidden {
@@ -348,8 +371,9 @@ func TestCleanSessions(t *testing.T) {
 	}
 
 	dry := f.run(context.Background(), "clean")
-	expect(t, dry, ExitOK, "sessions", "in Claude Code's projects folder", "1 folder that runs of this data folder left",
-		"1 folder named like this data folder's runs' that holds a session file of its own, which no run leaves: left alone")
+	expect(t, dry, ExitOK, "sessions", "in Claude Code's projects folder", "2 folders that runs of this data folder left",
+		"1 folder named like this data folder's runs' that holds a session file of its own, which no run leaves: left alone",
+		"3 folders named like this data folder's runs' that it has no run of (perhaps another data folder's): left alone")
 	unnamed(dry.stdout)
 	doc := jsonRun(t, f.runFixture, ExitOK, "clean")
 	var kind map[string]any
@@ -358,14 +382,23 @@ func TestCleanSessions(t *testing.T) {
 			kind = k.(map[string]any)
 		}
 	}
-	if kind == nil || kind["remove"] != float64(1) || kind["keep"] != float64(1) || kind["remove_bytes"].(float64) < 5000 {
+	if kind == nil || kind["remove"] != float64(2) || kind["keep"] != float64(4) || kind["remove_bytes"].(float64) < 10000 {
 		t.Errorf("sessions kind: %v", kind)
 	}
 	var item map[string]any
 	for _, it := range doc.get("remove").([]any) {
-		if it.(map[string]any)["kind"] == "sessions" {
-			item = it.(map[string]any)
+		if m := it.(map[string]any); m["kind"] == "sessions" && strings.Contains(m["note"].(string), "20261004T101500Z-0a1b2c") {
+			item = m
 		}
+	}
+	unknownKept := 0
+	for _, it := range doc.get("kept").([]any) {
+		if m := it.(map[string]any); m["kind"] == "sessions" && m["why"] == "unknown_run" {
+			unknownKept++
+		}
+	}
+	if unknownKept != 3 {
+		t.Errorf("kept as unknown runs: %d, want 3", unknownKept)
 	}
 	if item == nil || item["path"] != "in Claude Code's projects folder" || item["why"] != "left_by_run_session" ||
 		!strings.Contains(item["note"].(string), "20261004T101500Z-0a1b2c") {
@@ -385,14 +418,70 @@ func TestCleanSessions(t *testing.T) {
 	delete(f.vars, "ANTHROPIC_API_KEY")
 
 	yes := f.run(context.Background(), "clean", "--yes")
-	expect(t, yes, ExitOK, "What went:", "1 folder that runs of this data folder left")
+	expect(t, yes, ExitOK, "What went:", "2 folders that runs of this data folder left")
 	unnamed(yes.stdout)
-	if _, err := os.Lstat(gone); err == nil {
-		t.Error("the run's folder is still there")
+	for _, p := range []string{gone, slotGone} {
+		if _, err := os.Lstat(p); err == nil {
+			t.Error("a stored run's folder is still there")
+		}
 	}
-	for _, kept := range []string{filepath.Join(withSession, "5e6f.jsonl"), filepath.Join(own, "9a8b.jsonl")} {
+	for _, kept := range append([]string{filepath.Join(withSession, "5e6f.jsonl"), filepath.Join(own, "9a8b.jsonl")}, unknown...) {
 		if _, err := os.Lstat(kept); err != nil {
 			t.Errorf("%s: %v", filepath.Base(kept), err)
+		}
+	}
+}
+
+// A dead run's session folder is recovery's to remove, with its workspace: clean plans and counts it with that run's
+// leftovers, not as a session folder kept for its workspace, and --yes reports it as freed.
+func TestCleanCountsADeadRunsSessionFolderWithItsLeftovers(t *testing.T) {
+	t.Parallel()
+	f := newCleanFixture(t)
+	workspaces, err := filepath.EvalSymlinks(f.layout.Workspaces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "20261004T111500Z-0a0b0c"
+	dir, workspace := filepath.Join(f.layout.Records, id), filepath.Join(f.layout.Workspaces, id)
+	writeFile(t, filepath.Join(workspace, "repo"), "file", "x")
+	session := claude.SessionFolder(filepath.Join(f.home, ".claude"), filepath.Join(workspaces, id, "repo"))
+	writeFile(t, filepath.Join(session, "tool-results"), "big.txt", strings.Repeat("o", 1<<20))
+	old := time.Now().Add(-48 * time.Hour)
+	for _, q := range []string{filepath.Join(session, "tool-results", "big.txt"), filepath.Join(session, "tool-results"), session} {
+		if err := os.Chtimes(q, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start, _ := json.Marshal(map[string]any{"record": map[string]any{"id": id, "records": dir, "sign_in": "login"},
+		"workspace": workspace, "agent_started": true, "session": session})
+	writeFile(t, dir, "started.json", string(start))
+	kinds := func(doc jsonResult) map[string]map[string]any {
+		out := map[string]map[string]any{}
+		for _, k := range doc.get("kinds").([]any) {
+			out[k.(map[string]any)["kind"].(string)] = k.(map[string]any)
+		}
+		return out
+	}
+
+	dry := jsonRun(t, f.runFixture, ExitOK, "clean")
+	k := kinds(dry)
+	if k["sessions"]["keep"] != float64(0) || k["sessions"]["remove"] != float64(0) || k["leftovers"]["remove"] != float64(1) ||
+		k["leftovers"]["remove_bytes"].(float64) < 1<<20 {
+		t.Errorf("dry run kinds: sessions %v, leftovers %v", k["sessions"], k["leftovers"])
+	}
+	expect(t, f.run(context.Background(), "clean"), ExitOK, "records/"+id, "a run that stopped: recovery stores it as cancelled")
+
+	res := f.run(context.Background(), "clean", "--yes", "--json")
+	done := checkJSON(t, f.runFixture, res, ExitOK, []string{"clean"})
+	if freed := done.get("freed_bytes").(float64); freed < 1<<20 {
+		t.Errorf("freed %v: the session folder is not counted", freed)
+	}
+	if k := kinds(done); k["leftovers"]["remove"] != float64(1) || k["sessions"]["keep"] != float64(0) {
+		t.Errorf("--yes kinds: sessions %v, leftovers %v", k["sessions"], k["leftovers"])
+	}
+	for _, gone := range []string{session, workspace} {
+		if _, err := os.Lstat(gone); err == nil {
+			t.Errorf("%s is still there", filepath.Base(gone))
 		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -45,8 +46,11 @@ var sessionRest = regexp.MustCompile(`^([0-9]{8}T[0-9]{6}Z-[0-9a-f]{6}|e[0-9]+-s
 // sessionWorkspace recognises the name of a session folder a run of the data folder whose workspaces folder is
 // workspaces left (with its real path: claude.SessionFolder resolves the agent's folder), and returns the run's
 // workspace name. Two data folders whose paths differ only in characters other than letters and digits give the same
-// names (claude.SessionFolderUnder): the other conditions of a removal (no workspace of that name, no session file,
-// unused for CleanGrace) are what keep another data folder's live or kept run's folder.
+// names (claude.SessionFolderUnder), so a name alone never proves a folder this data folder's: cleanup also requires
+// that this data folder's store knows the workspace's run (CleanInput.KnownWorkspace). What a colliding data folder can
+// still lose is a folder of a run whose workspace name both stores know (the same run ID, which is random, or the same
+// experiment, slot and try), once it is unused for CleanGrace: only this data folder's workspaces are looked for, so
+// that run's kept workspace over there does not keep it.
 func sessionWorkspace(workspaces, name string) (string, bool) {
 	rest, ok := claude.SessionFolderUnder(workspaces, name)
 	if !ok {
@@ -238,6 +242,16 @@ func (env Env) removeOwnSession() string {
 	if env.ownSession == "" {
 		return ""
 	}
+	// As cleanup checks: an absolute path, and a name that fits this data folder's runs (a relative CLAUDE_CONFIG_DIR, or
+	// a workspace name Agentium does not make, leaves it).
+	ws, ok := sessionWorkspace(realPath(env.Layout.Workspaces), filepath.Base(env.ownSession))
+	if !filepath.IsAbs(env.ownSession) || !ok || ws != env.workspaceName() {
+		// A relative path cannot be looked at (runs refuse a relative config folder, so none gets here).
+		if _, err := os.Lstat(env.ownSession); filepath.IsAbs(env.ownSession) && err != nil {
+			return "" // nothing there to leave
+		}
+		return "Claude Code's session folder of this run was left in its projects folder: its path is not one Agentium's runs make"
+	}
 	if err := removeSession(filepath.Dir(env.ownSession), filepath.Base(env.ownSession), nil); err != nil {
 		return "Claude Code's session folder of this run was left in its projects folder: " + err.Error()
 	}
@@ -251,9 +265,8 @@ func recoverSession(layout home.Layout, s start) error {
 	if s.Session == "" {
 		return nil
 	}
-	projects, name := filepath.Dir(s.Session), filepath.Base(s.Session)
-	ws, ok := sessionWorkspace(realPath(layout.Workspaces), name)
-	if !filepath.IsAbs(s.Session) || filepath.Base(projects) != "projects" || !ok || ws != filepath.Base(s.Workspace) {
+	projects, name, ws, ok := startSession(layout, s)
+	if !ok {
 		return errors.New("its start file names a folder that is not the run's: it was left")
 	}
 	if _, err := os.Lstat(filepath.Join(layout.Workspaces, ws)); !errors.Is(err, fs.ErrNotExist) {
@@ -262,9 +275,49 @@ func recoverSession(layout home.Layout, s start) error {
 	return removeSession(projects, name, nil)
 }
 
-// sessionRef is a sessions item's folder: the projects folder and the folder's name in it.
+// startSession is the session folder a start file names (start.Session), split into its projects folder and name, with
+// its workspace's name: ok only for an absolute path in a folder named projects whose name is this data folder's session
+// folder name of the start file's own workspace.
+func startSession(layout home.Layout, s start) (projects, name, ws string, ok bool) {
+	if s.Session == "" || !filepath.IsAbs(s.Session) {
+		return "", "", "", false
+	}
+	projects, name = filepath.Dir(s.Session), filepath.Base(s.Session)
+	ws, ok = sessionWorkspace(realPath(layout.Workspaces), name)
+	if !ok || filepath.Base(projects) != "projects" || ws != filepath.Base(s.Workspace) {
+		return "", "", "", false
+	}
+	return projects, name, ws, true
+}
+
+// leftoverSession is the part of a dead run's leftovers (planner.leftovers) that is its session folder: what recovery
+// removes of it (recoverSession), sized through the same looks; ok is false when recovery would leave it.
+func leftoverSession(layout home.Layout, s start) (cleanPart, bool) {
+	projects, name, _, ok := startSession(layout, s)
+	if !ok {
+		return cleanPart{}, false
+	}
+	root, err := openProjects(projects)
+	if err != nil {
+		return cleanPart{}, false
+	}
+	defer root.Close()
+	look, sub, err := lookSession(root, name)
+	if err != nil {
+		return cleanPart{}, false
+	}
+	sub.Close()
+	if look.sessionFile {
+		return cleanPart{}, false
+	}
+	return cleanPart{path: filepath.Join(projects, name), bytes: look.bytes}, true
+}
+
+// sessionRef is a sessions item's folder: the projects folder and the folder's name in it, and how to ask the store
+// again at removal (CleanInput.KnownWorkspace).
 type sessionRef struct {
 	projects, name string
+	known          func(name string) (bool, error)
 }
 
 // The reasons of the sessions kind (CleanItem.Reason).
@@ -275,11 +328,15 @@ const (
 	CleanKeptWorkspace = "workspace_exists"
 	// CleanKeptSessionFile: it holds a session file of its own, which no run leaves.
 	CleanKeptSessionFile = "holds_session_file"
+	// CleanKeptUnknownRun: its name fits, but this data folder's store knows no run of that workspace: it may be another
+	// data folder's whose path encodes the same.
+	CleanKeptUnknownRun = "unknown_run"
 )
 
 // sessions plans the session folders runs of this data folder left in Claude Code's projects folder (CleanInput.ClaudeConfig;
 // none without it). Only names sessionWorkspace recognises are looked at; a link or a file of such a name is left out,
-// a folder whose run's workspace exists or that holds a session file is kept, and one used within CleanGrace too.
+// a folder whose run's workspace exists, that holds a session file, whose workspace's run the store does not know
+// (CleanInput.KnownWorkspace) or that was used within CleanGrace is kept.
 func (c *planner) sessions(ctx context.Context) error {
 	if c.in.ClaudeConfig == "" || c.in.Layout.Workspaces == "" {
 		return nil
@@ -306,6 +363,14 @@ func (c *planner) sessions(ctx context.Context) error {
 		return nil
 	}
 	workspaces := realPath(c.in.Layout.Workspaces)
+	leftover := map[string]bool{}
+	for _, it := range append(slices.Clone(c.plan.Remove), c.plan.Keep...) {
+		if it.Kind == CleanLeftovers {
+			for _, p := range it.parts {
+				leftover[p.path] = true
+			}
+		}
+	}
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -314,19 +379,24 @@ func (c *planner) sessions(ctx context.Context) error {
 		if !ok {
 			continue // not a run's: never looked at
 		}
+		if leftover[filepath.Join(projects, name)] {
+			continue // a dead run's: planned, and counted, with its leftovers (recovery removes it)
+		}
 		look, sub, err := lookSession(root, name)
 		if err != nil {
 			continue // a link, a file, another user's, or gone
 		}
 		sub.Close()
 		it := CleanItem{Kind: CleanSessions, Path: filepath.Join(projects, name), Bytes: look.bytes, LastUsed: look.newest,
-			session: &sessionRef{projects: projects, name: name}}
+			session: &sessionRef{projects: projects, name: name, known: c.in.KnownWorkspace}}
 		_, wsErr := os.Lstat(filepath.Join(c.in.Layout.Workspaces, ws))
 		switch age := c.in.Now.Sub(look.newest); {
 		case !errors.Is(wsErr, fs.ErrNotExist):
 			c.add(it, verdict{reason: CleanKeptWorkspace, detail: "its run's workspace is still there (a run in progress, one kept with --keep, or a stopped run's leftovers)"})
 		case look.sessionFile:
 			c.add(it, verdict{reason: CleanKeptSessionFile, detail: "named like a run's, but it holds a session file of its own, which no run leaves"})
+		case !c.knownWorkspace(ws):
+			c.add(it, verdict{reason: CleanKeptUnknownRun, detail: "named like a run's, but this data folder has no run " + ws + ": perhaps another data folder's"})
 		case age < CleanGrace:
 			c.add(it, verdict{reason: CleanKeptRecent, detail: "used " + ago(age) + " ago"})
 		default:
@@ -334,6 +404,16 @@ func (c *planner) sessions(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// knownWorkspace reports whether the store knows the run of the named workspace (CleanInput.KnownWorkspace); with no
+// way to ask, or when asking fails, it knows none, and the folder is kept.
+func (c *planner) knownWorkspace(ws string) bool {
+	if c.in.KnownWorkspace == nil {
+		return false
+	}
+	known, err := c.in.KnownWorkspace(ws)
+	return err == nil && known
 }
 
 // removeSessionItem removes a sessions item, checking each condition again first: the name is this data folder's, no
@@ -350,6 +430,13 @@ func removeSessionItem(layout home.Layout, it CleanItem) error {
 	}
 	if _, err := os.Lstat(filepath.Join(layout.Workspaces, ws)); !errors.Is(err, fs.ErrNotExist) {
 		return errors.New("refused: its run's workspace is there now")
+	}
+	// The same proof as the listing's: this data folder's store knows the run.
+	if ref.known == nil {
+		return errors.New("refused: this data folder has no run " + ws)
+	}
+	if known, err := ref.known(ws); err != nil || !known {
+		return errors.Join(errors.New("refused: this data folder has no run "+ws), err)
 	}
 	err := removeSession(ref.projects, ref.name, func(look sessionLook) error {
 		if look.newest.After(it.LastUsed) {

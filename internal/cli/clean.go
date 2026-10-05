@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -34,7 +35,8 @@ Shows what Agentium keeps for reuse and no longer needs, and how much space remo
     process uses: nothing is stopped);
   - with your Claude Code login, the session folders runs of this data folder left in Claude Code's projects folder
     (~/.claude/projects, or under CLAUDE_CONFIG_DIR); nothing else there is touched: not your own projects, not a
-    folder that holds a session file, not one whose run's workspace is still here;
+    folder that holds a session file, not one whose run's workspace is still here or whose run this data folder
+    never stored;
   - and it lists, as kept, processes a Codex run's commands may have left that Agentium did not see descend from the
     run's agent (in the run's sandbox, or using its folders): it never stops one of those, --yes or not; stop one that
     is yours to stop yourself (the line says how).
@@ -182,7 +184,8 @@ func clean(ctx context.Context, env Env, layout home.Layout, age time.Duration, 
 	if err != nil {
 		return res, err
 	}
-	in := run.CleanInput{Layout: layout, InUse: inUse, Now: env.Now(), OlderThan: age, ClaudeConfig: loginConfig(env)}
+	in := run.CleanInput{Layout: layout, InUse: inUse, Now: env.Now(), OlderThan: age, ClaudeConfig: loginConfig(env),
+		KnownWorkspace: knownWorkspace(ctx, db)}
 	if busy {
 		res.notes = append(res.notes, "runs are in progress: what stopped runs left is not listed")
 	} else {
@@ -256,6 +259,45 @@ func loginConfig(env Env) string {
 		return config
 	}
 	return ""
+}
+
+// experimentSlotTry is an experiment slot's workspace name (experiment.experimentWorkspace): e<id>-s<slot>-t<try>.
+var experimentSlotTry = regexp.MustCompile(`^e([0-9]+)-s([0-9]+)-t([0-9]+)$`)
+
+// knownWorkspace reports whether the store knows the run that used a workspace: a run's ID is a stored run; an
+// experiment slot's try t is known when the experiment has at least t stored runs in that slot (its tries count its
+// stored runs, cancelled ones included, so the t-th was stored). Experiment IDs are small numbers every data folder
+// has: the experiment alone proves nothing. Without a database it knows none.
+func knownWorkspace(ctx context.Context, db *store.Store) func(string) (bool, error) {
+	slots := map[int64]map[int]int{} // an experiment's stored runs per slot, read once
+	return func(name string) (bool, error) {
+		if db == nil {
+			return false, nil
+		}
+		m := experimentSlotTry.FindStringSubmatch(name)
+		if m == nil {
+			return db.HasRun(ctx, name)
+		}
+		id, err1 := strconv.ParseInt(m[1], 10, 64)
+		slot, err2 := strconv.Atoi(m[2])
+		try, err3 := strconv.Atoi(m[3])
+		if err := errors.Join(err1, err2, err3); err != nil {
+			return false, err
+		}
+		counts, ok := slots[id]
+		if !ok {
+			runs, err := db.ExperimentRuns(ctx, id)
+			if err != nil {
+				return false, err
+			}
+			counts = map[int]int{}
+			for _, r := range runs {
+				counts[r.Slot]++
+			}
+			slots[id] = counts
+		}
+		return try >= 1 && counts[slot] >= try, nil
+	}
 }
 
 // openForClean opens the database: read-only for a dry run, which writes nothing, and normally with --yes, which may
@@ -444,6 +486,8 @@ func sessionsWhy(reason, problem string, n int) string {
 		return folders + " named like this data folder's runs' that " + hold + ", which no run leaves: left alone"
 	case reason == run.CleanKeptRecent:
 		return folders + " used in the last hour"
+	case reason == run.CleanKeptUnknownRun:
+		return folders + " named like this data folder's runs' that it has no run of (perhaps another data folder's): left alone"
 	}
 	return folders
 }

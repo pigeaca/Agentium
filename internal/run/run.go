@@ -352,6 +352,14 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		if prepared {
 			env.step(StepCleanup)
 		}
+		// Claude Code's session folder goes first, after its last read (the unexpected-folder check) and with the agent and
+		// its tools stopped, so that the final start file holds the note of one that could not go; a kept workspace keeps
+		// it, for whoever looks at the run. The workspace itself goes below.
+		if prepared && !spec.Keep {
+			if note := env.removeOwnSession(); note != "" {
+				rec.Notes = append(rec.Notes, note)
+			}
+		}
 		rec.Finished = env.Now().UTC()
 		// What is stored (the start file, the caller's database) holds no secret: the record carries the agent's output.
 		rec = redactRecord(rec, append([]string{env.Secret}, env.RedactAlso...)...)
@@ -376,11 +384,6 @@ func Once(ctx context.Context, env Env, spec Spec) (rec Record, err error) {
 		}
 		if !spec.Keep {
 			env.removeCheckouts(workspace, repo, graded)
-			// After its last read (the unexpected-folder check), with the agent and its tools stopped; a kept workspace
-			// keeps it, for whoever looks at the run.
-			if note := env.removeOwnSession(); note != "" {
-				rec.Notes = append(rec.Notes, note)
-			}
 		}
 		// Even a kept run's temp root goes: it holds only Claude Code's own temp files, in a folder shared with other users.
 		if tempRoot != "" {
