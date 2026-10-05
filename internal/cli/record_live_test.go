@@ -59,6 +59,12 @@ func TestRecordLiveRun(t *testing.T) {
 	if costLean == "" {
 		costLean = "0.27"
 	}
+	// AGENTIUM_RECORD_GRADER=host records on an account that cannot read the unified log, where the sandbox grader
+	// reports itself unavailable (the log's denials are how a sandbox failure is told from a failed grade).
+	grader := os.Getenv("AGENTIUM_RECORD_GRADER")
+	if grader == "" {
+		grader = "sandbox"
+	}
 	ctx := context.Background()
 	usage := fmt.Sprintf("0.32 0.01 %d\n", time.Now().Add(3*time.Hour).Unix())
 	var f runFixture
@@ -74,7 +80,7 @@ func TestRecordLiveRun(t *testing.T) {
 		var ctrl string
 		f, ctrl = seqFixture(t)
 		control(t, ctrl, map[string]string{"usage": usage, "agent-sleep": pace, "cost-lean": costLean, "cost-jitter": "", "fix-lib": ""})
-		expect(t, f.run(ctx, "experiment", "new", "lean-vs-base", "--b", "lean", "--seed", "5", "--grader", "sandbox"), ExitOK)
+		expect(t, f.run(ctx, "experiment", "new", "lean-vs-base", "--b", "lean", "--seed", "5", "--grader", grader), ExitOK)
 		f.vars["LANG"], f.vars["COLUMNS"], f.vars["LINES"] = "en_US.UTF-8", "80", "34"
 		args = []string{"experiment", "run", "lean-vs-base"}
 		if view == "log" || view == "flow" {

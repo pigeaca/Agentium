@@ -21,7 +21,7 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
   `experiment run` as on a terminal with the test stand-in for Claude Code, at its real speed, no paid runs.
   `AGENTIUM_RECORD_VIEW` picks the dashboard (default, the quiet view: a seq-v1 experiment on 16 tasks, 80 by 34), `flow` (the step boxes), `log`, or `plain`
   (the status line); `AGENTIUM_RECORD_PACE` is the stand-in's seconds a run, `AGENTIUM_RECORD_COST` the second
-  context's cost a run. `console-run-dashboard.svg` (recorded as `flow`, before the quiet view became the default) is
+  context's cost a run. The flow view's old animation (recorded as `flow`, before the quiet view became the default, no longer in `docs/images`) was
   `AGENTIUM_RECORD_PACE=2 AGENTIUM_RECORD_COST=0.25`, then `frames2svg.py "…" 80 34 "…" --from 31 --fps 8` (the checks
   and the sandbox's revalidation, shown as "getting ready", take the first 30 seconds); its still is `--still 64.435`, and `console-run-log.svg` is
   the log view's `--still last` at 80 by 40.
@@ -41,3 +41,18 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
 - `AGENTIUM_RUN_DEMO=/tmp/demo go test ./internal/cli -run TestRunShowPreview -count=1` and
   `AGENTIUM_PLAN_DEMO=/tmp/demo go test ./internal/cli -run TestPlanViewPreview -count=1` write each scene's view
   (five runs, three plans, three pools) at 80 columns, for looking at the variants by eye.
+
+## Pictures recorded on 2026-10-05 (the four screens)
+- `console-report-model-ab.svg` and `console-task-list.svg`: the real model A/B on samber/lo, from a copy of its data folder
+  (`cp -R` of `agentium.db`, `projects` and `records` into a `chmod 700` folder, a binary built from the checkout, never
+  the original): `cd` into the repository, then `AGENTIUM_HOME=COPY FORCE_COLOR=1 COLS=100 ptyrun.py BIN experiment report
+  opus-vs-sonnet` and `... task list`, each after a `$ agentium ...` line, through `ansi2svg.py TITLE 100`.
+- `console-plan-not-sure.svg`: `experiment plan ab16` from a copy of the 16-run context A/B's data folder, at 120 columns
+  with `TERM=xterm-256color`; `console-plan.svg` and `console-start.svg` come from `TestRecordConsoleScreens`.
+  `console-report-*.svg` (the test scenes) are `report-NAME.ans` from `TestReportViewPreview`, at 80 columns.
+- `console-run-dashboard.svg` and `console-run-dashboard-still.svg`: the quiet view, graded in the sandbox,
+  `AGENTIUM_RECORD_PACE=2`, then `frames2svg.py "agentium experiment run lean-vs-base" 80 34 PROMPT --from 36 --fps 8`
+  (the checks and the sandbox's revalidation take the first 35 seconds; the still: `--still 63.6`).
+  `AGENTIUM_RECORD_GRADER=host` records where the sandbox grader reports itself unavailable (its probe's denial did
+  not reach the unified log in time, which also happens on a heavily loaded machine); the run then carries the host
+  grader's warning line, so prefer a recording without it. `console-run-flow.svg` is the earlier flow picture, kept and renamed (it is the step boxes' view).
