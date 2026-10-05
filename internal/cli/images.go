@@ -186,7 +186,7 @@ func imagesList(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	local, err := d.LocalImages(ctx)
+	local, err := d.LocalImages(ctx, built)
 	if err != nil {
 		return fail(env, err)
 	}
@@ -245,6 +245,11 @@ func printImages(env Env, plan container.ImagePlan, local []container.LocalImage
 	}
 	if len(others) > 0 {
 		fmt.Fprintln(out, note(st, "grading images of an earlier recipe: "+strings.Join(others, ", ")+"; agentium images remove --yes removes them"))
+	}
+	for _, l := range local {
+		if l.Kind == "foreign" {
+			fmt.Fprintln(out, note(st, l.Ref+" carries the grading labels but is not one of this data folder's grading images: Agentium never removes it"))
+		}
 	}
 	for _, it := range plan.Items {
 		if it.Pin.Unconfirmed != "" {
@@ -500,7 +505,11 @@ func imagesRemove(ctx context.Context, env Env, args []string) int {
 		}
 		defer unlock()
 	}
-	targets, local, err := removalTargets(ctx, d, pins, *bases)
+	built, err := container.LoadBuilt(builtImagesPath(layout))
+	if err != nil {
+		return fail(env, err)
+	}
+	targets, local, err := removalTargets(ctx, d, pins, *bases, built)
 	if err != nil {
 		return fail(env, err)
 	}
@@ -512,13 +521,14 @@ func imagesRemove(ctx context.Context, env Env, args []string) int {
 		printRemoval(env, targets, local, *bases)
 		return ExitOK
 	}
-	return removeImages(ctx, env, d, layout, targets, local)
+	return removeImages(ctx, env, d, layout, built, targets, local)
 }
 
-// removalTargets are the images of the named pins on the daemon (the grading images, and with bases the pinned bases),
-// grading images first: a base cannot go while an image built on it stays. local is every image of Agentium's there.
-func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, bases bool) (targets, local []container.LocalImage, err error) {
-	if local, err = d.LocalImages(ctx); err != nil {
+// removalTargets are the images of the named pins on the daemon (this data folder's grading images, and with bases the
+// pinned bases), grading images first: a base cannot go while an image built on it stays. Foreign images (the grading
+// labels without being one) are never targets. local is every image listed.
+func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, bases bool, built container.BuiltImages) (targets, local []container.LocalImage, err error) {
+	if local, err = d.LocalImages(ctx, built); err != nil {
 		return nil, nil, err
 	}
 	var names []string
@@ -526,7 +536,7 @@ func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, b
 		names = append(names, p.Name())
 	}
 	for _, l := range local {
-		if slices.Contains(names, l.Toolchain) && (l.Kind == "grading" || bases) {
+		if slices.Contains(names, l.Toolchain) && (l.Kind == "grading" || bases && l.Kind == "base") {
 			targets = append(targets, l)
 		}
 	}
@@ -540,14 +550,34 @@ func removalTargets(ctx context.Context, d DockerClient, pins []container.Pin, b
 	return targets, local, nil
 }
 
-// builtOn is a grading image built on base that is not among the targets ("" when none): the base then stays.
-func builtOn(base container.LocalImage, targets, local []container.LocalImage) string {
+// keptBy names an image that keeps base on the daemon, "" when none: a grading or foreign image that stays (not
+// gone) and is built on it by its layers (container.BuiltOn; labels are not trusted), or, when that cannot be read,
+// any of the base's toolchain (or of none).
+func keptBy(base container.LocalImage, local []container.LocalImage, gone map[string]bool) string {
 	for _, g := range local {
-		if g.Kind == "grading" && g.Base == base.Ref && !slices.ContainsFunc(targets, func(t container.LocalImage) bool { return t.Ref == g.Ref }) {
-			return g.Ref
+		if g.Kind == "base" || gone[g.Ref] {
+			continue
+		}
+		on, known := container.BuiltOn(base, g)
+		switch {
+		case known && on:
+			return "the image " + g.Ref + " is built on it"
+		case !known && (g.Toolchain == base.Toolchain || g.Toolchain == ""):
+			return "the image " + g.Ref + " may be built on it (its layers cannot be read)"
 		}
 	}
 	return ""
+}
+
+// targetGrading is the set of targets that are grading images: what a dry run would remove before the bases.
+func targetGrading(targets []container.LocalImage) map[string]bool {
+	gone := map[string]bool{}
+	for _, t := range targets {
+		if t.Kind == "grading" {
+			gone[t.Ref] = true
+		}
+	}
+	return gone
 }
 
 // freed is what removing an image frees: nothing when it stays under a tag of yours (its name goes, not the image).
@@ -568,42 +598,40 @@ func imageLine(l container.LocalImage) string {
 
 func printRemoval(env Env, targets, local []container.LocalImage, bases bool) {
 	st := env.style()
+	gone := targetGrading(targets)
 	var total int64
 	for _, l := range targets {
-		if l.Kind != "base" || builtOn(l, targets, local) == "" {
+		if l.Kind != "base" || keptBy(l, local, gone) == "" {
 			total += freed(l)
 		}
 	}
 	fmt.Fprintln(env.Stdout, st.Heading(fmt.Sprintf("Removing these would free up to %s (a dry run: nothing was removed):", formatBytes(total))))
 	for _, l := range targets {
-		if child := builtOn(l, targets, local); l.Kind == "base" && child != "" {
-			fmt.Fprintf(env.Stdout, "  %-8s %-12s %s (stays: the grading image %s is built on it)\n", l.Kind, l.Toolchain, l.Ref, child)
+		if why := keptBy(l, local, gone); l.Kind == "base" && why != "" {
+			fmt.Fprintf(env.Stdout, "  %-8s %-12s %s (stays: %s)\n", l.Kind, l.Toolchain, l.Ref, why)
 			continue
 		}
 		fmt.Fprintln(env.Stdout, "  "+imageLine(l))
+	}
+	for _, l := range local {
+		if l.Kind == "foreign" {
+			fmt.Fprintf(env.Stdout, "  never removed: %s, which carries the grading labels but is not one of this data folder's\n", l.Ref)
+		}
 	}
 	fmt.Fprintf(env.Stdout, "\nRun %s to remove them; a later container grade then needs agentium images pull again.\n", st.Command("agentium images remove --yes"+map[bool]string{true: " --bases", false: ""}[bases]))
 }
 
 // removeImages removes the targets in their order, grading images first (the caller holds the record's lock), and
-// drops them from the record. A base stays while a grading image built on it stays (one that was not a target, or
-// whose removal failed): with the classic image store, removing it would only untag it and leave it unreachable.
-func removeImages(ctx context.Context, env Env, d DockerClient, layout home.Layout, targets, local []container.LocalImage) int {
-	built, err := container.LoadBuilt(builtImagesPath(layout))
-	if err != nil {
-		return fail(env, err)
-	}
-	remaining := map[string]bool{} // grading images still there, by tag
-	for _, l := range local {
-		if l.Kind == "grading" {
-			remaining[l.Ref] = true
-		}
-	}
+// drops them from the record. A base stays while an image built on it stays (keptBy: one that was not a target, whose
+// removal failed, or a foreign one): with the classic image store, removing it would only untag it and leave it
+// unreachable.
+func removeImages(ctx context.Context, env Env, d DockerClient, layout home.Layout, built container.BuiltImages, targets, local []container.LocalImage) int {
+	gone := map[string]bool{}
 	failed := 0
 	for _, l := range targets {
 		if l.Kind == "base" {
-			if child := slices.IndexFunc(local, func(g container.LocalImage) bool { return g.Kind == "grading" && g.Base == l.Ref && remaining[g.Ref] }); child >= 0 {
-				fmt.Fprintf(env.Stdout, "kept base %s: the grading image %s is built on it\n", l.Ref, local[child].Ref)
+			if why := keptBy(l, local, gone); why != "" {
+				fmt.Fprintf(env.Stdout, "kept base %s: %s\n", l.Ref, why)
 				continue
 			}
 		}
@@ -613,7 +641,7 @@ func removeImages(ctx context.Context, env Env, d DockerClient, layout home.Layo
 			continue
 		}
 		delete(built, l.Ref)
-		delete(remaining, l.Ref)
+		gone[l.Ref] = true
 		if len(l.OtherTags) > 0 {
 			fmt.Fprintf(env.Stdout, "untagged %s %s: it stays as %s, your own tag\n", l.Kind, l.Ref, strings.Join(l.OtherTags, ", "))
 		} else {

@@ -435,10 +435,12 @@ const seedStage = ".seed"
 
 // seedScript runs in the seed's container, as the grade's user, with the stream on stdin and a fresh folder name as
 // $1. It first removes what earlier seeds that were cut short left in the staging folder (the caller holds the
-// volume's lock, so no other seed runs). It unpacks the whole stream there, and only once tar has read all of it does
-// it put each file and link into place: a hard link to its final name (link(2) never replaces an existing name, and the
-// file is whole by then), then the staging name goes. A name the volume holds already, whoever wrote it, stays as it
-// is. A stream cut mid-file makes tar fail, and nothing of it reaches a final name; its staging folder goes with the
+// volume's lock, and SeedDeps has removed every other seed container of the volume first, so no other seed runs). It
+// unpacks the whole stream there, and only once tar has read all of it does it put each file and link into place: a
+// hard link to its final name (link(2) never replaces an existing name, and the file is whole by then; -T makes the
+// final name the link itself, never a name inside a folder, or a link to one, that is there already), then the staging
+// name goes. A name the volume holds already, whoever wrote it, stays as it is; ln's own message says why a name that
+// is still missing could not be placed. A stream cut mid-file makes tar fail, and nothing of it reaches a final name; its staging folder goes with the
 // next seed. Folders on the way are made as needed.
 const seedScript = `set -eu
 umask 022
@@ -451,8 +453,8 @@ find . ! -type d -exec sh -c '
   for f do
     dest=/deps/${f#./}
     mkdir -p "${dest%/*}"
-    if ! ln -P "$f" "$dest" 2>/dev/null && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
-      echo "seed: cannot place ${f#./}" >&2
+    if ! err=$(ln -P -T "$f" "$dest" 2>&1) && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      echo "seed: cannot place ${f#./}: $err" >&2
       exit 1
     fi
   done' sh {} +
@@ -490,6 +492,12 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 	}
 	tops, err := topsTar(append([]string{seedStage}, seedTops(opened, entries)...))
 	if err != nil {
+		return nil, err
+	}
+	// A seed container of this volume that a dead Agentium left can still be running (or start again): it would clear
+	// this seed's staging folder, or this one its. They are Agentium's own, by their labels and their mount of this
+	// volume, so they go, and none may be left.
+	if err := d.removeSeeders(ctx, v); err != nil {
 		return nil, err
 	}
 	b := make([]byte, 4)
@@ -556,6 +564,27 @@ func (d *Docker) SeedDeps(ctx context.Context, v DepsVolume, img Image, seeds []
 		return nil, fmt.Errorf("deps seed into %s: %w", v.Name(), writeErr)
 	}
 	return written, nil
+}
+
+// removeSeeders removes every seed container of the volume (labelled with the data folder and a seed's run, named as
+// SeedDeps names them, and mounting the volume), whatever its state, and confirms each is gone; one that stays is an
+// error, and nothing is seeded.
+func (d *Docker) removeSeeders(ctx context.Context, v DepsVolume) error {
+	out, err := d.output(ctx, "ps", "--all", "--no-trunc", "--filter", "label="+LabelData+"="+v.Data, "--filter", "label="+LabelMode+"="+Mode,
+		"--filter", "volume="+v.Name(), "--format", `{{.Names}}	{{.Label "agentium.run"}}`)
+	if err != nil {
+		return fmt.Errorf("deps seed: find earlier seeds of %s: %w", v.Name(), err)
+	}
+	for _, line := range lines(out) {
+		name, run, _ := strings.Cut(line, "\t")
+		if !strings.HasPrefix(run, "seed-") || name != "agentium-"+v.Data+"-"+run+"-seed" {
+			continue
+		}
+		if err := d.removeName(ctx, name); err != nil {
+			return fmt.Errorf("deps seed: an earlier seed of %s (%s) could not be removed, so nothing is seeded: %w", v.Name(), name, err)
+		}
+	}
+	return nil
 }
 
 // WarmSpec is a deps warm-up's container: the grading image, the project's deps volume mounted read-write, and the

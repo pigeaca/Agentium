@@ -79,7 +79,7 @@ func (f *fakeDocker) Fetch(_ context.Context, it container.PlanItem, data string
 		Inside: "go1.27.1", Packages: []string{"git=1:2.47.3-0+deb13u1", "less=668-1"}, Arch: "arm64", At: time.Unix(0, 0).UTC()}, nil
 }
 
-func (f *fakeDocker) LocalImages(context.Context) ([]container.LocalImage, error) {
+func (f *fakeDocker) LocalImages(context.Context, container.BuiltImages) ([]container.LocalImage, error) {
 	return f.local, nil
 }
 
@@ -254,10 +254,10 @@ func TestImagesRemoveOrder(t *testing.T) {
 	jdk, _ := container.PinFor("jdk")
 	jdkRef, _ := jdk.Ref("arm64")
 	d := &fakeDocker{local: []container.LocalImage{
-		{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true},
-		{Kind: "base", Ref: jdkRef, Toolchain: "jdk 21", Size: 500e6, Current: true},
-		{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true, Base: ref},
-		{Kind: "grading", Ref: "agentium-grade:jdk21-bbbbbbbbbbbb", Toolchain: "jdk 21", Size: 520e6, Current: true, Base: jdkRef}}}
+		{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true, Layers: []string{"g1", "g2"}},
+		{Kind: "base", Ref: jdkRef, Toolchain: "jdk 21", Size: 500e6, Current: true, Layers: []string{"j1"}},
+		{Kind: "grading", Ref: "agentium-grade:go1.27-aaaaaaaaaaaa", Toolchain: "go 1.27", Size: 920e6, Current: true, Layers: []string{"g1", "g2", "g3"}},
+		{Kind: "grading", Ref: "agentium-grade:jdk21-bbbbbbbbbbbb", Toolchain: "jdk 21", Size: 520e6, Current: true, Layers: []string{"j1", "j2"}}}}
 	run, _ := imagesEnv(t, d, "", false)
 	expect(t, run("images", "remove", "--bases", "go"), ExitOK, "base     go 1.27      "+ref+" (900.0 MB)")
 	expect(t, run("images", "remove", "--yes", "--bases", "go"), ExitOK)
@@ -268,7 +268,7 @@ func TestImagesRemoveOrder(t *testing.T) {
 	d.imagesRm = nil
 	d.rmFail = map[string]bool{"agentium-grade:jdk21-bbbbbbbbbbbb": true}
 	res := run("images", "remove", "--yes", "--bases", "jdk")
-	expect(t, res, ExitError, "kept base "+jdkRef+": the grading image agentium-grade:jdk21-bbbbbbbbbbbb is built on it")
+	expect(t, res, ExitError, "kept base "+jdkRef+": the image agentium-grade:jdk21-bbbbbbbbbbbb is built on it")
 	if slices.Contains(d.imagesRm, jdkRef) {
 		t.Errorf("removed a base with a child: %v", d.imagesRm)
 	}
@@ -276,6 +276,46 @@ func TestImagesRemoveOrder(t *testing.T) {
 	d.local = d.local[1:] // the go base, its image gone; jdk's still there
 	expect(t, run("images", "remove", "--bases", "jdk"), ExitOK)
 	expect(t, run("images", "remove", "--yes", "--bases"), ExitOK)
+}
+
+// A base's children are found by their layers, not their labels: one whose toolchain label is missing or names
+// another toolchain still keeps its base; one whose layers cannot be read keeps every base of its toolchain; an image
+// that only carries the grading labels (the user's, built FROM a grading image) is never removed, and keeps its base.
+func TestImagesRemoveKeepsBasesByLayers(t *testing.T) {
+	t.Parallel()
+	goPin, _ := container.PinFor("go")
+	ref, _ := goPin.Ref("arm64")
+	base := container.LocalImage{Kind: "base", Ref: ref, Toolchain: "go 1.27", Size: 900e6, Current: true, Layers: []string{"g1", "g2"}}
+	for name, child := range map[string]container.LocalImage{
+		"no label":       {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "", Layers: []string{"g1", "g2", "x"}},
+		"a wrong label":  {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "jdk 21", Layers: []string{"g1", "g2", "x"}},
+		"layers unread":  {Kind: "grading", Ref: "agentium-grade:go1.27-cccccccccccc", Toolchain: "go 1.27"},
+		"the user's own": {Kind: "foreign", Ref: "myapp:dev", Toolchain: "go 1.27", Layers: []string{"g1", "g2", "y"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// The child is not a target: named for jdk, or failing to go, or foreign.
+			d := &fakeDocker{local: []container.LocalImage{base, child}, rmFail: map[string]bool{child.Ref: true}}
+			run, _ := imagesEnv(t, d, "", false)
+			dry := run("images", "remove", "--bases", "go")
+			if child.Toolchain != "go 1.27" || child.Kind == "foreign" { // not a target: the dry run keeps the base too
+				expect(t, dry, ExitOK, "(stays: the image "+child.Ref)
+			}
+			res := run("images", "remove", "--yes", "--bases", "go")
+			if !strings.Contains(res.stdout, "kept base "+ref) || slices.Contains(d.imagesRm, ref) {
+				t.Errorf("the base went: %v\n%s", d.imagesRm, res.stdout)
+			}
+			if child.Kind == "foreign" {
+				if slices.Contains(d.imagesRm, child.Ref) || !strings.Contains(dry.stdout, "never removed: myapp:dev") {
+					t.Errorf("a foreign image: %v\n%s", d.imagesRm, dry.stdout)
+				}
+			}
+		})
+	}
+	// An image of another base never keeps this one.
+	d := &fakeDocker{local: []container.LocalImage{base, {Kind: "foreign", Ref: "other:1", Toolchain: "go 1.27", Layers: []string{"o1", "o2", "o3"}}}}
+	run, _ := imagesEnv(t, d, "", false)
+	expect(t, run("images", "remove", "--yes", "--bases", "go"), ExitOK, "removed base "+ref)
 }
 
 // Without a toolchain named, images looks up the project in the current folder and writes nothing: no data folder

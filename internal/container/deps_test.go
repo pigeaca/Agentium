@@ -437,3 +437,50 @@ func (c *cutWriter) Write(p []byte) (int, error) {
 	c.left -= len(p)
 	return c.w.Write(p)
 }
+
+// A seed first removes every seed container of its volume that an earlier Agentium left (it could clear this seed's
+// staging), confirming each is gone, before it makes its own; one that cannot be removed stops the seed. Containers
+// that are not a seed's (a grade, a warm-up, or a name that does not match its labels) are never touched.
+func TestSeedRemovesEarlierSeeders(t *testing.T) {
+	t.Parallel()
+	v := testVolume()
+	sc := goodScenario(t)
+	sc.Volume = depsVolumeJSON(t, v, v.labels(), nil)
+	sc.Seeders = "agentium-test-seed-dead-seed\tseed-dead\nagentium-test-r1-grade\tr1\nagentium-test-warm-ab-warm\twarm-ab\nimpostor\tseed-x\n"
+	f, d := openFake(t, sc)
+	src := t.TempDir()
+	writeTree(t, src, map[string]string{"registry/a": "a"})
+	img := Image{Ref: goImage, ID: fixtureImageID}
+	_, err := d.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits())
+	must(t, err)
+	var order []string
+	for _, argv := range f.calls(t) {
+		a := argvAfter(argv)
+		switch {
+		case a[0] == "ps" && slices.Contains(a, "volume="+v.Name()):
+			order = append(order, "list")
+			if !slices.Contains(a, "label=agentium.data=test") {
+				t.Errorf("the list is not this data folder's: %v", a)
+			}
+		case a[0] == "rm":
+			order = append(order, "rm "+a[len(a)-1])
+		case a[0] == "container" && a[1] == "inspect":
+			order = append(order, "inspect")
+		case a[0] == "create":
+			order = append(order, "create")
+		}
+	}
+	if want := []string{"list", "rm agentium-test-seed-dead-seed", "inspect", "create"}; !slices.Equal(order[:min(len(order), 4)], want) {
+		t.Errorf("order %v, want %v first", order, want)
+	}
+	// One that will not go stops the seed before anything is made.
+	sc.RmFail = true
+	f2, d2 := openFake(t, sc)
+	if _, err := d2.SeedDeps(context.Background(), v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err == nil ||
+		!strings.Contains(err.Error(), "could not be removed, so nothing is seeded") {
+		t.Errorf("a seeder that stays: %v", err)
+	}
+	if f2.called(t, "create") {
+		t.Error("seeded beside an earlier seed")
+	}
+}

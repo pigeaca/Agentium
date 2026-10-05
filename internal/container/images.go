@@ -359,23 +359,42 @@ func (d *Docker) stream(ctx context.Context, args []string, stdin io.Reader, out
 	return d.redact(stderr.String()), res, nil
 }
 
-// LocalImage is an image of Agentium's on the daemon: a grading image (by its labels) or a pinned base (by its digest).
+// LocalImage is an image on the daemon that Agentium lists: a pinned base (by its digest), one of this data folder's
+// grading images, or an image that carries the grading labels without being one (Foreign: built FROM a grading image,
+// say, which inherits its labels; or another data folder's), which is never removed.
 type LocalImage struct {
-	Kind      string // "grading" or "base"
-	Ref       string // a grading image's tag, or a base's pinned reference
+	Kind      string // "base", "grading" or "foreign"
+	Ref       string // a grading or foreign image's repository:tag, or a base's pinned reference
 	ID        string
-	Toolchain string // the pin's name
+	Toolchain string // the pin's name (a foreign image's agentium.toolchain label, which it may not have)
 	Size      int64  // bytes, unpacked, as the daemon reports it
 	Current   bool   // a grading image of the current recipe, or a base of a current pin
 	// OtherTags are the image's tags that are not Agentium's (a base pulled by you as golang:1.27, say): removing the
 	// image by Agentium's reference then only drops that reference, and the image stays.
 	OtherTags []string
-	Base      string // a grading image's base (its agentium.base label): that base cannot go while the image stays
+	// Layers are the image's layers (RootFS.Layers), which tell what it is built on (BuiltOn); none when unread.
+	Layers []string
 }
 
-// LocalImages lists the grading images on the daemon (any recipe, current or not) and the pinned bases present.
-func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
+// BuiltOn reports whether img is built on base: base's layers are a prefix of img's (the same check a build's own
+// verification makes; labels are not trusted). known is false when either's layers are unknown: the caller then
+// assumes it is.
+func BuiltOn(base, img LocalImage) (on, known bool) {
+	if len(base.Layers) == 0 || len(img.Layers) == 0 {
+		return false, false
+	}
+	return len(img.Layers) > len(base.Layers) && slices.Equal(img.Layers[:len(base.Layers)], base.Layers), true
+}
+
+// LocalImages lists the pinned bases present, and the images carrying the grading labels: a grading image is one in
+// the agentium-grade repository whose image ID the data folder's record names (built); any other such image is
+// foreign.
+func (d *Docker) LocalImages(ctx context.Context, built BuiltImages) ([]LocalImage, error) {
 	current := map[string]bool{}
+	recorded := map[string]bool{}
+	for _, b := range built {
+		recorded[b.ID] = true
+	}
 	var list []LocalImage
 	for _, p := range pins() {
 		if r, err := NewRecipe(p, d.engine.Arch); err == nil {
@@ -392,13 +411,14 @@ func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
 		if err != nil {
 			return nil, err
 		}
-		list = append(list, LocalImage{Kind: "base", Ref: img.Ref, ID: img.ID, Toolchain: p.Name(), Size: info.Size, Current: true, OtherTags: info.RepoTags})
+		list = append(list, LocalImage{Kind: "base", Ref: img.Ref, ID: img.ID, Toolchain: p.Name(), Size: info.Size, Current: true, OtherTags: info.RepoTags,
+			Layers: info.RootFS.Layers})
 	}
 	out, err := d.output(ctx, "image", "ls", "--no-trunc", "--filter", "label="+LabelRecipe, "--format", `{{.ID}}	{{.Repository}}:{{.Tag}}	{{.Label "agentium.toolchain"}}`)
 	if err != nil {
 		return nil, fmt.Errorf("grading images: %w", err)
 	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, line := range lines(out) {
 		f := strings.Split(line, "\t")
 		if len(f) != 3 || !imageID.MatchString(f[0]) {
 			continue
@@ -410,14 +430,18 @@ func (d *Docker) LocalImages(ctx context.Context) ([]LocalImage, error) {
 			}
 			return nil, err
 		}
+		kind := "foreign"
+		if strings.HasPrefix(f[1], GradingRepository+":") && recorded[f[0]] {
+			kind = "grading"
+		}
 		var others []string
 		for _, tag := range info.RepoTags {
 			if !strings.HasPrefix(tag, GradingRepository+":") {
 				others = append(others, tag)
 			}
 		}
-		list = append(list, LocalImage{Kind: "grading", Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: current[f[1]], OtherTags: others,
-			Base: info.Config.Labels[LabelBase]})
+		list = append(list, LocalImage{Kind: kind, Ref: f[1], ID: f[0], Toolchain: f[2], Size: info.Size, Current: kind == "grading" && current[f[1]],
+			OtherTags: others, Layers: info.RootFS.Layers})
 	}
 	return list, nil
 }

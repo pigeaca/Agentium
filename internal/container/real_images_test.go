@@ -40,13 +40,30 @@ func TestRealPlan(t *testing.T) {
 // The whole life of a deps volume on a real daemon: made with its labels, seeded through a container that never
 // starts (every folder owned by the grade's user), warmed in a container that may write it, read-only to a grade, never
 // removed while a container uses it, and removed once idle; a created, never-started container is found and removed.
+//
+// AGENTIUM_TEST_IMAGE runs it with another image that is present already (by its digest reference, never pulled): the
+// JDK base, eclipse-temurin@sha256:..., is Ubuntu with Rust coreutils, where the seed's script must work too.
 func TestRealDepsVolume(t *testing.T) {
 	d, img := realDocker(t)
 	ctx := context.Background()
+	if ref := os.Getenv("AGENTIUM_TEST_IMAGE"); ref != "" {
+		var err error
+		if img, err = d.Image(ctx, ref); err != nil {
+			t.Skipf("AGENTIUM_TEST_IMAGE is not usable here (never pulled by tests): %v", err)
+		}
+	}
 	data := testData(t, d)
 	v := DepsVolume{Data: data, Project: "t1", Image: img.ID}
-	t.Cleanup(func() { // before testData's check, which would find the volume
-		_ = d.RemoveIdle(context.Background(), data, Item{Kind: "volume", Name: v.Name()})
+	t.Cleanup(func() { // before testData's check, which would find the volume: its containers first, then it
+		ctx := context.Background()
+		if left, err := d.Leftovers(ctx, data); err == nil {
+			for _, l := range left {
+				_ = d.RemoveRun(ctx, data, l.Run)
+			}
+		}
+		if err := d.RemoveIdle(ctx, data, Item{Kind: "volume", Name: v.Name()}); err != nil {
+			t.Errorf("the test's deps volume: %v", err)
+		}
 	})
 	created, err := d.EnsureDepsVolume(ctx, v)
 	must(t, err)
@@ -89,6 +106,29 @@ func TestRealDepsVolume(t *testing.T) {
 	if _, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err != nil {
 		t.Fatal(err)
 	}
+	// A name that is a folder, or a link to one, already is never linked into: the name stays as it was (ln -T).
+	linkEntries := []SeedEntry{{Name: "gradle-ro/modules-2", Dir: true}, {Name: "gradle/caches/modules-2", Link: "../../gradle-ro/modules-2"}}
+	for range 2 {
+		if _, err := d.SeedDeps(ctx, v, img, nil, append(linkEntries, SeedEntry{Name: "cargo/registry", Body: []byte("a file over a folder")}), SeedLimits()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A seed container a dead Agentium left running on this volume is removed before a seed, so it can clear no
+	// staging folder of the new one.
+	stuck := "agentium-" + data + "-seed-stuck-seed"
+	if _, err := d.output(ctx, "create", "--pull", "never", "--name", stuck, "--label", LabelData+"="+data, "--label", LabelRun+"=seed-stuck",
+		"--label", LabelMode+"="+Mode, "--network", "none", "--user", User, "--mount", "type=volume,src="+v.Name()+",dst=/deps", "--entrypoint", "sleep", img.Ref, "600"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.output(ctx, "start", stuck); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SeedDeps(ctx, v, img, []Seed{{Root: src, Path: ".", To: "cargo"}}, nil, SeedLimits()); err != nil {
+		t.Fatal(err)
+	}
+	if _, stderr, res, err := d.call(ctx, []string{"container", "inspect", stuck}, nil, controlTimeout); err != nil || res.ExitCode == 0 || !noSuchContainer(stderr) {
+		t.Errorf("the stuck seed container is still there: %v %s", err, stderr)
+	}
 	// A seed cut mid-file places nothing of that file, and the next seed delivers it whole and clears what the cut one
 	// left in the staging folder.
 	big := strings.Repeat("0123456789abcdef", 8<<10) // 128 KiB
@@ -130,7 +170,7 @@ func TestRealDepsVolume(t *testing.T) {
 	spec.Deps = v.Name()
 	out.Reset()
 	err = d.Run(ctx, spec, func(ctx context.Context, c *Container) error {
-		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log /deps/cargo/registry/cache/c.crate /deps/cargo/registry/cache/a.crate; echo; stat -c '%u' /deps/cargo/registry/cache/c.crate; sha256sum < /deps/cargo/registry/cache/big.crate; ls -A /deps/.seed | wc -l; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
+		res, err := c.Exec(ctx, Command{Command: "cat /deps/py/stamp /deps/cargo/registry/cache/b.crate; echo; cat /deps/py/log /deps/cargo/registry/cache/c.crate /deps/cargo/registry/cache/a.crate; echo; stat -c '%u' /deps/cargo/registry/cache/c.crate; sha256sum < /deps/cargo/registry/cache/big.crate; ls -A /deps/.seed | wc -l; readlink /deps/gradle/caches/modules-2; test -e /deps/gradle-ro/modules-2/modules-2 && echo SELFLINK; test -d /deps/cargo/registry && test ! -e /deps/cargo/registry/registry && echo FOLDER-KEPT; if touch /deps/py/x 2>/dev/null; then echo WROTE; fi", Timeout: time.Minute, Output: &out})
 		if err == nil && res.ExitCode != 0 {
 			err = errors.New("grade command failed: " + out.String())
 		}
@@ -156,7 +196,7 @@ func TestRealDepsVolume(t *testing.T) {
 	})
 	must(t, err)
 	sum := sha256.Sum256([]byte(big))
-	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\nwarm\ncrate\n65534\n"+hex.EncodeToString(sum[:])+"  -\n0\n") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
+	if got := out.String(); !strings.Contains(got, "warmed\nb\nwarm-ran\nwarm\ncrate\n65534\n"+hex.EncodeToString(sum[:])+"  -\n0\n../../gradle-ro/modules-2\nFOLDER-KEPT\n") || strings.Contains(got, "SELFLINK") || strings.Contains(got, "WROTE") || strings.Contains(got, "never") {
 		t.Errorf("grade output: %q", got)
 	}
 	// A seed's container left behind (Agentium died between create and removal): created, never started.

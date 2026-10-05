@@ -332,19 +332,26 @@ func TestLocalImagesAndRemove(t *testing.T) {
 	t.Parallel()
 	sc, r, builtID := imageScenario(t)
 	old := hexID("d")
-	sc.Images[builtID] = imageJSON(t, builtID, nil, []string{r.Tag}, nil, nil)
+	user, other := hexID("e"), hexID("f")
+	sc.Images[builtID] = imageJSON(t, builtID, nil, []string{r.Tag}, nil, []string{"sha256:l1", "sha256:l2", "sha256:l3"})
 	sc.Images[old] = imageJSON(t, old, nil, []string{"agentium-grade:go1.27-000000000000"}, nil, nil)
-	sc.ImageLS = builtID + "\t" + r.Tag + "\tgo 1.27\n" + old + "\tagentium-grade:go1.27-000000000000\tgo 1.27\n"
+	// The user's image built FROM a grading image inherits its labels; another data folder's grading image is not in
+	// this record: both are foreign.
+	sc.Images[user] = imageJSON(t, user, nil, []string{"myapp:dev"}, map[string]string{LabelRecipe: r.Hash}, nil)
+	sc.Images[other] = imageJSON(t, other, nil, []string{"agentium-grade:go1.27-ffffffffffff"}, nil, nil)
+	sc.ImageLS = builtID + "\t" + r.Tag + "\tgo 1.27\n" + old + "\tagentium-grade:go1.27-000000000000\tgo 1.27\n" + user + "\tmyapp:dev\tgo 1.27\n" +
+		other + "\tagentium-grade:go1.27-ffffffffffff\tgo 1.27\n"
 	f := newFake(t, sc)
 	d := openClient(t, f)
 	ctx := context.Background()
-	list, err := d.LocalImages(ctx)
+	list, err := d.LocalImages(ctx, BuiltImages{r.Tag: {ID: builtID}, "agentium-grade:go1.27-000000000000": {ID: old}})
 	must(t, err)
 	var got []string
 	for _, l := range list {
 		got = append(got, l.Kind+" "+l.Ref+" "+map[bool]string{true: "current", false: "old"}[l.Current])
 	}
-	want := []string{"base " + r.Base + " current", "grading " + r.Tag + " current", "grading agentium-grade:go1.27-000000000000 old"}
+	want := []string{"base " + r.Base + " current", "grading " + r.Tag + " current", "grading agentium-grade:go1.27-000000000000 old",
+		"foreign myapp:dev old", "foreign agentium-grade:go1.27-ffffffffffff old"}
 	if !slices.Equal(got, want) {
 		t.Errorf("images:\n%q\nwant\n%q", got, want)
 	}
@@ -365,6 +372,28 @@ func TestLocalImagesAndRemove(t *testing.T) {
 	f.set(t, sc)
 	if err := d.RemoveImage(ctx, r.Tag); err != nil {
 		t.Errorf("an image already gone: %v", err)
+	}
+}
+
+// What an image is built on is read from its layers, never from its labels.
+func TestBuiltOn(t *testing.T) {
+	base := LocalImage{Layers: []string{"a", "b"}}
+	for _, tt := range []struct {
+		layers      []string
+		on, known   bool
+		description string
+	}{
+		{[]string{"a", "b", "c"}, true, true, "on it"},
+		{[]string{"a", "x", "c"}, false, true, "another base"},
+		{[]string{"a", "b"}, false, true, "the base itself"},
+		{nil, false, false, "layers unknown"},
+	} {
+		if on, known := BuiltOn(base, LocalImage{Layers: tt.layers}); on != tt.on || known != tt.known {
+			t.Errorf("%s: %v %v", tt.description, on, known)
+		}
+	}
+	if _, known := BuiltOn(LocalImage{}, LocalImage{Layers: []string{"a"}}); known {
+		t.Error("a base without layers is known")
 	}
 }
 

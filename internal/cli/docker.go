@@ -17,7 +17,7 @@ type DockerClient interface {
 	Close() error
 	Plan(ctx context.Context, pins []container.Pin, built container.BuiltImages) (container.ImagePlan, error)
 	Fetch(ctx context.Context, it container.PlanItem, data string, out io.Writer) (container.Built, error)
-	LocalImages(ctx context.Context) ([]container.LocalImage, error)
+	LocalImages(ctx context.Context, built container.BuiltImages) ([]container.LocalImage, error)
 	RemoveImage(ctx context.Context, ref string) error
 	Inventory(ctx context.Context, data string) ([]container.Item, error)
 	RemoveIdle(ctx context.Context, data string, it container.Item) error

@@ -302,13 +302,17 @@ func planContainers(ctx context.Context, env Env, layout home.Layout, age time.D
 			res.plan.Keep = append(res.plan.Keep, it)
 		}
 	}
-	if images, err := d.LocalImages(ctx); err == nil && len(images) > 0 {
+	built, _ := container.LoadBuilt(builtImagesPath(layout)) // read only; unreadable: none of them counts as Agentium's
+	if images, err := d.LocalImages(ctx, built); err == nil {
+		images = slices.DeleteFunc(images, func(img container.LocalImage) bool { return img.Kind == "foreign" })
 		var total int64
 		for _, img := range images {
 			total += img.Size
 		}
-		res.notes = append(res.notes, fmt.Sprintf("Docker holds %d of the images container grading uses (%s); clean never removes them: agentium images remove --bases lists them all, and removes them with --yes",
-			len(images), formatBytes(total)))
+		if len(images) > 0 {
+			res.notes = append(res.notes, fmt.Sprintf("Docker holds %d of the images container grading uses (%s); clean never removes them: agentium images remove --bases lists them all, and removes them with --yes",
+				len(images), formatBytes(total)))
+		}
 	}
 	return d
 }

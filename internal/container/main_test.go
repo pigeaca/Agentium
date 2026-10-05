@@ -95,6 +95,7 @@ type scenario struct {
 	RmRefuse          string            // docker rm (without --force) fails with this message
 	SeedExit          int               // a seed's tar (docker start --attach)
 	PullStderr        string            // what a pull prints on stderr
+	Seeders           string            // ps of a volume's seed containers: name, tab, run
 }
 
 func fakeDocker() int {
@@ -289,6 +290,8 @@ func fakeDocker() int {
 		fmt.Println(args[len(args)-1])
 	case args[0] == "events":
 		return fakeEvents(dir, sc)
+	case args[0] == "ps" && strings.Contains(strings.Join(args, " "), "volume=") && strings.Contains(strings.Join(args, " "), "agentium.run"):
+		fmt.Print(sc.Seeders)
 	case args[0] == "ps" && strings.Contains(strings.Join(args, " "), "volume="):
 		for name, users := range sc.VolumeUsersBy {
 			if slices.Contains(args, "volume="+name) {
