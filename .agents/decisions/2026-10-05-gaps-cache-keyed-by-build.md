@@ -13,7 +13,11 @@ An answer depends on the task (two commits, the instruction, two file lists), on
 - An answer is kept under the task's input: its base and solution commits (by full ID only), instruction, hidden test files and reference files.
 - Answers belong to one checker: the build of Agentium, plus git's identity (the program on `PATH`, its version and build options, the locale variables). A checker reads only its own answers. The file holds those of the 8 checkers that saved last, each apart.
 - The build is the SHA-256 of the binary's file together with the build information the Go toolchain put in the running program (module, version, revision, settings). The program notes which file it is when it starts; if that file has been replaced or rewritten by the time it is read, the build has no identity and nothing is kept or taken.
-- Only complete answers are kept: not a check that failed, was cancelled or skipped a read.
+- Only complete answers are kept: not a check that failed, was cancelled or skipped a read. A git that a signal ended has answered nothing: its search is an error, never "no match".
+- Not kept either, because no key can name what they depend on:
+  - an answer whose check searched, ignoring case, for text outside ASCII. How such text matches depends on what git loads to match it (PCRE2 and its Unicode tables, or the C library's), and an upgrade of those changes neither git's version nor its path. ASCII matches the same in all of them. Such a task is checked on every list;
+  - anything, for a repository that has replacement refs (`refs/replace/`): git then reads another object than the one an ID names. Agentium makes no such ref; a repository that has one is checked on every list.
+- The file's folder must be a real folder and the file a regular file. Through a link the text would leave the folder agents are denied, and anything could be read back as an answer: nothing is read through one, and a save through one is refused and said.
 - Only `task list` reads and writes the file. Every other command checks afresh.
 
 ## Consequences

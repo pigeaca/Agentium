@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -58,11 +59,25 @@ func command(ctx context.Context, env, args []string) (*exec.Cmd, *bytes.Buffer)
 	return cmd, &stderr
 }
 
-// failure is the error of a git command that failed: its stderr when it exited with a status, else err.
+// ExitError is a git command that ran and ended in failure: with a status, or stopped by a signal.
+type ExitError struct {
+	Args   []string
+	Stderr string // what git wrote there, without surrounding space
+	// Code is git's exit status, or -1 when a signal ended it (killed, or crashed): that is no answer of git's, whatever
+	// the command. Some commands answer with a status: git grep exits 1, and writes nothing, when nothing matches.
+	Code int
+}
+
+func (e *ExitError) Error() string {
+	return fmt.Sprintf("git %s: %s", strings.Join(e.Args, " "), e.Stderr)
+}
+
+// failure is the error of a git command that failed: an *ExitError with its stderr when it ended with a status or a
+// signal, else err.
 func failure(args []string, stderr *bytes.Buffer, err error) error {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		return fmt.Errorf("git %s: %s", strings.Join(args, " "), strings.TrimSpace(stderr.String()))
+		return &ExitError{Args: slices.Clone(args), Stderr: strings.TrimSpace(stderr.String()), Code: exitErr.ExitCode()}
 	}
 	return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 }

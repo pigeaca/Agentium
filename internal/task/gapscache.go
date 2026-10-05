@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/pigeaca/agentium/internal/store"
@@ -32,14 +33,20 @@ const maxCheckers = 8
 //     its locale decide how a search that ignores case matches). The file keeps each checker's answers apart, and a
 //     checker reads only its own.
 //
-// So what is taken from the file is what a check would find now. Only complete answers are put there (Fairness.Gaps
-// says which those are). The file holds text of hidden tests, so it lives in the data folder's cache, which no agent
-// may read. It is disposable: one that cannot be read, or is of another format, counts as empty.
+// So what is taken from the file is what a check would find now. Only answers that are complete, and git's alone to
+// give, are put there (Fairness.Gaps says which those are). Two things the key cannot name are left to the caller: a
+// repository with replacement refs reads other objects than its IDs name (gitx.Replaced), and must not be given a
+// cache at all.
+//
+// The file holds text of hidden tests, so it lives in the data folder's cache, which no agent may read; its folder
+// must be a real folder there and the file a regular file, since a link would lead that text, or what is read back,
+// somewhere else. It is disposable: one that cannot be read, or is of another format, counts as empty.
 //
 // A nil *GapsCache keeps nothing. It is safe for concurrent use.
 type GapsCache struct {
 	path    string
 	checker string
+	now     func() time.Time
 
 	mu     sync.Mutex
 	gaps   map[string][]Gap // by input digest: the file's, for this checker, and what this command added
@@ -47,6 +54,10 @@ type GapsCache struct {
 	added  bool
 	others []checkerGaps // the file's other checkers, the one that saved last first
 }
+
+// staleAfter is the age at which a file a save left beside the cache is taken for a killed save's, and removed. A save
+// in progress writes and renames its file within the same moment.
+const staleAfter = 10 * time.Minute
 
 // gapsFile is the file: the answers of the checkers that saved last, the newest save first.
 type gapsFile struct {
@@ -64,7 +75,13 @@ type checkerGaps struct {
 // Agentium from any other, git is gitx.Identity. A file that is missing or unreadable, or has nothing of this checker,
 // gives an empty cache; Save then says so if it cannot write one either.
 func OpenGapsCache(path, build, git string) *GapsCache {
-	c := &GapsCache{path: path, checker: digest(build, git), gaps: map[string][]Gap{}}
+	c := &GapsCache{path: path, checker: digest(build, git), now: time.Now, gaps: map[string][]Gap{}}
+	if c.place() != nil {
+		return c // nothing is read through a link: Save says what is wrong
+	}
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		return c // none yet; or a link or a folder, which Save's rename replaces or reports
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return c
@@ -87,6 +104,18 @@ func OpenGapsCache(path, build, git string) *GapsCache {
 	}
 	c.loaded = len(c.gaps)
 	return c
+}
+
+// place refuses a folder for the file that is something else than a real folder: a link there would take the text of
+// hidden tests out of the data folder's cache, where no agent may read, to wherever it leads. A folder that is not
+// there yet is fine: Save makes it.
+func (c *GapsCache) place() error {
+	dir := filepath.Dir(c.path)
+	info, err := os.Lstat(dir)
+	if err == nil && !info.IsDir() {
+		return fmt.Errorf("refused: %s is not a real folder (a link, or a file), so nothing is kept in it", dir)
+	}
+	return nil
 }
 
 // lookup returns the gaps kept for in.
@@ -118,10 +147,10 @@ func (c *GapsCache) store(in FairnessInput, gaps []Gap) {
 	c.added = true
 }
 
-// Save writes the file when this command changed what it should hold for its checker: it worked out gaps the file
-// did not have, or the file has gaps of inputs that are none of tasks' (the project's tasks as they are now: an edited
-// or removed task's old answer is dropped, for every checker). Otherwise the file is left untouched, so a list that
-// found everything kept writes nothing. This checker's answers go first, then those of the others that saved last, as
+// Save writes the file when this command changed what it should hold: it worked out gaps the file did not have, or
+// the file has gaps, of any checker, for inputs that are none of tasks' (the project's tasks as they are now: an
+// edited or removed task's old answer is dropped). Otherwise the file is left untouched, so a list that found
+// everything kept writes nothing. This checker's answers go first, then those of the others that saved last, as
 // they were when the file was read, up to maxCheckers in all.
 //
 // The file is written whole beside its place and then renamed, mode 0600 in folders 0700: a reader never sees half of
@@ -144,19 +173,24 @@ func (c *GapsCache) Save(tasks []store.Task) error {
 			mine.Gaps[id] = append([]Gap{}, gaps...) // none is written as [], not null
 		}
 	}
-	if !c.added && len(mine.Gaps) == c.loaded {
-		return nil
-	}
+	dropped := len(mine.Gaps) != c.loaded // of this checker's; another's obsolete answers go too, whoever saves
 	file := gapsFile{Format: gapsFormat}
 	for _, one := range append([]checkerGaps{mine}, c.others...) {
 		for id := range one.Gaps {
 			if !current[id] {
 				delete(one.Gaps, id)
+				dropped = true
 			}
 		}
 		if len(one.Gaps) > 0 && len(file.Checkers) < maxCheckers {
 			file.Checkers = append(file.Checkers, one)
 		}
+	}
+	if !c.added && !dropped {
+		return nil
+	}
+	if err := c.place(); err != nil {
+		return err
 	}
 	data, err := json.Marshal(file)
 	if err != nil {
@@ -182,7 +216,19 @@ func (c *GapsCache) Save(tasks []store.Task) error {
 		return fmt.Errorf("write %s: %w", c.path, err)
 	}
 	c.added, c.loaded = false, len(mine.Gaps)
+	c.forgetKilledSaves()
 	return nil
+}
+
+// forgetKilledSaves removes the files that saves killed before their rename left beside the cache: text of hidden
+// tests that nothing reads again. Only a save writes there, so what is older than staleAfter is no save's in progress.
+func (c *GapsCache) forgetKilledSaves() {
+	left, _ := filepath.Glob(filepath.Join(filepath.Dir(c.path), filepath.Base(c.path)+".*.tmp"))
+	for _, tmp := range left {
+		if info, err := os.Lstat(tmp); err == nil && c.now().Sub(info.ModTime()) > staleAfter {
+			_ = os.Remove(tmp)
+		}
+	}
 }
 
 // digest is the SHA-256, in hex, of texts, each written with its length, so no two lists of texts share one.

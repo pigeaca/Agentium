@@ -775,18 +775,30 @@ func taskList(ctx context.Context, env Env, args []string) int {
 }
 
 // gapsCache opens what this build kept of the project's gap checks (task.GapsCache), for the task list: under this
-// build of Agentium, this git and its locale. It is nil, which keeps nothing, when the build or git cannot be told
-// from another one (no BuildID, a binary replaced since the program started); the list is then only slower.
+// build of Agentium, this git and its locale. It is nil, which keeps nothing, without a build identity (tests), and
+// for a repository with replacement refs, where a commit's ID does not say what git reads (gitx.Replaced). When the
+// build or git cannot be told from another one (a binary replaced since the program started, say), nothing is kept
+// either, and stderr says why: the list is right, but slow for a reason nothing else would show.
 func gapsCache(ctx context.Context, env Env, w *workspace) *task.GapsCache {
 	if env.BuildID == nil {
 		return nil
 	}
 	build, err := env.BuildID()
+	var git string
+	if err == nil {
+		git, err = gitx.Identity(ctx)
+	}
+	replaced := false
+	if err == nil {
+		replaced, err = gitx.Replaced(ctx, w.bare)
+	}
 	if err != nil {
+		if ctx.Err() == nil { // an interrupted list has more to say than this
+			fmt.Fprintf(env.Stderr, "agentium: the tasks' checks are not kept this time, so this list works them all out: %v\n", err)
+		}
 		return nil
 	}
-	git, err := gitx.Identity(ctx)
-	if err != nil {
+	if replaced {
 		return nil
 	}
 	return task.OpenGapsCache(w.layout.GapsCache(w.project.ID), build, git)

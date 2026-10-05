@@ -477,13 +477,37 @@ func TestTaskListKeepsItsChecksBetweenCommands(t *testing.T) { // not parallel: 
 		t.Errorf("lists that found everything kept rewrote the file (%v)", err)
 	}
 
-	// A build that cannot be told from another keeps and takes nothing.
+	// A build that cannot be told from another keeps and takes nothing, and says why the list is slow.
 	*f.build = func() (string, error) { return "", os.ErrNotExist }
-	if got := list(forms[0]); got.stdout != want[0] || got.stderr != "" || searches() != cold {
-		t.Errorf("a list of an unknown build: it must check everything and print the same:\n%s\nstderr %s", got.stdout, got.stderr)
+	if got := list(forms[0]); got.stdout != want[0] || !strings.Contains(got.stderr, "the tasks' checks are not kept this time") || searches() != cold {
+		t.Errorf("a list of an unknown build: it must check everything, print the same and say so:\n%s\nstderr %s", got.stdout, got.stderr)
 	}
 	if again, err := os.ReadFile(kept); err != nil || string(again) != string(saved) {
 		t.Errorf("a list of an unknown build touched the file (%v)", err)
+	}
+
+	// With a replacement ref, a commit's ID does not say what git reads: nothing is taken or kept, list after list,
+	// until the ref is gone.
+	*f.build = func() (string, error) { return build, nil }
+	bare := filepath.Join(f.data, "projects", "1", "repo.git")
+	commits := strings.Fields(gitIn(t, bare, "for-each-ref", "--format=%(objectname)", "refs/agentium/sources/"))
+	if len(commits) < 2 {
+		t.Fatalf("the project's repository has %d source commits", len(commits))
+	}
+	gitIn(t, bare, "replace", commits[0], commits[1])
+	calls()
+	for range 2 {
+		if got := list(forms[1]); got.stderr != "" || searches() == 0 {
+			t.Errorf("a list of a repository with a replacement ref must check its tasks itself, quietly:\nstderr %s", got.stderr)
+		}
+	}
+	if again, err := os.ReadFile(kept); err != nil || string(again) != string(saved) {
+		t.Errorf("a list of a repository with a replacement ref touched the file (%v)", err)
+	}
+	gitIn(t, bare, "replace", "-d", commits[0])
+	calls()
+	if got := list(forms[1]); got.stdout != want[1] || searches() != 0 {
+		t.Errorf("with the replacement ref gone the kept checks must serve again:\n%s", got.stdout)
 	}
 
 	// Another build checks everything itself, once.

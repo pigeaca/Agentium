@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/gitx/gitxtest"
 	"github.com/pigeaca/agentium/internal/store"
@@ -364,6 +366,21 @@ func TestGapsCacheDropsWhatNoTaskHasAndReportsAFailedSave(t *testing.T) {
 			}
 		}
 	}
+	// A checker with no answers of its own (a new build whose list checked nothing) still drops what the others have
+	// for a task that is gone.
+	if err := OpenGapsCache(path, "a build that checked nothing", "git").Save(tasks[:1]); err != nil {
+		t.Fatal(err)
+	}
+	for _, build := range []string{"build", "another build"} {
+		kept := OpenGapsCache(path, build, "git")
+		for i, tk := range tasks[:2] {
+			in, _ := inputOf(tk)
+			if _, ok := kept.lookup(in); ok != (i < 1) {
+				t.Errorf("%s, %s after a third checker saved for one task: in the file %v, want %v", build, tk.Name, ok, i < 1)
+			}
+		}
+	}
+	listed(t, repo, path, "build", "git", tasks[:2])
 	// Nothing to check keeps the file as it is: a task without a solution has no answer.
 	before, err := os.ReadFile(path)
 	if err != nil {
@@ -384,8 +401,8 @@ func TestGapsCacheDropsWhatNoTaskHasAndReportsAFailedSave(t *testing.T) {
 	if gaps, err := Gaps(context.Background(), f, tasks[0]); err != nil || len(gaps) != 3 {
 		t.Fatalf("a check whose answer cannot be kept: %v, %v", gaps, err)
 	}
-	if err := stuck.Save(tasks); err == nil || !strings.Contains(err.Error(), blocked) {
-		t.Errorf("a save that cannot write: %v, want an error naming %s", err, blocked)
+	if err := stuck.Save(tasks); err == nil || !strings.Contains(err.Error(), filepath.Dir(blocked)) {
+		t.Errorf("a save that cannot write: %v, want an error naming %s", err, filepath.Dir(blocked))
 	}
 	if left, _ := filepath.Glob(filepath.Join(dir, "*.tmp")); len(left) != 0 {
 		t.Errorf("files left behind: %v", left)
@@ -407,5 +424,182 @@ func TestDigestTellsTextsApart(t *testing.T) {
 	}
 	if digest("a", "b") != digest("a", "b") {
 		t.Error("equal texts have different digests")
+	}
+}
+
+// How text outside ASCII matches when case is ignored depends on what git loads to match it, which no key names: a
+// task whose check asked for such text is answered as ever and checked every time, while the others are kept.
+func TestGapsCacheKeepsNoAnswerThatNeededTextOutsideASCII(t *testing.T) {
+	repo, tasks := gapTasks(t)
+	const message = "résumé introuvable dans le dossier"
+	base := commit(t, repo, map[string]string{"r/r.go": "package r\n\nfunc Find() string { return \"\" }\n"}, "accents: base")
+	solution := commit(t, repo, map[string]string{
+		"r/r.go":      "package r\n\nfunc Find() string { return \"" + message + "\" }\n",
+		"r/r_test.go": "package r\n\nimport \"testing\"\n\nfunc TestFind(t *testing.T) {\n\tif Find() != \"" + message + "\" {\n\t\tt.Fatal(Find())\n\t}\n}\n",
+	}, "accents: solution")
+	hidden, reference, err := Split(context.Background(), base, solution, "-C", repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accents := store.Task{Name: "accents", BaseCommit: base, SolutionCommit: solution, Instruction: "Make Find say what is missing.", HiddenTests: hidden, Reference: reference}
+	all := append(append([]store.Task{}, tasks...), accents)
+	path := filepath.Join(t.TempDir(), "gaps.json")
+	for pass := range 2 {
+		got := listed(t, repo, path, "build", "git", all)
+		if texts := gapTexts(got[len(got)-1]); !reflect.DeepEqual(texts, []string{"literal:" + message}) {
+			t.Fatalf("pass %d: the task's gaps: %q", pass, texts)
+		}
+	}
+	kept := OpenGapsCache(path, "build", "git")
+	if in, _ := inputOf(accents); func() bool { _, ok := kept.lookup(in); return ok }() {
+		t.Error("an answer that needed a search for text outside ASCII was kept")
+	}
+	for _, tk := range tasks {
+		if in, _ := inputOf(tk); func() bool { _, ok := kept.lookup(in); return !ok }() {
+			t.Errorf("%s, whose check asked for ASCII alone, was not kept", tk.Name)
+		}
+	}
+	// The third list checks that task again, and it alone.
+	calls := gitxtest.Calls(t)
+	listed(t, repo, path, "build", "git", all)
+	made := calls()
+	if gitxtest.Count(made, "grep") == 0 {
+		t.Error("the task was not checked again")
+	}
+	for _, call := range made {
+		if line := strings.Join(call, " "); !strings.Contains(line, base) && !strings.Contains(line, solution) {
+			t.Errorf("git was asked about another task: %s", line)
+		}
+	}
+	if !isASCII([]string{"plain", "text"}) || isASCII([]string{"plain", "tëxt"}) || isASCII([]string{"\xff"}) {
+		t.Error("isASCII")
+	}
+}
+
+// A git that a signal ends has found out nothing: its search is an error, not "no match", so the task's gaps are
+// unknown for this command and nothing is kept, neither for it nor for the next.
+func TestGapsCacheKeepsNothingFromAGitThatWasKilled(t *testing.T) {
+	repo, tasks := gapTasks(t)
+	want := gapsAlone(t, repo, tasks)
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "gaps.json")
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir() // a git whose searches are killed; everything else is the real one
+	script := "#!/bin/sh\nfor arg in \"$@\"; do\n\tif [ \"$arg\" = grep ]; then kill -9 $$; fi\ndone\nexec '" + realGit + "' \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	kept := OpenGapsCache(path, "build", "git")
+	f := NewFairness("-C", repo)
+	f.Keep(kept)
+	PrepareGaps(ctx, f, tasks)
+	if gaps, err := Gaps(ctx, f, tasks[0]); err == nil {
+		t.Errorf("a check whose searches were killed gave %v", gaps)
+	}
+	if err := kept.Save(tasks); err != nil {
+		t.Fatal(err)
+	}
+	if in, _ := inputOf(tasks[0]); func() bool { _, ok := OpenGapsCache(path, "build", "git").lookup(in); return ok }() {
+		t.Error("an answer worked out from killed searches was kept")
+	}
+	// With git back, the same checker answers right: no killed search was taken for "no match".
+	if err := os.Remove(filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	if gaps, err := Gaps(ctx, f, tasks[0]); err != nil || !reflect.DeepEqual(gaps, want[0]) {
+		t.Errorf("with git back: %v, %v; want %v", gaps, err, want[0])
+	}
+}
+
+// The cache's folder must be a real folder, and its file a regular file: through a link, the text of hidden tests
+// would be written where an agent may read, and anything could be read back as an answer.
+func TestGapsCacheGoesThroughNoLink(t *testing.T) {
+	repo, tasks := gapTasks(t)
+	want := gapsAlone(t, repo, tasks)
+	root := t.TempDir()
+	outside := filepath.Join(root, "outside")
+	if err := os.MkdirAll(outside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A good file, made where the link will lead: what a checker would read if it followed the link.
+	listed(t, repo, filepath.Join(outside, "1.json"), "build", "git", tasks)
+	planted, err := os.ReadFile(filepath.Join(outside, "1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := filepath.Join(root, "cache")
+	if err := os.MkdirAll(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(cache, "gaps")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cache, "gaps", "1.json")
+	in, _ := inputOf(tasks[0])
+	linked := OpenGapsCache(path, "build", "git")
+	if gaps, ok := linked.lookup(in); ok {
+		t.Errorf("an answer was read through a linked folder: %v", gaps)
+	}
+	f := NewFairness("-C", repo)
+	f.Keep(linked)
+	if gaps, err := Gaps(context.Background(), f, tasks[0]); err != nil || !reflect.DeepEqual(gaps, want[0]) {
+		t.Fatalf("the check itself: %v, %v", gaps, err)
+	}
+	if err := linked.Save(tasks[:1]); err == nil || !strings.Contains(err.Error(), filepath.Join(cache, "gaps")) || !strings.Contains(err.Error(), "not a real folder") {
+		t.Errorf("a save through a linked folder: %v, want a refusal naming it", err)
+	}
+	entries, err := os.ReadDir(outside)
+	if after, readErr := os.ReadFile(filepath.Join(outside, "1.json")); err != nil || readErr != nil || len(entries) != 1 || string(after) != string(planted) {
+		t.Errorf("something was written where the link leads: %v (%v, %v)", entries, err, readErr)
+	}
+
+	// The file itself a link: not read, and replaced by a file of the cache's own; where it led is left alone.
+	real := filepath.Join(root, "real", "gaps")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path = filepath.Join(real, "1.json")
+	if err := os.Symlink(filepath.Join(outside, "1.json"), path); err != nil {
+		t.Fatal(err)
+	}
+	if gaps, ok := OpenGapsCache(path, "build", "git").lookup(in); ok {
+		t.Errorf("an answer was read through a linked file: %v", gaps)
+	}
+	listed(t, repo, path, "build", "git", tasks[:1])
+	if info, err := os.Lstat(path); err != nil || !info.Mode().IsRegular() {
+		t.Errorf("the linked file was not replaced by a regular one: %v, %v", info, err)
+	}
+	if after, err := os.ReadFile(filepath.Join(outside, "1.json")); err != nil || string(after) != string(planted) {
+		t.Errorf("the file the link led to was changed (%v)", err)
+	}
+}
+
+// A save that was killed before its rename leaves its file beside the cache; the next save removes it once it is too
+// old to be a save in progress, and leaves a young one alone.
+func TestGapsCacheRemovesWhatKilledSavesLeft(t *testing.T) {
+	repo, tasks := gapTasks(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "1.json")
+	old, young, other := path+".123.tmp", path+".456.tmp", filepath.Join(dir, "2.json.789.tmp")
+	for _, p := range []string{old, young, other} {
+		if err := os.WriteFile(p, []byte("left by a killed save"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	longAgo := time.Now().Add(-2 * staleAfter)
+	for _, p := range []string{old, other} {
+		if err := os.Chtimes(p, longAgo, longAgo); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed(t, repo, path, "build", "git", tasks[:1])
+	for p, wantThere := range map[string]bool{old: false, young: true, other: true, path: true} {
+		if _, err := os.Stat(p); (err == nil) != wantThere {
+			t.Errorf("%s: there %v, want %v", filepath.Base(p), err == nil, wantThere)
+		}
 	}
 }
