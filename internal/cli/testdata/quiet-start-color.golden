@@ -1,0 +1,17 @@
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     \e[38;5;243m░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░\e[39m   0 of 32 · 1s
+  \e[38;5;243mspent\e[39m    $0.00\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m      fresh copy             1s
+           \e[38;5;215mtrimmed\e[39m   \e[38;5;243mmap-keys\e[39m      fresh copy             1s
+
+  \e[38;5;243mso far\e[39m   too early to tell
+           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+
+
+
+
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== end

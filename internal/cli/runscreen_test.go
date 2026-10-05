@@ -82,15 +82,15 @@ func terminalVars(f runFixture) {
 	f.vars["LINES"] = "40"
 }
 
-// On a terminal, experiment run draws the dashboard: the region is redrawn in place and cleared at the end, and what
-// stays is the question, a line per run, the answer and the summary; never the plain view's event lines.
-func TestExperimentRunDrawsTheDashboardOnATerminal(t *testing.T) {
+// On a terminal, experiment run --view flow draws the step boxes: the region is redrawn in place and cleared at the end,
+// and what stays is the question, a line per run, the answer and the summary; never the plain view's event lines.
+func TestExperimentRunDrawsTheFlowViewOnATerminal(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	expect(t, f.run(ctx, "experiment", "new", "lean-ab", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "2", "--seed", "5"), ExitOK)
 	terminalVars(f)
-	r := f.run(ctx, "experiment", "run", "lean-ab")
+	r := f.run(ctx, "experiment", "run", "lean-ab", "--view", "flow")
 	expect(t, r, ExitOK)
 	for _, want := range []string{"\x1b[?25l", "\x1b[38;5;75m", "Claude works", "hidden tests", "fresh copy", "the answer so far"} {
 		if !strings.Contains(r.stdout, want) {
@@ -133,18 +133,18 @@ func TestDashboardDrawsTheSteps(t *testing.T) {
 	writeFile(t, ctrl, "agent-sleep", "0.6")
 	expect(t, f.run(ctx, "experiment", "new", "steps", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
 	terminalVars(f)
-	r := f.run(ctx, "experiment", "run", "steps")
+	r := f.run(ctx, "experiment", "run", "steps", "--view", "flow")
 	expect(t, r, ExitOK)
 	working := regexp.MustCompile(`┆ │\s+[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] \d+s\s+│ ┆`)
 	if !working.MatchString(term.Plain(r.stdout)) {
 		t.Errorf("no frame showed Claude Code at work:\n%s", term.Plain(r.stdout))
 	}
-	_, screen := newRunScreen(ctx, Env{Stdout: io.Discard, Stderr: io.Discard, Now: time.Now}, viewDashboard,
+	_, screen := newRunScreen(ctx, Env{Stdout: io.Discard, Stderr: io.Discard, Now: time.Now}, viewFlow,
 		term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}, 85)
 	defer screen.Close()
 	_, logView := newRunScreen(ctx, Env{Stdout: io.Discard, Now: time.Now}, viewLog, term.Capabilities{Terminal: true, Width: 100}, 85)
 	if !screen.observer(nil).Steps || logView.observer(nil).Steps {
-		t.Error("only the dashboard asks for the runs' steps")
+		t.Error("only a live view asks for the runs' steps")
 	}
 }
 
@@ -247,7 +247,7 @@ func TestExperimentRunViewsArePlainOffATerminal(t *testing.T) {
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
 	f.vars["AGENTIUM_VIEW"] = "dashboard"
-	for i, args := range [][]string{{"--view", "log"}, {"--view", "dashboard"}, nil} {
+	for i, args := range [][]string{{"--view", "log"}, {"--view", "dashboard"}, {"--view", "flow"}, nil} {
 		name := fmt.Sprintf("plain-%d", i)
 		expect(t, f.run(ctx, "experiment", "new", name, "--b", "lean", "--task", "value", "--repeats", "1", "--seed", "5"), ExitOK)
 		r := f.run(ctx, append([]string{"experiment", "run", name}, args...)...)
@@ -269,10 +269,10 @@ func TestViewFlagAndVariable(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
 	ctx := context.Background()
-	expect(t, f.run(ctx, "experiment", "run", "x", "--view", "fancy"), ExitUsage, `--view is dashboard or log, not "fancy"`)
+	expect(t, f.run(ctx, "experiment", "run", "x", "--view", "fancy"), ExitUsage, `--view is dashboard, flow or log, not "fancy"`)
 	f.vars["AGENTIUM_VIEW"] = "fancy"
-	expect(t, f.run(ctx, "experiment", "run", "x"), ExitUsage, `AGENTIUM_VIEW is dashboard or log, not "fancy"`)
-	expect(t, f.run(ctx, "start", "--view", "fancy"), ExitUsage, `--view is dashboard or log, not "fancy"`)
+	expect(t, f.run(ctx, "experiment", "run", "x"), ExitUsage, `AGENTIUM_VIEW is dashboard, flow or log, not "fancy"`)
+	expect(t, f.run(ctx, "start", "--view", "fancy"), ExitUsage, `--view is dashboard, flow or log, not "fancy"`)
 
 	vars := func(kv ...string) func(string) string {
 		m := map[string]string{"TERM": "xterm", "COLUMNS": "100"}
@@ -291,6 +291,10 @@ func TestViewFlagAndVariable(t *testing.T) {
 	}{
 		{"a terminal", true, vars(), "", false, viewDashboard},
 		{"a terminal, log asked", true, vars(), viewLog, false, viewLog},
+		{"a terminal, flow asked", true, vars(), viewFlow, false, viewFlow},
+		{"a terminal, dashboard asked", true, vars(), viewDashboard, false, viewDashboard},
+		{"a pipe, flow asked", false, vars(), viewFlow, false, viewPlain},
+		{"NO_COLOR, flow asked", true, vars("NO_COLOR", "1"), viewFlow, false, viewFlow},
 		{"a pipe", false, vars(), viewDashboard, false, viewPlain},
 		{"FORCE_COLOR into a pipe", false, vars("FORCE_COLOR", "1"), "", false, viewPlain},
 		{"a dumb terminal", true, vars("TERM", "dumb"), viewLog, false, viewPlain},
@@ -309,7 +313,7 @@ func TestViewFlagAndVariable(t *testing.T) {
 		flag viewFlag
 		env  string
 		want string
-	}{{"", "", ""}, {"", "log", "log"}, {"", " dashboard ", "dashboard"}, {"dashboard", "log", "dashboard"}} {
+	}{{"", "", ""}, {"", "log", "log"}, {"", " dashboard ", "dashboard"}, {"", "flow", "flow"}, {"dashboard", "log", "dashboard"}, {"flow", "dashboard", "flow"}} {
 		if got, err := askedView(tc.flag, func(string) string { return tc.env }); err != nil || got != tc.want {
 			t.Errorf("askedView(%q, %q) = %q, %v; want %q", tc.flag, tc.env, got, err, tc.want)
 		}
@@ -476,7 +480,7 @@ func TestDashboardCtrlC(t *testing.T) {
 // question, every run's line and the answer, as stopped.
 func TestScreenCloseLeavesTheRuns(t *testing.T) {
 	t.Parallel()
-	for _, view := range []string{viewDashboard, viewLog} {
+	for _, view := range []string{viewDashboard, viewFlow, viewLog} {
 		out := &syncBuffer{}
 		caps := term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}
 		_, screen := newRunScreen(context.Background(), Env{Stdout: out, Stderr: out, Now: time.Now}, view, caps, 85)
@@ -504,8 +508,8 @@ func TestScreenCloseLeavesTheRuns(t *testing.T) {
 	}
 }
 
-// The moments inside a step reach the dashboard: with a task whose setup takes a while, a frame shows "setup" in the
-// fresh copy's box (the moments' every wording is in dashboard-moments.golden).
+// The moments inside a step reach the flow view: with a task whose setup takes a while, a frame shows "setup" in the
+// fresh copy's box (the moments' every wording is in flow-moments.golden).
 func TestDashboardShowsTheMoments(t *testing.T) {
 	t.Parallel()
 	f, _ := experimentFixture(t)
@@ -514,7 +518,7 @@ func TestDashboardShowsTheMoments(t *testing.T) {
 	expect(t, f.run(ctx, "task", "validate", "value", "--snapshot", "lean"), ExitOK)
 	expect(t, f.run(ctx, "experiment", "new", "moments", "--b", "lean", "--task", "value", "--goal", "better", "--repeats", "1", "--seed", "5"), ExitOK)
 	terminalVars(f)
-	r := f.run(ctx, "experiment", "run", "moments")
+	r := f.run(ctx, "experiment", "run", "moments", "--view", "flow")
 	expect(t, r, ExitOK)
 	plain := term.Plain(r.stdout)
 	for _, want := range []*regexp.Regexp{

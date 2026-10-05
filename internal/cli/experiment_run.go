@@ -27,7 +27,7 @@ func experimentRun(ctx context.Context, env Env, args []string) int {
 	fs.Float64Var(&o.UsageLimit, "usage-limit", experiment.DefaultUsageLimit, "with a subscription, start no pair past this share of the five-hour window (percent)")
 	fs.BoolVar(&o.Wait, "wait", false, "at the usage limit, wait for the window to reset instead of pausing")
 	fs.BoolVar(&yes, "yes", false, "consent to the paid run, which --json needs (it never asks); a run you start yourself needs none")
-	fs.Var(&view, "view", "on a terminal: dashboard (the default, redrawn in place) or log (styled lines, nothing redrawn)")
+	fs.Var(&view, "view", "on a terminal: dashboard (the default: quiet, redrawn in place), flow (step boxes, redrawn in place) or log (styled lines, nothing redrawn)")
 	rest, code, ok := parseArgs(env, fs, args, experimentUsage)
 	if !ok {
 		return code
@@ -87,6 +87,7 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 	defer w.Close()
 	runner, release := experimentRunner(env, w, live)
 	if screen != nil {
+		screen.stored = func(experiment.Lock) []experiment.RunData { return storedRunData(context.WithoutCancel(ctx), w, name) }
 		runner.Observer = screen.observer(func(lock experiment.Lock) *answerState { return fixedAnswer(context.WithoutCancel(ctx), w, name, lock) })
 	}
 	runner.Quiet = asJSON
@@ -183,6 +184,23 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 		Finish: func(experiment.Summary) { live.Stop() },
 	}
 	return r, release
+}
+
+// storedRunData is the experiment's stored runs as the analysis reads them; nil when they cannot be read.
+func storedRunData(ctx context.Context, w *workspace, name string) []experiment.RunData {
+	stored, err := w.db.ExperimentByName(ctx, w.project.ID, name)
+	if err != nil {
+		return nil
+	}
+	runs, err := w.db.ExperimentRuns(ctx, stored.ID)
+	if err != nil {
+		return nil
+	}
+	data, err := experiment.RunDataOfStored(runs)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // fixedAnswer is a fixed design's answer once every run is done, from its stored runs, as the report analyses them;

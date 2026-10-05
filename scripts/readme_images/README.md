@@ -19,9 +19,9 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
 - The recorder for that JSON is `TestRecordLiveRun` in `internal/cli/record_live_test.go` (skipped unless asked):
   `AGENTIUM_RECORD_LIVE=/tmp/live.json go test ./internal/cli -run TestRecordLiveRun -count=1`. It runs
   `experiment run` as on a terminal with the test stand-in for Claude Code, at its real speed, no paid runs.
-  `AGENTIUM_RECORD_VIEW` picks the dashboard (default: a seq-v1 experiment on 16 tasks, 80 by 34), `log`, or `plain`
+  `AGENTIUM_RECORD_VIEW` picks the dashboard (default, the quiet view: a seq-v1 experiment on 16 tasks, 80 by 34), `flow` (the step boxes), `log`, or `plain`
   (the status line); `AGENTIUM_RECORD_PACE` is the stand-in's seconds a run, `AGENTIUM_RECORD_COST` the second
-  context's cost a run. `console-run-dashboard.svg` is
+  context's cost a run. `console-run-dashboard.svg` (recorded as `flow`, before the quiet view became the default) is
   `AGENTIUM_RECORD_PACE=2 AGENTIUM_RECORD_COST=0.25`, then `frames2svg.py "…" 80 34 "…" --from 31 --fps 8` (the checks
   and the sandbox's revalidation, shown as "getting ready", take the first 30 seconds); its still is `--still 64.435`, and `console-run-log.svg` is
   the log view's `--still last` at 80 by 40.
