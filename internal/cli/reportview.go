@@ -212,7 +212,10 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 			settle = settleWords(*gr, decided)
 		}
 	}
-	inner := min(max(term.Width(headline), term.Width(status), term.Width(guard), term.Width(settle), 52)+6, w-6)
+	if rep.JudgeGrading != nil && guard != "" && !f.aa { // both kinds of success, each named: the tests' and the judge's
+		guard = "by the tests: " + guard
+	}
+	inner := min(max(term.Width(headline), term.Width(status), term.Width(guard), term.Width(settle), term.Width(judgeAnswerWords(rep, f)), 52)+6, w-6)
 	if gr != nil && gr.Tasks >= 2 {
 		guardScale = rangePicture(sh, m, *gr, g, inner-4, !decided)
 	}
@@ -253,9 +256,6 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 		}
 	}
 	if guard != "" && !f.aa {
-		if rep.JudgeGrading != nil { // both kinds of success, each named: the tests' and the judge's
-			guard = "by the tests: " + guard
-		}
 		lines = append(lines, line{})
 		add(m.words(guard), guardRole)
 		for _, s := range guardScale {
@@ -323,9 +323,15 @@ func guardState(rep report.Report, f runFacts, r experiment.MetricResult) (answe
 
 // settleWords is what could settle a metric that has no verdict or is not sure: the analysis' figure when it has one
 // ("about 40 tasks in all could settle it"), else, with no verdict, the metric's own floor: the tasks, with as many
-// runs each, below which the analysis gives no verdict. "" when neither is known.
+// runs each, below which the analysis gives no verdict; for a secondary metric, which gets none at any size, the kind
+// of experiment that asks about it. "" when none is known.
 func settleWords(r experiment.MetricResult, decided bool) string {
 	switch {
+	case r.Role == experiment.RoleSecondary && r.Metric == experiment.MetricCost:
+		// A secondary metric is exploratory at any size: only an experiment that asks about it can settle it.
+		return "a --goal cheaper experiment could settle it"
+	case r.Role == experiment.RoleSecondary:
+		return ""
 	case r.TasksToResolve > 0:
 		return fmt.Sprintf("about %d tasks in all could settle it", r.TasksToResolve)
 	case !decided && r.FloorTasks > 0 && r.FloorRepeats > 0:
@@ -731,7 +737,7 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		}
 	}
 	marksOf := func(c report.TaskCell) string { // what a version's marks column shows
-		if summed {
+		if summed && c.Counted > 0 {
 			return fmt.Sprintf("%d/%d", c.Successes, c.Counted)
 		}
 		return c.Marks
@@ -769,7 +775,7 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 	}
 	arm := func(c report.TaskCell, role term.Role) string {
 		marks := taskMarks(st, m, c.Marks)
-		if summed {
+		if summed && c.Counted > 0 {
 			marks = marksOf(c)
 		}
 		out := term.Pad(marks, markW)

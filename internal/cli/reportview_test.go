@@ -341,7 +341,8 @@ func TestReportViewManyMarksKeepBothCosts(t *testing.T) {
 	cell := func(c *float64) report.TaskCell {
 		return report.TaskCell{Marks: marks, Successes: 8, Counted: 15, CostUSD: c}
 	}
-	rep.Tasks = []report.TaskRow{{Task: "feat-support-for-buffer-iteration-with-a-very-long-name", Arms: map[string]report.TaskCell{"A": cell(&a), "B": cell(&b)}}}
+	rep.Tasks = []report.TaskRow{{Task: "feat-support-for-buffer-iteration-with-a-very-long-name", Arms: map[string]report.TaskCell{"A": cell(&a), "B": cell(&b)}},
+		{Task: "left-out-in-b", Arms: map[string]report.TaskCell{"A": cell(&a), "B": {Marks: "×"}}}}
 	for _, width := range []int{term.MinWidth, 80} {
 		text := strings.Join(reportView(rep, plainUnicode, width), "\n")
 		var row string
@@ -349,6 +350,9 @@ func TestReportViewManyMarksKeepBothCosts(t *testing.T) {
 			if strings.Contains(line, "$0.52") {
 				row = line
 			}
+		}
+		if strings.Contains(text, "0/0") || !strings.Contains(text, "–") {
+			t.Errorf("at %d columns a version with no counted run must keep its mark, not 0/0:\n%s", width, text)
 		}
 		if !strings.Contains(row, "$0.40") || !strings.Contains(row, "8/15") || term.Width(row) > width {
 			t.Errorf("at %d columns the row lost a cost or a count, or is too wide: %q", width, row)
@@ -631,5 +635,26 @@ func TestFitParts(t *testing.T) {
 		Seq: true, All: 16, Settle: 57}, factsOf(screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), 85), 44)
 	if len(lines) != 5 || strings.Contains(strings.Join(lines, "\n"), "…") || !strings.Contains(lines[3], "not sure yet") {
 		t.Errorf("a narrow answer box:\n%s", strings.Join(lines, "\n"))
+	}
+}
+
+// Cost in a --goal better experiment is a secondary metric: exploratory at any size, so no floor of tasks can settle it;
+// the line says an experiment that asks about cost could. A guard below its floor keeps the floor line.
+func TestReportViewSecondaryMetricSettle(t *testing.T) {
+	rep := buildReport(t, reportScenes(t)["decisive"])
+	rep.Lock.Design.Goal = experiment.GoalBetter
+	for i, r := range rep.Analysis.Results {
+		switch r.Metric {
+		case experiment.MetricCost:
+			rep.Analysis.Results[i].Role, rep.Analysis.Results[i].Verdict = experiment.RoleSecondary, stats.Exploratory
+			rep.Analysis.Results[i].FloorTasks, rep.Analysis.Results[i].FloorRepeats = 8, 1 // past it, still no verdict
+			rep.Analysis.Results[i].TasksToResolve = 0
+		case experiment.MetricSuccess:
+			rep.Analysis.Results[i].Role = experiment.RolePrimary
+		}
+	}
+	view := strings.Join(reportView(rep, plainUnicode, 100), "\n")
+	if !strings.Contains(view, "a --goal cheaper experiment could settle it") || strings.Contains(view, "each could settle it") {
+		t.Errorf("a secondary metric's settle line:\n%s", view)
 	}
 }

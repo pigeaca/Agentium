@@ -67,23 +67,21 @@
  ───────────────────────────────────────────────────────────────────────────────
                    10 tasks · 19 runs · $9.06 spent · 20 min
 
-          ┌──────────────────────────────────────────────────────────┐
-          │                        the answer                        │
-          │               no clear difference in cost                │
-          │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-          │                          2 of 3                          │
-          │              after all 10 tasks · not sure               │
-          │                                                          │
-          │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
-          │  likely 14% to 36% less  same                            │
-          │                                                          │
-          │ by the tests: whether lean passes as many tasks: too few │
-          │                         to tell                          │
-          │  fewer pass ◀ ─────────────━│━━━━━●━━━━━─── ▶ more pass  │
-          │                           same                           │
-          │          likely 7 points fewer to 100 more pass          │
-          │         20 tasks of 3 runs each could settle it          │
-          └──────────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │                              the answer                              │
+    │                     no clear difference in cost                      │
+    │    by the judge (unvalidated): baseline 4 of 4 fixed, lean 2 of 3    │
+    │                    after all 10 tasks · not sure                     │
+    │                                                                      │
+    │  cheaper ◀ ────━━━━━●━━━━━━──────│────────────────────── ▶ costlier  │
+    │        likely 14% to 36% less  same                                  │
+    │                                                                      │
+    │   by the tests: whether lean passes as many tasks: too few to tell   │
+    │  fewer pass ◀ ───────────────────━│━━━━━━━●━━━━━━━━──── ▶ more pass  │
+    │                                 same                                 │
+    │                likely 7 points fewer to 100 more pass                │
+    │               20 tasks of 3 runs each could settle it                │
+    └──────────────────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
   │             baseline              │    │               lean                │
@@ -120,23 +118,21 @@
  ───────────────────────────────────────────────────────────────────────────────────────────────────
                              10 tasks · 19 runs · $9.06 spent · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │               no clear difference in cost                │
-                    │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-                    │                          2 of 3                          │
-                    │              after all 10 tasks · not sure               │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
-                    │  likely 14% to 36% less  same                            │
-                    │                                                          │
-                    │ by the tests: whether lean passes as many tasks: too few │
-                    │                         to tell                          │
-                    │  fewer pass ◀ ─────────────━│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 7 points fewer to 100 more pass          │
-                    │         20 tasks of 3 runs each could settle it          │
-                    └──────────────────────────────────────────────────────────┘
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │                              the answer                              │
+              │                     no clear difference in cost                      │
+              │    by the judge (unvalidated): baseline 4 of 4 fixed, lean 2 of 3    │
+              │                    after all 10 tasks · not sure                     │
+              │                                                                      │
+              │  cheaper ◀ ────━━━━━●━━━━━━──────│────────────────────── ▶ costlier  │
+              │        likely 14% to 36% less  same                                  │
+              │                                                                      │
+              │   by the tests: whether lean passes as many tasks: too few to tell   │
+              │  fewer pass ◀ ───────────────────━│━━━━━━━●━━━━━━━━──── ▶ more pass  │
+              │                                 same                                 │
+              │                likely 7 points fewer to 100 more pass                │
+              │               20 tasks of 3 runs each could settle it                │
+              └──────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
@@ -171,23 +167,21 @@
  ───────────────────────────────────────────────────────────────────────────────────────────────────
                              10 tasks · 19 runs · $9.06 spent · 20 min
 
-                    ┌──────────────────────────────────────────────────────────┐
-                    │                        the answer                        │
-                    │               no clear difference in cost                │
-                    │ by the judge (unvalidated): baseline 4 of 4 fixed, lean  │
-                    │                          2 of 3                          │
-                    │              after all 10 tasks · not sure               │
-                    │                                                          │
-                    │  cheaper ◀ ───━━━━●━━━━────│──────────────── ▶ costlier  │
-                    │  likely 14% to 36% less  same                            │
-                    │                                                          │
-                    │ by the tests: whether lean passes as many tasks: too few │
-                    │                         to tell                          │
-                    │  fewer pass ◀ ─────────────━│━━━━━●━━━━━─── ▶ more pass  │
-                    │                           same                           │
-                    │          likely 7 points fewer to 100 more pass          │
-                    │         20 tasks of 3 runs each could settle it          │
-                    └──────────────────────────────────────────────────────────┘
+              ┌──────────────────────────────────────────────────────────────────────┐
+              │                              the answer                              │
+              │                     no clear difference in cost                      │
+              │    by the judge (unvalidated): baseline 4 of 4 fixed, lean 2 of 3    │
+              │                    after all 10 tasks · not sure                     │
+              │                                                                      │
+              │  cheaper ◀ ────━━━━━●━━━━━━──────│────────────────────── ▶ costlier  │
+              │        likely 14% to 36% less  same                                  │
+              │                                                                      │
+              │   by the tests: whether lean passes as many tasks: too few to tell   │
+              │  fewer pass ◀ ───────────────────━│━━━━━━━●━━━━━━━━──── ▶ more pass  │
+              │                                 same                                 │
+              │                likely 7 points fewer to 100 more pass                │
+              │               20 tasks of 3 runs each could settle it                │
+              └──────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
   │                  baseline                   │    │                    lean                     │
