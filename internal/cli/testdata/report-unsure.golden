@@ -16,9 +16,8 @@
   │  whether lean passes as many tasks: too few to tell  │
   │  fewer pass ◀ ────────────│━━━━●━━━━━── ▶ more pass  │
   │                         same                         │
-  │        likely 1 point fewer to 101 more pass         │
-  │  --goal better with 12 tasks of 3 runs would settle  │
-  │                          it                          │
+  │        likely 1 point fewer to 100 more pass         │
+  │       20 tasks of 3 runs each could settle it        │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -38,17 +37,17 @@
 
   every task  baseline   lean
   they differ · 7
-  task-1    ✗ $0.42    ✓ $0.33
-  task-4    ✗ $0.36    ✓ $0.35
-  task-5    ✗ $0.49    ✓ $0.39
-  task-6    ✗ $0.25    ✓ $0.31
-  task-7    ✓ $0.32    ✗ $0.33
-  task-8    ✗ $0.46    ✓ $0.57
-  task-9    ✗ $0.23    ✓ $0.31
+  task-1      ✗ $0.42    ✓ $0.33
+  task-4      ✗ $0.36    ✓ $0.35
+  task-5      ✗ $0.49    ✓ $0.39
+  task-6      ✗ $0.25    ✓ $0.31
+  task-7      ✓ $0.32    ✗ $0.33
+  task-8      ✗ $0.46    ✓ $0.57
+  task-9      ✗ $0.23    ✓ $0.31
   both passed · 3
-  task-0    ✓ $0.27    ✓ $0.35
-  task-2    ✓ $0.58    ✓ $0.44
-  task-3    ✓ $0.30    ✓ $0.26
+  task-0      ✓ $0.27    ✓ $0.35
+  task-2      ✓ $0.58    ✓ $0.44
+  task-3      ✓ $0.30    ✓ $0.26
   neither version was cheaper on more tasks (5 of 10 each)
 
   the numbers behind this:
@@ -70,8 +69,8 @@
   │            whether lean passes as many tasks: too few to tell            │
   │  fewer pass ◀ ──────────────────────│━━━━━━━━●━━━━━━━━━──── ▶ more pass  │
   │                                   same                                   │
-  │                  likely 1 point fewer to 101 more pass                   │
-  │          --goal better with 12 tasks of 3 runs would settle it           │
+  │                  likely 1 point fewer to 100 more pass                   │
+  │                 20 tasks of 3 runs each could settle it                  │
   └──────────────────────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
@@ -84,17 +83,17 @@
 
   every task  baseline               lean
   they differ · 7
-  task-1    ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
-  task-4    ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
-  task-5    ✗ ██████████▏  $0.49   ✓ ████████     $0.39
-  task-6    ✗ █████▏       $0.25   ✓ ██████▍      $0.31
-  task-7    ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
-  task-8    ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
-  task-9    ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
   both passed · 3
-  task-0    ✓ █████▌       $0.27   ✓ ███████▏     $0.35
-  task-2    ✓ ████████████ $0.58   ✓ █████████▏   $0.44
-  task-3    ✓ ██████▏      $0.30   ✓ █████▍       $0.26
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
   neither version was cheaper on more tasks (5 of 10 each)
 
   the numbers behind this: agentium experiment report lean-ab-unsure --details
@@ -114,8 +113,8 @@
          │              whether lean passes as many tasks: too few to tell               │
          │  fewer pass ◀ ────────────────────────━│━━━━━━━━●━━━━━━━━━━───── ▶ more pass  │
          │                                      same                                     │
-         │                     likely 1 point fewer to 101 more pass                     │
-         │             --goal better with 12 tasks of 3 runs would settle it             │
+         │                     likely 1 point fewer to 100 more pass                     │
+         │                    20 tasks of 3 runs each could settle it                    │
          └───────────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -128,17 +127,17 @@
 
   every task  baseline               lean
   they differ · 7
-  task-1    ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
-  task-4    ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
-  task-5    ✗ ██████████▏  $0.49   ✓ ████████     $0.39
-  task-6    ✗ █████▏       $0.25   ✓ ██████▍      $0.31
-  task-7    ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
-  task-8    ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
-  task-9    ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
   both passed · 3
-  task-0    ✓ █████▌       $0.27   ✓ ███████▏     $0.35
-  task-2    ✓ ████████████ $0.58   ✓ █████████▏   $0.44
-  task-3    ✓ ██████▏      $0.30   ✓ █████▍       $0.26
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
   neither version was cheaper on more tasks (5 of 10 each)
 
   the numbers behind this: agentium experiment report lean-ab-unsure --details
@@ -158,8 +157,8 @@
          │              whether lean passes as many tasks: too few to tell               │
          │  fewer pass ◀ ────────────────────────━│━━━━━━━━●━━━━━━━━━━───── ▶ more pass  │
          │                                      same                                     │
-         │                     likely 1 point fewer to 101 more pass                     │
-         │             --goal better with 12 tasks of 3 runs would settle it             │
+         │                     likely 1 point fewer to 100 more pass                     │
+         │                    20 tasks of 3 runs each could settle it                    │
          └───────────────────────────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -172,17 +171,17 @@
 
   every task  baseline               lean
   they differ · 7
-  task-1    ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
-  task-4    ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
-  task-5    ✗ ██████████▏  $0.49   ✓ ████████     $0.39
-  task-6    ✗ █████▏       $0.25   ✓ ██████▍      $0.31
-  task-7    ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
-  task-8    ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
-  task-9    ✗ ████▊        $0.23   ✓ ██████▎      $0.31
+  task-1      ✗ ████████▋    $0.42   ✓ ██████▉      $0.33
+  task-4      ✗ ███████▍     $0.36   ✓ ███████▏     $0.35
+  task-5      ✗ ██████████▏  $0.49   ✓ ████████     $0.39
+  task-6      ✗ █████▏       $0.25   ✓ ██████▍      $0.31
+  task-7      ✓ ██████▌      $0.32   ✗ ██████▊      $0.33
+  task-8      ✗ █████████▍   $0.46   ✓ ███████████▊ $0.57
+  task-9      ✗ ████▊        $0.23   ✓ ██████▎      $0.31
   both passed · 3
-  task-0    ✓ █████▌       $0.27   ✓ ███████▏     $0.35
-  task-2    ✓ ████████████ $0.58   ✓ █████████▏   $0.44
-  task-3    ✓ ██████▏      $0.30   ✓ █████▍       $0.26
+  task-0      ✓ █████▌       $0.27   ✓ ███████▏     $0.35
+  task-2      ✓ ████████████ $0.58   ✓ █████████▏   $0.44
+  task-3      ✓ ██████▏      $0.30   ✓ █████▍       $0.26
   neither version was cheaper on more tasks (5 of 10 each)
 
   the numbers behind this: agentium experiment report lean-ab-unsure --details

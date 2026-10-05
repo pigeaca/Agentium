@@ -29,7 +29,7 @@ func reportView(rep report.Report, sh term.Shapes, width int) []string {
 	var out []string
 	out = append(out, center(questionLine(sh, m, f)))
 	out = append(out, " "+sh.Style.Paint(term.Muted, strings.Repeat(m.rule, max(w-1, 1))))
-	out = append(out, center(reportFacts(rep, sh, m, f)))
+	out = append(out, center(reportFacts(rep, sh, m, f, w)))
 	out = append(out, "")
 	out = append(out, reportAnswer(rep, sh, m, f, w)...)
 	out = append(out, "")
@@ -54,7 +54,7 @@ func reportView(rep report.Report, sh term.Shapes, width int) []string {
 
 // reportFacts is the line under the question: "10 tasks · 20 runs · $7.12 spent · 3h20m", and how the experiment
 // ended when it did not finish.
-func reportFacts(rep report.Report, sh term.Shapes, m marks, f runFacts) string {
+func reportFacts(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) string {
 	st := sh.Style
 	runs := 0
 	for _, a := range rep.Arms {
@@ -65,26 +65,48 @@ func reportFacts(rep report.Report, sh term.Shapes, m marks, f runFacts) string 
 		tasks = fmt.Sprintf("%d of %d tasks", ran, f.tasks)
 	}
 	parts := []string{tasks, fmt.Sprintf("%d %s", runs, plural(runs, "run", "runs")), fmt.Sprintf("$%.2f spent", rep.SpentUSD)}
-	if share, ok := report.PlanShare(rep); ok { // a subscription sign-in with usage readings; never an API key
-		parts = append(parts, planShareWords(share))
+	share, took := "", ""
+	if s, ok := report.PlanShare(rep); ok { // a subscription sign-in with usage readings; never an API key
+		share = planShareWords(s)
 	}
-	if took := runSpan(rep.Runs); took > 0 {
-		parts = append(parts, spanWords(took))
+	if t := runSpan(rep.Runs); t > 0 {
+		took = spanWords(t)
 	}
-	line := st.Paint(term.Muted, strings.Join(parts, " "+m.sep+" "))
+	stopped := ""
 	if words := stoppedWords(rep.Status); words != "" && rep.Status != experiment.StatusDone {
-		line += st.Paint(term.Muted, " "+m.sep+" ") + st.Paint(term.LevelCaution, m.words(words))
+		stopped = m.words(words)
 	}
-	return line
+	sep := " " + m.sep + " "
+	// Whole parts only: the time goes first when the line is too wide, then the share, never a part cut in the middle.
+	for drop := 0; ; drop++ {
+		all := slices.Clone(parts)
+		if share != "" && drop < 2 {
+			all = append(all, share)
+		}
+		if took != "" && drop < 1 {
+			all = append(all, took)
+		}
+		plain := strings.Join(all, sep)
+		if stopped != "" {
+			plain += sep + stopped
+		}
+		if term.Width(plain) <= w-2 || drop == 2 {
+			line := st.Paint(term.Muted, strings.Join(all, sep))
+			if stopped != "" {
+				line += st.Paint(term.Muted, sep) + st.Paint(term.LevelCaution, stopped)
+			}
+			return line
+		}
+	}
 }
 
-// planShareWords is the experiment's share of the plan's five-hour limit in plain words: "about 4% of your plan's
-// limit", "under 1% of your plan's limit".
+// planShareWords is the experiment's share of the plan's five-hour limit in plain words: "about 4% of your plan",
+// "under 1% of your plan".
 func planShareWords(share float64) string {
 	if share < 0.005 {
-		return "under 1% of your plan's limit"
+		return "under 1% of your plan"
 	}
-	return fmt.Sprintf("about %.0f%% of your plan's limit", 100*share)
+	return fmt.Sprintf("about %.0f%% of your plan", 100*share)
 }
 
 // ranTasks counts the tasks with a counted run in either version.
@@ -179,18 +201,20 @@ func reportAnswer(rep report.Report, sh term.Shapes, m marks, f runFacts, w int)
 	guard, guardRole := guardWords(rep, f)
 	var guardScale []string
 	var settle string
+	var gr *experiment.MetricResult
+	var g answerState
+	decided := false
 	if f.aa {
 		guard, guardRole = noiseWords(rep), term.Default
+	} else if gr = guardResult(rep, f); gr != nil {
+		g, decided = guardState(rep, f, *gr)
+		if !decided || gr.Verdict == stats.Inconclusive { // no verdict, or "not sure": what could settle it
+			settle = settleWords(*gr, decided)
+		}
 	}
-	inner := min(max(term.Width(headline), term.Width(status), term.Width(guard), 52)+6, w-6)
-	if gr := guardResult(rep, f); gr != nil && !f.aa {
-		g, decided := guardState(rep, f, *gr)
-		if gr.Tasks >= 2 {
-			guardScale = rangePicture(sh, m, *gr, g, inner-4, !decided)
-		}
-		if !decided || gr.Verdict == stats.Inconclusive { // no verdict, or "not sure": what would settle it
-			settle = settleWords(*gr, rep, decided)
-		}
+	inner := min(max(term.Width(headline), term.Width(status), term.Width(guard), term.Width(settle), 52)+6, w-6)
+	if gr != nil && gr.Tasks >= 2 {
+		guardScale = rangePicture(sh, m, *gr, g, inner-4, !decided)
 	}
 	type line struct {
 		text string
@@ -297,16 +321,15 @@ func guardState(rep report.Report, f runFacts, r experiment.MetricResult) (answe
 	return g, r.Tasks >= 2 && r.Verdict != stats.Exploratory && r.Verdict != ""
 }
 
-// settleWords is what would settle a metric that has no verdict: the analysis' figure when it has one ("about 40 tasks
-// in all could settle it"), else, for passes in a cost experiment, the size of a --goal better experiment, which tests
-// them. "" when neither is known.
-func settleWords(r experiment.MetricResult, rep report.Report, decided bool) string {
-	if r.TasksToResolve > 0 {
+// settleWords is what could settle a metric that has no verdict or is not sure: the analysis' figure when it has one
+// ("about 40 tasks in all could settle it"), else, with no verdict, the metric's own floor: the tasks, with as many
+// runs each, below which the analysis gives no verdict. "" when neither is known.
+func settleWords(r experiment.MetricResult, decided bool) string {
+	switch {
+	case r.TasksToResolve > 0:
 		return fmt.Sprintf("about %d tasks in all could settle it", r.TasksToResolve)
-	}
-	if !decided && r.Metric == experiment.MetricSuccess && rep.Lock.Design.Goal != experiment.GoalBetter {
-		t := experiment.Tiers()[0]
-		return fmt.Sprintf("--goal better with %d tasks of %d runs would settle it", t.Tasks, t.Repeats)
+	case !decided && r.FloorTasks > 0 && r.FloorRepeats > 0:
+		return fmt.Sprintf("%d tasks of %d %s each could settle it", r.FloorTasks, r.FloorRepeats, plural(r.FloorRepeats, "run", "runs"))
 	}
 	return ""
 }
@@ -369,6 +392,9 @@ func rangePicture(sh term.Shapes, m marks, res experiment.MetricResult, a answer
 		}
 	}
 	lo, est, hi := scale(iv.Low), scale(iv.Estimate), scale(iv.High)
+	if !res.Ratio { // a difference of pass rates is at most 100 points either way, whatever the interval's formula says
+		lo, est, hi = min(max(lo, -100), 100), min(max(est, -100), 100), min(max(hi, -100), 100)
+	}
 	if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) {
 		return nil
 	}
@@ -392,7 +418,7 @@ func rangePicture(sh term.Shapes, m marks, res experiment.MetricResult, a answer
 	col := func(v float64) int {
 		return term.Width(labelL) + 1 + int(math.Round((min(max(v, -bound), bound)+bound)/(2*bound)*float64(n-1)))
 	}
-	words := rangeWords(res, lo, hi)
+	words := rangeWords(res, lo, hi, muted)
 	ww := term.Width(words)
 	sx := min(max(col(0)-2, 0), width-4) // "same", centred under the line of no change
 	wx := min(max(col((lo+hi)/2)-ww/2, 0), width-ww)
@@ -419,8 +445,11 @@ func rangePicture(sh term.Shapes, m marks, res experiment.MetricResult, a answer
 
 // rangeWords is the range in words: "likely 15% to 21% less", "likely 4% less to 9% more"; for success, "likely 3 to
 // 12 points more pass".
-func rangeWords(res experiment.MetricResult, lo, hi float64) string {
+func rangeWords(res experiment.MetricResult, lo, hi float64, noVerdict bool) string {
 	if math.Round(lo) == 0 && math.Round(hi) == 0 { // a range too narrow to name, as when every run passed
+		if noVerdict {
+			return "no difference seen"
+		}
 		return "likely no change"
 	}
 	if res.Ratio {
@@ -652,10 +681,11 @@ func taskGrid(rep report.Report, sh term.Shapes, m marks, f runFacts, w int) []s
 			continue // else not run: a seq-v1 experiment stopped before it
 		}
 		row := taskRow{term.Sanitize(t.Task), ca, cb, t.Judged}
+		// The versions can have counted different numbers of runs (some left out): their pass rates are compared.
 		switch {
-		case ca.Successes != cb.Successes || ca.Counted != cb.Counted:
+		case ca.Counted == 0 || cb.Counted == 0 || ca.Successes*cb.Counted != cb.Successes*ca.Counted:
 			differ = append(differ, row)
-		case ca.Counted > 0 && ca.Successes == ca.Counted:
+		case ca.Successes == ca.Counted:
 			passed = append(passed, row)
 		case ca.Successes == 0:
 			failed = append(failed, row)
@@ -687,15 +717,28 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 	st := sh.Style
 	const judgeMark = " (judge)" // a judge-graded task's ✓ and ✗ are the judge's grades: its name keeps the mark when cut
 	const nameMax, barMax, gap = 30, 12, 3
+	const markCap = 6 // more marks than this (many repeats and retries) are summarized as a count: "3/5"
 	markW, costW, maxCost := 1, 0, 0.0
-	nameW := 8
+	nameW := term.Width("every task")
+	summed := false
 	for _, r := range scale {
 		for _, c := range []report.TaskCell{r.ca, r.cb} {
-			markW = max(markW, len([]rune(c.Marks)))
+			summed = summed || len([]rune(c.Marks)) > markCap
 			costW = max(costW, term.Width(taskCost(m, c)))
 			if c.CostUSD != nil {
 				maxCost = max(maxCost, *c.CostUSD)
 			}
+		}
+	}
+	marksOf := func(c report.TaskCell) string { // what a version's marks column shows
+		if summed {
+			return fmt.Sprintf("%d/%d", c.Successes, c.Counted)
+		}
+		return c.Marks
+	}
+	for _, r := range scale {
+		for _, c := range []report.TaskCell{r.ca, r.cb} {
+			markW = max(markW, term.Width(marksOf(c)))
 		}
 	}
 	for _, r := range scale {
@@ -707,6 +750,10 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		return (w - 1 - (2 + name + 2) - gap - 2*(markW+costW+2)) / 2
 	}
 	for nameW > 16 && barRoom(nameW) < 8 {
+		nameW--
+	}
+	labelW := max(min(term.Width(f.labels[0]), 14), min(term.Width(f.labels[1]), 14))
+	for nameW > 12 && barRoom(nameW) < 4 && 4+nameW+gap+2*max(markW+1+costW, labelW) > w-1 { // without bars it must still fit
 		nameW--
 	}
 	barW := min(barRoom(nameW), barMax)
@@ -721,7 +768,11 @@ func taskBlock(sh term.Shapes, m marks, f runFacts, w int, scale []taskRow, grou
 		groupW = max(groupW, min(term.Width(l), 14))
 	}
 	arm := func(c report.TaskCell, role term.Role) string {
-		out := term.Pad(taskMarks(st, m, c.Marks), markW)
+		marks := taskMarks(st, m, c.Marks)
+		if summed {
+			marks = marksOf(c)
+		}
+		out := term.Pad(marks, markW)
 		if barW > 0 {
 			out += " " + term.Pad(costBar(sh, c, maxCost, role, barW), barW)
 		}
@@ -779,13 +830,19 @@ func cheaperWords(st term.Style, f runFacts, rows []taskRow) string {
 		if r.ca.CostUSD == nil || r.cb.CostUSD == nil {
 			continue
 		}
-		both++
-		switch ca, cb := *r.ca.CostUSD, *r.cb.CostUSD; {
-		case ca < cb:
+		// A cost of a run cut short is a lower bound: it says which is cheaper only when the cut-short one is the
+		// costlier, and says nothing of a tie.
+		ca, cb := *r.ca.CostUSD, *r.cb.CostUSD
+		cutA, cutB := r.ca.Capped+r.ca.TimedOut > 0, r.cb.Capped+r.cb.TimedOut > 0
+		switch {
+		case ca < cb && !cutA:
 			cheaper[0]++
-		case cb < ca:
+		case cb < ca && !cutB:
 			cheaper[1]++
+		case ca == cb && (cutA || cutB), ca < cb && cutA, cb < ca && cutB:
+			continue // not comparable
 		}
+		both++
 	}
 	switch {
 	case both == 0:

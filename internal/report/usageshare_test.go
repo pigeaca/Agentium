@@ -60,3 +60,28 @@ func TestPlanShareAPIKey(t *testing.T) {
 		}
 	}
 }
+
+// A model A/B's arms run side by side, so the window's rise is theirs together: 16 runs in pairs of two models that
+// raised the window from 18% to 22% used 4%, not 4% for each model (which measuring each model alone would give).
+func TestPlanShareOverlappingModels(t *testing.T) {
+	rep, err := Build(oneRun("phase1-v2", "context-ab"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep.Lock.SignIn = claude.SignInLogin
+	rep.Lock.Design.Arms[0].Model, rep.Lock.Design.Arms[1].Model = "model-a", "model-b"
+	rep.Runs = rep.Runs[:16]
+	start := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	resets := start.Add(4 * time.Hour)
+	for i := range rep.Runs {
+		pair := i / 2 // both runs of a pair run at the same time
+		at := start.Add(time.Duration(pair) * time.Minute)
+		rep.Runs[i].Started, rep.Runs[i].Finished = at.Format(time.RFC3339), at.Add(50*time.Second).Format(time.RFC3339)
+		rep.Runs[i].Metrics.UsageFirst = &agent.UsageReading{FiveHour: 0.18 + 0.005*float64(pair), FiveHourResets: resets}
+		rep.Runs[i].Metrics.UsageLast = &agent.UsageReading{FiveHour: 0.18 + 0.005*float64(pair+1), FiveHourResets: resets}
+	}
+	share, ok := PlanShare(rep)
+	if !ok || math.Abs(share-0.04) > 1e-9 {
+		t.Errorf("share %v ok %v, want 0.04", share, ok)
+	}
+}

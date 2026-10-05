@@ -13,8 +13,8 @@
           |    whether lean passes as many tasks: too few to tell    |
           |  fewer pass < --------------|=====o=====--- > more pass  |
           |                           same                           |
-          |          likely 1 point fewer to 101 more pass           |
-          |  --goal better with 12 tasks of 3 runs would settle it   |
+          |          likely 1 point fewer to 100 more pass           |
+          |         20 tasks of 3 runs each could settle it          |
           +----------------------------------------------------------+
 
   +-----------------------------------+    +-----------------------------------+
@@ -27,17 +27,17 @@
 
   every task  baseline               lean
   they differ - 7
-  task-1    x ########     $0.42   + #####        $0.27
-  task-4    x #######      $0.36   + ######       $0.32
-  task-5    x ##########   $0.49   + #####        $0.24
-  task-6    x #####        $0.25   + ####         $0.18
-  task-7    + ######       $0.32   x #####        $0.27
-  task-8    x #########    $0.46   + ############ $0.60
-  task-9    x #####        $0.23   + ####         $0.20
+  task-1      x ########     $0.42   + #####        $0.27
+  task-4      x #######      $0.36   + ######       $0.32
+  task-5      x ##########   $0.49   + #####        $0.24
+  task-6      x #####        $0.25   + ####         $0.18
+  task-7      + ######       $0.32   x #####        $0.27
+  task-8      x #########    $0.46   + ############ $0.60
+  task-9      x #####        $0.23   + ####         $0.20
   both passed - 3
-  task-0    + #####        $0.27   + ####         $0.22
-  task-2    + ###########  $0.58   + ########     $0.38
-  task-3    + ######       $0.30   + #####        $0.24
+  task-0      + #####        $0.27   + ####         $0.22
+  task-2      + ###########  $0.58   + ########     $0.38
+  task-3      + ######       $0.30   + #####        $0.24
   lean was cheaper on 9 of 10 tasks
 
   the numbers behind this: agentium experiment report lean-ab-1run --details

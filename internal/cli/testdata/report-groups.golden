@@ -15,9 +15,8 @@
   │  whether lean passes as many tasks: too few to tell  │
   │  fewer pass ◀ ────────────│━━━━●━━━━━── ▶ more pass  │
   │                         same                         │
-  │        likely 1 point fewer to 101 more pass         │
-  │  --goal better with 12 tasks of 3 runs would settle  │
-  │                          it                          │
+  │        likely 1 point fewer to 100 more pass         │
+  │       20 tasks of 3 runs each could settle it        │
   └──────────────────────────────────────────────────────┘
 
   ┌────────────────────────────────────────────────────────┐
@@ -73,8 +72,8 @@
           │    whether lean passes as many tasks: too few to tell    │
           │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
           │                           same                           │
-          │          likely 1 point fewer to 101 more pass           │
-          │  --goal better with 12 tasks of 3 runs would settle it   │
+          │          likely 1 point fewer to 100 more pass           │
+          │         20 tasks of 3 runs each could settle it          │
           └──────────────────────────────────────────────────────────┘
 
   ┌───────────────────────────────────┐    ┌───────────────────────────────────┐
@@ -122,8 +121,8 @@
                     │    whether lean passes as many tasks: too few to tell    │
                     │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
                     │                           same                           │
-                    │          likely 1 point fewer to 101 more pass           │
-                    │  --goal better with 12 tasks of 3 runs would settle it   │
+                    │          likely 1 point fewer to 100 more pass           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐
@@ -171,8 +170,8 @@
                     │    whether lean passes as many tasks: too few to tell    │
                     │  fewer pass ◀ ──────────────│━━━━━●━━━━━─── ▶ more pass  │
                     │                           same                           │
-                    │          likely 1 point fewer to 101 more pass           │
-                    │  --goal better with 12 tasks of 3 runs would settle it   │
+                    │          likely 1 point fewer to 100 more pass           │
+                    │         20 tasks of 3 runs each could settle it          │
                     └──────────────────────────────────────────────────────────┘
 
   ┌─────────────────────────────────────────────┐    ┌─────────────────────────────────────────────┐

@@ -253,8 +253,19 @@ func TestReportViewTaskGroupsGoldens(t *testing.T) {
 			}
 		}
 		checkGolden(t, "report-"+name+".golden", b.String())
-		checkGolden(t, "report-"+name+"-color.golden", strings.Join(reportView(rep, color256, 100), "\n")+"\n")
-		checkGolden(t, "report-"+name+"-ascii.golden", strings.Join(reportView(rep, plainASCII, 100), "\n")+"\n")
+		for suffix, sh := range map[string]term.Shapes{"color": color256, "ascii": plainASCII} {
+			var b strings.Builder
+			for _, width := range reportWidths {
+				fmt.Fprintf(&b, "=== %d columns\n", width)
+				for _, line := range reportView(rep, sh, width) {
+					if w := term.Width(line); w > width {
+						t.Errorf("%s (%s) at %d columns: a line of %d cells: %q", name, suffix, width, w, line)
+					}
+					b.WriteString(line + "\n")
+				}
+			}
+			checkGolden(t, "report-"+name+"-"+suffix+".golden", b.String())
+		}
 	}
 	narrow := strings.Join(reportView(groupedReport(t), plainUnicode, term.MinWidth), "\n")
 	for _, line := range strings.Split(narrow, "\n") {
@@ -270,17 +281,128 @@ func TestReportViewTaskGroupsGoldens(t *testing.T) {
 	}
 }
 
+// Tasks are grouped by pass rate, so unequal numbers of counted runs do not split a group: 0 of 2 against 0 of 3 failed
+// in both; 3 of 3 against 2 of 2 passed in both; 1 of 2 against 2 of 4 is the same mixed result; 1 of 2 against 1 of 3
+// differs.
+func TestReportViewGroupsByRate(t *testing.T) {
+	rep := buildReport(t, reportScenes(t)["decisive"])
+	cost := 0.2
+	cell := func(ok, n int) report.TaskCell {
+		return report.TaskCell{Marks: strings.Repeat("●", ok) + strings.Repeat("○", n-ok), Successes: ok, Counted: n, CostUSD: &cost}
+	}
+	row := func(name string, a, b report.TaskCell) report.TaskRow {
+		return report.TaskRow{Task: name, Arms: map[string]report.TaskCell{"A": a, "B": b}}
+	}
+	rep.Tasks = []report.TaskRow{row("fail-a", cell(0, 2), cell(0, 3)), row("pass-a", cell(3, 3), cell(2, 2)), row("mix-a", cell(1, 2), cell(2, 4)),
+		row("differ-a", cell(1, 2), cell(1, 3))}
+	text := strings.Join(reportView(rep, plainUnicode, 100), "\n")
+	for _, want := range []string{"they differ · 1\n  differ-a", "both failed · 1", "ended the same, mixed · 1", "both passed · 1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the block lacks %q:\n%s", want, text)
+		}
+	}
+}
+
+// The cheaper count compares only what a cost says: a lower bound (a run cut short) never makes its version the cheaper
+// one, and a tie goes to neither; the line says how many tasks it compared.
+func TestReportViewCheaperCount(t *testing.T) {
+	st := plainUnicode.Style
+	f := factsOf(buildReport(t, reportScenes(t)["decisive"]).Lock, 0)
+	cell := func(c float64, cut int) report.TaskCell { return report.TaskCell{CostUSD: &c, Capped: cut} }
+	rows := func(pairs ...[2]report.TaskCell) []taskRow {
+		var out []taskRow
+		for _, p := range pairs {
+			out = append(out, taskRow{ca: p[0], cb: p[1]})
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		in   []taskRow
+		want string
+	}{
+		{"cut-short cheaper side", rows([2]report.TaskCell{cell(0.10, 1), cell(0.20, 0)}), ""},
+		{"cut-short costlier side", rows([2]report.TaskCell{cell(0.30, 1), cell(0.20, 0)}, [2]report.TaskCell{cell(0.30, 0), cell(0.20, 0)}), "lean was cheaper on 2 of 2 tasks"},
+		{"a tie", rows([2]report.TaskCell{cell(0.10, 0), cell(0.20, 0)}, [2]report.TaskCell{cell(0.30, 0), cell(0.20, 0)}), "neither version was cheaper on more tasks (1 of 2 each)"},
+		{"a cut-short tie", rows([2]report.TaskCell{cell(0.20, 1), cell(0.20, 0)}, [2]report.TaskCell{cell(0.30, 0), cell(0.20, 0)}), "lean was cheaper on 1 of 1 tasks"},
+	} {
+		if got := term.Plain(cheaperWords(st, f, c.in)); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// With many repeats and retries a row has more marks than fit: they are summarized as a count, and both costs stay on
+// the row at the narrowest width, whatever the task's name.
+func TestReportViewManyMarksKeepBothCosts(t *testing.T) {
+	rep := buildReport(t, reportScenes(t)["decisive"])
+	a, b := 0.52, 0.40
+	marks := "●○×●●×○●×●○●×●●" // 5 repeats with retries: 15 marks
+	cell := func(c *float64) report.TaskCell {
+		return report.TaskCell{Marks: marks, Successes: 8, Counted: 15, CostUSD: c}
+	}
+	rep.Tasks = []report.TaskRow{{Task: "feat-support-for-buffer-iteration-with-a-very-long-name", Arms: map[string]report.TaskCell{"A": cell(&a), "B": cell(&b)}}}
+	for _, width := range []int{term.MinWidth, 80} {
+		text := strings.Join(reportView(rep, plainUnicode, width), "\n")
+		var row string
+		for _, line := range strings.Split(text, "\n") {
+			if strings.Contains(line, "$0.52") {
+				row = line
+			}
+		}
+		if !strings.Contains(row, "$0.40") || !strings.Contains(row, "8/15") || term.Width(row) > width {
+			t.Errorf("at %d columns the row lost a cost or a count, or is too wide: %q", width, row)
+		}
+	}
+}
+
+// The facts line drops whole parts when it is too wide: the time first, then the plan's share; never a part cut in the
+// middle.
+func TestReportViewFactsFit(t *testing.T) {
+	rep := passesVerdictReport(t)
+	f := factsOf(rep.Lock, 0)
+	for width, want := range map[int]string{
+		100: "10 tasks · 20 runs · $6.61 spent · about 4% of your plan · 20 min",
+		60:  "10 tasks · 20 runs · $6.61 spent · about 4% of your plan",
+		40:  "10 tasks · 20 runs · $6.61 spent",
+	} {
+		if got := term.Plain(reportFacts(rep, plainUnicode, unicodeMarks, f, width)); got != want {
+			t.Errorf("at %d columns: %q, want %q", width, got, want)
+		}
+	}
+}
+
+// A difference of pass rates is drawn and worded within 100 points either way, and a range too narrow to name says so
+// without claiming anything when the metric has no verdict.
+func TestReportViewSuccessRangeBounds(t *testing.T) {
+	res := experiment.MetricResult{Metric: experiment.MetricSuccess}
+	// The decisive scene's passes interval is the t-interval of 10 tasks, which reaches past 100 points.
+	if iv := report.VerdictInterval(*guardResult(buildReport(t, reportScenes(t)["decisive"]), factsOf(buildReport(t, reportScenes(t)["decisive"]).Lock, 0))); 100*iv.High <= 100 {
+		t.Fatalf("the scene no longer reaches past 100 points (%v): the check proves nothing", iv)
+	}
+	view := strings.Join(reportView(buildReport(t, reportScenes(t)["decisive"]), plainUnicode, 100), "\n")
+	if strings.Contains(view, "101 more") || !strings.Contains(view, "to 100 more pass") {
+		t.Errorf("the range is not held to 100 points:\n%s", view)
+	}
+	if got := rangeWords(res, 0.1, -0.2, true); got != "no difference seen" {
+		t.Errorf("no verdict: %q", got)
+	}
+	if got := rangeWords(res, 0.1, -0.2, false); got != "likely no change" {
+		t.Errorf("a verdict: %q", got)
+	}
+}
+
 // The facts line states the plan's share only with a subscription sign-in and readings.
 func TestReportViewPlanShare(t *testing.T) {
 	rep := passesVerdictReport(t)
-	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); !strings.Contains(view, "$6.61 spent · about 4% of your plan's limit · 20 min") {
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); !strings.Contains(view, "$6.61 spent · about 4% of your plan · 20 min") {
 		t.Errorf("no plan share:\n%s", view)
 	}
 	rep.Lock.SignIn = claude.SignInAPIKey
-	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); strings.Contains(view, "plan's limit") {
+	if view := strings.Join(reportView(rep, plainUnicode, 100), "\n"); strings.Contains(view, "of your plan") {
 		t.Errorf("an API key shows a plan share:\n%s", view)
 	}
-	if got := planShareWords(0.003); got != "under 1% of your plan's limit" {
+	if got := planShareWords(0.003); got != "under 1% of your plan" {
 		t.Errorf("a tiny share: %q", got)
 	}
 }
@@ -290,7 +412,7 @@ func TestReportViewPlanShare(t *testing.T) {
 func TestReportViewSecondPicture(t *testing.T) {
 	scenes := reportScenes(t)
 	none := strings.Join(reportView(buildReport(t, scenes["decisive"]), plainUnicode, 100), "\n")
-	for _, want := range []string{"whether lean passes as many tasks: too few to tell", "fewer pass ◀", "--goal better with 12 tasks of 3 runs would settle it"} {
+	for _, want := range []string{"whether lean passes as many tasks: too few to tell", "fewer pass ◀", "20 tasks of 3 runs each could settle it"} {
 		if !strings.Contains(none, want) {
 			t.Errorf("no verdict: the box lacks %q:\n%s", want, none)
 		}
