@@ -8,7 +8,7 @@
            trimmed   chunk         judging                0s
 
   so far   about the same cost (+4%) · not sure yet
-           passed: baseline 1 of 1 · trimmed 0 of 1 · next check after 12 tasks
+           passed: baseline 1/1 · trimmed 0/1 · next check after 12 tasks
 
   last     ✗ trimmed   map-keys       $0.09  2m55s
            ✓ baseline  map-keys       $0.09  2m55s
@@ -55,11 +55,11 @@
   runs     ██▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 8m13s
   spent    $2.35 of $5 · plan 64% used
 
-  now      baseline  chunk         Claude works           2m21s
-           trimmed   chunk         judging                0s
+  now      baseline  chunk         Claude works        2m21s
+           trimmed   chunk         judging              0s
 
   so far   about the same cost (+4%) · not sure yet
-           baseline passed 1 of 1 · trimmed passed 0 of 1
+           passed: baseline 1/1 · trimmed 0/1
 
   last     ✗ trimmed   map-keys       $0.09  2m55s
            ✓ baseline  map-keys       $0.09  2m55s
@@ -76,7 +76,7 @@
            trimmed   chunk         judging                0s
 
   so far   about the same cost (+4%) · not sure yet
-           passed: baseline 1 of 1 · trimmed 0 of 1 · next check after 12 tasks
+           passed: baseline 1/1 · trimmed 0/1 · next check after 12 tasks
 
   last     ✗ trimmed   map-keys       $0.09  2m55s
            ✓ baseline  map-keys       $0.09  2m55s
@@ -91,7 +91,7 @@
            trimmed   chunk         judging                0s
 
   so far   about the same cost (+4%) · not sure yet
-           passed: baseline 1 of 1 · trimmed 0 of 1 · next check after 12 tasks
+           passed: baseline 1/1 · trimmed 0/1 · next check after 12 tasks
 === 79 columns, 9 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
@@ -99,8 +99,26 @@
   spent    $2.35 of $5 · plan 64% used
   now      baseline  chunk         Claude works           2m21s
            trimmed   chunk         judging                0s
+
   so far   about the same cost (+4%) · not sure yet
-           passed: baseline 1 of 1 · trimmed 0 of 1 · next check after 12 tasks
+           passed: baseline 1/1 · trimmed 0/1 · next check after 12 tasks
+=== 60 columns, 40 rows
+    BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────
+  runs     ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 8m13s
+  spent    $2.35 of $5 · plan 64% used
+
+  now      baseline  chunk         Claude works      2m21s
+           trimmed   chunk         judging            0s
+
+  so far   about the same cost (+4%) · not sure yet
+           passed: baseline 1/1 · trimmed 0/1
+
+  last     ✗ trimmed   map-keys       $0.09  2m55s
+           ✓ baseline  map-keys       $0.09  2m55s
+
+
+           Ctrl-C stops · run it again to go on
 === ASCII, 79 columns, 40 rows
              BASELINE  vs  TRIMMED   -   does trimmed save money?
  ------------------------------------------------------------------------------
@@ -111,7 +129,7 @@
            trimmed   chunk         judging                0s
 
   so far   about the same cost (+4%) - not sure yet
-           passed: baseline 1 of 1 - trimmed 0 of 1 - next check after 12 tasks
+           passed: baseline 1/1 - trimmed 0/1 - next check after 12 tasks
 
   last     x trimmed   map-keys       $0.09  2m55s
            + baseline  map-keys       $0.09  2m55s

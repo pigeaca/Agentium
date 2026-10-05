@@ -24,7 +24,8 @@ type runScreen struct {
 	now   func() time.Time
 	width func() int
 	limit float64 // the usage limit, in percent
-	name  string  // the experiment's name, for the quiet view's report command; "" draws none
+	// stored reads the experiment's stored runs (nil: none), to count a resumed run's earlier passes; set before the run.
+	stored func(experiment.Lock) []experiment.RunData
 
 	state   *runState // from Begin on
 	lock    experiment.Lock
@@ -198,6 +199,9 @@ func (s *runScreen) observer(answer func(experiment.Lock) *answerState) experime
 		Begin: func(lock experiment.Lock, standing experiment.Standing) {
 			s.lock = lock
 			state := newRunState(factsOf(lock, s.limit), standing, s.now)
+			if s.disp != nil && s.stored != nil && len(standing.Settled) > 0 {
+				state.seed(s.stored(lock))
+			}
 			s.mu.Lock()
 			s.state = state
 			s.mu.Unlock()

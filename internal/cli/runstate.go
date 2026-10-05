@@ -79,7 +79,8 @@ type runState struct {
 	notePos  int
 	noteAt   time.Time
 	// began is when the state was made, the quiet view's clock; passed and graded count each arm's settled graded runs
-	// of this execution (a resumed one does not know the earlier runs' passes).
+	// of the test-graded runs (a judge's grades are kept apart, as in the report); seed fills them from the stored runs of
+	// a resumed execution.
 	began          time.Time
 	passed, graded [2]int
 }
@@ -167,7 +168,7 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		s.last[arm] = r
 		s.spent = e.SpentUSD
 		if experiment.Settles(e.Result.Outcome) {
-			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil {
+			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil && !e.Result.JudgeGraded {
 				s.graded[arm]++
 				if *e.Result.Passed {
 					s.passed[arm]++
@@ -269,6 +270,23 @@ func (s *runState) end(sum experiment.Summary, final *answerState) answerState {
 	}
 	s.answer.Ended = sum.Status
 	return s.answer
+}
+
+// seed counts the passes of the runs an earlier execution settled, from their stored data: the test-graded ones whose
+// slot is in settled, fair and graded. Called before the first frame, so a resumed run does not read "0 passed".
+func (s *runState) seed(data []experiment.RunData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, d := range data {
+		arm, ok := s.facts.arms[d.Arm]
+		if !ok || !s.settled[d.Slot] || d.Judged || !experiment.Fair(d.Outcome) || d.Passed == nil {
+			continue
+		}
+		s.graded[arm]++
+		if *d.Passed {
+			s.passed[arm]++
+		}
+	}
 }
 
 // entries is every log line so far.

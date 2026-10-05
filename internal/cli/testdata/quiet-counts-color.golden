@@ -1,0 +1,17 @@
+             \e[1m\e[38;5;75mBASELINE\e[39m\e[22m\e[38;5;243m  vs  \e[39m\e[1m\e[38;5;215mTRIMMED\e[39m\e[22m\e[38;5;243m   ·   \e[39mdoes trimmed save money?
+ \e[38;5;243m──────────────────────────────────────────────────────────────────────────────\e[39m
+  \e[38;5;243mruns\e[39m     █████████████████████████▌\e[38;5;243m░░░░░░░░░░░\e[39m   22 of 32 · 1h04m
+  \e[38;5;243mspent\e[39m    $1.98\e[38;5;243m of $5\e[39m
+
+  \e[38;5;243mnow\e[39m      \e[38;5;75mbaseline\e[39m  \e[38;5;243mgroup-by\e[39m      Claude works           0s
+           \e[38;5;215mtrimmed\e[39m   \e[38;5;243mgroup-by\e[39m      fresh copy             2s
+
+  \e[38;5;243mso far\e[39m   trimmed may be cheaper (16% less)\e[38;5;243m · not sure yet\e[39m
+           \e[38;5;243mpassed: \e[39m\e[38;5;75mbaseline\e[39m\e[38;5;243m 10/11\e[39m\e[38;5;243m · \e[39m\e[38;5;215mtrimmed\e[39m\e[38;5;243m 10/11\e[39m\e[38;5;243m · \e[39m\e[38;5;243mnext check after 12 tasks\e[39m
+
+  \e[38;5;243mlast\e[39m     \e[38;5;114m✓\e[39m \e[38;5;215mtrimmed\e[39m   \e[38;5;243mmerge-with\e[39m     $0.09  \e[38;5;243m2m55s\e[39m
+           \e[38;5;114m✓\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmerge-with\e[39m     $0.09  \e[38;5;243m2m55s\e[39m
+           \e[38;5;114m✓\e[39m \e[38;5;215mtrimmed\e[39m   \e[38;5;243momit\e[39m           $0.09  \e[38;5;243m2m55s\e[39m
+
+           \e[38;5;243mCtrl-C stops · run it again to go on\e[39m
+=== end

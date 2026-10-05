@@ -40,14 +40,19 @@ const (
 const quietHint = "Ctrl-C stops · run it again to go on"
 
 // quietFrame draws the quiet view from a copy of the state. It fits height by dropping the hint, then the "last" rows,
-// then every blank row; the rows it keeps never change with what the runs do, so the frame does not jump.
+// then every blank row, then the "now" rows (a "+ N more" line stands for the runs left out); the rows it keeps never
+// change with what the runs do, so the frame does not jump and the answer's rows are never the ones cut.
 func quietFrame(v stateView, sh term.Shapes, now time.Time, width, height int) []string {
 	var lines []string
-	for level := range 4 {
-		lines = v.quietLines(sh, now, width, level)
-		if len(lines) <= height {
-			break
-		}
+	reserved := max(v.facts.concurrency, len(v.running), 1)
+	done := false
+	for level := 0; level < 4 && !done; level++ {
+		lines = v.quietLines(sh, now, width, level, reserved)
+		done = len(lines) <= height
+	}
+	for rows := reserved - 1; !done && rows >= 1; rows-- {
+		lines = v.quietLines(sh, now, width, 3, rows)
+		done = len(lines) <= height
 	}
 	for i, line := range lines {
 		lines[i] = term.Truncate(line, width, sh.Ellipsis())
@@ -78,8 +83,9 @@ func quietCont(content string) string {
 	return strings.Repeat(" ", quietIndent) + content
 }
 
-// quietLines is the frame at a level of compaction: 0 is everything, 1 drops the hint, 2 the "last" rows, 3 the blank rows.
-func (v stateView) quietLines(sh term.Shapes, now time.Time, width, level int) []string {
+// quietLines is the frame at a level of compaction: 0 is everything, 1 drops the hint, 2 the "last" rows, 3 the blank
+// rows. nowRows is the most rows the runs in flight take.
+func (v stateView) quietLines(sh term.Shapes, now time.Time, width, level, nowRows int) []string {
 	m := marksFor(sh)
 	w := min(width, term.MaxContentWidth)
 	blank := func() []string {
@@ -95,18 +101,14 @@ func (v stateView) quietLines(sh term.Shapes, now time.Time, width, level int) [
 		out = append(out, quietCont(hostWarning(sh, m)))
 	}
 	out = append(out, blank()...)
-	out = append(out, v.quietNow(sh, m, now, w, level)...)
+	out = append(out, v.quietNow(sh, m, now, w, level, nowRows)...)
 	out = append(out, v.quietAnswer(sh, m, w)...)
 	if level < 2 {
 		out = append(out, blank()...)
 		out = append(out, v.quietLast(sh, m, w)...)
 	}
 	if level < 1 {
-		hint := sh.Style.Paint(term.Muted, m.words(quietHint))
-		if v.answer.Final() && v.facts.report != "" { // the end: the report is what comes next
-			hint = sh.Style.Paint(term.Muted, "report: ") + sh.Style.Command("agentium experiment report "+v.facts.report)
-		}
-		out = append(out, "", quietCont(hint))
+		out = append(out, "", quietCont(sh.Style.Paint(term.Muted, m.words(quietHint))))
 	}
 	return out
 }
@@ -116,10 +118,20 @@ func (v stateView) settledAll() (done, all int) {
 	return v.settled[0] + v.settled[1], v.facts.perArm[0] + v.facts.perArm[1]
 }
 
-// quietRuns is the progress: a bar of the runs settled out of all, the count and the time since the start.
+// stoppedEarly reports whether a check ended the experiment before every run was done.
+func (v stateView) stoppedEarly() bool {
+	done, all := v.settledAll()
+	return done < all && (v.answer.Decision == experiment.LookStop || v.answer.Decision == experiment.LookFutility)
+}
+
+// quietRuns is the progress: a bar of the runs settled out of all, the count and the time since the start; "stopped
+// early" when a check ended the experiment with runs left, so the bar does not read as half done.
 func (v stateView) quietRuns(sh term.Shapes, m marks, now time.Time, w int) string {
 	done, all := v.settledAll()
 	text := fmt.Sprintf("%d of %d %s %s", done, all, m.sep, term.Elapsed(now.Sub(v.began)))
+	if v.stoppedEarly() {
+		text = fmt.Sprintf("%d of %d %s stopped early %s %s", done, all, m.sep, m.sep, term.Elapsed(now.Sub(v.began)))
+	}
 	barWidth := min(max(w-quietIndent-term.Width(text)-3, 6), 37)
 	frac := 0.0
 	if all > 0 {
@@ -148,7 +160,7 @@ func (v stateView) quietSpent(sh term.Shapes, m marks, now time.Time) string {
 }
 
 // quietStatus is what the "now" area says when it must say something besides the runs: a pause at the plan's limit with
-// the time it resets, a retry, a warning or a comparison (until it fades), or how the execution ended. "" when nothing.
+// the time it resets, or a retry, a warning or a comparison (until it fades). "" when nothing.
 func (v stateView) quietStatus(m marks, now time.Time) (string, term.Role) {
 	switch note := v.noteNow(now); {
 	case !v.until.IsZero():
@@ -157,36 +169,57 @@ func (v stateView) quietStatus(m marks, now time.Time) (string, term.Role) {
 	case note != "":
 		return note, v.noteRole
 	}
-	switch v.answer.Ended {
-	case experiment.StatusBudget, experiment.StatusUsage:
-		return stoppedWords(v.answer.Ended), term.LevelCaution
-	case "":
-	default:
-		return stoppedWords(v.answer.Ended), term.Muted
-	}
 	return "", term.Default
 }
 
-// quietNow is the "now" area: a row for each run in flight, as many rows as runs go at once, then one row that is
-// blank or the status's, so the area keeps its height. A status that does not fit a row goes on over the rows no run
-// uses (all of them, with no run in flight), and is cut with an ellipsis after that.
-func (v stateView) quietNow(sh term.Shapes, m marks, now time.Time, w, level int) []string {
+// idleWords is what "now" says with no run in flight and no status: before the first run, "getting ready"; when no run
+// is coming (every run settled, a check stopped the experiment, the budget is spent) "finishing", for the runner is
+// grading again or storing; else the next run is starting.
+func (v stateView) idleWords() string {
+	done, all := v.settledAll()
+	switch {
+	case v.answer.Final() || done >= all || v.spent >= v.facts.budget:
+		return "finishing"
+	case done > 0 || v.have[0] || v.have[1]:
+		return "starting the next run"
+	}
+	return "getting ready"
+}
+
+// quietNow is the "now" area: a row for each run in flight, as many rows as runs go at once (at most nowRows), then one
+// row that is blank or the status's, so the area keeps its height. A status that does not fit a row goes on over the
+// rows no run uses (all of them, with no run in flight), and is cut with an ellipsis after that. More runs than rows end
+// in "+ N more".
+func (v stateView) quietNow(sh term.Shapes, m marks, now time.Time, w, level, nowRows int) []string {
 	st := sh.Style
-	rows := max(v.facts.concurrency, len(v.running), 1)
+	reserved := max(v.facts.concurrency, len(v.running), 1)
+	rows := min(reserved, nowRows)
 	room := max(w-quietIndent, 1)
 	status, role := v.quietStatus(m, now)
+	shown := v.running
+	more := 0
+	if len(shown) > rows {
+		keep := rows - 1
+		shown, more = shown[:keep], len(shown)-keep
+	}
 	contents := make([]string, rows+1) // the last is the row under the runs
-	for i, r := range v.running {
+	for i, r := range shown {
 		contents[i] = v.quietRun(sh, m, r, now, w)
 	}
-	if status == "" && len(v.running) == 0 {
-		contents[0] = st.Paint(term.Muted, "getting ready")
-		if v.settledSoFar() || v.have[0] || v.have[1] {
-			contents[0] = st.Paint(term.Muted, "starting the next run")
+	used := len(shown)
+	if more > 0 {
+		text := fmt.Sprintf("+ %d more", more)
+		if used == 0 {
+			text = fmt.Sprintf("%d runs in flight", more)
 		}
+		contents[used] = st.Paint(term.Muted, text)
+		used++
+	}
+	if status == "" && len(v.running) == 0 {
+		contents[0] = st.Paint(term.Muted, v.idleWords())
 	}
 	if status != "" {
-		free := contents[len(v.running):] // the rows no run uses, and the one under them
+		free := contents[used:] // the rows no run uses, and the one under them
 		lines := wrapWords(m.words(status), room)
 		if len(lines) > len(free) {
 			lines = append(lines[:len(free)-1], sh.Fit(strings.Join(lines[len(free)-1:], " "), room))
@@ -196,14 +229,8 @@ func (v stateView) quietNow(sh term.Shapes, m marks, now time.Time, w, level int
 		}
 	}
 	out := []string{quietRow(sh, "now", contents[0])}
-	for _, c := range contents[1:rows] {
+	for _, c := range contents[1:] {
 		out = append(out, quietCont(c))
-	}
-	switch {
-	case contents[rows] != "":
-		out = append(out, quietCont(contents[rows]))
-	case level < 3:
-		out = append(out, "")
 	}
 	return out
 }
@@ -219,12 +246,6 @@ func wrapWords(text string, width int) []string {
 		lines = append(lines, word)
 	}
 	return lines
-}
-
-// settledSoFar reports whether any run has settled.
-func (v stateView) settledSoFar() bool {
-	done, _ := v.settledAll()
-	return done > 0
 }
 
 // quietStep is the words of a run's step and its time: the dashboard's box words, the moment's where it is a long one
@@ -243,29 +264,40 @@ func quietStep(r stateRun, now time.Time) (words string, since time.Time) {
 	return stepTitles[0][r.step], since
 }
 
+// quietCols splits a row's room: the version's column (cut at a third of it), then what is left over after the gaps and
+// fixedRight cells (the time, cost and the rest) for the task and, if want is above zero, a second column of at most
+// want cells (the step). The task's and the step's columns shrink before the time is cut.
+func (v stateView) quietCols(room, fixedRight, want int) (labelW, taskW, stepW int) {
+	labelW = min(max(term.Width(v.facts.labels[0]), term.Width(v.facts.labels[1])), max(room/3, 8))
+	avail := max(room-labelW-fixedRight-4, 6) // two gaps of two between the version, the task and the rest
+	if want > 0 {
+		stepW = min(want, max(avail/2, 8))
+		avail = max(avail-stepW-2, 4)
+	}
+	return labelW, min(v.facts.taskWidth, avail), stepW
+}
+
 // quietRun is a run in flight: its version in its color, the task, the step and the time in the step.
 func (v stateView) quietRun(sh term.Shapes, m marks, r stateRun, now time.Time, w int) string {
 	st := sh.Style
-	labelW := max(term.Width(v.facts.labels[0]), term.Width(v.facts.labels[1]))
 	words, since := quietStep(r, now)
 	elapsed := term.Elapsed(now.Sub(since))
-	const stepW = 21 // "fetching dependencies"
-	taskW := min(v.facts.taskWidth, max(w-quietIndent-labelW-stepW-term.Width(elapsed)-6, 6))
+	try := ""
+	if r.attempt > 1 {
+		try = fmt.Sprintf(" %s try %d", m.sep, r.attempt)
+	}
+	labelW, taskW, stepW := v.quietCols(w-quietIndent, term.Width(elapsed+try), 21) // 21: "fetching dependencies"
 	role := term.Default
 	if r.sandboxDown {
 		role = term.LevelCaution
 	}
-	line := term.Pad(st.Paint(armRole(r.arm), v.facts.labels[r.arm]), labelW) + "  " +
+	return term.Pad(st.Paint(armRole(r.arm), sh.Fit(v.facts.labels[r.arm], labelW)), labelW) + "  " +
 		term.Pad(st.Paint(term.Muted, sh.Fit(r.task, taskW)), taskW) + "  " +
-		term.Pad(st.Paint(role, sh.Fit(words, stepW)), stepW) + "  " + elapsed
-	if r.attempt > 1 {
-		line += st.Paint(term.Muted, fmt.Sprintf(" %s try %d", m.sep, r.attempt))
-	}
-	return line
+		term.Pad(st.Paint(role, sh.Fit(words, stepW)), stepW) + "  " + elapsed + st.Paint(term.Muted, try)
 }
 
 // quietAnswer is the answer so far (or the answer, at the end) on two rows: what the runs show and how sure it is, then
-// each version's passes and the next check, or at the end the command for the report. Words from answerWords.
+// each version's passes and the next check. Words from answerWords.
 func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 	st := sh.Style
 	room := max(w-quietIndent, 1)
@@ -295,24 +327,32 @@ func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 	case len(next) > 0 && !v.answer.Final():
 		tail = st.Paint(term.Muted, next[0])
 	}
-	// Each version's passes in the longest form that fits with the tail, then shorter, then without the tail.
+	// Each version's passes (test-graded runs; "no grades yet" before one) in the longest form that fits with the next
+	// check, then compact, and only then without the next check.
 	var second string
 	for _, form := range []struct {
-		words   string
-		hasTail bool
-	}{{" passed", true}, {"", true}, {" passed", false}, {"", false}} {
+		compact, hasTail bool
+	}{{false, true}, {true, true}, {true, false}} {
 		var passes []string
 		for arm := range 2 {
-			passes = append(passes, st.Paint(armRole(arm), v.facts.labels[arm])+st.Paint(term.Muted, fmt.Sprintf("%s %d of %d", form.words, v.passed[arm], v.graded[arm])))
+			label := st.Paint(armRole(arm), v.facts.labels[arm])
+			if form.compact {
+				passes = append(passes, label+st.Paint(term.Muted, fmt.Sprintf(" %d/%d", v.passed[arm], v.graded[arm])))
+			} else {
+				passes = append(passes, label+st.Paint(term.Muted, fmt.Sprintf(" passed %d of %d", v.passed[arm], v.graded[arm])))
+			}
 		}
 		second = strings.Join(passes, sep)
-		if form.words == "" {
+		switch {
+		case v.graded[0]+v.graded[1] == 0:
+			second = st.Paint(term.Muted, "no grades yet")
+		case form.compact:
 			second = st.Paint(term.Muted, "passed: ") + second
 		}
 		if form.hasTail && tail != "" {
 			second += sep + tail
 		}
-		if term.Width(second) <= room || !form.hasTail && form.words == "" {
+		if term.Width(second) <= room || !form.hasTail {
 			break
 		}
 	}
@@ -322,8 +362,7 @@ func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 // quietLast is the last results in a fixed area of quietRows rows, newest first, blank until they come: a mark, the
 // version, the task, the cost, the time, and a note for a grade that does not count or that the judge gave.
 func (v stateView) quietLast(sh term.Shapes, m marks, w int) []string {
-	labelW := max(term.Width(v.facts.labels[0]), term.Width(v.facts.labels[1]))
-	taskW := min(v.facts.taskWidth, max(w-quietIndent-labelW-30, 6))
+	labelW, taskW, _ := v.quietCols(w-quietIndent, 15, 0) // the mark, the cost and the time
 	out := make([]string, quietRows)
 	for i := range out {
 		n := len(v.log) - 1 - i
@@ -374,7 +413,7 @@ func (v stateView) quietResult(sh term.Shapes, m marks, e logEntry, labelW, task
 	}
 	fixed := 2 + labelW + 2 + 2 + 6 + 2 + 5 // the mark, the version, the cost and the time, and their gaps
 	if note != "" {
-		taskW = min(taskW, max(room-fixed-2-term.Width(note), 8))
+		taskW = min(taskW, max(room-fixed-2-term.Width(note), 6))
 		if r.Outcome == run.OutcomeSandboxFlagged && fixed+taskW+2+term.Width(note) > room { // the short form
 			note = "blocked: " + blockedWords(r.SandboxFlagged)
 		}
@@ -383,7 +422,7 @@ func (v stateView) quietResult(sh term.Shapes, m marks, e logEntry, labelW, task
 	if c := r.AgentUSD(); c > 0 || experiment.Fair(r.Outcome) {
 		cost = fmt.Sprintf("$%.2f", c)
 	}
-	line := st.Paint(role, mark) + " " + term.Pad(st.Paint(armRole(e.arm), v.facts.labels[e.arm]), labelW) + "  " +
+	line := st.Paint(role, mark) + " " + term.Pad(st.Paint(armRole(e.arm), sh.Fit(v.facts.labels[e.arm], labelW)), labelW) + "  " +
 		term.Pad(st.Paint(term.Muted, sh.Fit(e.task, taskW)), taskW) + "  " + term.PadLeft(cost, 6) + "  " +
 		term.PadLeft(st.Paint(term.Muted, term.Elapsed(e.took)), 5)
 	if note != "" {

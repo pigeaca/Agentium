@@ -1,121 +1,139 @@
 === 79 columns, 40 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 
-  last     ✗ trimmed   throttle       $0.09  2m55s
-           ✓ baseline  throttle       $0.09  2m55s
-           ✓ trimmed   debounce       $0.09  2m55s
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
 
-           report: agentium experiment report trimmed-ab
+           Ctrl-C stops · run it again to go on
 === 99 columns, 40 rows
                        BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 
-  last     ✗ trimmed   throttle       $0.09  2m55s
-           ✓ baseline  throttle       $0.09  2m55s
-           ✓ trimmed   debounce       $0.09  2m55s
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
 
-           report: agentium experiment report trimmed-ab
+           Ctrl-C stops · run it again to go on
 === 119 columns, 40 rows
                         BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 
-  last     ✗ trimmed   throttle       $0.09  2m55s
-           ✓ baseline  throttle       $0.09  2m55s
-           ✓ trimmed   debounce       $0.09  2m55s
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
 
-           report: agentium experiment report trimmed-ab
+           Ctrl-C stops · run it again to go on
 === 64 columns, 40 rows
       BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────
-  runs     ████████████████▌░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     ██████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure e…
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 
-  last     ✗ trimmed   throttle       $0.09  2m55s
-           ✓ baseline  throttle       $0.09  2m55s
-           ✓ trimmed   debounce       $0.09  2m55s
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
 
-           report: agentium experiment report trimmed-ab
+           Ctrl-C stops · run it again to go on
 === 79 columns, 14 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 
-  last     ✗ trimmed   throttle       $0.09  2m55s
-           ✓ baseline  throttle       $0.09  2m55s
-           ✓ trimmed   debounce       $0.09  2m55s
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
 === 79 columns, 11 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
 === 79 columns, 9 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
-  runs     ██████████████████▌░░░░░░░░░░░░░░░░░░   16 of 32 · 46m45s
-  spent    $1.44 of $5
-  now      every run is done: the report has the answer
+  runs     █████████████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
+  now      finishing
 
-  answer   trimmed is cheaper: 18% less · stopped early: sure enough
-           baseline passed 5 of 8 · trimmed passed 5 of 8
+
+  answer   no clear difference in cost · after all 16 tasks · not sure
+           baseline passed 10 of 16 · trimmed passed 11 of 16
+=== 60 columns, 40 rows
+    BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────
+  runs     ██████████████████████████████   32 of 32 · 1h33m
+  spent    $2.88 of $5
+
+  now      finishing
+
+
+  answer   no clear difference in cost · not sure
+           passed: baseline 10/16 · trimmed 11/16
+
+  last     ✓ trimmed   sum-by         $0.09  2m55s
+           ✗ baseline  sum-by         $0.09  2m55s
+           ✓ trimmed   range-step     $0.09  2m55s
+
+           Ctrl-C stops · run it again to go on
 === ASCII, 79 columns, 40 rows
              BASELINE  vs  TRIMMED   -   does trimmed save money?
  ------------------------------------------------------------------------------
-  runs     ###################..................   16 of 32 - 46m45s
-  spent    $1.44 of $5
+  runs     #####################################   32 of 32 - 1h33m
+  spent    $2.88 of $5
 
-  now      every run is done: the report has the answer
+  now      finishing
 
 
-  answer   trimmed is cheaper: 18% less - stopped early: sure enough
-           baseline passed 5 of 8 - trimmed passed 5 of 8
+  answer   no clear difference in cost - after all 16 tasks - not sure
+           baseline passed 10 of 16 - trimmed passed 11 of 16
 
-  last     x trimmed   throttle       $0.09  2m55s
-           + baseline  throttle       $0.09  2m55s
-           + trimmed   debounce       $0.09  2m55s
+  last     + trimmed   sum-by         $0.09  2m55s
+           x baseline  sum-by         $0.09  2m55s
+           + trimmed   range-step     $0.09  2m55s
 
-           report: agentium experiment report trimmed-ab
+           Ctrl-C stops - run it again to go on
 === end

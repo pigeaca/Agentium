@@ -15,11 +15,9 @@ import (
 	"github.com/pigeaca/agentium/internal/term"
 )
 
-// quietScene is a scene for the quiet view: the report command is set, as the screen sets it.
+// quietScene is a scene for the quiet view.
 func quietScene(t *testing.T, lock experiment.Lock, standing experiment.Standing) *scene {
-	s := newScene(t, lock, standing)
-	s.state.facts.report = "trimmed-ab"
-	return s
+	return newScene(t, lock, standing)
 }
 
 func (s *scene) quiet(sh term.Shapes, width, height int) string {
@@ -28,7 +26,7 @@ func (s *scene) quiet(sh term.Shapes, width, height int) string {
 
 // quietSizes are the terminals the quiet view's goldens cover: the roomy, the narrow, and the short ones (the hint goes,
 // then the last results, then the blank rows).
-var quietSizes = [][2]int{{79, 40}, {99, 40}, {119, 40}, {64, 40}, {79, 14}, {79, 11}, {79, 9}}
+var quietSizes = [][2]int{{79, 40}, {99, 40}, {119, 40}, {64, 40}, {79, 14}, {79, 11}, {79, 9}, {60, 40}}
 
 // drawQuiet is a scene in every size, then in ASCII, as plain text.
 func drawQuiet(s *scene) string {
@@ -61,41 +59,76 @@ func checkQuiet(t *testing.T, name string, s *scene) {
 	}
 }
 
-// quietMid is the quiet view a few runs in: baseline's run in the agent step, trimmed's in the judge, two results and
-// a check made (midRun's moment).
+// quietSeq is a seq-v1 scene on a sandbox lock with 32 runs and checks after 8, 12 and 16 tasks.
+func quietSeq(t *testing.T) *scene {
+	return quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+}
+
+func look(s *scene, n int, verdict string, ratio float64, decision string, planned int) {
+	s.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: n, Planned: planned, Counted: planned, Analysed: true, Verdict: verdict,
+		Interval: &stats.Interval{Estimate: ratio, Low: ratio - 0.1, High: ratio + 0.1}, Decision: decision}, Looks: 3})
+}
+
 func TestQuietGoldens(t *testing.T) {
 	t.Parallel()
-	start := quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
+	start := quietSeq(t)
 	start.start(0)
 	start.start(1)
 	start.clock.add(time.Second)
 
 	mid, host := midRun(t, true), midRun(t, false)
-	mid.state.facts.report, host.state.facts.report = "trimmed-ab", "trimmed-ab"
 
-	final := quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
-	for pos := range 16 {
+	// Two-digit counts: eleven runs settled in each arm, a run of each in flight.
+	counts := quietSeq(t)
+	for pos := range 22 {
+		counts.whole(pos, pos != 4 && pos != 9)
+	}
+	look(counts, 1, stats.Inconclusive, 0.84, experiment.LookContinue, 8)
+	counts.start(22)
+	counts.start(23)
+	counts.clock.add(2 * time.Second)
+	counts.step(22, run.StepAgent)
+
+	// The last live frame of a run every scheduled run of which settled.
+	final := quietSeq(t)
+	for pos := range 32 {
 		final.whole(pos, pos%3 != 0)
 	}
-	final.event(experiment.Event{Kind: "look", Look: &experiment.Look{Look: 1, Planned: 8, Counted: 8, Analysed: true, Verdict: stats.Improved,
-		Interval: &stats.Interval{Estimate: 0.82, Low: 0.7, High: 0.95}, Decision: experiment.LookStop}, Looks: 3})
-	final.state.end(experiment.Summary{Status: experiment.StatusDone}, nil)
-	final.clock.add(5 * time.Second)
+	look(final, 3, stats.Inconclusive, 0.93, experiment.LookFinal, 16)
+	final.clock.add(time.Second)
+
+	// The last live frame of a run a check stopped early: 16 of 32, a check that is sure.
+	stopped := quietSeq(t)
+	for pos := range 16 {
+		stopped.whole(pos, pos%3 != 0)
+	}
+	look(stopped, 2, stats.Improved, 0.82, experiment.LookStop, 8)
+	stopped.clock.add(time.Second)
 
 	for _, tc := range []struct {
 		name  string
 		scene *scene
-	}{{"start", start}, {"mid", mid}, {"host", host}, {"final", final}} {
+	}{{"start", start}, {"mid", mid}, {"host", host}, {"counts", counts}, {"final", final}, {"stopped", stopped}} {
 		checkQuiet(t, tc.name, tc.scene)
 	}
-	if f := final.quiet(plainUnicode, 79, 40); !strings.Contains(f, "answer ") || !strings.Contains(f, "agentium experiment report trimmed-ab") ||
-		strings.Contains(f, "so far") {
-		t.Errorf("the last frame is not the answer with its report command:\n%s", f)
+	if f := term.Plain(start.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "no grades yet · first check after 8 tasks") || strings.Contains(f, "0 of 0") {
+		t.Errorf("before any grade:\n%s", f)
 	}
-	if f := mid.quiet(plainUnicode, 79, 40); !strings.Contains(f, "so far") || !strings.Contains(f, "plan 64% used") || !strings.Contains(f, "passed: baseline 1 of 1 · trimmed 0 of 1 · next check after 12 tasks") {
+	if f := term.Plain(counts.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "next check after 12 tasks") || !strings.Contains(f, "baseline 10/11 · trimmed 10/11") {
+		t.Errorf("two-digit counts at 79 columns lose the next check:\n%s", f)
+	}
+	if f := term.Plain(final.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "answer ") || strings.Contains(f, "so far") || !strings.Contains(f, "now      finishing") ||
+		!strings.Contains(f, "32 of 32") {
+		t.Errorf("the last frame of a finished run:\n%s", f)
+	}
+	if f := term.Plain(stopped.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "16 of 32 · stopped early") || !strings.Contains(f, "now      finishing") {
+		t.Errorf("the last frame of a run a check stopped:\n%s", f)
+	}
+	if f := term.Plain(mid.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "so far") || !strings.Contains(f, "plan 64% used") ||
+		!strings.Contains(f, "passed: baseline 1/1 · trimmed 0/1 · next check after 12 tasks") {
 		t.Errorf("the mid frame:\n%s", f)
 	}
-	if f := host.quiet(plainUnicode, 79, 40); !strings.Contains(f, "hidden tests run on your machine") {
+	if f := term.Plain(host.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "hidden tests run on your machine") {
 		t.Errorf("the host grader's warning is missing:\n%s", f)
 	}
 	for _, bad := range []string{"⠋", "⠙", "●", "┌", "╌"} {
@@ -105,34 +138,303 @@ func TestQuietGoldens(t *testing.T) {
 	}
 }
 
-// The quiet view's rows never change with what the runs do: the same frame height from before the first run to the
-// last, at every height, through retries, checks, pauses and results.
-func TestQuietFrameDoesNotJump(t *testing.T) {
+// TestQuietMomentsGoldens draws the quiet view at the moments the flow view's moments golden draws (copying, fetching
+// dependencies, setup, the sandbox starting, the tests, cleaning up, a folder quarantined, passed, the host, the
+// sandbox unavailable with and without a retry, flagged denials), as the whole frame at 79 columns.
+func TestQuietMomentsGoldens(t *testing.T) {
 	t.Parallel()
-	s := quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
-	heights := map[int]int{}
-	check := func(when string) {
-		t.Helper()
-		for _, h := range []int{40, 14, 11} {
-			n := len(strings.Split(s.quiet(plainUnicode, 79, h), "\n"))
-			if was, ok := heights[h]; ok && was != n {
-				t.Errorf("%s at %d rows: the frame went from %d to %d rows", when, h, was, n)
-			}
-			heights[h] = n
+	var plain, color strings.Builder
+	draw := func(name string, s *scene) {
+		fmt.Fprintf(&plain, "=== %s\n%s\n", name, s.quiet(plainUnicode, 79, 40))
+		fmt.Fprintf(&color, "=== %s\n%s\n", name, s.quiet(color256, 79, 40))
+	}
+	moments := func(sandbox bool) *scene {
+		return quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, sandbox, true), experiment.Standing{})
+	}
+	s := moments(true)
+	s.start(0)
+	s.step(0, run.StepPreparing)
+	s.clock.add(2 * time.Second)
+	draw("copying", s)
+	s.step(0, run.StepDependencies)
+	s.clock.add(72 * time.Second)
+	draw("fetching dependencies", s)
+	s.step(0, run.StepSetup)
+	s.clock.add(4 * time.Second)
+	draw("running the setup", s)
+	s.step(0, run.StepAgent)
+	s.clock.add(2 * time.Minute)
+	s.step(0, run.StepGrading)
+	s.step(0, run.StepSandbox)
+	s.clock.add(1500 * time.Millisecond)
+	draw("starting the sandbox", s)
+	s.step(0, run.StepTests)
+	s.clock.add(38 * time.Second)
+	draw("running the tests", s)
+	s.step(0, run.StepCleanup)
+	s.clock.add(1500 * time.Millisecond)
+	draw("cleaning up", s)
+	s.step(0, run.StepQuarantined)
+	draw("a folder quarantined", s)
+	yes := true
+	s.finish(0, agent.OutcomeOK, &yes, 0.09)
+	draw("passed", s)
+
+	host := moments(false)
+	host.start(0)
+	host.step(0, run.StepAgent)
+	host.step(0, run.StepGrading)
+	host.step(0, run.StepTests)
+	host.clock.add(9 * time.Second)
+	draw("running the tests on the host", host)
+
+	down := moments(true)
+	down.start(0)
+	down.step(0, run.StepAgent)
+	down.step(0, run.StepGrading)
+	down.step(0, run.StepSandbox)
+	down.step(0, run.StepSandboxDown)
+	draw("the sandbox unavailable, running", down)
+	down.step(0, run.StepCleanup)
+	down.finish(0, agent.OutcomeInfra, nil, 0.08)
+	down.event(experiment.Event{Kind: "retry", Slot: down.lock.Schedule[0], Attempt: 1, RetryIn: 30 * time.Second})
+	draw("the sandbox unavailable, a retry", down)
+
+	spent := moments(true)
+	spent.start(0)
+	spent.step(0, run.StepAgent)
+	spent.step(0, run.StepGrading)
+	spent.step(0, run.StepSandbox)
+	spent.step(0, run.StepSandboxDown)
+	spent.finish(0, agent.OutcomeInfra, nil, 0.08)
+	draw("the sandbox unavailable, no retry", spent)
+
+	flagged := moments(true)
+	flagged.start(0)
+	flagged.step(0, run.StepAgent)
+	flagged.step(0, run.StepGrading)
+	flagged.step(0, run.StepSandbox)
+	flagged.step(0, run.StepTests)
+	flagged.event(experiment.Event{Kind: "finish", Slot: flagged.lock.Schedule[0], Attempt: 1, SpentUSD: 0.1,
+		Result: experiment.Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.1, SandboxFlagged: "mach-lookup, file-read-data, mach-register"}})
+	draw("flagged denials", flagged)
+	fmt.Fprintf(&plain, "=== ASCII, copying\n%s\n", s2ASCII(t))
+	checkWords(t, "the moments", plain.String())
+	checkGolden(t, "quiet-moments.golden", plain.String())
+	checkGolden(t, "quiet-moments-color.golden", color.String())
+	for _, want := range []string{"fetching dependencies", "cleaning up", "sandbox unavailable · not counted", "blocked: a system service"} {
+		if !strings.Contains(plain.String(), want) {
+			t.Errorf("the moments lack %q", want)
 		}
 	}
-	check("before any run")
+}
+
+// s2ASCII is a run in its first moment, in ASCII.
+func s2ASCII(t *testing.T) string {
+	s := quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
 	s.start(0)
-	check("one run")
-	s.start(1)
-	check("two runs")
-	s.event(experiment.Event{Kind: "retry", Slot: s.lock.Schedule[4], Attempt: 1, RetryIn: 30 * time.Second})
-	check("a retry")
-	s.event(experiment.Event{Kind: "wait", Until: s.clock.Now().Add(20 * time.Minute), Usage: 0.86})
-	check("a pause")
+	s.step(0, run.StepPreparing)
+	s.clock.add(2 * time.Second)
+	return s.quiet(plainASCII, 79, 40)
+}
+
+// TestQuietJudgeGraded is the flow view's judge scene in the quiet view: a judge-graded run's grading step is the judge's,
+// and its result shows in the last results in the judge's words, beside a test-graded run.
+func TestQuietJudgeGraded(t *testing.T) {
+	t.Parallel()
+	lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+	s := quietScene(t, lock, experiment.Standing{})
+	yes, no := true, false
+	judged := func(pos int, passed *bool, votes string) {
+		s.start(pos)
+		s.clock.add(3 * time.Second)
+		s.step(pos, run.StepAgent)
+		s.clock.add(2 * time.Minute)
+		s.step(pos, run.StepGrading)
+		s.clock.add(time.Second)
+		s.step(pos, run.StepJudgeGrading)
+		s.clock.add(40 * time.Second)
+		s.spent += 0.4
+		s.event(experiment.Event{Kind: "finish", Slot: lock.Schedule[pos], Attempt: 1, SpentUSD: s.spent,
+			Result: experiment.Result{Outcome: agent.OutcomeOK, Passed: passed, CostUSD: 0.4, JudgeUSD: 0.3, JudgeGraded: true, JudgeVotes: votes,
+				Judge: "fixed (" + votes + ")"}})
+	}
+	judged(0, &yes, "4 of 5")
+	judged(1, &no, "3 of 5")
+	s.clock.add(5 * time.Second)
+	var b strings.Builder
+	sizes := [][2]int{{79, 40}, {79, 14}, {79, 11}, {64, 40}}
+	for _, size := range sizes {
+		fmt.Fprintf(&b, "=== finished, %d columns, %d rows\n%s\n", size[0], size[1], s.quiet(plainUnicode, size[0], size[1]))
+	}
+	done := term.Plain(s.quiet(plainUnicode, 79, 40))
+	for _, want := range []string{"✓ baseline", "judge: fixed (4 of 5)", "✗ trimmed", "judge: not fixed (3 of 5)", "no grades yet"} {
+		if !strings.Contains(done, want) {
+			t.Errorf("the finished frame lacks %q:\n%s", want, done)
+		}
+	}
+	checkGolden(t, "quiet-judged-color.golden", s.quiet(color256, 79, 40)+"\n")
+	s.whole(2, true)
+	s.start(3)
+	s.clock.add(2 * time.Second)
+	s.step(3, run.StepAgent)
+	s.clock.add(time.Minute)
+	s.step(3, run.StepGrading)
+	s.step(3, run.StepJudgeGrading)
+	s.clock.add(12 * time.Second)
+	for _, size := range sizes {
+		fmt.Fprintf(&b, "=== judging, %d columns, %d rows\n%s\n", size[0], size[1], s.quiet(plainUnicode, size[0], size[1]))
+	}
+	fmt.Fprintf(&b, "=== judging, ASCII\n%s\n", s.quiet(plainASCII, 79, 40))
+	checkWords(t, "judged", b.String())
+	checkGolden(t, "quiet-judged.golden", b.String())
+	// The test-graded run counts; the judge's two grades do not.
+	if f := term.Plain(s.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "baseline 1/1 · trimmed 0/0") || !strings.Contains(f, "judge grading") {
+		t.Errorf("the judging frame:\n%s", f)
+	}
+}
+
+// The quiet view's rows never change with what the runs do: the same frame height from before the first run to the
+// last, at every terminal height, through retries, checks, pauses and results; and a frame never holds more rows than
+// the terminal (so the answer's rows are not the ones cut).
+func TestQuietFrameDoesNotJump(t *testing.T) {
+	t.Parallel()
+	for _, conc := range []int{2, 8} {
+		lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+		lock.Design.Concurrency = conc
+		s := quietScene(t, lock, experiment.Standing{})
+		heights := map[int]int{}
+		check := func(when string) {
+			t.Helper()
+			for h := 7; h <= 40; h++ {
+				lines := strings.Split(s.quiet(plainUnicode, 79, h), "\n")
+				if h >= 9 && len(lines) > h {
+					t.Errorf("%d at once, %s at %d rows: %d rows", conc, when, h, len(lines))
+				}
+				if was, ok := heights[h]; ok && was != len(lines) {
+					t.Errorf("%d at once, %s at %d rows: the frame went from %d to %d rows", conc, when, h, was, len(lines))
+				}
+				heights[h] = len(lines)
+			}
+		}
+		check("before any run")
+		s.start(0)
+		check("one run")
+		for pos := 1; pos < conc && pos < 8; pos++ {
+			s.start(pos)
+		}
+		check("every slot busy")
+		s.event(experiment.Event{Kind: "retry", Slot: s.lock.Schedule[20], Attempt: 1, RetryIn: 30 * time.Second})
+		check("a retry")
+		s.event(experiment.Event{Kind: "wait", Until: s.clock.Now().Add(20 * time.Minute), Usage: 0.86})
+		check("a pause")
+		for pos := range min(conc, 8) {
+			s.finish(pos, agent.OutcomeOK, &[]bool{true}[0], 0.1)
+			check(fmt.Sprintf("after run %d", pos))
+		}
+	}
+}
+
+// With 8 runs at a time on a short terminal the "now" rows give way, not the answer's: 80 by 13 shows the passes and the
+// next check, and "+ N more" stands for the runs left out.
+func TestQuietManyAtOnceOnAShortTerminal(t *testing.T) {
+	t.Parallel()
+	lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+	lock.Design.Concurrency = 8
+	s := quietScene(t, lock, experiment.Standing{})
 	for pos := range 8 {
-		s.whole(pos, pos%2 == 0)
-		check(fmt.Sprintf("after run %d", pos))
+		s.start(pos)
+	}
+	s.finish(8, agent.OutcomeOK, &[]bool{true}[0], 0.1)
+	f := term.Plain(s.quiet(plainUnicode, 80, 13))
+	if n := len(strings.Split(f, "\n")); n > 13 || !strings.Contains(f, "passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks") || !strings.Contains(f, "+ ") {
+		t.Errorf("%d rows:\n%s", n, f)
+	}
+	if full := term.Plain(s.quiet(plainUnicode, 80, 40)); strings.Contains(full, "more") || strings.Count(full, "fresh copy") != 8 {
+		t.Errorf("a roomy terminal shows every run:\n%s", full)
+	}
+}
+
+// Nothing in flight and nothing coming is "finishing", not "starting the next run".
+func TestQuietFinishing(t *testing.T) {
+	t.Parallel()
+	s := quietSeq(t)
+	s.whole(0, true)
+	if f := term.Plain(s.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "starting the next run") {
+		t.Errorf("between runs:\n%s", f)
+	}
+	look(s, 1, stats.Improved, 0.8, experiment.LookStop, 8)
+	if f := term.Plain(s.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "now      finishing") {
+		t.Errorf("after a check that stops:\n%s", f)
+	}
+	b := quietSeq(t)
+	b.spent = 5
+	b.whole(0, true)
+	b.state.spent = 5
+	if f := term.Plain(b.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "now      finishing") {
+		t.Errorf("at the budget:\n%s", f)
+	}
+}
+
+// A long version label on a narrow terminal shrinks the task and step columns, never the time.
+func TestQuietKeepsTheClock(t *testing.T) {
+	t.Parallel()
+	lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+	lock.Design.Arms[1].Context = "a-very-long-snapshot-name"
+	s := quietScene(t, lock, experiment.Standing{})
+	s.start(1)
+	s.clock.add(2 * time.Second)
+	s.step(1, run.StepAgent)
+	s.clock.add(63 * time.Second)
+	for _, width := range []int{60, 64, 80} {
+		f := term.Plain(s.quiet(plainUnicode, width, 40))
+		var row string
+		for _, l := range strings.Split(f, "\n") {
+			if strings.Contains(l, "Claude") || strings.Contains(l, "Cla…") {
+				row = l
+			}
+		}
+		if !strings.HasSuffix(row, " 1m03s") || term.Width(row) > width {
+			t.Errorf("at %d columns the run's row lacks its clock: %q", width, row)
+		}
+	}
+}
+
+// A resumed run counts the passes the earlier execution stored: the settled, test-graded, fair runs; not a judge's, not
+// an unsettled slot.
+func TestQuietCountsPassesOfAResume(t *testing.T) {
+	t.Parallel()
+	lock := screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true)
+	yes, no := true, false
+	data := []experiment.RunData{
+		{Slot: 0, Arm: "A", Outcome: agent.OutcomeOK, Passed: &yes},
+		{Slot: 1, Arm: "B", Outcome: agent.OutcomeOK, Passed: &no},
+		{Slot: 2, Arm: "A", Outcome: agent.OutcomeOK, Passed: &yes, Judged: true},
+		{Slot: 3, Arm: "B", Outcome: agent.OutcomeInfra},
+		{Slot: 4, Arm: "A", Outcome: agent.OutcomeOK, Passed: &yes}, // not settled in the standing
+	}
+	// Through the screen's own Begin, as a resumed run starts: before the first frame.
+	out := &syncBuffer{}
+	_, screen := newRunScreen(context.Background(), Env{Stdout: out, Stderr: out, Now: time.Now}, viewDashboard,
+		term.Capabilities{Terminal: true, Color: term.Color256, UTF8: true, Width: 100, Height: 40}, 85)
+	defer screen.Close()
+	screen.stored = func(experiment.Lock) []experiment.RunData { return data }
+	standing := experiment.Standing{Settled: map[int]bool{0: true, 1: true, 2: true}}
+	screen.observer(nil).Begin(lock, standing)
+	s := newScene(t, lock, standing)
+	s.state = screen.state
+	f := term.Plain(s.quiet(plainUnicode, 79, 40))
+	if !strings.Contains(f, "passed: baseline 1/1 · trimmed 0/1") || !strings.Contains(f, "3 of 32") {
+		t.Errorf("after a resume:\n%s", f)
+	}
+	if strings.Contains(f, "no grades yet") {
+		t.Errorf("a resume says nothing was graded:\n%s", f)
+	}
+	// Counted once: the settled slot finishing again (a run graded again) does not add.
+	s.start(0)
+	s.finish(0, agent.OutcomeOK, &yes, 0.1)
+	if v := s.state.view(); v.passed[0] != 1 || v.graded[0] != 1 {
+		t.Errorf("counted twice: %d of %d", v.passed[0], v.graded[0])
 	}
 }
 
@@ -171,16 +473,6 @@ func TestQuietStatuses(t *testing.T) {
 	s.event(experiment.Event{Kind: "pair", Slot: s.lock.Schedule[1], Result: experiment.Result{Judge: "tie", JudgeUSD: 0.09}})
 	if f := frame(s); !strings.Contains(f, "compared the two passing runs") {
 		t.Errorf("a comparison:\n%s", f)
-	}
-	for _, status := range []struct{ ended, want string }{
-		{experiment.StatusBudget, "stopped at the budget"}, {experiment.StatusUsage, "paused at your Claude plan's usage limit"},
-		{experiment.StatusStopped, "stopped · run it again to go on"},
-	} {
-		e := quietScene(t, screenLock(experiment.TemplateContextAB, experiment.GoalCheaper, true, true), experiment.Standing{})
-		e.state.end(experiment.Summary{Status: status.ended}, nil)
-		if f := frame(e); strings.Count(f, status.want) != 2 { // the "now" status and the answer's own words
-			t.Errorf("%s:\n%s", status.ended, f)
-		}
 	}
 }
 
@@ -226,7 +518,7 @@ func TestQuietLastResults(t *testing.T) {
 	s2.event(experiment.Event{Kind: "finish", Slot: lock.Schedule[0], Attempt: 1, SpentUSD: 0.1,
 		Result: experiment.Result{Outcome: run.OutcomeSandboxFlagged, CostUSD: 0.1, SandboxFlagged: "mach-lookup, file-read-data"}})
 	g := s2.quiet(color256, 119, 40)
-	if p := term.Plain(g); !strings.Contains(p, "blocked: a system service lookup, a file read") || !strings.Contains(p, "badname") {
+	if p := term.Plain(g); !strings.Contains(p, "blocked: a system service lookup, a file read") || !strings.Contains(p, "badna") {
 		t.Errorf("a blocked grade:\n%s", p)
 	}
 	for _, bad := range []string{"\x1b]", "\x07", "\u202e"} {

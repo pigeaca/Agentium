@@ -142,10 +142,8 @@ type runFacts struct {
 	taskWidth int     // the widest task name shown, in cells
 	margin    float64 // the primary metric's margin
 	terms     string  // how the runs are run, in words (termsOf)
-	// concurrency is how many runs go at once: the quiet view keeps that many rows for them. report is the experiment's
-	// name, for the command that opens its report at the end; "" draws none.
+	// concurrency is how many runs go at once: the quiet view keeps that many rows for them.
 	concurrency int
-	report      string
 }
 
 // maxNameWidth caps the arms' and tasks' names on the screen.

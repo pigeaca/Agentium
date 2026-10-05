@@ -75,7 +75,6 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 		defer live.Stop() // covers early returns and interrupts; the summary below stops it first
 	} else {
 		env, screen = newRunScreen(ctx, env, view, caps, o.UsageLimit)
-		screen.name = name
 		// Close clears the live region on every return, an interrupt or a panic included. Revalidation's status line is
 		// not live here: the screen shows the progress.
 		defer screen.Close()
@@ -88,6 +87,7 @@ func executeExperiment(ctx context.Context, env Env, name string, o experiment.R
 	defer w.Close()
 	runner, release := experimentRunner(env, w, live)
 	if screen != nil {
+		screen.stored = func(experiment.Lock) []experiment.RunData { return storedRunData(context.WithoutCancel(ctx), w, name) }
 		runner.Observer = screen.observer(func(lock experiment.Lock) *answerState { return fixedAnswer(context.WithoutCancel(ctx), w, name, lock) })
 	}
 	runner.Quiet = asJSON
@@ -184,6 +184,23 @@ func experimentRunner(env Env, w *workspace, live *term.StatusLine) (r experimen
 		Finish: func(experiment.Summary) { live.Stop() },
 	}
 	return r, release
+}
+
+// storedRunData is the experiment's stored runs as the analysis reads them; nil when they cannot be read.
+func storedRunData(ctx context.Context, w *workspace, name string) []experiment.RunData {
+	stored, err := w.db.ExperimentByName(ctx, w.project.ID, name)
+	if err != nil {
+		return nil
+	}
+	runs, err := w.db.ExperimentRuns(ctx, stored.ID)
+	if err != nil {
+		return nil
+	}
+	data, err := experiment.RunDataOfStored(runs)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 // fixedAnswer is a fixed design's answer once every run is done, from its stored runs, as the report analyses them;

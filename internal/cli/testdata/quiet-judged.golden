@@ -1,0 +1,138 @@
+=== finished, 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ██▍░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 5m33s
+  spent    $0.80 of $5
+
+  now      starting the next run
+
+
+  so far   too early to tell
+           no grades yet · first check after 8 tasks
+
+  last     ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
+           ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
+
+
+           Ctrl-C stops · run it again to go on
+=== finished, 79 columns, 14 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ██▍░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 5m33s
+  spent    $0.80 of $5
+
+  now      starting the next run
+
+
+  so far   too early to tell
+           no grades yet · first check after 8 tasks
+
+  last     ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
+           ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
+
+=== finished, 79 columns, 11 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ██▍░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 5m33s
+  spent    $0.80 of $5
+
+  now      starting the next run
+
+
+  so far   too early to tell
+           no grades yet · first check after 8 tasks
+=== finished, 64 columns, 40 rows
+      BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────
+  runs     ██▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   2 of 32 · 5m33s
+  spent    $0.80 of $5
+
+  now      starting the next run
+
+
+  so far   too early to tell
+           no grades yet · first check after 8 tasks
+
+  last     ✗ trimmed   map-k…   $0.10  2m44s  judge: not fixed …
+           ✓ baseline  map-k…   $0.10  2m44s  judge: fixed (4 o…
+
+
+           Ctrl-C stops · run it again to go on
+=== judging, 79 columns, 40 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ███▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   3 of 32 · 9m42s
+  spent    $0.89 of $5
+
+  now      trimmed   chunk         judge grading          12s
+
+
+  so far   too early to tell
+           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+
+  last     ✓ baseline  chunk          $0.09  2m55s
+           ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
+           ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
+
+           Ctrl-C stops · run it again to go on
+=== judging, 79 columns, 14 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ███▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   3 of 32 · 9m42s
+  spent    $0.89 of $5
+
+  now      trimmed   chunk         judge grading          12s
+
+
+  so far   too early to tell
+           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+
+  last     ✓ baseline  chunk          $0.09  2m55s
+           ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
+           ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
+=== judging, 79 columns, 11 rows
+             BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ──────────────────────────────────────────────────────────────────────────────
+  runs     ███▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   3 of 32 · 9m42s
+  spent    $0.89 of $5
+
+  now      trimmed   chunk         judge grading          12s
+
+
+  so far   too early to tell
+           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+=== judging, 64 columns, 40 rows
+      BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────────
+  runs     ███▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   3 of 32 · 9m42s
+  spent    $0.89 of $5
+
+  now      trimmed   chunk         judge grading        12s
+
+
+  so far   too early to tell
+           passed: baseline 1/1 · trimmed 0/0
+
+  last     ✓ baseline  chunk          $0.09  2m55s
+           ✗ trimmed   map-k…   $0.10  2m44s  judge: not fixed …
+           ✓ baseline  map-k…   $0.10  2m44s  judge: fixed (4 o…
+
+           Ctrl-C stops · run it again to go on
+=== judging, ASCII
+             BASELINE  vs  TRIMMED   -   does trimmed save money?
+ ------------------------------------------------------------------------------
+  runs     ###..................................   3 of 32 - 9m42s
+  spent    $0.89 of $5
+
+  now      trimmed   chunk         judge grading          12s
+
+
+  so far   too early to tell
+           passed: baseline 1/1 - trimmed 0/0 - first check after 8 tasks
+
+  last     + baseline  chunk          $0.09  2m55s
+           x trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
+           + baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
+
+           Ctrl-C stops - run it again to go on
+=== end

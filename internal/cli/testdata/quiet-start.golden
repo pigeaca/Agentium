@@ -8,7 +8,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           passed: baseline 0 of 0 · trimmed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
 
 
 
@@ -25,7 +25,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           baseline passed 0 of 0 · trimmed passed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
 
 
 
@@ -42,7 +42,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           baseline passed 0 of 0 · trimmed passed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
 
 
 
@@ -55,11 +55,11 @@
   runs     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0 of 32 · 1s
   spent    $0.00 of $5
 
-  now      baseline  map-keys      fresh copy             1s
-           trimmed   map-keys      fresh copy             1s
+  now      baseline  map-keys      fresh copy           1s
+           trimmed   map-keys      fresh copy           1s
 
   so far   too early to tell
-           baseline passed 0 of 0 · trimmed passed 0 of 0
+           no grades yet · first check after 8 tasks
 
 
 
@@ -76,7 +76,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           passed: baseline 0 of 0 · trimmed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
 
 
 
@@ -91,7 +91,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           passed: baseline 0 of 0 · trimmed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
 === 79 columns, 9 rows
              BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ──────────────────────────────────────────────────────────────────────────────
@@ -99,8 +99,26 @@
   spent    $0.00 of $5
   now      baseline  map-keys      fresh copy             1s
            trimmed   map-keys      fresh copy             1s
+
   so far   too early to tell
-           passed: baseline 0 of 0 · trimmed 0 of 0 · first check after 8 tasks
+           no grades yet · first check after 8 tasks
+=== 60 columns, 40 rows
+    BASELINE  vs  TRIMMED   ·   does trimmed save money?
+ ───────────────────────────────────────────────────────────
+  runs     ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   0 of 32 · 1s
+  spent    $0.00 of $5
+
+  now      baseline  map-keys      fresh copy         1s
+           trimmed   map-keys      fresh copy         1s
+
+  so far   too early to tell
+           no grades yet · first check after 8 tasks
+
+
+
+
+
+           Ctrl-C stops · run it again to go on
 === ASCII, 79 columns, 40 rows
              BASELINE  vs  TRIMMED   -   does trimmed save money?
  ------------------------------------------------------------------------------
@@ -111,7 +129,7 @@
            trimmed   map-keys      fresh copy             1s
 
   so far   too early to tell
-           passed: baseline 0 of 0 - trimmed 0 of 0 - first check after 8 tasks
+           no grades yet - first check after 8 tasks
 
 
 
