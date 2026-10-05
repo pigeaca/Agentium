@@ -8,7 +8,7 @@
 
 
   so far   too early to tell
-           no grades yet · first check after 8 tasks
+           no test grades yet · first check after 8 tasks
 
   last     ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
            ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
@@ -25,7 +25,7 @@
 
 
   so far   too early to tell
-           no grades yet · first check after 8 tasks
+           no test grades yet · first check after 8 tasks
 
   last     ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
            ✓ baseline  map-keys       $0.10  2m44s  judge: fixed (4 of 5)
@@ -40,7 +40,7 @@
 
 
   so far   too early to tell
-           no grades yet · first check after 8 tasks
+           no test grades yet · first check after 8 tasks
 === finished, 64 columns, 40 rows
       BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────
@@ -51,7 +51,7 @@
 
 
   so far   too early to tell
-           no grades yet · first check after 8 tasks
+           no test grades yet · first check after 8 tasks
 
   last     ✗ trimmed   map-k…   $0.10  2m44s  judge: not fixed …
            ✓ baseline  map-k…   $0.10  2m44s  judge: fixed (4 o…
@@ -68,7 +68,7 @@
 
 
   so far   too early to tell
-           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+           baseline passed 1 of 1 · trimmed – · first check after 8 tasks
 
   last     ✓ baseline  chunk          $0.09  2m55s
            ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
@@ -85,7 +85,7 @@
 
 
   so far   too early to tell
-           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+           baseline passed 1 of 1 · trimmed – · first check after 8 tasks
 
   last     ✓ baseline  chunk          $0.09  2m55s
            ✗ trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)
@@ -100,7 +100,7 @@
 
 
   so far   too early to tell
-           passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks
+           baseline passed 1 of 1 · trimmed – · first check after 8 tasks
 === judging, 64 columns, 40 rows
       BASELINE  vs  TRIMMED   ·   does trimmed save money?
  ───────────────────────────────────────────────────────────────
@@ -111,7 +111,7 @@
 
 
   so far   too early to tell
-           passed: baseline 1/1 · trimmed 0/0
+           passed: baseline 1/1 · trimmed –
 
   last     ✓ baseline  chunk          $0.09  2m55s
            ✗ trimmed   map-k…   $0.10  2m44s  judge: not fixed …
@@ -128,7 +128,7 @@
 
 
   so far   too early to tell
-           passed: baseline 1/1 - trimmed 0/0 - first check after 8 tasks
+           baseline passed 1 of 1 - trimmed - - first check after 8 tasks
 
   last     + baseline  chunk          $0.09  2m55s
            x trimmed   map-keys       $0.10  2m44s  judge: not fixed (3 of 5)

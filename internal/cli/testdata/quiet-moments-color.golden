@@ -127,7 +127,7 @@
 
 
   \e[38;5;243mso far\e[39m   too early to tell
-           \e[38;5;243mpassed: \e[39m\e[38;5;75mbaseline\e[39m\e[38;5;243m 1/1\e[39m\e[38;5;243m · \e[39m\e[38;5;215mtrimmed\e[39m\e[38;5;243m 0/0\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+           \e[38;5;75mbaseline\e[39m\e[38;5;243m passed 1 of 1\e[39m\e[38;5;243m · \e[39m\e[38;5;215mtrimmed\e[39m\e[38;5;243m –\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
 
   \e[38;5;243mlast\e[39m     \e[38;5;114m✓\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m       $0.09  \e[38;5;243m3m59s\e[39m
 

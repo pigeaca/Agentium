@@ -7,7 +7,7 @@
 
 
   \e[38;5;243mso far\e[39m   too early to tell
-           \e[38;5;243mno grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
+           \e[38;5;243mno test grades yet\e[39m\e[38;5;243m · \e[39m\e[38;5;243mfirst check after 8 tasks\e[39m
 
   \e[38;5;243mlast\e[39m     \e[38;5;203m✗\e[39m \e[38;5;215mtrimmed\e[39m   \e[38;5;243mmap-keys\e[39m       $0.10  \e[38;5;243m2m44s\e[39m  \e[38;5;243mjudge: not fixed (3 of 5)\e[39m
            \e[38;5;114m✓\e[39m \e[38;5;75mbaseline\e[39m  \e[38;5;243mmap-keys\e[39m       $0.10  \e[38;5;243m2m44s\e[39m  \e[38;5;243mjudge: fixed (4 of 5)\e[39m

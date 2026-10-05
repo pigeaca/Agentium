@@ -83,6 +83,7 @@ type runState struct {
 	// a resumed execution.
 	began          time.Time
 	passed, graded [2]int
+	judgeGraded    int // settled runs the judge graded: beside "no test grades yet"
 }
 
 // noteTime is how long a note that nothing else ends (a comparison, a warning) stays in the status line.
@@ -168,10 +169,15 @@ func (s *runState) apply(e experiment.Event) (added []logEntry, checked bool) {
 		s.last[arm] = r
 		s.spent = e.SpentUSD
 		if experiment.Settles(e.Result.Outcome) {
-			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil && !e.Result.JudgeGraded {
-				s.graded[arm]++
-				if *e.Result.Passed {
-					s.passed[arm]++
+			if !s.settled[e.Slot.Position] && experiment.Fair(e.Result.Outcome) && e.Result.Passed != nil {
+				switch {
+				case e.Result.JudgeGraded:
+					s.judgeGraded++
+				default:
+					s.graded[arm]++
+					if *e.Result.Passed {
+						s.passed[arm]++
+					}
 				}
 			}
 			s.settled[e.Slot.Position] = true
@@ -279,7 +285,11 @@ func (s *runState) seed(data []experiment.RunData) {
 	defer s.mu.Unlock()
 	for _, d := range data {
 		arm, ok := s.facts.arms[d.Arm]
-		if !ok || !s.settled[d.Slot] || d.Judged || !experiment.Fair(d.Outcome) || d.Passed == nil {
+		if !ok || !s.settled[d.Slot] || !experiment.Fair(d.Outcome) || d.Passed == nil {
+			continue
+		}
+		if d.Judged {
+			s.judgeGraded++
 			continue
 		}
 		s.graded[arm]++
@@ -320,7 +330,7 @@ func (s *runState) view() stateView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	v := stateView{facts: s.facts, spent: s.spent, usage: s.usage, hasUsage: s.hasUsage, until: s.until, answer: s.answer,
-		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt, began: s.began, passed: s.passed, graded: s.graded}
+		note: s.note, noteRole: s.noteRole, noteFades: s.notePos < 0, noteAt: s.noteAt, began: s.began, passed: s.passed, graded: s.graded, judgeGraded: s.judgeGraded}
 	for _, r := range s.runs { // every run in flight, by schedule position: the quiet view's "now"
 		v.running = append(v.running, *r)
 	}
@@ -354,24 +364,25 @@ func (s *runState) view() stateView {
 
 // stateView is a copy of the state for one frame.
 type stateView struct {
-	facts     runFacts
-	shown     [2]stateRun
-	have      [2]bool
-	settled   [2]int
-	spent     float64
-	usage     agent.UsageReading
-	hasUsage  bool
-	until     time.Time
-	answer    answerState
-	log       []logEntry // the last logRows runs' results
-	note      string
-	noteRole  term.Role
-	noteFades bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
-	noteAt    time.Time
-	running   []stateRun // every run in flight, by schedule position
-	began     time.Time
-	passed    [2]int // each arm's settled runs that passed, of graded
-	graded    [2]int
+	facts       runFacts
+	shown       [2]stateRun
+	have        [2]bool
+	settled     [2]int
+	spent       float64
+	usage       agent.UsageReading
+	hasUsage    bool
+	until       time.Time
+	answer      answerState
+	log         []logEntry // the last logRows runs' results
+	note        string
+	noteRole    term.Role
+	noteFades   bool // the note goes noteTime after noteAt (a retry's lasts until its run starts again)
+	noteAt      time.Time
+	running     []stateRun // every run in flight, by schedule position
+	began       time.Time
+	passed      [2]int // each arm's settled runs that passed, of graded
+	graded      [2]int
+	judgeGraded int
 }
 
 // noteNow is the status line's note at now: empty once it has faded.

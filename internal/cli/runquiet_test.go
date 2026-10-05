@@ -268,7 +268,7 @@ func TestQuietJudgeGraded(t *testing.T) {
 		fmt.Fprintf(&b, "=== finished, %d columns, %d rows\n%s\n", size[0], size[1], s.quiet(plainUnicode, size[0], size[1]))
 	}
 	done := term.Plain(s.quiet(plainUnicode, 79, 40))
-	for _, want := range []string{"✓ baseline", "judge: fixed (4 of 5)", "✗ trimmed", "judge: not fixed (3 of 5)", "no grades yet"} {
+	for _, want := range []string{"✓ baseline", "judge: fixed (4 of 5)", "✗ trimmed", "judge: not fixed (3 of 5)", "no test grades yet"} {
 		if !strings.Contains(done, want) {
 			t.Errorf("the finished frame lacks %q:\n%s", want, done)
 		}
@@ -289,7 +289,7 @@ func TestQuietJudgeGraded(t *testing.T) {
 	checkWords(t, "judged", b.String())
 	checkGolden(t, "quiet-judged.golden", b.String())
 	// The test-graded run counts; the judge's two grades do not.
-	if f := term.Plain(s.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "baseline 1/1 · trimmed 0/0") || !strings.Contains(f, "judge grading") {
+	if f := term.Plain(s.quiet(plainUnicode, 79, 40)); !strings.Contains(f, "baseline passed 1 of 1 · trimmed –") || !strings.Contains(f, "judge grading") {
 		t.Errorf("the judging frame:\n%s", f)
 	}
 }
@@ -347,7 +347,7 @@ func TestQuietManyAtOnceOnAShortTerminal(t *testing.T) {
 	}
 	s.finish(8, agent.OutcomeOK, &[]bool{true}[0], 0.1)
 	f := term.Plain(s.quiet(plainUnicode, 80, 13))
-	if n := len(strings.Split(f, "\n")); n > 13 || !strings.Contains(f, "passed: baseline 1/1 · trimmed 0/0 · first check after 8 tasks") || !strings.Contains(f, "+ ") {
+	if n := len(strings.Split(f, "\n")); n > 13 || !strings.Contains(f, "baseline passed 1 of 1 · trimmed – · first check after 8 tasks") || !strings.Contains(f, "+ ") {
 		t.Errorf("%d rows:\n%s", n, f)
 	}
 	if full := term.Plain(s.quiet(plainUnicode, 80, 40)); strings.Contains(full, "more") || strings.Count(full, "fresh copy") != 8 {

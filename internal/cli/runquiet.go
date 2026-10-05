@@ -336,6 +336,10 @@ func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 		var passes []string
 		for arm := range 2 {
 			label := st.Paint(armRole(arm), v.facts.labels[arm])
+			if v.graded[arm] == 0 { // no test grade for this version yet, while the other has some
+				passes = append(passes, label+st.Paint(term.Muted, " "+m.none))
+				continue
+			}
 			if form.compact {
 				passes = append(passes, label+st.Paint(term.Muted, fmt.Sprintf(" %d/%d", v.passed[arm], v.graded[arm])))
 			} else {
@@ -346,6 +350,9 @@ func (v stateView) quietAnswer(sh term.Shapes, m marks, w int) []string {
 		switch {
 		case v.graded[0]+v.graded[1] == 0:
 			second = st.Paint(term.Muted, "no grades yet")
+			if v.judgeGraded > 0 {
+				second = st.Paint(term.Muted, "no test grades yet")
+			}
 		case form.compact:
 			second = st.Paint(term.Muted, "passed: ") + second
 		}
