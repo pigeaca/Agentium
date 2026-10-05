@@ -209,7 +209,7 @@ func TestCanAnswerExpectedChange(t *testing.T) {
 }
 
 func turnsRun(model string, turns int, outcome string) store.Run {
-	return store.Run{Kind: "task", Outcome: outcome,
+	return store.Run{Kind: "task", Outcome: outcome, CostUSD: 1,
 		Record: []byte(fmt.Sprintf(`{"model":%q,"effort_recorded":true,"metrics":{"saw_result":true,"turns":%d}}`, model, turns))}
 }
 
@@ -264,10 +264,38 @@ func TestCanAnswerNeedsTheEstimateToRestOnRuns(t *testing.T) {
 	}
 }
 
+// The runs are the estimate's: at the design's effort, and while fewer than MinPastRuns of those exist, the runs from
+// before efforts were recorded too; runs at another effort never count.
+func TestMedianRequestsSelectsAsTheEstimateDoes(t *testing.T) {
+	run := func(turns int, effort string, recorded bool) store.Run {
+		return store.Run{Kind: "task", Outcome: agent.OutcomeOK, CostUSD: 1,
+			Record: []byte(fmt.Sprintf(`{"model":"claude-sonnet-5","effort":%q,"effort_recorded":%t,"metrics":{"saw_result":true,"turns":%d}}`, effort, recorded, turns))}
+	}
+	old := []store.Run{run(30, "", false), run(40, "", false), run(50, "", false)}
+	if m, n := MedianRequests(old, "claude-sonnet-5", "high"); m != 40 || n != 3 {
+		t.Errorf("unrecorded runs fill in: %v of %d", m, n)
+	}
+	two := append([]store.Run{run(10, "high", true), run(20, "high", true)}, old...)
+	if m, n := MedianRequests(two, "claude-sonnet-5", "high"); m != 30 || n != 5 {
+		t.Errorf("two at the effort and three unrecorded: %v of %d, want 30 of 5", m, n)
+	}
+	three := append([]store.Run{run(10, "high", true), run(20, "high", true), run(30, "high", true)}, old...)
+	if m, n := MedianRequests(three, "claude-sonnet-5", "high"); m != 20 || n != 3 {
+		t.Errorf("three at the effort: unrecorded ones are ignored: %v of %d, want 20 of 3", m, n)
+	}
+	other := []store.Run{run(90, "low", true), run(90, "low", true), run(90, "low", true)}
+	if _, n := MedianRequests(append(other, old[:2]...), "claude-sonnet-5", "high"); n != 2 {
+		t.Errorf("runs at another effort counted: %d", n)
+	}
+	if m, _ := MedianRequests(append(other, old...), "claude-sonnet-5", "high"); m != 40 {
+		t.Errorf("another effort moved the median: %v", m)
+	}
+}
+
 func TestMedianRequestsUsesTheEffortOfTheEstimate(t *testing.T) {
 	var runs []store.Run
 	for range 3 {
-		runs = append(runs, store.Run{Kind: "task", Outcome: agent.OutcomeOK,
+		runs = append(runs, store.Run{Kind: "task", Outcome: agent.OutcomeOK, CostUSD: 1,
 			Record: []byte(`{"model":"claude-sonnet-5","effort":"high","effort_recorded":true,"metrics":{"saw_result":true,"turns":50}}`)})
 	}
 	if m, n := MedianRequests(runs, "claude-sonnet-5", ""); m != 0 || n != 0 {

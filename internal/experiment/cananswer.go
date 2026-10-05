@@ -48,11 +48,18 @@ func (p Project) loadContextSize(ctx context.Context, d Design, needs []Calibrat
 	return size
 }
 
-// MedianRequests is the median number of requests (Claude Code's turns) a task run on model made, over the project's
-// earlier fair task runs on it at effort that reported them (the runs the cost estimate learns from); zero (and the
-// count) with fewer than MinPastRuns.
+// MedianRequests is the median number of requests (Claude Code's turns) a task run on model made, over the runs the
+// cost estimate learns from (Project.EstimateFor's selection): fair task runs on the model that saw a result and cost
+// something, at effort; while fewer than MinPastRuns of those exist, the runs from before efforts were recorded
+// join them. Runs at another effort never count. Zero (and the count) with fewer than MinPastRuns that reported turns.
 func MedianRequests(runs []store.Run, model, effort string) (requests float64, n int) {
-	var turns []float64
+	type pick struct {
+		turns    float64 // zero: the run reported none
+		recorded bool
+		match    bool
+	}
+	var picks []pick
+	matching := 0
 	for _, r := range runs {
 		if r.Kind != "task" || !Fair(r.Outcome) {
 			continue
@@ -66,10 +73,22 @@ func MedianRequests(runs []store.Run, model, effort string) (requests float64, n
 				Turns     int  `json:"turns"`
 			} `json:"metrics"`
 		}
-		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.EffortRecorded || rec.Effort != effort || !rec.Metrics.SawResult || rec.Metrics.Turns < 1 {
+		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.Metrics.SawResult || storedSpend(r).AgentUSD <= 0 {
 			continue
 		}
-		turns = append(turns, float64(rec.Metrics.Turns))
+		pk := pick{turns: float64(max(rec.Metrics.Turns, 0)), recorded: rec.EffortRecorded, match: rec.EffortRecorded && rec.Effort == effort}
+		if !pk.recorded || pk.match {
+			picks = append(picks, pk)
+		}
+		if pk.match {
+			matching++
+		}
+	}
+	var turns []float64
+	for _, pk := range picks {
+		if (pk.match || (!pk.recorded && matching < MinPastRuns)) && pk.turns >= 1 {
+			turns = append(turns, pk.turns)
+		}
 	}
 	if len(turns) < MinPastRuns {
 		return 0, len(turns)
