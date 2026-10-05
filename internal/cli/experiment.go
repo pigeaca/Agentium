@@ -306,15 +306,19 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
+	cautions, err := planCautionsOf(ctx, w, review.Design)
+	if err != nil {
+		return fail(env, err)
+	}
 	if env.JSON {
-		doc, err := planDocument(env, rest[0], review)
+		doc, err := planDocument(env, rest[0], review, cautions)
 		if err != nil {
 			return fail(env, err)
 		}
 		return env.emit(doc)
 	}
 	mode, _ := signInMode(env)
-	if err := writeReview(ctx, env, review, rest[0], mode, *details); err != nil {
+	if err := writeReview(ctx, env, review, cautions, rest[0], mode, *details); err != nil {
 		return fail(env, err)
 	}
 	return ExitOK

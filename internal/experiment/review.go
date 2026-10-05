@@ -27,6 +27,7 @@ type Review struct {
 	Readiness Readiness
 	Rows      []Row
 	Runs      []store.Run
+	Size      ContextSize // a context experiment's contexts' size, for the preview's "can it answer?"
 }
 
 // LoadReview reads experiment name and checks it. Nothing is changed.
@@ -56,8 +57,13 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 	if err != nil {
 		return Review{}, err
 	}
+	readiness := CheckReadiness(ctx, p, e, d, eligible, reasons, est)
+	size, err := p.loadContextSize(ctx, d, readiness.Calibrations, runs)
+	if err != nil {
+		return Review{}, err
+	}
 	return Review{Design: d, Eligible: eligible, Reasons: reasons, Estimates: est, Runs: runs,
-		Readiness: CheckReadiness(ctx, p, e, d, eligible, reasons, est), Rows: PreviewFor(d, eligible, est)}, nil
+		Readiness: readiness, Rows: PreviewFor(d, eligible, est), Size: size}, nil
 }
 
 // Write prints the review: the design, what is missing before it runs, the sizes with their costs and detectable

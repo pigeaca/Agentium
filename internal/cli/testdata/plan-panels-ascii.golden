@@ -1,0 +1,329 @@
+=== ctx-unsure
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
+| expected from size   about 4% less: the context is 4,575 tokens smaller      |
+| likely result        not sure                                                |
+| seeing 4% would take about 690 runs - size is not everything: a context that |
+| changes what the agent does can move cost more                               |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== ctx-sees
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
+| expected from size   about 35% less: the context is 4,575 tokens smaller     |
+| size is not everything: a context that changes what the agent does can move  |
+| cost more                                                                    |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== ctx-nosize
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== ctx-seq
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+             lean-ab - 16 tasks - 32 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 19% or more                            |
+| expected from size   about 4% less: the context is 4,575 tokens smaller      |
+| likely result        not sure                                                |
+| seeing 4% would take about 690 runs - size is not everything: a context that |
+| changes what the agent does can move cost more                               |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ##################################...................   $25.35 |
+| all tasks run #####################################################   $39.36 |
+| budget        ########################################.............      $30 |
+| likely: if nothing changes, about 10.3 of 16 tasks are used                  |
+| if every run hit its cap: $105.60                                            |
++------------------------------------------------------------------------------+
+
++- when it checks the answer --------------------------------------------------+
+| check 1: 8 tasks   ########################........................   $19.68 |
+| check 2: 12 tasks  ####################################............   $29.52 |
+| check 3: 16 tasks  ################################################   $39.36 |
+| it stops at the first check with a clear answer                              |
++------------------------------------------------------------------------------+
+
+ on your plan: 32 runs need about 2.3 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== model
+            SONNET-5  vs  HAIKU-4-5   -   does haiku-4-5 save money?
+ -------------------------------------------------------------------------------
+                   lean-ab - 8 tasks - 16 runs - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== aa
+            BASELINE  vs  LEAN   -   checking how much results vary
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== better-below
+              BASELINE  vs  LEAN   -   does lean pass more tasks?
+ -------------------------------------------------------------------------------
+             lean-ab - 12 tasks - 72 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| ! no answer on passes at this size: it needs 20 tasks of 3 runs each         |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $88.56 |
+| worst case    #####################################################  $237.60 |
+| budget        #######..............................................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 72 runs need about 5.1 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== better-above
+              BASELINE  vs  LEAN   -   does lean pass more tasks?
+ -------------------------------------------------------------------------------
+             lean-ab - 20 tasks - 120 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a pass-rate change of 24 points or more                 |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................  $147.60 |
+| worst case    #####################################################     $396 |
+| budget        ####.................................................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== usage-some
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
+| expected from size   about 4% less: the context is 4,575 tokens smaller      |
+| likely result        not sure                                                |
+| seeing 4% would take about 690 runs - size is not everything: a context that |
+| changes what the agent does can move cost more                               |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
++- your plan ------------------------------------------------------------------+
+| five-hour limit  #########################........................  51% used |
+| runs pause at 85% - about 5 more runs fit now - this experiment needs about  |
+| 1.1 limits: it pauses and goes on after the reset (add --wait)               |
++------------------------------------------------------------------------------+
+
+ everything: agentium experiment plan lean-ab --details
+=== usage-all
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 6 tasks - 12 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| ! no answer on cost at this size: it needs 8 tasks of 1 run each             |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $14.76 |
+| worst case    #####################################################   $39.60 |
+| budget        ########################################.............      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
++- your plan ------------------------------------------------------------------+
+| five-hour limit  #................................................   2% used |
+| every run fits now - this experiment needs about 0.8 limits                  |
++------------------------------------------------------------------------------+
+
+ everything: agentium experiment plan lean-ab --details
+=== api-key
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
+| expected from size   about 4% less: the context is 4,575 tokens smaller      |
+| likely result        not sure                                                |
+| seeing 4% would take about 690 runs - size is not everything: a context that |
+| changes what the agent does can move cost more                               |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ everything: agentium experiment plan lean-ab --details
+=== cautions
+              BASELINE  vs  LEAN   -   does lean pass more tasks?
+ -------------------------------------------------------------------------------
+             lean-ab - 20 tasks - 120 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
+| ! 3 tasks passed every time so far, so they may not tell the versions apart: |
+|   parse-dates, retry-http, rename-flag                                       |
+| ! 2 tasks never passed: check their text (agentium task show NAME):          |
+|   cache-race, tz-shift                                                       |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a pass-rate change of 24 points or more                 |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................  $147.60 |
+| worst case    #####################################################     $396 |
+| budget        ####.................................................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== cautions-long
+              BASELINE  vs  LEAN   -   does lean pass more tasks?
+ -------------------------------------------------------------------------------
+             lean-ab - 20 tasks - 120 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
+| ! 14 tasks passed every time so far, so they may not tell the versions       |
+|   apart: task-00, task-01, task-02, task-03, task-04, task-05, task-06, t... |
+| ! 1 task never passed: check its text (agentium task show NAME): only-one    |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a pass-rate change of 24 points or more                 |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................  $147.60 |
+| worst case    #####################################################     $396 |
+| budget        ####.................................................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== end

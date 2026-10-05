@@ -311,9 +311,55 @@ type experimentPlanDoc struct {
 	Looks          []lookPlanDoc   `json:"looks"` // seq-v1 designs; [] for others
 	Sizes          []sizePlanDoc   `json:"sizes"` // other designs; [] for seq-v1
 	Usage          *usageDoc       `json:"usage"` // null with an API key
+	CanAnswer      canAnswerDoc    `json:"can_answer"`
+	// TasksPassedEveryTime and TasksNeverPassed are the experiment's tasks that may not tell the versions apart, by the
+	// task list's rule (4 or more graded runs, all passed; 2 or more, none passed). null unless the goal is better:
+	// cautions, which change neither readiness nor which tasks run.
+	TasksPassedEveryTime []string `json:"tasks_passed_every_time"`
+	TasksNeverPassed     []string `json:"tasks_never_passed"`
 }
 
-func planDocument(env Env, name string, review experiment.Review) (experimentPlanDoc, error) {
+// canAnswerDoc is what the design's size can see, as plan previews it. Metric is what the goal asks about: cost
+// (--goal cheaper) or success (--goal better). FloorMet is false below the metric's floor (FloorTasks tasks of
+// FloorRepeats runs each, per arm): the metric gets no verdict at any effect and SmallestChange is null. SmallestChange
+// is the smallest change the size can see, a fraction: a share of cost, or the pass rate's points (0.30 is 30 points).
+// ExpectedChange is null unless a context experiment's contexts have calibrations that fit and at least 3 earlier task
+// runs on the model reported their turns.
+type canAnswerDoc struct {
+	Metric         string             `json:"metric"` // cost | success
+	FloorMet       bool               `json:"floor_met"`
+	FloorTasks     int                `json:"floor_tasks"`
+	FloorRepeats   int                `json:"floor_repeats"`
+	SmallestChange *float64           `json:"smallest_change"`
+	ExpectedChange *expectedChangeDoc `json:"expected_change"`
+	LikelyNotSure  bool               `json:"likely_result_not_sure"` // the expected change is below what the size can see
+}
+
+// expectedChangeDoc is the cost change a context's size alone is expected to make, and what it rests on: Change is a
+// fraction of a run's cost, positive when context B costs less. RunsToSee is the runs of a fixed design of one run
+// per version that could see it, to two digits.
+type expectedChangeDoc struct {
+	Change         float64 `json:"change"`
+	TokensA        int64   `json:"tokens_a"` // each context's first request
+	TokensB        int64   `json:"tokens_b"`
+	RequestsPerRun float64 `json:"requests_per_run"`
+	RunUSD         float64 `json:"run_usd"`
+	RunsToSee      *int    `json:"runs_to_see"`
+}
+
+func canAnswerOf(a experiment.CanAnswer) canAnswerDoc {
+	doc := canAnswerDoc{Metric: a.Metric, FloorMet: a.FloorMet, FloorTasks: a.FloorTasks, FloorRepeats: a.FloorRepeats, SmallestChange: finite(a.Smallest),
+		LikelyNotSure: a.NotSure}
+	if e := a.Expected; e != nil {
+		doc.ExpectedChange = &expectedChangeDoc{Change: e.Share, TokensA: e.TokensA, TokensB: e.TokensB, RequestsPerRun: e.Requests, RunUSD: e.RunUSD}
+		if a.RunsToSee > 0 {
+			doc.ExpectedChange.RunsToSee = ptr(a.RunsToSee)
+		}
+	}
+	return doc
+}
+
+func planDocument(env Env, name string, review experiment.Review, cautions planCautions) (experimentPlanDoc, error) {
 	spend, looks, sizes, err := spendPlan(review)
 	if err != nil {
 		return experimentPlanDoc{}, err
@@ -322,6 +368,10 @@ func planDocument(env Env, name string, review experiment.Review) (experimentPla
 		Readiness: []readinessDoc{}, Calibrations: len(review.Readiness.Calibrations), EligibleTasks: list(slices.Clone(review.Eligible)),
 		Ineligible: []ineligibleDoc{}, Spend: spend, Looks: looks, Sizes: sizes}
 	doc.CalibrationUSD, _ = experiment.CalibrationCosts(review.Readiness.Calibrations)
+	doc.CanAnswer = canAnswerOf(review.CanAnswer())
+	if cautions.Applies {
+		doc.TasksPassedEveryTime, doc.TasksNeverPassed = list(slices.Clone(cautions.TooEasy)), list(slices.Clone(cautions.NeverPassed))
+	}
 	mode, _ := signInMode(env)
 	doc.Usage = usageOf(review.Usage(mode, env.Now()), env.Now())
 	for _, c := range review.Readiness.Checks {
