@@ -229,8 +229,8 @@ func fixedAnswer(ctx context.Context, w *workspace, name string, lock experiment
 	return &a
 }
 
-// revalidate validates the named tasks again in grader mode and the arms' contexts, before a sandbox experiment locks
-// (experiment.Runner.Revalidate): as many at a time as the project's jobs setting, each stage as many times as the
+// revalidate validates the named tasks again in grader mode and the arms' contexts, with the proof that the hidden tests
+// ran, before an experiment locks (experiment.Runner.Revalidate): as many at a time as the project's jobs setting, each stage as many times as the
 // most any of them was last validated with, keeping their weak-tests results, and stores each validation. Readiness
 // then checks the results; an interrupt is an error.
 func revalidate(ctx context.Context, env Env, w *workspace, live *term.StatusLine, names []string, arms []task.Arm, grader string) error {
@@ -351,6 +351,9 @@ func experimentShow(ctx context.Context, env Env, args []string) int {
 	fmt.Fprintf(out, "%s; %d task(s) × %d run(s) per arm; %s\n", experiment.DescribeArms(d), len(lock.Tasks), d.Repeats, d.ModelLabel())
 	fmt.Fprintf(out, "Locked %s: Claude Code %s, sign-in %s, %s, method %s, prices of %s\n", lock.LockedAt.Format("2006-01-02 15:04"),
 		lock.ClaudeCode, lock.SignIn, lock.Host, lock.Method, lock.PriceTable)
+	if rule := lock.PassRule(); rule != task.PassExitCode { // a lock made before the proof shows as it did
+		fmt.Fprintf(out, "Passes: %s\n", task.DescribePassRule(rule))
+	}
 	if j := lock.Design.Judge; j != nil {
 		fmt.Fprintf(out, "Judge: %s (a second opinion beside the tests)\n", experiment.DescribeJudge(*j))
 	}

@@ -70,7 +70,15 @@ type Lock struct {
 	// (task.Validation.Harmless), fixed at the lock: a sandboxed grade of the task does not flag them. Absent for host
 	// locks and tasks without any.
 	Harmless map[string][]task.DenialKey `json:"harmless_denials,omitempty"`
+	// Pass is the rule every run's pass is decided by (task.PassGoTests: the proof that the hidden Go tests ran), from
+	// the design (Design.PassRule). Absent in locks made before the proof and in those of designs without hidden Go
+	// tests, which grade by the exit codes, and resume, report and keep their verdicts so (PassRule). One experiment
+	// never mixes rules.
+	Pass string `json:"pass_rule,omitempty"`
 }
+
+// PassRule is the rule the experiment's runs are graded by: the lock's, or task.PassExitCode for a lock without one.
+func (l Lock) PassRule() string { return task.PassRuleOf(l.Pass) }
 
 // LockedArm is an arm's context and the environment its runs must see.
 type LockedArm struct {
@@ -199,6 +207,10 @@ func (l Lock) Check(cliVersion, signIn string) error {
 	if !task.KnownGrader(l.Grader) {
 		return fmt.Errorf("its runs were graded in %s, which this Agentium does not grade in (it grades %s): its later runs would not compare; start a new experiment",
 			l.Grader, task.GradesOn)
+	}
+	if !task.KnownPassRule(l.Pass) {
+		return fmt.Errorf("its runs' passes were decided by rule %s, which this Agentium does not know (it knows %s and %s): its later runs would not compare; start a new experiment",
+			l.Pass, task.PassExitCode, task.PassGoTests)
 	}
 	switch {
 	case cliVersion != l.ClaudeCode:

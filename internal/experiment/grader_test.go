@@ -51,11 +51,11 @@ func TestIneligibleByGrader(t *testing.T) {
 			!strings.Contains(why, "agentium task validate t --snapshot lean --grader host")) {
 			t.Errorf("the refusal: %q", why)
 		}
-		if got := NeedsRevalidation(cand, c.experiment); got != c.revalidate {
+		if got := NeedsRevalidation(cand, c.experiment, ""); got != c.revalidate {
 			t.Errorf("validated %q, experiment %q: re-validate %v", c.validated, c.experiment, got)
 		}
 	}
-	if NeedsRevalidation(Candidate{Name: "t"}, task.GraderSandbox) {
+	if NeedsRevalidation(Candidate{Name: "t"}, task.GraderSandbox, "") {
 		t.Error("a task never validated is re-validated (it is refused)")
 	}
 }
@@ -369,7 +369,7 @@ func TestContainerModeIsRefused(t *testing.T) {
 		if why := Ineligible(cand, arms, mode); !strings.Contains(why, "does not grade in "+mode) {
 			t.Errorf("validated %q: eligible for %s: %q", validated, mode, why)
 		}
-		if NeedsRevalidation(cand, mode) {
+		if NeedsRevalidation(cand, mode, "") {
 			t.Errorf("validated %q: re-validated for %s", validated, mode)
 		}
 	}

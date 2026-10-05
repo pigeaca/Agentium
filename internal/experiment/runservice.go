@@ -238,16 +238,23 @@ func (r Runner) lockFirst(ctx context.Context, stored store.Experiment, d Design
 	return lock, nil
 }
 
-// revalidate validates d's tasks that were validated in another mode again, in d's (Revalidations): only a sandbox
-// experiment has any. Without Revalidate it does nothing, and readiness reports them.
+// revalidate validates d's tasks again, in d's mode and rule, that were validated in another mode (a sandbox
+// experiment) or before the proof that the hidden tests ran (an experiment that grades by it): Revalidations. Without
+// Revalidate it does nothing, and readiness reports them.
 func (r Runner) revalidate(ctx context.Context, d Design) error {
-	names, err := r.Project.Revalidations(ctx, d)
-	if err != nil || len(names) == 0 || r.Revalidate == nil {
+	why, err := r.Project.RevalidationsWhy(ctx, d)
+	if err != nil || len(why.Names) == 0 || r.Revalidate == nil {
 		return err
 	}
-	fmt.Fprintf(r.Out, "Validating %d task(s) again %s, the experiment's grader: they were validated in another mode (time, no money).\n",
-		len(names), task.DescribeGrader(d.Grader))
-	return r.Revalidate(ctx, names, ValidationArms(d.Arms), task.GraderOf(d.Grader))
+	if len(why.Mode) > 0 {
+		fmt.Fprintf(r.Out, "Validating %d task(s) again %s, the experiment's grader: they were validated in another mode (time, no money).\n",
+			len(why.Mode), task.DescribeGrader(d.Grader))
+	}
+	if len(why.Proof) > 0 {
+		fmt.Fprintf(r.Out, "Validating %d task(s) again with the proof that their hidden tests ran: they were validated before it (time, no money).\n",
+			len(why.Proof))
+	}
+	return r.Revalidate(ctx, why.Names, ValidationArms(d.Arms), task.GraderOf(d.Grader))
 }
 
 // ValidationArms are the contexts a validation covers for an experiment's arms: the base's own first, then each
@@ -453,11 +460,7 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 	if err != nil {
 		return RunOutcome{}, err
 	}
-	// The lock decides: a resumed experiment never gets local binding its first run did not have (and not after the user
-	// turned it off, either: NewRunEnv holds the project's setting now).
-	runEnv.AllowLocalBinding = runEnv.AllowLocalBinding && lock.LocalBinding
-	runEnv.Grader = task.GraderOf(lock.Grader)                                                // the lock's mode, whatever the default is now: one experiment never mixes modes
-	runEnv.Progress = nil                                                                     // the scheduler reports one line per run
+	runEnv = lockedRunEnv(runEnv, lock)
 	if err := p.DB.SetExperimentStatus(ctx, stored.ID, store.StatusRunning, ""); err != nil { // stays so if this process dies: show tells
 		return RunOutcome{}, err
 	}
@@ -566,6 +569,18 @@ func (r Runner) execute(ctx context.Context, stored store.Experiment, name strin
 		return RunOutcome{}, errors.Join(runErr, err)
 	}
 	return RunOutcome{Summary: sum, JudgePaused: x.judgePaused.Load(), Err: runErr}, nil
+}
+
+// lockedRunEnv is env as the lock has every run of the experiment graded, whatever this Agentium's defaults are now:
+// the lock's grader mode and pass rule (one experiment never mixes either; an experiment locked before the proof keeps
+// the exit codes), and local binding only when its first run had it (and not after the user turned it off, either:
+// NewRunEnv holds the project's setting now). The scheduler reports one line per run, so the run itself prints none.
+func lockedRunEnv(env run.Env, lock Lock) run.Env {
+	env.AllowLocalBinding = env.AllowLocalBinding && lock.LocalBinding
+	env.Grader = task.GraderOf(lock.Grader)
+	env.ExitCodeOnly = lock.PassRule() == task.PassExitCode
+	env.Progress = nil
+	return env
 }
 
 // lockPlan is the scheduler's plan of a locked experiment as far as the lock decides it: its schedule, concurrency,
@@ -1065,7 +1080,7 @@ func (r Runner) buildLock(ctx context.Context, d Design, cli, version string) (L
 	p := r.Project
 	l := Lock{Method: d.LockMethod(), Agentium: r.Version, LockedAt: r.Now().UTC(), ClaudeCode: version,
 		ClaudePath: cli, SignIn: r.SignIn, Host: runtime.GOOS + "/" + runtime.GOARCH, PriceTable: pricing.Date, Design: d,
-		Schedule: Schedule(d), MaxAttempts: MaxAttempts, Grader: task.GraderOf(d.Grader)}
+		Schedule: Schedule(d), MaxAttempts: MaxAttempts, Grader: task.GraderOf(d.Grader), Pass: d.PassRule}
 	if d.Sequential() {
 		seq, err := NewSequential(len(d.Tasks), !d.NoFutility)
 		if err != nil {

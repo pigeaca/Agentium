@@ -171,13 +171,16 @@ func (c *checker) tasks(d Design, eligible []string, reasons map[string]string) 
 	}
 }
 
-// graders checks that the tasks were validated in the experiment's grader mode, or says that the first run validates
-// them again in it (a sandbox experiment, before it locks).
+// graders checks that the tasks were validated in the experiment's grader mode and, for an experiment that grades by
+// the proof that the hidden tests ran, with the proof; or says that the first run validates them again so (before it
+// locks).
 func (c *checker) graders(ctx context.Context, p Project, e ReadinessEnv, d Design) {
-	names, err := p.Revalidations(ctx, d)
-	switch {
-	case err != nil:
+	why, err := p.RevalidationsWhy(ctx, d)
+	if err != nil {
 		c.line(false, "the tasks' validation modes could not be read: %v", err)
+		return
+	}
+	switch names := why.Mode; {
 	case len(names) > 0 && e.Locking:
 		c.line(false, "task(s) not validated %s, the experiment's grader: %s (%s)", task.DescribeGrader(d.Grader), strings.Join(names, ", "),
 			e.Style.Command("agentium task validate NAME --grader sandbox"+snapshotFlags(d.Arms)))
@@ -185,6 +188,22 @@ func (c *checker) graders(ctx context.Context, p Project, e ReadinessEnv, d Desi
 		c.line(true, "%d task(s) validated in another mode are validated again %s when the experiment runs, before it locks (time, no money): %s",
 			len(names), task.DescribeGrader(d.Grader), strings.Join(names, ", "))
 	}
+	switch names := why.Proof; {
+	case len(names) > 0 && e.Locking:
+		c.line(false, "task(s) not validated with the proof that their hidden tests ran: %s (%s)", strings.Join(names, ", "),
+			e.Style.Command("agentium task validate NAME"+graderFlag(d.Grader)+snapshotFlags(d.Arms)))
+	case len(names) > 0:
+		c.line(true, "%d task(s) validated before the proof that their hidden tests ran are validated again with it when the experiment runs, before it locks (time, no money): %s",
+			len(names), strings.Join(names, ", "))
+	}
+}
+
+// graderFlag is the --grader flag that validates in mode.
+func graderFlag(mode string) string {
+	if task.GraderOf(mode) == task.GraderSandbox {
+		return " --grader sandbox"
+	}
+	return " --grader host"
 }
 
 // fairness warns about tasks whose hidden tests need what nothing states, and about thin validation.

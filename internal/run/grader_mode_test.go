@@ -29,7 +29,7 @@ func TestContainerModeIsRefusedLikeAnUnknownMode(t *testing.T) {
 		if (Env{Grader: mode}).gradesInSandbox() {
 			t.Errorf("Env.gradesInSandbox(%s)", mode)
 		}
-		if _, err := (Env{Grader: mode}).verifyIsolated(ctx, Spec{}, "", &Record{}, nil); err == nil || err.Error() != want {
+		if _, err := (Env{Grader: mode}).verifyIsolated(ctx, Spec{}, "", &Record{}, nil, nil); err == nil || err.Error() != want {
 			t.Errorf("verifyIsolated(%s): %v", mode, err)
 		}
 		// Validation's commands: refused before anything is warmed or offered, never host (nil Isolated) or sandbox.

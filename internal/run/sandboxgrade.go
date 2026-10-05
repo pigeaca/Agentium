@@ -117,12 +117,16 @@ type sandboxGrade struct {
 	// Testing, Cleaning and Quarantined, when set, are told when the commands start (the canary passed), when the
 	// grade's cleanup starts, and when it moved a folder into the quarantine: for a live display (Env.Step).
 	Testing, Cleaning, Quarantined func()
+	// Proving, when set, is the proof that the hidden tests ran: once every command passed, its commands run in the same
+	// sandbox, profile and folder, with the same environment and time limit, before the denials are read, and the
+	// grade passes only when it is proven. Its Result says what it saw.
+	Proving *task.Proving
 }
 
-// gradeInSandbox runs the commands in the grading sandbox, until one fails, and returns their results, whether all
-// passed, and what the sandbox reported. An error wrapping sandbox.ErrUnavailable means the canary (or a profile check
-// before a command) showed the sandbox does not hold: report.Canary says why. Any other error is Agentium's own (or
-// cancellation).
+// gradeInSandbox runs the commands in the grading sandbox, until one fails, then the proof (in.Proving) when all
+// passed, and returns the commands' results, whether all passed (and the proof was proven), and what the sandbox
+// reported. An error wrapping sandbox.ErrUnavailable means the canary (or a profile check before a command) showed the
+// sandbox does not hold: report.Canary says why. Any other error is Agentium's own (or cancellation).
 func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []task.Command, ok bool, report *task.SandboxGrade, err error) {
 	profiles := buildtool.SelectRun(in.Agent.Tools, in.Agent.AgentTools)
 	seed := ""
@@ -197,6 +201,27 @@ func (env Env) gradeInSandbox(ctx context.Context, in sandboxGrade) (results []t
 				}
 				ok = false
 				break
+			}
+		}
+		if ok && in.Proving != nil {
+			if ok, err = in.Proving.Run(ctx, in.Log, func(ctx context.Context, command string, events *os.File) (task.Command, error) {
+				if err := sandbox.CheckFile(file, digest); err != nil {
+					return task.Command{Command: command, ExitCode: -1}, err
+				}
+				dir, there := env.gradeDir(g.Copy, in)
+				if !there {
+					return task.Command{Command: command, ExitCode: -1}, nil
+				}
+				spec, err := sandbox.Wrap(runner.Spec{Dir: dir, Command: command, Timeout: in.Timeout, Output: events, Stderr: in.Log,
+					Started: in.Running, Environ: g.Environ}, file)
+				if err != nil {
+					return task.Command{Command: command, ExitCode: -1}, err
+				}
+				result, err := runner.Run(ctx, spec)
+				return task.Command{Command: command, ExitCode: result.ExitCode, TimedOut: result.TimedOut,
+					Seconds: result.Duration.Round(time.Millisecond).Seconds()}, err
+			}); err != nil {
+				return err
 			}
 		}
 		read := sandbox.ReadDenials
@@ -294,10 +319,10 @@ func (g grading) lock() error {
 
 // sandboxedCommands is task.CheckoutCommands.Isolated for a validation (CheckoutCommands): a stage's checkout is
 // graded as a run's copy is, in its own grading folder, with agent's recipe and denied paths.
-func (env Env) sandboxedCommands(inv agent.Invocation, base string) func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
-	return func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer) ([]task.Command, bool, *task.SandboxGrade, error) {
+func (env Env) sandboxedCommands(inv agent.Invocation, base string) func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer, proving *task.Proving) ([]task.Command, bool, *task.SandboxGrade, error) {
+	return func(ctx context.Context, dir, root string, keep bool, commands []string, timeout time.Duration, log io.Writer, proving *task.Proving) ([]task.Command, bool, *task.SandboxGrade, error) {
 		in := sandboxGrade{Root: root, Copy: dir, Agent: inv, Base: base, Commands: commands, Timeout: timeout, Log: log,
-			Running: func(int) {}, Warn: func(w string) { fmt.Fprintf(log, "[agentium] warning: %s\n", w) }}
+			Running: func(int) {}, Warn: func(w string) { fmt.Fprintf(log, "[agentium] warning: %s\n", w) }, Proving: proving}
 		if keep {
 			in.Keep = dir
 		}
