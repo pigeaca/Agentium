@@ -1489,6 +1489,7 @@ json task add .task.unstated_requirements	int
 json task add .task.untested_hunks	int
 json task add .verify	[]string
 json task draft .command	string
+json task draft .cost_pending	bool
 json task draft .cost_usd	float
 json task draft .draft	string
 json task draft .drafting_spend_usd	float

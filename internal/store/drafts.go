@@ -81,11 +81,13 @@ func (s *Store) SetTaskDraft(ctx context.Context, ref TaskRef, text, model strin
 
 // AcceptMined marks t reviewed for `start --accept-mined` and `pool update --accept-mined`, only while it still awaits
 // review with the instruction t holds and that instruction is not a draft's (FromDraft): a draft always waits for the
-// owner, and an edit made since t was read is never reviewed in passing. Nothing else is written. It reports whether
+// owner, and an edit made since t was read is never reviewed in passing. The task is matched by its whole identity
+// (project, id, name and creation time): a task removed meanwhile whose id another task took is not the one checked. Nothing else is written. It reports whether
 // it marked the task.
 func (s *Store) AcceptMined(ctx context.Context, t Task, now time.Time) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE tasks SET needs_review = 0, updated_at = ?
-		WHERE id = ? AND needs_review = 1 AND instruction = ? AND instruction_from_draft = 0`, formatTime(now), t.ID, t.Instruction)
+		WHERE id = ? AND project_id = ? AND name = ? AND created_at = ? AND needs_review = 1 AND instruction = ? AND instruction_from_draft = 0`,
+		formatTime(now), t.ID, t.ProjectID, t.Name, formatTime(t.CreatedAt), t.Instruction)
 	if err != nil {
 		return false, fmt.Errorf("accept task %q: %w", t.Name, err)
 	}

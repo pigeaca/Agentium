@@ -177,6 +177,9 @@ type taskDraftDoc struct {
 	MaxCostUSD float64 `json:"max_cost_usd"`
 	// CostUSD is what this call reported it cost, counted before anything else; null when it reported none or nothing ran.
 	CostUSD *float64 `json:"cost_usd"`
+	// CostPending: the call returned but its cost could not be stored yet (outcome failed), so drafting_spend_usd leaves
+	// it out; the next command that starts paid work in the data folder counts it.
+	CostPending bool `json:"cost_pending"`
 	// DraftingSpendUSD is what every draft call on the task has cost, this one included.
 	DraftingSpendUSD float64  `json:"drafting_spend_usd"`
 	Notes            []string `json:"notes"` // for people: draft calls a stopped Agentium left, cut prompts

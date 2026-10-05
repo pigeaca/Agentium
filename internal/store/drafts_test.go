@@ -222,3 +222,38 @@ func TestDraftWritesNeverReachAReusedID(t *testing.T) {
 		t.Errorf("the new task was charged or given the draft: %+v", got)
 	}
 }
+
+// A task removed while --accept-mined checks it, its id taken by a task of another project with the same text: the
+// replacement is not marked reviewed.
+func TestAcceptMinedNeverMarksAReusedID(t *testing.T) {
+	s := open(t, filepath.Join(t.TempDir(), "agentium.db"))
+	ctx := context.Background()
+	now := time.Date(2026, 10, 5, 9, 0, 0, 0, time.UTC)
+	app, err := s.SaveProject(ctx, "/work/app", "app", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := s.SaveProject(ctx, "/work/other", "other", []byte(`{}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked, err := s.SaveTask(ctx, Task{ProjectID: app.ID, Name: "fix", Instruction: "Fix it.", Source: "commit abc", BaseCommit: "b",
+		Verify: []string{"t"}, NeedsReview: true, CreatedAt: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteTask(ctx, app.ID, "fix"); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := s.SaveTask(ctx, Task{ProjectID: other.ID, Name: "fix", Instruction: "Fix it.", Source: "commit abc", BaseCommit: "b",
+		Verify: []string{"t"}, NeedsReview: true, CreatedAt: now.Add(time.Minute)})
+	if err != nil || reused.ID != checked.ID {
+		t.Fatalf("the id was not reused (%d, %d): %v", checked.ID, reused.ID, err)
+	}
+	if ok, err := s.AcceptMined(ctx, checked, now); err != nil || ok {
+		t.Errorf("AcceptMined of the removed task = %v, %v", ok, err)
+	}
+	if got, _ := s.TaskByName(ctx, other.ID, "fix"); !got.NeedsReview {
+		t.Errorf("the replacement was marked reviewed: %+v", got)
+	}
+}

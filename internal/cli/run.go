@@ -496,7 +496,7 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 		return nil, err
 	}
 	// Draft calls a dead Agentium left, of every project: a live one refuses the start; finished ones are counted.
-	if w.draftNotes, err = settleDraftCalls(ctx, env, w.db, w.layout, env.noticeOut()); err != nil {
+	if w.draftNotes, err = settleDraftCalls(ctx, env, w.db, w.layout, env.noticeOut(), psProcessAge); err != nil {
 		release()
 		return nil, err
 	}

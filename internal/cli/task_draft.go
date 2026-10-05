@@ -112,6 +112,14 @@ func taskDraft(ctx context.Context, env Env, args []string) int {
 	defer release()
 	res, err := d.draft(ctx, *timeout)
 	switch {
+	case err != nil && d.pending: // the call spent, and its cost could not be stored: say it all the same
+		d.doc.Outcome, d.doc.CostPending, d.doc.NextCommand = "failed", true, "agentium task draft "+d.t.Name
+		d.doc.Reason = env.redact(pendingCostText(res) + ": " + err.Error())
+		if env.JSON {
+			return env.emitCode(d.doc, ExitError)
+		}
+		fmt.Fprintln(env.Stdout, env.style().Warn(pendingCostText(res)+"."))
+		return fail(env, err)
 	case err != nil && d.counted && env.JSON: // after the count (a check could not run): the document keeps the call's cost
 		d.doc.Outcome, d.doc.Reason, d.doc.NextCommand = "failed", env.redact(err.Error()), "agentium task draft "+d.t.Name
 		return env.emitCode(d.doc, ExitError)
@@ -134,6 +142,18 @@ type drafting struct {
 	// counted: the call returned and its cost was counted; removed: the task it was made for is gone (or its id is
 	// another task's now), so no task's spend counted it and nothing may be stored.
 	counted, removed bool
+	// pending: the call returned, but its cost could not be stored; its folder stays, and the next start of paid work
+	// counts it (settleDraftCalls).
+	pending bool
+}
+
+// pendingCostText says what a call whose cost could not be stored spent, and when it will be counted.
+func pendingCostText(res task.DraftResult) string {
+	spent := fmt.Sprintf("This call cost $%.2f", res.CostUSD)
+	if !res.CostReported {
+		spent = fmt.Sprintf("This call reported no cost (its spend is unknown, at most $%.2f)", draftMostUSD())
+	}
+	return spent + "; it could not be recorded yet, and the next task draft, run once or experiment run in this data folder counts it"
 }
 
 // prepareDraft is everything before any spend: the task can be drafted, the preview names the most the call may cost,
@@ -199,6 +219,7 @@ func (d *drafting) draft(ctx context.Context, timeout time.Duration) (task.Draft
 	count := func(cost float64, reported bool) error {
 		_, err := w.db.CountDraftCall(context.WithoutCancel(ctx), filepath.Base(dir), d.t.Ref(), cost, env.Now())
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
+			d.pending = true
 			return err // the folder stays: the next start of paid work counts it
 		}
 		d.counted, d.removed = true, err != nil
@@ -388,14 +409,14 @@ func (w *workspace) newDraftCall(env Env, t store.Task, cli, mode, secret string
 // command that starts paid work calls it under the run lock (startRuns), so no agent or call starts beside a call that
 // still runs:
 //   - while any call may still run (its process group exists, and its leader is not clearly another program: one that
-//     started more than draftStartSlack away from the call), it settles nothing and fails, saying where the call's
-//     folder is and what removing it means;
+//     started, by age's reading, more than draftStartSlack away from the call), it settles nothing and fails, saying
+//     where the call's folder is and what removing it means;
 //   - a call whose output reports its cost has that cost counted against the task it was made for, once
 //     (store.CountDraftCall: a call counted before its folder went says nothing; a task removed since is not charged);
 //   - a call whose output holds no cost (it never finished) is said to have an unknown spend, at most its bound.
 //
 // Then its folder goes. Its draft is never taken from a leftover reply: the owner runs task draft again.
-func settleDraftCalls(ctx context.Context, env Env, db *store.Store, layout home.Layout, out io.Writer) ([]string, error) {
+func settleDraftCalls(ctx context.Context, env Env, db *store.Store, layout home.Layout, out io.Writer, age processAge) ([]string, error) {
 	projects, err := os.ReadDir(layout.Drafts())
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -433,7 +454,8 @@ func settleDraftCalls(ctx context.Context, env Env, db *store.Store, layout home
 		if err != nil || convErr != nil || pgid <= 1 || !draftGroupExists(pgid) {
 			continue
 		}
-		if leader, ok := processStarted(ctx, pgid); ok && metaOK[i] && !metas[i].Started.IsZero() && leader.Sub(metas[i].Started).Abs() > draftStartSlack {
+		if ran, ok := age(ctx, pgid); ok && metaOK[i] && !metas[i].Started.IsZero() && env.Now().Add(-ran).Sub(metas[i].Started).Abs() > draftStartSlack {
+			leader := env.Now().Add(-ran)
 			say(fmt.Sprintf("Process group %d of a draft call left by a stopped Agentium (%s) now belongs to another program, started %s; the call is settled as ended",
 				pgid, filepath.Base(path), leader.UTC().Format(time.RFC3339)))
 			continue
@@ -480,21 +502,47 @@ func settleDraftCalls(ctx context.Context, env Env, db *store.Store, layout home
 // may be for the group to be the call's: the call starts within moments of its folder, and ps reports whole seconds.
 const draftStartSlack = 2 * time.Minute
 
-// processStarted is when process pid started, from ps; false when it cannot be told (no such process, no ps).
-func processStarted(ctx context.Context, pid int) (time.Time, bool) {
+// processAge is how long process pid has run, or false when it cannot be told (no such process, no ps). Elapsed time
+// has no time zone, so the repeated hour when daylight saving ends cannot shift it.
+type processAge func(ctx context.Context, pid int) (time.Duration, bool)
+
+// psProcessAge is processAge from ps's elapsed time (etime).
+func psProcessAge(ctx context.Context, pid int) (time.Duration, bool) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "/bin/ps", "-o", "lstart=", "-p", strconv.Itoa(pid))
-	cmd.Env = []string{"LC_ALL=C"} // English names; the same zone as time.Local, which TZ sets for both
-	if tz, ok := os.LookupEnv("TZ"); ok {
-		cmd.Env = append(cmd.Env, "TZ="+tz)
-	}
+	cmd := exec.CommandContext(ctx, "/bin/ps", "-o", "etime=", "-p", strconv.Itoa(pid))
+	cmd.Env = []string{"LC_ALL=C"}
 	out, err := cmd.Output()
 	if err != nil {
-		return time.Time{}, false
+		return 0, false
 	}
-	at, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", strings.Join(strings.Fields(string(out)), " "), time.Local)
-	return at, err == nil
+	return parseElapsed(string(out))
+}
+
+// parseElapsed reads ps's etime, [[DD-]HH:]MM:SS.
+func parseElapsed(s string) (time.Duration, bool) {
+	s = strings.TrimSpace(s)
+	days := 0
+	if d, rest, ok := strings.Cut(s, "-"); ok {
+		n, err := strconv.Atoi(d)
+		if err != nil || n < 0 {
+			return 0, false
+		}
+		days, s = n, rest
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 || (days > 0 && len(parts) != 3) {
+		return 0, false
+	}
+	total := 0
+	for _, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || len(p) == 0 {
+			return 0, false
+		}
+		total = total*60 + n
+	}
+	return time.Duration(days)*24*time.Hour + time.Duration(total)*time.Second, true
 }
 
 // draftGroupExists reports whether a process group exists (possibly another user's: EPERM).

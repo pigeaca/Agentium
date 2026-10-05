@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -338,16 +339,15 @@ func TestTaskDraftCountsACrashedCallOnce(t *testing.T) {
 	if left := draftFolders(t, f); len(left) != 5 || storedTask(t, f, "clamp").DraftSpendUSD != 0.40 {
 		t.Fatalf("a refusal settled something: folders %v, spend %v", left, storedTask(t, f, "clamp").DraftSpendUSD)
 	}
-	// The same group, but the call started an hour before its leader: a reused number, settled as ended.
-	if err := os.WriteFile(filepath.Join(alive, "call.json"), []byte(metaAt(clamp.CreatedAt, time.Now().Add(-time.Hour))), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	// Once its group is gone it is settled like the others (a reused group number is TestSettleDraftCallsTellsAReusedGroup's).
+	sleeper.Process.Kill()
+	sleeper.Wait()
+	_ = alive
 
 	setReply(t, ctrl, draftGap)
 	next := f.run(ctx, "task", "draft", "clamp", "--yes")
 	expect(t, next, ExitError, "Counted $0.03 that a draft call of task clamp spent before Agentium stopped; its draft was not kept",
 		"A draft call of task clamp, left by a stopped Agentium, reported no cost: its spend is unknown, at most $0.65",
-		"Process group "+pg+" of a draft call left by a stopped Agentium (20261005T100002Z-alive) now belongs to another program",
 		"A draft call of task clamp, left by a stopped Agentium, spent $0.03; that task was removed since, so no task's spend counts it",
 		"Refused the draft ($0.02; drafting this task has cost $0.45)")
 	if strings.Contains(next.stdout, "$0.58") || strings.Count(next.stdout, "Counted $") != 1 {
@@ -614,4 +614,146 @@ func draftOneTask(t *testing.T, f runFixture) string {
 	db.Close()
 	expect(t, f.run(ctx, "task", "edit", tasks[0].Name, "--accept-draft"), ExitOK)
 	return tasks[0].Name
+}
+
+// A live-looking leftover's group: its leader is the call's when it started with the call, another program's when it
+// started far from it, and unknown (no reading) counts as the call's. The reader is injected: no real ps is needed.
+func TestSettleDraftCallsTellsAReusedGroup(t *testing.T) {
+	t.Parallel()
+	f, _ := draftFixture(t)
+	ctx := context.Background()
+	layout, err := home.Resolve(func(k string) string { return f.vars[k] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(ctx, layout.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	sleeper := exec.Command("sleep", "60")
+	sleeper.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sleeper.Process.Kill(); sleeper.Wait() })
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+	clamp := storedTask(t, f, "clamp")
+	dir := filepath.Join(layout.Drafts(), "1", "20261005T115959Z-call")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	meta := `{"task_id":` + strconv.FormatInt(clamp.ID, 10) + `,"task":"clamp","task_created":"` + clamp.CreatedAt.Format(time.RFC3339Nano) +
+		`","model":"claude-sonnet-5-5","started":"` + now.Add(-time.Second).Format(time.RFC3339Nano) + `"}`
+	for file, body := range map[string]string{"call.json": meta, "pgid": strconv.Itoa(sleeper.Process.Pid)} {
+		if err := os.WriteFile(filepath.Join(dir, file), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	env := Env{Getenv: func(k string) string { return f.vars[k] }, Now: func() time.Time { return now }}
+	for _, c := range []struct {
+		name    string
+		age     processAge
+		settled bool
+	}{
+		{"started with the call", func(context.Context, int) (time.Duration, bool) { return 2 * time.Second, true }, false},
+		{"no reading", func(context.Context, int) (time.Duration, bool) { return 0, false }, false},
+		{"started an hour before the call", func(context.Context, int) (time.Duration, bool) { return time.Hour, true }, true},
+	} {
+		var out bytes.Buffer
+		notes, err := settleDraftCalls(ctx, env, db, layout, &out, c.age)
+		_, statErr := os.Stat(dir)
+		switch {
+		case c.settled && (err != nil || statErr == nil || len(notes) != 2 || !strings.Contains(notes[0], "now belongs to another program")):
+			t.Errorf("%s: not settled: %v, %v, %q", c.name, err, statErr, notes)
+		case !c.settled && (err == nil || !strings.Contains(err.Error(), "may still be running") || statErr != nil):
+			t.Errorf("%s: not refused: %v, %v", c.name, err, statErr)
+		}
+	}
+}
+
+func TestParseElapsed(t *testing.T) {
+	for in, want := range map[string]time.Duration{"  00:05\n": 5 * time.Second, "12:34": 12*time.Minute + 34*time.Second, "01:00:00": time.Hour,
+		"2-03:04:05": 51*time.Hour + 4*time.Minute + 5*time.Second} {
+		if got, ok := parseElapsed(in); !ok || got != want {
+			t.Errorf("parseElapsed(%q) = %v, %v; want %v", in, got, ok, want)
+		}
+	}
+	for _, in := range []string{"", "5", "a:b", "1-02:03", "-1:00", "1:2:3:4"} {
+		if _, ok := parseElapsed(in); ok {
+			t.Errorf("parseElapsed(%q) read a time", in)
+		}
+	}
+}
+
+// The real reader, where ps can run: this test's own process has run for a while, and a process that does not exist
+// gives no reading. Skipped where /bin/ps cannot run (some sandboxes).
+func TestPSProcessAgeReadsARealProcess(t *testing.T) {
+	if err := exec.Command("/bin/ps", "-o", "etime=", "-p", strconv.Itoa(os.Getpid())).Run(); err != nil {
+		t.Skipf("/bin/ps cannot run here: %v", err)
+	}
+	ran, ok := psProcessAge(context.Background(), os.Getpid())
+	if !ok || ran < 0 || ran > 24*time.Hour {
+		t.Errorf("this process's age: %v, %v", ran, ok)
+	}
+	if _, ok := psProcessAge(context.Background(), 1<<22+12345); ok {
+		t.Error("a missing process gave a reading")
+	}
+}
+
+// A count that cannot be stored (another writer holds the database past its busy timeout) still says what the call
+// cost, in text and JSON (cost_usd, cost_pending), and leaves the folder, which the next draft counts.
+func TestTaskDraftSaysACostItCouldNotStore(t *testing.T) {
+	t.Parallel()
+	f, ctrl := draftFixture(t)
+	ctx := context.Background()
+	setReply(t, ctrl, draftStored)
+	for _, asJSON := range []bool{false, true} {
+		os.Remove(filepath.Join(ctrl, "waiting"))
+		os.Remove(filepath.Join(ctrl, "go"))
+		if err := os.WriteFile(filepath.Join(ctrl, "wait"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{"task", "draft", "clamp", "--yes"}
+		if asJSON {
+			args = append(args, "--json")
+		}
+		done := make(chan cliResult, 1)
+		go func() { done <- f.run(ctx, args...) }()
+		waitFor(t, "the call", func() bool { _, err := os.Stat(filepath.Join(ctrl, "waiting")); return err == nil })
+		blocker, err := sql.Open("sqlite3", "file:"+filepath.Join(f.data, "agentium.db")+"?_txlock=immediate")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := blocker.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(ctrl, "go"), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		res := <-done
+		tx.Rollback()
+		blocker.Close()
+		if asJSON {
+			doc := checkJSON(t, f, res, ExitError, args[:4])
+			if doc.get("outcome") != "failed" || doc.get("cost_usd") != 0.031 || doc.get("cost_pending") != true || !near(doc.get("drafting_spend_usd").(float64), 0.031+0.02) || // the text round's, counted; not this call's
+
+				!strings.Contains(doc.get("reason").(string), "This call cost $0.03; it could not be recorded yet") {
+				t.Errorf("a cost not stored, --json: %s", doc.stdout)
+			}
+		} else {
+			expect(t, res, ExitError, "This call cost $0.03; it could not be recorded yet, and the next task draft, run once or experiment run in this data folder counts it", "locked")
+		}
+		if left := draftFolders(t, f); len(left) != 1 {
+			t.Fatalf("draft folders after a failed count: %v", left)
+		}
+		os.Remove(filepath.Join(ctrl, "wait"))
+		setReply(t, ctrl, draftGap)
+		expect(t, f.run(ctx, "task", "draft", "clamp", "--yes"), ExitError, "Counted $0.03 that a draft call of task clamp spent before Agentium stopped")
+		setReply(t, ctrl, draftStored)
+	}
+	if got := storedTask(t, f, "clamp"); !near(got.DraftSpendUSD, 2*(0.031+0.02)) {
+		t.Errorf("spend after both: %v", got.DraftSpendUSD)
+	}
 }
