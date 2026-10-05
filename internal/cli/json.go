@@ -71,7 +71,7 @@ var jsonCommands = map[string][]string{
 	"init":    {""},
 	"start":   {""},
 	"context": {"show", "snapshot", "list", "diff", "lint"},
-	"task":    {"list", "show", "validate", "import", "add", "edit", "rm", "mine"}, // mine: removed, its usage error as a document
+	"task":    {"list", "show", "draft", "validate", "import", "add", "edit", "rm", "mine"}, // mine: removed, its usage error as a document
 	"run":     {"once", "show", "list"},
 	// experiment report has its own --json (the lock and every run); it is left as it is.
 	"experiment": {"new", "plan", "show", "list", "run", "rm"},

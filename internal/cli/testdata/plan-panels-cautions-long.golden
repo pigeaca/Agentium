@@ -1,84 +1,78 @@
 === 60 columns
-       BASELINE  vs  LEAN   ·   does lean save money?
+    BASELINE  vs  LEAN   ·   does lean pass more tasks?
  ───────────────────────────────────────────────────────────
-   lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+   lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────╮
-│ ✗ task value: its tests do not fail on the base commit   │
-│ ! the budget $30.00 is below the estimated $41.00 plus   │
-│   $12.00 held for runs in flight: expect it to stop the… │
-│ ✓ 1 check ok                                             │
+│ ✓ everything is in place (2 checks)                      │
+│ ! 30 tasks passed every time, may not separate: task-00, │
+│   task-01, task-02 + 27 more: agentium task list         │
+│ ! 1 task never passed, check its text: only-one          │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────╮
-│ this size can see    22% less cost, or 29% more          │
+│ this size can see    a pass-rate change of 24 points or  │
+│ more                                                     │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────╮
-│ likely        ████████████████▏░░░░░░░░░░░░░░░░   $32.24 │
-│ worst case    █████████████████████████████████      $66 │
-│ budget        ███████████████░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ████████████▎░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████     $396 │
+│ budget        ██▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                       │
-│ plus about $0.09 to calibrate 1 context first (from the  │
-│ budget)                                                  │
 ╰──────────────────────────────────────────────────────────╯
 
- on your plan: 20 runs need about 1.4 windows of the
+ on your plan: 120 runs need about 8.5 windows of the
  five-hour limit
- not ready to run: fix what is missing above
- everything: agentium experiment plan lean-seq --details
+ everything: agentium experiment plan lean-ab --details
 === 80 columns
-                 BASELINE  vs  LEAN   ·   does lean save money?
+              BASELINE  vs  LEAN   ·   does lean pass more tasks?
  ───────────────────────────────────────────────────────────────────────────────
-             lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+             lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────╮
-│ ✗ task value: its tests do not fail on the base commit                       │
-│ ! the budget $30.00 is below the estimated $41.00 plus $12.00 held for runs  │
-│   in flight: expect it to stop the experiment early                          │
-│ ✓ 1 check ok                                                                 │
+│ ✓ everything is in place (2 checks)                                          │
+│ ! 30 tasks passed every time, may not separate: task-00, task-01, task-02,   │
+│   task-03, task-04, task-05, task-06, task-07 + 22 more: agentium task list  │
+│ ! 1 task never passed, check its text: only-one                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────╮
-│ this size can see    22% less cost, or 29% more                              │
+│ this size can see    a pass-rate change of 24 points or more                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────────────────────────╮
-│ likely        █████████████████████████▉░░░░░░░░░░░░░░░░░░░░░░░░░░░   $32.24 │
-│ worst case    █████████████████████████████████████████████████████      $66 │
-│ budget        ████████████████████████▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ███████████████████▊░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████████████████████████     $396 │
+│ budget        ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                                           │
-│ plus about $0.09 to calibrate 1 context first (from the budget)              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
- on your plan: 20 runs need about 1.4 windows of the five-hour limit
- not ready to run: fix what is missing above
- everything: agentium experiment plan lean-seq --details
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
 === 120 columns
-                           BASELINE  vs  LEAN   ·   does lean save money?
+                        BASELINE  vs  LEAN   ·   does lean pass more tasks?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                       lean-seq · 10 tasks · 20 runs · sonnet-5 · 2 at a time
+                       lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
-│ ✗ task value: its tests do not fail on the base commit                                           │
-│ ! the budget $30.00 is below the estimated $41.00 plus $12.00 held for runs in flight: expect it │
-│   to stop the experiment early                                                                   │
-│ ✓ 1 check ok                                                                                     │
+│ ✓ everything is in place (2 checks)                                                              │
+│ ! 30 tasks passed every time, may not separate: task-00, task-01, task-02, task-03, task-04,     │
+│   task-05, task-06, task-07, task-08, task-09, task-10, task-11 + 18 more: agentium task list    │
+│ ! 1 task never passed, check its text: only-one                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
-│ this size can see    22% less cost, or 29% more                                                  │
+│ this size can see    a pass-rate change of 24 points or more                                     │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
-│ likely        ███████████████████████████████████▋░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $32.24 │
-│ worst case    █████████████████████████████████████████████████████████████████████████      $66 │
-│ budget        █████████████████████████████████▏░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ███████████████████████████▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
+│ worst case    █████████████████████████████████████████████████████████████████████████     $396 │
+│ budget        █████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                                                               │
-│ plus about $0.09 to calibrate 1 context first (from the budget)                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
- on your plan: 20 runs need about 1.4 windows of the five-hour limit
- not ready to run: fix what is missing above
- everything: agentium experiment plan lean-seq --details
+ on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
 === end

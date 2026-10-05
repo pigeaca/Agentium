@@ -482,8 +482,9 @@ type runMeta struct {
 	Attempt      int    `json:"attempt,omitempty"`
 }
 
-// startRuns takes the data folder's run lock, which commands hold while they start agents, and stores the runs a dead
-// Agentium process left behind (cancelled, with what their transcripts show they spent). Call release when done.
+// startRuns takes the data folder's run lock, which commands hold while they start agents, settles the draft calls a
+// dead Agentium process left (settleDraftCalls: refused while one may still run) and stores the runs it left behind
+// (cancelled, with what their transcripts show they spent). Call release when done.
 func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err error) {
 	release, err = w.layout.LockRuns()
 	if err != nil {
@@ -491,6 +492,11 @@ func startRuns(ctx context.Context, env Env, w *workspace) (release func(), err 
 	}
 	secrets, err := recoverySecrets(env)
 	if err != nil {
+		release()
+		return nil, err
+	}
+	// Draft calls a dead Agentium left, of every project: a live one refuses the start; finished ones are counted.
+	if w.draftNotes, err = settleDraftCalls(ctx, env, w.db, w.layout, env.noticeOut(), psProcessAge); err != nil {
 		release()
 		return nil, err
 	}

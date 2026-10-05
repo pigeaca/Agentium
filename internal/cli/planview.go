@@ -15,7 +15,7 @@ import (
 // writeReview prints an experiment's review (experiment plan, and start's preview): on a terminal that shows the designed
 // console, the picture of planView unless details asks for every line; everywhere else (a pipe, NO_COLOR, TERM=dumb,
 // a narrow terminal, --json) the review as before, byte for byte.
-func writeReview(ctx context.Context, env Env, r experiment.Review, name, signIn string, details bool) error {
+func writeReview(ctx context.Context, env Env, r experiment.Review, cautions planCautions, name, signIn string, details bool) error {
 	caps := term.DetectCapabilities(env.Terminal, env.Getenv, envSize(env))
 	if details || env.JSON || env.Plain || !caps.Designed() {
 		return r.Write(ctx, env.Stdout, env.style(), name, signIn, env.Now())
@@ -23,7 +23,7 @@ func writeReview(ctx context.Context, env Env, r experiment.Review, name, signIn
 	if err := ctx.Err(); err != nil { // as Write: the readiness checks may have been cut short
 		return err
 	}
-	_, err := io.WriteString(env.Stdout, strings.Join(planView(r, name, signIn, env.Now(), caps.Shapes(), caps.Width), "\n")+"\n")
+	_, err := io.WriteString(env.Stdout, strings.Join(planViewWith(r, cautions, name, signIn, env.Now(), caps.Shapes(), caps.Width), "\n")+"\n")
 	return err
 }
 
@@ -32,6 +32,12 @@ func writeReview(ctx context.Context, env Env, r experiment.Review, name, signIn
 // check's spend as a bar. The detectable effects, floors and the long notes are in --details. Every name from outside
 // Agentium (contexts, check texts) is sanitized before it is drawn.
 func planView(r experiment.Review, name, signIn string, now time.Time, sh term.Shapes, width int) []string {
+	return planViewWith(r, planCautions{}, name, signIn, now, sh, width)
+}
+
+// planViewWith is planView with the tasks that may not tell the versions apart (planCautionsOf), which "before it runs"
+// names. After it come "can it answer?" and, with a current reading of the plan's five-hour limit, "your plan".
+func planViewWith(r experiment.Review, cautions planCautions, name, signIn string, now time.Time, sh term.Shapes, width int) []string {
 	st := sh.Style
 	m := marksFor(sh)
 	w := min(width, term.MaxContentWidth)
@@ -43,7 +49,11 @@ func planView(r experiment.Review, name, signIn string, now time.Time, sh term.S
 	out = append(out, " "+st.Paint(term.Muted, strings.Repeat(m.rule, max(w-1, 1))))
 	out = append(out, centered(w, st.Paint(term.Muted, m.words(planFacts(name, r)))))
 	out = append(out, "")
-	out = append(out, sh.Panel(readinessPanel(r, sh, m, w), w)...)
+	out = append(out, sh.Panel(readinessPanel(r, cautions, sh, m, w), w)...)
+	if len(d.Tasks) > 0 {
+		out = append(out, "")
+		out = append(out, sh.Panel(canAnswerPanel(r.CanAnswer(), sh, m), w)...)
+	}
 	var seq *experiment.SeqPreview
 	if d.Sequential() && len(d.Tasks) > 0 {
 		if p, err := experiment.PreviewSequential(d, r.Estimates); err == nil {
@@ -55,6 +65,10 @@ func planView(r experiment.Review, name, signIn string, now time.Time, sh term.S
 	if seq != nil && seq.Known && len(seq.Looks) > 1 { // one check is the end: the bars above say it
 		out = append(out, "")
 		out = append(out, sh.Panel(checksPanel(d, seq, sh, m, w), w)...)
+	}
+	if u := r.Usage(signIn, now); !u.APIKey && len(u.Models) > 0 && u.Latest != nil && u.Latest.Current {
+		out = append(out, "")
+		out = append(out, sh.Panel(usagePanel(u, now, sh, m, w), w)...)
 	}
 	if notes := planNotes(r, name, signIn, now, sh, m, w); len(notes) > 0 {
 		out = append(out, "")
@@ -82,8 +96,9 @@ func planFacts(name string, r experiment.Review) string {
 	return strings.Join(parts, " · ")
 }
 
-// readinessPanel says whether everything is in place: one line when it is, else each check that is not ok.
-func readinessPanel(r experiment.Review, sh term.Shapes, m marks, width int) term.Panel {
+// readinessPanel says whether everything is in place: one line when it is, else each check that is not ok. A --goal
+// better design's cautions about tasks that cannot separate follow; they do not make it not ready.
+func readinessPanel(r experiment.Review, cautions planCautions, sh term.Shapes, m marks, width int) term.Panel {
 	st := sh.Style
 	p := term.Panel{Title: "before it runs"}
 	var rest []string
@@ -115,6 +130,7 @@ func readinessPanel(r experiment.Review, sh term.Shapes, m marks, width int) ter
 			p.Lines = append(p.Lines, st.Paint(term.Muted, fmt.Sprintf("%s %d %s ok", m.ok, ok, plural(ok, "check", "checks"))))
 		}
 	}
+	p.Lines = append(p.Lines, cautions.lines(sh, m, width)...)
 	return p
 }
 
@@ -227,10 +243,9 @@ func planNotes(r experiment.Review, name, signIn string, now time.Time, sh term.
 	if u := r.Usage(signIn, now); !u.APIKey && len(u.Models) > 0 {
 		windows := fmt.Sprintf("%.1f", u.Windows)
 		text := fmt.Sprintf("on your plan: %d runs need about %s %s of the five-hour limit", u.Runs, windows, map[bool]string{true: "window", false: "windows"}[windows == "1.0"])
-		if l := u.Latest; l != nil && l.Current && l.Fits < u.Runs {
-			text += fmt.Sprintf(" %s about %d more fit now: it pauses at the limit (add --wait to wait)", m.sep, l.Fits)
+		if l := u.Latest; l == nil || !l.Current { // a current reading has its own panel (usagePanel)
+			out = append(out, wrapped(st, " ", text, term.Muted, width)...)
 		}
-		out = append(out, wrapped(st, " ", text, term.Muted, width)...)
 	}
 	for _, e := range r.Estimates {
 		if e.FewRuns() && e.EstimateBasis() == experiment.BasisCap {

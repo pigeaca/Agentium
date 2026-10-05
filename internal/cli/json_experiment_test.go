@@ -25,7 +25,7 @@ const (
 	intervalKeys        = "estimate,high,low"
 	spendKeys           = "estimate_basis,expected_tasks,expected_usd,if_cut_usd,known,max_usd,worst_case_usd"
 	estimateBasisKeys   = "arm,basis,history_runs,model,per_run_usd"
-	planKeys            = "calibration_estimate_usd,calibration_runs_needed,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend,usage"
+	planKeys            = "calibration_estimate_usd,calibration_runs_needed,can_answer,command,eligible_tasks,experiment,ineligible_tasks,looks,readiness,ready,schema,sizes,spend,tasks_never_passed,tasks_passed_every_time,usage"
 	usageKeys           = "latest,limit,models,runs,windows"
 	usageModelKeys      = "measured_runs,model,per_run,runs"
 	usageLatestKeys     = "age_seconds,current,fits,read_at,resets_at,used"
