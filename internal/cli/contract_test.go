@@ -43,6 +43,7 @@ var jsonDocs = map[string][]any{
 	"context lint":         {lintDoc{}},
 	"task list":            {taskListDoc{}},
 	"task show":            {taskShowDoc{}},
+	"task draft":           {taskDraftDoc{}},
 	"task validate":        {validatedDoc{}, validateAllDoc{}},
 	"task add":             {taskSavedDoc{}},
 	"task import":          {taskSavedDoc{}},

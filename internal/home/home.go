@@ -139,6 +139,12 @@ func (l Layout) Ensure() error {
 // `CODEX_HOME=<it> codex login` does.
 func (l Layout) CodexHome() string { return filepath.Join(l.Root, "codex") }
 
+// Drafts holds the folders of `agentium task draft`'s calls, one per call under the project's ID, each kept until the
+// call's cost is in the store, so a crash between the call and the count loses no spend. A reply may name what only the
+// reference solution has, so it is inside Artifacts, which no agent may read; it is not in Records, whose folders
+// recovery reads as runs.
+func (l Layout) Drafts() string { return filepath.Join(l.Artifacts, "drafts") }
+
 // ProjectRepo is the bare repository holding a project's snapshots and fetched commits.
 func (l Layout) ProjectRepo(projectID int64) string {
 	return filepath.Join(l.Root, "projects", strconv.FormatInt(projectID, 10), "repo.git")
