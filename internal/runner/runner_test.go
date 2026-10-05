@@ -352,3 +352,27 @@ func TestGraceKillNeverFollowsTheReap(t *testing.T) {
 		t.Errorf("the leader was not reaped: %q", state)
 	}
 }
+
+// A command whose exit cannot be waited for without reaping it cannot be supervised safely: its whole group, leader
+// included, is killed while the leader is not yet reaped (BeforeStop first), and Run fails with the reason.
+func TestRunStopsWhatItCannotWaitFor(t *testing.T) {
+	out, _ := output(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	refused := errors.New("no kqueue")
+	spec := Spec{Output: out, Timeout: time.Minute, Command: "sleep 30 & echo $! > " + pidFile + "; exec sleep 30",
+		waitExit: func(int) error { time.Sleep(200 * time.Millisecond); return refused }}
+	start := time.Now()
+	_, calls, leader, err := hooked(context.Background(), t, spec, pidFile, nil)
+	if !errors.Is(err, refused) || time.Since(start) > 10*time.Second {
+		t.Fatalf("Run = %v after %v: want the wait's failure, at once", err, time.Since(start))
+	}
+	if len(calls) != 1 || !calls[0].leader || !calls[0].watchedLive {
+		t.Errorf("calls %+v: want one BeforeStop, the leader and its child still running", calls)
+	}
+	if alive(t, pidFile) {
+		t.Error("the background child outlived the run")
+	}
+	if state := leaderState(leader); state != "" {
+		t.Errorf("the leader was not reaped: %q", state)
+	}
+}

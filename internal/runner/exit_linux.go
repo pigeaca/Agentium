@@ -6,6 +6,9 @@ import (
 	"unsafe"
 )
 
+// canWaitWithoutReaping: whether this system's waitExit works; without it Run refuses to start a command.
+const canWaitWithoutReaping = true
+
 // The waitid(2) values Run uses (linux/wait.h).
 const (
 	pPID     = 1

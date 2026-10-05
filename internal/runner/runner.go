@@ -47,6 +47,8 @@ type Spec struct {
 	// other goroutines, but never concurrently with itself; while it runs, the command's process (its group's leader)
 	// is alive or exited but not yet reaped, so the group's ID is still the command's.
 	BeforeStop func()
+	// waitExit replaces the system's wait for the command's exit without reaping it (waitExit; tests).
+	waitExit func(pid int) error
 }
 
 // Result is how a command ended.
@@ -125,9 +127,25 @@ func Environ(environ []string) []string {
 	return out
 }
 
-// Run runs spec. A non-zero exit or a timeout is a Result, not an error; errors mean the command could not run, or ctx
-// was cancelled (then the process group has been killed).
+// Run runs spec. A non-zero exit or a timeout is a Result, not an error; errors mean the command could not run, could
+// not be supervised (its exit could not be waited for: it is stopped), or ctx was cancelled (then the process group
+// has been killed).
+//
+// What is left of the group (background children) is killed as soon as the command's own process exits, before it is
+// reaped. With *os.File outputs (agents, grading, verification) everything it wrote is in the file; with another
+// io.Writer (a bytes.Buffer), output still in the pipe from a background child at that moment can be lost.
 func Run(ctx context.Context, spec Spec) (Result, error) {
+	name := spec.Command
+	if len(spec.Args) > 0 {
+		name = spec.Args[0]
+	}
+	wait := spec.waitExit
+	if wait == nil {
+		if !canWaitWithoutReaping {
+			return Result{ExitCode: -1}, fmt.Errorf("run %q: this system cannot wait for a command without reaping it, which stopping its process group safely needs (macOS and Linux can)", name)
+		}
+		wait = waitExit
+	}
 	runCtx, cancel := ctx, context.CancelFunc(func() {})
 	if spec.Timeout > 0 {
 		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
@@ -206,37 +224,26 @@ func Run(ctx context.Context, spec Spec) (Result, error) {
 		if spec.Started != nil {
 			spec.Started(pid)
 		}
-		if waitErr := waitExit(pid); waitErr == nil {
-			// The leader has exited and is not reaped yet: what is left of its group (background children) is stopped,
-			// BeforeStop first, then the leader is reaped. The zombie leader is itself a member, so the group is always
-			// signalled (harmless when nothing else is left).
-			mu.Lock()
-			exited = true
-			if escalate != nil {
-				escalate.Stop()
-			}
-			beforeStop()
-			killGroup(pid)
-			mu.Unlock()
-			err = cmd.Wait()
-		} else {
-			// The exit could not be waited for without reaping (not expected): reap, then stop the group's rest by its
-			// ID, as Agentium did before it waited this way.
-			err = cmd.Wait()
-			mu.Lock()
-			exited = true
-			if escalate != nil {
-				escalate.Stop()
-			}
-			mu.Unlock()
-			killGroup(pid)
+		// Once the leader has exited (not reaped yet), what is left of its group (background children) is stopped,
+		// BeforeStop first, then the leader is reaped. The zombie leader is itself a member, so the group is always
+		// signalled (harmless when nothing else is left). If the exit cannot be waited for without reaping (a kqueue
+		// that cannot be made, say), the command cannot be supervised safely: the same cleanup kills the whole group,
+		// leader included, still unreaped, and the run fails.
+		waitErr := wait(pid)
+		mu.Lock()
+		exited = true
+		if escalate != nil {
+			escalate.Stop()
+		}
+		beforeStop()
+		killGroup(pid)
+		mu.Unlock()
+		err = cmd.Wait()
+		if waitErr != nil {
+			return Result{Duration: time.Since(start), ExitCode: -1}, fmt.Errorf("run %q: wait for its exit: %w (it was stopped)", name, waitErr)
 		}
 	}
 	result := Result{Duration: time.Since(start), ExitCode: -1}
-	name := spec.Command
-	if len(spec.Args) > 0 {
-		name = spec.Args[0]
-	}
 	switch {
 	case ctx.Err() != nil:
 		return result, fmt.Errorf("run %q: %w", name, ctx.Err())
