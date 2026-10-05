@@ -148,7 +148,7 @@ func TestCanAnswerFloors(t *testing.T) {
 	if c.Metric != MetricSuccess || c.FloorMet || c.Smallest != nil || c.FloorTasks != MinTasksSuccess || c.FloorRepeats != MinRepeats {
 		t.Errorf("below the floor: %+v", c)
 	}
-	// At the floor the smallest change is Detect's low end: 20 tasks of 3 runs, 2.80158 × √((0.01 + 2 × 0.2 / 3) / 20) = 0.3157.
+	// At the floor the smallest change is Detect's low end: 20 tasks of 3 runs, 2.80158 × √((0.01 + 2 × 0.2 / 3) / 20) = 0.2372.
 	d.Tasks = tasksNamed(20)
 	c = Review{Design: d}.CanAnswer()
 	if !c.FloorMet || c.Smallest == nil {
@@ -164,7 +164,7 @@ func TestCanAnswerFloors(t *testing.T) {
 
 func contextReview(first [2]int64, requests float64, pastRuns int) Review {
 	d := Design{Method: MethodV2, Goal: GoalCheaper, Template: TemplateContextAB, Tasks: tasksNamed(8), Repeats: 1, Model: "claude-sonnet-5"}
-	est := Same(Estimate{PerRunUSD: 1.23, Known: true})
+	est := Same(Estimate{PerRunUSD: 1.23, Known: true, Runs: 6})
 	return Review{Design: d, Estimates: est, Size: ContextSize{FirstRequest: first, Requests: requests, PastRuns: pastRuns}}
 }
 
@@ -210,7 +210,7 @@ func TestCanAnswerExpectedChange(t *testing.T) {
 
 func turnsRun(model string, turns int, outcome string) store.Run {
 	return store.Run{Kind: "task", Outcome: outcome,
-		Record: []byte(fmt.Sprintf(`{"model":%q,"metrics":{"saw_result":true,"turns":%d}}`, model, turns))}
+		Record: []byte(fmt.Sprintf(`{"model":%q,"effort_recorded":true,"metrics":{"saw_result":true,"turns":%d}}`, model, turns))}
 }
 
 func TestMedianRequests(t *testing.T) {
@@ -218,17 +218,62 @@ func TestMedianRequests(t *testing.T) {
 		turnsRun("claude-sonnet-5", 30, agent.OutcomeOK), turnsRun("claude-sonnet-5", 46, agent.OutcomeCapped), turnsRun("claude-sonnet-5", 38, agent.OutcomeOK),
 		turnsRun("claude-sonnet-5", 500, agent.OutcomeInfra), // not a fair run
 		turnsRun("claude-haiku-4-5", 900, agent.OutcomeOK),   // another model
-		{Kind: "calibration", Outcome: agent.OutcomeOK, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":true,"turns":99}}`)},
-		{Kind: "task", Outcome: agent.OutcomeOK, Record: []byte(`{"model":"claude-sonnet-5","metrics":{"saw_result":false,"turns":77}}`)},
+		{Kind: "calibration", Outcome: agent.OutcomeOK, Record: []byte(`{"model":"claude-sonnet-5","effort_recorded":true,"metrics":{"saw_result":true,"turns":99}}`)},
+		{Kind: "task", Outcome: agent.OutcomeOK, Record: []byte(`{"model":"claude-sonnet-5","effort_recorded":true,"metrics":{"saw_result":false,"turns":77}}`)},
 	}
-	if m, n := MedianRequests(runs, "claude-sonnet-5"); m != 38 || n != 3 {
+	if m, n := MedianRequests(runs, "claude-sonnet-5", ""); m != 38 || n != 3 {
 		t.Errorf("median %v of %d, want 38 of 3", m, n)
 	}
 	runs = append(runs, turnsRun("claude-sonnet-5", 40, agent.OutcomeOK)) // four: the middle two, 38 and 40
-	if m, _ := MedianRequests(runs, "claude-sonnet-5"); m != 39 {
+	if m, _ := MedianRequests(runs, "claude-sonnet-5", ""); m != 39 {
 		t.Errorf("median of four = %v, want 39", m)
 	}
-	if m, n := MedianRequests(runs[:2], "claude-sonnet-5"); m != 0 || n != 2 {
+	if m, n := MedianRequests(runs[:2], "claude-sonnet-5", ""); m != 0 || n != 2 {
 		t.Errorf("fewer than %d runs: %v of %d", MinPastRuns, m, n)
+	}
+}
+
+// A rise is seen from exp(mde)-1, not from the smallest reduction: at 8 tasks of 1 run a reduction of 24.7% is seen from
+// 24.7%, a rise from 32.8%. By hand, 30,210 more tokens × $11.4e-6 over a $1.23 run is a 28% rise: ln 1.28 = 0.247 is
+// below the 0.284 an 8-task design sees, though 28% is above 24.7%.
+func TestCanAnswerRiseIsComparedOnTheLogScale(t *testing.T) {
+	c := contextReview([2]int64{20000, 50210}, 38, 6).CanAnswer()
+	if c.Expected == nil {
+		t.Fatal("no expected change")
+	}
+	within(t, "share", c.Expected.Share, -0.28, 1e-4)
+	if !c.NotSure {
+		t.Errorf("a 28%% rise at 8 tasks of 1 run is not seen: %+v", c)
+	}
+	if c := contextReview([2]int64{20000, 80000}, 38, 6).CanAnswer(); c.NotSure { // a 56% rise is
+		t.Errorf("a 56%% rise: %+v", c)
+	}
+}
+
+// The cost of a run and the requests of a run must come from earlier runs: an estimate resting on the default profile
+// or the cap shows no expected change.
+func TestCanAnswerNeedsTheEstimateToRestOnRuns(t *testing.T) {
+	r := contextReview([2]int64{20000, 15425}, 38, 6)
+	r.Estimates = Same(Estimate{PerRunUSD: 1.23, Known: true, Runs: 1})
+	if c := r.CanAnswer(); c.Expected != nil {
+		t.Errorf("an estimate from the default profile: %+v", c)
+	}
+	r.Estimates = Same(Estimate{PerRunUSD: 1.23, Known: true, Runs: 6, CapUSD: 1})
+	if c := r.CanAnswer(); c.Expected != nil {
+		t.Errorf("an estimate at the cap: %+v", c)
+	}
+}
+
+func TestMedianRequestsUsesTheEffortOfTheEstimate(t *testing.T) {
+	var runs []store.Run
+	for range 3 {
+		runs = append(runs, store.Run{Kind: "task", Outcome: agent.OutcomeOK,
+			Record: []byte(`{"model":"claude-sonnet-5","effort":"high","effort_recorded":true,"metrics":{"saw_result":true,"turns":50}}`)})
+	}
+	if m, n := MedianRequests(runs, "claude-sonnet-5", ""); m != 0 || n != 0 {
+		t.Errorf("runs at another effort: %v of %d", m, n)
+	}
+	if m, n := MedianRequests(runs, "claude-sonnet-5", "high"); m != 50 || n != 3 {
+		t.Errorf("runs at the design's effort: %v of %d", m, n)
 	}
 }

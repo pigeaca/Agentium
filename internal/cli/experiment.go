@@ -306,10 +306,7 @@ func experimentPlan(ctx context.Context, env Env, args []string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	cautions, err := planCautionsOf(ctx, w, review.Design)
-	if err != nil {
-		return fail(env, err)
-	}
+	cautions := planCautionsOf(ctx, w, review.Design)
 	if env.JSON {
 		doc, err := planDocument(env, rest[0], review, cautions)
 		if err != nil {

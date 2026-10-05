@@ -58,10 +58,7 @@ func LoadReview(ctx context.Context, p Project, e ReadinessEnv, name string) (Re
 		return Review{}, err
 	}
 	readiness := CheckReadiness(ctx, p, e, d, eligible, reasons, est)
-	size, err := p.loadContextSize(ctx, d, readiness.Calibrations, runs)
-	if err != nil {
-		return Review{}, err
-	}
+	size := p.loadContextSize(ctx, d, readiness.Calibrations, runs)
 	return Review{Design: d, Eligible: eligible, Reasons: reasons, Estimates: est, Runs: runs,
 		Readiness: readiness, Rows: PreviewFor(d, eligible, est), Size: size}, nil
 }

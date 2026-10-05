@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/pigeaca/agentium/internal/experiment"
-	"github.com/pigeaca/agentium/internal/store"
 	"github.com/pigeaca/agentium/internal/term"
 )
 
@@ -22,37 +21,46 @@ type planCautions struct {
 }
 
 // planCautionsOf names, among the design's tasks, those that passed every time and those that never passed, from their
-// graded runs (the same query and rule as the task list). Only a --goal better design has any.
-func planCautionsOf(ctx context.Context, w *workspace, d experiment.Design) (planCautions, error) {
+// graded runs: the task list's thresholds (tellsMinRunsToRate) and its rule for a pass (experiment.Success), counted
+// alone, so a task that has become flaky or unreviewed since the experiment locked is still named. Only a --goal
+// better design has any. The cautions are advice: a store that cannot be read gives none, never a failure.
+func planCautionsOf(ctx context.Context, w *workspace, d experiment.Design) planCautions {
 	if d.Goal != experiment.GoalBetter {
-		return planCautions{}, nil
+		return planCautions{}
 	}
 	all, err := w.db.Tasks(ctx, w.project.ID)
 	if err != nil {
-		return planCautions{}, err
+		return planCautions{}
 	}
-	var own []store.Task
-	for _, t := range all {
-		if slices.Contains(d.Tasks, t.Name) {
-			own = append(own, t)
+	grades, err := w.db.TaskGrades(ctx, w.project.ID)
+	if err != nil {
+		return planCautions{}
+	}
+	graded, passed := map[int64]int{}, map[int64]int{}
+	for _, g := range grades {
+		if !experiment.Fair(g.Outcome) {
+			continue
+		}
+		var changed []string
+		if g.ConfigChanged {
+			changed = []string{"config"}
+		}
+		graded[g.TaskID]++
+		if experiment.Success(g.Outcome, &g.Passed, changed) {
+			passed[g.TaskID]++
 		}
 	}
-	tells, err := tellsOf(ctx, w.db, w.project.ID, own, func(store.Task) bool { return false })
-	if err != nil {
-		return planCautions{}, err
-	}
-	return cautionsFrom(tells), nil
-}
-
-// cautionsFrom picks the tasks that cannot separate from rows, sorted by name.
-func cautionsFrom(rows []taskTell) planCautions {
 	c := planCautions{Applies: true}
-	for _, r := range rows {
-		switch r.Tell {
-		case tellsTooEasy:
-			c.TooEasy = append(c.TooEasy, r.Task.Name)
-		case tellsNeverPassed:
-			c.NeverPassed = append(c.NeverPassed, r.Task.Name)
+	for _, t := range all {
+		if !slices.Contains(d.Tasks, t.Name) {
+			continue
+		}
+		n, k := graded[t.ID], passed[t.ID]
+		switch {
+		case k == 0 && n >= 2:
+			c.NeverPassed = append(c.NeverPassed, t.Name)
+		case n >= tellsMinRunsToRate && k == n:
+			c.TooEasy = append(c.TooEasy, t.Name)
 		}
 	}
 	slices.Sort(c.TooEasy)
@@ -60,29 +68,61 @@ func cautionsFrom(rows []taskTell) planCautions {
 	return c
 }
 
-// lines are the caution lines of "before it runs", each cut as checkLines cuts a long list.
+// lines are the caution lines of "before it runs": the count, as many names as fit on two lines, then how many more
+// there are and the command that lists them all.
 func (c planCautions) lines(sh term.Shapes, m marks, width int) []string {
 	var out []string
 	mark := sh.Style.Paint(term.OutcomeInfra, m.warn)
+	room := min(width, term.MaxContentWidth) - 4 - 2
 	if n := len(c.TooEasy); n > 0 {
-		text := fmt.Sprintf("%s passed every time so far, so %s may not tell the versions apart: %s", taskCount(n),
-			map[bool]string{true: "it", false: "they"}[n == 1], strings.Join(c.TooEasy, ", "))
-		out = append(out, checkLines(mark, text, sh, width)...)
+		head := fmt.Sprintf("%s passed every time so far, so %s may not tell the versions apart: ", taskCount(n), map[bool]string{true: "it", false: "they"}[n == 1])
+		out = append(out, cautionList(mark, head, c.TooEasy, sh, room)...)
 	}
 	if n := len(c.NeverPassed); n > 0 {
-		out = append(out, checkLines(mark, fmt.Sprintf("%s never passed: check %s text (agentium task show NAME): %s", taskCount(n),
-			map[bool]string{true: "its", false: "their"}[n == 1], strings.Join(c.NeverPassed, ", ")), sh, width)...)
+		head := fmt.Sprintf("%s never passed: check %s text (agentium task show NAME): ", taskCount(n), map[bool]string{true: "its", false: "their"}[n == 1])
+		out = append(out, cautionList(mark, head, c.NeverPassed, sh, room)...)
 	}
 	return out
 }
 
-// pctWords is a share as a whole percent, or with a decimal below 1%: "25%", "4%", "0.4%".
+// cautionList is head and then the most names that keep it to two lines; the rest are counted, with the command that
+// lists them.
+func cautionList(mark, head string, names []string, sh term.Shapes, room int) []string {
+	for k := len(names); ; k-- {
+		text := head + strings.Join(names[:k], ", ")
+		switch {
+		case k == 0:
+			text = head + "agentium task list"
+		case k < len(names):
+			text += fmt.Sprintf(" + %d more: agentium task list", len(names)-k)
+		}
+		if len(term.Wrap(term.Sanitize(text), room)) <= 2 || k == 0 {
+			return checkLines(mark, text, sh, room+4+2)
+		}
+	}
+}
+
+// pctWords is a share as a whole percent, or with a decimal below 1%: "25%", "4%", "0.4%", "under 0.1%".
 func pctWords(share float64) string {
 	share = math.Abs(share) * 100
+	if share < 0.05 {
+		return "under 0.1%"
+	}
 	if share >= 0.95 {
 		return fmt.Sprintf("%.0f%%", share)
 	}
 	return fmt.Sprintf("%.1f%%", share)
+}
+
+// maxRunsWords is the most runs the panel puts a number on: seeing a smaller change takes more than that.
+const maxRunsWords = 10000
+
+// aboutPct is "about 4%", or "under 0.1%" for a change too small to print.
+func aboutPct(share float64) string {
+	if math.Abs(share) < 0.0005 {
+		return "under 0.1%"
+	}
+	return "about " + pctWords(share)
 }
 
 // groupDigits writes n with commas between thousands: 4575 is "4,575".
@@ -139,16 +179,20 @@ func canAnswerPanel(a experiment.CanAnswer, sh term.Shapes, m marks) term.Panel 
 	case diff == 0:
 		expected = "no change: the contexts are the same size"
 	case diff > 0:
-		expected = fmt.Sprintf("about %s less: the context is %s tokens smaller", pctWords(e.Share), groupDigits(diff))
+		expected = fmt.Sprintf("%s less: the context is %s tokens smaller", aboutPct(e.Share), groupDigits(diff))
 	default:
-		expected = fmt.Sprintf("about %s more: the context is %s tokens larger", pctWords(e.Share), groupDigits(-diff))
+		expected = fmt.Sprintf("%s more: the context is %s tokens larger", aboutPct(e.Share), groupDigits(-diff))
 	}
 	p.Lines = append(p.Lines, row("expected from size", expected, term.Default))
 	var note []string
 	if a.NotSure {
 		p.Lines = append(p.Lines, row("likely result", "not sure", term.OutcomeInfra))
 		if a.RunsToSee > 0 {
-			note = append(note, fmt.Sprintf("seeing %s would take about %d runs", pctWords(e.Share), a.RunsToSee))
+			runs := fmt.Sprintf("about %s runs", groupDigits(int64(a.RunsToSee)))
+			if a.RunsToSee > maxRunsWords {
+				runs = fmt.Sprintf("more than %s runs", groupDigits(maxRunsWords))
+			}
+			note = append(note, fmt.Sprintf("seeing %s would take %s", pctWords(e.Share), runs))
 		}
 	}
 	note = append(note, "size is not everything: a context that changes what the agent does can move cost more")
@@ -164,8 +208,7 @@ func usagePanel(u experiment.UsagePreview, sh term.Shapes, m marks, width int) t
 	l := u.Latest
 	p := term.Panel{Title: "your plan", Overflow: term.WrapText}
 	inner := min(width, term.MaxContentWidth) - 4
-	p.Lines = []string{sh.Bar(term.Bar{Label: "five-hour limit", LabelWidth: 16, Fraction: l.Used, Value: fmt.Sprintf("%.0f%% used", 100*l.Used), ValueWidth: 9,
-		Role: term.Level(l.Used, u.Limit)}, inner)}
+	p.Lines = []string{limitBar(sh, "five-hour limit", fmt.Sprintf("%.0f%% used", 100*l.Used), l.Used, u.Limit, term.Level(l.Used, u.Limit), inner)}
 	limits := fmt.Sprintf("%.1f", u.Windows)
 	needs := fmt.Sprintf("this experiment needs about %s %s", limits, map[bool]string{true: "limit", false: "limits"}[limits == "1.0"])
 	var words string
@@ -180,4 +223,42 @@ func usagePanel(u experiment.UsagePreview, sh term.Shapes, m marks, width int) t
 	}
 	p.Lines = append(p.Lines, st.Paint(term.Muted, words))
 	return p
+}
+
+// limitBar is a label, a bar of the share used with a mark where runs pause, and a value, inner cells wide. term's bar
+// has no mark: the bar's cells are drawn by the shapes, the cell at the pause share becomes "|" (also in ASCII) and the
+// parts are painted again, the fill in role and the track muted, as sideLines does for a report's bars.
+func limitBar(sh term.Shapes, label, value string, used, pause float64, role term.Role, inner int) string {
+	const labelWidth, valueWidth = 16, 9
+	n := max(inner-labelWidth-valueWidth-2, 4)
+	cells := []rune(term.Plain(sh.Bar(term.Bar{Fraction: used}, n)))
+	if len(cells) == 0 {
+		return ""
+	}
+	mark := min(max(int(math.Round(pause*float64(len(cells)-1))), 0), len(cells)-1)
+	var b strings.Builder
+	b.WriteString(term.Pad(label, labelWidth) + " ")
+	for i := 0; i < len(cells); {
+		kind := func(j int) term.Role {
+			switch {
+			case j == mark:
+				return term.Default
+			case cells[j] == '░' || cells[j] == '.':
+				return term.Muted
+			}
+			return role
+		}
+		j, text := i, ""
+		for ; j < len(cells) && kind(j) == kind(i); j++ {
+			text += string(cells[j])
+		}
+		switch kind(i) {
+		case term.Default:
+			b.WriteString("|")
+		default:
+			b.WriteString(sh.Style.Paint(kind(i), text))
+		}
+		i = j
+	}
+	return b.String() + " " + term.PadLeft(value, valueWidth)
 }

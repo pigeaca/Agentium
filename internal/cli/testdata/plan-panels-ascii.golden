@@ -218,7 +218,7 @@
 +------------------------------------------------------------------------------+
 
 +- your plan ------------------------------------------------------------------+
-| five-hour limit  #########################........................  51% used |
+| five-hour limit  #########################................|.......  51% used |
 | runs pause at 85% - about 5 more runs fit now - this experiment needs about  |
 | 1.1 limits: it pauses and goes on after the reset (add --wait)               |
 +------------------------------------------------------------------------------+
@@ -245,7 +245,7 @@
 +------------------------------------------------------------------------------+
 
 +- your plan ------------------------------------------------------------------+
-| five-hour limit  #................................................   2% used |
+| five-hour limit  #........................................|.......   2% used |
 | every run fits now - this experiment needs about 0.8 limits                  |
 +------------------------------------------------------------------------------+
 
@@ -309,7 +309,7 @@
 +- before it runs -------------------------------------------------------------+
 | + everything is in place (2 checks)                                          |
 | ! 14 tasks passed every time so far, so they may not tell the versions       |
-|   apart: task-00, task-01, task-02, task-03, task-04, task-05, task-06, t... |
+|   apart: task-00, task-01, task-02, task-03 + 10 more: agentium task list    |
 | ! 1 task never passed: check its text (agentium task show NAME): only-one    |
 +------------------------------------------------------------------------------+
 
@@ -325,5 +325,31 @@
 +------------------------------------------------------------------------------+
 
  on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ everything: agentium experiment plan lean-ab --details
+=== tiny
+                 BASELINE  vs  LEAN   -   does lean save money?
+ -------------------------------------------------------------------------------
+              lean-ab - 8 tasks - 16 runs - sonnet-5 - 2 at a time
+
++- before it runs -------------------------------------------------------------+
+| + everything is in place (2 checks)                                          |
++------------------------------------------------------------------------------+
+
++- can it answer? -------------------------------------------------------------+
+| this size can see    a cost change of 25% or more                            |
+| expected from size   under 0.1% less: the context is 4 tokens smaller        |
+| likely result        not sure                                                |
+| seeing under 0.1% would take more than 10,000 runs - size is not everything: |
+| a context that changes what the agent does can move cost more                |
++------------------------------------------------------------------------------+
+
++- what it may spend ----------------------------------------------------------+
+| likely        ####################.................................   $19.68 |
+| worst case    #####################################################   $52.80 |
+| budget        ##############################.......................      $30 |
+| worst case: every run hits its cap                                           |
++------------------------------------------------------------------------------+
+
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
  everything: agentium experiment plan lean-ab --details
 === end

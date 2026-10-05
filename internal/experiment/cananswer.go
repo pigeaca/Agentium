@@ -25,44 +25,48 @@ type ContextSize struct {
 }
 
 // loadContextSize reads the size facts of d from its calibrations that fit and the project's runs. An arm that needs a
-// calibration (Readiness.Calibrations) has none that fits, so it counts as unknown.
-func (p Project) loadContextSize(ctx context.Context, d Design, needs []CalibrationNeed, runs []store.Run) (ContextSize, error) {
+// calibration (Readiness.Calibrations) has none that fits, so it counts as unknown; so does a calibration that cannot
+// be read.
+func (p Project) loadContextSize(ctx context.Context, d Design, needs []CalibrationNeed, runs []store.Run) ContextSize {
 	var size ContextSize
 	if d.Template != TemplateContextAB || len(d.Arms) != 2 {
-		return size, nil
+		return size
 	}
 	for i, a := range d.Arms {
 		if slices.ContainsFunc(needs, func(n CalibrationNeed) bool { return sameCalibration(d, n.Arm, a) }) {
 			continue
 		}
 		_, cal, why, err := p.CalibrationState(ctx, d, a, "", "")
-		if err != nil {
-			return ContextSize{}, err
+		if err != nil { // the preview is advice: an unreadable calibration is an unknown size, never a failure
+			return ContextSize{}
 		}
 		if why == "" {
 			size.FirstRequest[i] = cal.FirstRequest
 		}
 	}
-	size.Requests, size.PastRuns = MedianRequests(runs, d.Model)
-	return size, nil
+	size.Requests, size.PastRuns = MedianRequests(runs, d.Model, d.ArmEffort(d.Arms[0]))
+	return size
 }
 
 // MedianRequests is the median number of requests (Claude Code's turns) a task run on model made, over the project's
-// earlier fair task runs on it that reported them; zero (and the count) with fewer than MinPastRuns.
-func MedianRequests(runs []store.Run, model string) (requests float64, n int) {
+// earlier fair task runs on it at effort that reported them (the runs the cost estimate learns from); zero (and the
+// count) with fewer than MinPastRuns.
+func MedianRequests(runs []store.Run, model, effort string) (requests float64, n int) {
 	var turns []float64
 	for _, r := range runs {
 		if r.Kind != "task" || !Fair(r.Outcome) {
 			continue
 		}
 		var rec struct {
-			Model   string `json:"model"`
-			Metrics struct {
+			Model          string `json:"model"`
+			Effort         string `json:"effort"`
+			EffortRecorded bool   `json:"effort_recorded"`
+			Metrics        struct {
 				SawResult bool `json:"saw_result"`
 				Turns     int  `json:"turns"`
 			} `json:"metrics"`
 		}
-		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.Metrics.SawResult || rec.Metrics.Turns < 1 {
+		if json.Unmarshal(r.Record, &rec) != nil || rec.Model != model || !rec.EffortRecorded || rec.Effort != effort || !rec.Metrics.SawResult || rec.Metrics.Turns < 1 {
 			continue
 		}
 		turns = append(turns, float64(rec.Metrics.Turns))
@@ -197,12 +201,17 @@ func (r Review) CanAnswer() CanAnswer {
 	}
 	size := r.Size
 	runUSD, known := r.Estimates[0].MeanUSD(d.Tasks)
+	if r.Estimates[0].EstimateBasis() != BasisHistory { // the cost of a run must rest on earlier runs, as the requests do
+		return c
+	}
 	if size.FirstRequest[0] <= 0 || size.FirstRequest[1] <= 0 || size.PastRuns < MinPastRuns || !known {
 		return c
 	}
 	if e, ok := ExpectedContextChange(d.Model, size.FirstRequest[0], size.FirstRequest[1], size.Requests, runUSD); ok {
 		c.Expected = &e
-		c.NotSure = math.Abs(e.Share) < smallest
+		// Compared on the log scale, where a rise and a fall of the same ratio are equally easy to see: a rise of x is seen
+		// from exp(mde)-1, not from the smallest reduction.
+		c.NotSure = math.Abs(math.Log(1-e.Share)) < -math.Log(1-smallest)
 		c.RunsToSee = RunsToSeeCostChange(e.Share)
 	}
 	return c

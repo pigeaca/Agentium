@@ -1,80 +1,82 @@
 === 60 columns
-    BASELINE  vs  LEAN   ·   does lean pass more tasks?
+       BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────
-   lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+    lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                      │
-│ ! 3 tasks passed every time so far, so they may not tell │
-│   the versions apart: agentium task list                 │
-│ ! 2 tasks never passed: check their text (agentium task  │
-│   show NAME): cache-race, tz-shift                       │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────╮
-│ this size can see    a pass-rate change of 24 points or  │
-│ more                                                     │
+│ this size can see    a cost change of 25% or more        │
+│ expected from size   under 0.1% less: the context is 4   │
+│ tokens smaller                                           │
+│ likely result        not sure                            │
+│ seeing under 0.1% would take more than 10,000 runs ·     │
+│ size is not everything: a context that changes what the  │
+│ agent does can move cost more                            │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────╮
-│ likely        ████████████▎░░░░░░░░░░░░░░░░░░░░  $147.60 │
-│ worst case    █████████████████████████████████     $396 │
-│ budget        ██▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ████████████▎░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████   $52.80 │
+│ budget        ██████████████████▊░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                       │
 ╰──────────────────────────────────────────────────────────╯
 
- on your plan: 120 runs need about 8.5 windows of the
+ on your plan: 16 runs need about 1.1 windows of the
  five-hour limit
  everything: agentium experiment plan lean-ab --details
 === 80 columns
-              BASELINE  vs  LEAN   ·   does lean pass more tasks?
+                 BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────
-             lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+              lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                          │
-│ ! 3 tasks passed every time so far, so they may not tell the versions apart: │
-│   parse-dates, retry-http, rename-flag                                       │
-│ ! 2 tasks never passed: check their text (agentium task show NAME):          │
-│   cache-race, tz-shift                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────╮
-│ this size can see    a pass-rate change of 24 points or more                 │
+│ this size can see    a cost change of 25% or more                            │
+│ expected from size   under 0.1% less: the context is 4 tokens smaller        │
+│ likely result        not sure                                                │
+│ seeing under 0.1% would take more than 10,000 runs · size is not everything: │
+│ a context that changes what the agent does can move cost more                │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────────────────────────╮
-│ likely        ███████████████████▊░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
-│ worst case    █████████████████████████████████████████████████████     $396 │
-│ budget        ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ███████████████████▊░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████████████████████████   $52.80 │
+│ budget        ██████████████████████████████▏░░░░░░░░░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                                           │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
- on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
  everything: agentium experiment plan lean-ab --details
 === 120 columns
-                        BASELINE  vs  LEAN   ·   does lean pass more tasks?
+                           BASELINE  vs  LEAN   ·   does lean save money?
  ───────────────────────────────────────────────────────────────────────────────────────────────────
-                       lean-ab · 20 tasks · 120 runs · sonnet-5 · 2 at a time
+                        lean-ab · 8 tasks · 16 runs · sonnet-5 · 2 at a time
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                                              │
-│ ! 3 tasks passed every time so far, so they may not tell the versions apart: parse-dates,        │
-│   retry-http, rename-flag                                                                        │
-│ ! 2 tasks never passed: check their text (agentium task show NAME): cache-race, tz-shift         │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
-│ this size can see    a pass-rate change of 24 points or more                                     │
+│ this size can see    a cost change of 25% or more                                                │
+│ expected from size   under 0.1% less: the context is 4 tokens smaller                            │
+│ likely result        not sure                                                                    │
+│ seeing under 0.1% would take more than 10,000 runs · size is not everything: a context that      │
+│ changes what the agent does can move cost more                                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ what it may spend ──────────────────────────────────────────────────────────────────────────────╮
-│ likely        ███████████████████████████▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  $147.60 │
-│ worst case    █████████████████████████████████████████████████████████████████████████     $396 │
-│ budget        █████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
+│ likely        ███████████████████████████▎░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   $19.68 │
+│ worst case    █████████████████████████████████████████████████████████████████████████   $52.80 │
+│ budget        █████████████████████████████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░      $30 │
 │ worst case: every run hits its cap                                                               │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
- on your plan: 120 runs need about 8.5 windows of the five-hour limit
+ on your plan: 16 runs need about 1.1 windows of the five-hour limit
  everything: agentium experiment plan lean-ab --details
 === end

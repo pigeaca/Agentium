@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,8 @@ func panelScenes(t *testing.T) map[string]panelScene {
 	some, all := unsure, build(experiment.MethodV2, experiment.GoalCheaper, 6, 1) // 12 runs fit in what is left of the window
 	some.Runs = []store.Run{usageRun(0.51)}
 	all.Runs = []store.Run{usageRun(0.02)}
+	tiny := unsure // 4 tokens fewer: about 0.00004% of a run
+	tiny.Size.FirstRequest = [2]int64{20000, 19996}
 	return map[string]panelScene{
 		"ctx-unsure":    {review: unsure, signIn: claude.SignInLogin},
 		"ctx-sees":      {review: sees, signIn: claude.SignInLogin},
@@ -91,10 +94,11 @@ func panelScenes(t *testing.T) map[string]panelScene {
 		"api-key":       {review: some, signIn: claude.SignInAPIKey},
 		"cautions":      {review: above, signIn: claude.SignInLogin, cautions: planCautions{Applies: true, TooEasy: []string{"parse-dates", "retry-http", "rename-flag"}, NeverPassed: []string{"cache-race", "tz-shift"}}},
 		"cautions-long": {review: above, signIn: claude.SignInLogin, cautions: planCautions{Applies: true, TooEasy: panelTasks(14), NeverPassed: []string{"only-one"}}},
+		"tiny":          {review: tiny, signIn: claude.SignInLogin},
 	}
 }
 
-var panelSceneNames = []string{"ctx-unsure", "ctx-sees", "ctx-nosize", "ctx-seq", "model", "aa", "better-below", "better-above", "usage-some", "usage-all", "api-key", "cautions", "cautions-long"}
+var panelSceneNames = []string{"ctx-unsure", "ctx-sees", "ctx-nosize", "ctx-seq", "model", "aa", "better-below", "better-above", "usage-some", "usage-all", "api-key", "cautions", "cautions-long", "tiny"}
 
 func TestPlanPanelGoldens(t *testing.T) {
 	scenes := panelScenes(t)
@@ -144,7 +148,8 @@ func TestPlanPanelWords(t *testing.T) {
 		"usage-some":    {"your plan", "five-hour limit", "51% used", "runs pause at 85%", "more runs fit now", "add --wait"},
 		"usage-all":     {"your plan", "every run fits now"},
 		"cautions":      {"3 tasks passed every time so far, so they may not tell the versions apart: parse-dates, retry-http, rename-flag", "2 tasks never passed: check their text (agentium task show NAME): cache-race, tz-shift"},
-		"cautions-long": {"1 task never passed: check its text"},
+		"cautions-long": {"1 task never passed: check its text", "more: agentium task list"},
+		"tiny":          {"under 0.1% less: the context is 4 tokens smaller", "seeing under 0.1% would take more than 10,000 runs"},
 	}
 	for name, words := range want {
 		v := text(name)
@@ -190,13 +195,42 @@ func TestPlanPanelsNeverBlock(t *testing.T) {
 	}
 }
 
-func TestCautionsFrom(t *testing.T) {
-	rows := []taskTell{{Task: store.Task{Name: "b"}, Tell: tellsTooEasy}, {Task: store.Task{Name: "a"}, Tell: tellsTooEasy}, {Task: store.Task{Name: "x"}, Tell: tellsNeverPassed},
-		{Task: store.Task{Name: "m"}, Tell: tellsSeparates}, {Task: store.Task{Name: "f"}, Tell: tellsFewRuns}}
-	c := cautionsFrom(rows)
-	if !c.Applies || strings.Join(c.TooEasy, ",") != "a,b" || strings.Join(c.NeverPassed, ",") != "x" {
+// Cautions are advice: a store that cannot be read gives none, and no failure.
+func TestPlanCautionsOfAnUnreadableStore(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(ctx, filepath.Join(t.TempDir(), "agentium.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	c := planCautionsOf(ctx, &workspace{db: db}, experiment.Design{Goal: experiment.GoalBetter, Tasks: []string{"a"}})
+	if c.Applies || len(c.TooEasy) != 0 || len(c.NeverPassed) != 0 {
 		t.Errorf("%+v", c)
 	}
+}
+
+// An unreadable calibration is an unknown size: the preview is printed, exit 0, with no expected change.
+func TestPlanSurvivesAnUnreadableCalibration(t *testing.T) {
+	t.Parallel()
+	f, _ := seqFixture(t)
+	jsonRun(t, f, ExitOK, "experiment", "new", "size", "--b", "lean", "--seed", "5")
+	seedSizeFacts(t, f, "claude-sonnet-5-5")
+	ctx := context.Background()
+	db, id := openFixtureDB(t, f)
+	latest, err := db.LatestCalibration(ctx, id, "base", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest.ID, latest.Result, latest.CreatedAt = 0, []byte("not json"), latest.CreatedAt.Add(time.Hour)
+	if err := db.SaveCalibration(ctx, latest); err != nil {
+		t.Fatal(err)
+	}
+	plan := jsonRun(t, f, ExitOK, "experiment", "plan", "size")
+	if plan.get("can_answer", "expected_change") != nil || plan.get("can_answer", "metric") != "cost" {
+		t.Errorf("an unreadable calibration: %s", plan.stdout)
+	}
+	*f.terminal = true
+	expect(t, f.run(ctx, "experiment", "plan", "size"), ExitOK, "can it answer?")
 }
 
 func TestGroupDigits(t *testing.T) {

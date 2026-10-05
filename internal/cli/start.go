@@ -367,10 +367,7 @@ func (s *starter) finish(ctx context.Context, name string) int {
 	if err != nil {
 		return fail(env, err)
 	}
-	cautions, err := planCautionsOf(ctx, w, review.Design)
-	if err != nil {
-		return fail(env, err)
-	}
+	cautions := planCautionsOf(ctx, w, review.Design)
 	mode, _ := signInMode(env)
 	if err := writeReview(ctx, env, review, cautions, name, mode, false); err != nil {
 		return fail(env, err)
