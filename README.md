@@ -42,7 +42,7 @@ The other [stored reports](docs/examples/) were checks of the tool itself.
 
 <img src="docs/images/console-run-dashboard-still.svg" alt="agentium experiment run: the question at the top; progress, spend and the plan's share; what runs now; the answer so far with each version's passes and the next check; the last results">
 
-*A running experiment, in the default quiet view: progress, spend, what runs now, the answer so far and the last results. (This recording graded on the host, so it carries a warning line; with the sandbox working, the line is gone.) It draws nothing that moves; `--view flow` gives step boxes and `--view log` a plain log. [See it running](docs/images/console-run-dashboard.svg). More screens are in the [gallery](docs/gallery.md).*
+*A running experiment, in the default quiet view: progress, spend, what runs now, the answer so far and the last results. It draws nothing that moves; `--view flow` gives step boxes and `--view log` a plain log. [See it running](docs/images/console-run-dashboard.svg). More screens are in the [gallery](docs/gallery.md).*
 
 ## Quick start
 

@@ -202,7 +202,7 @@ agentium experiment report lean               # the answer in plain words (--det
 
 **What a running experiment shows.** On a terminal, `experiment run` (and `start --yes`) draws a quiet live dashboard, redrawn in place when something changes and once a second for its clock; nothing on it moves or spins. From the top: the question in plain words ("BASELINE vs TRIMMED · does trimmed save money?"); `runs`, a bar with the runs done of all and the time; `spent`, the money against the budget and, with a subscription, your plan's share used; `now`, a line for each run in flight (version, task, step and the time in it) or, between runs, the latest pause, retry or warning; `so far`, the answer so far in words ("about the same cost (+4%) · not sure yet"), each version's passes and the next check; `last`, the last 3 results; and a hint. A grade the sandbox blocked or left out shows in the last results in yellow, with what was blocked in plain words; a judge-graded run says "judge: fixed" with its votes; the host grader's warning stays under the budget. It drops the hint, then the last results, on a short terminal. When the run ends, or stops on an error or Ctrl-C, the dashboard is cleared and the full log stays in the scrollback: what was printed before the first run, every run's line and the answer.
 
-![The quiet dashboard of a running experiment, recorded with the test stand-in for Claude Code on a machine that grades on the host, hence the warning line under the budget](images/console-run-dashboard-still.svg)
+![The quiet dashboard of a running experiment, recorded with the test stand-in for Claude Code](images/console-run-dashboard-still.svg)
 
 [The same run as an animation](images/console-run-dashboard.svg) (about 40 seconds).
 

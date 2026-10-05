@@ -50,8 +50,9 @@ folder are shortened to `~` and `…` marks lines left out; check every SVG with
 - `console-plan-not-sure.svg`: `experiment plan ab16` from a copy of the 16-run context A/B's data folder, at 120 columns
   with `TERM=xterm-256color`; `console-plan.svg` and `console-start.svg` come from `TestRecordConsoleScreens`.
   `console-report-*.svg` (the test scenes) are `report-NAME.ans` from `TestReportViewPreview`, at 80 columns.
-- `console-run-dashboard.svg` and `console-run-dashboard-still.svg`: the quiet view, `AGENTIUM_RECORD_PACE=2
-  AGENTIUM_RECORD_COST=0.25`, then `frames2svg.py "agentium experiment run lean-vs-base" 80 34 PROMPT --fps 8` (the still:
-  `--still 27`). `AGENTIUM_RECORD_GRADER=host` records on an account that cannot read the unified log (the sandbox grader
-  reports itself unavailable there); the run then carries the host grader's warning line, so record without it where
-  the sandbox works. `console-run-flow.svg` is the earlier flow picture, kept and renamed (it is the step boxes' view).
+- `console-run-dashboard.svg` and `console-run-dashboard-still.svg`: the quiet view, graded in the sandbox,
+  `AGENTIUM_RECORD_PACE=2`, then `frames2svg.py "agentium experiment run lean-vs-base" 80 34 PROMPT --from 36 --fps 8`
+  (the checks and the sandbox's revalidation take the first 35 seconds; the still: `--still 63.6`).
+  `AGENTIUM_RECORD_GRADER=host` records where the sandbox grader reports itself unavailable (its probe's denial did
+  not reach the unified log in time, which also happens on a heavily loaded machine); the run then carries the host
+  grader's warning line, so prefer a recording without it. `console-run-flow.svg` is the earlier flow picture, kept and renamed (it is the step boxes' view).
