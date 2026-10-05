@@ -21,8 +21,8 @@
 
 ╭─ your plan ──────────────────────────────────────────────╮
 │ five-hour limit  ▋░░░░░░░░░░░░░░░░░░░░░░░|░░░░   2% used │
-│ every run fits now · this experiment needs about 0.8     │
-│ limits                                                   │
+│ read 30 min ago · by that reading every run fits · this  │
+│ experiment needs about 0.8 limits                        │
 ╰──────────────────────────────────────────────────────────╯
 
  everything: agentium experiment plan lean-ab --details
@@ -48,7 +48,8 @@
 
 ╭─ your plan ──────────────────────────────────────────────────────────────────╮
 │ five-hour limit  █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|░░░░░░░   2% used │
-│ every run fits now · this experiment needs about 0.8 limits                  │
+│ read 30 min ago · by that reading every run fits · this experiment needs     │
+│ about 0.8 limits                                                             │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
  everything: agentium experiment plan lean-ab --details
@@ -74,7 +75,7 @@
 
 ╭─ your plan ──────────────────────────────────────────────────────────────────────────────────────╮
 │ five-hour limit  █▍░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|░░░░░░░░░░   2% used │
-│ every run fits now · this experiment needs about 0.8 limits                                      │
+│ read 30 min ago · by that reading every run fits · this experiment needs about 0.8 limits        │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
  everything: agentium experiment plan lean-ab --details

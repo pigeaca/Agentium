@@ -187,7 +187,8 @@ type CanAnswer struct {
 	// NotSure is set when Expected is smaller than Smallest: the likely result is not sure. When Expected is larger,
 	// no likely result is promised.
 	NotSure bool
-	// RunsToSee is the runs seeing Expected would take (RunsToSeeCostChange); zero when there is no Expected.
+	// RunsToSee is the runs seeing Expected would take (RunsToSeeCostChange), never fewer than the cost floor's runs
+	// (both versions); zero when there is no Expected.
 	RunsToSee int
 }
 
@@ -201,12 +202,16 @@ func (r Review) CanAnswer() CanAnswer {
 	}
 	c := CanAnswer{Metric: metric}
 	c.FloorTasks, c.FloorRepeats = FloorsFor(d.LockMethod()).Metric(metric)
-	c.FloorMet = len(d.Tasks) >= c.FloorTasks && d.Repeats >= c.FloorRepeats
+	tasks := len(d.Tasks)
+	if metric == MetricSuccess {
+		tasks -= d.judgedTasks() // the judge-graded tasks never count toward passes (SuccessFloorWarning)
+	}
+	c.FloorMet = tasks >= c.FloorTasks && d.Repeats >= c.FloorRepeats
 	if !c.FloorMet {
 		return c
 	}
 	if metric == MetricSuccess {
-		v := Detect(len(d.Tasks), d.Repeats).Success[0]
+		v := Detect(tasks, d.Repeats).Success[0]
 		c.Smallest = &v
 		return c
 	}
@@ -231,7 +236,8 @@ func (r Review) CanAnswer() CanAnswer {
 		// Compared on the log scale, where a rise and a fall of the same ratio are equally easy to see: a rise of x is seen
 		// from exp(mde)-1, not from the smallest reduction.
 		c.NotSure = math.Abs(math.Log(1-e.Share)) < -math.Log(1-smallest)
-		c.RunsToSee = RunsToSeeCostChange(e.Share)
+		// A verdict on cost needs the floor's runs at any effect: seeing a large change never takes fewer.
+		c.RunsToSee = max(RunsToSeeCostChange(e.Share), 2*c.FloorTasks*c.FloorRepeats)
 	}
 	return c
 }

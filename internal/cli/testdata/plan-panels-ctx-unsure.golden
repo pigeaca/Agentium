@@ -8,7 +8,7 @@
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────╮
-│ this size can see    a cost change of 25% or more        │
+│ this size can see    25% less cost, or 33% more          │
 │ expected from size   about 4% less: the context is 4,575 │
 │ tokens smaller                                           │
 │ likely result        not sure                            │
@@ -37,7 +37,7 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────╮
-│ this size can see    a cost change of 25% or more                            │
+│ this size can see    25% less cost, or 33% more                              │
 │ expected from size   about 4% less: the context is 4,575 tokens smaller      │
 │ likely result        not sure                                                │
 │ seeing 4% would take about 690 runs · size is not everything: a context that │
@@ -63,7 +63,7 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮
-│ this size can see    a cost change of 25% or more                                                │
+│ this size can see    25% less cost, or 33% more                                                  │
 │ expected from size   about 4% less: the context is 4,575 tokens smaller                          │
 │ likely result        not sure                                                                    │
 │ seeing 4% would take about 690 runs · size is not everything: a context that changes what the    │

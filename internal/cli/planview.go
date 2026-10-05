@@ -68,7 +68,7 @@ func planViewWith(r experiment.Review, cautions planCautions, name, signIn strin
 	}
 	if u := r.Usage(signIn, now); !u.APIKey && len(u.Models) > 0 && u.Latest != nil && u.Latest.Current {
 		out = append(out, "")
-		out = append(out, sh.Panel(usagePanel(u, sh, m, w), w)...)
+		out = append(out, sh.Panel(usagePanel(u, now, sh, m, w), w)...)
 	}
 	if notes := planNotes(r, name, signIn, now, sh, m, w); len(notes) > 0 {
 		out = append(out, "")

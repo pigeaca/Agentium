@@ -78,6 +78,8 @@ func panelScenes(t *testing.T) map[string]panelScene {
 	some, all := unsure, build(experiment.MethodV2, experiment.GoalCheaper, 6, 1) // 12 runs fit in what is left of the window
 	some.Runs = []store.Run{usageRun(0.51)}
 	all.Runs = []store.Run{usageRun(0.02)}
+	past := unsure // used past the pause share: the mark reads as where runs pause, left of the fill's end
+	past.Runs = []store.Run{usageRun(0.90)}
 	tiny := unsure // 4 tokens fewer: about 0.00004% of a run
 	tiny.Size.FirstRequest = [2]int64{20000, 19996}
 	return map[string]panelScene{
@@ -90,15 +92,16 @@ func panelScenes(t *testing.T) map[string]panelScene {
 		"better-below":  {review: below, signIn: claude.SignInLogin},
 		"better-above":  {review: above, signIn: claude.SignInLogin},
 		"usage-some":    {review: some, signIn: claude.SignInLogin},
+		"usage-past":    {review: past, signIn: claude.SignInLogin},
 		"usage-all":     {review: all, signIn: claude.SignInLogin},
 		"api-key":       {review: some, signIn: claude.SignInAPIKey},
 		"cautions":      {review: above, signIn: claude.SignInLogin, cautions: planCautions{Applies: true, TooEasy: []string{"parse-dates", "retry-http", "rename-flag"}, NeverPassed: []string{"cache-race", "tz-shift"}}},
-		"cautions-long": {review: above, signIn: claude.SignInLogin, cautions: planCautions{Applies: true, TooEasy: panelTasks(14), NeverPassed: []string{"only-one"}}},
+		"cautions-long": {review: above, signIn: claude.SignInLogin, cautions: planCautions{Applies: true, TooEasy: panelTasks(30), NeverPassed: []string{"only-one"}}},
 		"tiny":          {review: tiny, signIn: claude.SignInLogin},
 	}
 }
 
-var panelSceneNames = []string{"ctx-unsure", "ctx-sees", "ctx-nosize", "ctx-seq", "model", "aa", "better-below", "better-above", "usage-some", "usage-all", "api-key", "cautions", "cautions-long", "tiny"}
+var panelSceneNames = []string{"ctx-unsure", "ctx-sees", "ctx-nosize", "ctx-seq", "model", "aa", "better-below", "better-above", "usage-some", "usage-past", "usage-all", "api-key", "cautions", "cautions-long", "tiny"}
 
 func TestPlanPanelGoldens(t *testing.T) {
 	scenes := panelScenes(t)
@@ -141,14 +144,14 @@ func TestPlanPanelWords(t *testing.T) {
 		return strings.Join(out, " ")
 	}
 	want := map[string][]string{
-		"ctx-unsure":    {"can it answer?", "a cost change of 25% or more", "about 4% less: the context is 4,575 tokens smaller", "not sure", "seeing 4% would take about 690 runs", "size is not everything"},
-		"ctx-sees":      {"a cost change of 25% or more", "about 35% less: the context is 4,575 tokens smaller"},
+		"ctx-unsure":    {"can it answer?", "25% less cost, or 33% more", "about 4% less: the context is 4,575 tokens smaller", "not sure", "seeing 4% would take about 690 runs", "size is not everything"},
+		"ctx-sees":      {"25% less cost, or 33% more", "about 35% less: the context is 4,575 tokens smaller"},
 		"better-below":  {"no answer on passes at this size: it needs 20 tasks of 3 runs each"},
 		"better-above":  {"a pass-rate change of"},
-		"usage-some":    {"your plan", "five-hour limit", "51% used", "runs pause at 85%", "more runs fit now", "add --wait"},
-		"usage-all":     {"your plan", "every run fits now"},
-		"cautions":      {"3 tasks passed every time so far, so they may not tell the versions apart: parse-dates, retry-http, rename-flag", "2 tasks never passed: check their text (agentium task show NAME): cache-race, tz-shift"},
-		"cautions-long": {"1 task never passed: check its text", "more: agentium task list"},
+		"usage-some":    {"your plan", "five-hour limit", "51% used", "read 30 min ago", "runs pause at 85%", "by that reading about", "add --wait"},
+		"usage-all":     {"your plan", "by that reading every run fits"},
+		"cautions":      {"3 tasks passed every time, may not separate: parse-dates, retry-http, rename-flag", "2 tasks never passed, check their text: cache-race, tz-shift"},
+		"cautions-long": {"1 task never passed, check its text", "more: agentium task list"},
 		"tiny":          {"under 0.1% less: the context is 4 tokens smaller", "seeing under 0.1% would take more than 10,000 runs"},
 	}
 	for name, words := range want {
@@ -182,7 +185,7 @@ func TestPlanPanelWords(t *testing.T) {
 		t.Errorf("without a current reading the dim line is gone:\n%s", v)
 	}
 	// Cautions are not "not ready", and a long list is cut to two lines.
-	if v := text("cautions-long"); strings.Contains(v, "not ready") || strings.Contains(v, "task-13") {
+	if v := text("cautions-long"); strings.Contains(v, "not ready") || strings.Contains(v, "task-29") {
 		t.Errorf("cautions-long:\n%s", v)
 	}
 }
@@ -314,7 +317,7 @@ func TestPlanJSONCarriesWhatTheScreenShows(t *testing.T) {
 
 	*f.terminal = true
 	screen := term.Plain(f.run(context.Background(), "experiment", "plan", "size").stdout)
-	for _, want := range []string{"can it answer?", fmt.Sprintf("a cost change of %.0f%% or more", 100*smallest), "about 4% less: the context is 4,575 tokens smaller", "not sure",
+	for _, want := range []string{"can it answer?", fmt.Sprintf("%.0f%% less cost, or ", 100*smallest), "about 4% less: the context is 4,575 tokens smaller", "not sure",
 		"seeing 4% would take about 690 runs"} {
 		if !strings.Contains(flat(screen), want) {
 			t.Errorf("the screen lacks %q:\n%s", want, screen)
@@ -356,7 +359,7 @@ func TestPlanNamesTasksThatCannotSeparate(t *testing.T) {
 	}
 	*f.terminal = true
 	screen := flat(term.Plain(f.run(ctx, "experiment", "plan", "lean-ab").stdout))
-	if want := "1 task passed every time so far, so it may not tell the versions apart: value"; !strings.Contains(screen, want) {
+	if want := "1 task passed every time, may not separate: value"; !strings.Contains(screen, want) {
 		t.Errorf("the screen lacks %q:\n%s", want, screen)
 	}
 }

@@ -5,10 +5,9 @@
 
 ╭─ before it runs ─────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                      │
-│ ! 14 tasks passed every time so far, so they may not     │
-│   tell the versions apart: agentium task list            │
-│ ! 1 task never passed: check its text (agentium task     │
-│   show NAME): only-one                                   │
+│ ! 30 tasks passed every time, may not separate: task-00, │
+│   task-01, task-02 + 27 more: agentium task list         │
+│ ! 1 task never passed, check its text: only-one          │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────╮
@@ -33,9 +32,9 @@
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                          │
-│ ! 14 tasks passed every time so far, so they may not tell the versions       │
-│   apart: task-00, task-01, task-02, task-03 + 10 more: agentium task list    │
-│ ! 1 task never passed: check its text (agentium task show NAME): only-one    │
+│ ! 30 tasks passed every time, may not separate: task-00, task-01, task-02,   │
+│   task-03, task-04, task-05, task-06, task-07 + 22 more: agentium task list  │
+│ ! 1 task never passed, check its text: only-one                              │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────╮
@@ -58,9 +57,9 @@
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                                              │
-│ ! 14 tasks passed every time so far, so they may not tell the versions apart: task-00, task-01,  │
-│   task-02, task-03, task-04, task-05, task-06, task-07, task-08 + 5 more: agentium task list     │
-│ ! 1 task never passed: check its text (agentium task show NAME): only-one                        │
+│ ! 30 tasks passed every time, may not separate: task-00, task-01, task-02, task-03, task-04,     │
+│   task-05, task-06, task-07, task-08, task-09, task-10, task-11 + 18 more: agentium task list    │
+│ ! 1 task never passed, check its text: only-one                                                  │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮

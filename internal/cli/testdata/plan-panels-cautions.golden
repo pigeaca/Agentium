@@ -5,10 +5,10 @@
 
 ╭─ before it runs ─────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                      │
-│ ! 3 tasks passed every time so far, so they may not tell │
-│   the versions apart: agentium task list                 │
-│ ! 2 tasks never passed: check their text (agentium task  │
-│   show NAME): cache-race, tz-shift                       │
+│ ! 3 tasks passed every time, may not separate:           │
+│   parse-dates, retry-http, rename-flag                   │
+│ ! 2 tasks never passed, check their text: cache-race,    │
+│   tz-shift                                               │
 ╰──────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────╮
@@ -33,10 +33,9 @@
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                          │
-│ ! 3 tasks passed every time so far, so they may not tell the versions apart: │
-│   parse-dates, retry-http, rename-flag                                       │
-│ ! 2 tasks never passed: check their text (agentium task show NAME):          │
-│   cache-race, tz-shift                                                       │
+│ ! 3 tasks passed every time, may not separate: parse-dates, retry-http,      │
+│   rename-flag                                                                │
+│ ! 2 tasks never passed, check their text: cache-race, tz-shift               │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────╮
@@ -59,9 +58,8 @@
 
 ╭─ before it runs ─────────────────────────────────────────────────────────────────────────────────╮
 │ ✓ everything is in place (2 checks)                                                              │
-│ ! 3 tasks passed every time so far, so they may not tell the versions apart: parse-dates,        │
-│   retry-http, rename-flag                                                                        │
-│ ! 2 tasks never passed: check their text (agentium task show NAME): cache-race, tz-shift         │
+│ ! 3 tasks passed every time, may not separate: parse-dates, retry-http, rename-flag              │
+│ ! 2 tasks never passed, check their text: cache-race, tz-shift                                   │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ can it answer? ─────────────────────────────────────────────────────────────────────────────────╮

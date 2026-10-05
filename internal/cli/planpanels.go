@@ -6,6 +6,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pigeaca/agentium/internal/experiment"
 	"github.com/pigeaca/agentium/internal/term"
@@ -75,11 +76,11 @@ func (c planCautions) lines(sh term.Shapes, m marks, width int) []string {
 	mark := sh.Style.Paint(term.OutcomeInfra, m.warn)
 	room := min(width, term.MaxContentWidth) - 4 - 2
 	if n := len(c.TooEasy); n > 0 {
-		head := fmt.Sprintf("%s passed every time so far, so %s may not tell the versions apart: ", taskCount(n), map[bool]string{true: "it", false: "they"}[n == 1])
+		head := fmt.Sprintf("%s passed every time, may not separate: ", taskCount(n))
 		out = append(out, cautionList(mark, head, c.TooEasy, sh, room)...)
 	}
 	if n := len(c.NeverPassed); n > 0 {
-		head := fmt.Sprintf("%s never passed: check %s text (agentium task show NAME): ", taskCount(n), map[bool]string{true: "its", false: "their"}[n == 1])
+		head := fmt.Sprintf("%s never passed, check %s text: ", taskCount(n), map[bool]string{true: "its", false: "their"}[n == 1])
 		out = append(out, cautionList(mark, head, c.NeverPassed, sh, room)...)
 	}
 	return out
@@ -167,7 +168,8 @@ func canAnswerPanel(a experiment.CanAnswer, sh term.Shapes, m marks) term.Panel 
 	case a.Metric == experiment.MetricSuccess:
 		seen = fmt.Sprintf("a pass-rate change of %.0f points or more", 100**a.Smallest)
 	default:
-		seen = fmt.Sprintf("a cost change of %s or more", pctWords(*a.Smallest))
+		// The threshold is a reduction; the same distance on the log scale is a larger rise (24.7% less, 32.8% more).
+		seen = fmt.Sprintf("%s less cost, or %s more", pctWords(*a.Smallest), pctWords(*a.Smallest/(1-*a.Smallest)))
 	}
 	p.Lines = []string{row("this size can see", seen, term.Default)}
 	e := a.Expected
@@ -203,22 +205,28 @@ func canAnswerPanel(a experiment.CanAnswer, sh term.Shapes, m marks) term.Panel 
 // usagePanel is the plan's five-hour limit: the share used as a bar, then in words where runs pause (the mark; the bar
 // carries none), how many runs fit now and how many limits the experiment needs. The caller draws it only for a current
 // reading of a subscription's window.
-func usagePanel(u experiment.UsagePreview, sh term.Shapes, m marks, width int) term.Panel {
+func usagePanel(u experiment.UsagePreview, now time.Time, sh term.Shapes, m marks, width int) term.Panel {
 	st := sh.Style
 	l := u.Latest
 	p := term.Panel{Title: "your plan", Overflow: term.WrapText}
 	inner := min(width, term.MaxContentWidth) - 4
-	p.Lines = []string{limitBar(sh, "five-hour limit", fmt.Sprintf("%.0f%% used", 100*l.Used), l.Used, u.Limit, term.Level(l.Used, u.Limit), inner)}
+	value := fmt.Sprintf("%.0f%% used", 100*l.Used)
+	// The reading is the last run's: other sessions may have used the plan since, so the words say when it was taken.
+	read := ""
+	if age, ok := l.Age(now); ok {
+		read = "read " + ageWords(age) + " ago " + m.sep + " "
+	}
+	p.Lines = []string{limitBar(sh, "five-hour limit", value, l.Used, u.Limit, term.Level(l.Used, u.Limit), inner)}
 	limits := fmt.Sprintf("%.1f", u.Windows)
 	needs := fmt.Sprintf("this experiment needs about %s %s", limits, map[bool]string{true: "limit", false: "limits"}[limits == "1.0"])
 	var words string
 	switch {
 	case l.Fits >= u.Runs:
-		words = fmt.Sprintf("every run fits now %s %s", m.sep, needs)
+		words = fmt.Sprintf("%sby that reading every run fits %s %s", read, m.sep, needs)
 	case l.Fits == 0:
-		words = fmt.Sprintf("runs pause at %.0f%% %s no run fits now %s %s: it pauses and goes on after the reset (add --wait)", 100*u.Limit, m.sep, m.sep, needs)
+		words = fmt.Sprintf("%sruns pause at %.0f%% %s by that reading no run fits %s %s: it pauses and goes on after the reset (add --wait)", read, 100*u.Limit, m.sep, m.sep, needs)
 	default:
-		words = fmt.Sprintf("runs pause at %.0f%% %s about %d more %s fit now %s %s: it pauses and goes on after the reset (add --wait)", 100*u.Limit, m.sep,
+		words = fmt.Sprintf("%sruns pause at %.0f%% %s by that reading about %d more %s fit %s %s: it pauses and goes on after the reset (add --wait)", read, 100*u.Limit, m.sep,
 			l.Fits, plural(l.Fits, "run", "runs"), m.sep, needs)
 	}
 	p.Lines = append(p.Lines, st.Paint(term.Muted, words))
@@ -229,7 +237,8 @@ func usagePanel(u experiment.UsagePreview, sh term.Shapes, m marks, width int) t
 // has no mark: the bar's cells are drawn by the shapes, the cell at the pause share becomes "|" (also in ASCII) and the
 // parts are painted again, the fill in role and the track muted, as sideLines does for a report's bars.
 func limitBar(sh term.Shapes, label, value string, used, pause float64, role term.Role, inner int) string {
-	const labelWidth, valueWidth = 16, 9
+	const labelWidth = 16
+	valueWidth := max(9, term.Width(value))
 	n := max(inner-labelWidth-valueWidth-2, 4)
 	cells := []rune(term.Plain(sh.Bar(term.Bar{Fraction: used}, n)))
 	if len(cells) == 0 {
@@ -261,4 +270,18 @@ func limitBar(sh term.Shapes, label, value string, used, pause float64, role ter
 		i = j
 	}
 	return b.String() + " " + term.PadLeft(value, valueWidth)
+}
+
+// ageWords is how long ago a reading was taken: "just now" under a minute, "12 min", "2h", "2h 05m".
+func ageWords(d time.Duration) string {
+	d = d.Round(time.Minute)
+	switch {
+	case d < time.Minute:
+		return "under a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%d min", int(d.Minutes()))
+	case int(d.Minutes())%60 == 0:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dh %02dm", int(d.Hours()), int(d.Minutes())%60)
 }

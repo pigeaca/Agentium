@@ -305,3 +305,41 @@ func TestMedianRequestsUsesTheEffortOfTheEstimate(t *testing.T) {
 		t.Errorf("runs at the design's effort: %v of %d", m, n)
 	}
 }
+
+// Judge-graded tasks never count toward passes: 19 test-graded and 1 judge-graded task of 3 runs are below the passes
+// floor of 20 tasks, and the number is Detect's at the 19 test-graded tasks, once the 20th is graded by tests.
+func TestCanAnswerPassesCountOnlyTestGradedTasks(t *testing.T) {
+	d := Design{Method: MethodV2, Goal: GoalBetter, Template: TemplateContextAB, Tasks: tasksNamed(20), Repeats: 3, Model: "claude-sonnet-5"}
+	if c := (Review{Design: d}).CanAnswer(); !c.FloorMet {
+		t.Fatalf("20 test-graded tasks: %+v", c)
+	}
+	d.JudgeGraded = []string{"t19"}
+	c := Review{Design: d}.CanAnswer()
+	if c.FloorMet || c.Smallest != nil {
+		t.Errorf("19 test-graded and 1 judge-graded task: %+v", c)
+	}
+	d.Tasks = tasksNamed(24)
+	c = Review{Design: d}.CanAnswer()
+	if !c.FloorMet || *c.Smallest != Detect(23, 3).Success[0] {
+		t.Errorf("23 test-graded tasks: %+v", c)
+	}
+	// Cost counts every task.
+	d.Goal = GoalCheaper
+	if c := (Review{Design: d}).CanAnswer(); !c.FloorMet || c.Metric != MetricCost {
+		t.Errorf("cost: %+v", c)
+	}
+}
+
+// Seeing a large change never takes fewer runs than the cost floor's: a 35% reduction is 7 runs by the formula, and the
+// floor is 8 tasks of 1 run per version, 16 runs.
+func TestCanAnswerRunsToSeeNeverBelowTheFloor(t *testing.T) {
+	if got := RunsToSeeCostChange(0.35); got >= 16 {
+		t.Fatalf("the formula gives %d runs; the test needs one below the floor", got)
+	}
+	r := contextReview([2]int64{20000, 15425}, 38, 6)
+	r.Estimates = Same(Estimate{PerRunUSD: 0.15, Known: true, Runs: 6}) // 4,575 tokens are 35% of a $0.15 run
+	c := r.CanAnswer()
+	if c.Expected == nil || c.RunsToSee != 16 {
+		t.Errorf("%+v runs to see %d, want 16", c.Expected, c.RunsToSee)
+	}
+}
